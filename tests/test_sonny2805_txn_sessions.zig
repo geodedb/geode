@@ -265,9 +265,12 @@ test "SONNY-2799: over gRPC a failed statement rolls back its own transaction, u
     try testing.expect(!e1.state.in_txn);
     try testing.expect(e1.state.txn_graph == null);
 
-    // The transaction is over: the session's ROLLBACK finds none, and the
-    // other session's change is untouched.
-    try testing.expect(!try rollback(ga, s1));
+    // The transaction is rolled back and aborted (SONNY-3348 round 18: the
+    // session refuses statements until its client ends it); the session's
+    // ROLLBACK ends it, and the other session's change is untouched.
+    try testing.expect(e1.state.txn_aborted);
+    try testing.expect(try rollback(ga, s1));
+    try testing.expect(!e1.state.txn_aborted);
     try testing.expectEqual(@as(usize, 1), countLabel(f.st, "g2", "Victim"));
 
     victim.go_on.store(true, .release);
@@ -415,8 +418,9 @@ const Worker = struct {
                 0 => if (!try commit(ga, self.session)) return error.CommitFailed,
                 1 => {
                     if ((try outcome(ga, self.session, "RETURN 1/0 AS x")) == null) return error.ExpectedFailure;
-                    // The failure ended the transaction.
-                    if (try rollback(ga, self.session)) return error.TransactionStillOpen;
+                    // The failure rolled the transaction back and aborted
+                    // it (SONNY-3348 round 18): the client's ROLLBACK ends it.
+                    if (!try rollback(ga, self.session)) return error.TransactionNotAborted;
                 },
                 else => if (!try rollback(ga, self.session)) return error.RollbackFailed,
             }
@@ -616,7 +620,7 @@ fn quicCount(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query:
     };
 }
 
-test "SONNY-2805: over QUIC transaction control runs in program order, and a failed statement ends its transaction" {
+test "SONNY-2805: over QUIC transaction control runs in program order, and a failed statement aborts its transaction until the client ends it" {
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const io_fs = std.Io.Threaded.global_single_threaded.io();
@@ -653,13 +657,23 @@ test "SONNY-2805: over QUIC transaction control runs in program order, and a fai
     try testing.expectEqual(@as(i64, 0), try quicCount(&client, allocator, "USE GRAPH g2; MATCH (n:O) RETURN count(n) AS c"));
     try quicExpectOk(&client, allocator, "USE GRAPH g1");
 
-    // R8-C's first half: the failure undoes the transaction and ends it.
+    // R8-C's first half: the failure undoes the transaction and aborts it
+    // (SONNY-3348 round 18): every statement is refused (25P02), never
+    // autocommitted, until the client's ROLLBACK ends it.
     var b2 = try client.begin(allocator);
     b2.deinit(allocator);
     try quicExpectOk(&client, allocator, "CREATE (:F {v: 1})");
     try quicExpectCode(&client, allocator, "RETURN 1/0 AS x", "22012");
+    try quicExpectCode(&client, allocator, "CREATE (:F {v: 2})", "25P02");
+    try testing.expect(try client.rollback(allocator));
     try testing.expectEqual(@as(i64, 0), try quicCount(&client, allocator, "MATCH (n:F) RETURN count(n) AS c"));
-    try testing.expect(!try client.rollback(allocator));
+    // A COMMIT ends an aborted transaction too, and fails.
+    var b3 = try client.begin(allocator);
+    b3.deinit(allocator);
+    try quicExpectOk(&client, allocator, "CREATE (:F {v: 3})");
+    try quicExpectCode(&client, allocator, "RETURN 1/0 AS x", "22012");
+    try testing.expect(!try client.commit(allocator));
+    try testing.expectEqual(@as(i64, 0), try quicCount(&client, allocator, "MATCH (n:F) RETURN count(n) AS c"));
 }
 
 // ---------------------------------------------------------------------------

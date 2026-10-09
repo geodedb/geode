@@ -60,12 +60,35 @@ fn evalOrderByExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env) !Valu
             return eval.evalExpr(allocator, expr, env);
         },
         .Binary => |b| {
-            // For binary expressions, recursively evaluate both sides with member resolution
-            const left_val = try evalOrderByExpr(allocator, b.left.*, env);
-            const right_val = try evalOrderByExpr(allocator, b.right.*, env);
-            return eval.evalBinary(allocator, b.op, left_val, right_val);
+            // For binary expressions, evaluate both sides with member resolution.
+            // SONNY-3189: the left-deep chain `((a op b) op c) ...` with a
+            // loop (this runs in the sort comparator): down to `a`, then each
+            // link on the way back up, left operand before right as before.
+            const Link = struct { op: ast.BinOp, right: *const ast.Expr };
+            var sfa = std.heap.stackFallback(64 * @sizeOf(Link), std.heap.smp_allocator);
+            const la = sfa.get();
+            var links: std.ArrayList(Link) = .empty;
+            defer links.deinit(la);
+            try links.append(la, .{ .op = b.op, .right = b.right });
+            var leaf: *const ast.Expr = b.left;
+            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) {
+                try links.append(la, .{ .op = leaf.Binary.op, .right = leaf.Binary.right });
+            }
+            var acc = try evalOrderByExpr(allocator, leaf.*, env);
+            var i = links.items.len;
+            while (i > 0) {
+                i -= 1;
+                const right_val = try evalOrderByExpr(allocator, links.items[i].right.*, env);
+                // A new value, then `acc`: the result is not written over
+                // the operand it is computed from.
+                const next = try eval.evalBinary(allocator, links.items[i].op, acc, right_val);
+                acc = next;
+            }
+            return acc;
         },
         .Unary => |u| {
+            // SONNY-3189: a unary chain is bounded by the parser's nesting
+            // limit (128); it recurses.
             const val = try evalOrderByExpr(allocator, u.expr.*, env);
             return switch (u.op) {
                 .Not => .{ .Bool = !value_types.truthy(val) },
@@ -90,44 +113,55 @@ fn evalOrderByExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env) !Valu
 // CANARY: REQ=REQ-GQL-ORDERBY-EXPR-MATCH-001; FEATURE="OrderByExpressionMatch"; ASPECT=ExpressionEquality; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
 // D05 Fix: Compare two AST expressions for semantic equivalence
 // Used to match ORDER BY expressions against RETURN expressions when columns are aliased
-fn exprsEqual(a: ast.Expr, b: ast.Expr) bool {
-    // Check if the active union tags match
-    if (@intFromEnum(a) != @intFromEnum(b)) return false;
+fn exprsEqual(a_root: ast.Expr, b_root: ast.Expr) bool {
+    // SONNY-3189: the left operand, the member target, the unary operand and
+    // the callee are compared with a loop; right operands and arguments
+    // recurse (nesting bounds them).
+    var a: *const ast.Expr = &a_root;
+    var b: *const ast.Expr = &b_root;
+    while (true) {
+        // Check if the active union tags match
+        if (@intFromEnum(a.*) != @intFromEnum(b.*)) return false;
 
-    switch (a) {
-        .Ident => |a_id| {
-            const b_id = b.Ident;
-            return std.mem.eql(u8, a_id.orig, b_id.orig);
-        },
-        .Member => |a_mem| {
-            const b_mem = b.Member;
-            if (!std.mem.eql(u8, a_mem.field, b_mem.field)) return false;
-            return exprsEqual(a_mem.target.*, b_mem.target.*);
-        },
-        .Int => |a_int| return a_int == b.Int,
-        .String => |a_str| return std.mem.eql(u8, a_str, b.String),
-        .Bool => |a_bool| return a_bool == b.Bool,
-        .Binary => |a_bin| {
-            const b_bin = b.Binary;
-            if (a_bin.op != b_bin.op) return false;
-            return exprsEqual(a_bin.left.*, b_bin.left.*) and exprsEqual(a_bin.right.*, b_bin.right.*);
-        },
-        .Unary => |a_un| {
-            const b_un = b.Unary;
-            if (a_un.op != b_un.op) return false;
-            return exprsEqual(a_un.expr.*, b_un.expr.*);
-        },
-        .Call => |a_call| {
-            const b_call = b.Call;
-            // Compare callee expressions (typically Ident for function name)
-            if (!exprsEqual(a_call.callee.*, b_call.callee.*)) return false;
-            if (a_call.args.len != b_call.args.len) return false;
-            for (a_call.args, b_call.args) |a_arg, b_arg| {
-                if (!exprsEqual(a_arg.*, b_arg.*)) return false;
-            }
-            return true;
-        },
-        else => return false, // Complex expressions - conservative non-match
+        switch (a.*) {
+            .Ident => |a_id| {
+                const b_id = b.Ident;
+                return std.mem.eql(u8, a_id.orig, b_id.orig);
+            },
+            .Member => |a_mem| {
+                const b_mem = b.Member;
+                if (!std.mem.eql(u8, a_mem.field, b_mem.field)) return false;
+                a = a_mem.target;
+                b = b_mem.target;
+            },
+            .Int => |a_int| return a_int == b.Int,
+            .String => |a_str| return std.mem.eql(u8, a_str, b.String),
+            .Bool => |a_bool| return a_bool == b.Bool,
+            .Binary => |a_bin| {
+                const b_bin = b.Binary;
+                if (a_bin.op != b_bin.op) return false;
+                if (!exprsEqual(a_bin.right.*, b_bin.right.*)) return false;
+                a = a_bin.left;
+                b = b_bin.left;
+            },
+            .Unary => |a_un| {
+                const b_un = b.Unary;
+                if (a_un.op != b_un.op) return false;
+                a = a_un.expr;
+                b = b_un.expr;
+            },
+            .Call => |a_call| {
+                const b_call = b.Call;
+                // Compare callee expressions (typically Ident for function name)
+                if (a_call.args.len != b_call.args.len) return false;
+                for (a_call.args, b_call.args) |a_arg, b_arg| {
+                    if (!exprsEqual(a_arg.*, b_arg.*)) return false;
+                }
+                a = a_call.callee;
+                b = b_call.callee;
+            },
+            else => return false, // Complex expressions - conservative non-match
+        }
     }
 }
 
@@ -409,52 +443,63 @@ fn getTypeOrder(v: Value) u8 {
 }
 
 // CANARY: REQ=REQ-GQL-AGG-DETECT-001; FEATURE="AggregationDetection"; ASPECT=RecursiveCheck; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-pub fn isAggregationExpr(expr: ast.Expr) bool {
-    switch (expr) {
-        .Call => |call| {
-            if (call.callee.* == .Ident) {
-                const func_name = call.callee.Ident.orig;
-                // Use case-insensitive comparison for aggregation functions
-                return std.ascii.eqlIgnoreCase(func_name, "count") or
-                    std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
-                    std.ascii.eqlIgnoreCase(func_name, "sum") or
-                    std.ascii.eqlIgnoreCase(func_name, "avg") or
-                    std.ascii.eqlIgnoreCase(func_name, "min") or
-                    std.ascii.eqlIgnoreCase(func_name, "max") or
-                    std.ascii.eqlIgnoreCase(func_name, "collect");
-            }
-            return false;
-        },
-        .Binary => |bin| {
-            // Recursively check for aggregations in binary expressions (e.g., d.budget - sum(e.salary))
-            return isAggregationExpr(bin.left.*) or isAggregationExpr(bin.right.*);
-        },
-        .Unary => |un| {
-            // Recursively check for aggregations in unary expressions
-            return isAggregationExpr(un.expr.*);
-        },
-        else => return false,
+// CANARY: REQ=REQ-SONNY-3189-CHAIN-WALKERS; FEATURE="QueryAnalysis"; ASPECT=IterativeWalkers; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=execution; UPDATED=2026-09-27
+/// SONNY-3189: the left operand of a binary expression and the operand of a
+/// unary one are followed with a loop, not one recursion per operator (and
+/// a copy of the expression per level): `RETURN 1 + 1 + ...` is as deep as
+/// it is long. Right operands recurse; nesting bounds them.
+pub fn isAggregationExpr(root: ast.Expr) bool {
+    var expr: *const ast.Expr = &root;
+    while (true) {
+        switch (expr.*) {
+            .Call => |call| {
+                if (call.callee.* == .Ident) {
+                    const func_name = call.callee.Ident.orig;
+                    // Use case-insensitive comparison for aggregation functions
+                    return std.ascii.eqlIgnoreCase(func_name, "count") or
+                        std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
+                        std.ascii.eqlIgnoreCase(func_name, "sum") or
+                        std.ascii.eqlIgnoreCase(func_name, "avg") or
+                        std.ascii.eqlIgnoreCase(func_name, "min") or
+                        std.ascii.eqlIgnoreCase(func_name, "max") or
+                        std.ascii.eqlIgnoreCase(func_name, "collect");
+                }
+                return false;
+            },
+            .Binary => |bin| {
+                // Check for aggregations in binary expressions (e.g., d.budget - sum(e.salary))
+                if (isAggregationExpr(bin.right.*)) return true;
+                expr = bin.left;
+            },
+            // Check for aggregations in unary expressions
+            .Unary => |un| expr = un.expr,
+            else => return false,
+        }
     }
 }
 
-pub fn isNonConstantExpr(expr: ast.Expr) bool {
-    switch (expr) {
-        .PropertyAccess => return true,
-        .Ident => return true,
-        .Member => return true,
-        .Call => {
-            // Check if it's not an aggregation function
-            return !isAggregationExpr(expr);
-        },
-        .Binary => |bin| {
-            return isNonConstantExpr(bin.left.*) or isNonConstantExpr(bin.right.*);
-        },
-        .Unary => |un| {
-            return isNonConstantExpr(un.expr.*);
-        },
-        // Constants are not non-constant
-        .Int, .String, .Bool, .Null, .Decimal => return false,
-        else => return true,
+/// SONNY-3189: as `isAggregationExpr`, left operands and unary operands with
+/// a loop.
+pub fn isNonConstantExpr(root: ast.Expr) bool {
+    var expr: *const ast.Expr = &root;
+    while (true) {
+        switch (expr.*) {
+            .PropertyAccess => return true,
+            .Ident => return true,
+            .Member => return true,
+            .Call => {
+                // Check if it's not an aggregation function
+                return !isAggregationExpr(expr.*);
+            },
+            .Binary => |bin| {
+                if (isNonConstantExpr(bin.right.*)) return true;
+                expr = bin.left;
+            },
+            .Unary => |un| expr = un.expr,
+            // Constants are not non-constant
+            .Int, .String, .Bool, .Null, .Decimal => return false,
+            else => return true,
+        }
     }
 }
 

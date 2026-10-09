@@ -284,7 +284,39 @@ const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .
 const default_quic_poll_worker_count = if (builtin.mode == .Debug) 4 else 16;
 const quic_connection_queue_capacity = 1024;
 const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 4096;
-const quic_connection_admission_stack_size = 1024 * 1024;
+// SONNY-3191 (N-5): an admission thread runs a connection's first stream
+// itself when the stream pool refuses it or no stream reactor is installed,
+// so it gets a request thread's stack (it had 1 MiB, where a plain MATCH was
+// refused, and overflowed in a Debug build). A thread that cannot be spawned
+// rejects its connection, as before.
+//
+// CANARY: REQ=REQ-SONNY-3253-ADMISSION-STACK; FEATURE="QuicAdmission"; ASPECT=StackAndSpawnFailure; STATUS=TESTED; TEST=tests/test_sonny3253_round14_minors.zig; OWNER=transport; UPDATED=2026-09-28
+// SONNY-3253 (round 15, F13): the stacks are reserved address space, not
+// committed memory (a thread touches only the pages it uses), but the
+// reservation is `admission threads x stack`: 4096 x 16 MiB is 64 GiB, which
+// a kernel with strict overcommit (vm.overcommit_memory=2) counts against
+// its commit limit, so spawns fail there long before 4096. A release build
+// now takes 8 MiB (32 GiB at 4096 threads): the gRPC connection threads
+// serve every request on 8 MiB, and the parser and evaluator bound what a
+// request can nest (SONNY-3133, SONNY-3181, SONNY-3189, SONNY-3251), which
+// the round 14 and 15 regressions run on 8 MiB threads in ReleaseSafe. A
+// Debug build keeps 16 MiB (its frames are several times larger; 64
+// admission threads, 1 GiB). GEODE_QUIC_ADMISSION_STACK_MB overrides it
+// (8..1048576); lower GEODE_QUIC_CONNECTION_ADMISSION_THREADS under strict
+// overcommit. A thread that cannot be spawned rejects its connection
+// (logged); the server serves on.
+//
+// SONNY-3317 (round 16, M5): the override's floor is 8 MiB
+// (`min_quic_admission_stack_mb`); it took 1 MiB, the stack on which round
+// 13 found a plain MATCH refused, and a Debug build crashed. Two kinds of
+// thread serve QUIC requests: the admission threads, which run a
+// connection's first stream under overload (8 MiB in a release build, 16
+// MiB in Debug, this setting), and the request workers, which serve every
+// other stream on 16 MiB stacks (`stack_guard.request_thread_stack_bytes`).
+// A request's nesting limits hold on the smaller of the two.
+const default_quic_admission_stack_mb: usize = if (builtin.mode == .Debug) 16 else 8;
+const min_quic_admission_stack_mb: usize = 8;
+var g_quic_admission_stack_size: usize = default_quic_admission_stack_mb * 1024 * 1024;
 
 // Process-global AuthProvider used by the embedded LSP TCP listener to
 // authenticate `initialize` bearer / session tokens.  `null` until the
@@ -2151,6 +2183,10 @@ pub fn main() !void {
             // GAP-0756: Parity with QUIC — gRPC handlers hit the same
             // cross-connection SharedQueryOptimizer plan cache.
             .shared_optimizer = init_ctx.shared_optimizer,
+            // SONNY-3032: session lifetimes (the reaper `start` runs).
+            .idle_in_transaction_timeout_ms = config.grpc_idle_in_transaction_timeout_ms,
+            .session_idle_timeout_ms = config.grpc_session_idle_timeout_ms,
+            .max_sessions_per_principal = config.grpc_max_sessions_per_principal,
         };
 
         const grpc_server = try gpa.create(grpc_transport.GeodeGrpcServer);
@@ -2678,6 +2714,14 @@ pub fn main() !void {
             connection_admission_cap,
             @as(usize, std.math.maxInt(u32)),
         )));
+        // SONNY-3253 (round 15, F13): see `default_quic_admission_stack_mb`.
+        g_quic_admission_stack_size = envUsize(
+            gpa,
+            "GEODE_QUIC_ADMISSION_STACK_MB",
+            default_quic_admission_stack_mb,
+            min_quic_admission_stack_mb,
+            1024 * 1024,
+        ) * 1024 * 1024;
 
         // CANARY: REQ=REQ-QUIC-HC-020; FEATURE="ConfigurableStreamThrottle"; ASPECT=ServerEnv; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
         //
@@ -2978,6 +3022,9 @@ pub fn main() !void {
         );
         try proto_reader_metrics.registerAll(metrics_registry);
         try quic_response_metrics.registerAll(metrics_registry);
+        // SONNY-3348 (round 19, m3): statement undo replays, undo failures,
+        // and writes refused by the undo record's budget.
+        try geode.statement_undo.registerAll(metrics_registry);
 
         // Phase C1: bridge the now-fully-populated runtime metrics registry into
         // OTLP as geode.runtime.* observable gauges. MUST run after every
@@ -3374,7 +3421,7 @@ pub fn main() !void {
                 ctx.admission_gate = &g_connection_admission_gate;
 
                 const admission_thread = std.Thread.spawn(
-                    .{ .stack_size = quic_connection_admission_stack_size },
+                    .{ .stack_size = g_quic_admission_stack_size },
                     handleConnectionAsync,
                     .{@as(*anyopaque, @ptrCast(ctx))},
                 ) catch |err| {

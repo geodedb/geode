@@ -36,11 +36,13 @@
 //!
 //! ATOMICITY at abort: the budget is polled BETWEEN candidates, before a
 //! candidate's mutation is applied — a node's SET/REMOVE is never left
-//! half-applied. The legacy executor provides NO statement-level rollback for
-//! autocommit multi-row writes (pre-existing semantics: any mid-query error —
-//! eval failure, OOM — leaves earlier per-node writes applied). The budget
-//! abort therefore guarantees: (a) per-node atomicity, (b) no further writes
-//! after the trip, (c) a loud, clean error instead of the OOM killer.
+//! half-applied. SONNY-3348: the statement then fails, and its undo record
+//! (`statement_undo`) undoes the writes it made before the trip.
+//!
+//! SONNY-3348 (round 19): the same budget bounds that undo record, on every
+//! executor: the record's before-images plus the active scope's working set
+//! stay under `budgetBytes()`. A write whose image does not fit is not made,
+//! and the statement fails with `error.WriteQueryBudgetExceeded` (53200).
 //!
 //! Configuration: `GEODE_WRITE_EXECUTOR_BUDGET_MB` (default 8192 MB).
 //! `0` disables the budget (unlimited). Parsed once, cached; tests override via

@@ -1,6 +1,9 @@
 const std = @import("std");
+const logging = @import("logging");
+const undo_log = logging.scoped("txn_undo_log");
 const graph_store = @import("graph_store.zig");
 const property_codec = @import("property_value_codec.zig");
+const statement_undo = @import("statement_undo.zig");
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-014; FEATURE="TransactionUndoLog"; ASPECT=GraphCommonImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const graph_common = @import("types/graph_common.zig");
 
@@ -120,6 +123,9 @@ pub const UndoEntry = union(UndoOpType) {
         labels: []const []const u8,
         properties: []const SerializedProperty,
         graph_name: []const u8,
+        /// SONNY-3348 (round 18): the node's tenant, owned when non-empty;
+        /// empty restores it to the default tenant. Not in the CLI file.
+        tenant_id: []const u8 = "",
     },
 
     // On rollback: recreate the edge with its data
@@ -130,6 +136,8 @@ pub const UndoEntry = union(UndoOpType) {
         label: []const u8,
         properties: []const SerializedProperty,
         graph_name: []const u8,
+        /// SONNY-3348 (round 18): as `DeleteNode.tenant_id`.
+        tenant_id: []const u8 = "",
     },
 
     // On rollback: remove the added label
@@ -305,51 +313,7 @@ pub const UndoLog = struct {
     /// Free the memory owned by a single undo entry.  Caller MUST hold
     /// `list_mutex` (or otherwise guarantee exclusive access).
     fn freeEntry(self: *UndoLog, entry: UndoEntry) void {
-        switch (entry) {
-            .SetNodeProperty => |e| {
-                self.allocator.free(e.key);
-                e.old_value.deinit(self.allocator);
-            },
-            .RemoveNodeProperty => |e| {
-                e.old_value.deinit(self.allocator);
-            },
-            .SetEdgeProperty => |e| {
-                self.allocator.free(e.key);
-                e.old_value.deinit(self.allocator);
-            },
-            .RemoveEdgeProperty => |e| {
-                e.old_value.deinit(self.allocator);
-            },
-            .DeleteNode => |e| {
-                for (e.labels) |label| self.allocator.free(label);
-                self.allocator.free(e.labels);
-                for (e.properties) |prop| {
-                    prop.deinit(self.allocator);
-                }
-                self.allocator.free(e.properties);
-                self.allocator.free(e.graph_name);
-            },
-            .DeleteEdge => |e| {
-                self.allocator.free(e.label);
-                for (e.properties) |prop| {
-                    prop.deinit(self.allocator);
-                }
-                self.allocator.free(e.properties);
-                self.allocator.free(e.graph_name);
-            },
-            .AddNodeLabel => |e| {
-                self.allocator.free(e.label);
-            },
-            .RemoveNodeLabel => |e| {
-                self.allocator.free(e.label);
-            },
-            .CreateNode => |e| {
-                self.allocator.free(e.graph_name);
-            },
-            .CreateEdge => |e| {
-                self.allocator.free(e.graph_name);
-            },
-        }
+        freeEntryWith(self.allocator, entry);
     }
 
     pub fn clear(self: *UndoLog) void {
@@ -436,6 +400,18 @@ pub const UndoLog = struct {
         if (self.entries.items.len == 0) self.active = false;
     }
 
+    /// SONNY-3028: has the calling thread's transaction recorded any change?
+    pub fn threadTxnHasEntries(self: *UndoLog) bool {
+        const txn = threadTxn();
+        if (txn == 0) return false;
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        for (self.entry_txns.items) |t| {
+            if (t == txn) return true;
+        }
+        return false;
+    }
+
     /// SONNY-2799: forget transaction `txn_id` without undoing it: its
     /// entries and its savepoints. For a transaction that committed, or one
     /// whose session went away with no store to undo it on. 0 is none.
@@ -489,20 +465,33 @@ pub const UndoLog = struct {
         return taken;
     }
 
-    /// Undo `entries` in order, freeing each. On an error the entries not
-    /// undone are freed too, and the error returned.
-    fn undoAndFree(self: *UndoLog, store: *graph_store.GraphStore, entries: []const UndoEntry) !void {
-        for (entries, 0..) |entry, k| {
-            self.undoEntry(store, entry) catch |err| {
-                self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-                defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-                for (entries[k..]) |rest| self.freeEntry(rest);
-                return err;
+    /// Undo `entries` in order, freeing each.
+    ///
+    /// SONNY-3348 (round 19, m3): an entry that cannot be undone is logged,
+    /// counted (`statement_undo.replay_failures_total`) and skipped, and the
+    /// rest are still undone: it stopped at the first, and freed the rest
+    /// undone, silently skipping the rest of the transaction. Afterwards
+    /// `error.RollbackIncomplete` reports that the transaction is partly
+    /// applied.
+    fn undoAndFree(self: *UndoLog, store: *graph_store.GraphStore, entries: []const UndoEntry) error{RollbackIncomplete}!void {
+        // SONNY-3348 (round 18, I1): the undo's own writes are neither
+        // recorded in a statement's undo record nor refused by the write
+        // fence a failed statement raised (a transaction body's rollback runs
+        // inside that statement's scope, and the fence made it a no-op).
+        statement_undo.suspendCapture();
+        defer statement_undo.resumeCapture();
+        var complete = true;
+        for (entries) |entry| {
+            (if (statement_undo.takeTestUndoFailure()) error.InjectedUndoFailure else self.undoEntry(store, entry)) catch |err| {
+                complete = false;
+                _ = statement_undo.replay_failures_total.fetchAdd(1, .monotonic);
+                undo_log.err("transaction undo: an entry could not be undone; the transaction is partly applied", &.{logging.Attr.string("error", @errorName(err))});
             };
             self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             self.freeEntry(entry);
             self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         }
+        if (!complete) return error.RollbackIncomplete;
     }
 
     /// Remove (and free) all entries whose tag matches `txn_id`.  Caller
@@ -739,8 +728,10 @@ pub const UndoLog = struct {
         const txn_id = threadTxn();
         if (txn_id == 0) return;
 
-        graph_store.setMutationNotifyInhibit(true);
-        defer graph_store.setMutationNotifyInhibit(false);
+        // SONNY-3348 (round 18): the undo goes through the store's logged
+        // write methods (`undoEntryLogged`), and the WAL mutation stream
+        // sees it: it saw the changes being undone. (A process-wide inhibit
+        // flag also dropped other sessions' changes while it was set.)
 
         // Take the entries we own out of the list under the lock (newest
         // first, the replay order), then drop the lock before calling back
@@ -755,9 +746,9 @@ pub const UndoLog = struct {
         if (self.entries.items.len == 0) self.active = false;
         self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
+        // SONNY-3348 (round 19, m3): the transaction is over either way.
+        defer t_txn_state = .{};
         try self.undoAndFree(store, owned_entries.items);
-
-        t_txn_state = .{};
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -768,8 +759,9 @@ pub const UndoLog = struct {
         // SONNY-2799: as `rollback`: this thread's transaction, and none for 0.
         const txn_id = threadTxn();
         if (txn_id == 0) return;
-        graph_store.setMutationNotifyInhibit(true);
-        defer graph_store.setMutationNotifyInhibit(false);
+        // SONNY-3348 (round 18): see `rollback`.
+        statement_undo.suspendCapture();
+        defer statement_undo.resumeCapture();
 
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         var owned_entries = self.takeNewestOwnLocked(txn_id, self.countOwnLocked(txn_id)) catch {
@@ -801,76 +793,264 @@ pub const UndoLog = struct {
 
     fn undoEntry(self: *UndoLog, store: *graph_store.GraphStore, entry: UndoEntry) !void {
         _ = self;
-        switch (entry) {
-            .CreateNode => |e| {
-                // Undo: delete the created node (full delete propagates to adapter)
-                store.deleteNode(e.node_id);
-            },
-            .CreateEdge => |e| {
-                // Undo: delete the created edge (full delete propagates to adapter)
-                store.deleteEdge(e.edge_id);
-            },
-            .SetNodeProperty => |e| {
-                // Undo: restore old value or remove property
-                if (e.had_old_value) {
-                    const pv = try e.old_value.toPropertyValue(store.allocator);
-                    defer property_codec.freePropertyValue(store.allocator, pv);
-                    try store.setNodePropertyNoSave(e.node_id, e.key, pv);
-                } else {
-                    store.removeNodePropertyNoSave(e.node_id, e.key);
-                }
-            },
-            .RemoveNodeProperty => |e| {
-                // Undo: restore the removed property
-                const pv = try e.old_value.toPropertyValue(store.allocator);
-                defer property_codec.freePropertyValue(store.allocator, pv);
-                try store.setNodePropertyNoSave(e.node_id, e.old_value.key, pv);
-            },
-            .SetEdgeProperty => |e| {
-                // Undo: restore old value or remove property
-                if (e.had_old_value) {
-                    const pv = try e.old_value.toPropertyValue(store.allocator);
-                    defer property_codec.freePropertyValue(store.allocator, pv);
-                    try store.setEdgePropertyNoSave(e.edge_id, e.key, pv);
-                } else {
-                    store.removeEdgePropertyNoSave(e.edge_id, e.key);
-                }
-            },
-            .RemoveEdgeProperty => |e| {
-                // Undo: restore the removed property
-                const pv = try e.old_value.toPropertyValue(store.allocator);
-                defer property_codec.freePropertyValue(store.allocator, pv);
-                try store.setEdgePropertyNoSave(e.edge_id, e.old_value.key, pv);
-            },
-            .DeleteNode => |e| {
-                // Undo: recreate the node
-                try store.restoreNodeNoSave(e.node_id, e.labels, e.graph_name);
-                for (e.properties) |prop| {
-                    const pv = try prop.toPropertyValue(store.allocator);
-                    defer property_codec.freePropertyValue(store.allocator, pv);
-                    try store.setNodePropertyNoSave(e.node_id, prop.key, pv);
-                }
-            },
-            .DeleteEdge => |e| {
-                // Undo: recreate the edge
-                try store.restoreEdgeNoSave(e.edge_id, e.from_id, e.to_id, e.label, e.graph_name);
-                for (e.properties) |prop| {
-                    const pv = try prop.toPropertyValue(store.allocator);
-                    defer property_codec.freePropertyValue(store.allocator, pv);
-                    try store.setEdgePropertyNoSave(e.edge_id, prop.key, pv);
-                }
-            },
-            .AddNodeLabel => |e| {
-                // Undo: remove the added label
-                try store.removeNodeLabelNoSave(e.node_id, e.label);
-            },
-            .RemoveNodeLabel => |e| {
-                // Undo: add the removed label back
-                try store.addNodeLabelNoSave(e.node_id, e.label);
-            },
+        try undoEntryLogged(store, entry);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3059-UNDO-ALL-CHANGES; FEATURE="TransactionUndoLog"; ASPECT=AdoptStatementRecord; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=engine; UPDATED=2026-09-29
+    /// SONNY-3059 (round 18): append a statement's undo record
+    /// (`statement_undo`) to the calling thread's transaction, oldest first,
+    /// so ROLLBACK undoes the statement's every change: SET, REMOVE, DELETE,
+    /// labels, MERGE ON MATCH, not only what it created. All or nothing: on
+    /// OutOfMemory the transaction is left as it was.
+    pub fn adoptStatementEntries(self: *UndoLog, entries: []const UndoEntry) error{OutOfMemory}!void {
+        const txn_id = threadTxn();
+        if (txn_id == 0 or entries.len == 0) return;
+        var copies: std.ArrayListUnmanaged(UndoEntry) = .empty;
+        defer copies.deinit(self.allocator);
+        errdefer for (copies.items) |c| freeEntryWith(self.allocator, c);
+        try copies.ensureTotalCapacity(self.allocator, entries.len);
+        for (entries) |e| copies.appendAssumeCapacity(try cloneEntry(self.allocator, e));
+
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        try self.entries.ensureUnusedCapacity(self.allocator, copies.items.len);
+        try self.entry_txns.ensureUnusedCapacity(self.allocator, copies.items.len);
+        for (copies.items) |c| {
+            self.entries.appendAssumeCapacity(c);
+            self.entry_txns.appendAssumeCapacity(txn_id);
         }
+        self.active = true;
+        copies.clearRetainingCapacity();
     }
 };
+
+/// SONNY-2799: is a transaction open on the calling thread? (SONNY-3348:
+/// a statement's undo record joins it when the statement succeeds.)
+pub fn threadInTxn() bool {
+    return threadTxn() != 0;
+}
+
+/// Free the memory `entry` owns, allocated with `allocator`.
+pub fn freeEntryWith(allocator: std.mem.Allocator, entry: UndoEntry) void {
+    switch (entry) {
+        .SetNodeProperty => |e| {
+            allocator.free(e.key);
+            e.old_value.deinit(allocator);
+        },
+        .RemoveNodeProperty => |e| {
+            e.old_value.deinit(allocator);
+        },
+        .SetEdgeProperty => |e| {
+            allocator.free(e.key);
+            e.old_value.deinit(allocator);
+        },
+        .RemoveEdgeProperty => |e| {
+            e.old_value.deinit(allocator);
+        },
+        .DeleteNode => |e| {
+            for (e.labels) |label| allocator.free(label);
+            allocator.free(e.labels);
+            for (e.properties) |prop| {
+                prop.deinit(allocator);
+            }
+            allocator.free(e.properties);
+            allocator.free(e.graph_name);
+            allocator.free(e.tenant_id);
+        },
+        .DeleteEdge => |e| {
+            allocator.free(e.label);
+            for (e.properties) |prop| {
+                prop.deinit(allocator);
+            }
+            allocator.free(e.properties);
+            allocator.free(e.graph_name);
+            allocator.free(e.tenant_id);
+        },
+        .AddNodeLabel => |e| {
+            allocator.free(e.label);
+        },
+        .RemoveNodeLabel => |e| {
+            allocator.free(e.label);
+        },
+        .CreateNode => |e| {
+            allocator.free(e.graph_name);
+        },
+        .CreateEdge => |e| {
+            allocator.free(e.graph_name);
+        },
+    }
+}
+
+fn cloneProperty(allocator: std.mem.Allocator, prop: SerializedProperty) !SerializedProperty {
+    const key = try allocator.dupe(u8, prop.key);
+    errdefer allocator.free(key);
+    const string_value: ?[]const u8 = if (prop.string_value) |v| try allocator.dupe(u8, v) else null;
+    errdefer if (string_value) |v| allocator.free(v);
+    const binary_value: ?[]const u8 = if (prop.binary_value) |v| try allocator.dupe(u8, v) else null;
+    var out = prop;
+    out.key = key;
+    out.string_value = string_value;
+    out.binary_value = binary_value;
+    return out;
+}
+
+fn cloneProperties(allocator: std.mem.Allocator, props: []const SerializedProperty) ![]const SerializedProperty {
+    const out = try allocator.alloc(SerializedProperty, props.len);
+    var done: usize = 0;
+    errdefer {
+        for (out[0..done]) |p| p.deinit(allocator);
+        allocator.free(out);
+    }
+    for (props, 0..) |p, i| {
+        out[i] = try cloneProperty(allocator, p);
+        done += 1;
+    }
+    return out;
+}
+
+fn cloneLabels(allocator: std.mem.Allocator, labels: []const []const u8) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, labels.len);
+    var done: usize = 0;
+    errdefer {
+        for (out[0..done]) |l| allocator.free(l);
+        allocator.free(out);
+    }
+    for (labels, 0..) |l, i| {
+        out[i] = try allocator.dupe(u8, l);
+        done += 1;
+    }
+    return out;
+}
+
+/// SONNY-3348 (round 18): a deep copy of `entry`, allocated with `allocator`.
+pub fn cloneEntry(allocator: std.mem.Allocator, entry: UndoEntry) !UndoEntry {
+    switch (entry) {
+        .CreateNode => |e| return .{ .CreateNode = .{ .node_id = e.node_id, .graph_name = try allocator.dupe(u8, e.graph_name) } },
+        .CreateEdge => |e| return .{ .CreateEdge = .{ .edge_id = e.edge_id, .graph_name = try allocator.dupe(u8, e.graph_name) } },
+        .SetNodeProperty => |e| {
+            const key = try allocator.dupe(u8, e.key);
+            errdefer allocator.free(key);
+            return .{ .SetNodeProperty = .{ .node_id = e.node_id, .key = key, .had_old_value = e.had_old_value, .old_value = try cloneProperty(allocator, e.old_value) } };
+        },
+        .RemoveNodeProperty => |e| return .{ .RemoveNodeProperty = .{ .node_id = e.node_id, .old_value = try cloneProperty(allocator, e.old_value) } },
+        .SetEdgeProperty => |e| {
+            const key = try allocator.dupe(u8, e.key);
+            errdefer allocator.free(key);
+            return .{ .SetEdgeProperty = .{ .edge_id = e.edge_id, .key = key, .had_old_value = e.had_old_value, .old_value = try cloneProperty(allocator, e.old_value) } };
+        },
+        .RemoveEdgeProperty => |e| return .{ .RemoveEdgeProperty = .{ .edge_id = e.edge_id, .old_value = try cloneProperty(allocator, e.old_value) } },
+        .DeleteNode => |e| {
+            const labels = try cloneLabels(allocator, e.labels);
+            errdefer {
+                for (labels) |l| allocator.free(l);
+                allocator.free(labels);
+            }
+            const props = try cloneProperties(allocator, e.properties);
+            errdefer {
+                for (props) |p| p.deinit(allocator);
+                allocator.free(props);
+            }
+            const graph_name = try allocator.dupe(u8, e.graph_name);
+            errdefer allocator.free(graph_name);
+            return .{ .DeleteNode = .{ .node_id = e.node_id, .labels = labels, .properties = props, .graph_name = graph_name, .tenant_id = try allocator.dupe(u8, e.tenant_id) } };
+        },
+        .DeleteEdge => |e| {
+            const label = try allocator.dupe(u8, e.label);
+            errdefer allocator.free(label);
+            const props = try cloneProperties(allocator, e.properties);
+            errdefer {
+                for (props) |p| p.deinit(allocator);
+                allocator.free(props);
+            }
+            const graph_name = try allocator.dupe(u8, e.graph_name);
+            errdefer allocator.free(graph_name);
+            return .{ .DeleteEdge = .{ .edge_id = e.edge_id, .from_id = e.from_id, .to_id = e.to_id, .label = label, .properties = props, .graph_name = graph_name, .tenant_id = try allocator.dupe(u8, e.tenant_id) } };
+        },
+        .AddNodeLabel => |e| return .{ .AddNodeLabel = .{ .node_id = e.node_id, .label = try allocator.dupe(u8, e.label) } },
+        .RemoveNodeLabel => |e| return .{ .RemoveNodeLabel = .{ .node_id = e.node_id, .label = try allocator.dupe(u8, e.label) } },
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="TransactionUndoLog"; ASPECT=LoggedUndo; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=engine; UPDATED=2026-09-29
+/// SONNY-3348 (round 18): undo one change through the store's normal write
+/// methods, so the storage engine, the WAL mutation stream and the store's
+/// indexes see the compensating change. (The rollback used the `*NoSave`
+/// setters, which change the in-memory store only: the engine kept the
+/// transaction's value, and the next start read it back.) An entity the
+/// change was on that no longer exists (a node an earlier undo deleted) is
+/// skipped, and so is a delete whose entity is still there (the delete
+/// never happened). The caller suspends the statement record and the write
+/// fence (`statement_undo.suspendCapture`).
+pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry) !void {
+    switch (entry) {
+        .CreateNode => |e| {
+            if (store.nodeExistsForUndo(e.node_id)) store.deleteNode(e.node_id);
+        },
+        .CreateEdge => |e| {
+            if (store.edgeExistsForUndo(e.edge_id)) store.deleteEdge(e.edge_id);
+        },
+        .SetNodeProperty => |e| {
+            if (!store.nodeExistsForUndo(e.node_id)) return;
+            if (e.had_old_value) {
+                const pv = try e.old_value.toPropertyValue(store.allocator);
+                defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
+                try store.setNodeProperty(e.node_id, e.key, pv);
+            } else {
+                store.removeNodeProperty(e.node_id, e.key);
+            }
+        },
+        .RemoveNodeProperty => |e| {
+            if (!store.nodeExistsForUndo(e.node_id)) return;
+            const pv = try e.old_value.toPropertyValue(store.allocator);
+            defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
+            try store.setNodeProperty(e.node_id, e.old_value.key, pv);
+        },
+        .SetEdgeProperty => |e| {
+            if (!store.edgeExistsForUndo(e.edge_id)) return;
+            if (e.had_old_value) {
+                const pv = try e.old_value.toPropertyValue(store.allocator);
+                defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
+                try store.setEdgeProperty(e.edge_id, e.key, pv);
+            } else {
+                store.removeEdgeProperty(e.edge_id, e.key);
+            }
+        },
+        .RemoveEdgeProperty => |e| {
+            if (!store.edgeExistsForUndo(e.edge_id)) return;
+            const pv = try e.old_value.toPropertyValue(store.allocator);
+            defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
+            try store.setEdgeProperty(e.edge_id, e.old_value.key, pv);
+        },
+        .DeleteNode => |e| {
+            if (store.nodeExistsForUndo(e.node_id)) return;
+            const tenant = if (e.tenant_id.len > 0) e.tenant_id else graph_store.DEFAULT_TENANT_ID;
+            try store.createNodeWithReservedIdGraphAndTenant(e.node_id, e.labels, e.graph_name, tenant);
+            for (e.properties) |prop| {
+                const pv = try prop.toPropertyValue(store.allocator);
+                defer if (prop.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
+                try store.setNodeProperty(e.node_id, prop.key, pv);
+            }
+        },
+        .DeleteEdge => |e| {
+            if (store.edgeExistsForUndo(e.edge_id)) return;
+            const tenant = if (e.tenant_id.len > 0) e.tenant_id else graph_store.DEFAULT_TENANT_ID;
+            try store.restoreDeletedEdge(e.edge_id, e.from_id, e.to_id, e.label, e.graph_name, tenant);
+            for (e.properties) |prop| {
+                const pv = try prop.toPropertyValue(store.allocator);
+                defer if (prop.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
+                try store.setEdgeProperty(e.edge_id, prop.key, pv);
+            }
+        },
+        .AddNodeLabel => |e| {
+            if (!store.nodeExistsForUndo(e.node_id)) return;
+            try store.removeNodeLabel(e.node_id, e.label);
+        },
+        .RemoveNodeLabel => |e| {
+            if (!store.nodeExistsForUndo(e.node_id)) return;
+            try store.addNodeLabel(e.node_id, e.label);
+        },
+    }
+}
 
 // Global undo log instance for CLI mode
 var global_undo_log: ?UndoLog = null;

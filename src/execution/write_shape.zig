@@ -69,10 +69,11 @@ pub const Error = error{ WriteClauseNotApplied, VariableLengthPathWrite, Unsuppo
 /// Where a statement runs.
 pub const Options = struct {
     /// Inside an explicit transaction (a START TRANSACTION before it, or a
-    /// transaction body). A ROLLBACK undoes only what the transaction created
-    /// (SONNY-3059, see above): a label SET or REMOVE is refused here; a
-    /// property SET, a REMOVE, a DELETE and a MERGE SET are accepted and are
-    /// NOT undone by a ROLLBACK.
+    /// transaction body). A label SET or REMOVE was refused here while a
+    /// ROLLBACK undid only what the transaction created; since SONNY-3059
+    /// (round 18, merged in the v0.8.23 reconciliation) ROLLBACK undoes
+    /// every change, labels and their postings included, so no shape depends
+    /// on it any more. Kept for the statement walk's bookkeeping.
     in_transaction: bool = false,
 };
 
@@ -301,6 +302,9 @@ pub fn fieldRole(comptime field: []const u8) FieldRole {
         "inline_let_bindings", "group_by",       "having",         "path_variable", "is_initial_with", "call_clause",
         "initial_with",        "initial_where",  "pre_with_where", "with_where",    "chained_write",   "split_create",
         "select_projection",   "optional_where",
+        // SONNY-3384: DETACH on the part's DELETE; every executor that
+        // applies `.delete` (match_delete, match_create) honours it.
+        "detach_delete",
     };
     const nested = [_][]const u8{ "next_query", "for_statement", "initial_call_subquery", "cte_list" };
     // SONNY-3242: `set_clause_ends`, where each SET clause ends, orders the
@@ -630,9 +634,6 @@ fn writesNameOptionalVariable(part: ast.Query) bool {
     return false;
 }
 
-/// The facts that set or remove a label.
-const label_facts = fs(&.{ .set_labels, .remove_labels, .merge_labels });
-
 pub const ShapeId = enum {
     create_statement,
     insert_statement,
@@ -718,7 +719,7 @@ pub const shapes = [_]Shape{
     },
     .{
         .id = .match_delete,
-        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] MATCH <pattern> [WHERE ...] [OPTIONAL MATCH <one chain from a matched variable>] [SET/REMOVE ...] DELETE <node, relationship or variable-length relationship variables> [RETURN ...]",
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] MATCH <pattern> [WHERE ...] [OPTIONAL MATCH <one chain from a matched variable>] [SET/REMOVE ...] [DETACH] DELETE <node, relationship or variable-length relationship variables> [RETURN ...]",
         .executor = .match_delete,
         .must = fs(&.{ .match, .delete }),
         .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &set_facts, &.{ .optional, .unwind } }),
@@ -726,7 +727,7 @@ pub const shapes = [_]Shape{
     },
     .{
         .id = .match_create,
-        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] MATCH <pattern> [WHERE ...] [OPTIONAL MATCH <one chain from a matched variable>] CREATE <pattern of matched and new variables> [SET/REMOVE ...] [DELETE <matched variables>] [RETURN ...]",
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] MATCH <pattern> [WHERE ...] [OPTIONAL MATCH <one chain from a matched variable>] CREATE <pattern of matched and new variables> [SET/REMOVE ...] [[DETACH] DELETE <matched variables>] [RETURN ...]",
         .executor = .match_create,
         .must = fs(&.{ .match, .create }),
         .may = may(&.{ &pattern_facts, &return_facts, &initial_with_facts, &set_facts, &.{ .create_rel, .delete, .unwind, .optional } }),
@@ -955,7 +956,7 @@ fn allowStatementWith(stmt: ast.Statement, opts: Options, params: *const Names, 
         },
         .Create => |c| try allowCreateStatement(.create_statement, c.pattern, c.return_clause),
         .Insert => |i| try allowCreateStatement(.insert_statement, i.pattern, i.return_clause),
-        .Merge => |m| try allowMergeStatement(m, opts),
+        .Merge => |m| try allowMergeStatement(m),
         .Delete => |d| try allowDeleteStatement(d),
         .For => |fr| {
             const body = fr.body orelse return;
@@ -1061,7 +1062,7 @@ fn allowCreateStatement(ex: Executor, pattern: ast.GraphPattern, ret: ?ast.Retur
     }
 }
 
-fn allowMergeStatement(m: ast.MergeStatement, opts: Options) Error!void {
+fn allowMergeStatement(m: ast.MergeStatement) Error!void {
     var facts = Facts.initEmpty();
     mergeFacts(&facts, m);
     patternExprFacts(&facts, m.pattern);
@@ -1069,7 +1070,6 @@ fn allowMergeStatement(m: ast.MergeStatement, opts: Options) Error!void {
         for (actions) |sc| setClauseExprFacts(&facts, sc);
     }
     if (m.return_clause) |r| for (r.items) |item| exprFacts(&facts, item.expr);
-    if (opts.in_transaction and facts.intersectWith(label_facts).count() != 0) return error.WriteClauseNotApplied;
     _ = findShape(.merge_statement, facts, .{}) orelse return error.WriteClauseNotApplied;
     try checkMergeActions(m);
     // SONNY-3240: as a CREATE's (`allowCreateStatement`); the ON CREATE, ON
@@ -1148,7 +1148,6 @@ fn allowPart(q: ast.Query, ctx: PartCtx, params: *const Names) Error!void {
 
     partFacts(&facts, part, ex);
     queryExprFacts(&facts, q);
-    if (ctx.in_transaction and facts.intersectWith(label_facts).count() != 0) return error.WriteClauseNotApplied;
     _ = findShape(ex, facts, ctx) orelse return error.WriteClauseNotApplied;
     // A CREATE or MERGE after an OPTIONAL MATCH names only what the MATCH
     // binds: a variable the optional chain did not bind was null, and the
@@ -1263,6 +1262,9 @@ fn partFacts(facts: *Facts, q: ast.Query, ex: Executor) void {
         } else if (comptime is(name, "set_clause_ends")) {
             // Where each SET clause ends: the order the SET's values are
             // evaluated in (every executor applies it), not a shape.
+        } else if (comptime is(name, "detach_delete")) {
+            // SONNY-3384: DETACH on the part's DELETE (`.delete` above);
+            // every executor that applies a DELETE honours it.
         } else {
             @compileError("SONNY-3166: classify ast.Query." ++ name ++ " for the write-shape allowlist (partFacts, write_shape.zig)");
         }

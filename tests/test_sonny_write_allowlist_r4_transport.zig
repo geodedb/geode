@@ -885,7 +885,8 @@ const HandlerJob = struct {
 /// Run `job` on a thread whose stack is exactly `stack` bytes (a mapping of
 /// its own with a guard page; glibc would hand back a larger cached stack),
 /// in a child process, so an overflow is reported. Exit status: 0 answered,
-/// 1 answered 54001, 2 answered another error, 9 setup failed; null crashed.
+/// 1 refused as nested too deep (54001, or 42000 from the stack guard), 2
+/// answered another error, 9 setup failed; null crashed.
 fn handlerInChild(job: *HandlerJob, stack: usize) ?u8 {
     const pid = std.c.fork();
     if (pid < 0) return 9;
@@ -904,7 +905,12 @@ fn handlerInChild(job: *HandlerJob, stack: usize) ?u8 {
         _ = std.c.pthread_join(tid, null);
         if (!job.done) std.c._exit(9);
         const code = job.code orelse std.c._exit(0);
-        std.c._exit(if (std.mem.eql(u8, code, "54001")) 1 else 2);
+        // 54001: the query nesting limit (SONNY-3244). 42000 "nesting too
+        // deep for the parser's stack": the parser's stack guard (SONNY-3133,
+        // merged from the r12 line), which in a Debug build can refuse the
+        // deepest FOR bodies on an 8 MiB thread just before the limit does.
+        // Either is a clean refusal past the limit.
+        std.c._exit(if (std.mem.eql(u8, code, "54001") or std.mem.eql(u8, code, "42000")) 1 else 2);
     }
     var status: c_int = 0;
     if (std.c.waitpid(pid, &status, 0) != pid) return 9;

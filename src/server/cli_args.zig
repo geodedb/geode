@@ -89,6 +89,19 @@ pub const ServerConfig = struct {
     // GAP-0259: Configurable QUIC idle timeout (default 300s / 5 minutes)
     idle_timeout_ms: u64 = 300000,
 
+    // CANARY: REQ=REQ-SONNY-3032-GRPC-SESSION-EXPIRY; FEATURE="GrpcSessionLifetime"; ASPECT=Config; STATUS=TESTED; TEST=tests/test_sonny3032_grpc_session_expiry.zig; OWNER=transport; UPDATED=2026-09-27
+    // SONNY-3032: gRPC session lifetimes (grpc_server.SessionStore; the
+    // defaults are grpc_server's default_* constants). A session idle in an
+    // open transaction this long is closed and its transaction rolled back
+    // (--idle-in-transaction-timeout <ms>, config `idle_in_transaction_timeout`);
+    // any session idle this long is closed (--grpc-session-idle-timeout <ms>,
+    // `grpc_session_idle_timeout`); one user holds at most this many sessions
+    // (--grpc-max-sessions-per-principal <n>, `grpc_max_sessions_per_principal`).
+    // 0 turns each off.
+    grpc_idle_in_transaction_timeout_ms: u64 = 600000,
+    grpc_session_idle_timeout_ms: u64 = 1800000,
+    grpc_max_sessions_per_principal: u32 = 1024,
+
     // GAP-0327: Configurable QUIC connection cap. 0 = use the transport
     // default (1000). A small value makes connection-pool-exhaustion
     // behaviour deterministically testable.
@@ -234,6 +247,16 @@ pub fn mergeFileConfig(config: *ServerConfig, file_result: config_lib.Value) voi
     if (file_result.getString("persist_interval")) |v| {
         config.persist_interval_ms = std.fmt.parseUnsigned(u64, v, 10) catch config.persist_interval_ms;
     }
+    // SONNY-3032: gRPC session lifetimes.
+    if (file_result.getString("idle_in_transaction_timeout")) |v| {
+        config.grpc_idle_in_transaction_timeout_ms = std.fmt.parseUnsigned(u64, v, 10) catch config.grpc_idle_in_transaction_timeout_ms;
+    }
+    if (file_result.getString("grpc_session_idle_timeout")) |v| {
+        config.grpc_session_idle_timeout_ms = std.fmt.parseUnsigned(u64, v, 10) catch config.grpc_session_idle_timeout_ms;
+    }
+    if (file_result.getString("grpc_max_sessions_per_principal")) |v| {
+        config.grpc_max_sessions_per_principal = std.fmt.parseUnsigned(u32, v, 10) catch config.grpc_max_sessions_per_principal;
+    }
 }
 
 fn setCapabilityProfile(allocator: std.mem.Allocator, config: *ServerConfig, path: []const u8) !void {
@@ -270,6 +293,9 @@ pub fn printHelp() void {
     std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
     std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
     std.debug.print("  --idle-timeout <ms>          QUIC idle timeout in milliseconds (default: 300000)\n", .{});
+    std.debug.print("  --idle-in-transaction-timeout <ms>  Close a gRPC session idle in an open transaction this long, rolling it back (default: 600000; 0 = never)\n", .{});
+    std.debug.print("  --grpc-session-idle-timeout <ms>    Close a gRPC session idle this long (default: 1800000; 0 = never)\n", .{});
+    std.debug.print("  --grpc-max-sessions-per-principal <n>  Most gRPC sessions one user holds; past it the least recently used idle one is closed (default: 1024; 0 = no cap)\n", .{});
     std.debug.print("  --max-connections <n>        Cap concurrent QUIC connections (default: 10000)\n", .{});
     std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
     std.debug.print("  --cluster-port <port>        Raft cluster listen port (also requires GEODE_CLUSTER_TOKEN to activate)\n", .{});
@@ -441,6 +467,16 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--idle-timeout") and ai + 1 < args.len) {
             config.idle_timeout_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch 300000;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--idle-in-transaction-timeout") and ai + 1 < args.len) {
+            // SONNY-3032: a malformed value keeps the default.
+            config.grpc_idle_in_transaction_timeout_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch config.grpc_idle_in_transaction_timeout_ms;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--grpc-session-idle-timeout") and ai + 1 < args.len) {
+            config.grpc_session_idle_timeout_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch config.grpc_session_idle_timeout_ms;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--grpc-max-sessions-per-principal") and ai + 1 < args.len) {
+            config.grpc_max_sessions_per_principal = std.fmt.parseUnsigned(u32, args[ai + 1], 10) catch config.grpc_max_sessions_per_principal;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--max-connections") and ai + 1 < args.len) {
             config.max_connections = std.fmt.parseUnsigned(usize, args[ai + 1], 10) catch 0;

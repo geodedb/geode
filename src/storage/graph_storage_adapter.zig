@@ -1743,6 +1743,34 @@ pub const ManagedGraph = struct {
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
+    // CANARY: REQ=REQ-SONNY-3028-DROP-GRAPH-PINS; FEATURE="MultiGraphIsolation"; ASPECT=Pins; STATUS=TESTED; TEST=tests/test_sonny3028_drop_graph_in_use.zig; OWNER=storage; UPDATED=2026-09-27
+    /// SONNY-3028: the threads that hold this graph through the adapter while
+    /// it may be dropped (low bits), and whether it was (`dropped_bit`). A pin
+    /// is taken under the adapter's `mutex` while the graph is in `engines`:
+    /// by the graph lock API for every holder and waiter of `rwlock`
+    /// (`acquireGraphReadLock`, `acquireGraphWriteLock*`, until the matching
+    /// release), a group-commit batch, a checkpoint, and a session engine
+    /// transaction's commit or abort. `dropGraph` takes the graph out of
+    /// `engines` under the same mutex, so it sees every pin: with none it
+    /// frees the graph, and otherwise the last `unpinGraph` does. A waiter that
+    /// gets the lock of a dropped graph lets it go (`GraphNotFound`).
+    /// `dropGraph` freed the graph under its lock's holders and waiters, whose
+    /// release was then a use-after-free.
+    pins: std.atomic.Value(u32) = .init(0),
+    // CANARY: REQ=REQ-SONNY-3029-GROUP-COMMIT-TXN-GATE; FEATURE="High-Concurrency Mutations"; ASPECT=TxnGate; STATUS=TESTED; TEST=tests/test_sonny3029_group_commit_txn_gate.zig; OWNER=storage; UPDATED=2026-09-27
+    /// SONNY-3029: group-commit batches with a statement transaction open on
+    /// this graph (`enterBatchTxn`), and threads that hold or wait for its
+    /// write lock (`acquireGraphWriteLock*`, `claimWriteLock`). A batch opens
+    /// its transaction only while no writer is there, and a writer takes the
+    /// lock only once every open batch has committed, so no batch
+    /// transaction is open while another thread holds the graph's write lock.
+    /// A batch keeps its transaction open across the SHARED holds of its ops;
+    /// between two of them the graph's write lock could be taken, and the
+    /// writer's engine transactions then overlapped the batch's (review probe
+    /// P7: 15,314 of 864,308 samples), the SONNY-2978 class that loses
+    /// committed writes on crash recovery.
+    batch_txns_open: std.atomic.Value(u32) = .init(0),
+    write_lock_claims: std.atomic.Value(u32) = .init(0),
 
     /// Explicit writer-preference counter for ALL EXCLUSIVE acquirers of
     /// `rwlock` (the periodic checkpoint AND the edge-phase schema/MERGE ops).
@@ -1876,6 +1904,14 @@ pub const ManagedGraph = struct {
     rwlock_shared_hold_bulk_merge_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     rwlock_shared_hold_bulk_edge_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     rwlock_shared_hold_fallback_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
+    pub const dropped_bit: u32 = 1 << 31;
+
+    /// SONNY-3028: was this graph dropped (it is out of `engines`, and its
+    /// last pin frees it)?
+    pub fn isDropped(self: *const ManagedGraph) bool {
+        return self.pins.load(.acquire) & dropped_bit != 0;
+    }
 
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
@@ -2853,6 +2889,11 @@ pub const SessionEngineTxn = struct {
     /// `txn` is an open engine transaction. Kept by `beginSessionTxnLazy`
     /// and the commit and abort functions.
     open: bool = false,
+    /// SONNY-3135 (N7b): the session's request failed inside its transaction
+    /// (`noteSessionTxnFailed`), which the handler rolls back: its engine
+    /// transaction is aborted, never committed (`settleAtWriteRelease`).
+    /// Cleared when a request of the session starts and ends.
+    failed: bool = false,
 };
 
 /// SONNY-2823: the session slot installed on this thread, or null. With none,
@@ -2871,28 +2912,56 @@ pub const SessionEngineTxnScope = struct {
 /// SONNY-2823: install `slot` on this thread for one request of its session.
 pub fn enterSessionEngineTxn(slot: *SessionEngineTxn) SessionEngineTxnScope {
     if (t_session_engine_slot == slot) return .{ .prev = slot, .nested = true };
+    slot.failed = false;
     const prev = t_session_engine_slot;
     t_session_engine_slot = slot;
     t_session_engine_txn = if (slot.open) &slot.txn else null;
     return .{ .prev = prev };
 }
 
+// CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=Instrumentation; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3027: releases of a graph's write lock that found a session engine
+/// transaction still open on the releasing thread (`settleAtWriteRelease`).
+/// The request's handler commits it before it lets go; each one counted here
+/// is a path that did not. Zero in a correct server.
+pub var session_txn_open_at_write_release_total: std.atomic.Value(u64) = .init(0);
+/// SONNY-3027: requests that ended with their session engine transaction
+/// still open (`leaveSessionEngineTxn`'s backstop), which aborts it. Zero in a
+/// correct server.
+pub var session_txn_backstop_total: std.atomic.Value(u64) = .init(0);
+
 /// SONNY-2823: the request is over. The thread keeps no session engine
 /// transaction, and no per-statement one either: neither may outlive the
 /// request on a pooled thread, where the next request's writes, from any
 /// session, would join it.
-pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnScope) void {
-    if (scope.nested) return;
+///
+/// SONNY-3027: true when the backstop ran: the session's engine transaction
+/// was still open. The request's write lock is released by now, so it is
+/// aborted, never committed (a commit here, outside the lock, overlapped the
+/// transactions of the graph's next writer: the SONNY-2978 class), and the
+/// caller fails the session's transaction.
+pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnScope) bool {
+    if (scope.nested) return false;
+    var backstop = false;
     if (slot.open and t_session_engine_txn == &slot.txn) {
-        // The executor commits it when the program that opened it returns;
-        // one still open is a bug. Its changes stand in memory, as an undo
-        // transaction's do until it is undone, so it is committed.
-        log.err("a session engine txn outlived its request; committing it", .{});
-        commitThreadSessionTxn() catch |err| {
-            log.err("session engine txn commit failed: {s}", .{@errorName(err)});
-        };
+        // The executor commits it when the program that opened it returns,
+        // and the handler before it releases the program's write lock; one
+        // still open is a bug. A warning: the failure is handled, and the
+        // client sees it (its transaction fails); the counter tells.
+        log.warn("a session engine txn outlived its request's write lock; aborting it and failing its transaction", .{});
+        _ = session_txn_backstop_total.fetchAdd(1, .monotonic);
+        abortThreadSessionTxn();
+        backstop = true;
+    }
+    if (t_session_commit_failure) |err| {
+        // SONNY-3031: a commit of the session's engine transaction failed in
+        // this request, and no handler reported it: its transaction failed.
+        log.warn("a session engine txn commit failed and was not reported; failing its transaction: {s}", .{@errorName(err)});
+        t_session_commit_failure = null;
+        backstop = true;
     }
     slot.open = false;
+    slot.failed = false;
     t_session_engine_slot = scope.prev;
     t_session_engine_txn = if (scope.prev) |p| (if (p.open) &p.txn else null) else null;
     if (scope.prev == null and t_current_statement_txn != null) {
@@ -2903,12 +2972,112 @@ pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnSco
         log.err("a statement engine txn was left open at the end of a request; the thread forgets it", .{});
         t_current_statement_txn = null;
     }
+    return backstop;
+}
+
+// CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=CommitBeforeRelease; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3027: the transport handlers call this while they still hold the
+/// request's graph write lock, before they release it: the session engine
+/// transaction the request left on this thread is committed under the lock.
+/// The executor's entry points commit it when the program ends; a path that
+/// ran a change without passing one (the PROFILE arm) left it open, and only
+/// the backstop committed it, after the lock was released. An error fails the
+/// request, and the handler rolls back the session's transaction.
+///
+/// SONNY-3031: it also reports a commit that failed earlier in the request
+/// where no error could be returned (`noteSessionCommitFailure`, the end of
+/// the executor's program). Either failure is `error.SessionCommitFailed`
+/// (40000): the transaction's changes are not durable, so the request fails
+/// and the handler rolls the transaction back.
+pub fn settleThreadSessionTxn() error{SessionCommitFailed}!void {
+    if (t_session_commit_failure) |err| {
+        t_session_commit_failure = null;
+        log.warn("session engine txn commit failed: {s}", .{@errorName(err)});
+        abortThreadSessionTxn();
+        return error.SessionCommitFailed;
+    }
+    commitThreadSessionTxn() catch |err| {
+        log.warn("session engine txn commit failed: {s}", .{@errorName(err)});
+        return error.SessionCommitFailed;
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-3031-SESSION-COMMIT-FAILURE; FEATURE="TransactionManagement"; ASPECT=NotedFailure; STATUS=TESTED; TEST=tests/test_sonny3031_session_commit_failure.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3031: a session engine commit that failed where its error could
+/// not be returned (the executor's program end, `graph_store.releaseGraphLock`),
+/// kept for the request's handler (`settleThreadSessionTxn`) or, failing that,
+/// the backstop (`leaveSessionEngineTxn`). It was only logged: the request
+/// and the transaction's COMMIT reported success.
+threadlocal var t_session_commit_failure: ?anyerror = null;
+
+pub fn noteSessionCommitFailure(err: anyerror) void {
+    if (t_session_commit_failure == null) t_session_commit_failure = err;
+}
+
+/// SONNY-3031 fault injection for tests: the next N commits of a session
+/// engine transaction fail (`error.InjectedSessionCommitFailure`) before
+/// they reach the engine, as a failed WAL append or fsync would.
+pub var session_commit_fault_injections: std.atomic.Value(u32) = .init(0);
+
+fn takeInjectedCommitFault() bool {
+    var n = session_commit_fault_injections.load(.monotonic);
+    while (n > 0) {
+        n = session_commit_fault_injections.cmpxchgWeak(n, n - 1, .monotonic, .monotonic) orelse return true;
+    }
+    return false;
+}
+
+/// SONNY-3027: `graph_store.releaseGraphLock` of a write lock, before it lets
+/// go. A session engine transaction still open on this thread is committed
+/// now, under the lock, rather than after it (by then another writer may hold
+/// the lock and have transactions of its own open on the graph). Its handler
+/// should have committed it first (`settleThreadSessionTxn`), so it is
+/// counted and logged.
+///
+/// CANARY: REQ=REQ-SONNY-3135-FAILED-TXN-ABORT; FEATURE="TransactionManagement"; ASPECT=SettleAtWriteRelease; STATUS=TESTED; TEST=tests/test_sonny3135_profile_allowlist_failed_txn.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3135 (N7b): the transaction of a request that failed
+/// (`noteSessionTxnFailed`) is aborted instead: the handler rolls it back
+/// once the lock is released, and a commit made the failed changes durable
+/// until then (the SONNY-2979 crash window).
+pub fn settleAtWriteRelease() void {
+    if (t_session_engine_txn == null) return;
+    _ = session_txn_open_at_write_release_total.fetchAdd(1, .monotonic);
+    if (sessionTxnFailed()) {
+        // The structured logger, at error level: the path is a handled
+        // failure, and std.log's error level fails a test that drives it.
+        slog.err("a graph write lock was released with a failed request's session engine txn open; aborting it under the lock", &.{});
+        abortThreadSessionTxn();
+        return;
+    }
+    log.err("a graph write lock was released with a session engine txn open; committing it under the lock", .{});
+    commitThreadSessionTxn() catch |err| noteSessionCommitFailure(err);
+}
+
+/// SONNY-3135 (N7b): the request running on this thread failed inside its
+/// session's transaction, which its handler rolls back: the session engine
+/// transaction is aborted, not committed, wherever it is settled
+/// (`settleAtWriteRelease`, the executor's program end). No-op without a
+/// session slot on the thread.
+pub fn noteSessionTxnFailed() void {
+    if (t_session_engine_slot) |slot| slot.failed = true;
+}
+
+/// SONNY-3135 (N7b): did the request running on this thread fail inside its
+/// session's transaction (`noteSessionTxnFailed`)?
+pub fn sessionTxnFailed() bool {
+    const slot = t_session_engine_slot orelse return false;
+    return slot.failed;
 }
 
 /// SONNY-2823: take this thread's session engine transaction off the thread
 /// (and out of its slot), or null for none. Null too when its graph was
 /// dropped: the transaction went with the graph's engine, and `txn.mg`,
 /// freed, is not read.
+///
+/// SONNY-3028: the graph comes back pinned (`ManagedGraph.pins`), so a
+/// `dropGraph` on another thread cannot free it between the check and the
+/// commit or abort; the caller unpins it (`unpinTaken`). The check and the use
+/// were two steps, with the adapter's mutex released between them.
 fn takeThreadSessionTxn() ?*StatementTxn {
     const txn = t_session_engine_txn orelse return null;
     t_session_engine_txn = null;
@@ -2916,18 +3085,45 @@ fn takeThreadSessionTxn() ?*StatementTxn {
     if (&slot.txn != txn) return txn;
     slot.open = false;
     const ad = graph_store.getGlobalAdapter() orelse return null;
-    if (!ad.engineIsOpen(slot.txn.mg, slot.graph_uuid)) {
+    if (!ad.pinIfOpen(slot.txn.mg, slot.graph_uuid)) {
         log.warn("the graph of a session engine txn was dropped; the txn went with it", .{});
         return null;
     }
     return txn;
 }
 
+/// SONNY-3028: the pin `takeThreadSessionTxn` took on `txn`'s graph.
+fn unpinTaken(txn: *StatementTxn) void {
+    const slot = t_session_engine_slot orelse return;
+    if (&slot.txn != txn) return;
+    const ad = graph_store.getGlobalAdapter() orelse return;
+    ad.unpinGraph(txn.mg);
+}
+
 /// SONNY-2823: commit this thread's session engine transaction, if it has
 /// one: ONE WAL fsync for its writes on its shard.
+///
+/// SONNY-3031: a commit that fails aborts the transaction, so the engine
+/// forgets it: it stayed in the shard's `active_txns` forever.
 pub fn commitThreadSessionTxn() !void {
     const txn = takeThreadSessionTxn() orelse return;
-    try txn.mg.engine.commitTxn(txn.txn_id);
+    defer unpinTaken(txn);
+    const result = if (takeInjectedCommitFault())
+        error.InjectedSessionCommitFailure
+    else
+        txn.mg.engine.commitTxn(txn.txn_id);
+    result catch |err| {
+        txn.mg.engine.abortTxn(txn.txn_id) catch |abort_err| {
+            log.err("session engine txn abort after a failed commit failed: {s}", .{@errorName(abort_err)});
+        };
+        return err;
+    };
+}
+
+/// SONNY-3348 (round 19): does this thread have a session engine
+/// transaction open?
+pub fn hasThreadSessionTxn() bool {
+    return t_session_engine_txn != null;
 }
 
 /// SONNY-2823: abort this thread's session engine transaction, if it has
@@ -2935,9 +3131,18 @@ pub fn commitThreadSessionTxn() !void {
 /// changes commit on their own and do not join the aborted transaction.
 pub fn abortThreadSessionTxn() void {
     const txn = takeThreadSessionTxn() orelse return;
+    defer unpinTaken(txn);
     // error-policy: A — best-effort session rollback; WAL recovery
     // supersedes a failed abort.
     txn.mg.engine.abortTxn(txn.txn_id) catch {};
+}
+
+/// SONNY-3028: does this thread have an engine transaction open on `mg` (its
+/// session's, or a statement's)? `dropGraph` refuses to drop that graph.
+fn threadTxnOn(mg: *const ManagedGraph) bool {
+    if (t_session_engine_txn) |t| if (t.mg == mg) return true;
+    if (t_current_statement_txn) |t| if (t.mg == mg) return true;
+    return false;
 }
 
 /// Return the thread-local statement txn if it targets `graph_name`; else null.
@@ -3441,10 +3646,29 @@ pub const StorageAdapter = struct {
         return self.engines.contains(name) or self.findRegistryEntryLocked(name) != null;
     }
 
+    // CANARY: REQ=REQ-SONNY-3028-DROP-GRAPH-PINS; FEATURE="MultiGraphIsolation"; ASPECT=DropGraph; STATUS=TESTED; TEST=tests/test_sonny3028_drop_graph_in_use.zig; OWNER=storage; UPDATED=2026-09-27
     /// Close and remove the graph identified by `name`.
-    pub fn dropGraph(self: *StorageAdapter, name: []const u8) void {
+    ///
+    /// SONNY-3028: the graph leaves `engines` and the registry now, and is
+    /// freed when no thread holds it (`ManagedGraph.pins`): at once, or by the
+    /// last of its lock's holders and waiters, its group-commit batch or its
+    /// checkpoint to let go. A waiter that gets the lock of a dropped graph
+    /// lets it go (`GraphNotFound`). It was freed under them. `ObjectInUse`
+    /// when this thread has an engine transaction open on it (a program that
+    /// changed the graph in its transaction, then drops it): the graph stays.
+    ///
+    /// SONNY-3132: the default graph is refused (`CannotDropDefaultGraph`),
+    /// whoever calls. `GraphStore.dropGraph` checked for it only after this
+    /// drop had deleted the default graph's engine and files.
+    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph }!void {
+        // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=AdapterRefusesDefault; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
+        if (std.mem.eql(u8, name, graph_store.DEFAULT_GRAPH_NAME)) return error.CannotDropDefaultGraph;
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        if (self.engines.get(name)) |mg| {
+            if (threadTxnOn(mg)) return error.ObjectInUse;
+        }
 
         var dropped_uuid: ?[16]u8 = null;
         if (self.engines.fetchRemove(name)) |kv| {
@@ -3456,7 +3680,9 @@ pub const StorageAdapter = struct {
             }
 
             dropped_uuid = mg.uuid;
-            mg.deinit(self.allocator, false);
+            // SONNY-3028: pinned graphs are freed by their last unpin.
+            const prev = mg.pins.fetchOr(ManagedGraph.dropped_bit, .acq_rel);
+            if (prev == 0) mg.deinit(self.allocator, false);
         } else if (self.findRegistryEntryLocked(name)) |entry| {
             dropped_uuid = entry.uuid;
         }
@@ -8251,11 +8477,15 @@ pub const StorageAdapter = struct {
             var it = self.engines.valueIterator();
             while (it.next()) |mg| {
                 if (graph_count < graphs_buf.len) {
+                    // SONNY-3028: pinned while this checkpoint uses it, so a
+                    // concurrent `dropGraph` cannot free it under the pointer.
+                    _ = mg.*.pins.fetchAdd(1, .acq_rel);
                     graphs_buf[graph_count] = mg.*;
                     graph_count += 1;
                 }
             }
         }
+        defer for (graphs_buf[0..graph_count]) |mg| self.unpinGraph(mg);
 
         // Checkpoint each graph WITHOUT holding the adapter mutex.
         // The ManagedGraph pointers remain valid because graphs are only
@@ -8338,7 +8568,7 @@ pub const StorageAdapter = struct {
         // the rwlock acquire eliminates the recurring reader entirely, which
         // alone unblocks the edge phase; FIX #2 (exclusive_waiting writer
         // preference) hardens the remaining SHARED read paths.
-        var counts_buf: [64]struct { name: []const u8, uuid: [16]u8, node_count: u64, edge_count: u64 } = undefined;
+        var counts_buf: [64]struct { mg: *ManagedGraph, node_count: u64, edge_count: u64 } = undefined;
         for (graphs_buf[0..graph_count], 0..) |mg, i| {
             var nc: u64 = 0;
             var ec: u64 = 0;
@@ -8347,8 +8577,7 @@ pub const StorageAdapter = struct {
                 ec += @atomicLoad(u64, &shard.manifest.edge_count, .monotonic);
             }
             counts_buf[i] = .{
-                .name = mg.name,
-                .uuid = mg.uuid,
+                .mg = mg,
                 .node_count = nc,
                 .edge_count = ec,
             };
@@ -8357,7 +8586,10 @@ pub const StorageAdapter = struct {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             for (counts_buf[0..graph_count]) |c| {
-                self.upsertRegistryEntryLocked(c.name, c.uuid, c.node_count, c.edge_count);
+                // SONNY-3028: a graph dropped during this checkpoint left the
+                // registry; it is not written back.
+                if (c.mg.isDropped()) continue;
+                self.upsertRegistryEntryLocked(c.mg.name, c.mg.uuid, c.node_count, c.edge_count);
             }
             self.saveRegistryLocked() catch |err| {
                 log.warn("failed to persist graph registry: {}", .{err});
@@ -8551,6 +8783,12 @@ pub const StorageAdapter = struct {
             }
         }
         _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        // SONNY-3028: dropped while this checkpoint waited for its lock (the
+        // caller pinned it): there is nothing left to save.
+        if (mg.isDropped()) {
+            mg.rwlock.unlock(io_cp);
+            return .ok;
+        }
         // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
         // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
         // checkpoint so a restart loads the derived indexes without a rebuild.
@@ -9065,8 +9303,12 @@ pub const StorageAdapter = struct {
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            break :blk try self.requireExistingGraphLocked(graph_name);
+            const found = try self.requireExistingGraphLocked(graph_name);
+            // SONNY-3028: pinned while this checkpoint uses it.
+            _ = found.pins.fetchAdd(1, .acq_rel);
+            break :blk found;
         };
+        defer self.unpinGraph(mg);
         switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s, exact_out)) {
             .ok => {},
             .skipped_busy => return error.CheckpointLockBusy,
@@ -9085,6 +9327,14 @@ pub const StorageAdapter = struct {
         {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            // CANARY: REQ=REQ-SONNY-3131-CHECKPOINT-DROPPED-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=GraphCheckpointRegistry; STATUS=TESTED; TEST=tests/test_sonny3131_checkpoint_dropped_graph.zig; OWNER=storage; UPDATED=2026-09-27
+            // SONNY-3131: a graph dropped while this checkpoint waited (it
+            // returned `.ok` with nothing saved) left the registry; it is not
+            // written back, as `checkpointAllEx` does not. The upsert put the
+            // dropped graph back, whose files are gone: CREATE GRAPH of the
+            // name answered 42P07, and every later registry save failed. The
+            // dropped bit is set under this mutex, so the check is exact.
+            if (mg.isDropped()) return;
             self.upsertRegistryEntryLocked(mg.name, mg.uuid, nc, ec);
             self.saveRegistryLocked() catch |err| {
                 log.warn("failed to persist graph registry: {}", .{err});
@@ -10277,7 +10527,17 @@ pub const StorageAdapter = struct {
         return buf;
     }
 
-    fn refreshRegistryHeaderNextIdsLocked(self: *StorageAdapter) !void {
+    // CANARY: REQ=REQ-SONNY-3131-CHECKPOINT-DROPPED-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=RegistryHeaderSkipsLostEntry; STATUS=TESTED; TEST=tests/test_sonny3131_checkpoint_dropped_graph.zig; OWNER=storage; UPDATED=2026-09-27
+    /// The registry header's next node and edge ids: the largest of every
+    /// entry's, read from the engine of a loaded graph and from the manifest
+    /// on disk of one that is not.
+    ///
+    /// SONNY-3131: an entry whose manifest cannot be read (its files are gone)
+    /// is skipped and logged at error level, and the header's current ids are
+    /// kept as a floor, so the skipped entry cannot lower them. Its error failed
+    /// the whole save, on every save that followed: graphs created later were
+    /// never written to the registry, and were gone after a restart.
+    fn refreshRegistryHeaderNextIdsLocked(self: *StorageAdapter) void {
         var next_node_id: u64 = 1;
         var next_edge_id: u64 = 1;
 
@@ -10290,7 +10550,15 @@ pub const StorageAdapter = struct {
                 continue;
             }
 
-            const manifest = try self.loadPersistedManifestLocked(entry.uuid);
+            const manifest = self.loadPersistedManifestLocked(entry.uuid) catch |err| {
+                slog.err("graph registry entry has no readable manifest; it is skipped in the registry header's next ids", &.{
+                    SAttr.string("graph", entry.name),
+                    SAttr.err("error", err),
+                });
+                next_node_id = @max(next_node_id, self.registry.next_node_id);
+                next_edge_id = @max(next_edge_id, self.registry.next_edge_id);
+                continue;
+            };
             next_node_id = @max(next_node_id, manifest.next_node_id);
             next_edge_id = @max(next_edge_id, manifest.next_edge_id);
         }
@@ -10300,7 +10568,7 @@ pub const StorageAdapter = struct {
     }
 
     fn saveRegistryLocked(self: *StorageAdapter) !void {
-        try self.refreshRegistryHeaderNextIdsLocked();
+        self.refreshRegistryHeaderNextIdsLocked();
         try self.registry.saveToFile(self.registry_path);
     }
 
@@ -10437,12 +10705,7 @@ pub const StorageAdapter = struct {
         self: *StorageAdapter,
         graph_name: []const u8,
     ) !ReadLockAcquisition {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        const mg = self.engines.get(graph_name) orelse {
-            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            return error.GraphNotFound;
-        };
-        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         const _t_start = monoNanosNow();
         // EDGE-PHASE 40001 FIX #2 (2026-06-22): yield to a pending EXCLUSIVE
         // acquirer (checkpoint or edge schema/MERGE) before taking SHARED, so
@@ -10456,11 +10719,19 @@ pub const StorageAdapter = struct {
         mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+        // SONNY-3028: dropped while this thread waited for its lock.
+        if (mg.isDropped()) {
+            mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+            self.unpinGraph(mg);
+            return error.GraphNotFound;
+        }
         const hold_start_ns = monoNanosNow();
         return .{ .mg = mg, .hold_start_ns = hold_start_ns };
     }
 
-    pub fn releaseGraphReadLock(_: *StorageAdapter, mg: *ManagedGraph, hold_start_ns: u64, site_tag: graph_store.LockSiteTag) void {
+    pub fn releaseGraphReadLock(self: *StorageAdapter, mg: *ManagedGraph, hold_start_ns: u64, site_tag: graph_store.LockSiteTag) void {
+        // SONNY-3028: the pin `acquireGraphReadLock` took goes with the lock.
+        defer self.unpinGraph(mg);
         const _hold_ns = monoNanosNow() -| hold_start_ns;
         _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
         const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
@@ -10490,12 +10761,12 @@ pub const StorageAdapter = struct {
     /// Acquire an exclusive (write) lock on the named graph.
     /// Caller MUST call releaseGraphWriteLock when done.
     pub fn acquireGraphWriteLock(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        const mg = self.engines.get(graph_name) orelse {
-            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            return error.GraphNotFound;
-        };
-        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        // SONNY-3028: pinned until `releaseGraphWriteLock`.
+        const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
+        errdefer self.unpinGraph(mg);
+        // SONNY-3029: no group-commit batch transaction stays open under it.
+        claimWriteLock(mg, null) catch unreachable;
+        errdefer unclaimWriteLock(mg);
         // HANG FIX (2026-05-22): re-probe via `tryLock` instead of parking
         // unboundedly on `mg.rwlock.lockUncancelable`.  See the detailed
         // rationale in `acquireGraphWriteLockCancelable` below — the
@@ -10508,7 +10779,7 @@ pub const StorageAdapter = struct {
         const _t_start = monoNanosNow();
         if (mg.rwlock.tryLock(io)) {
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            return mg;
+            return lockedUnlessDropped(mg);
         }
         var sleep_ns: u64 = 100 * std.time.ns_per_us;
         const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
@@ -10521,10 +10792,74 @@ pub const StorageAdapter = struct {
             _ = std.os.linux.nanosleep(&req, &rem);
             if (mg.rwlock.tryLock(io)) {
                 _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-                return mg;
+                return lockedUnlessDropped(mg);
             }
             sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
         }
+    }
+
+    /// SONNY-3029: open a group-commit batch's statement transaction on `mg`
+    /// (see `ManagedGraph.batch_txns_open`): waits while a thread holds or
+    /// waits for the graph's write lock. The caller holds no graph lock, and
+    /// calls `leaveBatchTxn` once the transaction committed or aborted.
+    pub fn enterBatchTxn(_: *StorageAdapter, mg: *ManagedGraph) void {
+        var nap_ns: u64 = 20 * std.time.ns_per_us;
+        while (true) {
+            if (mg.write_lock_claims.load(.seq_cst) == 0) {
+                _ = mg.batch_txns_open.fetchAdd(1, .seq_cst);
+                if (mg.write_lock_claims.load(.seq_cst) == 0) return;
+                _ = mg.batch_txns_open.fetchSub(1, .seq_cst);
+            }
+            napNs(nap_ns);
+            nap_ns = @min(nap_ns * 2, std.time.ns_per_ms);
+        }
+    }
+
+    pub fn leaveBatchTxn(_: *StorageAdapter, mg: *ManagedGraph) void {
+        _ = mg.batch_txns_open.fetchSub(1, .seq_cst);
+    }
+
+    /// SONNY-3029: announce this thread's claim on `mg`'s write lock, and wait
+    /// until no group-commit batch has a transaction open on it (`Deadline`
+    /// past `deadline_mono_ns`, the claim withdrawn). Batches opening one
+    /// wait meanwhile. `unclaimWriteLock` withdraws it.
+    fn claimWriteLock(mg: *ManagedGraph, deadline_mono_ns: ?u64) error{Deadline}!void {
+        _ = mg.write_lock_claims.fetchAdd(1, .seq_cst);
+        var nap_ns: u64 = 20 * std.time.ns_per_us;
+        while (mg.batch_txns_open.load(.seq_cst) != 0) {
+            if (deadline_mono_ns) |dl| {
+                if (monoNanosNow() >= dl) {
+                    unclaimWriteLock(mg);
+                    return error.Deadline;
+                }
+            }
+            napNs(nap_ns);
+            nap_ns = @min(nap_ns * 2, std.time.ns_per_ms);
+        }
+    }
+
+    fn unclaimWriteLock(mg: *ManagedGraph) void {
+        _ = mg.write_lock_claims.fetchSub(1, .seq_cst);
+    }
+
+    fn napNs(ns: u64) void {
+        const req = std.os.linux.timespec{
+            .sec = @intCast(ns / std.time.ns_per_s),
+            .nsec = @intCast(ns % std.time.ns_per_s),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+    }
+
+    /// SONNY-3028: `mg`, whose write lock this thread just took, or
+    /// `GraphNotFound` (the lock let go again) when it was dropped while the
+    /// thread waited. The caller's errdefer unpins it.
+    fn lockedUnlessDropped(mg: *ManagedGraph) !*ManagedGraph {
+        if (mg.isDropped()) {
+            mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+            return error.GraphNotFound;
+        }
+        return mg;
     }
 
     /// Deadline-aware variant of `acquireGraphWriteLock`.
@@ -10574,12 +10909,12 @@ pub const StorageAdapter = struct {
         graph_name: []const u8,
         deadline_mono_ns: u64,
     ) !*ManagedGraph {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        const mg = self.engines.get(graph_name) orelse {
-            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-            return error.GraphNotFound;
-        };
-        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        // SONNY-3028: pinned until `releaseGraphWriteLock`.
+        const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
+        errdefer self.unpinGraph(mg);
+        // SONNY-3029: no group-commit batch transaction stays open under it.
+        try claimWriteLock(mg, deadline_mono_ns);
+        errdefer unclaimWriteLock(mg);
 
         const io = std.Io.Threaded.global_single_threaded.io();
         const _t_start = monoNanosNow();
@@ -10612,7 +10947,7 @@ pub const StorageAdapter = struct {
         // Fast path: uncontended acquire in one call.
         if (mg.rwlock.tryLock(io)) {
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-            return mg;
+            return lockedUnlessDropped(mg);
         }
 
         // Contended slow path: bounded, re-probing `tryLock` spin.
@@ -10661,14 +10996,19 @@ pub const StorageAdapter = struct {
             }
             if (mg.rwlock.tryLock(io)) {
                 _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-                return mg;
+                return lockedUnlessDropped(mg);
             }
             sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
         }
     }
 
-    pub fn releaseGraphWriteLock(_: *StorageAdapter, mg: *ManagedGraph) void {
+    pub fn releaseGraphWriteLock(self: *StorageAdapter, mg: *ManagedGraph) void {
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+        unclaimWriteLock(mg);
+        // SONNY-3028: and the pin the acquire took. A graph this thread
+        // dropped while it held the lock is freed here, when no other thread
+        // holds or waits for it.
+        self.unpinGraph(mg);
     }
 
     /// R8 (2026-04-22): begin a per-statement engine transaction on `graph_name`.
@@ -10819,6 +11159,50 @@ pub const StorageAdapter = struct {
     /// only once it is found in the map: it may have been freed with a
     /// dropped graph. The UUID tells a graph created again at the freed
     /// address from the one the transaction was opened on.
+    /// SONNY-3028: `engineIsOpen`, and when it is, a pin on `mg`
+    /// (`ManagedGraph.pins`) under the same hold of the adapter's mutex. The
+    /// caller unpins it (`unpinGraph`).
+    pub fn pinIfOpen(self: *StorageAdapter, mg: *ManagedGraph, graph_uuid: [16]u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        var it = self.engines.valueIterator();
+        while (it.next()) |v| {
+            if (v.* == mg) {
+                if (!std.mem.eql(u8, &mg.uuid, &graph_uuid)) return false;
+                _ = mg.pins.fetchAdd(1, .acq_rel);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// SONNY-3033: open `graph_name`'s graph when it exists (loaded, or in
+    /// the registry), without creating it: `GraphNotFound` otherwise.
+    pub fn openExistingGraph(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.requireExistingGraphLocked(graph_name);
+    }
+
+    /// SONNY-3028: pin `graph_name`'s graph (`ManagedGraph.pins`) for a caller
+    /// that uses it outside the adapter's mutex, or null when it is not open.
+    /// The caller unpins it (`unpinGraph`).
+    pub fn pinGraph(self: *StorageAdapter, graph_name: []const u8) ?*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(graph_name) orelse return null;
+        _ = mg.pins.fetchAdd(1, .acq_rel);
+        return mg;
+    }
+
+    /// SONNY-3028: drop a pin on `mg`. The last pin of a dropped graph frees
+    /// it; `dropGraph` already took it out of `engines`, deleted its files and
+    /// its registry entry, so nothing is checkpointed.
+    pub fn unpinGraph(self: *StorageAdapter, mg: *ManagedGraph) void {
+        const prev = mg.pins.fetchSub(1, .acq_rel);
+        if (prev == (ManagedGraph.dropped_bit | 1)) mg.deinit(self.allocator, true);
+    }
+
     pub fn engineIsOpen(self: *StorageAdapter, mg: *const ManagedGraph, graph_uuid: [16]u8) bool {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -11730,7 +12114,7 @@ test "StorageAdapter: drop graph" {
     _ = try adapter.getOrCreateGraph("drop_me");
     try std.testing.expect(adapter.graphExists("drop_me"));
 
-    adapter.dropGraph("drop_me");
+    try adapter.dropGraph("drop_me");
     try std.testing.expect(!adapter.graphExists("drop_me"));
 }
 
@@ -12195,7 +12579,7 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
     }
 
     // Drop the graph — this should deinit subsystems and delete the directory.
-    adapter.dropGraph("__geode_security");
+    try adapter.dropGraph("__geode_security");
 
     // Verify graph directory is removed.
     const dir_result = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), graph_dir, .{});

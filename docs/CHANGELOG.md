@@ -754,6 +754,599 @@
   agree: it compares a DOUBLE with an exact number approximately, in a
   double, so `DOUBLE 0.1 = 0.1` is true while `{x: 0.1}` does not match a
   stored DOUBLE 0.1 (SONNY-2807).
+- **EXPLAIN and PROFILE of transaction control are refused (SONNY-3026):**
+  `PROFILE <statement>` parses for any statement, and the handlers' PROFILE
+  arm ran the inner one with nothing looking inside. PROFILE ROLLBACK undid
+  the transaction under a read lock (or none) and the handler kept the
+  transaction open, so the client's next autocommit change joined a
+  transaction that was rolled back at disconnect; PROFILE START TRANSACTION
+  began a transaction the handler threw away; PROFILE COMMIT committed one
+  the handler still held open. An EXPLAIN or PROFILE of START TRANSACTION,
+  COMMIT, ROLLBACK, a SESSION statement, USE GRAPH or another EXPLAIN or
+  PROFILE is now refused (0A000) on QUIC and gRPC, and the program traits
+  (transaction control, the program's graph, the handlers' transaction
+  bookkeeping) look inside PROFILE and EXPLAIN.
+
+  **Behaviour change:** `PROFILE ROLLBACK`, `EXPLAIN USE GRAPH g` and the
+  like answer 0A000.
+- **A PROFILE'd change commits under its write lock (SONNY-3027):** a
+  PROFILE'd query that writes in a transaction (`PROFILE MATCH (a:X) MERGE
+  (:Y {k: 1})`) opened the session's engine transaction without passing an
+  executor entry point, and only the end-of-request backstop committed it,
+  after the PROFILE arm had released the graph's write lock: an engine
+  transaction open while another thread held the lock (SONNY-2978's
+  overlap). The profiled path is now an executor entry point, both handlers
+  commit the engine transaction before they release a write lock, and the
+  backstop aborts a transaction still open and rolls the session's
+  transaction back instead of committing outside the lock.
+- **DROP GRAPH frees a graph only when no thread holds it (SONNY-3028):**
+  DROP GRAPH counted as a statement on the session's graph, so `DROP GRAPH
+  g` from a session on `default` locked `default` and freed g under the
+  threads that held or waited for g's lock and under engine transactions
+  open on g: a use-after-free any holder of the schema permission could
+  trigger (`START TRANSACTION; CREATE (:X); DROP GRAPH g; CREATE (:Y)`
+  crashed the server). CREATE and DROP GRAPH now run on (and lock) the graph
+  they name, so DROP GRAPH waits for the graph's requests; a graph is freed
+  by the last of its lock's holders, waiters, group-commit batches and
+  checkpoints, and a waiter that gets a dropped graph's lock is told the
+  graph is gone; the session engine transaction's graph is checked and used
+  under one pin.
+
+  **Behaviour change:** DROP GRAPH (or CREATE OR REPLACE GRAPH) of the graph
+  the session's transaction changed is refused with 55006 ("object in
+  use"), and a program that changes data and also creates or drops another
+  graph is refused as spanning graphs (0A000).
+- **Group commit keeps no engine transaction open under the write lock
+  (SONNY-3029):** a group-commit batch (on by default) kept its statement
+  transaction open across ops that each took the graph's lock SHARED only
+  while they ran, so the graph's write lock could be taken in between and
+  the writer's engine transactions overlapped the batch's (a review probe
+  saw open transactions in 15,314 of 864,308 samples), the SONNY-2978
+  overlap that can lose committed writes on crash recovery. A batch now
+  opens its transaction only while no thread holds or waits for the graph's
+  write lock, and a writer takes the lock only once every open batch has
+  committed. The 16 shard workers' batches stay concurrent:
+  `bench-group-commit` (16-way with the coordinator) measured 8,471 / 9,145
+  / 9,201 ops/s before and 9,351 / 9,243 / 8,989 after. Taking the graph's
+  exclusive lock for each batch instead cost about 72%.
+- **Index and constraint DDL need the schema permission on the database
+  (SONNY-3030):** indexes and constraints are catalogued database-wide, but
+  SONNY-2803 checked the schema permission on one graph, so a user with a
+  `FOR SCHEMA` grant on one graph added constraints that bound every graph
+  and dropped indexes an Admin created from another. CREATE and DROP INDEX
+  (fulltext included) and CREATE and DROP CONSTRAINT now also need
+  `decide(schema)` on the whole database.
+
+  **Behaviour change:** these statements need Admin, or a GPS `FOR SCHEMA`
+  policy on `*`; a `FOR SCHEMA` policy on single graphs no longer grants
+  them.
+- **A failed commit of a transaction's engine transaction fails the
+  transaction (SONNY-3031):** it was only logged, so the request and the
+  later COMMIT reported success for changes never committed to storage, and
+  the engine transaction stayed in its shard's list of open transactions for
+  good. The failed engine transaction is now aborted, the request fails
+  (40000), and the transaction is rolled back, so its COMMIT reports the
+  failure. The COMMIT statement, a START TRANSACTION body and the COMMIT
+  RPC and message commit the engine transaction before the undo log.
+- **A `/*+BATCH*/` never recreates a dropped graph (SONNY-3033):** the QUIC
+  batch route ran before the graph-existence check, and the group-commit
+  coordinator created whatever graph it was given, so a session left on a
+  graph another session dropped recreated it with its next batch, without
+  the schema permission. The route now applies the session-graph gate
+  (internal, bind, existence), and the coordinator creates no graph but the
+  default one.
+- **Offline auth commands verify against the chain root (SONNY-3035):** a
+  store whose security records were all removed at rest kept its chain root
+  and skipped verification, so `geode auth init` bootstrapped a new admin
+  into it and sealed it. And verification wrote a new `.geode_hmac_key`
+  when there was none, then refused. A store now counts as empty only with
+  no records and no chain root, and verification (and `geode auth verify`)
+  looks the key up without generating one.
+- **Deleting an RLS policy leaves no dangling map key (SONNY-3036):** the RLS
+  engine's policy map borrowed its keys from the first policy of each graph
+  and table, and kept them after `UserManager.deletePolicy` freed that
+  policy's strings (a library caller could read freed memory). The map now
+  owns its keys, and an emptied graph and table lose their entry.
+- **`geode revoke --from` revokes that principal's grant (SONNY-3037):** it
+  removed the first permission record with the permission's name, which
+  could belong to another principal, and reported success when nothing
+  matched; and `geode grant` reused one record id, so each grant replaced
+  the previous one. Revoke now removes the named principal's grants (on the
+  named resource, when given) and fails, changing nothing, when there is
+  none; grant takes an id of its own.
+- **`geode.auth.revoke` fails when the revoke cannot be saved, and schema DDL
+  is gated (SONNY-3038):** a revoke whose durable write failed was logged
+  and reported "Revoked", and the privilege came back at the next start; it
+  now fails with 58030. CREATE and DROP SCHEMA were ungated; they now need
+  the schema permission on the database, as index DDL does.
+
+  **Behaviour change:** CREATE/DROP SCHEMA need Admin or a GPS `FOR SCHEMA`
+  policy on `*`.
+- **Graph DDL runs without statements on graph data (SONNY-3130):** the
+  handlers lock the graph a program runs on before it runs, and since
+  SONNY-3028 CREATE and DROP GRAPH count as statements on the graph they
+  name. So `CREATE OR REPLACE GRAPH g; USE GRAPH g; CREATE (:R)` and `DROP
+  GRAPH g; CREATE GRAPH g; USE GRAPH g; CREATE (:R)` held the old graph's
+  write lock while the program wrote the new graph, which has a lock of its
+  own, beside that graph's writers; and from a session on g, `DROP GRAPH g;
+  CREATE (:R)` created g again. A program that creates, replaces or drops a
+  graph and also has a statement on graph data, on any graph, before or
+  after the DDL (a START TRANSACTION body and a PROFILE'd statement
+  included), is now refused on QUIC and gRPC.
+
+  **Behaviour change:** such a program answers 0A000; send the statements
+  that use the graph in a request of their own. Graph DDL still runs with
+  other graph DDL, graph selection, session statements and transaction
+  control, so `DROP GRAPH IF EXISTS g; CREATE GRAPH g` and `CREATE GRAPH g;
+  USE GRAPH g` run. `START TRANSACTION; CREATE (:X); DROP GRAPH g` answers
+  0A000 where it answered 55006.
+- **A checkpoint does not write a dropped graph back (SONNY-3131):** a
+  regression of SONNY-3028 in this release. A graph-scoped checkpoint (the
+  hydration persist, the exact-index persist worker, the ordered-index
+  build, the self-heal flush) of a graph dropped while it waited for the
+  graph's lock put the graph back into the registry, with its files gone.
+  CREATE GRAPH of the name then answered 42P07, and every later registry
+  save failed on the missing files and was only logged, so graphs created
+  afterwards, and their data, were gone after a restart. The checkpoint now
+  leaves the registry alone for a dropped graph, and a registry save skips
+  (and logs at error level) an entry whose files cannot be read instead of
+  failing, without lowering the registry's next ids.
+- **The default graph cannot be dropped or replaced (SONNY-3132):**
+  `GraphStore.dropGraph` dropped the storage engine's graph before it
+  checked for `default`, and DROP GRAPH logged the refusal and answered ok:
+  `DROP GRAPH default` from a user with the schema permission on `default`
+  (a ReadWrite user with a `FOR SCHEMA` grant on it, too) deleted the
+  default graph's engine and its files on disk, while the in-memory store
+  still showed its data. The store and the storage engine now refuse `default`
+  before dropping anything, and the refusal reaches the client; CREATE OR
+  REPLACE GRAPH default is refused before anything is dropped.
+
+  **Behaviour change:** DROP GRAPH default, DROP GRAPH IF EXISTS default and
+  CREATE OR REPLACE GRAPH default answer 0A000, for every principal.
+- **Deep nesting gets a parse error, not a crash (SONNY-3133):** parsing
+  runs before authorization, and only the expression grammar counted its
+  depth, so any authenticated user could overflow the stack of the thread
+  parsing the request: a 408-byte `PROFILE EXPLAIN PROFILE ...` crashed the
+  server at depth 50, and so did deep START TRANSACTION bodies,
+  parenthesized statements, VALUES continuations, WITH chains, CALL { }
+  subqueries, FOR bodies, and long NOT, unary minus or shortestPath()
+  chains; `ORDER BY 1 + 1 + ... + 1` overflowed in the ORDER BY check. Every
+  recursive entry of the parser now counts against the 128-level limit
+  (GAP-0333), statements nest at most 8 deep, and a level is refused when
+  less than 2 MiB (Debug) or 512 KiB of the thread's stack is left, so no
+  nesting overflows the 16 MiB QUIC workers or the 8 MiB gRPC connection
+  threads. The ORDER BY check walks operator and member-access chains in a
+  loop.
+
+  **Behaviour change:** more than 8 nested statements (EXPLAIN, PROFILE,
+  EXPLAIN POLICY FOR, a START TRANSACTION body, a parenthesized statement, a
+  VALUES continuation) answer 42000, and so do more than 128 levels of any
+  nesting, NOT and unary minus chains and WITH chains included. A Debug
+  build refuses somewhat less nesting than a release build, where the
+  thread's stack runs short first.
+- **DROP GRAPH is refused while any session's transaction has changed the
+  graph (SONNY-3134):** SONNY-3028 refused DROP GRAPH of the graph the
+  calling session's transaction changed. Another session's open
+  transaction holds no lock between its requests, so the graph was dropped
+  under it: that session's COMMIT reported success for changes that went
+  with the graph, and its COMMIT or ROLLBACK created the graph again. A
+  session's transaction now holds the graph it changed (its transaction
+  graph, SONNY-2776) from its first change until it commits, rolls back or
+  the session ends, and DROP GRAPH and CREATE OR REPLACE GRAPH of a held
+  graph are refused. A QUIC session ends with its stream. A gRPC session
+  ends when the server closes it: one idle in an open transaction for
+  `--idle-in-transaction-timeout` (10 minutes) is closed and its
+  transaction rolled back, which releases the hold (SONNY-3032, below).
+  The hold goes as the COMMIT or ROLLBACK statement ends the transaction,
+  so `COMMIT; DROP GRAPH g` runs in one program (SONNY-3191).
+
+  **Behaviour change:** DROP GRAPH and CREATE OR REPLACE GRAPH of a graph
+  that any session's open transaction has changed answer 55006, until that
+  transaction ends. A transaction that only read the graph does not hold
+  it.
+- **EXPLAIN and PROFILE take a listed set of statements, and a failed
+  request's engine transaction is aborted (SONNY-3135, part):** SONNY-3026
+  refused the statements it listed and let the rest through: `PROFILE CALL
+  geode.tenant.backfill_edge_tags()` ran the self-locking procedure under
+  the handler's lock, where it waited up to 120 s on the lock its own
+  request held, and DDL ran through the PROFILE arm, built for queries.
+  EXPLAIN and PROFILE now take a query (set operations included), a data
+  change (INSERT, CREATE, MERGE, DELETE, SET, REMOVE), FOR or a read-only
+  CALL, and a PROFILE'd self-locking CALL counts as one. And a program that
+  failed inside its transaction committed its engine transaction when it
+  returned (a write lock's release did the same for one left open), so the
+  failed changes were durable until the rollback undid them (the SONNY-2979
+  crash window); the engine transaction is now aborted. What the rollback
+  then undoes is what the undo log records: the nodes and edges a CREATE or
+  a MERGE created. Other writes inside the transaction (SET, REMOVE,
+  DELETE, a label change, and a change MERGE makes to data it matched)
+  persisted after its ROLLBACK or its failure (SONNY-3059); round 18 fixed
+  that (ROLLBACK undoes every change, below).
+
+  **Behaviour change:** EXPLAIN or PROFILE of graph, index, constraint,
+  schema, auth or policy DDL, SHOW, VALUES, EXPLAIN POLICY or a CALL that
+  changes data answers 0A000.
+- **An expression of more than 4096 operators is refused, and long
+  operator chains no longer crash the server (SONNY-3181, SONNY-3189):**
+  the parser builds operator and member-access chains with loops, so
+  `RETURN 1 + 1 + ... + 1` with N terms is an expression N deep, and the
+  code that walks expressions recursed once per operator. Before
+  authorization, the request analysis crashed a server thread on an
+  EXPLAIN RETURN chain of 100,000 terms (400 KB) or an OR chain of 400,000,
+  and a Debug build on 20,000; printing an ORDER BY key crashed on long
+  chains; and evaluation crashed a Debug build on 1,000 terms, and on
+  `RETURN - - ... 1` 120 deep, for any role that can read. The parser now
+  counts the operators of an expression (binary operators, unary prefixes,
+  and member-access, index, slice and call links, over the whole
+  expression and what nests in it) and refuses more than 4096
+  (`max_expr_links`). The evaluator, the request analysis, the printer and
+  the other walks over expressions follow chains with loops, and the
+  evaluator and the grouped HAVING rewrite refuse nesting deeper than the
+  thread's stack holds instead of overflowing it.
+
+  Round 15 corrections (SONNY-3189, SONNY-3251): as first shipped, the
+  walkers a grouped HAVING's rewrite calls (`containsAggregate`,
+  `mentionsAnyName`, `exprEql`) still recursed once per link, so `GROUP BY
+  v HAVING sum(n.v + 0 ... + 0) >= 0` near the cap crashed the server
+  thread instead of being refused cleanly; and a 54001 refusal inside a
+  WHERE, a WITH ... WHERE, an EXISTS or a grouped HAVING was silent: the
+  row counted as not matching, and the query answered 0 rows. Both are
+  fixed in round 15 (below). Integer arithmetic on aggregates that
+  overflows answers 22003 on the WITH-chain path; the multi-node aggregate
+  path answers NULL instead (SONNY-2696, open).
+
+  **Behaviour change:** an expression with more than 4096 operators
+  answers 42000 ("expression too long"). An IN list of literals has no
+  operators, and an OR of a few hundred `n.v = k` terms (three each) fits;
+  split a larger predicate into an IN list or parameters. An expression
+  nested (lists, calls, CASE) deeper than the evaluating thread's stack
+  holds answers 54001 where it crashed; a Debug build reaches that sooner.
+- **Graph id maps are safe to use from sessions on different graphs at once
+  (SONNY-3180):** the map from each graph to its node and edge id map was
+  shared by the whole store with no lock of its own, and each graph's id
+  map was stored inside it. Two sessions writing to different graphs at
+  once corrupted it (a Debug build tripped the hash map's check; a release
+  build had a data race and a use-after-free), and adding a graph moved
+  every other graph's id map from under the threads using it. The map now
+  has its own lock and each graph's id map an address of its own.
+
+  Round 15 correction (SONNY-3180): as first shipped, only the map of id
+  maps had a lock; each id map's contents were still read without its own
+  lock by every snapshot read, by `CALL db.propertyKeys()`, the algorithms
+  and the backup, so a read racing a writer of another graph, or a DROP
+  GRAPH, could still crash. Fixed in round 15 (below).
+- **Abandoned gRPC transactions and sessions are closed (SONNY-3032):** a
+  gRPC session lived as long as the server, and a client that began a
+  transaction, wrote and went away left the transaction open for good, with
+  its undo entries, its storage transaction and its graph hold, so the
+  graph could never be dropped. A gRPC session idle in an open transaction
+  for `--idle-in-transaction-timeout` is closed and its transaction rolled
+  back; any gRPC
+  session idle for `--grpc-session-idle-timeout` is closed; a session a
+  request is using is never closed. One user holds at most
+  `--grpc-max-sessions-per-principal` gRPC sessions: past it a Handshake
+  closes that user's least recently used idle session, or is refused when
+  all are in use. Each is also a config-file key
+  (`idle_in_transaction_timeout`, `grpc_session_idle_timeout`,
+  `grpc_max_sessions_per_principal`); 0 turns it off.
+
+  Round 15 corrections (SONNY-3252): as first shipped, the idle session a
+  Handshake closed at the cap could be one idle inside an open
+  transaction, which was rolled back; and without authentication every
+  client was the same principal, so any client could close any other's
+  session and transaction. Now a session in a transaction is never closed
+  (below). The cap counts sessions per user name, not per tenant: one name
+  in two tenants shares one cap.
+
+  **Behaviour change:** a gRPC session idle in an open transaction for 10
+  minutes is closed and its transaction rolled back, and a gRPC session
+  idle for 30 minutes is closed; a closed session's Execute and Pull answer
+  28000, and its BEGIN, COMMIT and ROLLBACK answer success=false (no SQLSTATE
+  on those replies); the client handshakes again. A user holding 1024 gRPC
+  sessions has its least recently used idle one closed at the next
+  Handshake.
+- **The rest of the round 13 review (SONNY-3191, SONNY-3122):**
+  - A COMMIT or ROLLBACK statement releases its session's graph hold where
+    it ends the transaction, not after the program, so `COMMIT; DROP GRAPH
+    g` and `ROLLBACK; DROP GRAPH g` run.
+  - Under overload the QUIC connection admission thread serves a
+    connection's first stream itself, on a 1 MiB stack, where a plain MATCH
+    was refused ("nesting too deep") and a Debug build crashed. It now has
+    the 16 MiB stack of the threads that serve requests.
+  - CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH and HOME_PROPERTY_GRAPH
+    are reserved: `CREATE GRAPH CURRENT_GRAPH` created a graph USE GRAPH
+    could never select, and `DROP GRAPH CURRENT_GRAPH` dropped a graph of
+    that name, not the current graph.
+  - A policy expression with more than 64 nested parentheses or 1024 AND or
+    OR operators is refused: it could overflow the stack of every request
+    the policy applies to.
+  - A read that resolves an edge type's name looks its graph up and pins
+    it; it created the graph when it was missing, so a read racing a DROP
+    GRAPH could create the graph again (SONNY-3122, part).
+
+  **Behaviour change:** CREATE and DROP GRAPH of CURRENT_GRAPH,
+  CURRENT_PROPERTY_GRAPH, HOME_GRAPH and HOME_PROPERTY_GRAPH (any case)
+  answer 42939, and a HELLO cannot create one. A policy expression past
+  the bounds above is refused at CREATE or ALTER POLICY. (A graph that
+  already had such a name could not be dropped by it as first shipped;
+  round 15, SONNY-3234, lets DROP GRAPH remove it, below.)
+- **Round 15: the round 14 review's crashes and races (SONNY-3189,
+  SONNY-3180, SONNY-3233, SONNY-3250, SONNY-3251, SONNY-3252, SONNY-3234,
+  SONNY-3253):**
+  - A grouped or implicit HAVING with an operator chain as long as the
+    parser takes (`GROUP BY v HAVING sum(n.v + 0 ... x4090) >= 0`, the
+    item-equality form, `RETURN count(n) AS c WHERE sum(...)`) crashed the
+    server thread: the walkers the HAVING rewrite calls recursed once per
+    link. They follow chains with loops, as does the projection analysis
+    of a planned read with a hop, which recursed on index and slice
+    chains with no stack guard (SONNY-3189).
+  - The contents of each graph's id map are read under that map's own
+    lock, and a snapshot read (every gRPC and QUIC read not served
+    engine-direct) clones only its own graph, under the locks of what it
+    walks. It cloned every graph's id map, nodes and edges with no lock,
+    so reads crashed within a second next to a writer of another graph,
+    and corrupted the heap next to DROP and CREATE GRAPH (SONNY-3180).
+  - The node, edge and adjacency caches' growth, the adjacency and
+    edge-type index of an in-memory (unbounded-cache) store, and the graph
+    registry change under their locks: a batch CREATE on one graph racing
+    a single CREATE on another panicked, and so did two edge writers on
+    two graphs (SONNY-3233).
+  - A nested EXISTS or COUNT subquery read an environment it had freed
+    (`WHERE EXISTS { MATCH (m) WHERE EXISTS { ... } }` panicked, "@memcpy
+    arguments alias"); pre-existing (SONNY-3250).
+  - A resource limit the evaluator runs into (54001, the read budget, a
+    cancel) fails the query; a WHERE, a HAVING, an aggregate or a subquery
+    turned it into a row that did not match. (Round 16 correction: as
+    shipped in round 15 this held on the request's own thread and for
+    54001 only; a limit in a parallel UNION arm, an out of memory, and the
+    node scan's inline-property seek could still become an answer. Fixed in
+    round 16, SONNY-3316.)
+    Index, slice, member and map-projection chains evaluate with a loop,
+    so 4096 links is the real limit for them too (SONNY-3251).
+  - At the gRPC per-principal session cap, a session in an open
+    transaction is never closed: when every one of the principal's
+    sessions is in use or in a transaction, the Handshake is refused
+    (resource exhausted). Without authentication a client counts as
+    `anonymous@<peer ip>`, and a federation peer as `federation@<peer
+    ip>` (every peer node sends the one name the cluster token accepts,
+    `geode-cluster`). A Handshake that fails closes nothing, and a closed
+    session is torn down on the reaper thread, not the Handshake's
+    (SONNY-3252). (Round 16 correction: as shipped in round 15 the peer
+    address was "unknown" for every client, so all anonymous clients, and
+    all federation peers, shared one cap; fixed in round 16, SONNY-3313.)
+  - DROP GRAPH drops a graph that already had a reserved name (a
+    CURRENT_GRAPH made before 0.8.23), and the server warns at start for
+    each such graph; CREATE stays refused (SONNY-3234).
+  - A dropped graph's id map is freed when no walk holds it; it was kept
+    until the server stopped (about 0.5 KB per DROP GRAPH). A reload or a
+    Raft snapshot install no longer frees id maps a walk holds. A QUIC
+    admission thread's stack is 8 MiB in a release build (16 MiB in
+    Debug), set by `GEODE_QUIC_ADMISSION_STACK_MB`: the stacks reserve
+    `admission threads x stack` of address space (4096 x 16 MiB was 64
+    GiB), which strict overcommit counts. A thread that cannot be spawned
+    rejects its connection; the server serves on (SONNY-3253).
+
+  **Behaviour change:** a query whose expression runs into a limit
+  answers 54001 (or 53200, 57014) instead of fewer rows. At the gRPC
+  session cap, a Handshake is refused rather than closing a session in a
+  transaction; anonymous clients of one host share a cap. To remove a
+  graph named CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH or
+  HOME_PROPERTY_GRAPH made before 0.8.23 (the start-up log names each),
+  run `DROP GRAPH <name>` with the name exactly as stored.
+- **Round 16: the round 15 review's findings (SONNY-3312, SONNY-3313,
+  SONNY-3314, SONNY-3315, SONNY-3316, SONNY-3317):**
+  - A read whose statements run on several graphs (`MATCH ...; USE GRAPH
+    g2; MATCH ...`) reads each of them: round 15's snapshot copied only the
+    session's graph, so the other graphs read as empty (a regression in
+    round 15). The read takes each graph's read lock, shared and in name
+    order, and snapshots every graph it reads (SONNY-3312).
+  - A parallel UNION's result freed its nodes through an allocator that
+    lived in a function that had returned: `MATCH (n:C) WHERE n.v >= 0
+    RETURN [[...60 levels...]] AS v UNION ALL ...` hung the request thread,
+    and any read could corrupt its stack; pre-existing (SONNY-3315).
+  - A limit the evaluator runs into, out of memory included, fails the
+    query where a caller had turned it into a value (an EXISTS or COUNT { }
+    subquery's WHERE, an ORDER BY key, the node scan's inline-property seek)
+    and in a parallel UNION arm (it runs on a thread of its own, and its
+    record of the limit was lost). (Round 17 correction: this held for
+    statements run through the executor's statement entry point only; a
+    PROFILE, and an out of memory materializing a node in the node scan,
+    could still become an answer. Fixed in round 17, SONNY-3349.) A
+    grouped HAVING chain is compared only with projected items and keys of
+    its own length: 32 items of 4088 links took 13 s to rewrite, now under
+    0.1 s (SONNY-3316).
+  - A dropped graph's id map and name are freed by their last holder: a
+    lookup of a node or edge by id (the bounded caches' hydrate-on-miss), a
+    first-touch hydration and a walk over every graph each hold the map they
+    use. Round 15 freed them while such a lookup or hydration still used
+    them (a use after free next to DROP GRAPH), and kept every dropped map
+    while any walk ran, which overlapping walks made forever. DROP GRAPH now
+    waits for a first-touch hydration of the graph and none starts during
+    it: the two could deadlock, and a hydrate-on-miss racing the drop freed
+    a node's labels twice (SONNY-3314).
+  - The gRPC Handshake keys a client by its real peer address: it was
+    "unknown" for every client, so every anonymous client counted against
+    one `anonymous@unknown` session cap (one host holding its sessions in
+    transactions refused every other host's Handshake), and the auth rate
+    limiter's per-IP bucket was one bucket for all clients (one client's
+    username-rotating guessing locked every client out). Clients behind
+    one NAT gateway, proxy or load balancer share a cap and a bucket; an
+    IPv6 host that rotates addresses within its /64 is several peers
+    (SONNY-3313).
+  - Smaller fixes (SONNY-3317): CREATE GRAPH that ran out of memory
+    partway could free the graph's name twice; `GEODE_QUIC_ADMISSION_STACK_MB`
+    takes at least 8 (it took 1, on which a plain MATCH was refused); a
+    reload or a Raft snapshot install clears the node, edge and adjacency
+    caches under their locks and the store's (pre-existing: a read racing
+    one could crash); a gRPC Handshake for a tenant that ran out of memory
+    kept one of the tenant's connections counted; a session closed to make
+    room at the cap is logged when the reaper tears it down, too.
+
+  **Behaviour change:** `GEODE_QUIC_ADMISSION_STACK_MB` below 8 is taken
+  as 8.
+- **Round 17: the round 16 review's findings (SONNY-3348, SONNY-3349,
+  SONNY-3350):**
+  - Once a caller swallows a limit (54001, out of memory, the read budget,
+    a cancel) or an IN type error, the store refuses every further change
+    of the statement, before the engine, the in-memory graph, the WAL and
+    Raft replication see it, and a cluster leader proposes nothing. The
+    relay failed the statement only after it had run, so its writes stayed:
+    `MATCH (n:C) SET n.w = EXISTS { ... }`, where the subquery's WHERE ran
+    into 54001, answered 54001 with `n.w` set to false on every row
+    (SONNY-3348). (Round 18 correction: this refused only the changes made
+    after the limit was recorded. Those made before it stayed: earlier
+    rows, a SET before a RETURN or ORDER BY that ran into the limit, a
+    change before a WITH the MATCH executor evaluates late, the point-write
+    fast path's write (its only expression is its RETURN), MERGE, FOR and
+    PROFILE. In an explicit transaction the session then left the
+    transaction and ran its next statements in autocommit, and a
+    `START TRANSACTION { ... }` body's rollback did nothing. Fixed in
+    round 18, below.)
+  - The limit relay covers exactly these paths: every statement the
+    executor runs (`executeStatementWithContext`: the statements of a gRPC,
+    QUIC or embedded program, and EXPLAIN'd or PROFILE'd statements other
+    than queries); a PROFILE'd query (`executeProfiledIfSupported`, which
+    answered a swallowed 54001 or out of memory as a profile, 00000, and
+    kept a PROFILE'd change's writes); the arms of a parallel UNION; and
+    the engine-direct node scan, whose paging scan, filtered count and
+    WHERE + LIMIT enumeration fail on an out of memory materializing a
+    node, where they skipped the node as if it had been deleted
+    (SONNY-3349). The bulk-ingest fast paths take literals and parameters
+    only, and fail on any evaluation error.
+  - Smaller fixes (SONNY-3350): a Raft `drop_graph` entry takes the
+    graph's write lock, as DROP GRAPH does, so it waits for the graph's
+    requests (it freed the graph under them); the engine-direct readers
+    pin a graph's id map while they read it (a reader holding only the
+    global lock did not hold off a DROP GRAPH, which freed the map); and a
+    read of several graphs checks the principal's access to each before it
+    locks or copies any (it took the read lock of, and copied, a graph the
+    principal was then refused).
+- **Round 18: the round 17 review's findings (SONNY-3348, SONNY-3059,
+  SONNY-3349, SONNY-3350):**
+  - A statement that fails changes nothing. While a statement runs, each
+    change the store makes records what it replaces (a property's old
+    value or its absence, a label, a deleted node or edge with its labels,
+    properties and edges, a created node or edge). When the statement
+    fails, for any reason (54001, out of memory, the read budget, an IN
+    type error, a division by zero), the record is undone,
+    newest first, through the store's normal write methods, so the storage
+    engine, the WAL mutation stream and the store's own indexes see the
+    undo, before the error is answered. This covers every executor that
+    changes data through the store (the MATCH executor and its write step,
+    CREATE, MATCH ... CREATE, FOR, MERGE, DELETE, the point-write fast
+    path, PROFILE'd statements), in autocommit and in a transaction. A
+    retry applies the statement once (SONNY-3348). (Round 19 correction:
+    on a cluster leader the statements that write once per row or per
+    iteration proposed each row's write at once, so the rows before the
+    failing one stayed on every node. Fixed in round 19, below.)
+  - A failed statement aborts its explicit transaction. The transaction is
+    rolled back at once, and every later statement of the session is
+    refused with 25P02 until the client ends the transaction: ROLLBACK
+    succeeds, and COMMIT fails with 40000 (the transaction was rolled
+    back). A BEGIN is refused too. The session left the transaction
+    silently, so the client's next statements autocommitted, and its
+    ROLLBACK reported that no transaction was open.
+  - ROLLBACK undoes every change a transaction made: SET and REMOVE of
+    properties, labels added and removed, DELETE and DETACH DELETE (the
+    node or edge comes back with its id, labels, properties and edges),
+    MATCH ... CREATE, and the changes MERGE makes to what it matched; so
+    does the rollback of a failed transaction and of a
+    `START TRANSACTION { ... }` body. The undo log recorded only created
+    nodes and edges, and undid through setters that changed the in-memory
+    graph but not the storage engine (SONNY-3059).
+  - A `START TRANSACTION { ... }` body's rollback runs when a limit failed
+    the body; the write fence refused it. A body statement of a kind a body
+    cannot hold (DELETE, for one) now rolls the body back too; it returned
+    with the body's transaction still open on the thread.
+  - Smaller fixes: the engine-direct readers no longer answer an engine
+    slot as a node's id when they cannot read the node's public id; an out
+    of memory there fails the query, and a node whose id is gone is
+    skipped. The id map counts (`count(n)`, `count(r)`), the edge endpoint
+    check and the per-graph edge list read the map pinned, as the other
+    readers do.
+
+  **Behaviour change:** after a statement fails in an explicit
+  transaction, the session refuses every statement but ROLLBACK or COMMIT
+  (25P02); COMMIT then answers 40000.
+- **Round 19: the round 18 review's findings (SONNY-3348, SONNY-3384):**
+  - On a cluster leader a statement commits all of its writes in one Raft
+    entry, or none. The leader holds each write the statement makes and,
+    once the whole statement has evaluated without an error, proposes them
+    together: one entry as before when there is one, a statement batch
+    (GBAT) when there are more. A statement that fails proposes nothing,
+    and nothing proposed is undone. `FOR i IN [1, 2, 3] CREATE ...` and
+    `MATCH ... MERGE ...` proposed one entry per row and waited for each,
+    so when the third row failed the first two were committed on every
+    node. Every node applies a batch's writes in order; a create in a batch
+    takes ids of its own (`2^54 + (index * 4096 + position) * 64`). A
+    client's idempotency key covers the whole statement: a retried
+    statement is one no-op (the rows of one statement were taken for
+    retries of each other).
+  - A statement's undo record counts against the write budget
+    (`GEODE_WRITE_EXECUTOR_BUDGET_MB`, 8192 MB by default, 0 for none):
+    the record and the write executor's working set together stay under
+    it. A write whose before-image does not fit is not made, and the
+    statement fails with 53200 and undoes what it recorded:
+    `MATCH (n) DETACH DELETE n` over a graph larger than the budget
+    answers 53200 and leaves the graph as it was. The record held the
+    image of every change it made, a whole graph for that statement, in
+    memory no budget saw.
+  - A failed statement whose undo cannot undo every change answers 40003
+    (statement completion unknown), not its own error: it is partly
+    applied, and a blind retry would apply the rest twice. ROLLBACK, and
+    the rollback of a failed transaction, continue past a change they
+    cannot undo (they stopped at the first and dropped the rest undone),
+    and report it: ROLLBACK answers 40003, and so does the ROLLBACK or
+    COMMIT that ends a transaction whose rollback was incomplete. The
+    failures are counted (`statement_undo_replay_failures_total`, with
+    `statement_undo_replayed_statements_total` and
+    `statement_undo_budget_refusals_total`, on the metrics endpoint).
+  - `MATCH ... SET ... DETACH DELETE x RETURN ...` deletes x with its
+    edges and answers its RETURN. The query took DELETE after a SET but
+    not DETACH DELETE: the SET was applied, the delete skipped, and the
+    answer was one row of 0 (SONNY-3384). A SET or REMOVE before the
+    DELETE is applied first, in order, by the one write step (SONNY-3042),
+    and the RETURN is computed before the delete; a RETURN that holds an
+    element the statement deletes is refused (0A000). (On the r12 line
+    such a SET was refused; the v0.8.23 reconciliation keeps the v0823
+    line's in-order write step.) `MATCH ... CREATE ... DETACH DELETE`
+    likewise takes the deleted nodes' edges with them.
+  - Smaller fixes:
+    - A statement that fails in an explicit transaction aborts the
+      session's engine transaction before its undo, which then commits on
+      its own. The undo's changes joined the transaction's engine
+      transaction, which was aborted next: after a crash the failed
+      statement's write could come back.
+    - A statement failing at a later page of its results, a node scan that
+      fails to start with any error, and a request whose engine
+      transaction outlived it all abort the explicit transaction; the last
+      left the transaction silently, into autocommit.
+    - The COMMIT and ROLLBACK messages carry the code of their failure:
+      COMMIT of a failed transaction answers 40000 as the COMMIT statement
+      does (it answered only `success = false`).
+    - A node whose public id the engine-direct readers cannot read is
+      skipped only when it is gone; any other read error fails the query.
+    - The before-image of a deleted node reads its edges through the
+      checked adjacency readers: an adjacency it cannot read refuses the
+      delete (it recorded the node without its edges).
+    - A Raft node freed the result of every entry it applied (a created
+      node's id leaked, 8 bytes per create, on every node).
+
+  **Behaviour change:** on a cluster leader, a statement whose later row
+  reads what an earlier row of it wrote (MERGE of a key an earlier row
+  merged with ON MATCH SET, a MATCH of a node or a label and property an
+  earlier row created or changed) is refused (40001) before anything is
+  proposed: the earlier rows are not applied until the statement's entry
+  commits, so the leader cannot read them. A MERGE of a key an earlier row
+  created, without ON MATCH SET, matches it. A statement of more than 4096
+  writes, or of more than 1000 KiB of them, is refused the same way.
+
+  **Upgrade note:** upgrade every node of a cluster before sending
+  statements that write more than once. A node before round 19 does not
+  know the batch entry: it logs "unknown create payload version —
+  skipping" and applies none of it (no partial statement, no junk data),
+  and falls behind the others. A statement with one write is proposed as
+  before.
 
 ### Fixed
 
@@ -1550,27 +2143,69 @@
   The cost grows with the label. A lookup that settles an entry whose
   lowest holder was removed scans the label in lean mode too. The default
   (lean mode off) reads the exact index instead.
-- **ROLLBACK undoes only what a transaction created.** The undo log
-  records the nodes and edges a CREATE or a MERGE creates, and nothing
-  else. A SET, a REMOVE, a DELETE, a label change, and a change MERGE makes
-  to a node or edge it matched stay after ROLLBACK, and after a failed
-  statement's rollback. Until that is fixed, do not rely on ROLLBACK to
-  undo changes to existing data.
+- **What a failed statement's undo and ROLLBACK do not reach
+  (SONNY-3348, SONNY-3059).** They undo what the store changed. They do
+  not revert a vector, full-text or other advanced index the executor
+  updated for a changed property: such an index can keep the undone value
+  until it is rebuilt. A change the storage engine refuses to undo (it
+  runs out of memory mid-undo) is logged and counted
+  (`statement_undo_replay_failures_total`), and the statement fails with
+  40003 (round 19). A statement's record is its own thread's: a
+  change made for it on another thread is not in it. A deleted node comes
+  back with a new storage slot under its old id. The CLI's saved undo log
+  does not keep a deleted node's tenant: after a CLI restart its ROLLBACK
+  restores the node into the default tenant. The bulk-ingest fast paths
+  (autocommit only) write storage directly and are not recorded; they take
+  literals and parameters only and fail on any evaluation error.
+- **A cluster write that fails after its Raft entry commits stays.** A
+  statement on the leader proposes its writes, as one entry, only after it
+  has evaluated completely without an error (round 19), so a limit or any
+  other error in any row proposes nothing. If the entry then does not
+  commit in time, the statement fails with 08006 and the outcome is
+  unknown to the client, as for any timed-out commit: the entry may still
+  commit, and nothing proposed is undone.
+- **A Raft `drop_graph` entry can stall the apply loop (SONNY-3350, latent).**
+  Applying it takes the graph's write lock. A leader writer that holds that
+  lock while it waits (up to 5 s) for its own later entry to apply holds
+  the apply loop, and the Raft ticks with it, for that long. Nothing
+  proposes a `drop_graph` entry today.
+- **Large QUIC requests can stall (SONNY-3232, left for S2).** The cause
+  is loss recovery in the QUIC library (quic v0.1.44): when the receiver
+  drains its socket slowly and the kernel drops datagrams in a burst, the
+  library resends at most two lost packets per acknowledgement and then
+  prunes the rest as if delivered, so the stream keeps a hole and the
+  request is never answered. Whether that happens depends on timing (how
+  loaded the server is, a Debug server more than a release one), not on the
+  request's size: a release server answered 1 MiB in about 0.1 s and 4 MiB
+  in about 1.4 s, and a Debug server stalled on 1 MiB in one run and
+  answered 4 MiB in 15 s in another. The same loss recovery carries QUIC
+  responses and the Raft transport. Keep QUIC requests small (use
+  parameters). A request past the 16 MiB message cap is refused when its
+  length arrives, but the server ends the stream without a reply, and the
+  client, held by the stream window, fails only at its own timeout (34 to
+  62 s observed). The server stays up and serves other connections in both
+  cases.
+- **A Debug build takes less nesting (SONNY-3191).** A Debug build's
+  stack frames are several times a release build's: on an 8 MiB thread
+  (the gRPC connection threads') it refuses some nesting of lists and calls
+  past about 60, where a release build takes 128. (WITH, CALL { } and FOR
+  chains stop at the 10-level query nesting limit in every build,
+  SONNY-3244.) Debug builds are for development.
 - **A transaction is not crash-atomic (SONNY-2979).** 15 of the 16 shards
   commit each operation on its own, and the undo log lives in memory only.
   A crash (a kill or a power loss) in the middle of a transaction leaves
   the operations run so far applied, and nothing rolls them back at
   restart.
 - **Index DDL runs on the default graph, and indexes are database-wide
-  (SONNY-2803):** DROP INDEX and a fulltext CREATE INDEX need the schema
-  permission on `default`, whatever the session's graph, because they run
-  on it (SONNY-2790). Indexes and constraints are catalogued for the whole
-  database, but the permission is checked on one graph, so a user with
-  `FOR SCHEMA` on `default` can drop an index created from another graph
-  (SONNY-3030).
-- **Offline auth commands need the HMAC key (SONNY-2798):** on a store that
-  holds any security record, an offline command refuses, and changes
-  nothing, when no HMAC key is available to verify the chain with. Set
+  (SONNY-2803, SONNY-3030):** DROP INDEX and a fulltext CREATE INDEX need
+  the schema permission on `default`, whatever the session's graph, because
+  they run on it (SONNY-2790). Indexes and constraints are catalogued for
+  the whole database, so every index and constraint statement also needs
+  the schema permission on the database (Admin, or `FOR SCHEMA` on `*`).
+- **Offline auth commands need the HMAC key (SONNY-2798, SONNY-3035):** on
+  a store that holds any security record or a chain root, an offline
+  command refuses, and changes nothing, when no HMAC key is available to
+  verify the chain with. Set
   `GEODE_AUTH_HMAC_KEY` or `GEODE_TDE_KEY` as the server does, or keep
   `.geode_hmac_key` in the data directory.
 - **`CALL algo.*` is slower under RLS or a tenant scope (SONNY-2685):** a
@@ -1639,18 +2274,17 @@
   after a CREATE, MERGE or DELETE (SONNY-2683), a variable an expression
   names that is not bound where it is evaluated (SONNY-3183), a name an
   initial WITH, an UNWIND or a FOR binds that is also a pattern variable or
-  a client parameter (SONNY-3183), a label SET or REMOVE inside an explicit
-  transaction (a rolled-back `SET n:L` kept its label postings, SONNY-3059),
-  and a write inside an expression (SONNY-3182). Split such a statement.
-  Inside an explicit transaction the other shapes are accepted, but ROLLBACK
-  does not undo a property SET, a REMOVE, a DELETE or a MERGE's SET
-  (SONNY-3059, see above; not only a label), and a rolled-back MATCH ...
-  CREATE can leave a node behind (round-3 review I7, round 4b).
+  a client parameter (SONNY-3183), and a write inside an expression
+  (SONNY-3182). Split such a statement. Inside an explicit transaction every
+  allowlisted shape is accepted, a label SET or REMOVE included (refused on
+  the v0823 line while a rolled-back `SET n:L` kept its label postings), and
+  ROLLBACK undoes it (SONNY-3059, round 18; see "What a failed statement's
+  undo and ROLLBACK do not reach" under Known limitations).
 - **Parser limits (SONNY-3244):** a request carries at most 1,024
   statements and at most 64 MiB of parsed form (54000); queries nest at most
   10 deep (54001). A Debug build's QUIC connection admission threads have
-  1 MiB of stack, which a nested query overflows before any limit applies
-  (the round-14 branch gives them 16 MiB, SONNY-3191).
+  16 MiB of stack (SONNY-3191), so a nested query reaches these limits
+  rather than the end of its stack.
 - **A statement ends at a `;` (SONNY-3166):** the parser used to split two
   statements written without a `;` between them and run each on its own;
   that is now a syntax error (42601). Programs that relied on it (`CREATE

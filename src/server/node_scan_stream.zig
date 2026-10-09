@@ -416,14 +416,20 @@ pub const NodeScanStream = struct {
             // ONLY those keys (cheap per-key directory lookup) instead of
             // decoding+duping every persisted property.
             const node = if (self.needed_keys) |keys|
-                materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch continue
+                materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch |err| {
+                    if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                    continue;
+                }
             else
-                materializeNode(allocator, self.graph_name, slot_id) catch continue;
+                materializeNode(allocator, self.graph_name, slot_id) catch |err| {
+                    if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                    continue;
+                };
             var node_tracked = false;
             errdefer if (!node_tracked) destroyNode(allocator, node);
 
             if (self.where_expr) |where_expr| {
-                const passes = self.evalPredicate(&scratch, allocator, where_expr, node);
+                const passes = try self.evalPredicate(&scratch, allocator, where_expr, node);
                 if (!passes) {
                     destroyNode(allocator, node);
                     continue;
@@ -691,11 +697,17 @@ pub const NodeScanStream = struct {
                     // GAP-0902: a filtered count needs ONLY the predicate's keys
                     // (no projection, no node escape), so read just those keys.
                     const node = if (self.needed_keys) |keys|
-                        materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch continue
+                        materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch |err| {
+                            if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                            continue;
+                        }
                     else
-                        materializeNode(allocator, self.graph_name, slot_id) catch continue;
+                        materializeNode(allocator, self.graph_name, slot_id) catch |err| {
+                            if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                            continue;
+                        };
                     defer destroyNode(allocator, node);
-                    if (self.evalPredicate(&scratch, allocator, where_expr, node)) matched += 1;
+                    if (try self.evalPredicate(&scratch, allocator, where_expr, node)) matched += 1;
                 }
                 // Released already if we bailed at a batch boundary on cancel.
                 if (count_lock_held) graph_store.releaseGraphLock(lock);
@@ -748,12 +760,18 @@ pub const NodeScanStream = struct {
 
     /// Whether `node` passes `where_expr`. The evaluation runs on `scratch`
     /// (see `predicateAllocator`), which is reset before this returns. An
-    /// evaluation error is a miss, as it always was.
-    fn evalPredicate(self: *NodeScanStream, scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator, where_expr: ast.Expr, node: *graph_store.Node) bool {
+    /// evaluation error is a miss, as it always was, except a limit
+    /// (SONNY-3251, round 15: 54001, 53200, 57014), which fails the read:
+    /// this stream is served outside the statement chokepoint that fails a
+    /// statement on a limit it swallowed.
+    fn evalPredicate(self: *NodeScanStream, scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator, where_expr: ast.Expr, node: *graph_store.Node) !bool {
         defer _ = scratch.reset(.retain_capacity);
         const eval_allocator = predicateAllocator(scratch, allocator);
         const env = self.makeEnv(eval_allocator, node);
-        const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch return false;
+        const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch |err| {
+            if (eval.isResourceLimitError(err)) return err;
+            return false;
+        };
         return predicateHolds(where_result);
     }
 };
@@ -1235,7 +1253,10 @@ fn collectExprPropertyKeys(
         .PropertyAccess => |pa| {
             if (std.ascii.eqlIgnoreCase(pa.object, variable_name)) try addKeyUnique(arena, pa.property, out);
         },
-        .Member => |m| {
+        .Member => |top| {
+            // SONNY-3189: down a member chain with a loop.
+            var m = top;
+            while (m.target.* == .Member) m = m.target.Member;
             if (m.target.* == .Ident and
                 (std.ascii.eqlIgnoreCase(m.target.Ident.orig, variable_name) or std.ascii.eqlIgnoreCase(m.target.Ident.cnf, variable_name)))
             {
@@ -1246,8 +1267,18 @@ fn collectExprPropertyKeys(
         },
         .Unary => |u| try collectExprPropertyKeys(arena, u.expr.*, variable_name, out),
         .Binary => |b| {
-            try collectExprPropertyKeys(arena, b.left.*, variable_name, out);
-            try collectExprPropertyKeys(arena, b.right.*, variable_name, out);
+            // SONNY-3189: a left-deep chain with a loop, not one recursion per
+            // operator; keys in the order the recursion found them.
+            var rights: std.ArrayList(*const ast.Expr) = .empty;
+            try rights.append(arena, b.right);
+            var leaf: *const ast.Expr = b.left;
+            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) try rights.append(arena, leaf.Binary.right);
+            try collectExprPropertyKeys(arena, leaf.*, variable_name, out);
+            var i = rights.items.len;
+            while (i > 0) {
+                i -= 1;
+                try collectExprPropertyKeys(arena, rights.items[i].*, variable_name, out);
+            }
         },
         .IsNull => |n| try collectExprPropertyKeys(arena, n.target.*, variable_name, out),
         .Call => |c| {
@@ -1441,7 +1472,26 @@ fn isStreamableProjectionExpr(expr: ast.Expr, variable_name: []const u8) bool {
 /// params. Rejects anything referencing other variables or needing cross-row
 /// context, so the per-node `eval.evalExpr` is guaranteed identical to the
 /// snapshot executor's per-node evaluation.
-fn isStreamablePredicateExpr(expr: ast.Expr) bool {
+fn isStreamablePredicateExpr(root: ast.Expr) bool {
+    // SONNY-3189: down AND/OR/comparison, NOT and member chains with a loop,
+    // not one recursion per link.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |b| switch (b.op) {
+            .And, .Or, .Eq, .Ne, .Lt, .Le, .Gt, .Ge => {
+                if (!isStreamablePredicateExpr(b.right.*)) return false;
+                at = b.left;
+            },
+            else => return false,
+        },
+        .Unary => |u| {
+            if (u.op != .Not) return false;
+            at = u.expr;
+        },
+        .Member => |m| at = m.target,
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Bool, .Int, .Null, .String, .Decimal, .Param => true,
         .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .TextLit => true,
@@ -1460,7 +1510,19 @@ fn isStreamablePredicateExpr(expr: ast.Expr) bool {
 /// Every Ident / property-access target inside the predicate references only
 /// the scanned variable (or a parameter). Guards against `WHERE m.x = 1`
 /// where `m` is some other (unbound here) variable.
-fn predicateOnlyReferences(expr: ast.Expr, variable_name: []const u8) bool {
+fn predicateOnlyReferences(root: ast.Expr, variable_name: []const u8) bool {
+    // SONNY-3189: down binary, unary and member chains with a loop.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |b| {
+            if (!predicateOnlyReferences(b.right.*, variable_name)) return false;
+            at = b.left;
+        },
+        .Unary => |u| at = u.expr,
+        .Member => |m| at = m.target,
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Bool, .Int, .Null, .String, .Decimal, .Param => true,
         .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .TextLit => true,
@@ -1644,8 +1706,18 @@ fn appendSeekableWhereProps(
         else => return,
     };
     if (b.op == .And) {
-        try appendSeekableWhereProps(arena, b.left.*, var_name, out);
-        try appendSeekableWhereProps(arena, b.right.*, var_name, out);
+        // SONNY-3189: an AND chain with a loop, not one recursion per AND;
+        // conjuncts in the order the recursion appended them.
+        var rights: std.ArrayList(*const ast.Expr) = .empty;
+        try rights.append(arena, b.right);
+        var leaf: *const ast.Expr = b.left;
+        while (leaf.* == .Binary and leaf.Binary.op == .And) : (leaf = leaf.Binary.left) try rights.append(arena, leaf.Binary.right);
+        try appendSeekableWhereProps(arena, leaf.*, var_name, out);
+        var i = rights.items.len;
+        while (i > 0) {
+            i -= 1;
+            try appendSeekableWhereProps(arena, rights.items[i].*, var_name, out);
+        }
         return;
     }
     if (b.op != .Eq) return;
@@ -1815,7 +1887,7 @@ fn collectMatchingSlotIds(
                         // predicate. Only predicate-passing slots count toward
                         // `match_cap`; capping on raw slots would under-return.
                         if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
-                        if (!slotMatchesPredicate(allocator, &scratch, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
+                        if (!try slotMatchesPredicate(allocator, &scratch, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
                         try result.append(allocator, slot_id);
                         if (result.items.len >= wp.match_cap) break :outer;
                     }
@@ -1904,14 +1976,28 @@ fn seekIndexedCandidates(
         // restricted inline values to streamable literals/params, so this is a
         // pure constant fold. A failure or a non-scalar (e.g. NULL / list /
         // node ref) means we cannot seek on this prop — skip it.
-        const expected = eval.evalExpr(allocator, prop.value.*, env) catch continue;
+        // SONNY-3316 (round 16, I4): a limit (54001, 53200, a budget or a
+        // cancel) fails the read; only a value that cannot be sought skips.
+        const expected = eval.evalExpr(allocator, prop.value.*, env) catch |err| {
+            if (eval.isResourceLimitError(err)) {
+                if (best_pv) |b| property_value_codec.freePropertyValue(allocator, b);
+                return err;
+            }
+            continue;
+        };
         // SONNY-2806: the index hashes a duration or a zoned time by its
         // representation, and two equal ones can differ (P1D and PT24H,
         // 01:00+14:00 and 11:00+00:00), so a seek could miss one. Such a
         // property is matched by the scan, which compares by value. (A number
         // hashes by its value; see graph_storage_adapter.hashStorageProperty.)
         if (expected == .Interval or expected == .TimeTZ) continue;
-        const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch continue;
+        const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch |err| {
+            if (eval.isResourceLimitError(err)) {
+                if (best_pv) |b| property_value_codec.freePropertyValue(allocator, b);
+                return err;
+            }
+            continue;
+        };
         // NULL inline equality never matches via the index path the same way
         // (`{p: null}` is unusual); leave it to the scan/verify path.
         if (pv == .Null) {
@@ -1990,7 +2076,11 @@ fn nodeMatchesPattern(
     };
 
     for (pattern.props.?) |prop| {
-        const expected = eval.evalExpr(allocator, prop.value.*, env) catch return false;
+        // SONNY-3316 (round 16, I4): a limit fails the read, not the row.
+        const expected = eval.evalExpr(allocator, prop.value.*, env) catch |err| {
+            if (eval.isResourceLimitError(err)) return err;
+            return false;
+        };
         const actual = props.get(prop.key) orelse return false;
         // SONNY-2806: by value, as the executor compares (a decimal by
         // representation and every extended value never, a DOUBLE included).
@@ -2020,8 +2110,11 @@ fn slotMatchesPredicate(
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
-) bool {
-    const node = materializeNode(allocator, graph_name, slot_id) catch return false;
+) !bool {
+    const node = materializeNode(allocator, graph_name, slot_id) catch |err| {
+        if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+        return false;
+    };
     defer destroyNode(allocator, node);
     // SONNY-2656: as in `evalPredicate`, the evaluation runs on `scratch`,
     // reset before this returns.
@@ -2037,7 +2130,12 @@ fn slotMatchesPredicate(
         .allocator = eval_allocator,
         .exec_context = @constCast(&context),
     };
-    const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch return false;
+    // SONNY-3251 (round 15, F6): a limit fails the read; any other error is
+    // a miss.
+    const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch |err| {
+        if (eval.isResourceLimitError(err)) return err;
+        return false;
+    };
     return predicateHolds(where_result);
 }
 
@@ -2068,7 +2166,19 @@ fn predicateAllocator(scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allo
     return scratch.allocator();
 }
 
+// CANARY: REQ=REQ-SONNY-3349-PROFILE-RELAY; FEATURE="NodeScanStream"; ASPECT=MaterializeLimitFails; STATUS=TESTED; TEST=tests/test_sonny3349_profile_relay.zig; OWNER=server; UPDATED=2026-09-28
+/// SONNY-3349 (round 17): a test seam. When set on a thread, `materializeNode`
+/// and `materializeNodeProjected` fail with it, as an allocation or a node
+/// deleted under the scan would. Never set outside tests.
+///
+/// The scan skips a node it cannot materialize, which a concurrent delete
+/// explains; a resource limit (out of memory) is not a missing node, and
+/// fails the query (the paging scan, the filtered count, and the WHERE +
+/// LIMIT enumeration). It became a row the query did not return.
+pub threadlocal var test_materialize_error: ?error{ OutOfMemory, NodeNotFound } = null;
+
 fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
+    if (test_materialize_error) |err| return err;
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const node = try newNode(allocator, adapter, graph_name, slot_id);
@@ -2139,6 +2249,12 @@ pub fn materializeNodeForTest(allocator: std.mem.Allocator, graph_name: []const 
     return materializeNode(allocator, graph_name, slot_id);
 }
 
+/// SONNY-3350 (round 17): a test seam: `resolveExternalNodeId`.
+pub fn resolveExternalNodeIdForTest(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !u64 {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    return resolveExternalNodeId(allocator, adapter, graph_store.getGlobalStore(allocator), graph_name, slot_id);
+}
+
 /// Test-only (SONNY-2463): `destroyNode`, for a node `materializeNodeForTest`
 /// built.
 pub fn destroyNodeForTest(allocator: std.mem.Allocator, node: *graph_store.Node) void {
@@ -2161,6 +2277,7 @@ fn materializeNodeProjected(
     slot_id: u64,
     needed_keys: []const []const u8,
 ) !*graph_store.Node {
+    if (test_materialize_error) |err| return err; // SONNY-3349
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const node = try newNode(allocator, adapter, graph_name, slot_id);
@@ -2208,15 +2325,21 @@ fn resolveExternalNodeId(
     graph_name: []const u8,
     slot_id: u64,
 ) !u64 {
-    // Fast path: IdMap already has the mapping.
-    if (store.getIdMap(graph_name)) |id_map| {
-        if (id_map.nodeUuid(slot_id)) |uuid_128| {
-            return @as(u64, @truncate(uuid_128));
-        }
-    }
+    // Fast path: IdMap already has the mapping. SONNY-3350: read with the
+    // map pinned (`GraphStore.idMapNodeId`).
+    if (store.idMapNodeId(graph_name, slot_id)) |id| return id;
 
     // Slow path: read the persisted public ID property from the adapter.
-    if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
+    // SONNY-3348 round 18 (review M1): a resource limit fails the query (it
+    // was swallowed, and the slot used as the id: a wrong row).
+    // SONNY-3348 round 19 (review m4): only a node or graph that is gone
+    // is skipped; any other read error (an engine I/O error) fails the
+    // query instead of dropping the row silently.
+    const stored = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch |err| switch (err) {
+        error.NodeNotFound, error.GraphNotFound => return error.NodeNotFound,
+        else => return err,
+    };
+    if (stored) |stored_prop| {
         defer freeStoragePropertyValue(allocator, stored_prop);
         const public_id: ?u64 = switch (stored_prop) {
             .string => |text| graph_store.parsePersistedPublicId(text),
@@ -2224,19 +2347,17 @@ fn resolveExternalNodeId(
             else => null,
         };
         if (public_id) |pid| {
-            // Back-fill the IdMap for future lookups.
-            const im = store.getOrCreateIdMap(graph_name) catch return pid;
-            im.insertNodeWithSlot(@as(u128, pid), slot_id) catch {};
+            // Back-fill the IdMap for future lookups (SONNY-3350: pinned).
+            store.idMapBackfillNode(graph_name, pid, slot_id);
             return pid;
         }
     }
 
-    // Neither the IdMap nor the persisted property had a mapping for this
-    // slot.  This happens for nodes created within the current session whose
-    // graph has no IdMap yet (e.g. freshly-created test graphs).  Fall back
-    // to using the slot_id directly as the external ID so that
-    // materializeNode can still succeed.
-    return slot_id;
+    // Neither the IdMap nor the persisted property has a public id for this
+    // slot: the node is gone (a DROP GRAPH, or a delete, after the scan read
+    // the slot). SONNY-3348 round 18 (review M1): the caller skips it. The
+    // slot was returned as the node's id, a row with an id no node has.
+    return error.NodeNotFound;
 }
 
 /// Free a value the storage adapter read for this file (`getNodeProperty`,
@@ -2292,6 +2413,36 @@ fn cloneIdent(arena: std.mem.Allocator, id: ast.IdentRepr) CloneError!ast.IdentR
     return .{ .orig = try arena.dupe(u8, id.orig), .cnf = try arena.dupe(u8, id.cnf) };
 }
 
+/// SONNY-3189: copy a chain of member accesses and binary operators with a
+/// loop: down the member targets and left operands, each copied link's child
+/// slot filled by the next link; right operands and the innermost operand
+/// through `cloneExprPtr`.
+fn cloneChain(arena: std.mem.Allocator, e: ast.Expr) CloneError!ast.Expr {
+    var result: ast.Expr = undefined;
+    var slot: *ast.Expr = &result;
+    var src: *const ast.Expr = &e;
+    while (true) {
+        switch (src.*) {
+            .Member => |m| {
+                const child = try arena.create(ast.Expr);
+                slot.* = .{ .Member = .{ .target = child, .field = try arena.dupe(u8, m.field) } };
+                slot = child;
+                src = m.target;
+            },
+            .Binary => |b| {
+                const child = try arena.create(ast.Expr);
+                slot.* = .{ .Binary = .{ .op = b.op, .left = child, .right = try cloneExprPtr(arena, b.right) } };
+                slot = child;
+                src = b.left;
+            },
+            else => {
+                slot.* = try cloneExpr(arena, src.*);
+                return result;
+            },
+        }
+    }
+}
+
 fn cloneExpr(arena: std.mem.Allocator, e: ast.Expr) CloneError!ast.Expr {
     return switch (e) {
         .Null => .Null,
@@ -2310,18 +2461,12 @@ fn cloneExpr(arena: std.mem.Allocator, e: ast.Expr) CloneError!ast.Expr {
             .object = try arena.dupe(u8, pa.object),
             .property = try arena.dupe(u8, pa.property),
         } },
-        .Member => |m| .{ .Member = .{
-            .target = try cloneExprPtr(arena, m.target),
-            .field = try arena.dupe(u8, m.field),
-        } },
+        // SONNY-3189: member and binary chains are copied with a loop
+        // (`cloneChain`), not one recursion per link.
+        .Member, .Binary => cloneChain(arena, e),
         .Unary => |u| .{ .Unary = .{
             .op = u.op,
             .expr = try cloneExprPtr(arena, u.expr),
-        } },
-        .Binary => |b| .{ .Binary = .{
-            .op = b.op,
-            .left = try cloneExprPtr(arena, b.left),
-            .right = try cloneExprPtr(arena, b.right),
         } },
         .IsNull => |n| .{ .IsNull = .{
             .target = try cloneExprPtr(arena, n.target),

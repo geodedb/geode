@@ -36,6 +36,20 @@ pub fn refuseInternal(graph: []const u8) error{InternalGraph}!void {
     if (graph_store.isInternalGraphName(graph)) return error.InternalGraph;
 }
 
+// CANARY: REQ=REQ-SONNY-3191-RESERVED-GRAPH-NAMES; FEATURE="MultiGraphIsolation"; ASPECT=RefuseReserved; STATUS=TESTED; TEST=tests/test_sonny3191_round13_items.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-3191 (N-7): CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH and
+/// HOME_PROPERTY_GRAPH (any case) name the session's current and home
+/// graphs (`query_traits.graphTarget`), so no graph may be created or dropped
+/// by them: `error.ReservedGraphName` (42939). `CREATE GRAPH CURRENT_GRAPH`
+/// created a graph USE GRAPH could never select, and `DROP GRAPH
+/// CURRENT_GRAPH` dropped a graph of that name, not the current graph.
+pub fn refuseReserved(graph: []const u8) error{ReservedGraphName}!void {
+    switch (query_traits.graphTarget(graph)) {
+        .named => {},
+        .current, .home => return error.ReservedGraphName,
+    }
+}
+
 /// Does `graph` exist? The default graph always does: every session starts
 /// on it, whether or not anything has been stored in it yet.
 pub fn exists(catalog: *catalog_mod.Catalog, graph: []const u8) bool {
@@ -92,6 +106,48 @@ pub fn maySchema(principal: ?*const principal_mod.Principal, graph: []const u8) 
     return mayBind(p, graph);
 }
 
+// CANARY: REQ=REQ-SONNY-3030-CATALOG-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=MaySchemaDatabase; STATUS=TESTED; TEST=tests/test_sonny3030_catalog_ddl_gate.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-3030: may `principal` change the schema of the whole database:
+/// every graph at once? `gps.decide(schema, graph "*")`: Admin's builtin
+/// Schema permission, or a GPS policy `FOR SCHEMA` scoped to `*`. A policy
+/// scoped to one graph does not match. No principal: yes (an in-process
+/// caller).
+pub fn maySchemaDatabase(principal: ?*const principal_mod.Principal) bool {
+    const p = principal orelse return true;
+    const req = gps.DecisionRequest{
+        .principal = p,
+        .action = .schema,
+        .resource = .{ .graph = "*" },
+    };
+    // smp_allocator: the governance-approved global allocator in src/.
+    const decision = gps.decide(std.heap.smp_allocator, &req) catch return false;
+    return decision.kind == .allow;
+}
+
+/// SONNY-3030: refuse index and constraint DDL (`Unauthorized`, 42501) unless
+/// `maySchema` on `graph`, the graph the statement runs on, and
+/// `maySchemaDatabase`. Indexes and constraints are catalogued database-wide,
+/// by label, and bind every graph: a `FOR SCHEMA` grant on one graph let its
+/// holder drop an index an Admin created from another graph, or add a
+/// UNIQUE constraint that refused writes there. Checked before the index or
+/// constraint is looked up.
+pub fn authorizeCatalogSchemaChange(context: execution.ExecutionContext, graph: []const u8) error{Unauthorized}!void {
+    try authorizeSchemaChange(context, graph);
+    if (!maySchemaDatabase(context.principal)) return error.Unauthorized;
+}
+
+// CANARY: REQ=REQ-SONNY-3033-BATCH-GRAPH-GATE; FEATURE="MultiGraphIsolation"; ASPECT=SessionGraphGate; STATUS=TESTED; TEST=tests/test_sonny3033_batch_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+/// SONNY-3033: the session-graph gate for a path that writes the session's
+/// graph without the executor (the `/*+BATCH*/` route), in the order every
+/// session graph change takes: internal (`InternalGraph`), then permission
+/// (`mayBind`, `Unauthorized`), then existence (`GraphNotFound`). The graph is
+/// never created here: that needs CREATE GRAPH and the schema permission.
+pub fn requireWritable(principal: ?*const principal_mod.Principal, catalog: *catalog_mod.Catalog, graph: []const u8) error{ InternalGraph, Unauthorized, GraphNotFound }!void {
+    try refuseInternal(graph);
+    if (!mayBind(principal, graph)) return error.Unauthorized;
+    if (!exists(catalog, graph)) return error.GraphNotFound;
+}
+
 /// SONNY-2824: what a HELLO does with the graph a connection names.
 pub const HelloGraph = enum {
     /// Refused: an internal graph, or one the principal may not bind. The
@@ -138,6 +194,21 @@ pub fn set(session: *execution.SessionState, graph: ?[]const u8) std.mem.Allocat
     const copy: ?[]const u8 = if (graph) |g| try session.allocator.dupe(u8, g) else null;
     if (session.graph) |old| session.allocator.free(old);
     session.graph = copy;
+}
+
+// CANARY: REQ=REQ-SONNY-3350-ROUND16-MINORS; FEATURE="GraphRBACEnforcement"; ASPECT=AuthorizeSnapshotRead; STATUS=TESTED; TEST=tests/test_sonny3350_round16_minors.zig; OWNER=security; UPDATED=2026-09-28
+/// SONNY-3350 (round 17): may the program running in `context` read
+/// `graph`, one of the graphs its statements run on
+/// (`graph_store.snapshotUnderReadLocks`)? The checks `change` makes for
+/// the USE GRAPH that moves the program there, in its order, and nothing
+/// else (no existence check: a graph that is not there has nothing to lock
+/// or copy, and the executor reports it). The session's own graph needs
+/// none: it was bound at HELLO or by an earlier USE GRAPH.
+pub fn authorizeSnapshotRead(context: execution.ExecutionContext, graph: []const u8) error{ InternalGraph, GraphBound, Unauthorized }!void {
+    if (std.mem.eql(u8, graph, current(context))) return;
+    try refuseInternal(graph);
+    if (context.graph_bound) return error.GraphBound;
+    if (!mayBind(context.principal, graph)) return error.Unauthorized;
 }
 
 /// The graph `context`'s session is on.

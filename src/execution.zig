@@ -14,6 +14,9 @@ const fle_catalog = @import("schema/fle_catalog.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
+const statement_undo = @import("statement_undo.zig");
+// SONNY-3348 (round 19): a statement's replicated writes, one entry or none.
+const statement_proposals = @import("distributed/statement_proposals.zig");
 const log = logging.scoped("execution");
 const Attr = logging.Attr;
 
@@ -187,6 +190,11 @@ pub fn batchCreateInvocations() u64 {
 /// prior wall-clock budget assertions that flaked on contended hosts.
 pub fn parallelUnionInvocations() u64 {
     return set_operations.parallel_union_invocations.load(.monotonic);
+}
+
+/// SONNY-3316: the test seam `set_operations.test_force_limit_in_spawned_arms`.
+pub fn setTestForceLimitInSpawnedUnionArms(on: bool) void {
+    set_operations.test_force_limit_in_spawned_arms.store(on, .release);
 }
 
 /// SONNY-1330 regression probe. Monotonic count of UNIONs that started on the
@@ -1258,15 +1266,33 @@ fn requirePolicyDdlAdmin(allocator: std.mem.Allocator, action: []const u8, conte
     om.recordAuthzCheck(.allow, .rbac, d);
 }
 
-/// SONNY-2823: commit this thread's session engine transaction (R9), where
-/// its undo transaction commits, or where the program that opened it ends. A
-/// failed commit is logged: the undo transaction is committed already, as
-/// QUIC's COMMIT message does.
+/// SONNY-3028: DROP GRAPH (and CREATE OR REPLACE GRAPH) in a transaction
+/// that has changed data is refused (`ObjectInUse`, 55006). A transaction
+/// changes one graph (SONNY-2776), and the handlers run a DROP GRAPH under the
+/// dropped graph's write lock, so the graph such a transaction changed is the
+/// one being dropped: its undo would replay into a dropped graph, and its
+/// engine transaction pointed into the freed graph. `START TRANSACTION;
+/// CREATE (:X); DROP GRAPH g; CREATE (:Y)` used the freed graph.
+fn refuseDropInTransaction(context: ExecutionContext) error{ObjectInUse}!void {
+    if (context.transaction_state != .Active) return;
+    if (txn_undo_log.getGlobalUndoLog(std.heap.smp_allocator).threadTxnHasEntries()) return error.ObjectInUse;
+}
+
+// CANARY: REQ=REQ-SONNY-3031-SESSION-COMMIT-FAILURE; FEATURE="TransactionManagement"; ASPECT=ProgramEndCommit; STATUS=TESTED; TEST=tests/test_sonny3031_session_commit_failure.zig; OWNER=storage; UPDATED=2026-09-27
+/// SONNY-2823: commit this thread's session engine transaction (R9) where the
+/// program that opened it ends.
+///
+/// SONNY-3031: a failed commit (the transaction is aborted) is kept for the
+/// request's handler (`storage_adapter.noteSessionCommitFailure`), which fails
+/// the request and rolls the transaction back, so its COMMIT reports the
+/// failure. It was only logged, and the request and the COMMIT reported
+/// success for changes that were never committed to storage.
 fn commitSessionEngineTxn() void {
     storage_adapter.commitThreadSessionTxn() catch |err| {
-        log.err("Failed to commit the session engine transaction", &.{
+        log.warn("Failed to commit the session engine transaction", &.{
             Attr.string("error", @errorName(err)),
         });
+        storage_adapter.noteSessionCommitFailure(err);
     };
 }
 
@@ -1294,13 +1320,36 @@ pub fn checkProgramParams(program: *const ast.Program, names: []const []const u8
 /// transaction goes on: the undo log undoes a committed change as well.
 threadlocal var t_entry_depth: u32 = 0;
 
-fn enterEntryPoint() void {
+/// SONNY-3027: `pub` for the executor's other entry points, the profiled
+/// execution in `planned_read_runtime`.
+pub fn enterEntryPoint() void {
     t_entry_depth += 1;
 }
 
-fn leaveEntryPoint() void {
+pub fn leaveEntryPoint() void {
     t_entry_depth -= 1;
-    if (t_entry_depth == 0) commitSessionEngineTxn();
+    if (t_entry_depth != 0) return;
+    // CANARY: REQ=REQ-SONNY-3135-FAILED-TXN-ABORT; FEATURE="TransactionManagement"; ASPECT=ProgramEndAbort; STATUS=TESTED; TEST=tests/test_sonny3135_profile_allowlist_failed_txn.zig; OWNER=storage; UPDATED=2026-09-27
+    // SONNY-3135 (N7b): a program that failed in its transaction
+    // (`failEntryPoint`) has its session engine transaction aborted: the
+    // transaction is rolled back (GAP-0917, by the executor or the handler),
+    // and a commit here made the failed changes durable until the rollback
+    // undid them (the SONNY-2979 crash window).
+    if (storage_adapter.sessionTxnFailed()) {
+        storage_adapter.abortThreadSessionTxn();
+        return;
+    }
+    commitSessionEngineTxn();
+}
+
+/// SONNY-3135 (N7b): the outermost executor entry point is returning an
+/// error. With a session slot on the thread, the program ran in its session's
+/// transaction, which fails with it: `noteSessionTxnFailed`. Called by the
+/// entry points' `errdefer`, before their `leaveEntryPoint`. An inner entry
+/// point's error may be handled by the program around it, so only the
+/// outermost one's counts.
+pub fn failEntryPoint() void {
+    if (t_entry_depth == 1) storage_adapter.noteSessionTxnFailed();
 }
 
 // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=TransportProfile; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
@@ -1322,6 +1371,7 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     // SONNY-2823: the program's session engine transaction ends with it.
     enterEntryPoint();
     defer leaveEntryPoint();
+    errdefer failEntryPoint();
     const prev_ctx = pushActiveContext(&context);
     defer popActiveContext(prev_ctx);
     if (program.statements.len == 0) {
@@ -1525,6 +1575,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     // program; its session engine transaction ends with it.
     enterEntryPoint();
     defer leaveEntryPoint();
+    errdefer failEntryPoint();
     // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=PrePassGraphScope; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=execution; UPDATED=2026-08-29
     // ENG-3922(a): the write pre-pass needs to know which GRAPH the statement
     // writes to (the unindexed vector-dimension pin is per-graph), and the only
@@ -1546,15 +1597,91 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     defer if (pushed_ctx) popActiveContext(prev_active_ctx);
 
     const owns_in_predicate_scope = eval.enterInPredicateScope();
+    // CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StatementUndoReplay; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=execution; UPDATED=2026-09-29
+    // SONNY-3348 (round 18): the statement's undo record (`statement_undo`).
+    // A statement that fails, here or at the relay below, has its changes
+    // undone before its error is returned, on every executor; one that
+    // succeeds in an explicit transaction hands its record to the
+    // transaction's undo log (SONNY-3059).
+    // SONNY-3348 (round 19): on a cluster leader, its replicated writes
+    // are held and proposed as one entry once it succeeded, or dropped.
+    beginStatementScope(owns_in_predicate_scope);
     var result = executeStatementWithContextInner(allocator, stmt, context) catch |err| {
         _ = eval.exitInPredicateScope(owns_in_predicate_scope);
-        return err;
+        _ = eval.takeDeferredLimitError(owns_in_predicate_scope);
+        return endStatementFailed(owns_in_predicate_scope, err);
     };
+    // CANARY: REQ=REQ-SONNY-3251-LIMIT-ERRORS; FEATURE="Execution"; ASPECT=StatementLimitRelay; STATUS=TESTED; TEST=tests/test_sonny3251_limit_errors.zig; OWNER=execution; UPDATED=2026-09-28
+    // SONNY-3251 (round 15, F6): a limit the evaluator ran into (54001),
+    // which a WHERE, a cell, an aggregate or a subquery turned into false,
+    // NULL, 0 or a skipped row somewhere inside, fails the statement: its
+    // rows are not an answer (`eval.noteLimitError`).
+    const limit_error = eval.takeDeferredLimitError(owns_in_predicate_scope);
     if (eval.exitInPredicateScope(owns_in_predicate_scope)) {
         result.deinit(allocator);
-        return error.InListRequiresList;
+        return endStatementFailed(owns_in_predicate_scope, error.InListRequiresList);
     }
+    if (limit_error) |err| {
+        result.deinit(allocator);
+        return endStatementFailed(owns_in_predicate_scope, err);
+    }
+    endStatementSucceeded(owns_in_predicate_scope) catch |err| {
+        result.deinit(allocator);
+        return err;
+    };
     return result;
+}
+
+/// SONNY-3348: open a statement's scope (`owns`: the outermost on the
+/// thread): its undo record (`statement_undo`) and, on a cluster leader, its
+/// held replicated writes (`statement_proposals`). `pub` for PROFILE's scope
+/// (`planned_read_runtime.executeProfiledIfSupported`).
+pub fn beginStatementScope(owns: bool) void {
+    statement_undo.begin(owns);
+    statement_proposals.begin(owns);
+}
+
+/// SONNY-3348 (round 19, m1): failed statements of an explicit transaction
+/// whose session engine transaction was aborted before their replay (tests).
+pub var session_txn_aborted_before_replay_total: std.atomic.Value(u64) = .init(0);
+
+/// The errors a failed statement's scope can answer instead of its own.
+pub const StatementScopeError = error{ WriteQueryBudgetExceeded, StatementUndoIncomplete };
+
+// CANARY: REQ=REQ-SONNY-3348-LIMIT-ATOMICITY; FEATURE="Execution"; ASPECT=StatementScopeFailed; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=execution; UPDATED=2026-09-29
+/// SONNY-3348: the statement that opened the scope `owns` failed with
+/// `err`. Nothing it held for the cluster is proposed; its changes are
+/// undone; and it answers `err`, or (round 19):
+///   * `error.StatementUndoIncomplete` (40003) when a change could not be
+///     undone (m3: it is partly applied, and a blind retry would apply the
+///     rest twice);
+///   * `error.WriteQueryBudgetExceeded` (53200) when a write was refused
+///     because the undo record would not fit the write budget (I2).
+/// Inside an explicit transaction the session's engine transaction is
+/// aborted before the replay (m1, the SONNY-2823 order): the transaction is
+/// rolled back next, and the replay's compensations commit on their own
+/// instead of joining the aborted engine transaction (a stolen page of the
+/// failed write was recovered after a crash, with no redo record for its
+/// compensation).
+pub fn endStatementFailed(owns: bool, err: anytype) (@TypeOf(err) || StatementScopeError) {
+    statement_proposals.finishFailed(owns);
+    if (owns and statement_undo.pendingCount() > 0 and txn_undo_log.threadInTxn()) {
+        if (storage_adapter.hasThreadSessionTxn()) _ = session_txn_aborted_before_replay_total.fetchAdd(1, .monotonic);
+        storage_adapter.abortThreadSessionTxn();
+    }
+    const over_budget = owns and statement_undo.budgetExceeded();
+    if (!statement_undo.finishFailed(owns)) return error.StatementUndoIncomplete;
+    if (over_budget) return error.WriteQueryBudgetExceeded;
+    return err;
+}
+
+/// SONNY-3348: the statement that opened the scope `owns` evaluated without
+/// an error. On a cluster leader its held writes are proposed now, as one
+/// entry (round 19); if that fails, it fails (nothing was applied). Then its
+/// undo record joins its explicit transaction, or is dropped.
+pub fn endStatementSucceeded(owns: bool) (statement_proposals.Error || StatementScopeError)!void {
+    statement_proposals.flush(owns) catch |err| return endStatementFailed(owns, err);
+    try statement_undo.finishSucceeded(owns);
 }
 
 fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
@@ -1730,10 +1857,15 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         },
                         .Create => |create_stmt| executeCreate(allocator, create_stmt, txn_graph, mut_context),
                         .Merge => |m| executeMerge(allocator, m, txn_graph, mut_context),
-                        .StartTransaction => return error.NestedTransactionNotAllowed,
-                        .Commit => return error.CommitInTransactionBody,
-                        .Rollback => return error.RollbackInTransactionBody,
-                        else => return error.UnsupportedStatementInTransactionBody,
+                        // SONNY-3348 (round 18): refusals go through the
+                        // rollback below too. They returned from here with
+                        // the body's undo transaction still open on the
+                        // thread, and the handler took the session for one
+                        // in a failed explicit transaction.
+                        .StartTransaction => error.NestedTransactionNotAllowed,
+                        .Commit => error.CommitInTransactionBody,
+                        .Rollback => error.RollbackInTransactionBody,
+                        else => error.UnsupportedStatementInTransactionBody,
                     }) catch |err| {
                         mut_context.transaction_state = .None;
                         // SONNY-2823: the engine transaction first, so the
@@ -1743,6 +1875,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                             log.err("Failed to roll back a transaction body", &.{
                                 Attr.string("error", @errorName(rb_err)),
                             });
+                            // SONNY-3348 (round 19, m3): reported, not
+                            // only logged: the body is partly applied.
+                            return error.RollbackIncomplete;
                         };
                         return err;
                     };
@@ -1750,8 +1885,21 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
                 // Auto-commit: reset transaction state
                 mut_context.transaction_state = .None;
+                // SONNY-3031: the engine transaction first; if it cannot
+                // commit, the body is rolled back and fails.
+                storage_adapter.commitThreadSessionTxn() catch |err| {
+                    log.warn("Failed to commit a transaction body's engine transaction; rolling the body back", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    undo_log.rollback(body_store) catch |rb_err| {
+                        log.err("Failed to roll back a transaction body", &.{
+                            Attr.string("error", @errorName(rb_err)),
+                        });
+                        return error.RollbackIncomplete;
+                    };
+                    return error.SessionCommitFailed;
+                };
                 undo_log.commit(body_store);
-                commitSessionEngineTxn();
 
                 // Return result from last statement
                 if (last_result) |result| {
@@ -1782,18 +1930,29 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 var mut_context = context;
                 mut_context.transaction_state = .Committed;
 
+                // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=CommitStatement; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+                // SONNY-2823: the session's engine transaction (R9), which a
+                // COMMIT statement never committed, on either transport: the
+                // transaction's writes on its shard had no COMMIT record, and
+                // the thread kept the transaction for the next session it
+                // served. SONNY-3031: first, and a failure fails the COMMIT
+                // (the transaction is then rolled back, GAP-0917): it was
+                // logged, and the undo log committed as if it had not failed.
+                storage_adapter.commitThreadSessionTxn() catch |err| {
+                    log.warn("Failed to commit the session engine transaction at COMMIT", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    return error.SessionCommitFailed;
+                };
                 // CANARY: REQ=REQ-TXN-UNDO-006; FEATURE="TransactionUndoLog"; ASPECT=CommitTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                 // Commit the undo log - clears the log and keeps changes
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 const commit_store = graph_store.getWritableGlobalStore(allocator);
                 undo_log.commit(commit_store);
-                // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=CommitStatement; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
-                // SONNY-2823: and the session's engine transaction (R9),
-                // which a COMMIT statement never committed, on either
-                // transport: the transaction's writes on its shard had no
-                // COMMIT record, and the thread kept the transaction for the
-                // next session it served.
-                commitSessionEngineTxn();
+                // SONNY-3191 (N-4): the transaction is over; its session lets
+                // the graph hold (SONNY-3134) go now, not after the program,
+                // so `COMMIT; DROP GRAPH g` runs.
+                graph_store.releaseThreadTxnHold();
 
                 break :blk "transaction committed";
             } else "no transaction active";
@@ -1837,11 +1996,19 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 // QUIC's ROLLBACK message does), so the undo's own changes
                 // commit on their own. A ROLLBACK statement never aborted it.
                 storage_adapter.abortThreadSessionTxn();
+                // SONNY-3348 (round 19, m3): the undo continues past a
+                // change it cannot undo, and ROLLBACK then fails with
+                // 40003: the transaction is over, and partly applied.
+                var rollback_complete = true;
                 undo_log.rollback(store) catch |err| {
                     log.err("Failed to rollback transaction", &.{
                         Attr.string("error", @errorName(err)),
                     });
+                    rollback_complete = false;
                 };
+                // SONNY-3191 (N-4): as at COMMIT.
+                graph_store.releaseThreadTxnHold();
+                if (!rollback_complete) return error.RollbackIncomplete;
 
                 break :blk "transaction rolled back";
             } else "no transaction active";
@@ -1936,7 +2103,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // SONNY-2803: schema on the graph the index DDL runs on (the
             // session's; a fulltext index lives in the default graph,
             // SONNY-2790), before the IF NOT EXISTS lookup.
-            try session_graph.authorizeSchemaChange(context, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context));
+            // SONNY-3030: and on the database: the catalog is database-wide.
+            try session_graph.authorizeCatalogSchemaChange(context, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context));
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -2116,8 +2284,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateConstraintDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2803: schema on the session's graph, before the IF NOT
-            // EXISTS lookup.
-            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
+            // EXISTS lookup. SONNY-3030: and on the database.
+            try session_graph.authorizeCatalogSchemaChange(context, session_graph.current(context));
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT implementation - store in catalog and enforce
 
@@ -2188,7 +2356,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // SONNY-2803: schema on the default graph, the graph DROP INDEX
             // runs on (SONNY-2790: the index may be a fulltext one), before
             // the index is looked up.
-            try session_graph.authorizeSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
+            // SONNY-3030: and on the database: the catalog is database-wide.
+            try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
             const cat = context.catalog;
             const index_name = di.name;
 
@@ -2262,8 +2431,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // (Currently a stub no-op, but the surface claims to mutate — keep
             // the fail-closed contract so a future real implementation stays gated.)
             try cluster_mod.gateUnreplicatedWrite();
-            // SONNY-2803: as CREATE CONSTRAINT.
-            try session_graph.authorizeSchemaChange(context, session_graph.current(context));
+            // SONNY-2803, SONNY-3030: as CREATE CONSTRAINT.
+            try session_graph.authorizeCatalogSchemaChange(context, session_graph.current(context));
             // DROP CONSTRAINT implementation
             _ = dc;
             return ExecutionResult{
@@ -2330,6 +2499,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2791: the __geode_* names are the engine's own.
             try session_graph.refuseInternal(cg.name);
+            // SONNY-3191 (N-7): the current- and home-graph names are not
+            // graph names.
+            try session_graph.refuseReserved(cg.name);
             // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=GraphDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
             // SONNY-2803: schema and bind_graph on the graph to create, before
             // whether it exists.
@@ -2343,10 +2515,20 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const in_store = store.graphExists(graph_name);
 
             if (cg.or_replace) {
+                // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=ReplaceDefaultRefused; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
+                // SONNY-3132: the default graph is not replaced. Its drop's
+                // refusal was swallowed here, and the graph created again.
+                if (std.mem.eql(u8, graph_name, graph_store.DEFAULT_GRAPH_NAME)) return error.CannotDropDefaultGraph;
+                // SONNY-3028: the graph a transaction changed is not replaced
+                // under it, and a refusal leaves the catalog as it was.
+                try refuseDropInTransaction(context);
+                store.dropGraph(graph_name) catch |err| switch (err) {
+                    error.ObjectInUse, error.CannotDropDefaultGraph => return err,
+                    else => {},
+                };
                 cat.removeGraph(graph_name) catch |err| {
                     if (err != error.GraphNotFound) return err;
                 };
-                store.dropGraph(graph_name) catch {};
             } else if (in_catalog or in_store) {
                 if (cg.if_not_exists) {
                     return ExecutionResult{
@@ -2410,6 +2592,22 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2791: DROP GRAPH __geode_security removed the security graph.
             try session_graph.refuseInternal(dg.name);
+            // SONNY-3191 (N-7): DROP GRAPH CURRENT_GRAPH dropped a graph named
+            // CURRENT_GRAPH, not the current graph.
+            // CANARY: REQ=REQ-SONNY-3234-LEGACY-RESERVED-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=DropLegacyReservedName; STATUS=TESTED; TEST=tests/test_sonny3234_legacy_reserved_graph.zig; OWNER=storage; UPDATED=2026-09-28
+            // SONNY-3234 (round 15, F10): except that a graph made under such a
+            // name before the names were reserved (a legacy CURRENT_GRAPH,
+            // loaded at start) could then never be dropped, and no session can
+            // use it. When a graph of exactly that name exists, DROP GRAPH
+            // drops it, and says so in the log. CREATE stays refused.
+            if (graph_store.isReservedGraphName(dg.name)) {
+                const legacy_store = graph_store.getGlobalStore(allocator);
+                if (legacy_store.graphExists(dg.name) or context.catalog.hasGraph(dg.name)) {
+                    log.warn("DROP GRAPH of a graph with a reserved name, made before the name was reserved (SONNY-3191); it is dropped", &.{
+                        Attr.string("graph_name", dg.name),
+                    });
+                } else try session_graph.refuseReserved(dg.name);
+            }
             // SONNY-2803: schema and bind_graph on the graph to drop, before
             // whether it exists. A ReadWrite user refused `USE GRAPH g1`
             // dropped g1.
@@ -2426,18 +2624,27 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 return error.GraphNotFound;
             }
 
+            // CANARY: REQ=REQ-SONNY-3028-DROP-GRAPH-PINS; FEATURE="MultiGraphIsolation"; ASPECT=DropInTransaction; STATUS=TESTED; TEST=tests/test_sonny3028_drop_graph_in_use.zig; OWNER=storage; UPDATED=2026-09-27
+            // SONNY-3028: a transaction's graph is not dropped under it (its
+            // undo, and its engine transaction, point into the graph), and
+            // the store goes first, so a refusal (ObjectInUse, 55006) leaves
+            // the catalog as it was.
+            try refuseDropInTransaction(context);
+            store.dropGraph(graph_name) catch |err| switch (err) {
+                // SONNY-3132: the default graph's refusal was logged, and the
+                // statement answered ok.
+                error.ObjectInUse, error.CannotDropDefaultGraph => return err,
+                else => log.warn("dropGraphStore failed", &.{
+                    Attr.string("graph_name", graph_name),
+                    Attr.string("error", @errorName(err)),
+                }),
+            };
+
             if (in_catalog) {
                 cat.removeGraph(graph_name) catch |err| {
                     if (err != error.GraphNotFound) return err;
                 };
             }
-
-            store.dropGraph(graph_name) catch |err| {
-                log.warn("dropGraphStore failed", &.{
-                    Attr.string("graph_name", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
 
             // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimGraphDrop; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
             // ENG-3922(a): the per-graph vector-dimension pins describe THIS
@@ -2468,6 +2675,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             };
         },
         .CreateSchema => |cs| {
+            // CANARY: REQ=REQ-SONNY-3038-SCHEMA-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=SchemaDDL; STATUS=TESTED; TEST=tests/test_sonny3038_revoke_and_schema_ddl.zig; OWNER=security; UPDATED=2026-09-27
+            // SONNY-3038: the schema permission on the database (schemas are
+            // catalogued database-wide), before whether the schema exists.
+            // CREATE and DROP SCHEMA were ungated.
+            if (!session_graph.maySchemaDatabase(context.principal)) return error.Unauthorized;
             // CREATE SCHEMA implementation with duplicate detection (Catalog instance)
             const schema_name = cs.name;
             const cat = context.catalog;
@@ -2501,6 +2713,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             };
         },
         .DropSchema => |ds| {
+            // SONNY-3038: as CREATE SCHEMA.
+            if (!session_graph.maySchemaDatabase(context.principal)) return error.Unauthorized;
             // DROP SCHEMA implementation with existence check (Catalog instance)
             const schema_name = ds.name;
             const cat = context.catalog;
@@ -3279,23 +3493,29 @@ fn isAggregateCall(expr: ast.Expr) bool {
     return return_and_sorting.isAggregationExpr(expr) and expr == .Call;
 }
 
-fn exprHasNestedAggregate(expr: ast.Expr, inside_aggregate: bool) error{NestedAggregate}!bool {
-    switch (expr) {
-        .Call => |call| {
-            const is_agg = isAggregateCall(expr);
-            if (is_agg and inside_aggregate) return true; // aggregate within an aggregate
-            const now_inside = inside_aggregate or is_agg;
-            for (call.args) |arg| {
-                if (try exprHasNestedAggregate(arg.*, now_inside)) return true;
-            }
-            return false;
-        },
-        .Binary => |bin| {
-            return (try exprHasNestedAggregate(bin.left.*, inside_aggregate)) or
-                (try exprHasNestedAggregate(bin.right.*, inside_aggregate));
-        },
-        .Unary => |un| return exprHasNestedAggregate(un.expr.*, inside_aggregate),
-        else => return false,
+/// SONNY-3189: every RETURN runs this. The left operand of a binary
+/// expression and a unary operand are followed with a loop, not one
+/// recursion (and one copy of the expression) per operator.
+fn exprHasNestedAggregate(root: ast.Expr, inside_aggregate: bool) error{NestedAggregate}!bool {
+    var expr: *const ast.Expr = &root;
+    while (true) {
+        switch (expr.*) {
+            .Call => |call| {
+                const is_agg = isAggregateCall(expr.*);
+                if (is_agg and inside_aggregate) return true; // aggregate within an aggregate
+                const now_inside = inside_aggregate or is_agg;
+                for (call.args) |arg| {
+                    if (try exprHasNestedAggregate(arg.*, now_inside)) return true;
+                }
+                return false;
+            },
+            .Binary => |bin| {
+                if (try exprHasNestedAggregate(bin.right.*, inside_aggregate)) return true;
+                expr = bin.left;
+            },
+            .Unary => |un| expr = un.expr,
+            else => return false,
+        }
     }
 }
 
@@ -3420,6 +3640,10 @@ pub fn isQueryLevelEvalError(err: anyerror) bool {
         // not installed; no row may be answered without it.
         error.EvaluatorNotInitialized,
         error.OutOfMemory,
+        // SONNY-3251 (round 15, F6): the expression nested past the thread's
+        // stack (54001). A grouped HAVING that met it dropped its group, a
+        // key or cell became NULL, an aggregate skipped the row.
+        error.ExpressionTooDeep,
         => true,
         else => false,
     };

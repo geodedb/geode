@@ -281,6 +281,18 @@ pub const ServerState = struct {
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,
+    // CANARY: REQ=REQ-SONNY-3348-ABORTED-TXN; FEATURE="TransactionManagement"; ASPECT=SessionState; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=engine; UPDATED=2026-09-29
+    // SONNY-3348 (round 18, I2): a statement failed inside the session's
+    // explicit transaction, which was rolled back. Until the client ends it
+    // (ROLLBACK, or a COMMIT that fails), every statement is refused (25P02,
+    // `query_traits.abortedTxnVerdict`). The session left the transaction
+    // silently and ran the client's next statements in autocommit.
+    txn_aborted: bool = false,
+    // SONNY-3348 (round 19, m3): the rollback of the session's transaction
+    // could not undo every change (`UndoLog.rollback`'s
+    // `error.RollbackIncomplete`). The client's ROLLBACK or COMMIT that ends
+    // the transaction reports it (40003), then it is cleared.
+    txn_rollback_incomplete: bool = false,
     // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=TxnGraph; STATUS=TESTED; TEST=tests/test_sonny2776_session_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
     // SONNY-2776: the graph the open transaction changes, owned by
     // `allocator`; null until its first change. A transaction changes one
@@ -400,9 +412,18 @@ pub const ServerState = struct {
 
     /// SONNY-2776: note that the open transaction changes `graph`; its first
     /// change fixes the transaction's graph.
+    ///
+    /// SONNY-3134: the transaction graph is held (`holdGraphForTxn`) until
+    /// `clearTxnGraph`: DROP GRAPH of it is refused (55006), from any
+    /// session. The handlers call this while the request holds the graph's
+    /// write lock.
     pub fn noteTxnWrite(self: *ServerState, graph: []const u8) std.mem.Allocator.Error!void {
         if (self.txn_graph != null) return;
-        self.txn_graph = try self.allocator.dupe(u8, graph);
+        const graph_store_mod = @import("../graph_store.zig");
+        const owned = try self.allocator.dupe(u8, graph);
+        errdefer self.allocator.free(owned);
+        try graph_store_mod.holdGraphForTxn(owned);
+        self.txn_graph = owned;
     }
 
     /// SONNY-2776: would a change of `graph` make the open transaction change
@@ -420,11 +441,23 @@ pub const ServerState = struct {
     }
 
     pub fn clearTxnGraph(self: *ServerState) void {
-        if (self.txn_graph) |g| self.allocator.free(g);
+        if (self.txn_graph) |g| {
+            // SONNY-3134: the transaction no longer holds its graph.
+            @import("../graph_store.zig").releaseGraphForTxn(g);
+            self.allocator.free(g);
+        }
         self.txn_graph = null;
     }
 
     /// SONNY-2776: the transaction is over: no transaction id, no graph.
+    /// SONNY-3348 (round 19, m3): was the rollback of the transaction the
+    /// client now ends incomplete? Cleared.
+    pub fn takeRollbackIncomplete(self: *ServerState) bool {
+        const incomplete = self.txn_rollback_incomplete;
+        self.txn_rollback_incomplete = false;
+        return incomplete;
+    }
+
     pub fn endTransaction(self: *ServerState) void {
         self.in_txn = false;
         self.txn_id = 0;
@@ -438,7 +471,18 @@ pub const ServerState = struct {
         /// session's when this one's teardown runs inside that session's
         /// request). `leaveSessionTxn` puts it back.
         prev_undo_txn: u64 = 0,
+        /// SONNY-3191 (N-4): the hold release the thread had installed
+        /// before (`graph_store.setThreadTxnHoldRelease`).
+        prev_hold_release: ?@import("../graph_store.zig").TxnHoldRelease = null,
     };
+
+    /// SONNY-3191 (N-4): the executor ended the transaction with a COMMIT or
+    /// ROLLBACK statement (`graph_store.releaseThreadTxnHold`): its graph
+    /// hold goes now, so the rest of the program can drop the graph.
+    fn releaseTxnHoldThunk(ctx: *anyopaque) void {
+        const self: *ServerState = @ptrCast(@alignCast(ctx));
+        self.clearTxnGraph();
+    }
 
     // CANARY: REQ=REQ-SONNY-2799-SESSION-UNDO-TXN; FEATURE="TransactionUndoLog"; ASPECT=PerSession; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
     // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=PerRequestInstall; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
@@ -457,7 +501,9 @@ pub const ServerState = struct {
         if (engine.nested) return .{ .engine = engine };
         const prev_undo_txn = txn_undo_log.currentThreadTxnId();
         txn_undo_log.setThreadTxnId(self.txn_id);
-        return .{ .engine = engine, .prev_undo_txn = prev_undo_txn };
+        // SONNY-3191 (N-4): a COMMIT or ROLLBACK statement lets the hold go.
+        const prev_hold_release = @import("../graph_store.zig").setThreadTxnHoldRelease(.{ .ctx = self, .release = releaseTxnHoldThunk });
+        return .{ .engine = engine, .prev_undo_txn = prev_undo_txn, .prev_hold_release = prev_hold_release };
     }
 
     /// After a request, the session's transaction is whatever the undo log's
@@ -468,6 +514,7 @@ pub const ServerState = struct {
         self.txn_id = txn_undo_log.currentThreadTxnId();
         if (!scope.engine.nested) {
             txn_undo_log.setThreadTxnId(scope.prev_undo_txn);
+            _ = @import("../graph_store.zig").setThreadTxnHoldRelease(scope.prev_hold_release);
             // The handler's transaction and the undo log's agree after every
             // request. A transaction the undo log no longer has is over. One
             // the handler never took up (a request that failed after its
@@ -480,21 +527,29 @@ pub const ServerState = struct {
                 self.txn_id = 0;
             }
         }
-        // SONNY-2823: and no engine transaction outlives the request (one
-        // left open is committed there).
-        gsa.leaveSessionEngineTxn(&self.session_engine_txn, scope.engine);
+        // SONNY-2823: and no engine transaction outlives the request.
+        // SONNY-3027: one still open here outlived the request's write lock:
+        // it is aborted, and the transaction it belongs to failed. It is
+        // rolled back (under its graph's write lock), so its COMMIT reports
+        // the failure rather than keeping changes that were never committed.
+        if (gsa.leaveSessionEngineTxn(&self.session_engine_txn, scope.engine) and self.in_txn) {
+            self.rollBackTransaction(self.sessionGraph());
+            // SONNY-3348 (round 19, m2): and the session is in the aborted
+            // transaction until the client ends it; it fell back to
+            // autocommit, silently.
+            self.txn_aborted = true;
+        }
     }
 
     /// SONNY-2823: commit the session's engine transaction, where its undo
     /// transaction commits (the COMMIT RPC). The program that opened it
     /// committed it already; this is the backstop. Called inside the
-    /// session's request. A failed commit is logged: the undo transaction is
-    /// committed already.
-    pub fn commitEngineTxn(self: *ServerState) void {
+    /// session's request. SONNY-3031: before the undo transaction commits,
+    /// and a failure, or one an earlier request's program left unreported,
+    /// fails the COMMIT (`settleThreadSessionTxn`).
+    pub fn commitEngineTxn(self: *ServerState) error{SessionCommitFailed}!void {
         _ = self;
-        gsa.commitThreadSessionTxn() catch |err| {
-            std.log.err("session engine transaction commit failed: {s}", .{@errorName(err)});
-        };
+        try gsa.settleThreadSessionTxn();
     }
 
     // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=RollBack; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
@@ -516,7 +571,10 @@ pub const ServerState = struct {
                 defer self.leaveSessionTxn(scope);
                 gsa.abortThreadSessionTxn();
                 txn_undo_log.getGlobalUndoLog(self.allocator).rollback(graph_store_mod.getWritableGlobalStore(self.allocator)) catch |err| {
-                    std.log.warn("transaction rollback failed: {s}", .{@errorName(err)});
+                    // SONNY-3348 (round 19, m3): reported to the client at
+                    // its ROLLBACK or COMMIT (`txn_rollback_incomplete`).
+                    @import("logging").scoped("server_state").err("transaction rollback could not undo every change", &.{@import("logging").Attr.string("error", @errorName(err))});
+                    self.txn_rollback_incomplete = true;
                 };
             } else {
                 txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(self.txn_id);

@@ -614,6 +614,9 @@ fn executeBulkSimpleCreate(
         // helpers must hold their SHARED across probe+insert, because a
         // general-path `executeMerge` running under the whole-graph EXCLUSIVE
         // is otherwise free to interleave between the two.
+        // SONNY-3029: the batch's statement transaction is open only while no
+        // thread holds or waits for the graph's write lock
+        // (`StorageAdapter.enterBatchTxn`).
         mut_sample.markLockAcquired();
         var op = group_commit.ApplyOp{ .bulk_insert_node = .{
             .labels = node_pattern.labels,
@@ -2172,6 +2175,20 @@ pub fn decodeBufferedMessageForTest(
     return reader.decodeBufferedMessage();
 }
 
+/// SONNY-3348 (round 19, m3/m5): the error a failed COMMIT or ROLLBACK
+/// message carries (the code the statement form answers), owned by
+/// `allocator`: `sendQuicMessage` frees the message it sends.
+fn txnEndErrorOwned(allocator: std.mem.Allocator, err: anyerror) !schema.Error {
+    const info = proto_util.mapError(err);
+    const code = try allocator.dupe(u8, info.code);
+    errdefer allocator.free(code);
+    const message = try allocator.dupe(u8, info.message);
+    errdefer allocator.free(message);
+    const kind = try allocator.dupe(u8, "ERROR");
+    errdefer allocator.free(kind);
+    return .{ .code = code, .message = message, .type = kind, .anchor = try allocator.dupe(u8, "") };
+}
+
 fn sendQuicMessage(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, msg: schema.QuicServerMessage) !void {
     const first_stream_response_start_ns = monoNsFromHandler();
     defer quic_response_metrics.recordFirstStreamResponseSend(monoNsFromHandler() -| first_stream_response_start_ns);
@@ -2357,7 +2374,16 @@ fn extractVarProperty(expr: gql_ast.Expr) ?struct { variable: []const u8, proper
 
 /// Check if a WHERE clause contains an equality predicate on a property
 /// that matches a catalog index for the given label and variable name.
-fn whereHasIndexedEq(where_expr: gql_ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+fn whereHasIndexedEq(root: gql_ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+    // SONNY-3189: down an AND chain with a loop, not one recursion (and one
+    // copy of the expression) per AND: EXPLAIN reaches this before
+    // authorization.
+    var at: *const gql_ast.Expr = &root;
+    while (at.* == .Binary and at.Binary.op == .And) {
+        if (whereHasIndexedEq(at.Binary.right.*, var_name, label, cat)) return true;
+        at = at.Binary.left;
+    }
+    const where_expr = at.*;
     switch (where_expr) {
         .Binary => |bin| {
             if (bin.op == .And) {
@@ -6274,7 +6300,12 @@ fn syncGraphFromSession(state: *ServerState) void {
 /// undo log's (`ServerState.leaveSessionTxn`). A transaction the handler holds
 /// and the undo log does not is begun, so its changes are recorded.
 fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program, write_graph: ?[]const u8) void {
-    for (program.statements) |*stmt| switch (stmt.*) {
+    for (program.statements) |*stmt| noteTxnStatement(state, stmt, write_graph);
+    if (state.in_txn and txn_undo_log.currentThreadTxnId() == 0) txn_undo_log.getGlobalUndoLog(state.allocator).begin();
+}
+
+fn noteTxnStatement(state: *ServerState, stmt: *const gql_ast.Statement, write_graph: ?[]const u8) void {
+    switch (stmt.*) {
         .StartTransaction => |st| {
             if (st.body == null and !state.in_txn) {
                 state.clearTxnGraph();
@@ -6282,13 +6313,17 @@ fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Progra
             }
         },
         .Commit, .Rollback => state.endTransaction(),
+        // SONNY-3026: a PROFILE ran the statement it wraps (the handler
+        // refuses one of transaction control; this keeps the bookkeeping
+        // honest anyway). An EXPLAIN ran nothing.
+        .Profile => |p| noteTxnStatement(state, p.query, write_graph),
+        .Explain => {},
         else => if (state.in_txn and query_traits.isMutatingStatement(stmt)) {
             // A failed allocation leaves the transaction without a graph; its
             // end then locks the session's graph, as before SONNY-2776.
             if (write_graph) |g| state.noteTxnWrite(g) catch {};
         },
-    };
-    if (state.in_txn and txn_undo_log.currentThreadTxnId() == 0) txn_undo_log.getGlobalUndoLog(state.allocator).begin();
+    }
 }
 
 // CANARY: REQ=REQ-SONNY-2799-FAILED-TXN-ROLLBACK; FEATURE="TransactionManagement"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
@@ -6299,11 +6334,16 @@ fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Progra
 /// under the write lock of the graph it changed (or `request_graph`, the
 /// graph the request ran on). The request's own lock is released by now. If
 /// the handler thought a transaction open that the executor ended, end it.
-fn abortFailedTransaction(state: *ServerState, request_graph: []const u8) void {
+fn abortFailedTransaction(state: *ServerState, request_graph: []const u8, ended_txn: bool) void {
     const open = txn_undo_log.currentThreadTxnId();
     if (open != 0) {
         state.txn_id = open;
         state.rollBackTransaction(request_graph);
+        // SONNY-3348 (round 18, I2): and the session stays in the aborted
+        // transaction until the client ends it (`query_traits.abortedTxnVerdict`),
+        // unless the program itself ended it last (`ended_txn`: a COMMIT that
+        // failed, which rolls back).
+        state.txn_aborted = !ended_txn;
     } else if (state.in_txn) {
         state.endTransaction();
     }
@@ -7346,6 +7386,21 @@ fn handleClientMessage(
                 return;
             }
 
+            // SONNY-3348 (round 18, I2): a session whose transaction a failed
+            // statement aborted runs nothing until it ends the transaction.
+            if (state.txn_aborted) {
+                const verdict = query_traits.abortedTxnVerdict(&parse_result.program);
+                if (verdict != .refuse) state.txn_aborted = false;
+                // SONNY-3348 (round 19, m3): the ROLLBACK or COMMIT that ends
+                // it reports a rollback that could not undo every change.
+                const incomplete = verdict != .refuse and state.takeRollbackIncomplete();
+                if (verdict != .rollback or incomplete) {
+                    const info = proto_util.mapError(if (incomplete) error.RollbackIncomplete else if (verdict == .commit) error.TransactionRolledBack else error.TransactionAborted);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
+                }
+            }
+
             // SONNY-3247: every parameter the program names is one the request
             // supplies (42P02 otherwise), checked before any path runs it: the
             // write fast paths below evaluated a missing one as null.
@@ -7730,10 +7785,27 @@ fn handleClientMessage(
                 try sendExecuteError(gpa, stream, "0A000", query_traits.explain_profile_alone_message, &.{}, &.{});
                 return;
             }
+            // CANARY: REQ=REQ-SONNY-3026-PROFILE-TXN-CONTROL; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny3026_profile_txn_control.zig; OWNER=security; UPDATED=2026-09-27
+            // SONNY-3026: nor an EXPLAIN or PROFILE of transaction control, a
+            // session statement or graph selection. `PROFILE ROLLBACK` undid
+            // the transaction under a read lock and the transaction stayed open.
+            if (query_traits.explainOrProfileTargetRefused(&parse_result.program)) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.explain_profile_target_message, &.{}, &.{});
+                return;
+            }
             // SONNY-2749: one graph's write lock cannot cover a program that
             // changes data on several, and a handler never holds two.
             if (stmt_plan.spans_graphs) {
                 try sendExecuteError(gpa, stream, "0A000", query_traits.spans_graphs_message, &.{}, &.{});
+                return;
+            }
+            // CANARY: REQ=REQ-SONNY-3130-GRAPH-DDL-ALONE; FEATURE="MultiGraphIsolation"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny3130_graph_ddl_alone.zig; OWNER=storage; UPDATED=2026-09-27
+            // SONNY-3130: nor graph DDL with a statement on graph data. The
+            // lock taken below is the old graph's; a CREATE OR REPLACE (or a
+            // DROP then CREATE) puts a new graph, with its own lock, under the
+            // name, and the program's writes landed there without it.
+            if (stmt_plan.graph_ddl_has_company) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.graph_ddl_alone_message, &.{}, &.{});
                 return;
             }
             // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2776_session_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
@@ -7754,7 +7826,7 @@ fn handleClientMessage(
             // after the request's lock is released: this defer is registered
             // before the lock's, so it runs after it.
             var failed_in_txn = false;
-            defer if (failed_in_txn) abortFailedTransaction(state, lock_graph);
+            defer if (failed_in_txn) abortFailedTransaction(state, lock_graph, query_traits.endsTransactionLast(&parse_result.program));
 
             quic_response_metrics.recordFirstStreamQueryPrepare(monoNsFromHandler() -| first_stream_prepare_start_ns);
 
@@ -7786,6 +7858,25 @@ fn handleClientMessage(
                 graph_store.getGlobalAdapter() != null and
                 geode.distributed.cluster.getGlobalClusterCoordinator() == null)
             {
+                // CANARY: REQ=REQ-SONNY-3033-BATCH-GRAPH-GATE; FEATURE="MultiGraphIsolation"; ASPECT=QuicBatchRoute; STATUS=TESTED; TEST=tests/test_sonny3033_batch_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+                // SONNY-3033: the session's graph passes the session-graph
+                // gate (internal, bind, existence) first. The route ran before
+                // any existence check, and the coordinator created whatever
+                // graph it was given: a batch recreated a dropped graph for a
+                // principal without the schema permission. The coordinator
+                // now creates none (it fails the ops of a graph that is gone),
+                // and a DROP GRAPH waits for a batch's open transactions
+                // (SONNY-3029), so the route takes no graph lock itself: its
+                // ops take the graph's lock SHARED, and a writer waits for
+                // them, so holding the write lock across them would deadlock.
+                // No principal with authentication off, as the write gate
+                // above and the HELLO do.
+                const batch_principal: ?*const @TypeOf(principal_for_request) = if (state.authenticated_role != null) &principal_for_request else null;
+                execution.session_graph.requireWritable(batch_principal, catalog, query_graph_name) catch |err| {
+                    const info = proto_util.mapError(err);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
+                };
                 if (try executeBatchSimpleMerge(gpa, stream, state, &parse_result.program, query_graph_name, exec_context)) {
                     return;
                 }
@@ -8130,11 +8221,34 @@ fn handleClientMessage(
                             return;
                         }
                         if (err == error.GraphNotFound) {
-                            const info = proto_util.mapError(err);
-                            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-                            return;
-                        }
-                        return err;
+                            // SONNY-3028: CREATE GRAPH of a new graph, or
+                            // DROP GRAPH IF EXISTS of a missing one: no lock
+                            // to take.
+                            if (!stmt_plan.lock_graph_may_be_missing) {
+                                const info = proto_util.mapError(err);
+                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                return;
+                            }
+                        } else return err;
+                    }
+                } else if (stmt_plan.reads_several_graphs) {
+                    // CANARY: REQ=REQ-SONNY-3312-MULTI-GRAPH-READ; FEATURE="MultiGraphIsolation"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny3312_multi_graph_read.zig; OWNER=storage; UPDATED=2026-09-28
+                    // SONNY-3312: a read whose statements run on several
+                    // graphs snapshots each of them, under each one's read
+                    // lock taken in name order. A snapshot of `lock_graph`
+                    // (the session graph) alone read the others as empty.
+                    // No live fallback: it would hold one graph's lock.
+                    const read_graphs = try query_traits.programDataGraphList(gpa, &parse_result.program, query_graph_name, homeGraphName(state));
+                    defer gpa.free(read_graphs);
+                    if (graph_store.snapshotUnderReadLocks(gpa, read_graphs, &exec_context)) |session| {
+                        read_session = session;
+                        prev_active_read_store = graph_store.pushActiveQueryReadStore(
+                            read_session.?.store(),
+                        );
+                    } else |err| {
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
                     }
                 } else if (stmt_plan.point_read and !execution.wouldEvaluateRLS()) {
                     // GAP-0805: hold the shared read lock across the brief
@@ -8361,6 +8475,16 @@ fn handleClientMessage(
                             var owned_planned = planned;
                             defer owned_planned.deinitMetadata(gpa);
                             defer owned_planned.result.deinit(gpa);
+                            // CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=QuicProfileSettle; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+                            // SONNY-3027: the session engine transaction the
+                            // program's changes opened commits here, while the
+                            // request still holds its write lock.
+                            geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
+                                failed_in_txn = true;
+                                const info = proto_util.mapError(err);
+                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                return;
+                            };
                             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=QuicProfileTxn; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
                             // SONNY-2802: a PROFILE'd change is its transaction's,
                             // recorded as soon as it ran, as the .rows arm does.
@@ -8423,6 +8547,12 @@ fn handleClientMessage(
                         return;
                     };
                     defer exec_result.deinit(gpa);
+                    geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
+                        failed_in_txn = true;
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
                     // SONNY-2802: see the planned path above.
                     updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
 
@@ -8515,7 +8645,18 @@ fn handleClientMessage(
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 const query_ptr = &target.Query;
-                                if (try node_scan_stream.prepare(gpa, query_ptr, exec_context, bindings.names, bindings.values, flags.items)) |prepared_stream| {
+                                // SONNY-3251 (round 15, F6): a limit the scan's
+                                // WHERE ran into answers its SQLSTATE.
+                                const prepared_opt = node_scan_stream.prepare(gpa, query_ptr, exec_context, bindings.names, bindings.values, flags.items) catch |err| {
+                                    // SONNY-3348 (round 19, m2): any error the
+                                    // scan fails with fails its transaction.
+                                    failed_in_txn = true;
+                                    if (!geode.eval.isResourceLimitError(err)) return err;
+                                    const info = proto_util.mapError(err);
+                                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                    return;
+                                };
+                                if (prepared_opt) |prepared_stream| {
                                     var active_stream = prepared_stream;
                                     errdefer active_stream.deinit();
 
@@ -8548,6 +8689,9 @@ fn handleClientMessage(
                                     // they cannot be built, answer as the
                                     // executor path does when its rows fail.
                                     active_stream.prefetchSchemaSample(gpa) catch |err| {
+                                        // SONNY-3348 (round 19, m2): and it fails
+                                        // its transaction, as the executor's do.
+                                        failed_in_txn = true;
                                         const info = proto_util.mapError(err);
                                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                                         active_stream.deinit();
@@ -8663,6 +8807,13 @@ fn handleClientMessage(
                     // Task 1: mark execute phase complete (before lock release).
                     if (mut_sample) |*s| s.markExecuteDone();
                     defer exec_result.deinit(gpa);
+                    // SONNY-3027: see the .profile arm.
+                    geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
+                        failed_in_txn = true;
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
                     // SONNY-2805: the session's transaction as the program left
                     // it, recorded before anything below (the post-filter, the
                     // response) can fail the request.
@@ -8863,6 +9014,20 @@ fn handleClientMessage(
                 // O(scanned) WHERE scan (where-scan-writer-progress). No outer
                 // lock here — an outer hold would defeat the chunking.
                 var page_result = active_stream.buildNextPage(gpa, page_size) catch |err| {
+                    // SONNY-3251 (round 15, F6): a limit a page's WHERE ran
+                    // into ends the stream with its SQLSTATE, not a final
+                    // page that reads as a complete answer.
+                    if (geode.eval.isResourceLimitError(err)) {
+                        const info = proto_util.mapError(err);
+                        var lim_resp = try buildErrorResponse(pa, info.code, info.message, &.{}, &.{});
+                        _ = &lim_resp;
+                        state.resetResult();
+                        // SONNY-3348 (round 19, m2): a later page's failure
+                        // fails the transaction the statement ran in.
+                        if (state.in_txn) abortFailedTransaction(state, state.sessionGraph(), false);
+                        try sendQuicMessage(pa, stream, .{ .pull = .{ .response = lim_resp } });
+                        return;
+                    }
                     // Node disappeared during concurrent ingest — send empty
                     // final page so the client sees what was collected so far.
                     log.warn("PULL page build failed, closing stream", &.{
@@ -8957,7 +9122,8 @@ fn handleClientMessage(
                     return;
                 },
             }
-            if (state.in_txn) {
+            // SONNY-3348 (round 18, I2): nor while its last transaction is aborted.
+            if (state.in_txn or state.txn_aborted) {
                 try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, ""), .tx_id = try gpa.dupe(u8, "") } });
                 return;
             }
@@ -8999,6 +9165,15 @@ fn handleClientMessage(
                     return;
                 },
             }
+            // SONNY-3348 (round 18, I2): COMMIT of an aborted transaction ends
+            // it, and fails: it was rolled back.
+            if (state.txn_aborted) {
+                state.txn_aborted = false;
+                // SONNY-3348 (round 19, m5): with the code a COMMIT statement
+                // answers (40000), or 40003 for an incomplete rollback.
+                try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, if (state.takeRollbackIncomplete()) error.RollbackIncomplete else error.TransactionRolledBack) } });
+                return;
+            }
             if (state.in_txn) {
                 // GAP-0511: COMMIT acquires the write lock for state cleanup only.
                 // Index rebuilds are deferred to after lock release to prevent
@@ -9010,21 +9185,25 @@ fn handleClientMessage(
                 {
                     const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
                     defer graph_store.releaseGraphLock(commit_lock);
-                    undo.commitDeferRebuilds();
 
                     // R9 (2026-04-22): commit the session-scoped engine
                     // txn that R8's per-statement shortcut joined during
                     // this batch — ONE fsync for the whole Geode txn.
                     // SONNY-2823: the program that opened it committed it
                     // when it returned; none spans messages. A backstop.
-                    if (graph_store.getGlobalAdapter()) |ad| {
-                        ad.commitSessionTxn() catch |err| switch (err) {
-                            error.NoActiveSessionTxn => {},
-                            else => log.warn("session engine txn commit failed", &.{
-                                Attr.string("error", @errorName(err)),
-                            }),
+                    // CANARY: REQ=REQ-SONNY-3031-SESSION-COMMIT-FAILURE; FEATURE="TransactionManagement"; ASPECT=QuicCommit; STATUS=TESTED; TEST=tests/test_sonny3031_session_commit_failure.zig; OWNER=storage; UPDATED=2026-09-27
+                    // SONNY-3031: first, and a failure rolls the transaction
+                    // back and fails the COMMIT (it was logged, and the
+                    // COMMIT reported success).
+                    geode.graph_storage_adapter.settleThreadSessionTxn() catch {
+                        undo.rollback(graph_store.getWritableGlobalStore(gpa)) catch |err| {
+                            log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
                         };
-                    }
+                        state.endTransaction();
+                        try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.SessionCommitFailed) } });
+                        return;
+                    };
+                    undo.commitDeferRebuilds();
                 }
                 // Flush deferred index rebuilds outside the write lock.
                 const store = graph_store.getGlobalStore(gpa);
@@ -9045,6 +9224,19 @@ fn handleClientMessage(
                     return;
                 },
             }
+            // SONNY-3348 (round 18, I2): ROLLBACK ends an aborted transaction
+            // (the failed statement's handler already undid it).
+            if (state.txn_aborted) {
+                state.txn_aborted = false;
+                // SONNY-3348 (round 19, m3): an incomplete rollback is
+                // reported (40003).
+                if (state.takeRollbackIncomplete()) {
+                    try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.RollbackIncomplete) } });
+                    return;
+                }
+                try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
+                return;
+            }
             if (state.in_txn) {
                 // GAP-0001: Rollback reverses mutations on the store — needs exclusive lock
                 // P1: Per-graph write lock scoped to the session's current graph.
@@ -9062,10 +9254,17 @@ fn handleClientMessage(
                 }
 
                 const store = graph_store.getGlobalStore(gpa);
+                var rollback_complete = true;
                 txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
                     log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
+                    rollback_complete = false;
                 };
                 state.endTransaction();
+                // SONNY-3348 (round 19, m3): reported, not answered as a success.
+                if (!rollback_complete) {
+                    try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.RollbackIncomplete) } });
+                    return;
+                }
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });

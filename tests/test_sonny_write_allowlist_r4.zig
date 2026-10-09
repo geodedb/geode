@@ -460,13 +460,30 @@ test "C2: a write one level down is refused with nothing written and classified 
     }
 }
 
-test "C2 / I8: the one walk is iterative: 20,000 OR terms, with a write at the bottom, are walked without recursing" {
+test "C2 / I8: the one walk is iterative: an OR chain as long as the parser takes, with a write at the bottom, is walked without recursing" {
     // A Debug frame per level overflowed the thread at about 5,000 terms
     // (exprIsReadOnly); the write-shape validator's own walks recursed too.
+    // Since SONNY-3181 (merged from the r12 line) the parser refuses an
+    // expression of more than `max_expr_links` (4096) operator links, so the
+    // walk is driven with the longest chain it takes: 1,300 terms of three
+    // links each (`OR`, `=`, `.i`). 20,000 terms are refused at the parse.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
     try text.appendSlice(testing.allocator, "MATCH (n:G) WHERE n.i = 0");
     for (1..20_000) |i| try text.print(testing.allocator, " OR n.i = {d}", .{i});
+    try text.appendSlice(testing.allocator, " SET n.x = 1");
+    {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        if (geode.parseGql(text.items, arena.allocator())) |p| {
+            var too_long = p;
+            too_long.deinit();
+            return error.TestUnexpectedResult;
+        } else |_| {}
+    }
+    text.clearRetainingCapacity();
+    try text.appendSlice(testing.allocator, "MATCH (n:G) WHERE n.i = 0");
+    for (1..1_300) |i| try text.print(testing.allocator, " OR n.i = {d}", .{i});
     const read_len = text.items.len;
     try text.appendSlice(testing.allocator, " SET n.x = 1");
     var arena = std.heap.ArenaAllocator.init(testing.allocator);

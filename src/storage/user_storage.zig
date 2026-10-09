@@ -1302,6 +1302,20 @@ pub const UserStorageBackend = struct {
         try self.upsertPermissionNode(record);
     }
 
+    // CANARY: REQ=REQ-SONNY-3037-REVOKE-PRINCIPAL; FEATURE="OfflineAuthStoreSafety"; ASPECT=PermissionIdSequence; STATUS=TESTED; TEST=tests/test_sonny3037_revoke_principal.zig; OWNER=security; UPDATED=2026-09-27
+    /// SONNY-3037: the id for a new permission record: one more than any
+    /// permission record's, loaded or not (as `nextPolicyId`). `geode grant`
+    /// took the next user id, the same in every run over one set of users,
+    /// so each grant replaced the previous one.
+    pub fn nextPermissionId(self: *Self) u64 {
+        var max_id: u64 = 0;
+        var cached = self.permission_cache.keyIterator();
+        while (cached.next()) |id| max_id = @max(max_id, id.*);
+        var nodes = self.permission_nodes.keyIterator();
+        while (nodes.next()) |id| max_id = @max(max_id, id.*);
+        return max_id + 1;
+    }
+
     pub fn removePermission(self: *Self, permission_id: u64) !void {
         _ = self.permission_cache.remove(permission_id);
         if (self.permission_nodes.fetchRemove(permission_id)) |kv| {

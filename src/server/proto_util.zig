@@ -185,8 +185,21 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.TransactionAlreadyActive => .{ .code = "25001", .message = "Transaction already active" },
         // GAP-0917: statement failed mid-transaction; everything until
         // ROLLBACK is rejected and COMMIT aborts. 25P02 = in_failed_sql_transaction.
-        error.TransactionAborted => .{ .code = "25P02", .message = "Current transaction is aborted; statements are rejected until ROLLBACK" },
+        error.TransactionAborted => .{ .code = "25P02", .message = "Current transaction is aborted; statements are rejected until ROLLBACK or COMMIT ends it (COMMIT fails with 40000)" },
+        // SONNY-3348 (round 19, m3): a failed statement's undo could not undo
+        // every change it made: the statement is partly applied. 40003 =
+        // statement_completion_unknown; do not retry it blindly.
+        error.StatementUndoIncomplete => .{ .code = "40003", .message = "The statement failed and its changes could not all be undone; it may be partly applied. Check the data before retrying" },
+        // SONNY-3348 (round 19, m3): ROLLBACK could not undo every change of
+        // the transaction; it is over, and may be partly applied.
+        error.RollbackIncomplete => .{ .code = "40003", .message = "ROLLBACK could not undo every change of the transaction; it ended, and may be partly applied" },
+        // SONNY-3031: the storage engine could not commit the transaction's
+        // changes; the transaction is rolled back.
+        error.SessionCommitFailed => .{ .code = "40000", .message = "The transaction's changes could not be committed to storage; the transaction was rolled back" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
+        // SONNY-3348 (round 18, I2): COMMIT of a transaction a failed
+        // statement aborted: it was rolled back, and it is over.
+        error.TransactionRolledBack => .{ .code = "40000", .message = "The transaction failed and was rolled back; COMMIT did not commit it" },
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
         // SONNY-2755: `YIELD path, path` used to free that column twice.
         error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },
@@ -195,8 +208,17 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // it withheld the rows rather than return them unchecked.
         error.RowSecurityFilterUnavailable => .{ .code = "53200", .message = "Out of memory: the row-level security filter could not run, so no rows were returned" },
         error.InternalGraph => .{ .code = "42501", .message = "The __geode_* graphs are internal: a statement cannot select, create or drop one" },
+        // SONNY-3191 (N-7): CREATE or DROP GRAPH of a current- or home-graph name.
+        error.ReservedGraphName => .{ .code = "42939", .message = "CURRENT_GRAPH, CURRENT_PROPERTY_GRAPH, HOME_GRAPH and HOME_PROPERTY_GRAPH name the session's current and home graphs: no graph can be created or dropped by these names" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
+        // SONNY-3038: geode.auth.revoke could not save the revoke.
+        error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph; the privilege may return at the next start. Retry it" },
+        // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
+        // SONNY-3134: or another session's open transaction.
+        error.ObjectInUse => .{ .code = "55006", .message = "Object in use: an open transaction (this session's or another's) changed the graph; it can be dropped or replaced once that transaction commits or rolls back" },
+        // SONNY-3132: DROP GRAPH default, CREATE OR REPLACE GRAPH default.
+        error.CannotDropDefaultGraph => .{ .code = "0A000", .message = "The default graph cannot be dropped or replaced" },
         // ENG-3903: a MERGE relationship endpoint that is neither bound by a
         // preceding clause nor describable by a label/property pattern is
         // rejected instead of committing an empty success (silent write loss).
@@ -316,6 +338,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.RepeatedSetTarget => .{ .code = "22G03", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
         error.OptionalPathVariable => .{ .code = "0A000", .message = "A path variable on an OPTIONAL MATCH pattern after the first is not supported; return the pattern's nodes and relationships instead" },
         error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
+        // SONNY-3384: a SET or REMOVE before a DELETE in one query runs only
+        // on a variable the DELETE deletes, which the RETURN does not read.
+        error.UnsupportedSetBeforeDelete => .{ .code = "0A000", .message = "A SET or REMOVE before a DELETE in one statement is supported only on a variable the statement deletes, and not read by its RETURN or ORDER BY; run the SET as a statement of its own" },
         error.DeleteReturnsDeletedElement => .{ .code = "0A000", .message = "A RETURN after DELETE cannot return an element the statement deletes (a node, an edge or a path through one), or a JSONB, XML, URL, DOMAIN, bit string or extended value; return its properties or an aggregate" },
         // SONNY-3040, SONNY-3041, SONNY-3043: a write clause the statement's
         // shape does not apply is refused, before anything is written, rather
@@ -406,11 +431,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.Timeout => .{ .code = "08006", .message = "Timeout: cluster write outcome unknown — the entry may have committed but local apply could not be confirmed in time; retry ONLY with an idempotency key" },
         error.ClusterNotLeader => .{ .code = "40001", .message = "ClusterNotLeader: cluster write not applied here — this node is not the leader; retry against the current leader" },
         error.ClusterWriteNotReplicable => .{ .code = "40001", .message = "ClusterWriteNotReplicable: cluster write not applied here — the leader could not replicate this write shape; retry against the current leader" },
+        // SONNY-3348 (round 19): the leader could not propose a statement's
+        // entry (nothing was proposed; nothing applied).
+        error.ClusterProposeFailed => .{ .code = "40001", .message = "ClusterProposeFailed: cluster write not applied — the leader could not propose the statement's entry; retry against the current leader" },
         // GAP (write-path OOM, 2026-07-04): the legacy write-carrying MATCH
         // executor aborted because its materialization working set crossed the
         // configured budget — a loud, clean refusal instead of the OOM killer.
         // 53200 = SQLSTATE out_of_memory (class 53, insufficient resources).
-        error.WriteQueryBudgetExceeded => .{ .code = "53200", .message = "WriteQueryBudgetExceeded: this write query's working set exceeded GEODE_WRITE_EXECUTOR_BUDGET_MB (default 8192; 0 disables) and was aborted before exhausting server memory. Aborted BETWEEN row mutations: rows already written remain applied (no statement-level rollback in autocommit). Narrow the MATCH (single-node indexed-equality point writes run engine-direct) or raise the budget" },
+        error.WriteQueryBudgetExceeded => .{ .code = "53200", .message = "WriteQueryBudgetExceeded: this write query's working set exceeded GEODE_WRITE_EXECUTOR_BUDGET_MB (default 8192; 0 disables) and was aborted before exhausting server memory. The statement's changes were undone (its undo record counts against the same budget). Narrow the MATCH (single-node indexed-equality point writes run engine-direct) or raise the budget" },
         // GAP-ENT-0044 (T5, 2026-07-05 live OOM): the read executor's
         // materialization working set crossed the configured budget — a loud,
         // clean refusal instead of the OOM killer taking the server.
@@ -425,11 +453,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-1841: a per-stream QUIC CANCEL (or connection close / stall
         // watchdog) reached the write executor; the write-carrying mutation
         // aborted at a candidate/apply boundary and RELEASED the per-graph write
-        // lock instead of holding it to the ~120 s deadline. Aborted BETWEEN row
-        // mutations: rows already written remain applied (no statement-level
-        // rollback on the autocommit path), matching the budget-abort semantics.
+        // lock instead of holding it to the ~120 s deadline. SONNY-3348: the
+        // statement's changes are undone (its undo record), as at the budget
+        // abort.
         // 57014 = SQLSTATE query_canceled (class 57, operator intervention).
-        error.WriteQueryCancelled => .{ .code = "57014", .message = "WriteQueryCancelled: the client canceled this write (per-stream CANCEL, disconnect, or stall watchdog); execution aborted at a row-mutation boundary and released the per-graph write lock. Rows already written remain applied (no statement-level rollback in autocommit)" },
+        error.WriteQueryCancelled => .{ .code = "57014", .message = "WriteQueryCancelled: the client canceled this write (per-stream CANCEL, disconnect, or stall watchdog); execution aborted at a row-mutation boundary and released the per-graph write lock. The statement's changes were undone" },
         // ENG-3911: an oversized property VALUE used to reach the client as
         // `PropertyKeyTooLong` under the generic 58000 system-error class — the
         // wrong noun AND a "the server broke" class for a documented resource
@@ -452,6 +480,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // 54000 = SQLSTATE program_limit_exceeded (class 54, limit exceeded).
         // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorF32"; ASPECT=OverCapErrorMapping; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=transport; UPDATED=2026-08-29
         error.VectorTooLarge => .{ .code = "54000", .message = "VectorTooLarge: the vector dimension exceeds the maximum of 65535 elements (VectorF32.dim / VectorI32.dim are u16). Reduce the embedding dimension" },
+        // SONNY-3181: an expression nested deeper than the evaluating thread's
+        // stack holds (lists, calls or CASE inside one another; operator and
+        // member chains are evaluated with loops). 54001 = SQLSTATE
+        // statement_too_complex (class 54, program limit exceeded).
+        error.ExpressionTooDeep => .{ .code = "54001", .message = "ExpressionTooDeep: the expression nests too deeply to evaluate on this server thread's stack; flatten it" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }

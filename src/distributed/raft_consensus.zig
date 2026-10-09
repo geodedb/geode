@@ -3462,14 +3462,19 @@ pub const RaftNode = struct {
                     // Pass the committed entry's globally-unique, cross-node-identical
                     // log index so the apply layer can derive a deterministic,
                     // restart-idempotent node id (Raft Log Matching Property).
-                    _ = callback(self.allocator, cmd, entry.index) catch |err| {
+                    // SONNY-3348 (round 19): the result is the caller's to
+                    // free (`raft_apply.applyCommand`); it was dropped, and a
+                    // create's 8-byte id leaked per committed entry per node.
+                    const applied = callback(self.allocator, cmd, entry.index) catch |err| blk: {
                         log.err("Raft apply_callback failed — committed entry not applied", &.{
                             Attr.string("error", @errorName(err)),
                             Attr.uint("entry_index", entry.index),
                             Attr.uint("term", self.current_term),
                         });
                         self.stats.apply_errors += 1;
+                        break :blk null;
                     };
+                    if (applied) |result| self.allocator.free(result);
                 }
             }
             self.stats.entries_applied += 1;

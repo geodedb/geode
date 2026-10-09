@@ -2,6 +2,7 @@ const std = @import("std");
 const gs = @import("graph_storage");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
+const statement_undo = @import("../statement_undo.zig");
 const execution = @import("../execution.zig");
 const write_walk = @import("write_walk.zig");
 const result_utils = @import("result_utils.zig");
@@ -474,7 +475,72 @@ pub fn executeProfiledIfSupported(
     // CANARY: REQ=REQ-PROFILE-RLS-TENANT-001; FEATURE="PROFILE"; ASPECT=ActiveContextPush; STATUS=TESTED; TEST=tests/test_profile_rls_tenant.zig; OWNER=security; UPDATED=2026-08-29
     const prev_ctx = execution.pushActiveContext(&context);
     defer execution.popActiveContext(prev_ctx);
+    // CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProfiledEntryPoint; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+    // SONNY-3027: a profiled query is a program of its own, like one run
+    // through `executeProgramWithContext`: the session engine transaction a
+    // change in it opened (`executeMerge`, `executeCreate`) is committed when
+    // it returns, while the handler still holds the request's write lock. It
+    // stayed open, and the backstop committed it after the lock was released.
+    execution.enterEntryPoint();
+    defer execution.leaveEntryPoint();
+    // SONNY-3135 (N7b): a failed profiled change aborts its engine transaction.
+    errdefer execution.failEntryPoint();
 
+    // CANARY: REQ=REQ-SONNY-3349-PROFILE-RELAY; FEATURE="ExpressionEvaluator"; ASPECT=ProfiledRelayScope; STATUS=TESTED; TEST=tests/test_sonny3349_profile_relay.zig; OWNER=eval; UPDATED=2026-09-28
+    // SONNY-3349 (round 17): the profiled run is a statement of its own, so
+    // it opens the relay's scope (`execution.executeStatementWithContext`
+    // does for every other statement) and fails with what a caller
+    // swallowed in it: a limit (54001, out of memory, the read budget) or an
+    // IN type error. PROFILE answered those as a profile (00000), and a
+    // PROFILE'd change kept its writes; inside the scope the store's write
+    // fence refuses them too (SONNY-3348). Nested under a statement's own
+    // scope (`executeIfSupported`), it does not own the scope, and the
+    // statement fails instead.
+    const owns_scope = eval.enterInPredicateScope();
+    // SONNY-3348 (round 18): and its statement undo record: a profiled
+    // statement that fails has its changes undone, as any other statement
+    // (`execution.executeStatementWithContext`).
+    // SONNY-3348 (round 19): and its held replicated writes (one entry).
+    execution.beginStatementScope(owns_scope);
+    var profiled = (executeProfiledInScope(allocator, q, context, param_names, param_values, apply_window) catch |err| {
+        _ = eval.exitInPredicateScope(owns_scope);
+        _ = eval.takeDeferredLimitError(owns_scope);
+        return execution.endStatementFailed(owns_scope, err);
+    }) orelse {
+        _ = eval.exitInPredicateScope(owns_scope);
+        _ = eval.takeDeferredLimitError(owns_scope);
+        // Nothing ran (no plan); the caller runs the statement another way.
+        switch (execution.endStatementFailed(owns_scope, error.NoPlan)) {
+            error.NoPlan => {},
+            else => |e| return e,
+        }
+        return null;
+    };
+    const limit_error = eval.takeDeferredLimitError(owns_scope);
+    const in_type_error = eval.exitInPredicateScope(owns_scope);
+    if (in_type_error or limit_error != null) {
+        profiled.result.deinit(allocator);
+        profiled.deinitMetadata(allocator);
+        if (in_type_error) return execution.endStatementFailed(owns_scope, error.InListRequiresList);
+        return execution.endStatementFailed(owns_scope, limit_error.?);
+    }
+    execution.endStatementSucceeded(owns_scope) catch |err| {
+        profiled.result.deinit(allocator);
+        profiled.deinitMetadata(allocator);
+        return err;
+    };
+    return profiled;
+}
+
+/// SONNY-3349: `executeProfiledIfSupported`'s run, inside its relay scope.
+fn executeProfiledInScope(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    apply_window: bool,
+) !?ProfiledExecution {
     // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=PlannedRuntimeDeclinesWrites; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
     // SONNY-3139, SONNY-3182 (round-3 review C1): the planned runtime is a
     // read runtime. A query that writes (a write clause, a part that writes,
@@ -1641,7 +1707,28 @@ fn propertyAccessVar(expr: ast.Expr) ?struct { obj: []const u8, prop: []const u8
     }
 }
 
-fn extractJoinPredicate(expr: ast.Expr, chain_vars: []const ?[]const u8) ?JoinPredicate {
+fn extractJoinPredicate(root: ast.Expr, chain_vars: []const ?[]const u8) ?JoinPredicate {
+    // SONNY-3189: an AND chain with a loop, not one recursion per AND: its
+    // innermost left conjunct first, then the right ones from the bottom up,
+    // the order the recursion tried them in (the first join predicate wins).
+    if (root == .Binary and root.Binary.op == .And) {
+        var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+        const la = sfa.get();
+        var rights: std.ArrayList(*const ast.Expr) = .empty;
+        defer rights.deinit(la);
+        var leaf: *const ast.Expr = &root;
+        while (leaf.* == .Binary and leaf.Binary.op == .And) : (leaf = leaf.Binary.left) {
+            rights.append(la, leaf.Binary.right) catch return null;
+        }
+        if (extractJoinPredicate(leaf.*, chain_vars)) |p| return p;
+        var i = rights.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (extractJoinPredicate(rights.items[i].*, chain_vars)) |p| return p;
+        }
+        return null;
+    }
+    const expr = root;
     switch (expr) {
         .Binary => |b| {
             switch (b.op) {
@@ -2225,7 +2312,99 @@ fn findBindingIndex(plan: *const Plan, name: []const u8) ?usize {
     return null;
 }
 
+// CANARY: REQ=REQ-SONNY-3189-HAVING-WALKERS; FEATURE="PlannedReadRuntime"; ASPECT=ProjectionWalker; STATUS=TESTED; TEST=tests/test_sonny3189_grouped_having_chains.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3189 (round 15): the projection analysis walks every RETURN and
+/// WITH item, GROUP BY key, HAVING and ORDER BY key of a planned read with a
+/// hop. Round 14 looped binary and member chains, but an index or slice
+/// link recursed on its target with no stack guard: `RETURN l[0][0] ... [0]`
+/// with 4,000 links is one frame per link. Now every chain the parser builds
+/// as long as its input (a binary link's left operand, a unary operand, and
+/// the target of a member, index or slice link) is followed with a loop; a
+/// link's other children (a right operand, an index, a slice's bounds) are
+/// analysed after the chain's innermost operand, innermost link first: the
+/// order the recursion took. They are nested expressions, bounded by the
+/// parser's 128 levels.
 fn analyzeExprForProjection(
+    allocator: std.mem.Allocator,
+    expr: ast.Expr,
+    plan: *const Plan,
+    projections: []BindingProjection,
+    key_lists: []std.ArrayList([]const u8),
+    failed: *bool,
+) void {
+    if (failed.*) return;
+    var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+    const la = sfa.get();
+    var links: std.ArrayList(*const ast.Expr) = .empty;
+    defer links.deinit(la);
+    var at: *const ast.Expr = &expr;
+    spine: while (true) {
+        switch (at.*) {
+            .Binary => |bin| {
+                links.append(la, at) catch {
+                    failed.* = true;
+                    return;
+                };
+                at = bin.left;
+            },
+            .Index => |ix| {
+                links.append(la, at) catch {
+                    failed.* = true;
+                    return;
+                };
+                at = ix.target;
+            },
+            .Slice => |sl| {
+                links.append(la, at) catch {
+                    failed.* = true;
+                    return;
+                };
+                at = sl.target;
+            },
+            .Unary => |un| at = un.expr,
+            // p.key → record (p, key). Down a member chain: the link whose
+            // target is not a member access decides.
+            .Member => |top| {
+                var m = top;
+                while (m.target.* == .Member) m = m.target.Member;
+                if (m.target.* == .Ident) {
+                    const target_ident = m.target.Ident;
+                    if (findBindingIndex(plan, target_ident.orig)) |idx| {
+                        if (plan.binding_kinds[idx] == .node) {
+                            recordBindingKey(allocator, idx, m.field, projections, key_lists, failed);
+                        }
+                        break :spine;
+                    }
+                }
+                at = m.target;
+            },
+            else => {
+                analyzeLeafForProjection(allocator, at.*, plan, projections, key_lists, failed);
+                break :spine;
+            },
+        }
+    }
+    var i = links.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (failed.*) return;
+        switch (links.items[i].*) {
+            .Binary => |bin| analyzeExprForProjection(allocator, bin.right.*, plan, projections, key_lists, failed),
+            .Index => |ix| analyzeExprForProjection(allocator, ix.index.*, plan, projections, key_lists, failed),
+            .Slice => |sl| {
+                if (sl.start) |st| {
+                    analyzeExprForProjection(allocator, st.*, plan, projections, key_lists, failed);
+                    if (failed.*) return;
+                }
+                if (sl.end) |en| analyzeExprForProjection(allocator, en.*, plan, projections, key_lists, failed);
+            },
+            else => unreachable,
+        }
+    }
+}
+
+/// `analyzeExprForProjection` for an expression that is no chain link.
+fn analyzeLeafForProjection(
     allocator: std.mem.Allocator,
     expr: ast.Expr,
     plan: *const Plan,
@@ -2246,19 +2425,8 @@ fn analyzeExprForProjection(
                 }
             }
         },
-        // p.key → record (p, key).
-        .Member => |m| {
-            if (m.target.* == .Ident) {
-                const target_ident = m.target.Ident;
-                if (findBindingIndex(plan, target_ident.orig)) |idx| {
-                    if (plan.binding_kinds[idx] == .node) {
-                        recordBindingKey(allocator, idx, m.field, projections, key_lists, failed);
-                    }
-                    return;
-                }
-            }
-            analyzeExprForProjection(allocator, m.target.*, plan, projections, key_lists, failed);
-        },
+        // Chain links: `analyzeExprForProjection`.
+        .Member, .Binary, .Unary, .Index, .Slice => analyzeExprForProjection(allocator, expr, plan, projections, key_lists, failed),
         .PropertyAccess => |pa| {
             if (findBindingIndex(plan, pa.object)) |idx| {
                 if (plan.binding_kinds[idx] == .node) {
@@ -2266,34 +2434,10 @@ fn analyzeExprForProjection(
                 }
             }
         },
-        .Binary => |bin| {
-            analyzeExprForProjection(allocator, bin.left.*, plan, projections, key_lists, failed);
-            if (failed.*) return;
-            analyzeExprForProjection(allocator, bin.right.*, plan, projections, key_lists, failed);
-        },
-        .Unary => |un| {
-            analyzeExprForProjection(allocator, un.expr.*, plan, projections, key_lists, failed);
-        },
         .Call => |call| {
             for (call.args) |arg| {
                 analyzeExprForProjection(allocator, arg.*, plan, projections, key_lists, failed);
                 if (failed.*) return;
-            }
-        },
-        .Index => |ix| {
-            analyzeExprForProjection(allocator, ix.target.*, plan, projections, key_lists, failed);
-            if (failed.*) return;
-            analyzeExprForProjection(allocator, ix.index.*, plan, projections, key_lists, failed);
-        },
-        .Slice => |sl| {
-            analyzeExprForProjection(allocator, sl.target.*, plan, projections, key_lists, failed);
-            if (failed.*) return;
-            if (sl.start) |s| {
-                analyzeExprForProjection(allocator, s.*, plan, projections, key_lists, failed);
-                if (failed.*) return;
-            }
-            if (sl.end) |e| {
-                analyzeExprForProjection(allocator, e.*, plan, projections, key_lists, failed);
             }
         },
         .List => |items| {
@@ -3051,8 +3195,8 @@ fn materializeEdge(allocator: std.mem.Allocator, graph_name: []const u8, edge_st
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const store = graph_store.getGlobalStore(allocator);
-    const id_map = store.getIdMap(graph_name) orelse return error.IdMapNotLoaded;
-    const edge_id = @as(u64, @truncate(id_map.edgeUuid(edge_step.edge_id) orelse return error.EdgeSlotMappingMissing));
+    // SONNY-3350: read with the IdMap pinned (`GraphStore.idMapEdgeId`).
+    const edge_id = store.idMapEdgeId(graph_name, edge_step.edge_id) orelse return error.EdgeSlotMappingMissing;
     const from_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, edge_step.actual_from_slot);
     const to_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, edge_step.actual_to_slot);
 
@@ -3098,15 +3242,21 @@ fn resolveExternalNodeId(
     graph_name: []const u8,
     slot_id: u64,
 ) !u64 {
-    // Fast path: IdMap already has the mapping.
-    if (store.getIdMap(graph_name)) |id_map| {
-        if (id_map.nodeUuid(slot_id)) |uuid_128| {
-            return @as(u64, @truncate(uuid_128));
-        }
-    }
+    // Fast path: IdMap already has the mapping. SONNY-3350: read with the
+    // map pinned (`GraphStore.idMapNodeId`).
+    if (store.idMapNodeId(graph_name, slot_id)) |id| return id;
 
     // Slow path: read the persisted public ID property from the adapter.
-    if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
+    // SONNY-3348 round 18 (review M1): a resource limit fails the query (it
+    // was swallowed, and the slot used as the id: a wrong row).
+    // SONNY-3348 round 19 (review m4): only a node or graph that is gone
+    // is skipped; any other read error (an engine I/O error) fails the
+    // query instead of dropping the row silently.
+    const stored = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch |err| switch (err) {
+        error.NodeNotFound, error.GraphNotFound => return error.NodeNotFound,
+        else => return err,
+    };
+    if (stored) |stored_prop| {
         defer freeStoragePropertyValue(allocator, stored_prop);
         const public_id: ?u64 = switch (stored_prop) {
             .string => |text| graph_store.parsePersistedPublicId(text),
@@ -3114,19 +3264,17 @@ fn resolveExternalNodeId(
             else => null,
         };
         if (public_id) |pid| {
-            // Back-fill the IdMap for future lookups.
-            const im = store.getOrCreateIdMap(graph_name) catch return pid;
-            im.insertNodeWithSlot(@as(u128, pid), slot_id) catch {};
+            // Back-fill the IdMap for future lookups (SONNY-3350: pinned).
+            store.idMapBackfillNode(graph_name, pid, slot_id);
             return pid;
         }
     }
 
-    // Neither the IdMap nor the persisted property had a mapping for this
-    // slot.  This happens for nodes created within the current session whose
-    // graph has no IdMap yet (e.g. freshly-created test graphs).  Fall back
-    // to using the slot_id directly as the external ID so that
-    // materializeNode can still succeed.
-    return slot_id;
+    // Neither the IdMap nor the persisted property has a public id for this
+    // slot: the node is gone (a DROP GRAPH, or a delete, after the scan read
+    // the slot). SONNY-3348 round 18 (review M1): the caller skips it. The
+    // slot was returned as the node's id, a row with an id no node has.
+    return error.NodeNotFound;
 }
 
 fn buildColumns(allocator: std.mem.Allocator, items: []const ast.ReturnItem) !struct { columns: [][]const u8, buffer: []u8 } {
@@ -3229,8 +3377,10 @@ fn applyResultFilters(
             .exec_context = @constCast(&context),
         };
 
+        // SONNY-3251 (round 15, F6): a limit (54001, 53200, 57014) is the
+        // query's; any other error is the row's false, as it was.
         const passes_where = if (where_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch Value{ .Bool = false })
+            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err)) return err else Value{ .Bool = false })
         else
             true;
         if (!passes_where) {
@@ -3239,7 +3389,7 @@ fn applyResultFilters(
         }
 
         const passes_filter = if (filter_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch Value{ .Bool = false })
+            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err)) return err else Value{ .Bool = false })
         else
             true;
         if (!passes_filter) {
@@ -3415,9 +3565,15 @@ fn freeStoragePropertyMap(allocator: std.mem.Allocator, map: *std.StringHashMap(
     map.deinit();
 }
 
+/// SONNY-3122: a read resolves an edge type's name from the graph it read,
+/// looked up only and pinned while its dictionary is read. It called
+/// `getOrCreateGraph`: on the read path, with no lock of the adapter's, it
+/// could create a graph dropped meanwhile again, and read one that a DROP
+/// was freeing (review of round 13).
 fn edgeTypeName(allocator: std.mem.Allocator, graph_name: []const u8, rel_type: gs.LabelId) ![]const u8 {
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
-    const managed_graph = try adapter.getOrCreateGraph(graph_name);
+    const managed_graph = adapter.pinGraph(graph_name) orelse return error.GraphNotFound;
+    defer adapter.unpinGraph(managed_graph);
     return try allocator.dupe(u8, managed_graph.label_dict.getString(rel_type) orelse "UNKNOWN");
 }
 
@@ -3511,7 +3667,14 @@ fn nodeCanUseIndex(context: ExecutionContext, node: ast.NodePattern, where_claus
     return false;
 }
 
-fn whereClauseHasIndexedEquality(expr: ast.Expr, var_name: []const u8, label: []const u8, context: ExecutionContext) bool {
+fn whereClauseHasIndexedEquality(root: ast.Expr, var_name: []const u8, label: []const u8, context: ExecutionContext) bool {
+    // SONNY-3189: down an AND chain with a loop, not one recursion per AND.
+    var at: *const ast.Expr = &root;
+    while (at.* == .Binary and at.Binary.op == .And) {
+        if (whereClauseHasIndexedEquality(at.Binary.right.*, var_name, label, context)) return true;
+        at = at.Binary.left;
+    }
+    const expr = at.*;
     switch (expr) {
         .Binary => |bin| {
             if (bin.op == .And) {
@@ -4148,4 +4311,10 @@ fn containsName(names: []const []const u8, candidate: []const u8) bool {
         if (std.mem.eql(u8, name, candidate)) return true;
     }
     return false;
+}
+
+/// SONNY-3350 (round 17): a test seam: `resolveExternalNodeId`.
+pub fn resolveExternalNodeIdForTest(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !u64 {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    return resolveExternalNodeId(allocator, adapter, graph_store.getGlobalStore(allocator), graph_name, slot_id);
 }

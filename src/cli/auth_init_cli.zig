@@ -356,10 +356,16 @@ pub fn cmdAuthVerify(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: us
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
-    // Resolve HMAC key
-    const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
+    // SONNY-3035: an empty store (no records, no chain root) verifies with
+    // no key; otherwise the key is looked up, never generated: a key made up
+    // now cannot verify an existing chain, and verifying wrote it.
+    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) {
+        std.debug.print("HMAC chain verified: 0 records, integrity OK.\n", .{});
+        return;
+    }
+    const kr = auth_graph_manager.AuthGraphManager.resolveExistingHmacKey(allocator, data_dir) catch |err| {
         std.debug.print("Error: Failed to resolve HMAC key: {s}\n", .{@errorName(err)});
-        std.debug.print("Set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY, or create .geode_hmac_key in the data directory.\n", .{});
+        std.debug.print("Set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY, or place the store's .geode_hmac_key in the data directory.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 

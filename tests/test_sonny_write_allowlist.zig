@@ -358,6 +358,31 @@ const match_cases = [_]Case{
     .{ .shape = .match_delete, .write = "MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 DELETE q", .checks = &.{
         .{ .query = "MATCH (q:Q) RETURN q.i", .want = &.{ "1", "2", "3" } },
     } },
+    // SONNY-3384: DETACH DELETE after a SET, a REMOVE, a WITH or a CREATE
+    // (a syntax error before the v0.8.23 reconciliation; on the r12 line
+    // it parsed). Every clause runs, in order.
+    .{ .shape = .match_delete, .write = "MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 DETACH DELETE q", .checks = &.{
+        .{ .query = "MATCH (q:Q) RETURN q.i", .want = &.{ "1", "2", "3" } },
+        .{ .query = "MATCH (q:Q) WHERE q.x IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .shape = .match_delete, .write = "MATCH (n:G) WHERE n.i = 5 SET n.z = 1 DETACH DELETE n", .checks = &.{
+        .{ .query = "MATCH (n:G) RETURN count(*) AS c", .want = &.{"9"} },
+        .{ .query = "MATCH (:G)-[r:R]->(:X) RETURN count(*) AS c", .want = &.{"9"} },
+        .{ .query = "MATCH (x:X) RETURN count(*) AS c", .want = &.{"10"} },
+        .{ .query = "MATCH (n:G) WHERE n.z IS NOT NULL RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .shape = .match_with_write, .write = "MATCH (q:Q) WITH q WHERE q.i = 0 SET q.x = 1 DETACH DELETE q", .checks = &.{
+        .{ .query = "MATCH (q:Q) RETURN q.i", .want = &.{ "1", "2", "3" } },
+    } },
+    .{ .shape = .match_delete, .write = "MATCH (q:Q) WHERE q.i = 0 REMOVE q.name DETACH DELETE q", .checks = &.{
+        .{ .query = "MATCH (q:Q) RETURN q.i", .want = &.{ "1", "2", "3" } },
+        .{ .query = "MATCH (q:Q) WHERE q.name IS NULL RETURN count(*) AS c", .want = &.{"0"} },
+    } },
+    .{ .shape = .match_create, .write = "MATCH (n:G) WHERE n.i = 5 CREATE (z:Z) DETACH DELETE n", .checks = &.{
+        .{ .query = "MATCH (n:G) RETURN count(*) AS c", .want = &.{"9"} },
+        .{ .query = "MATCH (:G)-[r:R]->(:X) RETURN count(*) AS c", .want = &.{"9"} },
+        .{ .query = "MATCH (z:Z) RETURN count(*) AS c", .want = &.{"1"} },
+    } },
     .{ .shape = .match_delete, .write = "MATCH (n:G)-[r:R]->(x:X) WHERE n.i = 5 SET n.z = 1 DELETE r", .checks = &.{
         .{ .query = "MATCH (:G)-[r:R]->(:X) RETURN count(*) AS c", .want = &.{"9"} },
         .{ .query = "MATCH (n:G) WHERE n.z = 1 RETURN n.i", .want = &.{"5"} },
@@ -518,7 +543,11 @@ const composed_cases = [_]Case{
         gx(&.{"5|1"})[0],
         .{ .query = "MATCH (m:M) RETURN m.k", .want = &.{"1"} },
     } },
-    // (ROLLBACK undoes only what the transaction created: a known limitation.)
+    // SONNY-3384: PROFILE of MATCH ... SET ... DETACH DELETE runs it.
+    .{ .write = "PROFILE MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 DETACH DELETE q", .checks = &.{
+        .{ .query = "MATCH (q:Q) RETURN q.i", .want = &.{ "1", "2", "3" } },
+    } },
+    // (ROLLBACK undoes what the transaction did; SONNY-3059.)
     .{ .write = "START TRANSACTION; CREATE (:Z {k: 1}); ROLLBACK", .checks = &.{
         .{ .query = "MATCH (z:Z) RETURN count(*) AS c", .want = &.{"0"} },
     } },
@@ -539,11 +568,6 @@ const syntax = error.UnexpectedToken;
 const refused_cases = [_]Case{
     // SONNY-3166: a statement boundary without ';' (review a: SPL1..SPL23,
     // e: TN11, PS2, i: DP9, PG1..PG3).
-    .{ .write = "MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 DETACH DELETE q", .refused = syntax },
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.z = 1 DETACH DELETE n", .refused = syntax },
-    .{ .write = "MATCH (q:Q) WITH q WHERE q.i = 0 SET q.x = 1 DETACH DELETE q", .refused = syntax },
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 CREATE (z:Z) DETACH DELETE n", .refused = syntax },
-    .{ .write = "MATCH (q:Q) WHERE q.i = 0 REMOVE q.name DETACH DELETE q", .refused = syntax },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.x = 1 CREATE (n)-[:T]->(z:Z)", .refused = syntax },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 CREATE (a:A) SET a.k = 1 CREATE (n)-[:T]->(b:B)", .refused = syntax },
     .{ .write = "MATCH (q:Q) DELETE q CREATE (w:W)", .refused = syntax },
@@ -554,11 +578,12 @@ const refused_cases = [_]Case{
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.x = 1 WITH n SET n.y = 2", .refused = syntax },
     .{ .write = "MERGE (m:M {g: 'z'}) WITH m SET m.k = 1", .refused = syntax },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 CREATE (z:Z) SET z.k = 1 MERGE (m:M {g: n.g})", .refused = syntax },
-    .{ .write = "PROFILE MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 DETACH DELETE q", .refused = syntax },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.x = 1 OPTIONAL MATCH (n)-[:R]->(x:X) SET x.x = 1", .refused = syntax },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.x = 1 MATCH (n)-[:R]->(x:X) SET x.x = 1", .refused = syntax },
     .{ .write = "MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 MATCH (q:Q) DELETE q", .refused = syntax },
-    .{ .write = "MATCH (n:G), p = (m:G)-[:R]->(x:X) WHERE n.i = 1 AND m.i = 5 SET n.z = 1 DETACH DELETE p", .refused = syntax },
+    // SONNY-3384: it parses now (DETACH DELETE after a SET); a path DELETE
+    // is refused (SONNY-3146).
+    .{ .write = "MATCH (n:G), p = (m:G)-[:R]->(x:X) WHERE n.i = 1 AND m.i = 5 SET n.z = 1 DETACH DELETE p", .refused = refused },
     .{ .write = "START TRANSACTION MATCH (n:G) WHERE n.i = 5 SET n.x = 1 WITH n SET n.y = 2 COMMIT", .refused = syntax },
     .{ .write = "MATCH (n:G {i: 5}) SET n.x = 1 MATCH (q:Q {i: 0}) SET q.x = 1", .refused = syntax },
     // A DELETE with no MATCH (SPL7, SPL8).
@@ -696,7 +721,10 @@ test "allowlist: every shape it leaves out, and every refused case of the review
 
 // SONNY-3059: a rolled-back `SET n:L` kept its label postings, so no label is
 // set or removed inside an explicit transaction.
-test "allowlist: a label SET or REMOVE inside an explicit transaction is refused" {
+test "allowlist: a label SET or REMOVE inside an explicit transaction runs, and ROLLBACK undoes it (SONNY-3059)" {
+    // The v0823 line refused these while ROLLBACK undid only what a
+    // transaction created; the r12 line's SONNY-3059 (round 18) undoes every
+    // change, labels included, so the v0.8.23 reconciliation accepts them.
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var f: h.Failures = .{ .arena = arena.allocator() };
@@ -704,23 +732,24 @@ test "allowlist: a label SET or REMOVE inside an explicit transaction is refused
         var s = try openSession(mode);
         defer s.deinit();
         const programs = [_][]const u8{
-            "START TRANSACTION; MATCH (n:G {i: 5}) SET n:Hit; COMMIT",
+            "START TRANSACTION; MATCH (n:G {i: 5}) SET n:Hit; ROLLBACK",
             "START TRANSACTION; MATCH (n:G {i: 5}) REMOVE n:G; ROLLBACK",
-            "START TRANSACTION; MERGE (m:M {g: 'z'}) ON CREATE SET m:Extra; COMMIT",
-            "START TRANSACTION { MATCH (n:G {i: 5}) SET n:Hit }",
+            "START TRANSACTION; MERGE (m:M {g: 'z'}) ON CREATE SET m:Extra; ROLLBACK",
+            "START TRANSACTION; MATCH (n:G {i: 6}) SET n:Kept; COMMIT",
         };
         for (programs) |p| {
             if (runProgram(&s, stmt_alloc, p)) |r| {
                 var result = r;
                 result.deinit(stmt_alloc);
-                try f.add("[{s}] {s}: expected WriteClauseNotApplied, got a result", .{ @tagName(mode), p });
-            } else |err| if (err != error.WriteClauseNotApplied) {
-                try f.add("[{s}] {s}: expected WriteClauseNotApplied, got {s}", .{ @tagName(mode), p, @errorName(err) });
+            } else |err| {
+                try f.add("[{s}] {s}: expected it to run, got {s}", .{ @tagName(mode), p, @errorName(err) });
             }
         }
         try h.expectRows(&s, &f, "effect", "label in a transaction", "MATCH (n:Hit) RETURN count(*) AS c", &.{"0"});
         try h.expectRows(&s, &f, "effect", "label in a transaction", "MATCH (n:G) RETURN count(*) AS c", &.{"10"});
         try h.expectRows(&s, &f, "effect", "label in a transaction", "MATCH (m:M) RETURN count(*) AS c", &.{"0"});
+        try h.expectRows(&s, &f, "effect", "label in a transaction", "MATCH (m:Extra) RETURN count(*) AS c", &.{"0"});
+        try h.expectRows(&s, &f, "effect", "label in a transaction", "MATCH (n:Kept) RETURN n.i", &.{"6"});
     }
     try f.finish("labels in a transaction");
 }
@@ -752,7 +781,8 @@ test "SONNY-3166: a statement boundary without ';' is a syntax error" {
     defer arena.deinit();
     const aa = arena.allocator();
     const bad = [_][]const u8{
-        "MATCH (q:Q) SET q.x = 1 DETACH DELETE q",
+        // (`MATCH (q:Q) SET q.x = 1 DETACH DELETE q` is one statement since
+        // SONNY-3384, merged in the v0.8.23 reconciliation.)
         "CREATE (x1:A), (x2:B) WITH x1, x2 SET x1.status = 'a' CREATE (x1)-[:DEPENDS_ON]->(x2)",
         "MATCH (n) RETURN n MATCH (m) RETURN m",
         "START TRANSACTION { MATCH (n) SET n.x = 1 MATCH (m) SET m.y = 2 }",

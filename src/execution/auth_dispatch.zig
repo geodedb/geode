@@ -1417,6 +1417,11 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
 
     // Apply grant/revoke for each action code. Callback failures are logged and
     // skipped — best effort; don't fail the whole handler.
+    // CANARY: REQ=REQ-SONNY-3038-REVOKE-DURABLE; FEATURE="GQL Auth DDL Persistence"; ASPECT=RevokeFailureReported; STATUS=TESTED; TEST=tests/test_sonny3038_revoke_and_schema_ddl.zig; OWNER=security; UPDATED=2026-09-27
+    // SONNY-3038: except a revoke: one that could not be saved fails the
+    // call (`RevokeNotPersisted`). It reported "Revoked", and the privilege
+    // came back at the next start.
+    var revoke_failure: ?anyerror = null;
     for (actions) |action| {
         if (is_grant) {
             if (g_grant_persist.grant_fn) |f| {
@@ -1438,9 +1443,20 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
                         Attr.string("graph", resource),
                         Attr.uint("action", @as(u64, action)),
                     });
+                    if (revoke_failure == null) revoke_failure = e;
                 };
             }
         }
+    }
+
+    if (revoke_failure != null) {
+        // The in-memory RBAC state may have moved; tell the LSP providers.
+        schema_change_notifier.notify();
+        allocator.free(columns[0]);
+        allocator.free(columns);
+        allocator.free(row);
+        allocator.free(rows);
+        return error.RevokeNotPersisted;
     }
 
     // Return the status row with wording the geodetestlab spec asserts.

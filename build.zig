@@ -8920,6 +8920,733 @@ pub fn build(b: *std.Build) void {
     const sonny2824_step = b.step("test-sonny2824-hello-graph-gate", "Run SONNY-2824 regression (spawns a server: a QUIC or gRPC HELLO naming a missing graph creates it only for a principal with the schema permission on it; a ReadWrite user is refused and nothing is created; a GPS FOR SCHEMA policy grants it)");
     sonny2824_step.dependOn(&run_sonny2824_tests.step);
 
+    // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
+    // statement or graph selection is refused (0A000), and the program traits
+    // look inside PROFILE and EXPLAIN. The real gRPC handler in process
+    // (SONNY-1560 shim) and QUIC against a spawned server.
+    const sonny3026_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3026_profile_txn_control.zig"), .target = target, .optimize = optimize });
+    sonny3026_test_mod.link_libc = true;
+    sonny3026_test_mod.addImport("geode", root_mod);
+    sonny3026_test_mod.addImport("schema", schema_mod);
+    sonny3026_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3026_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3026_test_mod.addImport("logging", logging_mod);
+    sonny3026_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3026_tests = b.addTest(.{ .root_module = sonny3026_test_mod });
+    const run_sonny3026_tests = b.addRunArtifact(sonny3026_tests);
+    run_sonny3026_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3026_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3026_step = b.step("test-sonny3026-profile-txn-control", "Run SONNY-3026 regression (EXPLAIN and PROFILE of START TRANSACTION, COMMIT, ROLLBACK, a session statement or graph selection are refused, 0A000, and leave the session's transaction and graph as they were; gRPC in process and QUIC against a spawned server)");
+    sonny3026_step.dependOn(&run_sonny3026_tests.step);
+
+    // SONNY-3027: a PROFILE'd change in a transaction commits its session
+    // engine transaction under the graph's write lock (the profiled entry
+    // point is an executor entry point, and both handlers commit before they
+    // release a write lock); the backstop aborts and fails the transaction.
+    // The executor directly, the real gRPC handler in process (SONNY-1560
+    // shim), and QUIC against a spawned server.
+    const sonny3027_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3027_profile_engine_txn.zig"), .target = target, .optimize = optimize });
+    sonny3027_test_mod.link_libc = true;
+    sonny3027_test_mod.addImport("geode", root_mod);
+    sonny3027_test_mod.addImport("schema", schema_mod);
+    sonny3027_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3027_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3027_test_mod.addImport("logging", logging_mod);
+    sonny3027_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3027_tests = b.addTest(.{ .root_module = sonny3027_test_mod });
+    const run_sonny3027_tests = b.addRunArtifact(sonny3027_tests);
+    run_sonny3027_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3027_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3027_step = b.step("test-sonny3027-profile-engine-txn", "Run SONNY-3027 regression (a PROFILE'd MERGE or CREATE in a transaction leaves no engine transaction open once its write lock is released; the backstop aborts and fails the transaction, never commits outside the lock; executor, gRPC in process, QUIC e2e)");
+    sonny3027_step.dependOn(&run_sonny3027_tests.step);
+
+    // SONNY-3028: DROP GRAPH frees a graph only when no thread holds it:
+    // CREATE and DROP GRAPH lock the graph they name, the holders and waiters
+    // of a graph's lock pin it, and DROP GRAPH of the graph the session's
+    // transaction changed is refused (55006). The real gRPC handler in
+    // process (SONNY-1560 shim) under the testing allocator.
+    const sonny3028_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3028_drop_graph_in_use.zig"), .target = target, .optimize = optimize });
+    sonny3028_test_mod.link_libc = true;
+    sonny3028_test_mod.addImport("geode", root_mod);
+    sonny3028_test_mod.addImport("schema", schema_mod);
+    sonny3028_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3028_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3028_test_mod.addImport("logging", logging_mod);
+    const sonny3028_tests = b.addTest(.{ .root_module = sonny3028_test_mod });
+    const run_sonny3028_tests = b.addRunArtifact(sonny3028_tests);
+    shardDep(test_step, &run_sonny3028_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3028_step = b.step("test-sonny3028-drop-graph-in-use", "Run SONNY-3028 regression (DROP GRAPH from another graph's session waits for the graph's lock holders; a waiter is told the graph is gone; nothing is freed under a holder; DROP GRAPH of the transaction's graph is refused, 55006; gRPC in process)");
+    sonny3028_step.dependOn(&run_sonny3028_tests.step);
+
+    // SONNY-3029: no group-commit batch has an engine transaction open on a
+    // graph while another thread holds the graph's write lock. A batch held
+    // open by a test hook, and the review's sampling probe.
+    const sonny3029_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3029_group_commit_txn_gate.zig"), .target = target, .optimize = optimize });
+    sonny3029_test_mod.link_libc = true;
+    sonny3029_test_mod.addImport("geode", root_mod);
+    sonny3029_test_mod.addImport("schema", schema_mod);
+    sonny3029_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3029_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3029_test_mod.addImport("logging", logging_mod);
+    const sonny3029_tests = b.addTest(.{ .root_module = sonny3029_test_mod });
+    const run_sonny3029_tests = b.addRunArtifact(sonny3029_tests);
+    shardDep(test_step, &run_sonny3029_tests.step, 2, test_shard_loads, test_shard_index);
+    const sonny3029_step = b.step("test-sonny3029-group-commit-txn-gate", "Run SONNY-3029 regression (a group-commit batch's statement transaction is never open on a graph while another thread holds the graph's write lock: a batch held open keeps the writer out; 1600 inserts against a thread that keeps taking the lock see no open transaction)");
+    sonny3029_step.dependOn(&run_sonny3029_tests.step);
+
+    // SONNY-3030: index and constraint DDL need the schema permission on the
+    // database (Admin, or a FOR SCHEMA policy on *): the catalog is
+    // database-wide. The real gRPC handler in process, authorization on.
+    const sonny3030_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3030_catalog_ddl_gate.zig"), .target = target, .optimize = optimize });
+    sonny3030_test_mod.link_libc = true;
+    sonny3030_test_mod.addImport("geode", root_mod);
+    sonny3030_test_mod.addImport("schema", schema_mod);
+    sonny3030_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3030_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3030_test_mod.addImport("logging", logging_mod);
+    const sonny3030_tests = b.addTest(.{ .root_module = sonny3030_test_mod });
+    const run_sonny3030_tests = b.addRunArtifact(sonny3030_tests);
+    shardDep(test_step, &run_sonny3030_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3030_step = b.step("test-sonny3030-catalog-ddl-gate", "Run SONNY-3030 regression (CREATE/DROP INDEX, fulltext included, and CREATE/DROP CONSTRAINT need the schema permission on the database: a FOR SCHEMA grant on some graphs is refused, one on * is not)");
+    sonny3030_step.dependOn(&run_sonny3030_tests.step);
+
+    // SONNY-3031: a failed commit of a session engine transaction aborts it,
+    // fails the request (40000) and rolls the transaction back, so its COMMIT
+    // fails. The engine's failure is injected. The real gRPC handler in
+    // process.
+    const sonny3031_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3031_session_commit_failure.zig"), .target = target, .optimize = optimize });
+    sonny3031_test_mod.link_libc = true;
+    sonny3031_test_mod.addImport("geode", root_mod);
+    sonny3031_test_mod.addImport("schema", schema_mod);
+    sonny3031_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3031_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3031_test_mod.addImport("logging", logging_mod);
+    const sonny3031_tests = b.addTest(.{ .root_module = sonny3031_test_mod });
+    const run_sonny3031_tests = b.addRunArtifact(sonny3031_tests);
+    shardDep(test_step, &run_sonny3031_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3031_step = b.step("test-sonny3031-session-commit-failure", "Run SONNY-3031 regression (an injected failure of a session engine commit at a program's end, a COMMIT statement or START..COMMIT fails the request with 40000, aborts the engine transaction and rolls the transaction back; its COMMIT fails)");
+    sonny3031_step.dependOn(&run_sonny3031_tests.step);
+
+    // SONNY-3038 (the v0.8.23 part): geode.auth.revoke fails when the revoke
+    // cannot be saved (injected through the grant persistence callbacks), and
+    // CREATE/DROP SCHEMA need the schema permission on the database. The real
+    // gRPC handler in process.
+    const sonny3038_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3038_revoke_and_schema_ddl.zig"), .target = target, .optimize = optimize });
+    sonny3038_test_mod.link_libc = true;
+    sonny3038_test_mod.addImport("geode", root_mod);
+    sonny3038_test_mod.addImport("schema", schema_mod);
+    sonny3038_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3038_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3038_test_mod.addImport("logging", logging_mod);
+    const sonny3038_tests = b.addTest(.{ .root_module = sonny3038_test_mod });
+    const run_sonny3038_tests = b.addRunArtifact(sonny3038_tests);
+    shardDep(test_step, &run_sonny3038_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3038_step = b.step("test-sonny3038-revoke-schema-ddl", "Run SONNY-3038 (v0.8.23 part) regression (geode.auth.revoke fails with 58030 when the revoke cannot be saved; CREATE/DROP SCHEMA need the schema permission on the database)");
+    sonny3038_step.dependOn(&run_sonny3038_tests.step);
+
+    // SONNY-3033: the QUIC /*+BATCH*/ route applies the session-graph gate
+    // and the group-commit coordinator creates no graph but the default one:
+    // a batch against a dropped graph is refused and does not recreate it.
+    // Against a spawned server.
+    const sonny3033_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3033_batch_graph_gate.zig"), .target = target, .optimize = optimize });
+    sonny3033_test_mod.link_libc = true;
+    sonny3033_test_mod.addImport("geode", root_mod);
+    sonny3033_test_mod.addImport("schema", schema_mod);
+    sonny3033_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3033_test_mod.addImport("logging", logging_mod);
+    sonny3033_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3033_tests = b.addTest(.{ .root_module = sonny3033_test_mod });
+    const run_sonny3033_tests = b.addRunArtifact(sonny3033_tests);
+    run_sonny3033_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3033_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3033_step = b.step("test-sonny3033-batch-graph-gate", "Run SONNY-3033 regression (spawns a server: a /*+BATCH*/ against a graph another session dropped is refused, 3F000, and does not recreate it, for a ReadWrite user and an Admin)");
+    sonny3033_step.dependOn(&run_sonny3033_tests.step);
+
+    // SONNY-3130: a program that creates, replaces or drops a graph carries no
+    // statement on graph data (0A000): the handler held the old graph's lock
+    // while the program wrote the new one. gRPC in process (SONNY-1560 shim)
+    // and QUIC against a spawned server.
+    const sonny3130_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3130_graph_ddl_alone.zig"), .target = target, .optimize = optimize });
+    sonny3130_test_mod.link_libc = true;
+    sonny3130_test_mod.addImport("geode", root_mod);
+    sonny3130_test_mod.addImport("schema", schema_mod);
+    sonny3130_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3130_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3130_test_mod.addImport("logging", logging_mod);
+    sonny3130_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3130_tests = b.addTest(.{ .root_module = sonny3130_test_mod });
+    const run_sonny3130_tests = b.addRunArtifact(sonny3130_tests);
+    run_sonny3130_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3130_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3130_step = b.step("test-sonny3130-graph-ddl-alone", "Run SONNY-3130 regression (a program that creates, replaces or drops a graph and has a statement on graph data is refused, 0A000, and changes nothing; graph DDL with graph selection runs; gRPC in process and QUIC against a spawned server)");
+    sonny3130_step.dependOn(&run_sonny3130_tests.step);
+
+    // SONNY-3131: a graph-scoped checkpoint of a graph dropped while it waited
+    // leaves the registry alone, and a registry entry whose files are gone
+    // does not stop the registry from being saved (restarts included).
+    const sonny3131_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3131_checkpoint_dropped_graph.zig"), .target = target, .optimize = optimize });
+    sonny3131_test_mod.link_libc = true;
+    sonny3131_test_mod.addImport("geode", root_mod);
+    sonny3131_test_mod.addImport("schema", schema_mod);
+    sonny3131_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3131_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3131_test_mod.addImport("logging", logging_mod);
+    const sonny3131_tests = b.addTest(.{ .root_module = sonny3131_test_mod });
+    const run_sonny3131_tests = b.addRunArtifact(sonny3131_tests);
+    shardDep(test_step, &run_sonny3131_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3131_step = b.step("test-sonny3131-checkpoint-dropped-graph", "Run SONNY-3131 regression (a checkpoint racing DROP GRAPH does not write the graph back into the registry; a registry entry whose files are gone does not stop later graphs from persisting across a restart)");
+    sonny3131_step.dependOn(&run_sonny3131_tests.step);
+
+    // SONNY-3132: DROP GRAPH default and CREATE OR REPLACE GRAPH default are
+    // refused before anything is dropped (GraphStore, the storage adapter
+    // and the executor); the default graph's engine and files stay.
+    const sonny3132_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3132_drop_default_graph.zig"), .target = target, .optimize = optimize });
+    sonny3132_test_mod.link_libc = true;
+    sonny3132_test_mod.addImport("geode", root_mod);
+    sonny3132_test_mod.addImport("schema", schema_mod);
+    sonny3132_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3132_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3132_test_mod.addImport("logging", logging_mod);
+    const sonny3132_tests = b.addTest(.{ .root_module = sonny3132_test_mod });
+    const run_sonny3132_tests = b.addRunArtifact(sonny3132_tests);
+    shardDep(test_step, &run_sonny3132_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3132_step = b.step("test-sonny3132-drop-default-graph", "Run SONNY-3132 regression (DROP GRAPH default, DROP GRAPH IF EXISTS default and CREATE OR REPLACE GRAPH default are refused, for an Admin and a ReadWrite user with FOR SCHEMA on default; GraphStore and the storage adapter refuse it; the engine, its data and its files stay)");
+    sonny3132_step.dependOn(&run_sonny3132_tests.step);
+
+    // SONNY-3133: every recursive entry of the GQL parser has a depth guard:
+    // nested wrappers, statements, queries, expressions and patterns get a
+    // clean parse error on a 16 MiB worker stack. Run it in Debug and in
+    // ReleaseSafe (-Doptimize=ReleaseSafe).
+    const sonny3133_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3133_parser_nesting.zig"), .target = target, .optimize = optimize });
+    sonny3133_test_mod.link_libc = true;
+    sonny3133_test_mod.addImport("geode", root_mod);
+    sonny3133_test_mod.addImport("schema", schema_mod);
+    sonny3133_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3133_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3133_test_mod.addImport("logging", logging_mod);
+    const sonny3133_tests = b.addTest(.{ .root_module = sonny3133_test_mod });
+    const run_sonny3133_tests = b.addRunArtifact(sonny3133_tests);
+    shardDep(test_step, &run_sonny3133_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3133_step = b.step("test-sonny3133-parser-nesting", "Run SONNY-3133 regression (no nesting of PROFILE/EXPLAIN, a START TRANSACTION body, a parenthesized statement, VALUES, WITH, CALL { }, FOR, NOT, unary minus/plus, shortestPath or an expression overflows a 16 MiB stack: clean parse error; ordinary nesting parses; gRPC X11 bomb gets 42000; run in Debug and ReleaseSafe)");
+    sonny3133_step.dependOn(&run_sonny3133_tests.step);
+
+    // SONNY-3134: DROP GRAPH and CREATE OR REPLACE GRAPH of a graph any
+    // session's open transaction changed are refused (55006). gRPC in process
+    // and QUIC against a spawned server.
+    const sonny3134_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3134_drop_graph_other_txn.zig"), .target = target, .optimize = optimize });
+    sonny3134_test_mod.link_libc = true;
+    sonny3134_test_mod.addImport("geode", root_mod);
+    sonny3134_test_mod.addImport("schema", schema_mod);
+    sonny3134_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3134_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3134_test_mod.addImport("logging", logging_mod);
+    sonny3134_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3134_tests = b.addTest(.{ .root_module = sonny3134_test_mod });
+    const run_sonny3134_tests = b.addRunArtifact(sonny3134_tests);
+    run_sonny3134_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3134_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3134_step = b.step("test-sonny3134-drop-graph-other-txn", "Run SONNY-3134 regression (DROP GRAPH and CREATE OR REPLACE GRAPH of a graph another session's open transaction changed are refused, 55006; its COMMIT keeps and its ROLLBACK undoes the change; the graph drops once the transaction ends or its client disconnects; gRPC in process and QUIC)");
+    sonny3134_step.dependOn(&run_sonny3134_tests.step);
+
+    // SONNY-3135 (N7a, N7b): EXPLAIN and PROFILE wrap only a query, a data
+    // change, FOR or a read-only CALL; a request that fails in a transaction
+    // aborts its session engine transaction rather than committing it.
+    const sonny3135_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3135_profile_allowlist_failed_txn.zig"), .target = target, .optimize = optimize });
+    sonny3135_test_mod.link_libc = true;
+    sonny3135_test_mod.addImport("geode", root_mod);
+    sonny3135_test_mod.addImport("schema", schema_mod);
+    sonny3135_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3135_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3135_test_mod.addImport("logging", logging_mod);
+    const sonny3135_tests = b.addTest(.{ .root_module = sonny3135_test_mod });
+    const run_sonny3135_tests = b.addRunArtifact(sonny3135_tests);
+    shardDep(test_step, &run_sonny3135_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3135_step = b.step("test-sonny3135-profile-allowlist-failed-txn", "Run SONNY-3135 (N7a, N7b) regression (EXPLAIN and PROFILE take only a query, a data change, FOR or a read-only CALL, 0A000 otherwise; PROFILE of the self-locking backfill is refused at once; a failed request's session engine transaction is aborted, not committed)");
+    sonny3135_step.dependOn(&run_sonny3135_tests.step);
+
+    // SONNY-3181, SONNY-3189: an operator chain longer than the parser's cap
+    // (max_expr_links) is refused with 42000; up to it, the query analysis,
+    // the printer and the evaluator walk chains with loops. gRPC in process
+    // on 8 MiB and 16 MiB threads, the parser in child processes, and QUIC
+    // against a spawned server. Run it in Debug and in ReleaseSafe
+    // (-Doptimize=ReleaseSafe).
+    const sonny3181_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3181_expr_chain_cap.zig"), .target = target, .optimize = optimize });
+    sonny3181_test_mod.link_libc = true;
+    sonny3181_test_mod.addImport("geode", root_mod);
+    sonny3181_test_mod.addImport("schema", schema_mod);
+    sonny3181_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3181_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3181_test_mod.addImport("logging", logging_mod);
+    sonny3181_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3181_tests = b.addTest(.{ .root_module = sonny3181_test_mod });
+    const run_sonny3181_tests = b.addRunArtifact(sonny3181_tests);
+    run_sonny3181_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3181_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3181_step = b.step("test-sonny3181-expr-chain-cap", "Run SONNY-3181/SONNY-3189 regression (an expression of more than max_expr_links operator links is refused, 42000; chains of +, AND, OR, ||, member access and unary operators in RETURN, WHERE, ORDER BY, a property map, a UNION arm, an aggregate and EXPLAIN evaluate correctly up to the cap; no length to 1,000,000 terms overflows an 8 MiB or 16 MiB thread; gRPC in process, parser, QUIC; run in Debug and ReleaseSafe)");
+    sonny3181_step.dependOn(&run_sonny3181_tests.step);
+
+    // SONNY-3180: GraphStore.id_maps under a lock, and each IdMap at an
+    // address of its own: threads creating and using the IdMaps of distinct
+    // graphs, readers and a CREATE/DROP GRAPH loop, all at once, under the
+    // testing allocator.
+    const sonny3180_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3180_id_maps_race.zig"), .target = target, .optimize = optimize });
+    sonny3180_test_mod.link_libc = true;
+    sonny3180_test_mod.addImport("geode", root_mod);
+    const sonny3180_tests = b.addTest(.{ .root_module = sonny3180_test_mod });
+    const run_sonny3180_tests = b.addRunArtifact(sonny3180_tests);
+    shardDep(test_step, &run_sonny3180_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3180_step = b.step("test-sonny3180-id-maps-race", "Run SONNY-3180 regression (GraphStore.id_maps is locked and each IdMap keeps its address: writers of distinct graphs, readers and CREATE/DROP GRAPH at once, no corruption, under the testing allocator)");
+    sonny3180_step.dependOn(&run_sonny3180_tests.step);
+
+    // SONNY-3032: gRPC sessions end: one idle in an open transaction past
+    // idle_in_transaction_timeout_ms is closed with its transaction rolled
+    // back (the hold released), idle sessions are closed, and one user holds
+    // at most max_sessions_per_principal sessions. gRPC in process, and a
+    // spawned server with --idle-in-transaction-timeout (Debug: the plaintext
+    // gRPC listener).
+    const sonny3032_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3032_grpc_session_expiry.zig"), .target = target, .optimize = optimize });
+    sonny3032_test_mod.link_libc = true;
+    sonny3032_test_mod.addImport("geode", root_mod);
+    sonny3032_test_mod.addImport("schema", schema_mod);
+    sonny3032_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3032_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3032_test_mod.addImport("logging", logging_mod);
+    sonny3032_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3032_tests = b.addTest(.{ .root_module = sonny3032_test_mod });
+    const run_sonny3032_tests = b.addRunArtifact(sonny3032_tests);
+    run_sonny3032_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3032_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3032_step = b.step("test-sonny3032-grpc-session-expiry", "Run SONNY-3032 regression (a gRPC session idle in an open transaction past the timeout is closed, its transaction rolled back and its graph hold released, so DROP GRAPH runs; idle sessions are closed, never one a request holds; one user holds at most max_sessions_per_principal sessions; gRPC in process and a spawned server)");
+    sonny3032_step.dependOn(&run_sonny3032_tests.step);
+
+    // SONNY-3191 (round 13 review N-4..N-7) and SONNY-3122: COMMIT or
+    // ROLLBACK then DROP GRAPH in one program; the QUIC admission thread's
+    // stack; the Debug WITH-chain limit; reserved graph names; the read
+    // path's edge type lookup. gRPC in process and QUIC.
+    const sonny3191_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3191_round13_items.zig"), .target = target, .optimize = optimize });
+    sonny3191_test_mod.link_libc = true;
+    sonny3191_test_mod.addImport("geode", root_mod);
+    sonny3191_test_mod.addImport("schema", schema_mod);
+    sonny3191_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3191_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3191_test_mod.addImport("logging", logging_mod);
+    sonny3191_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3191_tests = b.addTest(.{ .root_module = sonny3191_test_mod });
+    const run_sonny3191_tests = b.addRunArtifact(sonny3191_tests);
+    run_sonny3191_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3191_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3191_step = b.step("test-sonny3191-round13-items", "Run SONNY-3191 (N-4..N-7) and SONNY-3122 regression (COMMIT/ROLLBACK then DROP GRAPH in one program runs; queries run on the QUIC admission thread's stack; WITH chain of 64: parsed in release, refused cleanly in Debug on 8 MiB; CURRENT_GRAPH/HOME_GRAPH reserved, 42939; edge type names read by lookup and pin; gRPC in process and QUIC)");
+    sonny3191_step.dependOn(&run_sonny3191_tests.step);
+
+    // SONNY-3189 (round 15, F1): a grouped or implicit HAVING with an
+    // operator chain just under max_expr_links is evaluated correctly (the
+    // walkers the HAVING rewrite calls follow chains with loops), and past it
+    // refused with 42000; gRPC in process on 8 MiB and 16 MiB threads. Run it
+    // in Debug and in ReleaseSafe (-Doptimize=ReleaseSafe).
+    const sonny3189_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3189_grouped_having_chains.zig"), .target = target, .optimize = optimize });
+    sonny3189_test_mod.link_libc = true;
+    sonny3189_test_mod.addImport("geode", root_mod);
+    sonny3189_test_mod.addImport("schema", schema_mod);
+    sonny3189_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3189_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3189_test_mod.addImport("logging", logging_mod);
+    sonny3189_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3189_tests = b.addTest(.{ .root_module = sonny3189_test_mod });
+    const run_sonny3189_tests = b.addRunArtifact(sonny3189_tests);
+    shardDep(test_step, &run_sonny3189_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3189_step = b.step("test-sonny3189-grouped-having-chains", "Run SONNY-3189 round 15 regression (GROUP BY ... HAVING sum(n.v + 0 ... x4090), count(...), the item-equality form and RETURN count(n) WHERE sum(...) evaluate correctly just under max_expr_links and are refused (42000) past it; AND and member chains in a HAVING evaluate; index and slice chains in a planned read with a hop are analysed with loops; gRPC in process on 8 MiB and 16 MiB threads; run in Debug and ReleaseSafe)");
+    sonny3189_step.dependOn(&run_sonny3189_tests.step);
+
+    // SONNY-3250 (round 15, F4; pre-existing): nested EXISTS and COUNT
+    // subqueries at depth 2 and 3 no longer read a freed environment
+    // (graph_algorithms countPatternMatches / evaluateWhereFilter); gRPC in
+    // process. Run it in Debug and in ReleaseSafe.
+    const sonny3250_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3250_nested_exists.zig"), .target = target, .optimize = optimize });
+    sonny3250_test_mod.link_libc = true;
+    sonny3250_test_mod.addImport("geode", root_mod);
+    sonny3250_test_mod.addImport("schema", schema_mod);
+    sonny3250_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3250_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3250_test_mod.addImport("logging", logging_mod);
+    sonny3250_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3250_tests = b.addTest(.{ .root_module = sonny3250_test_mod });
+    const run_sonny3250_tests = b.addRunArtifact(sonny3250_tests);
+    shardDep(test_step, &run_sonny3250_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3250_step = b.step("test-sonny3250-nested-exists", "Run SONNY-3250 regression (nested EXISTS and COUNT subqueries at depth 2 and 3, correlated and not, with and without a hop, answer correctly with no use after free; gRPC in process; run in Debug and ReleaseSafe)");
+    sonny3250_step.dependOn(&run_sonny3250_tests.step);
+
+    // SONNY-3233 (round 15, F3, F5, F12): the caches' reservations, the
+    // unbounded adjacency append and removal, the edge-type index and the
+    // graph registry hold their locks: batch vs single CREATE on two graphs,
+    // two edge writers on two graphs with edge-type readers, and CREATE/DROP
+    // GRAPH churn racing first writes, with bounded (production) and
+    // unbounded caches. Loop it.
+    const sonny3233_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3233_cache_graph_locking.zig"), .target = target, .optimize = optimize });
+    sonny3233_test_mod.link_libc = true;
+    sonny3233_test_mod.addImport("geode", root_mod);
+    sonny3233_test_mod.addImport("schema", schema_mod);
+    sonny3233_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3233_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3233_test_mod.addImport("logging", logging_mod);
+    sonny3233_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3233_tests = b.addTest(.{ .root_module = sonny3233_test_mod });
+    const run_sonny3233_tests = b.addRunArtifact(sonny3233_tests);
+    shardDep(test_step, &run_sonny3233_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3233_step = b.step("test-sonny3233-cache-graph-locking", "Run SONNY-3233 regression (cache reservations under each shard's lock, unbounded adjacency append/removal under the shard lock, edge_type_index and the graphs registry locked: batch vs single CREATE on two graphs, two edge writers with edge-type readers, CREATE/DROP GRAPH churn racing first writes; bounded and unbounded caches; bounded time, loop it)");
+    sonny3233_step.dependOn(&run_sonny3233_tests.step);
+
+    // SONNY-3180 (round 15, F2): the contents of each graph's IdMap, and the
+    // resident maps every graph shares, are read under their own locks:
+    // snapshot reads, store walks and CALL db.propertyKeys() race writers of
+    // other graphs and CREATE/DROP GRAPH churn, and a gRPC read and COMMIT
+    // race DROP/CREATE of the same graph name, with unbounded and bounded
+    // (production) caches. Loop it.
+    const sonny3180c_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3180_idmap_contents_race.zig"), .target = target, .optimize = optimize });
+    sonny3180c_test_mod.link_libc = true;
+    sonny3180c_test_mod.addImport("geode", root_mod);
+    sonny3180c_test_mod.addImport("schema", schema_mod);
+    sonny3180c_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3180c_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3180c_test_mod.addImport("logging", logging_mod);
+    sonny3180c_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3180c_tests = b.addTest(.{ .root_module = sonny3180c_test_mod });
+    const run_sonny3180c_tests = b.addRunArtifact(sonny3180c_tests);
+    shardDep(test_step, &run_sonny3180c_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3180c_step = b.step("test-sonny3180-idmap-contents-race", "Run SONNY-3180 round 15 regression (IdMap contents and the shared resident maps read under their own locks: snapshot reads, allEdgeIds/getAllNodes/counts and CALL db.propertyKeys() race a writer of another graph and CREATE/DROP GRAPH churn; a gRPC read and COMMIT race DROP/CREATE GRAPH of the same name; unbounded and bounded caches; bounded time, loop it)");
+    sonny3180c_step.dependOn(&run_sonny3180c_tests.step);
+
+    // SONNY-3312 (round 16, C1): a read program whose statements run on
+    // several graphs snapshots each of them, under each one's read lock in
+    // name order (round 15 snapshotted the session graph alone, and read the
+    // others as empty). gRPC in process with unbounded and bounded caches,
+    // readers racing writers and CREATE/DROP GRAPH churn, and QUIC (spawned
+    // server).
+    const sonny3312_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3312_multi_graph_read.zig"), .target = target, .optimize = optimize });
+    sonny3312_test_mod.link_libc = true;
+    sonny3312_test_mod.addImport("geode", root_mod);
+    sonny3312_test_mod.addImport("schema", schema_mod);
+    sonny3312_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3312_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3312_test_mod.addImport("logging", logging_mod);
+    sonny3312_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3312_tests = b.addTest(.{ .root_module = sonny3312_test_mod });
+    const run_sonny3312_tests = b.addRunArtifact(sonny3312_tests);
+    run_sonny3312_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3312_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3312_step = b.step("test-sonny3312-multi-graph-read", "Run SONNY-3312 regression (a read program spanning graphs reads each graph: the review's repro and its mirror, three graphs, a missing graph answers as alone; readers in both orders race writers and CREATE/DROP GRAPH churn with no deadlock; gRPC in process with unbounded and bounded caches, and QUIC; spawned server)");
+    sonny3312_step.dependOn(&run_sonny3312_tests.step);
+
+    // SONNY-3315 (round 16, I3; pre-existing): a parallel UNION's result
+    // frees through the caller's allocator, not the arms' LockedAllocator in
+    // tryParallelUnion's dead frame (the review's 60-level nested list hung).
+    // gRPC in process with a watchdog, and the executor under the testing
+    // allocator. Run it in Debug and ReleaseSafe.
+    const sonny3315_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3315_parallel_union_allocator.zig"), .target = target, .optimize = optimize });
+    sonny3315_test_mod.link_libc = true;
+    sonny3315_test_mod.addImport("geode", root_mod);
+    sonny3315_test_mod.addImport("schema", schema_mod);
+    sonny3315_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3315_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3315_test_mod.addImport("logging", logging_mod);
+    sonny3315_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3315_tests = b.addTest(.{ .root_module = sonny3315_test_mod });
+    const run_sonny3315_tests = b.addRunArtifact(sonny3315_tests);
+    shardDep(test_step, &run_sonny3315_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3315_step = b.step("test-sonny3315-parallel-union-allocator", "Run SONNY-3315 regression (a parallel UNION ALL of a nested list 8 to 100 levels deep answers over gRPC on an 8 MiB thread, no hang; parallel UNIONs of nodes and scalars free their results through the caller's allocator under the debug allocator with the stack reused; Debug and ReleaseSafe)");
+    sonny3315_step.dependOn(&run_sonny3315_tests.step);
+
+    // SONNY-3316 (round 16, I4, M2): a limit a parallel UNION arm runs into
+    // on its own thread fails the UNION; every resource limit (out of memory
+    // included) a caller swallowed fails the query; a HAVING chain against
+    // 32 projected chains of 4088 links is O(K*N). gRPC in process. Run it
+    // in Debug and ReleaseSafe.
+    const sonny3316_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3316_limit_relay.zig"), .target = target, .optimize = optimize });
+    sonny3316_test_mod.link_libc = true;
+    sonny3316_test_mod.addImport("geode", root_mod);
+    sonny3316_test_mod.addImport("schema", schema_mod);
+    sonny3316_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3316_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3316_test_mod.addImport("logging", logging_mod);
+    sonny3316_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3316_tests = b.addTest(.{ .root_module = sonny3316_test_mod });
+    const run_sonny3316_tests = b.addRunArtifact(sonny3316_tests);
+    shardDep(test_step, &run_sonny3316_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3316_step = b.step("test-sonny3316-limit-relay", "Run SONNY-3316 regression (a 54001 in a parallel UNION arm on its own thread fails the UNION in a WHERE, a cell, a CASE and an aggregate; a forced out of memory or budget error fails the query wherever a caller swallowed it; a HAVING chain against 32 projected chains of 4088 links runs under 2 s in ReleaseSafe; gRPC in process; Debug and ReleaseSafe)");
+    sonny3316_step.dependOn(&run_sonny3316_tests.step);
+
+    // SONNY-3251 (round 15, F6, F7): a limit the evaluator runs into (54001)
+    // fails the query in every context instead of answering as a row that
+    // did not match; index, slice, member and map-projection chains evaluate
+    // with a loop up to max_expr_links; gRPC in process on 8 MiB and 16 MiB
+    // threads. Run it in Debug and in ReleaseSafe.
+    const sonny3251_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3251_limit_errors.zig"), .target = target, .optimize = optimize });
+    sonny3251_test_mod.link_libc = true;
+    sonny3251_test_mod.addImport("geode", root_mod);
+    sonny3251_test_mod.addImport("schema", schema_mod);
+    sonny3251_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3251_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3251_test_mod.addImport("logging", logging_mod);
+    sonny3251_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3251_tests = b.addTest(.{ .root_module = sonny3251_test_mod });
+    const run_sonny3251_tests = b.addRunArtifact(sonny3251_tests);
+    shardDep(test_step, &run_sonny3251_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3251_step = b.step("test-sonny3251-limit-errors", "Run SONNY-3251 regression (the review's slice, index, member and mixed postfix chains evaluate correctly up to max_expr_links in WHERE, RETURN, WITH ... WHERE, EXISTS and HAVING; a forced 54001 fails the query in WHERE, WITH ... WHERE, EXISTS, COUNT, HAVING, aggregates, function arguments, projections and hops; gRPC in process on 8 MiB and 16 MiB threads; run in Debug and ReleaseSafe)");
+    sonny3251_step.dependOn(&run_sonny3251_tests.step);
+
+    // SONNY-3252 (round 15, F8, F9): the per-principal gRPC session cap
+    // never closes a session in an open transaction (refuses instead), keys
+    // anonymous clients per peer, loses nothing on a failed insert, and tears
+    // closed sessions down on the reaper.
+    const sonny3252_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3252_grpc_session_cap.zig"), .target = target, .optimize = optimize });
+    sonny3252_test_mod.link_libc = true;
+    sonny3252_test_mod.addImport("geode", root_mod);
+    sonny3252_test_mod.addImport("schema", schema_mod);
+    sonny3252_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3252_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3252_test_mod.addImport("logging", logging_mod);
+    sonny3252_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3252_tests = b.addTest(.{ .root_module = sonny3252_test_mod });
+    const run_sonny3252_tests = b.addRunArtifact(sonny3252_tests);
+    shardDep(test_step, &run_sonny3252_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3252_step = b.step("test-sonny3252-grpc-session-cap", "Run SONNY-3252 regression (at max_sessions_per_principal a session in an open transaction is never closed and the Handshake is refused; anonymous clients count per peer and federation peers per peer; the cap is per user name, not tenant; a Handshake failing at any allocation closes and leaks nothing; the cap alone starts the reaper, which tears closed sessions down)");
+    sonny3252_step.dependOn(&run_sonny3252_tests.step);
+
+    // SONNY-3313 (round 16, I1): the gRPC Handshake keys a client by its real
+    // peer address (getPeerIp was a placeholder answering "unknown"):
+    // formatPeerIp, and the real handler on real accepted sockets from two
+    // loopback addresses (and ::1): one peer at the cap does not refuse
+    // another.
+    const sonny3313_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3313_grpc_peer_ip.zig"), .target = target, .optimize = optimize });
+    sonny3313_test_mod.link_libc = true;
+    sonny3313_test_mod.addImport("geode", root_mod);
+    sonny3313_test_mod.addImport("schema", schema_mod);
+    sonny3313_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3313_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3313_test_mod.addImport("logging", logging_mod);
+    sonny3313_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3313_tests = b.addTest(.{ .root_module = sonny3313_test_mod });
+    const run_sonny3313_tests = b.addRunArtifact(sonny3313_tests);
+    shardDep(test_step, &run_sonny3313_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3313_step = b.step("test-sonny3313-grpc-peer-ip", "Run SONNY-3313 regression (formatPeerIp formats IPv4, IPv6 and IPv4-mapped peers; anonymous Handshakes through the real handler on real accepted sockets from 127.0.0.2, 127.0.0.3 and ::1 count per peer: at max_sessions_per_principal one peer is refused and another served)");
+    sonny3313_step.dependOn(&run_sonny3313_tests.step);
+
+    // SONNY-3234 (round 15, F10): a graph made under a name reserved since
+    // (a legacy CURRENT_GRAPH) can be dropped by that name; the names stay
+    // refused otherwise.
+    const sonny3234_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3234_legacy_reserved_graph.zig"), .target = target, .optimize = optimize });
+    sonny3234_test_mod.link_libc = true;
+    sonny3234_test_mod.addImport("geode", root_mod);
+    sonny3234_test_mod.addImport("schema", schema_mod);
+    sonny3234_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3234_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3234_test_mod.addImport("logging", logging_mod);
+    sonny3234_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3234_tests = b.addTest(.{ .root_module = sonny3234_test_mod });
+    const run_sonny3234_tests = b.addRunArtifact(sonny3234_tests);
+    shardDep(test_step, &run_sonny3234_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3234_step = b.step("test-sonny3234-legacy-reserved-graph", "Run SONNY-3234 regression (a legacy graph named CURRENT_GRAPH or HOME_GRAPH is listed by reservedNameGraphs and dropped by DROP GRAPH; CREATE, and DROP when no such graph exists, stay refused with 42939)");
+    sonny3234_step.dependOn(&run_sonny3234_tests.step);
+
+    // SONNY-3253 (round 15, F11, F13): retired IdMaps are bounded, clearNodes
+    // keeps the IdMaps' addresses for the walks that hold them, and a QUIC
+    // admission spawn failure rejects the connection while the server serves
+    // on (spawned server).
+    const sonny3253_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3253_round14_minors.zig"), .target = target, .optimize = optimize });
+    sonny3253_test_mod.link_libc = true;
+    sonny3253_test_mod.addImport("geode", root_mod);
+    sonny3253_test_mod.addImport("schema", schema_mod);
+    sonny3253_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3253_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3253_test_mod.addImport("logging", logging_mod);
+    sonny3253_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3253_tests = b.addTest(.{ .root_module = sonny3253_test_mod });
+    const run_sonny3253_tests = b.addRunArtifact(sonny3253_tests);
+    run_sonny3253_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3253_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3253_step = b.step("test-sonny3253-round14-minors", "Run SONNY-3253 regression (a dropped graph's IdMap is freed when no walk holds it, and when the last walk lets go; clearNodes keeps an IdMap a walk holds; a QUIC admission thread that cannot be spawned rejects its connection quickly and the server serves on; spawned server)");
+    sonny3253_step.dependOn(&run_sonny3253_tests.step);
+
+    // SONNY-3314 (round 16, I2, M1): a dropped graph's IdMap and name are
+    // freed only by their last holder (a point resolve, hydrate-on-miss, a
+    // first-touch hydration, a walk), and then: DROP GRAPH racing
+    // hydrate-on-miss, DROP during a first-touch hydration, overlapping walks
+    // during DROP churn; bounded retained memory. Loop it.
+    const sonny3314_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3314_idmap_holders.zig"), .target = target, .optimize = optimize });
+    sonny3314_test_mod.link_libc = true;
+    sonny3314_test_mod.addImport("geode", root_mod);
+    sonny3314_test_mod.addImport("schema", schema_mod);
+    sonny3314_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3314_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3314_test_mod.addImport("logging", logging_mod);
+    sonny3314_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3314_tests = b.addTest(.{ .root_module = sonny3314_test_mod });
+    const run_sonny3314_tests = b.addRunArtifact(sonny3314_tests);
+    shardDep(test_step, &run_sonny3314_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3314_step = b.step("test-sonny3314-idmap-holders", "Run SONNY-3314 regression (a dropped graph's IdMap and name are freed by their last holder: DROP GRAPH racing hydrate-on-miss and pinned resolves reads no torn name; DROP during a first-touch hydration; overlapping snapshot walks during DROP churn keep the retired maps bounded and none after; loop it)");
+    sonny3314_step.dependOn(&run_sonny3314_tests.step);
+
+    // SONNY-3317 (round 16, minors): createGraph / openOrCreateGraphWithUuid
+    // under an out of memory at each allocation (M4); the QUIC admission
+    // stack's 8 MiB floor (M5, spawned server); cache readers racing Raft
+    // snapshot installs (M7); a failed tenant Handshake gives its quota back
+    // (M8).
+    const sonny3317_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3317_round15_minors.zig"), .target = target, .optimize = optimize });
+    sonny3317_test_mod.link_libc = true;
+    sonny3317_test_mod.addImport("geode", root_mod);
+    sonny3317_test_mod.addImport("schema", schema_mod);
+    sonny3317_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3317_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3317_test_mod.addImport("logging", logging_mod);
+    sonny3317_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3317_tests = b.addTest(.{ .root_module = sonny3317_test_mod });
+    const run_sonny3317_tests = b.addRunArtifact(sonny3317_tests);
+    run_sonny3317_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3317_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3317_step = b.step("test-sonny3317-round15-minors", "Run SONNY-3317 regression (M4: createGraph and openOrCreateGraphWithUuid under an out of memory at each allocation free their name copy once; M5: GEODE_QUIC_ADMISSION_STACK_MB floors at 8 MiB, a server told 1 serves; M7: snapshot reads race Raft snapshot installs; M8: a Handshake with a tenant failing at each allocation gives the quota back; spawned server)");
+    sonny3317_step.dependOn(&run_sonny3317_tests.step);
+
+    // SONNY-3348 (round 17, the v0.8.23 blocker): a statement the limit
+    // relay fails writes nothing: a SET, a label, a REMOVE, a CREATE, a
+    // MATCH ... CREATE, a MERGE and a DETACH DELETE decided by a swallowed
+    // 54001, out of memory, read budget or IN type error; in autocommit and
+    // in an explicit transaction; a retry applies once. gRPC in process.
+    const sonny3348_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3348_limit_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny3348_test_mod.link_libc = true;
+    sonny3348_test_mod.addImport("geode", root_mod);
+    sonny3348_test_mod.addImport("schema", schema_mod);
+    sonny3348_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3348_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3348_test_mod.addImport("logging", logging_mod);
+    sonny3348_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3348_tests = b.addTest(.{ .root_module = sonny3348_test_mod });
+    const run_sonny3348_tests = b.addRunArtifact(sonny3348_tests);
+    shardDep(test_step, &run_sonny3348_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3348_step = b.step("test-sonny3348-limit-atomicity", "Run SONNY-3348 regression (a statement the limit relay fails writes nothing: SET, label, REMOVE, CREATE, MATCH ... CREATE, MERGE and DETACH DELETE decided by a swallowed 54001, out of memory, read budget or IN type error; autocommit and explicit transaction; a retry applies once; gRPC in process)");
+    sonny3348_step.dependOn(&run_sonny3348_tests.step);
+
+    // SONNY-3348 round 18 (and SONNY-3059): a failed statement leaves nothing
+    // (the statement undo record, every executor, the round 17 reviewer's
+    // probe matrix), a transaction body's rollback is not fenced off, a
+    // failed statement aborts its explicit transaction (25P02 until ROLLBACK
+    // or COMMIT), and ROLLBACK undoes every change. gRPC in process.
+    const sonny3348u_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3348_statement_undo.zig"), .target = target, .optimize = optimize });
+    sonny3348u_test_mod.link_libc = true;
+    sonny3348u_test_mod.addImport("geode", root_mod);
+    sonny3348u_test_mod.addImport("schema", schema_mod);
+    sonny3348u_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3348u_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3348u_test_mod.addImport("logging", logging_mod);
+    sonny3348u_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3348u_tests = b.addTest(.{ .root_module = sonny3348u_test_mod });
+    const run_sonny3348u_tests = b.addRunArtifact(sonny3348u_tests);
+    shardDep(test_step, &run_sonny3348u_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3348u_step = b.step("test-sonny3348-statement-undo", "Run SONNY-3348 round 18 regression (a failed statement leaves nothing on every executor: legacy MATCH, CREATE, MATCH ... CREATE, FOR, MERGE, DELETE, point-write fast path, PROFILE; a START TRANSACTION body's rollback is not fenced; a failed statement aborts its explicit transaction until ROLLBACK or COMMIT; SONNY-3059 ROLLBACK undoes SET, REMOVE, labels, DETACH DELETE; gRPC in process)");
+    sonny3348u_step.dependOn(&run_sonny3348u_tests.step);
+
+    // SONNY-3348 (round 19): a statement's writes on a cluster leader are one
+    // Raft entry or none (statement_proposals, the GBAT batch). In-process
+    // 3-node Raft cluster, gRPC in process.
+    const sonny3348c_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3348_cluster_batch.zig"), .target = target, .optimize = optimize });
+    sonny3348c_test_mod.link_libc = true;
+    sonny3348c_test_mod.addImport("geode", root_mod);
+    sonny3348c_test_mod.addImport("schema", schema_mod);
+    sonny3348c_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3348c_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3348c_test_mod.addImport("logging", logging_mod);
+    sonny3348c_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3348c_tests = b.addTest(.{ .root_module = sonny3348c_test_mod });
+    const run_sonny3348c_tests = b.addRunArtifact(sonny3348c_tests);
+    shardDep(test_step, &run_sonny3348c_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3348c_step = b.step("test-sonny3348-cluster-batch", "Run SONNY-3348 round 19 regression (on a cluster leader a statement's writes are ONE Raft entry or none: FOR ... CREATE and MATCH ... MERGE with a limit on the last row propose nothing, and succeed as one GBAT batch; MERGE matches the statement's own held create; a read a held write could change is refused; the batch codec is versioned; an in-process 3-node cluster through the real gRPC handler)");
+    sonny3348c_step.dependOn(&run_sonny3348c_tests.step);
+
+    // SONNY-3348 (round 19): the undo record's budget (I2) and the round 18
+    // review's minors m1-m7. gRPC in process.
+    const sonny3348b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3348_round19_undo.zig"), .target = target, .optimize = optimize });
+    sonny3348b_test_mod.link_libc = true;
+    sonny3348b_test_mod.addImport("geode", root_mod);
+    sonny3348b_test_mod.addImport("schema", schema_mod);
+    sonny3348b_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3348b_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3348b_test_mod.addImport("logging", logging_mod);
+    sonny3348b_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3348b_tests = b.addTest(.{ .root_module = sonny3348b_test_mod });
+    const run_sonny3348b_tests = b.addRunArtifact(sonny3348b_tests);
+    shardDep(test_step, &run_sonny3348b_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3348b_step = b.step("test-sonny3348-round19-undo", "Run SONNY-3348 round 19 regression (the statement undo record counts against the write budget: a DETACH DELETE of a graph whose images do not fit answers 53200 and leaves the graph; the record is leak-checked; an undo that cannot undo answers 40003; ROLLBACK continues past it and reports it; every failure path aborts the transaction; COMMIT after a failure answers 40000 on every transport; the delete image reads the checked adjacency; gRPC in process)");
+    sonny3348b_step.dependOn(&run_sonny3348b_tests.step);
+
+    // SONNY-3384: MATCH ... SET ... DETACH DELETE ... RETURN runs every clause,
+    // or is refused. gRPC in process.
+    const sonny3384_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3384_set_detach_delete.zig"), .target = target, .optimize = optimize });
+    sonny3384_test_mod.link_libc = true;
+    sonny3384_test_mod.addImport("geode", root_mod);
+    sonny3384_test_mod.addImport("schema", schema_mod);
+    sonny3384_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3384_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3384_test_mod.addImport("logging", logging_mod);
+    sonny3384_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3384_tests = b.addTest(.{ .root_module = sonny3384_test_mod });
+    const run_sonny3384_tests = b.addRunArtifact(sonny3384_tests);
+    shardDep(test_step, &run_sonny3384_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3384_step = b.step("test-sonny3384-set-detach-delete", "Run SONNY-3384 regression (MATCH ... SET ... DETACH DELETE x RETURN ... runs every clause or is refused: the DETACH DELETE deletes, a SET on a variable it does not delete or a RETURN that reads a SET variable is refused; gRPC in process)");
+    sonny3384_step.dependOn(&run_sonny3384_tests.step);
+
+    // SONNY-3349 (round 17): PROFILE opens the limit relay's scope (a
+    // swallowed 54001, out of memory, read budget or IN type error answers
+    // the error, and a PROFILE'd change writes nothing); an out of memory
+    // materializing a node fails the node scan's paging scan, filtered
+    // count and WHERE + LIMIT enumeration. gRPC and the scan in process.
+    const sonny3349_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3349_profile_relay.zig"), .target = target, .optimize = optimize });
+    sonny3349_test_mod.link_libc = true;
+    sonny3349_test_mod.addImport("geode", root_mod);
+    sonny3349_test_mod.addImport("schema", schema_mod);
+    sonny3349_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3349_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3349_test_mod.addImport("logging", logging_mod);
+    sonny3349_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3349_tests = b.addTest(.{ .root_module = sonny3349_test_mod });
+    const run_sonny3349_tests = b.addRunArtifact(sonny3349_tests);
+    shardDep(test_step, &run_sonny3349_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3349_step = b.step("test-sonny3349-profile-relay", "Run SONNY-3349 regression (PROFILE fails with a limit or IN type error a caller swallowed, and a PROFILE'd change writes nothing; an out of memory materializing a node fails the node scan's paging scan, filtered count and WHERE + LIMIT enumeration; gRPC and the scan in process)");
+    sonny3349_step.dependOn(&run_sonny3349_tests.step);
+
+    // SONNY-3350 (round 17): a Raft drop_graph takes the graph's write lock;
+    // the engine-direct IdMap readers pin the map across a DROP GRAPH; a
+    // read of several graphs checks each graph's access before it locks or
+    // copies any. In process.
+    const sonny3350_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3350_round16_minors.zig"), .target = target, .optimize = optimize });
+    sonny3350_test_mod.link_libc = true;
+    sonny3350_test_mod.addImport("geode", root_mod);
+    sonny3350_test_mod.addImport("schema", schema_mod);
+    sonny3350_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3350_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3350_test_mod.addImport("logging", logging_mod);
+    sonny3350_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3350_tests = b.addTest(.{ .root_module = sonny3350_test_mod });
+    const run_sonny3350_tests = b.addRunArtifact(sonny3350_tests);
+    shardDep(test_step, &run_sonny3350_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3350_step = b.step("test-sonny3350-round16-minors", "Run SONNY-3350 regression (a Raft drop_graph waits for the graph's lock holders; the engine-direct IdMap readers pin the map across a DROP GRAPH; a read of several graphs is refused a graph it may not bind before it locks or copies any; in process)");
+    sonny3350_step.dependOn(&run_sonny3350_tests.step);
+
+    // SONNY-3232 (round 15, item 10; pre-existing, diagnosed, left for S2):
+    // a QUIC request of 256 KiB is answered, one past the 16 MiB maximum
+    // message is not, the 1 MiB and 4 MiB outcomes are recorded, and the
+    // server serves on; spawned server. Run it in Debug and ReleaseSafe.
+    const sonny3232_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3232_quic_large_request.zig"), .target = target, .optimize = optimize });
+    sonny3232_test_mod.link_libc = true;
+    sonny3232_test_mod.addImport("geode", root_mod);
+    sonny3232_test_mod.addImport("schema", schema_mod);
+    sonny3232_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3232_test_mod.addImport("logging", logging_mod);
+    sonny3232_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3232_tests = b.addTest(.{ .root_module = sonny3232_test_mod });
+    const run_sonny3232_tests = b.addRunArtifact(sonny3232_tests);
+    run_sonny3232_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3232_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (a QUIC request of 256 KiB is answered, one past the 16 MiB maximum is not, 1 MiB and 4 MiB outcomes are recorded (SONNY-3232, left for S2); the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
+    sonny3232_step.dependOn(&run_sonny3232_tests.step);
+
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
     // run on the default graph, so the handlers lock `default` for them from
     // any session. Classifier, and the real gRPC handler (SONNY-1560 shim).
@@ -11222,6 +11949,37 @@ pub fn build(b: *std.Build) void {
     const sonny2798_step = b.step("test-sonny2798-offline-verify", "Run SONNY-2798 regression (every offline auth command refuses a store whose chain a planted record broke, signs nothing, and seals a verified change)");
     sonny2798_step.dependOn(&run_sonny2798_tests.step);
 
+    // SONNY-3035: offline auth commands verify against the chain root
+    // whenever one exists (zero records too), and write nothing, not even a
+    // .geode_hmac_key, before verification passes. In process and through
+    // the installed CLI.
+    const sonny3035_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3035_offline_chain_root.zig"), .target = target, .optimize = optimize });
+    sonny3035_test_mod.link_libc = true;
+    sonny3035_test_mod.addImport("geode", root_mod);
+    sonny3035_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny3035_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sonny3035_tests = b.addTest(.{ .root_module = sonny3035_test_mod });
+    const run_sonny3035_tests = b.addRunArtifact(sonny3035_tests);
+    run_sonny3035_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3035_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3035_step = b.step("test-sonny3035-offline-chain-root", "Run SONNY-3035 regression (a store emptied at rest keeps its chain root and does not verify, so auth init and user changes are refused; verification with no key available writes no .geode_hmac_key)");
+    sonny3035_step.dependOn(&run_sonny3035_tests.step);
+
+    // SONNY-3037: `geode revoke <permission> --from <principal>` revokes that
+    // principal's grant only, and fails, changing nothing, when it holds
+    // none. Through the installed CLI.
+    const sonny3037_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3037_revoke_principal.zig"), .target = target, .optimize = optimize });
+    sonny3037_test_mod.link_libc = true;
+    sonny3037_test_mod.addImport("geode", root_mod);
+    sonny3037_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny3037_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sonny3037_tests = b.addTest(.{ .root_module = sonny3037_test_mod });
+    const run_sonny3037_tests = b.addRunArtifact(sonny3037_tests);
+    run_sonny3037_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3037_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3037_step = b.step("test-sonny3037-revoke-principal", "Run SONNY-3037 regression (geode revoke --from revokes the named principal's grant and no other principal's; a principal with no such grant is refused and nothing changes)");
+    sonny3037_step.dependOn(&run_sonny3037_tests.step);
+
     // SONNY-2778: the generated admin password file (O_CREAT|O_EXCL|
     // O_NOFOLLOW, 0600, never in the cwd, never over a planted file or link),
     // and UserManager's policy strings (spawns the installed CLI and server).
@@ -11238,6 +11996,23 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2778_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2778_step = b.step("test-sonny2778-admin-password-file", "Run SONNY-2778 regression (the generated admin password file is created O_EXCL|O_NOFOLLOW 0600 under the data dir only, never over a planted file or link, by SecurityManager, the server and geode auth init; UserManager frees its policy strings)");
     sonny2778_step.dependOn(&run_sonny2778_tests.step);
+
+    // SONNY-3036: the RLS engine's policy map owns copies of its keys, and a
+    // graph and table left with no policy lose their entry, so deleting a
+    // policy (UserManager.deletePolicy frees its strings) leaves no key into
+    // freed memory. Leak-checked with the testing allocator.
+    const sonny3036_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3036_rls_policy_keys.zig"), .target = target, .optimize = optimize });
+    sonny3036_test_mod.link_libc = true;
+    sonny3036_test_mod.addImport("geode", root_mod);
+    sonny3036_test_mod.addImport("geode_auth", auth_mod);
+    sonny3036_test_mod.addImport("rls", rls_mod);
+    sonny3036_test_mod.addImport("user_manager", user_manager_mod);
+    sonny3036_test_mod.addImport("user_storage", user_storage_mod);
+    const sonny3036_tests = b.addTest(.{ .root_module = sonny3036_test_mod });
+    const run_sonny3036_tests = b.addRunArtifact(sonny3036_tests);
+    shardDep(test_step, &run_sonny3036_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3036_step = b.step("test-sonny3036-rls-policy-keys", "Run SONNY-3036 regression (deleting an RLS policy through UserManager leaves the engine's policy map no key into its freed strings; an emptied graph and table lose their entry; leak-checked)");
+    sonny3036_step.dependOn(&run_sonny3036_tests.step);
 
     const sonny2750_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2750_policy_record_kind.zig"), .target = target, .optimize = optimize });
     sonny2750_test_mod.link_libc = true;

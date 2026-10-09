@@ -51,7 +51,17 @@
 //! enumerates the variants and checks each walker descends into each one.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const ast = @import("../gql/ast.zig");
+// SONNY-3181: the thread-stack guard the parser and the evaluator take.
+const stack_guard = @import("../stack_guard.zig");
+
+/// SONNY-3181: how much of the thread's stack a level of `Rewriter.rewrite`
+/// must leave: it recurses once per level of the expression's nesting (three
+/// frames, and a copy of the expression, each). SONNY-3189: a chain, as long
+/// as its input up to the parser's `max_expr_links`, is followed with a loop
+/// (`rewriteChain`), so only nesting (128 levels) recurses.
+const rewrite_stack_reserve_bytes: usize = if (builtin.mode == .Debug) 1024 * 1024 else 256 * 1024;
 const return_and_sorting = @import("return_and_sorting.zig");
 
 pub const Error = error{
@@ -69,6 +79,9 @@ pub const Error = error{
     /// A name that is no column, input binding, comprehension variable or
     /// query parameter.
     UnknownHavingReference,
+    /// SONNY-3181: the HAVING nests deeper than the thread's stack holds
+    /// (54001).
+    ExpressionTooDeep,
     OutOfMemory,
 };
 
@@ -148,6 +161,14 @@ const Rewriter = struct {
     /// The variables of the list comprehensions around the expression being
     /// rewritten.
     locals: std.ArrayList([]const u8) = .empty,
+    /// SONNY-3189 (round 15): whether each projection item contains an
+    /// aggregate, computed once: `matchSlot` asks for every item at every
+    /// link of a chain, and an item may be a chain of 4096 links itself.
+    item_has_aggregate: ?[]const bool = null,
+    /// SONNY-3316 (round 16, M2): each projection item's and grouping key's
+    /// chain length (`spineLen`), computed once.
+    item_spine: ?[]const usize = null,
+    key_spine: ?[]const usize = null,
 
     const Mode = enum {
         /// A HAVING over groups: what it reads from a group becomes a slot.
@@ -170,6 +191,9 @@ const Rewriter = struct {
     };
 
     fn rewrite(self: *Rewriter, e: ast.Expr) Error!ast.Expr {
+        // SONNY-3181: refused (54001), not overflowed, past the thread's stack.
+        if (!stack_guard.hasRoom(rewrite_stack_reserve_bytes)) return error.ExpressionTooDeep;
+        if (isChainLink(e)) return self.rewriteChain(e);
         switch (e) {
             // Literals and parameters read nothing from a row.
             .String, .Int, .Decimal, .Bool, .Null, .Date, .DateTime, .Time, .LocalDateTime => return e,
@@ -211,6 +235,64 @@ const Rewriter = struct {
         return self.rebuild(e);
     }
 
+    /// SONNY-3181: a binary expression and the binary links under its left
+    /// operand, with a loop, not three frames per operator: `HAVING c + 0 +
+    /// ... + 0` is as deep as it is long. Down the left operands while a link
+    /// is not a projected expression or grouping key (`matchSlot`, as each
+    /// level of the recursion tried it first), the innermost operand
+    /// rewritten, then each link rebuilt on the way back up with its right
+    /// operand rewritten: the order the recursion rewrote them in.
+    ///
+    /// SONNY-3189 (round 15): every chain the parser builds, not only the
+    /// binary one: a unary operand, and the target of a member, index or
+    /// slice link or of a map projection (`isChainLink`), so `HAVING
+    /// k.a.a ... .a` and `HAVING l[0][0] ... [0]` are no deeper than `c + 0
+    /// ... + 0`. None of them is an aggregate call, so each link is tried as
+    /// a slot and rebuilt as `rebuild` did, its other children rewritten
+    /// after its spine (a binary link's right operand, an index, a slice's
+    /// bounds): the recursion's order, so the slots are numbered as before.
+    fn rewriteChain(self: *Rewriter, top: ast.Expr) Error!ast.Expr {
+        var links: std.ArrayList(*const ast.Expr) = .empty;
+        var at: *const ast.Expr = &top;
+        var acc: ast.Expr = undefined;
+        // SONNY-3316 (round 16, M2): the length of the chain under each link,
+        // known from the top's, so `matchSlot` compares a link only with the
+        // items and keys of that length.
+        const top_spine = spineLen(top);
+        while (true) {
+            if (!isChainLink(at.*)) {
+                acc = try self.rewrite(at.*);
+                break;
+            }
+            // A chain link is no aggregate call.
+            if (self.mode == .grouped) {
+                if (try self.matchSlotSpine(at.*, top_spine -| links.items.len)) |slot| {
+                    acc = slot;
+                    break;
+                }
+            }
+            try links.append(self.arena, at);
+            at = chainNext(at.*);
+        }
+        var i = links.items.len;
+        while (i > 0) {
+            i -= 1;
+            // Into a new value, not `acc` itself: the literal would be
+            // written into `acc` while `boxed` still reads it.
+            const inner = try self.boxed(acc);
+            acc = switch (links.items[i].*) {
+                .Binary => |b| .{ .Binary = .{ .op = b.op, .left = inner, .right = try self.child(b.right) } },
+                .Unary => |u| .{ .Unary = .{ .op = u.op, .expr = inner } },
+                .Member => |m| .{ .Member = .{ .target = inner, .field = m.field } },
+                .Index => |ix| .{ .Index = .{ .target = inner, .index = try self.child(ix.index) } },
+                .Slice => |sl| .{ .Slice = .{ .target = inner, .start = try self.optChild(sl.start), .end = try self.optChild(sl.end) } },
+                .MapProjection => |mp| .{ .MapProjection = .{ .source = inner, .fields = mp.fields } },
+                else => unreachable,
+            };
+        }
+        return acc;
+    }
+
     /// `e` with each child rewritten.
     fn rebuild(self: *Rewriter, e: ast.Expr) Error!ast.Expr {
         return switch (e) {
@@ -240,14 +322,10 @@ const Rewriter = struct {
             },
             .List => |xs| .{ .List = try self.children(xs) },
             .ArrayLit => |xs| .{ .ArrayLit = try self.children(xs) },
-            .Member => |m| .{ .Member = .{ .target = try self.child(m.target), .field = m.field } },
-            .MapProjection => |mp| .{ .MapProjection = .{ .source = try self.child(mp.source), .fields = mp.fields } },
-            .Index => |ix| .{ .Index = .{ .target = try self.child(ix.target), .index = try self.child(ix.index) } },
-            .Slice => |s| .{ .Slice = .{ .target = try self.child(s.target), .start = try self.optChild(s.start), .end = try self.optChild(s.end) } },
+            // Chain links: `rewriteChain`.
+            .Member, .MapProjection, .Index, .Slice, .Unary, .Binary => unreachable,
             // The callee names the function; it reads nothing from a row.
             .Call => |c| .{ .Call = .{ .callee = c.callee, .args = try self.children(c.args), .distinct = c.distinct } },
-            .Unary => |u| .{ .Unary = .{ .op = u.op, .expr = try self.child(u.expr) } },
-            .Binary => |b| .{ .Binary = .{ .op = b.op, .left = try self.child(b.left), .right = try self.child(b.right) } },
             .In => |x| .{ .In = .{ .value = try self.child(x.value), .set = try self.children(x.set) } },
             .NotIn => |x| .{ .NotIn = .{ .value = try self.child(x.value), .set = try self.children(x.set) } },
             .InListExpr => |x| .{ .InListExpr = .{ .value = try self.child(x.value), .list_expr = try self.child(x.list_expr) } },
@@ -328,17 +406,51 @@ const Rewriter = struct {
     /// only when the item is a plain aggregate call (matched in `aggregate`),
     /// so the HAVING computes the aggregates inside it instead.
     fn matchSlot(self: *Rewriter, e: ast.Expr) Error!?ast.Expr {
+        return self.matchSlotSpine(e, spineLen(e));
+    }
+
+    /// `matchSlot` for `e`, whose chain length (`spineLen`) is `e_spine`.
+    ///
+    /// SONNY-3316 (round 16, M2): `rewriteChain` asks at every link of a
+    /// chain, and `exprEql` walks two chains down together until they differ:
+    /// K items of N links, against a HAVING chain of N links that differs only
+    /// at its bottom, cost O(K*N^2) (K=32, N=4088 took 20 s). Equal
+    /// expressions have equal chain lengths, so only the items and keys of
+    /// `e`'s length are compared: O(K*N) for the chain.
+    fn matchSlotSpine(self: *Rewriter, e: ast.Expr, e_spine: usize) Error!?ast.Expr {
         // An expression over a comprehension's variable means the element,
         // whatever the projection names alike.
         if (self.locals.items.len != 0 and mentionsAnyName(e, self.locals.items)) return null;
-        for (self.scope.items, 0..) |item, i| {
-            if (containsAggregate(item.expr)) continue;
+        const has_aggregate = try self.itemsWithAggregates();
+        const item_spine = try self.itemSpines();
+        for (self.scope.items, has_aggregate, item_spine, 0..) |item, agg, len, i| {
+            if (agg or len != e_spine) continue;
             if (exprEql(item.expr, e)) return try self.slotIdent(.{ .column = i });
         }
-        for (self.scope.keys) |key| {
+        const key_spine = try self.keySpines();
+        for (self.scope.keys, key_spine) |key, len| {
+            if (len != e_spine) continue;
             if (exprEql(key, e)) return try self.slotIdent(.{ .key = key });
         }
         return null;
+    }
+
+    /// SONNY-3316: each projection item's chain length (computed once).
+    fn itemSpines(self: *Rewriter) Error![]const usize {
+        if (self.item_spine) |lens| return lens;
+        const lens = try self.arena.alloc(usize, self.scope.items.len);
+        for (self.scope.items, lens) |item, *len| len.* = spineLen(item.expr);
+        self.item_spine = lens;
+        return lens;
+    }
+
+    /// SONNY-3316: each grouping key's chain length (computed once).
+    fn keySpines(self: *Rewriter) Error![]const usize {
+        if (self.key_spine) |lens| return lens;
+        const lens = try self.arena.alloc(usize, self.scope.keys.len);
+        for (self.scope.keys, lens) |key, *len| len.* = spineLen(key);
+        self.key_spine = lens;
+        return lens;
     }
 
     /// What a name the HAVING uses stands for. A comprehension's variable is
@@ -373,6 +485,15 @@ const Rewriter = struct {
         return error.UnknownHavingReference;
     }
 
+    /// Whether each projection item contains an aggregate (computed once).
+    fn itemsWithAggregates(self: *Rewriter) Error![]const bool {
+        if (self.item_has_aggregate) |flags| return flags;
+        const flags = try self.arena.alloc(bool, self.scope.items.len);
+        for (self.scope.items, flags) |item, *f| f.* = containsAggregate(item.expr);
+        self.item_has_aggregate = flags;
+        return flags;
+    }
+
     fn slotIdent(self: *Rewriter, slot: Slot) Error!ast.Expr {
         for (self.slots.items, self.slot_names.items) |existing, name| {
             if (slotEql(existing, slot)) return ident(name);
@@ -396,6 +517,40 @@ fn ident(name: []const u8) ast.Expr {
     return .{ .Ident = .{ .orig = name, .cnf = name } };
 }
 
+/// SONNY-3189: a link of a chain the parser builds as long as its input,
+/// which `Rewriter.rewriteChain` follows with a loop.
+fn isChainLink(e: ast.Expr) bool {
+    return switch (e) {
+        .Binary, .Unary, .Member, .Index, .Slice, .MapProjection => true,
+        else => false,
+    };
+}
+
+/// SONNY-3316 (round 16, M2): the number of chain links down `e`'s left
+/// spine, as `exprEql` walks it: a property of a variable (`n.p`, written
+/// either way) is a leaf, as `exprEql` compares it. `exprEql(a, b)` implies
+/// `spineLen(a) == spineLen(b)`.
+fn spineLen(e: ast.Expr) usize {
+    var n: usize = 0;
+    var at: *const ast.Expr = &e;
+    while (isChainLink(at.*) and propertyOf(at.*) == null) : (n += 1) at = chainNext(at.*);
+    return n;
+}
+
+/// The next link down a chain: the left operand, the operand, the target or
+/// the source.
+fn chainNext(e: ast.Expr) *const ast.Expr {
+    return switch (e) {
+        .Binary => |b| b.left,
+        .Unary => |u| u.expr,
+        .Member => |m| m.target,
+        .Index => |ix| ix.target,
+        .Slice => |sl| sl.target,
+        .MapProjection => |mp| mp.source,
+        else => unreachable,
+    };
+}
+
 fn containsName(names: []const []const u8, name: []const u8) bool {
     for (names) |n| {
         if (std.mem.eql(u8, n, name)) return true;
@@ -403,46 +558,98 @@ fn containsName(names: []const []const u8, name: []const u8) bool {
     return false;
 }
 
+// CANARY: REQ=REQ-SONNY-3189-HAVING-WALKERS; FEATURE="GroupedHaving"; ASPECT=IterativeWalkers; STATUS=TESTED; TEST=tests/test_sonny3189_grouped_having_chains.zig; OWNER=engine; UPDATED=2026-09-28
+// SONNY-3189 (round 15, F1): `containsAggregate`, `mentionsAnyName` and
+// `exprEql` run from `Rewriter.aggregate` and `Rewriter.matchSlot`, outside
+// the rewrite's stack guard, on every link of a HAVING's operator chain and
+// on every projection item. They recursed once per link:
+// `GROUP BY v HAVING sum(n.v + 0 + ... + 0) >= 0` with about 2,700 links
+// overflowed an 8 MiB thread in ReleaseSafe (1,600 in Debug), and the
+// item-equality form a 16 MiB one. Each now follows the left spine of a chain
+// with a loop, as `Rewriter.rewriteChain` does: the left operand of a
+// binary link, the operand of a unary one, the target of a member, index or
+// slice link, the source of a map projection, and the tested value of IN, IS
+// NULL, STARTS WITH, ENDS WITH and CONTAINS (and, in `exprEql` only, the
+// callee of a call; the others read a call's arguments, not the name it
+// calls). Only the other children recurse (a binary link's right operand, an
+// index, list items, arguments, CASE branches, map values, a comprehension's
+// parts):
+// each of those is an expression nested in parentheses, brackets or braces,
+// which the parser bounds at 128 levels (`enterRecursion`), and whose own
+// chains these loops follow.
+
 /// Whether `e` contains an aggregate call, outside any pattern or subquery
 /// (whose own WHERE and map aggregate over their own rows).
-pub fn containsAggregate(e: ast.Expr) bool {
-    if (isAggregateCall(e)) return true;
-    return switch (e) {
-        .String, .Int, .Decimal, .Bool, .Null, .Date, .DateTime, .Time, .LocalDateTime => false,
-        .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .CharLit, .VarcharLit, .TextLit, .ByteaLit => false,
-        .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .EnumLit, .BitLit, .VarBitLit => false,
-        .Param, .Ident, .PropertyAccess, .HasLabel => false,
-        .PatternComp, .Exists, .ShortestPath, .PatternCount => false,
-        inline .InSubquery, .NotInSubquery => |x| containsAggregate(x.value.*),
-        .List, .ArrayLit => |xs| anyContainsAggregate(xs),
-        .Member => |m| containsAggregate(m.target.*),
-        .MapProjection => |mp| containsAggregate(mp.source.*),
-        .Index => |ix| containsAggregate(ix.target.*) or containsAggregate(ix.index.*),
-        .Slice => |s| containsAggregate(s.target.*) or optContainsAggregate(s.start) or optContainsAggregate(s.end),
-        .Call => |c| anyContainsAggregate(c.args),
-        .Unary => |u| containsAggregate(u.expr.*),
-        .Binary => |b| containsAggregate(b.left.*) or containsAggregate(b.right.*),
-        inline .In, .NotIn => |x| containsAggregate(x.value.*) or anyContainsAggregate(x.set),
-        inline .InListExpr, .NotInListExpr => |x| containsAggregate(x.value.*) or containsAggregate(x.list_expr.*),
-        inline .IsNull, .IsUnknown => |x| containsAggregate(x.target.*),
-        .StartsWith => |x| containsAggregate(x.value.*) or containsAggregate(x.prefix.*),
-        .EndsWith => |x| containsAggregate(x.value.*) or containsAggregate(x.suffix.*),
-        .Contains => |x| containsAggregate(x.value.*) or containsAggregate(x.needle.*),
-        .Case => |c| blk: {
-            if (optContainsAggregate(c.operand) or optContainsAggregate(c.else_expr)) break :blk true;
-            for (c.whens) |w| {
-                if (containsAggregate(w.when.*) or containsAggregate(w.then_expr.*)) break :blk true;
-            }
-            break :blk false;
-        },
-        .Map => |props| blk: {
-            for (props) |p| {
-                if (containsAggregate(p.value.*)) break :blk true;
-            }
-            break :blk false;
-        },
-        .ListComprehension => |lc| containsAggregate(lc.source.*) or optContainsAggregate(lc.filter) or optContainsAggregate(lc.map),
-    };
+pub fn containsAggregate(root: ast.Expr) bool {
+    var at: *const ast.Expr = &root;
+    while (true) {
+        const e = at.*;
+        if (isAggregateCall(e)) return true;
+        switch (e) {
+            .String, .Int, .Decimal, .Bool, .Null, .Date, .DateTime, .Time, .LocalDateTime => return false,
+            .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .CharLit, .VarcharLit, .TextLit, .ByteaLit => return false,
+            .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .EnumLit, .BitLit, .VarBitLit => return false,
+            .Param, .Ident, .PropertyAccess, .HasLabel => return false,
+            .PatternComp, .Exists, .ShortestPath, .PatternCount => return false,
+            inline .InSubquery, .NotInSubquery => |x| at = x.value,
+            .List, .ArrayLit => |xs| return anyContainsAggregate(xs),
+            .Member => |m| at = m.target,
+            .MapProjection => |mp| at = mp.source,
+            .Index => |ix| {
+                if (containsAggregate(ix.index.*)) return true;
+                at = ix.target;
+            },
+            .Slice => |s| {
+                if (optContainsAggregate(s.start) or optContainsAggregate(s.end)) return true;
+                at = s.target;
+            },
+            // The callee names the function (not an aggregate here).
+            .Call => |c| return anyContainsAggregate(c.args),
+            .Unary => |u| at = u.expr,
+            .Binary => |b| {
+                if (containsAggregate(b.right.*)) return true;
+                at = b.left;
+            },
+            inline .In, .NotIn => |x| {
+                if (anyContainsAggregate(x.set)) return true;
+                at = x.value;
+            },
+            inline .InListExpr, .NotInListExpr => |x| {
+                if (containsAggregate(x.list_expr.*)) return true;
+                at = x.value;
+            },
+            inline .IsNull, .IsUnknown => |x| at = x.target,
+            .StartsWith => |x| {
+                if (containsAggregate(x.prefix.*)) return true;
+                at = x.value;
+            },
+            .EndsWith => |x| {
+                if (containsAggregate(x.suffix.*)) return true;
+                at = x.value;
+            },
+            .Contains => |x| {
+                if (containsAggregate(x.needle.*)) return true;
+                at = x.value;
+            },
+            .Case => |c| {
+                if (optContainsAggregate(c.operand) or optContainsAggregate(c.else_expr)) return true;
+                for (c.whens) |w| {
+                    if (containsAggregate(w.when.*) or containsAggregate(w.then_expr.*)) return true;
+                }
+                return false;
+            },
+            .Map => |props| {
+                for (props) |p| {
+                    if (containsAggregate(p.value.*)) return true;
+                }
+                return false;
+            },
+            .ListComprehension => |lc| {
+                if (optContainsAggregate(lc.filter) or optContainsAggregate(lc.map)) return true;
+                at = lc.source;
+            },
+        }
+    }
 }
 
 fn anyContainsAggregate(es: []const *ast.Expr) bool {
@@ -458,47 +665,77 @@ fn optContainsAggregate(e: ?*const ast.Expr) bool {
 
 /// Whether `e` may read one of `names`. A pattern or subquery may name
 /// anything, so it counts as reading all of them.
-pub fn mentionsAnyName(e: ast.Expr, names: []const []const u8) bool {
-    return switch (e) {
-        .String, .Int, .Decimal, .Bool, .Null, .Date, .DateTime, .Time, .LocalDateTime => false,
-        .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .CharLit, .VarcharLit, .TextLit, .ByteaLit => false,
-        .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .EnumLit, .BitLit, .VarBitLit => false,
-        .Param => false,
-        .Ident => |id| containsName(names, id.orig),
-        .PropertyAccess => |pa| containsName(names, pa.object),
-        .HasLabel => |hl| containsName(names, hl.node),
-        .InSubquery, .NotInSubquery, .PatternComp, .Exists, .ShortestPath, .PatternCount => true,
-        .List, .ArrayLit => |xs| anyMentions(xs, names),
-        .Member => |m| mentionsAnyName(m.target.*, names),
-        .MapProjection => |mp| mentionsAnyName(mp.source.*, names),
-        .Index => |ix| mentionsAnyName(ix.target.*, names) or mentionsAnyName(ix.index.*, names),
-        .Slice => |s| mentionsAnyName(s.target.*, names) or optMentions(s.start, names) or optMentions(s.end, names),
-        .Call => |c| anyMentions(c.args, names),
-        .Unary => |u| mentionsAnyName(u.expr.*, names),
-        .Binary => |b| mentionsAnyName(b.left.*, names) or mentionsAnyName(b.right.*, names),
-        inline .In, .NotIn => |x| mentionsAnyName(x.value.*, names) or anyMentions(x.set, names),
-        inline .InListExpr, .NotInListExpr => |x| mentionsAnyName(x.value.*, names) or mentionsAnyName(x.list_expr.*, names),
-        inline .IsNull, .IsUnknown => |x| mentionsAnyName(x.target.*, names),
-        .StartsWith => |x| mentionsAnyName(x.value.*, names) or mentionsAnyName(x.prefix.*, names),
-        .EndsWith => |x| mentionsAnyName(x.value.*, names) or mentionsAnyName(x.suffix.*, names),
-        .Contains => |x| mentionsAnyName(x.value.*, names) or mentionsAnyName(x.needle.*, names),
-        .Case => |c| blk: {
-            if (optMentions(c.operand, names) or optMentions(c.else_expr, names)) break :blk true;
-            for (c.whens) |w| {
-                if (mentionsAnyName(w.when.*, names) or mentionsAnyName(w.then_expr.*, names)) break :blk true;
-            }
-            break :blk false;
-        },
-        .Map => |props| blk: {
-            for (props) |p| {
-                if (mentionsAnyName(p.value.*, names)) break :blk true;
-            }
-            break :blk false;
-        },
-        // A comprehension that rebinds a name still counts as reading it:
-        // that only ever skips a match.
-        .ListComprehension => |lc| mentionsAnyName(lc.source.*, names) or optMentions(lc.filter, names) or optMentions(lc.map, names),
-    };
+pub fn mentionsAnyName(root: ast.Expr, names: []const []const u8) bool {
+    var at: *const ast.Expr = &root;
+    while (true) {
+        switch (at.*) {
+            .String, .Int, .Decimal, .Bool, .Null, .Date, .DateTime, .Time, .LocalDateTime => return false,
+            .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .CharLit, .VarcharLit, .TextLit, .ByteaLit => return false,
+            .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .EnumLit, .BitLit, .VarBitLit => return false,
+            .Param => return false,
+            .Ident => |id| return containsName(names, id.orig),
+            .PropertyAccess => |pa| return containsName(names, pa.object),
+            .HasLabel => |hl| return containsName(names, hl.node),
+            .InSubquery, .NotInSubquery, .PatternComp, .Exists, .ShortestPath, .PatternCount => return true,
+            .List, .ArrayLit => |xs| return anyMentions(xs, names),
+            .Member => |m| at = m.target,
+            .MapProjection => |mp| at = mp.source,
+            .Index => |ix| {
+                if (mentionsAnyName(ix.index.*, names)) return true;
+                at = ix.target;
+            },
+            .Slice => |s| {
+                if (optMentions(s.start, names) or optMentions(s.end, names)) return true;
+                at = s.target;
+            },
+            .Call => |c| return anyMentions(c.args, names),
+            .Unary => |u| at = u.expr,
+            .Binary => |b| {
+                if (mentionsAnyName(b.right.*, names)) return true;
+                at = b.left;
+            },
+            inline .In, .NotIn => |x| {
+                if (anyMentions(x.set, names)) return true;
+                at = x.value;
+            },
+            inline .InListExpr, .NotInListExpr => |x| {
+                if (mentionsAnyName(x.list_expr.*, names)) return true;
+                at = x.value;
+            },
+            inline .IsNull, .IsUnknown => |x| at = x.target,
+            .StartsWith => |x| {
+                if (mentionsAnyName(x.prefix.*, names)) return true;
+                at = x.value;
+            },
+            .EndsWith => |x| {
+                if (mentionsAnyName(x.suffix.*, names)) return true;
+                at = x.value;
+            },
+            .Contains => |x| {
+                if (mentionsAnyName(x.needle.*, names)) return true;
+                at = x.value;
+            },
+            .Case => |c| {
+                if (optMentions(c.operand, names) or optMentions(c.else_expr, names)) return true;
+                for (c.whens) |w| {
+                    if (mentionsAnyName(w.when.*, names) or mentionsAnyName(w.then_expr.*, names)) return true;
+                }
+                return false;
+            },
+            .Map => |props| {
+                for (props) |p| {
+                    if (mentionsAnyName(p.value.*, names)) return true;
+                }
+                return false;
+            },
+            // A comprehension that rebinds a name still counts as reading it:
+            // that only ever skips a match.
+            .ListComprehension => |lc| {
+                if (optMentions(lc.filter, names) or optMentions(lc.map, names)) return true;
+                at = lc.source;
+            },
+        }
+    }
 }
 
 fn anyMentions(es: []const *ast.Expr, names: []const []const u8) bool {
@@ -515,69 +752,129 @@ fn optMentions(e: ?*const ast.Expr, names: []const []const u8) bool {
 /// Whether `a` and `b` are the same expression. `n.p` equals itself written
 /// as a property access or as a member of the identifier `n`; function names
 /// compare without case. A pattern or subquery equals nothing (this is used
-/// only to reuse a value, so a miss is safe).
-pub fn exprEql(a: ast.Expr, b: ast.Expr) bool {
-    if (propertyOf(a)) |pa| {
-        if (propertyOf(b)) |pb| return std.mem.eql(u8, pa.object, pb.object) and std.mem.eql(u8, pa.property, pb.property);
+/// only to reuse a value, so a miss is safe). The two left spines are walked
+/// together with a loop (see above).
+pub fn exprEql(a_root: ast.Expr, b_root: ast.Expr) bool {
+    var a: *const ast.Expr = &a_root;
+    var b: *const ast.Expr = &b_root;
+    while (true) {
+        if (propertyOf(a.*)) |pa| {
+            if (propertyOf(b.*)) |pb| return std.mem.eql(u8, pa.object, pb.object) and std.mem.eql(u8, pa.property, pb.property);
+        }
+        if (std.meta.activeTag(a.*) != std.meta.activeTag(b.*)) return false;
+        switch (a.*) {
+            .Ident => |x| return std.mem.eql(u8, x.orig, b.Ident.orig),
+            .String => |x| return std.mem.eql(u8, x, b.String),
+            .Int => |x| return x == b.Int,
+            .Decimal => |x| return x.coeff == b.Decimal.coeff and x.scale == b.Decimal.scale,
+            .Bool => |x| return x == b.Bool,
+            .Null => return true,
+            inline .Date, .DateTime, .Time, .LocalDateTime => |x, tag| return std.mem.eql(u8, x.raw, @field(b.*, @tagName(tag)).raw),
+            .SmallIntLit => |x| return x == b.SmallIntLit,
+            .BigIntLit => |x| return x == b.BigIntLit,
+            .RealLit => |x| return @as(u32, @bitCast(x)) == @as(u32, @bitCast(b.RealLit)),
+            .DoubleLit => |x| return @as(u64, @bitCast(x)) == @as(u64, @bitCast(b.DoubleLit)),
+            inline .CharLit, .VarcharLit => |x, tag| return x.n == @field(b.*, @tagName(tag)).n and std.mem.eql(u8, x.text, @field(b.*, @tagName(tag)).text),
+            inline .TextLit, .ByteaLit, .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .BitLit, .VarBitLit, .Param => |x, tag| return std.mem.eql(u8, x, @field(b.*, @tagName(tag))),
+            .EnumLit => |x| return std.mem.eql(u8, x.type_name, b.EnumLit.type_name) and std.mem.eql(u8, x.value, b.EnumLit.value),
+            inline .List, .ArrayLit => |xs, tag| return allEql(xs, @field(b.*, @tagName(tag))),
+            .Member => |x| {
+                if (!std.mem.eql(u8, x.field, b.Member.field)) return false;
+                a = x.target;
+                b = b.Member.target;
+            },
+            .PropertyAccess => |x| return std.mem.eql(u8, x.object, b.PropertyAccess.object) and std.mem.eql(u8, x.property, b.PropertyAccess.property),
+            .Index => |x| {
+                if (!exprEql(x.index.*, b.Index.index.*)) return false;
+                a = x.target;
+                b = b.Index.target;
+            },
+            .Slice => |x| {
+                if (!optEql(x.start, b.Slice.start) or !optEql(x.end, b.Slice.end)) return false;
+                a = x.target;
+                b = b.Slice.target;
+            },
+            .Call => |x| {
+                if (x.distinct != b.Call.distinct or !allEql(x.args, b.Call.args)) return false;
+                // A function name compares without case.
+                if (x.callee.* == .Ident and b.Call.callee.* == .Ident) return std.ascii.eqlIgnoreCase(x.callee.Ident.orig, b.Call.callee.Ident.orig);
+                a = x.callee;
+                b = b.Call.callee;
+            },
+            .Unary => |x| {
+                if (x.op != b.Unary.op) return false;
+                a = x.expr;
+                b = b.Unary.expr;
+            },
+            .Binary => |x| {
+                if (x.op != b.Binary.op or !exprEql(x.right.*, b.Binary.right.*)) return false;
+                a = x.left;
+                b = b.Binary.left;
+            },
+            inline .In, .NotIn => |x, tag| {
+                if (!allEql(x.set, @field(b.*, @tagName(tag)).set)) return false;
+                a = x.value;
+                b = @field(b.*, @tagName(tag)).value;
+            },
+            inline .InListExpr, .NotInListExpr => |x, tag| {
+                if (!exprEql(x.list_expr.*, @field(b.*, @tagName(tag)).list_expr.*)) return false;
+                a = x.value;
+                b = @field(b.*, @tagName(tag)).value;
+            },
+            inline .IsNull, .IsUnknown => |x, tag| {
+                if (x.negated != @field(b.*, @tagName(tag)).negated) return false;
+                a = x.target;
+                b = @field(b.*, @tagName(tag)).target;
+            },
+            .StartsWith => |x| {
+                if (!exprEql(x.prefix.*, b.StartsWith.prefix.*)) return false;
+                a = x.value;
+                b = b.StartsWith.value;
+            },
+            .EndsWith => |x| {
+                if (!exprEql(x.suffix.*, b.EndsWith.suffix.*)) return false;
+                a = x.value;
+                b = b.EndsWith.value;
+            },
+            .Contains => |x| {
+                if (!exprEql(x.needle.*, b.Contains.needle.*)) return false;
+                a = x.value;
+                b = b.Contains.value;
+            },
+            .Case => |x| {
+                const y = b.Case;
+                if (!optEql(x.operand, y.operand) or !optEql(x.else_expr, y.else_expr) or x.whens.len != y.whens.len) return false;
+                for (x.whens, y.whens) |wx, wy| {
+                    if (!exprEql(wx.when.*, wy.when.*) or !exprEql(wx.then_expr.*, wy.then_expr.*)) return false;
+                }
+                return true;
+            },
+            .Map => |x| {
+                if (x.len != b.Map.len) return false;
+                for (x, b.Map) |px, py| {
+                    if (!std.mem.eql(u8, px.key, py.key) or !exprEql(px.value.*, py.value.*)) return false;
+                }
+                return true;
+            },
+            .HasLabel => |x| return std.mem.eql(u8, x.node, b.HasLabel.node) and std.mem.eql(u8, x.label, b.HasLabel.label),
+            .MapProjection => |x| {
+                const y = b.MapProjection;
+                if (x.fields.len != y.fields.len) return false;
+                for (x.fields, y.fields) |fx, fy| {
+                    if (!std.mem.eql(u8, fx, fy)) return false;
+                }
+                a = x.source;
+                b = y.source;
+            },
+            .ListComprehension => |x| {
+                const y = b.ListComprehension;
+                if (!std.mem.eql(u8, x.variable, y.variable) or !optEql(x.filter, y.filter) or !optEql(x.map, y.map)) return false;
+                a = x.source;
+                b = y.source;
+            },
+            .InSubquery, .NotInSubquery, .PatternComp, .Exists, .ShortestPath, .PatternCount => return false,
+        }
     }
-    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .Ident => |x| std.mem.eql(u8, x.orig, b.Ident.orig),
-        .String => |x| std.mem.eql(u8, x, b.String),
-        .Int => |x| x == b.Int,
-        .Decimal => |x| x.coeff == b.Decimal.coeff and x.scale == b.Decimal.scale,
-        .Bool => |x| x == b.Bool,
-        .Null => true,
-        inline .Date, .DateTime, .Time, .LocalDateTime => |x, tag| std.mem.eql(u8, x.raw, @field(b, @tagName(tag)).raw),
-        .SmallIntLit => |x| x == b.SmallIntLit,
-        .BigIntLit => |x| x == b.BigIntLit,
-        .RealLit => |x| @as(u32, @bitCast(x)) == @as(u32, @bitCast(b.RealLit)),
-        .DoubleLit => |x| @as(u64, @bitCast(x)) == @as(u64, @bitCast(b.DoubleLit)),
-        inline .CharLit, .VarcharLit => |x, tag| x.n == @field(b, @tagName(tag)).n and std.mem.eql(u8, x.text, @field(b, @tagName(tag)).text),
-        inline .TextLit, .ByteaLit, .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .BitLit, .VarBitLit, .Param => |x, tag| std.mem.eql(u8, x, @field(b, @tagName(tag))),
-        .EnumLit => |x| std.mem.eql(u8, x.type_name, b.EnumLit.type_name) and std.mem.eql(u8, x.value, b.EnumLit.value),
-        inline .List, .ArrayLit => |xs, tag| allEql(xs, @field(b, @tagName(tag))),
-        .Member => |x| std.mem.eql(u8, x.field, b.Member.field) and exprEql(x.target.*, b.Member.target.*),
-        .PropertyAccess => |x| std.mem.eql(u8, x.object, b.PropertyAccess.object) and std.mem.eql(u8, x.property, b.PropertyAccess.property),
-        .Index => |x| exprEql(x.target.*, b.Index.target.*) and exprEql(x.index.*, b.Index.index.*),
-        .Slice => |x| exprEql(x.target.*, b.Slice.target.*) and optEql(x.start, b.Slice.start) and optEql(x.end, b.Slice.end),
-        .Call => |x| x.distinct == b.Call.distinct and calleeEql(x.callee.*, b.Call.callee.*) and allEql(x.args, b.Call.args),
-        .Unary => |x| x.op == b.Unary.op and exprEql(x.expr.*, b.Unary.expr.*),
-        .Binary => |x| x.op == b.Binary.op and exprEql(x.left.*, b.Binary.left.*) and exprEql(x.right.*, b.Binary.right.*),
-        inline .In, .NotIn => |x, tag| exprEql(x.value.*, @field(b, @tagName(tag)).value.*) and allEql(x.set, @field(b, @tagName(tag)).set),
-        inline .InListExpr, .NotInListExpr => |x, tag| exprEql(x.value.*, @field(b, @tagName(tag)).value.*) and exprEql(x.list_expr.*, @field(b, @tagName(tag)).list_expr.*),
-        inline .IsNull, .IsUnknown => |x, tag| x.negated == @field(b, @tagName(tag)).negated and exprEql(x.target.*, @field(b, @tagName(tag)).target.*),
-        .StartsWith => |x| exprEql(x.value.*, b.StartsWith.value.*) and exprEql(x.prefix.*, b.StartsWith.prefix.*),
-        .EndsWith => |x| exprEql(x.value.*, b.EndsWith.value.*) and exprEql(x.suffix.*, b.EndsWith.suffix.*),
-        .Contains => |x| exprEql(x.value.*, b.Contains.value.*) and exprEql(x.needle.*, b.Contains.needle.*),
-        .Case => |x| blk: {
-            const y = b.Case;
-            if (!optEql(x.operand, y.operand) or !optEql(x.else_expr, y.else_expr) or x.whens.len != y.whens.len) break :blk false;
-            for (x.whens, y.whens) |wx, wy| {
-                if (!exprEql(wx.when.*, wy.when.*) or !exprEql(wx.then_expr.*, wy.then_expr.*)) break :blk false;
-            }
-            break :blk true;
-        },
-        .Map => |x| blk: {
-            if (x.len != b.Map.len) break :blk false;
-            for (x, b.Map) |px, py| {
-                if (!std.mem.eql(u8, px.key, py.key) or !exprEql(px.value.*, py.value.*)) break :blk false;
-            }
-            break :blk true;
-        },
-        .HasLabel => |x| std.mem.eql(u8, x.node, b.HasLabel.node) and std.mem.eql(u8, x.label, b.HasLabel.label),
-        .MapProjection => |x| blk: {
-            const y = b.MapProjection;
-            if (x.fields.len != y.fields.len or !exprEql(x.source.*, y.source.*)) break :blk false;
-            for (x.fields, y.fields) |fx, fy| {
-                if (!std.mem.eql(u8, fx, fy)) break :blk false;
-            }
-            break :blk true;
-        },
-        .ListComprehension => |x| std.mem.eql(u8, x.variable, b.ListComprehension.variable) and exprEql(x.source.*, b.ListComprehension.source.*) and
-            optEql(x.filter, b.ListComprehension.filter) and optEql(x.map, b.ListComprehension.map),
-        .InSubquery, .NotInSubquery, .PatternComp, .Exists, .ShortestPath, .PatternCount => false,
-    };
 }
 
 const Property = struct { object: []const u8, property: []const u8 };
@@ -589,11 +886,6 @@ fn propertyOf(e: ast.Expr) ?Property {
         .Member => |m| if (m.target.* == .Ident) .{ .object = m.target.Ident.orig, .property = m.field } else null,
         else => null,
     };
-}
-
-fn calleeEql(a: ast.Expr, b: ast.Expr) bool {
-    if (a == .Ident and b == .Ident) return std.ascii.eqlIgnoreCase(a.Ident.orig, b.Ident.orig);
-    return exprEql(a, b);
 }
 
 fn allEql(xs: []const *ast.Expr, ys: []const *ast.Expr) bool {

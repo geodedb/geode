@@ -219,9 +219,17 @@ pub const ChainCheckError = error{ AuthChainTampered, HmacKeyUnavailable };
 /// planted record without a kind; this refuses the planted records that
 /// carry one. An empty store has nothing to verify. On success the key is
 /// kept, and `deinitAndSaveCliAuth` seals the command's change.
+///
+/// SONNY-3035: a store is empty only with no records AND no chain root. A
+/// store whose records were all removed at rest kept its chain root, skipped
+/// verification, and `geode auth init` bootstrapped a new admin into it and
+/// sealed it. And the key is looked up, never generated
+/// (`resolveExistingHmacKey`): a missing `.geode_hmac_key` was written with a
+/// new key, which then failed to verify, although the refusal said nothing
+/// was changed.
 pub fn verifyChainBeforeChange(allocator: std.mem.Allocator, mgr: *AuthGraphManager) ChainCheckError!void {
-    if (mgr.countAuthRecords() == 0) return;
-    const kr = AuthGraphManager.resolveHmacKey(allocator, g_resolved_data_dir) catch |err| {
+    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) return;
+    const kr = AuthGraphManager.resolveExistingHmacKey(allocator, g_resolved_data_dir) catch |err| {
         g_verify_failure = err;
         return error.HmacKeyUnavailable;
     };

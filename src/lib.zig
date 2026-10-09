@@ -132,6 +132,9 @@ pub const recommendations = @import("gql/recommendations.zig");
 
 // Re-export printer module so binaries can import through the geode module
 pub const printer = @import("gql/print.zig");
+// SONNY-3181, SONNY-3191: the thread-stack guard and the server's request
+// thread stack size.
+pub const stack_guard = @import("stack_guard.zig");
 // GAP-0875: exported for the residual-stubs regression suite (test-gap0875)
 pub const constraint_manager = @import("schema/constraint_manager.zig");
 pub const memory_mapped_io = @import("performance/memory_mapped_io.zig");
@@ -232,6 +235,8 @@ pub const enhanced_materialized_views = @import("query/enhanced_materialized_vie
 // CANARY: REQ=REQ-TXN-UNDO-003; FEATURE="TransactionUndoLog"; ASPECT=LibExport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 // Re-export transaction undo log for CLI rollback support
 pub const txn_undo_log = @import("txn_undo_log.zig");
+/// SONNY-3348 (round 18): the statement undo record.
+pub const statement_undo = @import("statement_undo.zig");
 
 // Machine Learning and Analytics
 pub const ml = struct {
@@ -358,6 +363,8 @@ pub const distributed = struct {
     pub const raft_snapshot_manager = @import("distributed/raft_snapshot_manager.zig");
     pub const raft_apply = @import("distributed/raft_apply.zig");
     pub const cluster_replication = @import("distributed/cluster_replication.zig");
+    /// SONNY-3348 (round 19): a statement's replicated writes, one entry.
+    pub const statement_proposals = @import("distributed/statement_proposals.zig");
     pub const txn_coordinator = @import("distributed/txn_coordinator.zig");
     pub const cluster = @import("distributed/cluster.zig");
     /// SEC-INFRA-03: shared cluster bearer-token validator (dual-token

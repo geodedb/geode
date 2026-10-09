@@ -312,7 +312,7 @@ fn addLabelRolledBack(id: u64, label: []const u8) !void {
     // installs it (SONNY-2823).
     var slot: gsa.SessionEngineTxn = .{};
     const scope = gsa.enterSessionEngineTxn(&slot);
-    defer gsa.leaveSessionEngineTxn(&slot, scope);
+    defer _ = gsa.leaveSessionEngineTxn(&slot, scope);
     var undo = geode.txn_undo_log.UndoLog.init(testing.allocator);
     defer undo.deinit();
     undo.begin();

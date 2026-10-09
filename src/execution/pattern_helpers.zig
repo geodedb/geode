@@ -235,7 +235,19 @@ pub fn dispatchToMultiChainHandler(q: ast.Query, all_simple_nodes: bool) Dispatc
 /// Check if an expression contains a variable reference (e.g., Member like d.name)
 /// This is used to detect property patterns like {department: d.name} that can't be
 /// evaluated until we have the environment from previous chains.
-pub fn containsVariableReference(expr: ast.Expr) bool {
+pub fn containsVariableReference(root: ast.Expr) bool {
+    // SONNY-3189: binary and unary chains with a loop, not one recursion per
+    // operator: `MATCH (n {v: 0 + 0 + ...})` is as deep as it is long.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |bin| {
+            if (containsVariableReference(bin.right.*)) return true;
+            at = bin.left;
+        },
+        .Unary => |un| at = un.expr,
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Member => true, // e.g., d.name - target.field
         .PropertyAccess => true, // e.g., n.name - object.property
@@ -335,7 +347,23 @@ pub fn getWithExpressionName(allocator: std.mem.Allocator, expr: ast.Expr) []con
 
 // E30/E31 Fix: Helper to check if an expression references a specific variable
 // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-VAR-001; FEATURE="OptionalMatchWhereVar"; ASPECT=VarReference; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-pub fn whereExprReferencesVar(expr: ast.Expr, var_name: []const u8) bool {
+pub fn whereExprReferencesVar(root: ast.Expr, var_name: []const u8) bool {
+    // SONNY-3189: binary, unary and member chains with a loop, not one
+    // recursion per link.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |binary| {
+            if (whereExprReferencesVar(binary.right.*, var_name)) return true;
+            at = binary.left;
+        },
+        .Unary => |unary| at = unary.expr,
+        .Member => |member| {
+            if (member.target.* == .Ident) break;
+            at = member.target;
+        },
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Ident => |ident| std.mem.eql(u8, ident.orig, var_name),
         .Member => |member| {

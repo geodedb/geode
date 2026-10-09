@@ -1040,8 +1040,37 @@ const ArmJob = struct {
     /// and was refused the hydrate-on-miss that would have mutated the shared
     /// bounded cache. The arm's rows are then INCOMPLETE and must be discarded.
     needs_hydration: bool = false,
+    /// SONNY-3316: this arm runs on a thread of its own (every arm but the
+    /// last, which runs on the calling thread).
+    spawned: bool = false,
 
     fn runnerEntry(self: *ArmJob) void {
+        // CANARY: REQ=REQ-SONNY-3316-LIMIT-RELAY; FEATURE="ParallelUnionArms"; ASPECT=ArmLimitRelay; STATUS=TESTED; TEST=tests/test_sonny3316_limit_relay.zig; OWNER=execution; UPDATED=2026-09-28
+        // SONNY-3316 (round 16, I4): the statement relay (a limit error a
+        // WHERE, a cell or an aggregate swallowed, recorded by `eval`, and an
+        // IN type error) is per thread, and a spawned arm runs outside the
+        // statement's scope: its record was lost, and the UNION answered as if
+        // the arm's rows did not match. A spawned arm opens its own scope and
+        // fails with what it recorded. The arm on the calling thread is
+        // inside the statement's scope already.
+        const owns_scope = eval.enterInPredicateScope();
+        if (self.spawned and test_force_limit_in_spawned_arms.load(.acquire)) eval.test_force_limit_error = error.ExpressionTooDeep;
+        defer if (self.spawned) {
+            eval.test_force_limit_error = null;
+        };
+        self.runArm();
+        const limit_error = eval.takeDeferredLimitError(owns_scope);
+        const in_type_error = eval.exitInPredicateScope(owns_scope);
+        if (self.needs_hydration or self.err != null) return;
+        const relayed: ?anyerror = if (limit_error) |e| e else if (in_type_error) error.InListRequiresList else null;
+        if (relayed) |e| {
+            if (self.result) |*res| res.deinit(self.allocator);
+            self.result = null;
+            self.err = e;
+        }
+    }
+
+    fn runArm(self: *ArmJob) void {
         // Each thread gets its own threadlocal active context via
         // `executeQueryNoLimitWithContext` -> `executeQueryWithContext`
         // which pushes/pops `g_active_context`. No shared mutable state.
@@ -1122,6 +1151,19 @@ const LockedAllocator = struct {
     };
 };
 
+/// SONNY-3316: a test seam. When set, every parallel UNION arm run on a
+/// thread of its own fails with 54001 where it evaluates the string literal
+/// `eval.test_force_limit_marker` (`eval.test_force_limit_error` on that
+/// thread). Never set outside tests.
+pub var test_force_limit_in_spawned_arms: std.atomic.Value(bool) = .init(false);
+
+/// SONNY-3315: make `res`, built by a parallel UNION arm through the
+/// frame-local `LockedAllocator`, free through `parent` from now on.
+fn reownArmResult(res: *ExecutionResult, parent: std.mem.Allocator) void {
+    if (res.owned_graph_entities) |tracker| tracker.allocator = parent;
+    if (res.variable_bindings) |bindings| bindings.allocator = parent;
+}
+
 /// GAP-0814 Task 5.1: fork-join all union arms, then merge.
 /// Returns `null` if parallelism was elected not to be used (e.g. thread
 /// spawn failure), signalling the caller to take the serial path. Any
@@ -1169,6 +1211,7 @@ fn tryParallelUnion(
     }
 
     while (spawned < spawn_count) {
+        jobs[spawned].spawned = true;
         threads[spawned] = std.Thread.spawn(.{}, ArmJob.runnerEntry, .{&jobs[spawned]}) catch {
             // Thread spawn failure: signal caller to fall back to serial.
             // We haven't mutated any result state yet beyond jobs[0..spawned]
@@ -1201,6 +1244,21 @@ fn tryParallelUnion(
     // (panic stack rooted at `set_operations.zig:786 in tryParallelUnion`).
     spawned = 0;
 
+    // CANARY: REQ=REQ-SONNY-3315-UNION-ARM-ALLOCATOR; FEATURE="ParallelUnionArms"; ASPECT=ReownArmResults; STATUS=TESTED; TEST=tests/test_sonny3315_parallel_union_allocator.zig; OWNER=execution; UPDATED=2026-09-28
+    // SONNY-3315 (round 16, I3; pre-existing): the arms allocated through
+    // `locked_allocator`, which lives in this frame, and a result keeps the
+    // allocator it was built with where it frees through it later: its
+    // node/edge tracker (`OwnedGraphEntities`) and its variable bindings.
+    // `ExecutionResult.deinit` ran after this function returned, and locked
+    // a mutex in a dead frame: a UNION ALL of a 60-level nested list hung in
+    // `LockedAllocator.freeFn`, and any other reuse of the stack corrupted it.
+    // Every thread has joined, so nothing allocates concurrently any more:
+    // hand the results the parent allocator the locked one wrapped (the
+    // memory is the parent's either way).
+    for (jobs) |*job| {
+        if (job.result) |*res| reownArmResult(res, allocator);
+    }
+
     // SONNY-1330: did ANY arm get refused a hydrate-on-miss? If so its rows are
     // incomplete (a non-resident node/edge simply did not exist as far as that
     // arm could tell), so NOTHING any arm produced may be merged. Drop every
@@ -1229,8 +1287,11 @@ fn tryParallelUnion(
     // Propagate the first error, if any.
     for (jobs) |*job| {
         if (job.err) |e| {
+            // SONNY-3316: each freed result is taken out: the errdefer
+            // above frees what is left, and freed these a second time.
             for (jobs) |*j2| {
                 if (j2.result) |*res| res.deinit(allocator);
+                j2.result = null;
             }
             return e;
         }

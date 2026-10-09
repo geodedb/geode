@@ -5,10 +5,70 @@
 // CANARY: REQ=REQ-GQL-008; FEATURE="ORDER/LIMIT/OFFSET Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2025-09-20
 
 const std = @import("std");
+const builtin = @import("builtin");
 const tok = @import("gql_lib").token;
 const ast = @import("ast.zig");
 const temporal = @import("../temporal.zig");
 const Lexer = @import("lexer.zig").Lexer;
+const stack_guard = @import("../stack_guard.zig");
+
+// CANARY: REQ=REQ-SONNY-3133-PARSER-NESTING; FEATURE="GQLParser"; ASPECT=StackGuard; STATUS=TESTED; TEST=tests/test_sonny3133_parser_nesting.zig; OWNER=parser; UPDATED=2026-09-27
+/// SONNY-3133: how much of the calling thread's stack must be left for the
+/// parser to go one nesting level deeper: the frames it can descend between
+/// two `enterRecursion` calls (a statement and the query it holds, about
+/// 0.7 MiB in a Debug build), with room to spare. The nesting limits below
+/// hold on the server's 16 MiB QUIC workers (GAP-0333); the gRPC connection
+/// threads have 8 MiB, and other callers (the CLI's main thread, a library
+/// user's) whatever they have. Measured, a limit cannot overflow any of them.
+///
+/// SONNY-3191 (N-6): a Debug build's frames are several times a release
+/// build's, and a WITH, CALL { } or FOR level costs about 0.2 MiB there: on
+/// the gRPC connection threads' 8 MiB a Debug build refuses (42000) such
+/// chains past about 25 levels, where a release build takes 128. No margin
+/// buys 64 Debug levels on 8 MiB (64 x 0.2 MiB is over 8 MiB), so the limit
+/// is Debug-only and documented, not tuned; the QUIC workers' 16 MiB hold
+/// about twice as many (tests/test_sonny3191_round13_items.zig pins it).
+const stack_reserve_bytes: usize = if (builtin.mode == .Debug) 2 * 1024 * 1024 else 512 * 1024;
+
+/// SONNY-3133: is more than `stack_reserve_bytes` of the calling thread's
+/// stack left below this frame? True when the bounds are unknown, or when
+/// this frame is not on the thread's stack (a fiber's). SONNY-3181: the
+/// bounds lookup is `stack_guard`'s, which the evaluator shares.
+fn stackHasRoom() bool {
+    return stack_guard.hasRoomBelow(@frameAddress(), stack_reserve_bytes);
+}
+
+/// SONNY-3133: statements nested in statements (EXPLAIN, EXPLAIN POLICY FOR,
+/// PROFILE, a START TRANSACTION body, a parenthesized statement, a VALUES
+/// continuation). A statement's frames are the parser's largest, about
+/// 0.3 MiB each in a Debug build: 64 of them overflowed a 16 MiB worker stack
+/// (review probe R12-X11).
+const max_statement_nesting: u16 = 8;
+
+// CANARY: REQ=REQ-SONNY-3181-EXPR-CHAIN-CAP; FEATURE="GQLParser"; ASPECT=ExprLinkCap; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=parser; UPDATED=2026-09-27
+/// SONNY-3181, SONNY-3189: the most operator links one expression may hold.
+/// A link is a binary operator (`OR`, `XOR`, `AND`, a comparison, `+`, `-`,
+/// `||`, `*`, `/`, `%`, `^`), a unary prefix (`NOT`, `-`, `+`) or a postfix
+/// link (member access, index, slice, call, map projection). The count runs
+/// over the whole outermost expression, the expressions nested in it
+/// included (list items, arguments, CASE branches, subqueries), and a WHERE
+/// that later MATCH clauses extend with AND counts as one expression.
+///
+/// The loops of the expression grammar build operator and postfix chains as
+/// long as the input: `1 + 1 + ... + 1` with N terms is an AST N deep, and
+/// the analysis, printing and evaluation that walk it recursed once per link
+/// (on the pre-auth request path, too). 100,000 terms, about 400 KB of
+/// query, overflowed an 8 MiB thread in ReleaseSafe, 1,000 terms a Debug
+/// one. With the cap an expression's AST is at most this many links plus
+/// the 128 levels of nesting `enterRecursion` allows, and the walkers that
+/// still recurse stay far inside a thread's stack.
+///
+/// An `IN [...]` list is not a chain: its items are expressions of their
+/// own, and literal items have no links. A WHERE of a few hundred OR terms
+/// (`n.v = 1 OR n.v = 2 ...`, three links a term) fits; a generated query
+/// that needs more splits its predicate into an IN list or parameters.
+/// Past the cap the parser answers 42000.
+pub const max_expr_links: u32 = 4096;
 
 pub const Parser = struct {
     lx: *Lexer,
@@ -44,20 +104,91 @@ pub const Parser = struct {
     pattern_comp_depth: u32 = 0,
     // Track expression recursion depth to prevent stack overflow from deeply nested input
     recursion_depth: u16 = 0,
+    // SONNY-3133: statements nested in the one being parsed.
+    statement_depth: u16 = 0,
+    // SONNY-3181: operator links in the outermost expression being parsed
+    // (`max_expr_links`), and how many expressions deep the parser is (0
+    // outside any expression; the count restarts at the next outermost one).
+    expr_links: u32 = 0,
+    expr_nesting: u32 = 0,
 
     // GAP-0333: The hard limit is 128 user-visible nested parens.  The internal
     // counter includes the outer parseOrExpr frame invoked by RETURN/MATCH, so
     // 128 parens drives recursion_depth to 129. Allow a small headroom so the
     // user-visible 128-deep input parses successfully; 129+ still errors out.
+    //
+    // CANARY: REQ=REQ-SONNY-3133-PARSER-NESTING; FEATURE="GQLParser"; ASPECT=DepthGuard; STATUS=TESTED; TEST=tests/test_sonny3133_parser_nesting.zig; OWNER=parser; UPDATED=2026-09-27
+    // SONNY-3133: every recursive entry of the parser passes here, not only
+    // the expression grammar's: the statements a PROFILE, EXPLAIN, START
+    // TRANSACTION body, parenthesized statement or VALUES holds
+    // (`parseNestedStatement`), the queries a WITH chain, CALL { } or FOR
+    // holds (`parseNestedQuery`), NOT, unary minus and plus, and
+    // shortestPath(). And a level is refused when the thread's stack is
+    // nearly used up (`stackHasRoom`), whatever the count: the frames differ
+    // several-fold between the recursions and between build modes.
     fn enterRecursion(self: *Parser) ParserError!void {
         self.recursion_depth += 1;
+        errdefer self.recursion_depth -= 1;
         if (self.recursion_depth > 129) {
-            return self.unexpected("expression nesting depth exceeds maximum (128)");
+            return self.unexpected("nesting depth exceeds maximum (128)");
+        }
+        if (!stackHasRoom()) {
+            return self.unexpected("nesting too deep for the parser's stack");
         }
     }
 
     fn leaveRecursion(self: *Parser) void {
         self.recursion_depth -= 1;
+    }
+
+    /// SONNY-3133: a statement nested in the one being parsed. At most
+    /// `max_statement_nesting` deep, and a level of `enterRecursion`.
+    fn parseNestedStatement(self: *Parser) ParserError!ast.Statement {
+        try self.enterRecursion();
+        defer self.leaveRecursion();
+        self.statement_depth += 1;
+        defer self.statement_depth -= 1;
+        if (self.statement_depth > max_statement_nesting) {
+            return self.unexpected("statement nesting depth exceeds maximum (8)");
+        }
+        return self.parseStatement();
+    }
+
+    /// SONNY-3133: a query nested in the one being parsed: the next part of a
+    /// WITH chain, a CALL { } subquery, a FOR body.
+    fn parseNestedQuery(self: *Parser) ParserError!ast.Query {
+        // SONNY-3244: the fixed query nesting limit answers first (54001),
+        // so the depth refused does not depend on the build's frame sizes;
+        // the stack guard below stays the backstop.
+        if (self.query_depth >= max_query_nesting) {
+            self.last_error = "queries may nest at most 10 deep (WITH chain parts, CALL { }, IN (subquery), FOR bodies, CTE bodies)";
+            return error.QueryNestingTooDeep;
+        }
+        try self.enterRecursion();
+        defer self.leaveRecursion();
+        return self.parseQuery();
+    }
+
+    /// SONNY-3181: an expression starts. The outermost one restarts the
+    /// link count (`max_expr_links`). Pair with `leaveExpr`.
+    fn enterExpr(self: *Parser) void {
+        if (self.expr_nesting == 0) self.expr_links = 0;
+        self.expr_nesting += 1;
+    }
+
+    fn leaveExpr(self: *Parser) void {
+        self.expr_nesting -= 1;
+    }
+
+    /// SONNY-3181: one more operator link in the expression being parsed
+    /// (`max_expr_links`). Links built outside an expression are not
+    /// counted here.
+    fn countExprLink(self: *Parser) ParserError!void {
+        if (self.expr_nesting == 0) return;
+        self.expr_links += 1;
+        if (self.expr_links > max_expr_links) {
+            return self.unexpected("expression too long: more than 4096 operators in one expression (max_expr_links)");
+        }
     }
 
     fn advance(self: *Parser) void {
@@ -351,8 +482,9 @@ pub const Parser = struct {
     /// 10 holds on the server's request threads (the QUIC workers' 16 MiB, the
     /// gRPC connection threads' 8 MiB) in both builds, with room for the
     /// handler's own frames below the parser. (A 1 MiB QUIC admission thread
-    /// overflows a Debug build on any nesting at all; the round-14 branch
-    /// gives those threads 16 MiB, SONNY-3191.)
+    /// overflowed a Debug build on any nesting at all; SONNY-3191 and
+    /// SONNY-3253 give those threads 16 MiB in Debug, 8 MiB in a release
+    /// build.)
     pub const max_query_nesting: u16 = 10;
 
     /// SONNY-3244: count one more statement, and check the parser's memory.
@@ -1353,7 +1485,8 @@ pub const Parser = struct {
                         // Parse statements until we hit }
                         var statements = try std.ArrayList(ast.Statement).initCapacity(self.arena.allocator(), 4);
                         while (self.cur.kind != .r_brace and self.cur.kind != .eof) {
-                            const stmt = try self.parseStatement();
+                            // SONNY-3133: a nested statement.
+                            const stmt = try self.parseNestedStatement();
                             try statements.append(self.arena.allocator(), stmt);
 
                             // SONNY-3166: statements are separated by ';'.
@@ -1623,7 +1756,8 @@ pub const Parser = struct {
                 // CANARY: REQ=REQ-GQL-085; FEATURE="ParenthesizedSetOperations"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-14
                 // Parse parenthesized statement: (MATCH ... UNION ...) INTERSECT ...
                 self.advance(); // consume (
-                const inner_stmt = try self.parseStatement();
+                // SONNY-3133: a nested statement.
+                const inner_stmt = try self.parseNestedStatement();
                 _ = try self.expect(.r_paren);
 
                 // Check if this is followed by set operations
@@ -1939,7 +2073,7 @@ pub const Parser = struct {
             // e.g., WITH 'Alice' AS n WITH n AS n2 RETURN n2
             if (self.cur.kind == .WITH) {
                 // Parse the continuation as a new query
-                const next_query = try self.parseQuery();
+                const next_query = try self.parseNestedQuery();
                 // Allocate on arena and store pointer
                 const next_ptr = try self.arena.allocator().create(ast.Query);
                 next_ptr.* = next_query;
@@ -2044,7 +2178,7 @@ pub const Parser = struct {
                 self.advance(); // consume {
 
                 // Parse the inner query
-                const inner_query = try self.parseQuery();
+                const inner_query = try self.parseNestedQuery();
 
                 // Consume closing brace
                 _ = try self.expect(.r_brace);
@@ -2292,6 +2426,11 @@ pub const Parser = struct {
                     try post_where_chains.append(self.arena.allocator(), chain);
                 }
                 // Parse additional MATCH clauses
+                // SONNY-3181: each WHERE below is ANDed onto the WHERE so far,
+                // one link per MATCH: the conditions count as one expression
+                // (`max_expr_links`), whatever the MATCH clauses parse.
+                self.enterExpr();
+                defer self.leaveExpr();
                 while (self.cur.kind == .MATCH) {
                     self.advance(); // consume MATCH
                     const additional_pattern = try self.parseGraphPattern();
@@ -2527,7 +2666,7 @@ pub const Parser = struct {
                     next_query_ptr = next_ptr;
                 } else {
                     // Parse the continuation as a new query
-                    const next_query = try self.parseQuery();
+                    const next_query = try self.parseNestedQuery();
                     // Allocate on arena and store pointer
                     const next_ptr = try self.arena.allocator().create(ast.Query);
                     next_ptr.* = next_query;
@@ -2606,6 +2745,16 @@ pub const Parser = struct {
         // CANARY: REQ=REQ-GQL-DELETE; FEATURE="DELETE in Query"; ASPECT=Parser; STATUS=TESTED; TEST=no-id-collision-on-delete-create; OWNER=parser; UPDATED=2025-10-14
         var delete_items: []ast.DeleteItem = &.{};
         var split_create = false;
+        // SONNY-3384: and DETACH DELETE. After a SET or a REMOVE the query
+        // left `DETACH` unparsed, and the rest (`DELETE x RETURN ...`) ran as
+        // a statement of its own: the SET was applied, the delete skipped,
+        // and the RETURN answered one row of 0.
+        var detach_delete = false;
+        if (self.cur.kind == .DETACH) {
+            self.advance();
+            detach_delete = true;
+            if (self.cur.kind != .DELETE) _ = try self.expect(.DELETE);
+        }
         if (self.cur.kind == .DELETE) {
             self.advance();
             delete_items = try self.parseDeleteItems();
@@ -2832,6 +2981,7 @@ pub const Parser = struct {
             .set_clause_ends = set_clause_ends,
             .remove_clauses = remove_clauses,
             .delete_items = delete_items,
+            .detach_delete = detach_delete,
             .group_by = group_by,
             .having = having_expr,
             .ret = return_clause,
@@ -2923,6 +3073,10 @@ pub const Parser = struct {
                         // This is a path function - create a special chain with shortestPath marker
                         self.advance(); // consume function name
                         _ = try self.expect(.l_paren);
+                        // SONNY-3133: `p = shortestPath(p = shortestPath(...))`
+                        // recursed with no limit.
+                        try self.enterRecursion();
+                        defer self.leaveRecursion();
                         const inner_pattern = try self.parseGraphPattern();
                         _ = try self.expect(.r_paren);
 
@@ -3221,6 +3375,10 @@ pub const Parser = struct {
     fn parseOrExpr(self: *Parser) ParserError!ast.Expr {
         try self.enterRecursion();
         defer self.leaveRecursion();
+        // SONNY-3181: every expression is parsed from here; the outermost
+        // one counts the links of all of them (`max_expr_links`).
+        self.enterExpr();
+        defer self.leaveExpr();
         var left = try self.parseAndExpr();
         while (self.cur.kind == .OR or self.cur.kind == .XOR) {
             const op_kind = self.cur.kind;
@@ -3317,6 +3475,8 @@ pub const Parser = struct {
                 if (looks_like_pattern) {
                     // Parse as NOT followed by a graph pattern
                     self.advance(); // consume NOT
+                    // SONNY-3181: a unary link.
+                    try self.countExprLink();
                     const pattern = try self.parseGraphPattern();
 
                     // Create EXISTS predicate
@@ -3333,6 +3493,11 @@ pub const Parser = struct {
             }
 
             self.advance();
+            // SONNY-3133: `NOT NOT ... x` recursed with no limit.
+            try self.enterRecursion();
+            defer self.leaveRecursion();
+            // SONNY-3181: and it is a link of the expression.
+            try self.countExprLink();
             const e = try self.parseNotExpr();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
@@ -3635,6 +3800,11 @@ pub const Parser = struct {
         }
         if (self.cur.kind == .minus) {
             self.advance();
+            // SONNY-3133: `- - ... 1` recursed with no limit.
+            try self.enterRecursion();
+            defer self.leaveRecursion();
+            // SONNY-3181: and it is a link of the expression.
+            try self.countExprLink();
             const e = try self.parseUnaryExpr();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
@@ -3643,6 +3813,10 @@ pub const Parser = struct {
         }
         if (self.cur.kind == .plus) {
             self.advance();
+            // SONNY-3133: as unary minus.
+            try self.enterRecursion();
+            defer self.leaveRecursion();
+            try self.countExprLink();
             const e = try self.parseUnaryExpr();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
@@ -3654,7 +3828,10 @@ pub const Parser = struct {
 
     fn parsePostfixExpr(self: *Parser) ParserError!ast.Expr {
         var base = try self.parsePrimaryExpr();
-        while (true) {
+        // SONNY-3181: every pass that goes on wrapped `base` in one more
+        // postfix link (member access, call, index, slice, map projection):
+        // `n.a.a.a ...` is as deep as it is long.
+        while (true) : (try self.countExprLink()) {
             if (self.cur.kind == .dot) {
                 self.advance();
                 const field = if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) blk: {
@@ -4376,6 +4553,8 @@ pub const Parser = struct {
     }
 
     fn makeBinary(self: *Parser, op: ast.BinOp, left: ast.Expr, right: ast.Expr) ParserError!ast.Expr {
+        // SONNY-3181: a binary link of the expression being parsed.
+        try self.countExprLink();
         const a = self.arena.allocator();
         const lp = try a.create(ast.Expr);
         const rp = try a.create(ast.Expr);
@@ -4394,52 +4573,57 @@ pub const Parser = struct {
     }
 
     fn isSimpleOrderPtr(self: *Parser, e: ast.Expr) bool {
-        return switch (e) {
-            .Ident => true,
-            .Member => |m| self.isSimpleOrderPtr(m.target.*),
-            else => false,
-        };
+        _ = self;
+        // SONNY-3133: a member chain (`a.b.c`) is built by a loop and is as
+        // deep as the input is long: it is followed in a loop.
+        var cur = e;
+        while (true) {
+            switch (cur) {
+                .Ident => return true,
+                .Member => |m| cur = m.target.*,
+                else => return false,
+            }
+        }
     }
 
     pub fn containsCall(self: *Parser, e: ast.Expr) bool {
-        return switch (e) {
-            .Call => true,
-            .Member => |m| self.containsCall(m.target.*),
-            .Unary => |u| self.containsCall(u.expr.*),
-            .Binary => |b| self.containsCall(b.left.*) or self.containsCall(b.right.*),
-            .List => |items| blk: {
-                for (items) |it| if (self.containsCall(it.*)) break :blk true;
-                break :blk false;
-            },
-            .In => |x| blk2: {
-                if (self.containsCall(x.value.*)) break :blk2 true;
-                for (x.set) |it| if (self.containsCall(it.*)) break :blk2 true;
-                break :blk2 false;
-            },
-            .IsNull => |z| self.containsCall(z.target.*),
-            else => false,
-        };
+        _ = self;
+        return containsCallStatic(e);
     }
 
     // Static variant for post-parse validation (no Parser instance state needed)
+    //
+    // SONNY-3133: an operator chain (`1 + 1 + ... + 1`) and a member chain
+    // (`a.b.c`) are built by loops and are as deep as the input is long. The
+    // left operand, the member target, the unary operand, the IS NULL target
+    // and the IN value are followed in a loop; only a right operand, list
+    // items and IN set items recurse, and their nesting is bounded by
+    // `enterRecursion`. It recursed on each, and the server parses ORDER BY
+    // keys with `forbid_orderby_calls` set: `ORDER BY 1 + 1 + ... + 1`
+    // recursed once per operator.
     pub fn containsCallStatic(e: ast.Expr) bool {
-        return switch (e) {
-            .Call => true,
-            .Member => |m| containsCallStatic(m.target.*),
-            .Unary => |u| containsCallStatic(u.expr.*),
-            .Binary => |b| containsCallStatic(b.left.*) or containsCallStatic(b.right.*),
-            .List => |items| blk: {
-                for (items) |it| if (containsCallStatic(it.*)) break :blk true;
-                break :blk false;
-            },
-            .In => |x| blk2: {
-                if (containsCallStatic(x.value.*)) break :blk2 true;
-                for (x.set) |it| if (containsCallStatic(it.*)) break :blk2 true;
-                break :blk2 false;
-            },
-            .IsNull => |z| containsCallStatic(z.target.*),
-            else => false,
-        };
+        var cur = e;
+        while (true) {
+            switch (cur) {
+                .Call => return true,
+                .Member => |m| cur = m.target.*,
+                .Unary => |u| cur = u.expr.*,
+                .IsNull => |z| cur = z.target.*,
+                .Binary => |b| {
+                    if (containsCallStatic(b.right.*)) return true;
+                    cur = b.left.*;
+                },
+                .List => |items| {
+                    for (items) |it| if (containsCallStatic(it.*)) return true;
+                    return false;
+                },
+                .In => |x| {
+                    for (x.set) |it| if (containsCallStatic(it.*)) return true;
+                    cur = x.value.*;
+                },
+                else => return false,
+            }
+        }
     }
 
     fn argIsPropertyLike(e: ast.Expr) bool {
@@ -6035,7 +6219,8 @@ pub const Parser = struct {
         var next_stmt: ?*ast.Statement = null;
         if (self.cur.kind != .eof and self.cur.kind != .semicolon) {
             const stmt_ptr = try self.arena.allocator().create(ast.Statement);
-            stmt_ptr.* = try self.parseStatement();
+            // SONNY-3133: a nested statement.
+            stmt_ptr.* = try self.parseNestedStatement();
             next_stmt = stmt_ptr;
         }
 
@@ -6115,7 +6300,7 @@ pub const Parser = struct {
                     .merge_statement = merge_ptr,
                 };
             } else {
-                body_ptr.* = try self.parseQuery();
+                body_ptr.* = try self.parseNestedQuery();
             }
 
             return .{ .For = .{
@@ -6223,13 +6408,16 @@ pub const Parser = struct {
             self.advance(); // consume FOR
             // Parse the inner statement.
             const inner_ptr = try self.arena.allocator().create(ast.Statement);
-            inner_ptr.* = try self.parseStatement();
+            // SONNY-3133: a nested statement.
+            inner_ptr.* = try self.parseNestedStatement();
             return .{ .ExplainPolicy = .{ .inner = inner_ptr } };
         }
 
         // Parse the query to explain
+        // SONNY-3133: a nested statement; `PROFILE EXPLAIN PROFILE ...` recursed
+        // with no limit, and overflowed a worker's stack at depth 50.
         const query_stmt_ptr = try self.arena.allocator().create(ast.Statement);
-        query_stmt_ptr.* = try self.parseStatement();
+        query_stmt_ptr.* = try self.parseNestedStatement();
 
         return .{ .Explain = .{ .query = query_stmt_ptr } };
     }
@@ -6238,8 +6426,9 @@ pub const Parser = struct {
         _ = try self.expect(.PROFILE);
 
         // Parse the query to profile
+        // SONNY-3133: a nested statement (see parseExplainStatement).
         const query_stmt_ptr = try self.arena.allocator().create(ast.Statement);
-        query_stmt_ptr.* = try self.parseStatement();
+        query_stmt_ptr.* = try self.parseNestedStatement();
 
         return .{ .Profile = .{ .query = query_stmt_ptr } };
     }
