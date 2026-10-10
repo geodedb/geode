@@ -10,7 +10,7 @@ extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 // 32-byte secret (hex) for the FLE master key -- test-only, never a real secret.
-const TEST_MASTER_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const TEST_MASTER_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; // gitleaks:allow — deterministic test key fixture
 
 test "FLE complete lifecycle" {
     var gpa = std.heap.DebugAllocator(.{}){};
