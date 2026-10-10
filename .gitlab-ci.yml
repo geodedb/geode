@@ -111,8 +111,13 @@ stages:
 #   - OVH Dedicated Runners      -> [company, dedicated, docker, linux, x86]
 # Jobs that need docker:dind override with `[company, lab, linux]`.
 default:
+  # 2026-10-10: `x86` matched no k8s runner after the Company Cluster Runner
+  # was recreated on 2026-09-27 with [company, k8s, linux, amd64, ubuntu,
+  # docker]; every default-tagged job sat in stuck_pending_no_matching_runners.
+  # The k8s pool's arch tag is `amd64` (the `x86` tag belongs to the OVH and
+  # AWS-spot dedicated pools, which jobs select with `dedicated`).
   tags:
-    [company, k8s, linux, x86]
+    [company, k8s, linux, amd64]
   interruptible: true  # Allow auto-cancel of redundant pipelines on push
   # GLOBAL transient-infra retry: the shared kubernetes runners intermittently
   # fail jobs at POD SETUP with `system failure: etcdserver: leader changed`
