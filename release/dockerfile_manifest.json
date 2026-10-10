@@ -88,7 +88,7 @@
         "The binary is copied from the GoReleaser build context.",
         "Requires NVIDIA Container Toolkit on the host system."
       ],
-      "base_image": "nvidia/cuda:13.3.1-runtime-ubuntu22.04",
+      "base_image": "nvidia/cuda:13.4.2-runtime-ubuntu22.04",
       "package_manager": "apt",
       "runtime_packages": [
         "ca-certificates",
