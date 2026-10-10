@@ -4,11 +4,13 @@
 //
 // These functions are re-exported via execution.zig -> lib.zig -> geode module.
 //
-// SONNY-1318: these helpers now take a trailing `tenant_filter` (the session's
-// resolved tenant scope). This harness is single-tenant and unscoped, so it
-// passes `null` — the all-tenants value, which is exactly the behaviour these
-// tests asserted before the parameter existed. The tenant-scoped behaviour is
-// covered by tests/test_sonny1318_procedure_tenancy.zig.
+// SONNY-1318 / SONNY-2685: these helpers take a trailing scope (the session's
+// graph, tenant scope and RLS policies). This harness has one graph, one
+// tenant and no policy, so it passes a scope on "default" with no tenant scope
+// (`unscoped`), which is exactly the behaviour these tests asserted before the
+// parameter existed. The tenant-scoped behaviour is covered by
+// tests/test_sonny1318_procedure_tenancy.zig, the RLS behaviour by
+// tests/test_sonny2685_algo_rls.zig.
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
@@ -32,6 +34,11 @@ fn addTestNode(store: *graph_store.GraphStore, id: u64, labels: []const []const 
 
 fn addTestEdge(store: *graph_store.GraphStore, edge_id: u64, from: u64, to: u64, label: []const u8) !void {
     try store.createEdgeWithIdNoSave(edge_id, from, to, label, "default");
+}
+
+/// The scope of a call on "default" with no tenant scope and no policy.
+fn unscoped() !*execution.AlgoScope {
+    return execution.AlgoScope.create(testing.allocator, "default", null);
 }
 
 // ===========================================================================
@@ -74,7 +81,9 @@ test "getNeighbors: isolated node returns empty slice" {
     defer store.deinit();
     try addTestNode(&store, 1, &.{"Person"});
 
-    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, null);
+    const scope = try unscoped();
+    defer scope.destroy();
+    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, scope);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 0), neighbors.len);
@@ -89,7 +98,9 @@ test "getNeighbors: outgoing edges" {
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
     try addTestEdge(&store, 101, 1, 3, "KNOWS");
 
-    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, null);
+    const scope = try unscoped();
+    defer scope.destroy();
+    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, scope);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 2), neighbors.len);
@@ -110,7 +121,9 @@ test "getNeighbors: incoming edges" {
     try addTestNode(&store, 2, &.{"B"});
     try addTestEdge(&store, 100, 2, 1, "FOLLOWS");
 
-    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, null);
+    const scope = try unscoped();
+    defer scope.destroy();
+    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, scope);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 1), neighbors.len);
@@ -125,7 +138,9 @@ test "getNeighbors: bidirectional edges" {
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
     try addTestEdge(&store, 101, 2, 1, "KNOWS");
 
-    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, null);
+    const scope = try unscoped();
+    defer scope.destroy();
+    const neighbors = try execution.getNeighbors(&store, 1, testing.allocator, scope);
     defer testing.allocator.free(neighbors);
 
     // outgoing to 2 AND incoming from 2
@@ -136,7 +151,9 @@ test "getNeighbors: nonexistent node returns empty" {
     var store = try createTestStore();
     defer store.deinit();
 
-    const neighbors = try execution.getNeighbors(&store, 999, testing.allocator, null);
+    const scope = try unscoped();
+    defer scope.destroy();
+    const neighbors = try execution.getNeighbors(&store, 999, testing.allocator, scope);
     defer testing.allocator.free(neighbors);
 
     try testing.expectEqual(@as(usize, 0), neighbors.len);
@@ -157,7 +174,9 @@ test "precomputeAdjacency: triangle graph" {
     try addTestEdge(&store, 12, 3, 1, "E");
 
     const node_list = [_]u64{ 1, 2, 3 };
-    var adj = try execution.precomputeAdjacency(&store, &node_list, testing.allocator, null);
+    const scope = try unscoped();
+    defer scope.destroy();
+    var adj = try execution.precomputeAdjacency(&store, &node_list, testing.allocator, scope);
     defer execution.deinitAdjacency(&adj, testing.allocator);
 
     // Each node has 1 outgoing + 1 incoming = 2 neighbors
@@ -171,7 +190,9 @@ test "precomputeAdjacency: empty node list" {
     defer store.deinit();
 
     const node_list = [_]u64{};
-    var adj = try execution.precomputeAdjacency(&store, &node_list, testing.allocator, null);
+    const scope = try unscoped();
+    defer scope.destroy();
+    var adj = try execution.precomputeAdjacency(&store, &node_list, testing.allocator, scope);
     defer execution.deinitAdjacency(&adj, testing.allocator);
 
     try testing.expectEqual(@as(u32, 0), adj.count());
@@ -207,7 +228,9 @@ test "buildNeighborSets: O(1) adjacency check" {
     try addTestEdge(&store, 11, 1, 3, "E");
 
     const node_list = [_]u64{ 1, 2, 3 };
-    var sets = try execution.buildNeighborSets(&node_list, &store, testing.allocator, null);
+    const scope = try unscoped();
+    defer scope.destroy();
+    var sets = try execution.buildNeighborSets(&node_list, &store, testing.allocator, scope);
     defer execution.deinitNeighborSets(&sets);
 
     const set1 = sets.get(1).?;
@@ -469,10 +492,11 @@ test "findBoundNode: not found returns null" {
 // ===========================================================================
 // graph_algorithms.zig — findEdgeBetween
 //
-// SONNY-1326: `findEdgeBetween` takes the resolved session tenant scope as a
-// REQUIRED parameter. This is a single-tenant unit harness with no session
-// context, so every call here passes `null` (all-tenants), which is exactly the
-// legacy behaviour these cases were written against.
+// SONNY-2687 (review): `findEdgeBetween` resolves the whole expression scope
+// from the active session (its graph, tenant rule and RLS policies). This unit
+// harness has no session, so every call reads the default graph with every
+// tenant and no RLS: the legacy behaviour these cases were written against.
+// The last case pins that an edge in another graph is not returned.
 // ===========================================================================
 
 test "findEdgeBetween: direct edge found" {
@@ -482,7 +506,7 @@ test "findEdgeBetween: direct edge found" {
     try addTestNode(&store, 2, &.{"B"});
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
 
-    const edge = execution.findEdgeBetween(&store, 1, 2, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge != null);
     try testing.expectEqual(@as(u64, 100), edge.?.id);
     try testing.expectEqual(@as(u64, 1), edge.?.from_id);
@@ -497,7 +521,7 @@ test "findEdgeBetween: reverse direction found" {
     try addTestEdge(&store, 100, 2, 1, "FOLLOWS");
 
     // Searching from 1 to 2: edge is 2->1, found via reverse check
-    const edge = execution.findEdgeBetween(&store, 1, 2, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge != null);
     try testing.expectEqual(@as(u64, 100), edge.?.id);
 }
@@ -508,7 +532,7 @@ test "findEdgeBetween: no edge returns null" {
     try addTestNode(&store, 1, &.{"A"});
     try addTestNode(&store, 2, &.{"B"});
 
-    const edge = execution.findEdgeBetween(&store, 1, 2, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge == null);
 }
 
@@ -520,7 +544,7 @@ test "findEdgeBetween: multiple edges returns first match" {
     try addTestEdge(&store, 100, 1, 2, "KNOWS");
     try addTestEdge(&store, 101, 1, 2, "LIKES");
 
-    const edge = execution.findEdgeBetween(&store, 1, 2, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge != null);
     try testing.expect(edge.?.id == 100 or edge.?.id == 101);
 }
@@ -529,6 +553,18 @@ test "findEdgeBetween: nonexistent nodes returns null" {
     var store = try createTestStore();
     defer store.deinit();
 
-    const edge = execution.findEdgeBetween(&store, 999, 888, null);
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 999, 888);
+    try testing.expect(edge == null);
+}
+
+test "findEdgeBetween: an edge in another graph is not returned" {
+    var store = try createTestStore();
+    defer store.deinit();
+    try store.createNodeWithIdNoSave(1, &.{"A"}, "other");
+    try store.createNodeWithIdNoSave(2, &.{"B"}, "other");
+    try store.createEdgeWithIdNoSave(100, 1, 2, "KNOWS", "other");
+
+    // The session's graph is the default one; the edge lives in "other".
+    const edge = try execution.findEdgeBetween(testing.allocator, &store, 1, 2);
     try testing.expect(edge == null);
 }

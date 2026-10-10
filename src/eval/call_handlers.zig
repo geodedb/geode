@@ -21,6 +21,9 @@ const datetime = @import("../types/datetime.zig");
 const bitstring = @import("../types/bitstring.zig");
 const public_suffix = @import("../types/public_suffix.zig");
 const type_promotion = @import("type_promotion.zig");
+const decimal128 = @import("../types/decimal128.zig");
+const narrowing = @import("../types/narrowing.zig");
+const decimal_text = @import("../types/decimal_text.zig");
 
 pub const Value = value_types.Value;
 pub const EvalError = value_types.EvalError;
@@ -32,11 +35,22 @@ const heapValueToEvalValue = type_promotion.heapValueToEvalValue;
 // Forward declaration for recursive evalExpr call
 const eval = @import("../eval.zig");
 
+// CANARY: REQ=REQ-SONNY-2739-CHECKED-NARROWING; FEATURE="NumericNarrowing"; ASPECT=MathAndCastFunctions; STATUS=TESTED; TEST=tests/test_sonny2739_float_narrowing.zig; OWNER=eval; UPDATED=2026-09-25
+/// A float as a scale-6 Decimal coefficient, rounded to the nearest, or
+/// DecimalOverflow (22003) for NaN, an infinity or a magnitude past the 38
+/// digits. SONNY-2739: degrees(), radians() and toFloat() narrowed it with a
+/// bare `@intFromFloat`, which aborts the server past i128 (`degrees(1e33)`,
+/// `toFloat('1e400')`) and turns NaN into a garbage coefficient.
+fn roundedScale6(f: f64) EvalError!i128 {
+    return decimal128.checkedScaledCoeff(@round(f * 1_000_000), 1.0);
+}
+
 fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
     return switch (err) {
         evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
         evaluator_functions.EvaluatorError.DivisionByZero => EvalError.DivisionByZero,
-        evaluator_functions.EvaluatorError.Overflow => EvalError.Unsupported,
+        // SONNY-2769: a heap function's overflow is 22003, not 0A000.
+        evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
         evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
         evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
         evaluator_functions.EvaluatorError.OutOfMemory => EvalError.OutOfMemory,
@@ -148,15 +162,18 @@ pub fn evalMathFunction(
         if (args.len != 1) return Value{ .Null = {} };
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
+            // SONNY-2769: abs(minInt) does not fit; the negation aborted
+            // the server.
             .Int => |i| {
-                const abs_val = if (i < 0) -i else i;
+                const abs_val = if (i < 0) std.math.negate(i) catch return EvalError.IntegerOverflow else i;
                 return Value{ .Int = abs_val };
             },
             .Decimal => |d| {
                 if (d.coeff >= 0) {
                     return arg;
                 }
-                return Value{ .Decimal = .{ .coeff = -d.coeff, .scale = d.scale, .orig_scale = d.orig_scale, .orig_repr = d.orig_repr } };
+                const coeff = std.math.negate(d.coeff) catch return EvalError.DecimalOverflow;
+                return Value{ .Decimal = .{ .coeff = coeff, .scale = d.scale, .orig_scale = d.orig_scale, .orig_repr = d.orig_repr } };
             },
             else => return Value{ .Null = {} },
         }
@@ -352,7 +369,7 @@ pub fn evalMathFunction(
         };
         const result = val * (180.0 / std.math.pi);
         if (std.math.isNan(result) or std.math.isInf(result)) return Value{ .Null = {} };
-        return Value{ .Decimal = .{ .coeff = @intFromFloat(@round(result * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+        return Value{ .Decimal = .{ .coeff = try roundedScale6(result), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
@@ -367,7 +384,7 @@ pub fn evalMathFunction(
         };
         const result = val * (std.math.pi / 180.0);
         if (std.math.isNan(result) or std.math.isInf(result)) return Value{ .Null = {} };
-        return Value{ .Decimal = .{ .coeff = @intFromFloat(@round(result * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+        return Value{ .Decimal = .{ .coeff = try roundedScale6(result), .scale = 6, .orig_scale = 6, .orig_repr = null } };
     }
 
     // log(x)
@@ -407,16 +424,10 @@ pub fn evalMathFunction(
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i },
-            .Decimal => |d| {
-                const divisor = std.math.pow(i128, 10, d.scale);
-                const whole = @divTrunc(d.coeff, divisor);
-                const frac = @rem(d.coeff, divisor);
-                if (frac > 0) {
-                    return Value{ .Int = @intCast(whole + 1) };
-                } else {
-                    return Value{ .Int = @intCast(whole) };
-                }
-            },
+            // SONNY-2739: exact, and IntegerOverflow (22003) past i64; the
+            // `@intCast` aborted the server (`ceil(9223372036854775807.5)`), and
+            // `std.math.pow(i128, 10, scale)` did past scale 38.
+            .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .ceil) },
             else => return Value{ .Null = {} },
         }
     }
@@ -427,16 +438,8 @@ pub fn evalMathFunction(
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i },
-            .Decimal => |d| {
-                const divisor = std.math.pow(i128, 10, d.scale);
-                const whole = @divTrunc(d.coeff, divisor);
-                const frac = @rem(d.coeff, divisor);
-                if (frac < 0) {
-                    return Value{ .Int = @intCast(whole - 1) };
-                } else {
-                    return Value{ .Int = @intCast(whole) };
-                }
-            },
+            // SONNY-2739: see ceil.
+            .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .floor) },
             else => return Value{ .Null = {} },
         }
     }
@@ -456,58 +459,40 @@ pub fn evalMathFunction(
             };
         }
 
+        // SONNY-2739: every step is exact and checked. `std.math.pow(i64 or
+        // i128, 10, n)` aborted the server past 10^18 or 10^38 (`round(5, -19)`,
+        // a scale-60 decimal), `@intCast` past i64 (`round(1e30)`) or u8
+        // (`round(1.5, -300)`). A result past i64 is IntegerOverflow (22003).
+        // The rounding itself is unchanged: an Int rounds half up
+        // (`(i + 10^k / 2) / 10^k`, truncated), a Decimal half away from zero.
         switch (arg) {
             .Int => |i| {
-                if (precision >= 0) {
-                    return Value{ .Int = i };
-                } else {
-                    const scale_factor = std.math.pow(i64, 10, @intCast(-precision));
-                    const rounded = @divTrunc(i + @divTrunc(scale_factor, 2), scale_factor) * scale_factor;
-                    return Value{ .Int = rounded };
-                }
+                if (precision >= 0) return Value{ .Int = i };
+                // |i| < 10^19, so past 10^38 the quotient is 0.
+                const k = @abs(precision);
+                const factor = if (k <= 38) narrowing.pow10(@intCast(k)).? else return Value{ .Int = 0 };
+                const rounded = @divTrunc(@as(i128, i) + @divTrunc(factor, 2), factor) * factor;
+                return Value{ .Int = std.math.cast(i64, rounded) orelse return EvalError.IntegerOverflow };
             },
             .Decimal => |d| {
                 if (precision == 0) {
-                    const divisor = std.math.pow(i128, 10, d.scale);
-                    const whole = @divTrunc(d.coeff, divisor);
-                    const frac = @rem(d.coeff, divisor);
-                    const half_divisor = @divTrunc(divisor, 2);
-                    if (frac >= half_divisor) {
-                        return Value{ .Int = @intCast(whole + 1) };
-                    } else if (frac <= -half_divisor) {
-                        return Value{ .Int = @intCast(whole - 1) };
-                    } else {
-                        return Value{ .Int = @intCast(whole) };
-                    }
+                    return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .half_away_from_zero) };
                 } else if (precision > 0) {
                     const target_scale: u8 = @intCast(@min(precision, 38));
                     if (target_scale >= d.scale) {
                         return Value{ .Decimal = d };
                     }
-                    const scale_diff = d.scale - target_scale;
-                    const divisor = std.math.pow(i128, 10, scale_diff);
-                    const half = @divTrunc(divisor, 2);
-                    const remainder = @rem(d.coeff, divisor);
-                    var new_coeff = @divTrunc(d.coeff, divisor);
-                    if (remainder >= half) {
-                        new_coeff += 1;
-                    } else if (remainder <= -half) {
-                        new_coeff -= 1;
-                    }
+                    const new_coeff = narrowing.decimalRound(d.coeff, d.scale - target_scale, .half_away_from_zero);
                     return Value{ .Decimal = .{ .coeff = new_coeff, .scale = target_scale } };
                 } else {
-                    const total_scale = d.scale + @as(u8, @intCast(-precision));
-                    const divisor = std.math.pow(i128, 10, total_scale);
-                    const half = @divTrunc(divisor, 2);
-                    const remainder = @rem(d.coeff, divisor);
-                    var new_coeff = @divTrunc(d.coeff, divisor);
-                    if (remainder >= half) {
-                        new_coeff += 1;
-                    } else if (remainder <= -half) {
-                        new_coeff -= 1;
-                    }
-                    const result = new_coeff * std.math.pow(i128, 10, @intCast(-precision));
-                    return Value{ .Int = @intCast(result) };
+                    // Round to a multiple of 10^k: past 10^38 in all, the
+                    // quotient is 0 (every |coeff| < 10^39).
+                    const k = @abs(precision);
+                    const total = @min(@as(u64, d.scale) + k, 64);
+                    const quotient = narrowing.decimalRound(d.coeff, @intCast(total), .half_away_from_zero);
+                    if (quotient == 0) return Value{ .Int = 0 };
+                    const result = std.math.mul(i128, quotient, narrowing.pow10(@intCast(k)).?) catch return EvalError.IntegerOverflow;
+                    return Value{ .Int = std.math.cast(i64, result) orelse return EvalError.IntegerOverflow };
                 }
             },
             else => return Value{ .Null = {} },
@@ -532,6 +517,9 @@ pub fn evalMathFunction(
         };
 
         if (divisor == 0) return Value{ .Null = {} };
+        // SONNY-2769: x mod -1 is 0; @rem(minInt, -1) was a hardware division
+        // trap (SIGFPE) that killed the server.
+        if (divisor == -1) return Value{ .Int = 0 };
         const result = @rem(dividend, divisor);
         return Value{ .Int = result };
     }
@@ -908,6 +896,43 @@ fn castParseError(e: anyerror) EvalError {
     };
 }
 
+/// `coeff` * 10^-`from` at scale `to`: scaled up exactly (DecimalOverflow
+/// past i128) or truncated down (SONNY-2769).
+fn rescaleDecimal(coeff: i128, from: u8, to: u8) EvalError!i128 {
+    if (to >= from) {
+        if (coeff == 0) return 0;
+        const factor = narrowing.pow10(to - from) orelse return EvalError.DecimalOverflow;
+        return std.math.mul(i128, coeff, factor) catch EvalError.DecimalOverflow;
+    }
+    return narrowing.decimalRound(coeff, from - to, .trunc);
+}
+
+/// A decimal string ("-12.345", "7") as coefficient and scale, exactly, with
+/// fraction digits past `max_scale` truncated, as the rescale to it would
+/// (SONNY-2769). GAP-0921: an invalid character is a cast error; a value past
+/// 38 digits is DecimalOverflow. The sign now applies to the fraction too:
+/// "-1.5" was -0.5 and "-0.5" was 0.5.
+fn parseDecimalText(s: []const u8, max_scale: u8) EvalError!struct { coeff: i128, scale: u8 } {
+    const dot = std.mem.indexOfScalar(u8, s, '.') orelse
+        return .{ .coeff = std.fmt.parseInt(i128, s, 10) catch |e| return castParseError(e), .scale = 0 };
+    const int_part = s[0..dot];
+    const frac_all = s[dot + 1 ..];
+    const int_val = std.fmt.parseInt(i128, int_part, 10) catch |e| return castParseError(e);
+    if (frac_all.len == 0) return EvalError.InvalidCast;
+    for (frac_all) |c| {
+        if (!std.ascii.isDigit(c)) return EvalError.InvalidCast;
+    }
+    const frac_part = frac_all[0..@min(frac_all.len, max_scale)];
+    const scale: u8 = @intCast(frac_part.len);
+    const frac_val = if (frac_part.len == 0) 0 else std.fmt.parseInt(i128, frac_part, 10) catch return EvalError.DecimalOverflow;
+    const whole = if (int_val == 0) 0 else std.math.mul(i128, int_val, narrowing.pow10(scale) orelse return EvalError.DecimalOverflow) catch
+        return EvalError.DecimalOverflow;
+    const negative = int_part.len > 0 and int_part[0] == '-';
+    const coeff = (if (negative) std.math.sub(i128, whole, frac_val) else std.math.add(i128, whole, frac_val)) catch
+        return EvalError.DecimalOverflow;
+    return .{ .coeff = coeff, .scale = scale };
+}
+
 // CANARY: REQ=REQ-EVAL-REFACTOR-004; FEATURE="EvalExpr Refactoring"; ASPECT=TypeCastFunctions; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
 // CANARY: REQ=REQ-GQL-CAST-001; FEATURE="TypeCasting"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-25
 /// Evaluate type cast functions: cast, toString, toInteger, toFloat, toBoolean
@@ -962,57 +987,15 @@ pub fn evalTypeCastFunction(
         if (std.mem.eql(u8, upper_type, "DECIMAL") or std.mem.eql(u8, upper_type, "NUMERIC")) {
             const target_scale: u8 = scale orelse 0;
             switch (value_arg) {
-                .Int => |i| {
-                    var coeff = @as(i128, i);
-                    var s: u8 = 0;
-                    while (s < target_scale) : (s += 1) {
-                        coeff *= 10;
-                    }
-                    return Value{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
-                },
-                .Decimal => |d| {
-                    var coeff = d.coeff;
-                    var current_scale = d.scale;
-                    while (current_scale < target_scale) : (current_scale += 1) {
-                        coeff *= 10;
-                    }
-                    while (current_scale > target_scale) : (current_scale -= 1) {
-                        coeff = @divTrunc(coeff, 10);
-                    }
-                    return Value{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
-                },
+                // SONNY-2769: every rescale is checked; `coeff *= 10` and the
+                // fraction's `mult *= 10` aborted the server past i128
+                // (`CAST(9223372036854775807 AS DECIMAL(38, 30))`, a string
+                // with 40 fraction digits), and `@intCast` past 255 of them.
+                .Int => |i| return Value{ .Decimal = .{ .coeff = try rescaleDecimal(i, 0, target_scale), .scale = target_scale } },
+                .Decimal => |d| return Value{ .Decimal = .{ .coeff = try rescaleDecimal(d.coeff, d.scale, target_scale), .scale = target_scale } },
                 .Str => |s| {
-                    if (std.mem.indexOf(u8, s, ".")) |dot_idx| {
-                        const int_part = s[0..dot_idx];
-                        const frac_part = s[dot_idx + 1 ..];
-                        // GAP-0921: invalid character / overflow are errors, not silent NULL.
-                        const int_val = std.fmt.parseInt(i128, int_part, 10) catch |e| return castParseError(e);
-                        const frac_val = std.fmt.parseInt(i128, frac_part, 10) catch |e| return castParseError(e);
-                        var coeff = int_val;
-                        const frac_len = frac_part.len;
-                        var mult: i128 = 1;
-                        var k: usize = 0;
-                        while (k < frac_len) : (k += 1) {
-                            mult *= 10;
-                        }
-                        coeff = coeff * mult + frac_val;
-                        var current_scale: u8 = @intCast(frac_len);
-                        while (current_scale < target_scale) : (current_scale += 1) {
-                            coeff *= 10;
-                        }
-                        while (current_scale > target_scale) : (current_scale -= 1) {
-                            coeff = @divTrunc(coeff, 10);
-                        }
-                        return Value{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
-                    } else {
-                        const int_val = std.fmt.parseInt(i128, s, 10) catch |e| return castParseError(e);
-                        var coeff = int_val;
-                        var sc: u8 = 0;
-                        while (sc < target_scale) : (sc += 1) {
-                            coeff *= 10;
-                        }
-                        return Value{ .Decimal = .{ .coeff = coeff, .scale = target_scale } };
-                    }
+                    const parsed = try parseDecimalText(s, target_scale);
+                    return Value{ .Decimal = .{ .coeff = try rescaleDecimal(parsed.coeff, parsed.scale, target_scale), .scale = target_scale } };
                 },
                 // GAP-0921: an unconvertible source value is a cast error.
                 else => return EvalError.InvalidCast,
@@ -1058,36 +1041,12 @@ pub fn evalTypeCastFunction(
                     return Value{ .Str = str };
                 },
                 .Decimal => |d| {
-                    if (d.scale == 0) {
-                        const str = try std.fmt.allocPrint(allocator, "{d}", .{d.coeff});
-                        return Value{ .Str = str };
-                    } else {
-                        var divisor: i128 = 1;
-                        var sc = d.scale;
-                        while (sc > 0) : (sc -= 1) {
-                            divisor *= 10;
-                        }
-                        const int_part = @divTrunc(d.coeff, divisor);
-                        const frac_part_signed = @rem(d.coeff, divisor);
-                        const frac_part = if (frac_part_signed < 0) -frac_part_signed else frac_part_signed;
-                        var frac_buf: [32]u8 = undefined;
-                        const frac_str = std.fmt.bufPrint(&frac_buf, "{d}", .{frac_part}) catch return Value{ .Null = {} };
-                        const frac_len = frac_str.len;
-                        const zeros_needed: usize = if (d.scale > frac_len) d.scale - @as(u8, @intCast(frac_len)) else 0;
-                        var int_buf: [32]u8 = undefined;
-                        const int_str = std.fmt.bufPrint(&int_buf, "{d}", .{int_part}) catch return Value{ .Null = {} };
-                        const total_len = int_str.len + 1 + zeros_needed + frac_len;
-                        const result = allocator.alloc(u8, total_len) catch return Value{ .Null = {} };
-                        var pos: usize = 0;
-                        @memcpy(result[pos..][0..int_str.len], int_str);
-                        pos += int_str.len;
-                        result[pos] = '.';
-                        pos += 1;
-                        @memset(result[pos..][0..zeros_needed], '0');
-                        pos += zeros_needed;
-                        @memcpy(result[pos..][0..frac_len], frac_str);
-                        return Value{ .Str = result };
-                    }
+                    // SONNY-2769: the text of a decimal at any scale. The
+                    // hand-rolled `divisor *= 10` overflowed past scale 38 and
+                    // aborted the server; past 32 digits the text came out
+                    // NULL, and a value between -1 and 0 lost its sign
+                    // (-0.5 was '0.5').
+                    return Value{ .Str = try decimal_text.alloc(allocator, d.coeff, d.scale) };
                 },
                 .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
                 .Str => |s| return Value{ .Str = s },
@@ -1106,7 +1065,9 @@ pub fn evalTypeCastFunction(
                 .Str => |s| {
                     // GAP-0921: non-numeric string is a cast error, not NULL.
                     const f = std.fmt.parseFloat(f64, s) catch return EvalError.InvalidCast;
-                    const coeff = @as(i128, @intFromFloat(f * 1000000));
+                    // SONNY-2739: 'nan', 'inf' or a magnitude past the
+                    // decimal is 22003; `@intFromFloat` aborted the server.
+                    const coeff = try decimal128.checkedScaledCoeff(f, 1_000_000.0);
                     return Value{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
                 },
                 else => return EvalError.InvalidCast,
@@ -1205,8 +1166,8 @@ pub fn evalTypeCastFunction(
             .Decimal => |d| return Value{ .Decimal = d },
             .Str => |s| {
                 const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
-                const scaled: i128 = @intFromFloat(@round(f * @as(f64, @floatFromInt(float_multiplier))));
-                return Value{ .Decimal = .{ .coeff = scaled, .scale = float_scale } };
+                // SONNY-2739: see CAST; `float_multiplier` is the same 10^6.
+                return Value{ .Decimal = .{ .coeff = try roundedScale6(f), .scale = float_scale } };
             },
             else => return Value{ .Null = {} },
         }
@@ -1218,7 +1179,8 @@ pub fn evalTypeCastFunction(
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i },
-            .Decimal => |d| return Value{ .Int = @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))) },
+            // SONNY-2739: exact and checked (see ceil); still the floor.
+            .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .floor) },
             .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
             .Str => |s| {
                 const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
@@ -1259,11 +1221,9 @@ pub fn evalTypeCastFunction(
                 const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return Value{ .Str = "" };
                 return Value{ .Str = try allocator.dupe(u8, str) };
             },
-            .Decimal => |d| {
-                const float_val = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                const str = std.fmt.allocPrint(allocator, "{d}", .{float_val}) catch return Value{ .Str = "" };
-                return Value{ .Str = str };
-            },
+            // SONNY-2769 (round 6): exact, as CAST does. Through f64 the text
+            // lost every digit past the 17th and the scale's trailing zeros.
+            .Decimal => |d| return Value{ .Str = try decimal_text.alloc(allocator, d.coeff, d.scale) },
             .Str => |s| return Value{ .Str = s },
             .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
             // CANARY: REQ=REQ-ENG-3916-TOSTRING-NULL-PROPAGATION; FEATURE="StringFunctions"; ASPECT=ToStringNullPropagation; STATUS=TESTED; TEST=tests/test_eng3916_edge_id_projection.zig; OWNER=eval; UPDATED=2026-08-25
@@ -1474,14 +1434,15 @@ pub fn evalCollectionFunction(
 
         if (step == 0) return Value{ .Null = {} };
 
-        const count: i64 = if (step > 0) blk: {
+        // SONNY-2769: in i128, so a span or a step at the edge of i64
+        // (`range(minInt, maxInt)`, a step of minInt) no longer overflows
+        // and aborts the server; every element still fits i64.
+        const count: i128 = if (step > 0) blk: {
             if (stop <= start) break :blk 0;
-            const diff = stop - start;
-            break :blk @divFloor(diff + step - 1, step);
+            break :blk @divFloor(@as(i128, stop) - start + step - 1, step);
         } else blk: {
             if (stop >= start) break :blk 0;
-            const diff = start - stop;
-            break :blk @divFloor(diff - step - 1, -step);
+            break :blk @divFloor(@as(i128, start) - stop - step - 1, -@as(i128, step));
         };
 
         if (count <= 0) {
@@ -1496,9 +1457,10 @@ pub fn evalCollectionFunction(
         const ucount = @as(usize, @intCast(count));
         var result = try allocator.alloc(Value, ucount);
 
-        var current = start;
+        // i128: the step past the last element may leave i64.
+        var current: i128 = start;
         for (0..ucount) |i| {
-            result[i] = Value{ .Int = current };
+            result[i] = Value{ .Int = @intCast(current) };
             current += step;
         }
 
@@ -1556,21 +1518,27 @@ pub fn evalAggregateFunction(
                     }
                 }
 
+                // SONNY-2739: a decimal is narrowed (to its floor, as
+                // before) exactly and checked, and the sum is checked: the
+                // `@intCast`, `std.math.pow` and `+=` aborted the server
+                // (`sum([9223372036854775808.0])`, `sum([9223372036854775807,
+                // 1])`). A sum past i64 is IntegerOverflow (22003).
                 if (has_decimal) {
                     var sum: i64 = 0;
                     for (list) |item| {
-                        switch (item) {
-                            .Int => |n| sum += n,
-                            .Decimal => |d| sum += @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))),
-                            else => {},
-                        }
+                        const addend = switch (item) {
+                            .Int => |v| v,
+                            .Decimal => |d| try narrowing.decimalToInt(d.coeff, d.scale, .floor),
+                            else => continue,
+                        };
+                        sum = std.math.add(i64, sum, addend) catch return EvalError.IntegerOverflow;
                     }
                     return Value{ .Int = sum };
                 } else {
                     var sum: i64 = 0;
                     for (list) |item| {
                         switch (item) {
-                            .Int => |n| sum += n,
+                            .Int => |n| sum = std.math.add(i64, sum, n) catch return EvalError.IntegerOverflow,
                             else => {},
                         }
                     }
@@ -1592,18 +1560,15 @@ pub fn evalAggregateFunction(
 
                 var sum: i64 = 0;
                 var count: usize = 0;
+                // SONNY-2739: see sum(list).
                 for (list) |item| {
-                    switch (item) {
-                        .Int => |n| {
-                            sum += n;
-                            count += 1;
-                        },
-                        .Decimal => |d| {
-                            sum += @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale)));
-                            count += 1;
-                        },
-                        else => {},
-                    }
+                    const addend = switch (item) {
+                        .Int => |v| v,
+                        .Decimal => |d| try narrowing.decimalToInt(d.coeff, d.scale, .floor),
+                        else => continue,
+                    };
+                    sum = std.math.add(i64, sum, addend) catch return EvalError.IntegerOverflow;
+                    count += 1;
                 }
 
                 if (count == 0) return Value{ .Null = {} };
@@ -1763,7 +1728,8 @@ pub fn evalAdvancedTypeFunction(
         const scale = if (args.len == 2) blk: {
             const scale_arg = try eval.evalExpr(allocator, args[1].*, env);
             const scale_value = intLike(scale_arg) orelse return Value{ .Null = {} };
-            break :blk @as(i16, @intCast(scale_value));
+            // SONNY-2769: the cast aborted the server past i16.
+            break :blk std.math.cast(i16, scale_value) orelse return EvalError.DecimalOverflow;
         } else null;
 
         const result = evaluator_functions.Decimal(allocator, value_text, scale) catch |err| return mapEvaluatorError(err);
@@ -1776,7 +1742,9 @@ pub fn evalAdvancedTypeFunction(
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
         const text = textLike(value_arg) orelse return Value{ .Null = {} };
         const n = intLike(len_arg) orelse return Value{ .Null = {} };
-        const result = evaluator_functions.Char(allocator, text, @intCast(n)) catch |err| return mapEvaluatorError(err);
+        // SONNY-2769: a length outside 0..65535 aborted the server in the cast.
+        const len = std.math.cast(u16, n) orelse return EvalError.InvalidArgs;
+        const result = evaluator_functions.Char(allocator, text, len) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
@@ -1786,7 +1754,9 @@ pub fn evalAdvancedTypeFunction(
         const len_arg = try eval.evalExpr(allocator, args[1].*, env);
         const text = textLike(value_arg) orelse return Value{ .Null = {} };
         const n = intLike(len_arg) orelse return Value{ .Null = {} };
-        const result = evaluator_functions.Varchar(allocator, text, @intCast(n)) catch |err| return mapEvaluatorError(err);
+        // SONNY-2769: see char().
+        const len = std.math.cast(u16, n) orelse return EvalError.InvalidArgs;
+        const result = evaluator_functions.Varchar(allocator, text, len) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 

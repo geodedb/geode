@@ -1,5 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
+// SONNY-2394: the signal-safe, environment-carrying Io openssl is spawned with
+// (shared with transport/quic.zig).
+const spawn_io = @import("spawn_io");
 
 // Simple self-signed certificate generator for development/testing
 // In production, use proper CA-signed certificates
@@ -11,11 +14,16 @@ pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8
 
     // Zig 0.16 note: the stdlib's `global_single_threaded` Threaded instance
     // ships with `.allocator = .failing`, so any `std.process.run` through it
-    // OOMs immediately inside `spawnPosix`'s internal arena. Build a local
-    // Threaded backed by `smp_allocator` (allowed by the governance-
-    // no-page-allocator gate; `page_allocator` is forbidden in src/).
+    // OOMs immediately inside `spawnPosix`'s internal arena. SONNY-2394: nor
+    // `std.Io.Threaded.init(gpa, .{})`, which this used to be: it swaps
+    // process-wide SIGIO/SIGPIPE handlers, and its environment is EMPTY, so
+    // openssl was found only on std's fixed default PATH and never saw
+    // OPENSSL_CONF. `spawn_io` has a real allocator, installs no handler, and
+    // carries the process environment. `smp_allocator` also backs the argv
+    // strings and captured output below (the governance gate forbids
+    // `page_allocator` in src/).
     const spawn_gpa = std.heap.smp_allocator;
-    var local_threaded = std.Io.Threaded.init(spawn_gpa, .{});
+    var local_threaded = spawn_io.threaded();
     defer local_threaded.deinit();
     const io = local_threaded.io();
 

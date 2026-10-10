@@ -1,7 +1,7 @@
 .{
     // Geode Graph Database - ISO/IEC 39075:2024 GQL Implementation
     .name = .geode,
-    .version = "0.8.22",
+    .version = "0.8.23",
     .fingerprint = 0x9e0aec1832a82609,
     .minimum_zig_version = "0.16.0",
 
@@ -539,8 +539,8 @@
 
         // Audit - Event modeling, filtering, CEF formatting, syslog/file sinks
         .audit = .{
-            .url = "git+https://gitlab.com/devnw/zig/audit.git?ref=v0.1.19#50a10998b8976a31e8053359b26aac4a35b8c257",
-            .hash = "audit-0.1.19-J9TtCMkxBQDG-0pryIpmhZbLmg0MBfXf6fCzMLiwJ7yf",
+            .url = "git+https://gitlab.com/devnw/zig/audit.git?ref=v0.1.20#49859f973a10a421543b00241ff99938f5a2a65b",
+            .hash = "audit-0.1.20-J9TtCHU2BQBxp1F5aZ_uZRMyv3NfsmFRRFhmOKB3fjhB",
         },
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics

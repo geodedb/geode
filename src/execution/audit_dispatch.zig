@@ -192,9 +192,12 @@ fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
         }
 
         // Parse third argument as max file size
+        // SONNY-2769: a size outside usize, or one whose MiB count passes
+        // u32 below, aborted the server in the casts; it is InvalidArgs.
         if (args.len > 2 and args[2].* == .Int) {
-            max_file_size = @intCast(args[2].Int);
+            max_file_size = std.math.cast(usize, args[2].Int) orelse return error.InvalidArgs;
         }
+        if (std.math.cast(u32, max_file_size / (1024 * 1024)) == null) return error.InvalidArgs;
 
         // Parse fourth argument as compression flag
         if (args.len > 3 and args[3].* == .Bool) {
@@ -415,7 +418,7 @@ fn handleAuditGetRecentEvents(allocator: std.mem.Allocator, call_stmt: ast.CallP
         else => &[_]*ast.Expr{},
     };
 
-    const limit = if (args.len > 0 and args[0].* == .Int) @as(usize, @intCast(args[0].Int)) else 10;
+    const limit = if (args.len > 0 and args[0].* == .Int) std.math.cast(usize, args[0].Int) orelse return error.InvalidArgs else 10; // SONNY-2769
 
     const columns = try allocator.alloc([]const u8, 5);
     columns[0] = try allocator.dupe(u8, "event_id");
@@ -1385,7 +1388,8 @@ fn handleAuditDetectAnomalies(allocator: std.mem.Allocator, _: ast.CallProcedure
     const row = try allocator.alloc(Value, 3);
     row[0] = Value{ .Bool = result.anomalies_detected > 0 };
     row[1] = Value{ .Int = @intCast(result.anomalies_detected) };
-    row[2] = Value{ .Int = @intFromFloat(result.risk_score) }; // Convert risk score to severity level
+    // SONNY-2739: measurements saturate (NaN is 0) instead of aborting.
+    row[2] = Value{ .Int = std.math.lossyCast(i64, result.risk_score) }; // Convert risk score to severity level
     rows[0] = row;
 
     // Free the patterns string
@@ -1493,10 +1497,11 @@ fn handleAuditPerformanceTest(allocator: std.mem.Allocator, _: ast.CallProcedure
     const rows = try allocator.alloc([]Value, 1);
     const row = try allocator.alloc(Value, 5);
     row[0] = Value{ .Int = @intCast(result.events_per_second) };
-    row[1] = Value{ .Int = @intFromFloat(result.avg_latency_ms) };
-    row[2] = Value{ .Int = @intFromFloat(result.max_latency_ms) };
-    row[3] = Value{ .Int = @intFromFloat(result.memory_used_mb) };
-    row[4] = Value{ .Int = @intFromFloat(result.cpu_percent) };
+    // SONNY-2739: measurements saturate (NaN is 0) instead of aborting.
+    row[1] = Value{ .Int = std.math.lossyCast(i64, result.avg_latency_ms) };
+    row[2] = Value{ .Int = std.math.lossyCast(i64, result.max_latency_ms) };
+    row[3] = Value{ .Int = std.math.lossyCast(i64, result.memory_used_mb) };
+    row[4] = Value{ .Int = std.math.lossyCast(i64, result.cpu_percent) };
     rows[0] = row;
     return ExecutionResult{
         .columns = columns,
@@ -1518,9 +1523,10 @@ fn handleAuditMemoryUsageTest(allocator: std.mem.Allocator, _: ast.CallProcedure
     columns[3] = try allocator.dupe(u8, "leak_detected");
     const rows = try allocator.alloc([]Value, 1);
     const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Int = @intFromFloat(result.baseline_mb) };
-    row[1] = Value{ .Int = @intFromFloat(result.peak_mb) };
-    row[2] = Value{ .Int = @intFromFloat(result.current_mb) };
+    // SONNY-2739: measurements saturate (NaN is 0) instead of aborting.
+    row[0] = Value{ .Int = std.math.lossyCast(i64, result.baseline_mb) };
+    row[1] = Value{ .Int = std.math.lossyCast(i64, result.peak_mb) };
+    row[2] = Value{ .Int = std.math.lossyCast(i64, result.current_mb) };
     row[3] = Value{ .Bool = result.leak_detected };
     rows[0] = row;
     return ExecutionResult{

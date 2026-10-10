@@ -148,9 +148,38 @@ pub fn dispatchToMultiChainHandler(q: ast.Query, all_simple_nodes: bool) Dispatc
     }
 
     // Handle single chain with multiple hops (e.g., (a)-[:E]->(b)-[:E]->(c)-[:E]->(a))
-    // Route through multi-chain handler which now supports multi-hop chains
+    // Route through multi-chain handler which now supports multi-hop chains.
+    // SONNY-2679: executeMatchQueryImpl relies on this: after
+    // `.continue_processing` it reads one hop at most, and refuses a longer
+    // chain (error.MultiHopPatternNotDispatched) rather than read part of it.
     if (q.match.chains.len == 1 and q.match.chains[0].hops.len > 1) {
         return .multi_chain_relationship_match;
+    }
+    // SONNY-3318 (round 4b-1 review I-5): the one-hop traversals read the
+    // first type of `[:A|B]` only (`PatternInfo.rel_type`), so an in-memory
+    // `MATCH (a)-[:S|R]->(b) RETURN count(*)` counted the S edges. A hop
+    // with more than one type goes to the multi-chain executor, which walks
+    // every type. Round 4b-1b (review I-D): a named path too (`MATCH p =
+    // (a)-[:S|R]->(b)` counted the S edges); the multi-chain executor binds
+    // it now. A shortest path, and OPTIONAL, stay where they were.
+    if (q.match.chains.len == 1 and q.match.chains[0].hops.len == 1 and q.match.chains[0].hops[0].rel.types.len > 1) {
+        const chain = q.match.chains[0];
+        if (!chain.is_optional and !chain.is_shortest) return .multi_chain_relationship_match;
+    }
+    // SONNY-3318 (round 4b-1b review I-D): the one-hop traversals bind a
+    // path variable for the RETURN only, after their WHERE and FILTER: `MATCH
+    // p = (a:G {i: 1})-[:R]->(b) WHERE length(p) = 1` matched nothing. A
+    // named one-hop path whose WHERE or FILTER reads the path goes to the
+    // multi-chain executor, which binds the path before either (one that
+    // does not read it stays where its arrays' ownership is kept, SONNY-2394).
+    if (q.match.chains.len == 1 and q.match.chains[0].hops.len == 1) {
+        const chain = q.match.chains[0];
+        const path_name = chain.name orelse q.path_variable;
+        if (!chain.is_optional and !chain.is_shortest) if (path_name) |pn| {
+            const in_where = if (q.where_clause) |w| whereExprReferencesVar(w, pn) else false;
+            const in_filter = if (q.filter_clause) |f| whereExprReferencesVar(f, pn) else false;
+            if (in_where or in_filter) return .multi_chain_relationship_match;
+        };
     }
 
     // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
@@ -206,7 +235,19 @@ pub fn dispatchToMultiChainHandler(q: ast.Query, all_simple_nodes: bool) Dispatc
 /// Check if an expression contains a variable reference (e.g., Member like d.name)
 /// This is used to detect property patterns like {department: d.name} that can't be
 /// evaluated until we have the environment from previous chains.
-pub fn containsVariableReference(expr: ast.Expr) bool {
+pub fn containsVariableReference(root: ast.Expr) bool {
+    // SONNY-3189: binary and unary chains with a loop, not one recursion per
+    // operator: `MATCH (n {v: 0 + 0 + ...})` is as deep as it is long.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |bin| {
+            if (containsVariableReference(bin.right.*)) return true;
+            at = bin.left;
+        },
+        .Unary => |un| at = un.expr,
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Member => true, // e.g., d.name - target.field
         .PropertyAccess => true, // e.g., n.name - object.property
@@ -306,7 +347,23 @@ pub fn getWithExpressionName(allocator: std.mem.Allocator, expr: ast.Expr) []con
 
 // E30/E31 Fix: Helper to check if an expression references a specific variable
 // CANARY: REQ=REQ-GQL-OPTIONAL-WHERE-VAR-001; FEATURE="OptionalMatchWhereVar"; ASPECT=VarReference; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-pub fn whereExprReferencesVar(expr: ast.Expr, var_name: []const u8) bool {
+pub fn whereExprReferencesVar(root: ast.Expr, var_name: []const u8) bool {
+    // SONNY-3189: binary, unary and member chains with a loop, not one
+    // recursion per link.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |binary| {
+            if (whereExprReferencesVar(binary.right.*, var_name)) return true;
+            at = binary.left;
+        },
+        .Unary => |unary| at = unary.expr,
+        .Member => |member| {
+            if (member.target.* == .Ident) break;
+            at = member.target;
+        },
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Ident => |ident| std.mem.eql(u8, ident.orig, var_name),
         .Member => |member| {
@@ -419,7 +476,8 @@ pub fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, 
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
             if (val == .Int) {
-                sum += val.Int;
+                // SONNY-2769: checked; `+=` aborted the server past i64.
+                sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
                 has_value = true;
             }
         }

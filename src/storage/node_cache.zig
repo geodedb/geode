@@ -510,6 +510,24 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             }
         }
 
+        /// SONNY-3233 (round 15, F5): `remove` for a caller that already holds
+        /// `key`'s shard lock exclusively (`lockShardExclusive`).
+        pub fn removeLocked(self: *Self, key: K) void {
+            const idx = sharded_store.shardIndex(@as(u64, key));
+            if (self.store.fetchRemove(key)) |kv| {
+                self.shards[idx].retired.append(self.allocator, kv.value) catch {
+                    var v = kv.value;
+                    self.free_fn(self.allocator, &v);
+                };
+            }
+        }
+
+        /// SONNY-3233 (round 15, F5): `getOrPut` and `noteInserted` for a
+        /// caller that holds `key`'s shard lock exclusively.
+        pub fn getOrPutLocked(self: *Self, key: K) !GetOrPutResult {
+            return self.store.getOrPut(key);
+        }
+
         /// Mirror of `ShardedStore.fetchRemove` for callers that must inspect
         /// the removed value (e.g. to free sub-objects themselves). The caller
         /// then owns the value and must free it; it is NOT retired here.
@@ -534,6 +552,13 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
             return self.store.remove(key) != null;
         }
 
+        // CANARY: REQ=REQ-SONNY-3233-CACHE-LOCKING; FEATURE="BoundedNodeCache"; ASPECT=ShardLockedReservation; STATUS=TESTED; TEST=tests/test_sonny3233_cache_graph_locking.zig; OWNER=storage; UPDATED=2026-09-28
+        /// SONNY-3233 (round 15, F3): each shard's reservation under that
+        /// shard's `map_lock`, exclusive. `Store.ensureTotalCapacity` grows
+        /// every shard's map, and the map is every graph's: a batch CREATE
+        /// (or a hydration) of one graph resized a shard while a single
+        /// CREATE of another graph inserted into it, and the insert panicked
+        /// (`insertEvicting`) within seconds in ReleaseSafe (the review's F3).
         pub fn ensureTotalCapacity(self: *Self, total_capacity: u32) !void {
             // Cap the pre-reservation at the resident cap so a huge ingest hint
             // doesn't pre-allocate the very table we're trying to bound.
@@ -541,20 +566,39 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
                 total_capacity
             else
                 @min(total_capacity, @as(u32, @intCast(@min(self.cap, std.math.maxInt(u32)))));
-            try self.store.ensureTotalCapacity(want);
+            const per_shard: u32 = @intCast((@as(u64, want) + SHARD_COUNT - 1) / SHARD_COUNT);
+            for (&self.store.shards, &self.shards) |*map, *sh| {
+                sh.map_lock.lockUncancelable(io());
+                defer sh.map_lock.unlock(io());
+                try map.ensureTotalCapacity(per_shard);
+            }
         }
 
+        /// SONNY-3233 (round 15, F3): as `ensureTotalCapacity`, each shard's
+        /// reservation under its `map_lock`, exclusive.
         pub fn ensureUnusedCapacity(self: *Self, additional: u32) !void {
             const want: u32 = if (self.cap == 0)
                 additional
             else
                 @min(additional, @as(u32, @intCast(@min(self.cap, std.math.maxInt(u32)))));
-            try self.store.ensureUnusedCapacity(want);
+            const per_shard: u32 = @intCast((@as(u64, want) + SHARD_COUNT - 1) / SHARD_COUNT);
+            for (&self.store.shards, &self.shards) |*map, *sh| {
+                sh.map_lock.lockUncancelable(io());
+                defer sh.map_lock.unlock(io());
+                try map.ensureUnusedCapacity(per_shard);
+            }
         }
 
         /// Clear all resident entries (freeing their values) and every shard's
         /// retire list + FIFO. Used by snapshot-restore / reset paths.
         pub fn clearRetainingCapacity(self: *Self) void {
+            // CANARY: REQ=REQ-SONNY-3317-CACHE-CLEAR-LOCKED; FEATURE="BoundedNodeCache"; ASPECT=ClearUnderShardLocks; STATUS=TESTED; TEST=tests/test_sonny3317_round15_minors.zig; OWNER=storage; UPDATED=2026-09-28
+            // SONNY-3317 (round 16, M7; pre-existing): every shard's map lock,
+            // exclusively, in shard order, across the clear. A reload or a
+            // Raft snapshot install (`GraphStore.clearNodes`) freed every
+            // entry while a reader of any graph could be walking a shard.
+            for (&self.shards) |*sh| sh.map_lock.lockUncancelable(io());
+            defer for (&self.shards) |*sh| sh.map_lock.unlock(io());
             self.reclaimRetired();
             var it = self.store.iterator();
             while (it.next()) |entry| self.free_fn(self.allocator, entry.value_ptr);
@@ -575,6 +619,23 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
 
         pub fn keyIterator(self: *const Self) KeyIterator {
             return self.store.keyIterator();
+        }
+
+        // CANARY: REQ=REQ-SONNY-3180-IDMAP-CONTENTS; FEATURE="BoundedNodeCache"; ASPECT=LockedResidentWalk; STATUS=TESTED; TEST=tests/test_sonny3180_idmap_contents_race.zig; OWNER=storage; UPDATED=2026-09-28
+        /// SONNY-3180 (round 15, F2): visit every resident entry, holding each
+        /// shard's `map_lock` SHARED across that shard's visit, so a writer
+        /// (of any graph: the map is every graph's) cannot grow or move the
+        /// shard, or change an entry in place (its `lockShardExclusive`),
+        /// under the walk. `visit(context, key, value)` must not call back into
+        /// this cache (the lock is not re-entrant) and must copy what it keeps.
+        pub fn forEachResident(self: *const Self, context: anytype, comptime visit: anytype) !void {
+            for (0..SHARD_COUNT) |idx| {
+                const sh: *Shard = @constCast(&self.shards[idx]);
+                sh.map_lock.lockSharedUncancelable(io());
+                defer sh.map_lock.unlockShared(io());
+                var it = self.store.shards[idx].iterator();
+                while (it.next()) |entry| try visit(context, entry.key_ptr.*, entry.value_ptr);
+            }
         }
 
         /// Snapshot every resident KEY into a caller-owned slice, holding each

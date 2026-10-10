@@ -703,11 +703,34 @@ pub const SharedQueryOptimizer = struct {
     }
 
     /// Invalidate all cached plans (e.g., after CREATE/DROP INDEX)
+    ///
+    /// SONNY-2394: this used to be byte-identical to `bumpSchemaEpoch` (lazy:
+    /// every stale plan stayed resident -- still counted in `cache_size` and
+    /// still holding an LRU slot and its memory -- until a later miss on that
+    /// same key happened to evict it). It now also frees every plan no handle
+    /// references. A plan still held by an outstanding SharedPlanHandle
+    /// (ref_count > 0) must stay allocated until released; the epoch bump
+    /// already makes it unservable, and the next miss on its key evicts it.
+    /// Safe under the EXCLUSIVE lock: release() only takes it SHARED.
     pub fn invalidateAll(self: *SharedQueryOptimizer) void {
         self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         self.schema_epoch += 1;
-        // Entries will be lazily evicted on next miss (epoch check fails)
+        // Every cached plan is on the LRU list (inserted right after put()).
+        var key_opt = self.lru_head;
+        while (key_opt) |key| {
+            const entry = self.plan_cache.getPtr(key) orelse break;
+            const next = entry.lru_next;
+            if (entry.ref_count.load(.acquire) == 0) {
+                self.lruRemoveNodeUnlocked(key);
+                if (self.plan_cache.fetchRemove(key)) |kv| {
+                    self.allocator.free(kv.value.query_text);
+                    self.allocator.free(kv.value.plan.operators);
+                    self.allocator.destroy(kv.value.plan);
+                }
+            }
+            key_opt = next;
+        }
     }
 
     /// Increment schema epoch without clearing cache (lazy invalidation)

@@ -195,6 +195,11 @@ const StressCtx = struct {
 fn stressAppender(ctx: *StressCtx) void {
     waitForFlag(ctx.go);
     const undo = txn_undo_log.getGlobalUndoLog(ctx.allocator);
+    // SONNY-2799: a change is recorded only inside a transaction, so each
+    // thread is one (it relied on another thread's BEGIN setting the log's
+    // global `active` flag, which recorded every thread's changes under
+    // transaction 0).
+    undo.begin();
     var i: usize = 0;
     while (i < appends_per_thread) : (i += 1) {
         undo.logCreateNode(@intCast(i + 1), "default") catch |err| {

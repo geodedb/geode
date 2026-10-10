@@ -135,14 +135,31 @@ pub const TemporalStorage = struct {
 
     fn destroyNode(self: *Self, node: *TemporalNode) void {
         node.versions.deinit(self.allocator);
+        self.freeVersionChains(&node.properties);
         node.properties.deinit();
         self.allocator.destroy(node);
     }
 
     fn destroyEdge(self: *Self, edge: *TemporalEdge) void {
         edge.versions.deinit(self.allocator);
+        self.freeVersionChains(&edge.properties);
         edge.properties.deinit();
         self.allocator.destroy(edge);
+    }
+
+    /// SONNY-2394: updateNode heap-allocates one `previous_version` link per
+    /// overwritten property value, but nothing ever freed those chains, so
+    /// every update leaked (surfaced once the inline tests actually ran).
+    fn freeVersionChains(self: *Self, properties: *std.StringHashMap(VersionedValue)) void {
+        var it = properties.valueIterator();
+        while (it.next()) |versioned| {
+            var link = versioned.previous_version;
+            while (link) |prev| {
+                link = prev.previous_version;
+                self.allocator.destroy(prev);
+            }
+            versioned.previous_version = null;
+        }
     }
 
     pub fn createNode(
@@ -235,6 +252,11 @@ pub const TemporalStorage = struct {
         try self.logTransaction(txn_id, timestamp, .delete_node, id);
     }
 
+    /// Returns a point-in-time COPY of the node owned by the caller: release it
+    /// with `releaseNodeAsOf` (SONNY-2394 -- the copy's struct and property map
+    /// were allocated per call and leaked, since nothing documented or offered
+    /// a way to free them). The copy borrows labels, the version list and the
+    /// property values from the live node, so it must not outlive this storage.
     pub fn getNodeAsOf(self: *Self, id: u64, as_of: AsOfClause) ?*TemporalNode {
         const node = self.nodes.get(id) orelse return null;
 
@@ -249,12 +271,20 @@ pub const TemporalStorage = struct {
         return filtered_node;
     }
 
+    /// Free a copy returned by `getNodeAsOf` (only the copy's own struct and
+    /// property map; everything else is borrowed from the live node).
+    pub fn releaseNodeAsOf(self: *Self, node: *TemporalNode) void {
+        node.properties.deinit();
+        self.allocator.destroy(node);
+    }
+
     // GAP-0119: Filter node properties to show only values valid at specified time
     fn filterNodePropertiesAsOf(self: *Self, node: *TemporalNode, as_of: AsOfClause) !*TemporalNode {
         const as_of_time = self.asOfToTimestamp(as_of);
 
         // Create a copy of the node with filtered properties
         const filtered_node = try self.allocator.create(TemporalNode);
+        errdefer self.allocator.destroy(filtered_node);
         filtered_node.* = .{
             .id = node.id,
             .labels = node.labels,
@@ -263,6 +293,7 @@ pub const TemporalStorage = struct {
             .created_at = node.created_at,
             .deleted_at = node.deleted_at,
         };
+        errdefer filtered_node.properties.deinit();
 
         // Filter each property to find the version valid at as_of time
         var prop_it = node.properties.iterator();
@@ -552,6 +583,8 @@ test "time travel query" {
     // Query as of after creation
     const node_after = storage.getNodeAsOf(2, .{ .timestamp = after + 1 });
     try std.testing.expect(node_after != null);
+    defer storage.releaseNodeAsOf(node_after.?);
+    try std.testing.expectEqualStrings("Bob", node_after.?.properties.get("name").?.value);
 }
 
 test "vacuum old versions" {

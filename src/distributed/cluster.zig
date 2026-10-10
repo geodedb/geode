@@ -745,9 +745,11 @@ pub const ClusterCoordinator = struct {
     cluster_name: []const u8 = "geode-cluster",
     /// TLS certificate path for the intra-cluster QUIC listener.  When the
     /// server-side `cert_gen` workflow places certs in `<data-dir>/server.crt`,
-    /// the cluster listener needs to reuse those — its own
-    /// `generateSelfSignedCert` path is still unimplemented in Zig 0.16, so a
-    /// missing cert here will hard-fatal the network loop (A6 reproducer).
+    /// the cluster listener needs to reuse those.  A missing cert here is
+    /// self-signed by `QuicTransport.listen` only in dev posture (Debug build,
+    /// GEODE_ENV not "production") or with GEODE_TLS_AUTOGENERATE_CERT=1; in
+    /// production posture the listener refuses to start and the network loop
+    /// fails (SONNY-2394; A6 reproducer).
     cert_path: []const u8 = "certs/server.crt",
     /// TLS private key path for the intra-cluster QUIC listener.  Mirrors
     /// `cert_path` lifetime / fallback semantics.

@@ -497,7 +497,7 @@ fn countersEqualTo(s: *Session, comptime label: []const u8, comptime want: []con
     return r.rows.len;
 }
 
-test "SONNY-1330: a UNION arm whose CTE body WRITES is never run in parallel, and the write applies once" {
+test "SONNY-1330: a UNION arm whose CTE body WRITES is never run in parallel, and is refused before it writes (SONNY-3182)" {
     const allocator = testing.allocator;
 
     var tmp = testing.tmpDir(.{});
@@ -507,19 +507,19 @@ test "SONNY-1330: a UNION arm whose CTE body WRITES is never run in parallel, an
 
     var s = try Session.open(allocator, data_dir);
     defer s.close();
-    const aa = s.arena.allocator();
 
     try seedCounters(&s, "S1330CteArm");
     try seedCounters(&s, "S1330CteOther");
 
     const invocations_before = execution.parallelUnionInvocations();
 
-    var r = try s.runQuery(
+    // SONNY-3182: a write inside a CTE body or an IN / NOT IN subquery is
+    // refused (0A000) before anything runs; nothing is written.
+    try testing.expectError(error.WriteClauseNotApplied, s.runQuery(
         "WITH w AS (MATCH (n:S1330CteArm) SET n.c = n.c + 1 RETURN n)" ++
             " MATCH (m:S1330CteArm) RETURN m.k" ++
             " UNION ALL MATCH (o:S1330CteOther) RETURN o.k",
-    );
-    defer r.deinit(aa);
+    ));
 
     // THE gate assertion, and the one that is RED on the pre-fix tree: the
     // parallel fork-join was never even ATTEMPTED for this UNION, because
@@ -539,18 +539,17 @@ test "SONNY-1330: a UNION arm whose CTE body WRITES is never run in parallel, an
     //     `set_clauses` are empty; the SET lives one level down in the CTE
     //     body), and `predictArmRowCount` returned null on `cte_list`, which
     //     the cost model reads as "expensive -> parallel".
-    // The `c == 1` assertions below independently prove the CTE body was
-    // actually executed, so the arm is a genuine writer and not a no-op.
+    // Since SONNY-3182 the write-shape validator refuses the statement
+    // before any arm runs, so the counters must all still read 0.
     try testing.expectEqual(
         @as(u64, 0),
         execution.parallelUnionInvocations() - invocations_before,
     );
 
-    // …and the consequence that actually matters to a client: the CTE's write
-    // landed EXACTLY once. Every seeded node went 0 -> 1 and none went to 2,
-    // which is precisely what a discarded parallel attempt followed by a
-    // serial re-run would have produced.
-    try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330CteArm", "1"));
+    // …and the consequence that actually matters to a client: nothing of the
+    // refused statement was written (no 1s, and no 2s from a discarded
+    // parallel attempt followed by a serial re-run).
+    try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330CteArm", "0"));
     try testing.expectEqual(@as(usize, 0), try countersEqualTo(&s, "S1330CteArm", "2"));
     // The read-only sibling arm is untouched, so a stray write cannot be
     // mistaken for the CTE's.
@@ -614,7 +613,7 @@ fn seedSingleAnchor(s: *Session, comptime label: []const u8) !void {
     r.deinit(aa);
 }
 
-test "SONNY-1330: a UNION arm whose IN/NOT IN subquery WRITES is never run in parallel, and the write applies once" {
+test "SONNY-1330: a UNION arm whose IN/NOT IN subquery WRITES is never run in parallel, and is refused before it writes (SONNY-3182)" {
     const allocator = testing.allocator;
 
     var tmp = testing.tmpDir(.{});
@@ -624,7 +623,6 @@ test "SONNY-1330: a UNION arm whose IN/NOT IN subquery WRITES is never run in pa
 
     var s = try Session.open(allocator, data_dir);
     defer s.close();
-    const aa = s.arena.allocator();
 
     // Three independent (anchor, mutation target, sibling arm) triples so the
     // three shapes cannot contaminate each other's counters.
@@ -643,22 +641,23 @@ test "SONNY-1330: a UNION arm whose IN/NOT IN subquery WRITES is never run in pa
     // --- (a) the mutating subquery sits in WHERE, behind IN ----------------
     {
         const invocations_before = execution.parallelUnionInvocations();
-        var r = try s.runQuery(
+        // SONNY-3182: a write inside a CTE body or an IN / NOT IN subquery is
+        // refused (0A000) before anything runs; nothing is written.
+        try testing.expectError(error.WriteClauseNotApplied, s.runQuery(
             "MATCH (a:S1330InAnchor)" ++
                 " WHERE a.k IN (MATCH (m:S1330InSub) SET m.c = m.c + 1 RETURN m.k)" ++
                 " RETURN a.k" ++
                 " UNION ALL MATCH (o:S1330InOther) RETURN o.k",
-        );
-        defer r.deinit(aa);
+        ));
 
         try testing.expectEqual(
             @as(u64, 0),
             execution.parallelUnionInvocations() - invocations_before,
         );
-        // The SET really ran (so the arm is a genuine writer, not a no-op)…
-        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330InSub", "1"));
-        // …and it ran EXACTLY once: nothing reached 2, which is what a
-        // discarded parallel attempt plus a serial re-run would have produced.
+        // Refused before it ran (SONNY-3182): nothing written…
+        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330InSub", "0"));
+        // …and nothing reached 2 (a discarded parallel attempt plus a serial
+        // re-run).
         try testing.expectEqual(@as(usize, 0), try countersEqualTo(&s, "S1330InSub", "2"));
         // The read-only sibling arm is untouched.
         try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330InOther", "0"));
@@ -667,19 +666,20 @@ test "SONNY-1330: a UNION arm whose IN/NOT IN subquery WRITES is never run in pa
     // --- (b) the NOT IN variant -------------------------------------------
     {
         const invocations_before = execution.parallelUnionInvocations();
-        var r = try s.runQuery(
+        // SONNY-3182: a write inside a CTE body or an IN / NOT IN subquery is
+        // refused (0A000) before anything runs; nothing is written.
+        try testing.expectError(error.WriteClauseNotApplied, s.runQuery(
             "MATCH (a:S1330NotInAnchor)" ++
                 " WHERE a.k NOT IN (MATCH (m:S1330NotInSub) SET m.c = m.c + 1 RETURN m.k)" ++
                 " RETURN a.k" ++
                 " UNION ALL MATCH (o:S1330NotInOther) RETURN o.k",
-        );
-        defer r.deinit(aa);
+        ));
 
         try testing.expectEqual(
             @as(u64, 0),
             execution.parallelUnionInvocations() - invocations_before,
         );
-        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330NotInSub", "1"));
+        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330NotInSub", "0"));
         try testing.expectEqual(@as(usize, 0), try countersEqualTo(&s, "S1330NotInSub", "2"));
         try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330NotInOther", "0"));
     }
@@ -691,18 +691,19 @@ test "SONNY-1330: a UNION arm whose IN/NOT IN subquery WRITES is never run in pa
     // shape stays on the parallel path the way the other two do.
     {
         const invocations_before = execution.parallelUnionInvocations();
-        var r = try s.runQuery(
+        // SONNY-3182: a write inside a CTE body or an IN / NOT IN subquery is
+        // refused (0A000) before anything runs; nothing is written.
+        try testing.expectError(error.WriteClauseNotApplied, s.runQuery(
             "MATCH (a:S1330RetAnchor) WHERE a.k >= 0" ++
                 " RETURN a.k IN (MATCH (m:S1330RetSub) SET m.c = m.c + 1 RETURN m.k) AS hit" ++
                 " UNION ALL MATCH (o:S1330RetOther) RETURN o.k",
-        );
-        defer r.deinit(aa);
+        ));
 
         try testing.expectEqual(
             @as(u64, 0),
             execution.parallelUnionInvocations() - invocations_before,
         );
-        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330RetSub", "1"));
+        try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330RetSub", "0"));
         try testing.expectEqual(@as(usize, 0), try countersEqualTo(&s, "S1330RetSub", "2"));
         try testing.expectEqual(CTE_ROWS, try countersEqualTo(&s, "S1330RetOther", "0"));
     }

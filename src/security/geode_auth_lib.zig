@@ -544,6 +544,61 @@ pub const AuditLog = struct {
 };
 
 // ---- Security Context ----
+// CANARY: REQ=REQ-SONNY-2778-ADMIN-PASSWORD-FILE; FEATURE="Secure Default Password"; ASPECT=ExclusiveNoFollow0600; STATUS=TESTED; TEST=tests/test_sonny2778_admin_password_file.zig; OWNER=security; UPDATED=2026-09-26
+/// SONNY-2778: the file a generated admin password is written to, in the data
+/// directory (docs/USER_AUTH.md, "The generated admin password").
+pub const admin_password_file_name = ".geode_admin_password";
+
+/// SONNY-2778: write a generated admin password to
+/// `<data_dir>/.geode_admin_password`, the one documented place for it. Every
+/// writer (`SecurityManager.init`, the server's first boot, `geode auth init`)
+/// goes through here.
+///
+/// The file is opened with O_CREAT | O_EXCL | O_NOFOLLOW and mode 0600, and
+/// its mode is set to 0600 again once open, so no umask changes it. Nothing is
+/// written when anything is already at the path: a file, or a symbolic link,
+/// dangling or not (error.AdminPasswordFileExists). The writers used
+/// O_CREAT | O_TRUNC without O_EXCL: an existing file kept its mode and owner,
+/// so a world-readable file planted there received the password, and a
+/// symbolic link planted there was followed. `SecurityManager.init` also wrote
+/// into the current working directory when no data directory was set. A file
+/// that cannot be completed is removed. Returns the path; the caller frees it.
+pub fn writeAdminPasswordFile(allocator: std.mem.Allocator, data_dir: []const u8, password: []const u8) ![]u8 {
+    const path = try std.fmt.allocPrint(allocator, "{s}/" ++ admin_password_file_name, .{data_dir});
+    errdefer allocator.free(path);
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .EXCL = true,
+        .NOFOLLOW = true,
+        .CLOEXEC = true,
+    }, 0o600) catch |err| switch (err) {
+        error.PathAlreadyExists => return error.AdminPasswordFileExists,
+        else => return err,
+    };
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer file.close(io);
+    errdefer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    try file.setPermissions(io, std.Io.File.Permissions.fromMode(0o600));
+    try file.writeStreamingAll(io, password);
+    return path;
+}
+
+/// SONNY-2778: whether anything is at `<data_dir>/.geode_admin_password`: a
+/// file, a directory, or a symbolic link, dangling or not. A writer that can
+/// look before it creates the admin (`geode auth init`) refuses then and
+/// changes nothing, rather than creating an admin whose password it cannot
+/// record. `writeAdminPasswordFile` stays the guard; this is only the early
+/// answer.
+pub fn adminPasswordFilePresent(data_dir: []const u8) bool {
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = std.fmt.bufPrint(&buf, "{s}/" ++ admin_password_file_name, .{data_dir}) catch return false;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    _ = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch return false;
+    return true;
+}
+
 pub const SecurityContext = struct { user: *User, roles: []const Role, session_attributes: std.StringHashMap([]const u8), request_attributes: std.StringHashMap([]const u8), environment: EnvironmentInfo };
 
 // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-005; FEATURE="Runtime Auth Graph Persistence"; ASPECT=SingleDurableWriter; STATUS=TESTED; TEST=tests/test_bug731_password_reset.zig; OWNER=security; UPDATED=2026-07-31
@@ -590,6 +645,17 @@ pub const SecurityManager = struct {
     audit_log: AuditLog,
     password_policy: PasswordPolicy,
     elevation_ttl_ms: i64 = 5 * 60 * 1000, // default 5 minutes; configurable
+    /// SONNY-2394: serializes the credential entry points -- `authenticate`,
+    /// `authenticateWithMFA` and `updatePassword`. One SecurityManager is
+    /// shared by every connection thread (server_init), and these paths mutate
+    /// shared state with no other synchronization: a user's single-use
+    /// recovery-code list (orderedRemove), password hashes and lockout
+    /// counters, the `sessions` map and the `audit_log` entries. Concurrent MFA
+    /// recovery-code redemption crashed on the unsynchronized audit-log /
+    /// session-map growth (DebugAllocator: "Double free detected") and could
+    /// redeem one code twice. Not re-entrant: the three bodies never call each
+    /// other.
+    auth_mu: std.Io.Mutex = std.Io.Mutex.init,
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-001; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManager; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
     // Opaque pointer to AuthGraphManager for runtime mutation persistence (set by server_init).
     // Uses anyopaque because geode_auth_lib cannot import auth_graph_manager (circular dep).
@@ -1485,34 +1551,29 @@ pub const SecurityManager = struct {
 
             // SEC-05: Write generated password to a file instead of stderr.
             // This prevents password leakage into log aggregators or terminal scrollback.
+            // SONNY-2778: only under an explicit data directory
+            // (GEODE_DATA_DIR), with `writeAdminPasswordFile`. It was written
+            // to the current working directory when none was set: a test run
+            // left one in a source worktree.
             const data_dir = getEnvVarOwned(self.allocator, "GEODE_DATA_DIR") catch null;
             defer if (data_dir) |d| self.allocator.free(d);
-            const pw_dir = data_dir orelse ".";
-            const pw_path = std.fmt.allocPrint(self.allocator, "{s}/.geode_admin_password", .{pw_dir}) catch {
-                // If we cannot even format the path, log a warning but continue.
-                log.warn("Failed to allocate password file path", &.{});
-                break :blk generated_password_hex[0..64];
-            };
-            defer self.allocator.free(pw_path);
-
-            const io_pw = std.Io.Threaded.global_single_threaded.io();
-            if (std.Io.Dir.cwd().createFile(io_pw, pw_path, .{ .permissions = std.Io.File.Permissions.fromMode(0o600) })) |file| {
-                defer file.close(io_pw);
-                file.writeStreamingAll(io_pw, generated_password_hex[0..64]) catch |err| {
-                    log.warn("Failed to write admin password file", &.{
+            if (data_dir) |dir| {
+                if (writeAdminPasswordFile(self.allocator, dir, generated_password_hex[0..64])) |pw_path| {
+                    defer self.allocator.free(pw_path);
+                    std.debug.print("\n[GEODE SECURITY] WARNING: Auto-generated admin password written to disk: {s} (mode 0600)\n" ++
+                        "[GEODE SECURITY] WARNING: Set GEODE_DEFAULT_PASSWORD env var for production.\n\n", .{pw_path});
+                } else |err| {
+                    log.warn("Failed to create admin password file", &.{
+                        Attr.string("data_dir", dir),
                         Attr.string("error", @errorName(err)),
                     });
-                };
-                std.debug.print("\n[GEODE SECURITY] WARNING: Auto-generated admin password written to disk: {s}\n" ++
-                    "[GEODE SECURITY] WARNING: Set GEODE_DEFAULT_PASSWORD env var for production.\n\n", .{pw_path});
-            } else |err| {
-                log.warn("Failed to create admin password file", &.{
-                    Attr.string("path", pw_path),
-                    Attr.string("error", @errorName(err)),
-                });
-                // Fallback: print location hint only (no password) so operator knows something went wrong
-                std.debug.print("\n[GEODE SECURITY] Could not write admin password file to {s}: {s}\n" ++
-                    "[GEODE SECURITY] Set GEODE_DEFAULT_PASSWORD env var to configure the admin password.\n\n", .{ pw_path, @errorName(err) });
+                    // Fallback: print location hint only (no password) so operator knows something went wrong
+                    std.debug.print("\n[GEODE SECURITY] Could not write the admin password file in {s}: {s}\n" ++
+                        "[GEODE SECURITY] An existing file is never overwritten. Set GEODE_DEFAULT_PASSWORD env var to configure the admin password.\n\n", .{ dir, @errorName(err) });
+                }
+            } else {
+                std.debug.print("\n[GEODE SECURITY] No data directory (GEODE_DATA_DIR) is set, so the generated admin password was not written anywhere.\n" ++
+                    "[GEODE SECURITY] Set GEODE_DEFAULT_PASSWORD env var to configure the admin password.\n\n", .{});
             }
 
             log.warn("Generated random admin password — see password file in data directory", &.{
@@ -1526,8 +1587,20 @@ pub const SecurityManager = struct {
         const id = @as(UserId, @intCast(self.users.count() + 1));
         const attrs = std.StringHashMap([]const u8).init(self.allocator);
 
-        // Hash the password
-        const password_hash = try self.hashPassword(default_password);
+        // Hash the password.
+        // SONNY-2394: only an OPERATOR-supplied password (GEODE_DEFAULT_PASSWORD)
+        // goes through the human-password policy (`hashPassword` validates
+        // first). The generated fallback is 32 CSPRNG bytes rendered as 64
+        // lowercase hex -- a single "word" with no uppercase -- so the
+        // passphrase policy (upper+lower, >=3 words) rejected it and
+        // `SecurityManager.init` failed whenever GEODE_DEFAULT_PASSWORD was
+        // unset (breaking the `geode-auth` tool and every init() caller).
+        // Hash the random secret directly, exactly as the production
+        // first-boot path (AuthGraphManager bootstrap) already does.
+        const password_hash = if (password_from_env)
+            try self.hashPassword(default_password)
+        else
+            try hashPasswordArgon2id(self.allocator, default_password);
 
         // Default user bootstrap:
         // - Allow login when an explicit password is provided (env or debug default),
@@ -1599,6 +1672,13 @@ pub const SecurityManager = struct {
 
     // Update password and clear reset requirement
     pub fn updatePassword(self: *Self, user_id: UserId, new_password: []const u8) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.auth_mu.lockUncancelable(io);
+        defer self.auth_mu.unlock(io);
+        return self.updatePasswordLocked(user_id, new_password);
+    }
+
+    fn updatePasswordLocked(self: *Self, user_id: UserId, new_password: []const u8) !void {
         // CANARY: REQ=REQ-AUTH-POLICY-009; FEATURE="Password Update Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_009_UpdateValidation; OWNER=security; UPDATED=2025-09-30
         // Validate new password against current policy before accepting
         try self.validatePasswordAgainstCurrentPolicy(new_password);
@@ -1659,6 +1739,13 @@ pub const SecurityManager = struct {
     // If MFA required, returns error.MFARequired after logging issuance.
     // CANARY: REQ=REQ-GQL-AUTH-002; FEATURE="Password authentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_002_AuthPassword; OWNER=security; UPDATED=2025-09-26
     pub fn authenticate(self: *Self, username: []const u8, password: []const u8) ![]const u8 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.auth_mu.lockUncancelable(io);
+        defer self.auth_mu.unlock(io);
+        return self.authenticateLocked(username, password);
+    }
+
+    fn authenticateLocked(self: *Self, username: []const u8, password: []const u8) ![]const u8 {
         // Locate user
         var user_opt: ?*User = null;
         var it = self.users.iterator();
@@ -1770,6 +1857,13 @@ pub const SecurityManager = struct {
     // Recovery codes are single-use; upon successful use it is removed and audited.
     // CANARY: REQ=REQ-GQL-AUTH-004; FEATURE="MFA recovery code"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_004_Recovery|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse; OWNER=security; UPDATED=2025-09-26
     pub fn authenticateWithMFA(self: *Self, username: []const u8, password: []const u8, code: u32, recovery_code: ?[]const u8) ![]const u8 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.auth_mu.lockUncancelable(io);
+        defer self.auth_mu.unlock(io);
+        return self.authenticateWithMFALocked(username, password, code, recovery_code);
+    }
+
+    fn authenticateWithMFALocked(self: *Self, username: []const u8, password: []const u8, code: u32, recovery_code: ?[]const u8) ![]const u8 {
         var user_opt: ?*User = null;
         var it = self.users.iterator();
         while (it.next()) |entry| {
@@ -1817,8 +1911,10 @@ pub const SecurityManager = struct {
                 var idx: usize = 0;
                 while (idx < codes.items.len) : (idx += 1) {
                     if (std.mem.eql(u8, codes.items[idx], rc)) {
-                        // Remove single-use code by swap-remove
-                        _ = codes.orderedRemove(idx);
+                        // Remove the single-use code. SONNY-2394: free it too
+                        // -- the removed string used to be discarded (leaked
+                        // once per redemption).
+                        self.allocator.free(codes.orderedRemove(idx));
                         try self.audit_log.logMfaRecoveryCodeUsed(user.id);
                         used_recovery = true;
                         break;
@@ -2017,11 +2113,65 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
 // ============================================================================
 
 test "SecurityManager.deinit releases default startup allocations" {
+    // Zig 0.16 removed std.posix.setenv; use libc directly (test-scoped).
+    const c = struct {
+        extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+        extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+        fn save(a: Allocator, name: [*:0]const u8) !?[:0]u8 {
+            return if (std.c.getenv(name)) |v| try a.dupeZ(u8, std.mem.span(v)) else null;
+        }
+        fn restore(a: Allocator, name: [*:0]const u8, saved: ?[:0]u8) void {
+            if (saved) |v| {
+                _ = setenv(name, v.ptr, 1);
+                a.free(v);
+            } else _ = unsetenv(name);
+        }
+    };
     var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
+    const allocator = gpa.allocator();
 
-    var sm = try SecurityManager.init(gpa.allocator());
+    // Hermetic env. SONNY-2394 regression: with GEODE_DEFAULT_PASSWORD unset,
+    // init() generates a random admin secret, which the human-password
+    // passphrase policy used to reject (init() failed with
+    // PasswordMissingUppercase). GEODE_DATA_DIR points the generated-password
+    // file at a tmp dir so the test never writes `.geode_admin_password` into
+    // the build root.
+    //
+    // Memoize Zig's own view of the environment FIRST. Zig 0.16 scans its
+    // startup envp lazily (first std.debug.print, first spawn, ...) and
+    // panics on a NULL inside the captured slice -- which an in-place libc
+    // unsetenv of a variable present at startup leaves behind; the panic
+    // handler then deadlocks re-taking the environ mutex (SONNY-2394: this
+    // test hung whenever GEODE_DEFAULT_PASSWORD was exported by the caller).
+    _ = std.Io.Threaded.global_single_threaded.environString("PATH");
+    const saved_pw = try c.save(allocator, "GEODE_DEFAULT_PASSWORD");
+    defer c.restore(allocator, "GEODE_DEFAULT_PASSWORD", saved_pw);
+    const saved_dir = try c.save(allocator, "GEODE_DATA_DIR");
+    defer c.restore(allocator, "GEODE_DATA_DIR", saved_dir);
+    _ = c.unsetenv("GEODE_DEFAULT_PASSWORD");
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try std.fmt.allocPrintSentinel(allocator, ".zig-cache/tmp/{s}", .{tmp.sub_path}, 0);
+    defer allocator.free(data_dir);
+    try std.testing.expect(c.setenv("GEODE_DATA_DIR", data_dir.ptr, 1) == 0);
+
+    var sm = try SecurityManager.init(allocator);
     defer sm.deinit();
+
+    // The generated secret was handed to the operator via the password file
+    // and is the credential actually stored for the default admin.
+    const written = try tmp.dir.readFileAlloc(std.testing.io, ".geode_admin_password", allocator, .limited(256));
+    defer allocator.free(written);
+    try std.testing.expectEqual(@as(usize, 64), written.len);
+    var admin: ?*User = null;
+    var it = sm.users.valueIterator();
+    while (it.next()) |u| {
+        if (u.is_default_user) admin = u;
+    }
+    try std.testing.expect(admin != null);
+    try std.testing.expect(try verifyPasswordArgon2id(allocator, written, admin.?.password_hash));
 }
 
 test "SecurityManager.deinit releases hydrated runtime state" {

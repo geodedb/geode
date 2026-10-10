@@ -231,7 +231,17 @@ pub const Manager = struct {
 
         // Phantom detection before commit stamping
         if (self.phantom_enabled) {
-            try self.detectPhantoms(txn);
+            self.detectPhantoms(txn) catch |err| {
+                // SONNY-2394: a phantom under a tracked predicate/range dooms
+                // the transaction. 267e7d67 moved this check ahead of commit
+                // stamping (so a failed txn is no longer marked Committed) but
+                // dropped the Aborted marking the old post-stamp check did, so
+                // callers got SerializationFailure on a txn still reporting
+                // .Active. The caller must still rollback() to release its
+                // locks and discard its writes (unchanged contract).
+                txn.state = .Aborted;
+                return err;
+            };
         }
 
         // Assign commit timestamp

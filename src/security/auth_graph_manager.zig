@@ -397,6 +397,20 @@ pub const AuthGraphManager = struct {
     /// 4. Auto-generate random 256-bit key -> write to `.geode_hmac_key` (0o600)
     /// 5. error.NoHmacKeyAvailable (only if no data_dir provided)
     pub fn resolveHmacKey(allocator: Allocator, data_dir: ?[]const u8) !HmacKeyResult {
+        return resolveHmacKeyEx(allocator, data_dir, true);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3035-OFFLINE-CHAIN-ROOT; FEATURE="OfflineAuthStoreSafety"; ASPECT=NoKeyBeforeVerify; STATUS=TESTED; TEST=tests/test_sonny3035_offline_chain_root.zig; OWNER=security; UPDATED=2026-09-27
+    /// SONNY-3035: `resolveHmacKey` that writes nothing: with no key in the
+    /// environment and no `.geode_hmac_key` file, `NoHmacKeyAvailable`, where
+    /// `resolveHmacKey` generates the file. For verifying an existing chain:
+    /// a key made up now cannot verify it, and generating it wrote key
+    /// material into a store the command then refused to change.
+    pub fn resolveExistingHmacKey(allocator: Allocator, data_dir: ?[]const u8) !HmacKeyResult {
+        return resolveHmacKeyEx(allocator, data_dir, false);
+    }
+
+    fn resolveHmacKeyEx(allocator: Allocator, data_dir: ?[]const u8, create_missing: bool) !HmacKeyResult {
         // 1. Try GEODE_AUTH_HMAC_KEY env var
         if (getEnvVarOwned(allocator, "GEODE_AUTH_HMAC_KEY")) |env_val| {
             defer allocator.free(env_val);
@@ -438,6 +452,7 @@ pub const AuthGraphManager = struct {
                 switch (err) {
                     error.FileNotFound => {
                         // 4. Auto-generate a random 256-bit HMAC key and write to file
+                        if (!create_missing) return error.NoHmacKeyAvailable;
                         return autoGenerateHmacKeyFile(path);
                     },
                     else => {
@@ -628,14 +643,147 @@ pub const AuthGraphManager = struct {
 
     // -- Chain Sealing --
 
-    /// Recompute all per-record HMACs and chain hash.
-    /// Used after mutations or by `geode auth reseal`.
+    /// SONNY-2791: does the HMAC stored on `record`'s node match the one
+    /// `hmac_key` gives it?
+    fn policyHmacVerifies(self: *Self, hmac_key: *const [32]u8, record: *const UserStorageBackend.PolicyRecord) bool {
+        const node_id = self.storage.policy_nodes.get(record.id) orelse return false;
+        const stored = self.storage.store.getNodeProperty(node_id, "hmac") orelse return false;
+        if (stored != .String) return false;
+        const computed = computePolicyHmac(hmac_key, record);
+        const computed_hex = auth_hmac.hmacToHex(&computed);
+        return std.mem.eql(u8, &computed_hex, stored.String);
+    }
+
+    /// SONNY-2791: the operator's decisions, by record id, for the policy
+    /// records no seal signs on its own (`refuseUnsignedLegacy`).
+    pub const LegacyPolicyDecisions = struct {
+        /// Sign each one, stored explicitly as what its shape makes it.
+        accept: []const u64 = &.{},
+        /// Delete each one.
+        drop: []const u64 = &.{},
+
+        fn decided(self: LegacyPolicyDecisions, id: u64) bool {
+            return std.mem.indexOfScalar(u64, self.accept, id) != null or
+                std.mem.indexOfScalar(u64, self.drop, id) != null;
+        }
+    };
+
+    // CANARY: REQ=REQ-SONNY-2791-RESEAL-LEGACY; FEATURE="AuthDDLPersistence"; ASPECT=SealRefusesUnsignedLegacy; STATUS=TESTED; TEST=tests/test_sonny2791_internal_graphs_reseal.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2791: refuse (error.UnsignedLegacyPolicyRecord, logging each
+    /// record) while a policy record has no kind, its stored HMAC does not
+    /// verify under `hmac_key`, and `decisions` has nothing for it.
+    ///
+    /// A record without a kind was written before SONNY-2750. GPS loads it by
+    /// its shape, and with no USING text it grants unconditionally. One this
+    /// key never signed may have been planted in that shape, so no seal signs
+    /// it: not the recovery reseal, and not the seal after every auth change.
+    /// An offline CLI command loads the security graph as it is and seals
+    /// after its change, so it used to sign such a record. A record without a
+    /// kind whose HMAC verifies was signed by this key before the upgrade.
+    fn refuseUnsignedLegacy(self: *Self, hmac_key: *const [32]u8, decisions: LegacyPolicyDecisions) error{UnsignedLegacyPolicyRecord}!void {
+        var refused: usize = 0;
+        var it = self.storage.policyIterator();
+        while (it.next()) |record| {
+            if (record.kind != .legacy or decisions.decided(record.id)) continue;
+            if (self.policyHmacVerifies(hmac_key, record)) continue;
+            log.err("refusing to sign a policy record without a kind whose HMAC does not verify (it may have been planted); decide it with geode auth reseal --accept-legacy-policy <id> or --drop-legacy-policy <id>", &.{
+                Attr.uint("policy_id", record.id),
+                Attr.string("name", record.getName()),
+                Attr.string("shape", @tagName(record.effectiveKind())),
+            });
+            refused += 1;
+        }
+        if (refused > 0) return error.UnsignedLegacyPolicyRecord;
+    }
+
+    // CANARY: REQ=REQ-SONNY-2791-RESEAL-LEGACY; FEATURE="AuthDDLPersistence"; ASPECT=ResealRefusesUnsignedLegacy; STATUS=TESTED; TEST=tests/test_sonny2791_internal_graphs_reseal.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2791: the recovery reseal (`geode auth reseal`, and
+    /// GEODE_AUTH_RESEAL_CHAIN=1 at startup). It is `sealChain`, after the
+    /// operator's decision for each policy record that has no kind and does
+    /// not verify (`refuseUnsignedLegacy`):
+    /// - a dropped record is deleted;
+    /// - an accepted record is rewritten as what it now is, explicitly: its
+    ///   kind and, for GPS, its USING text ("true" when it had none), so
+    ///   nothing is "true by absence". A malformed one is signed as it is and
+    ///   still loads nowhere.
+    /// Without a decision for each one it refuses and changes nothing. An id
+    /// both accepted and dropped is error.ConflictingLegacyPolicyDecision. A
+    /// decision for any other record is ignored.
+    pub fn resealChain(self: *Self, hmac_key: *const [32]u8, decisions: LegacyPolicyDecisions) !void {
+        for (decisions.accept) |id| {
+            if (std.mem.indexOfScalar(u64, decisions.drop, id) == null) continue;
+            log.err("reseal refused: a policy record is both accepted and dropped", &.{
+                Attr.uint("policy_id", id),
+            });
+            return error.ConflictingLegacyPolicyDecision;
+        }
+        try self.refuseUnsignedLegacy(hmac_key, decisions);
+
+        // Collected first: the changes below change the cache.
+        var unverified: std.ArrayList(u64) = .empty;
+        defer unverified.deinit(self.allocator);
+        var it = self.storage.policyIterator();
+        while (it.next()) |record| {
+            if (record.kind != .legacy) continue;
+            if (self.policyHmacVerifies(hmac_key, record)) continue;
+            try unverified.append(self.allocator, record.id);
+        }
+        for (unverified.items) |id| {
+            const record = self.storage.getPolicy(id) orelse continue;
+            if (std.mem.indexOfScalar(u64, decisions.drop, id) != null) {
+                log.warn("reseal: the operator dropped a policy record without a kind that did not verify", &.{
+                    Attr.uint("policy_id", id),
+                    Attr.string("name", record.getName()),
+                });
+                try self.storage.removePolicy(id);
+                continue;
+            }
+            const kind = record.effectiveKind();
+            if (record.malformed or (kind != .gps and kind != .rls)) continue;
+            log.warn("reseal: the operator accepted a policy record without a kind; storing its kind and USING text", &.{
+                Attr.uint("policy_id", id),
+                Attr.string("name", record.getName()),
+                Attr.string("kind", @tagName(kind)),
+            });
+            try self.storage.persistPolicy(.{
+                .policy_id = id,
+                .name = record.getName(),
+                .description = record.getDescription(),
+                .graph = record.getGraph(),
+                .table = record.getTable(),
+                .operation = record.operation,
+                .permissive = record.permissive,
+                .enabled = record.enabled,
+                .using_clause = if (kind == .gps) (record.getUsingClause() orelse "true") else record.getUsingClause(),
+                .check_clause = record.getCheckClause(),
+                .audit_level = record.audit_level,
+                .created_by = record.created_by,
+                .created_at = record.created_at,
+                .kind = kind,
+                .mode = .replace,
+            });
+        }
+        // A malformed accepted record keeps no kind and still does not verify.
+        try self.sealChainWith(hmac_key, .{ .accept = decisions.accept });
+    }
+
+    /// Recompute all per-record HMACs and the chain hash, after every auth
+    /// change. SONNY-2791: while a policy record without a kind does not
+    /// verify, it refuses and signs nothing (`refuseUnsignedLegacy`). Only
+    /// the recovery reseal (`resealChain`) signs one, on the operator's
+    /// decision.
     pub fn sealChain(self: *Self, hmac_key: *const [32]u8) !void {
+        return self.sealChainWith(hmac_key, .{});
+    }
+
+    fn sealChainWith(self: *Self, hmac_key: *const [32]u8, decisions: LegacyPolicyDecisions) !void {
         // #834: hold seal_mutex across the entire compute-and-persist window
         // so concurrent ALTER USER calls don't interleave their hmac_list
         // construction with another writer's persistChainRoot.
         self.seal_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.seal_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        try self.refuseUnsignedLegacy(hmac_key, decisions);
 
         var hmac_list: std.ArrayList([32]u8) = .empty;
         defer hmac_list.deinit(self.allocator);
@@ -1234,10 +1382,22 @@ pub const AuthGraphManager = struct {
     }
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=FindPolicyIdByName; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
-    /// Look up a policy id by name. Returns null if not found.
+    /// Look up a GPS policy's id by name. Returns null if not found.
+    /// SONNY-2750: GPS records only; an RLS record of the same name (the
+    /// geode-auth CLI writes the same record type) is not a GPS policy, and
+    /// CREATE, ALTER and DROP POLICY must not reach it.
     pub fn findPolicyIdByName(self: *Self, name: []const u8) ?u64 {
-        const record = self.storage.getPolicyByName(name) orelse return null;
-        return record.id;
+        var it = self.storage.policyIterator();
+        while (it.next()) |record| {
+            if (record.effectiveKind() == .gps and std.mem.eql(u8, record.getName(), name)) return record.id;
+        }
+        return null;
+    }
+
+    /// SONNY-2750: audit a :Policy record that GPS hydration refused to load
+    /// (it is not a GPS policy, or it is malformed). `reason` says why.
+    pub fn auditRefusedPolicyRecord(self: *Self, record: *const UserStorageBackend.PolicyRecord, reason: []const u8) void {
+        self.logSecurityGraphMutation(.policy_violation, "REFUSE_POLICY_RECORD", record.id, record.getName(), reason);
     }
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=CreatePolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
@@ -1256,13 +1416,8 @@ pub const AuthGraphManager = struct {
     ) !u64 {
         if (self.findPolicyIdByName(name)) |existing_id| return existing_id;
 
-        // Derive next policy id: max across the cache + 1.
-        var max_id: u64 = 0;
-        var it = self.storage.policy_cache.keyIterator();
-        while (it.next()) |key| {
-            if (key.* > max_id) max_id = key.*;
-        }
-        const policy_id = max_id + 1;
+        // SONNY-2777: the policy id sequence every policy writer shares.
+        const policy_id = self.storage.nextPolicyId();
 
         try self.storage.persistPolicy(.{
             .policy_id = policy_id,
@@ -1277,6 +1432,8 @@ pub const AuthGraphManager = struct {
             .check_clause = null,
             .audit_level = 0,
             .created_by = 0,
+            .kind = .gps,
+            .mode = .create,
         });
         try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1310,6 +1467,10 @@ pub const AuthGraphManager = struct {
     ) !void {
         const policy_id = self.findPolicyIdByName(name) orelse return error.PolicyNotFound;
         const existing = self.storage.getPolicy(policy_id) orelse return error.PolicyNotFound;
+        // SONNY-2750: a record with a missing or mistyped property was not
+        // loaded, and is not rewritten either: the rewrite would store the
+        // defaults that stood in for what is missing as its values.
+        if (existing.malformed) return error.PolicyNotFound;
 
         // GAP-0858 (follow-up): durable rename-collision guard. If the rename
         // target is already held by a DIFFERENT policy id, reject — otherwise
@@ -1340,11 +1501,18 @@ pub const AuthGraphManager = struct {
             .operation = existing.operation,
             .permissive = existing.permissive,
             .enabled = new_enabled,
-            .using_clause = existing.getUsingClause(),
+            // SONNY-2750: a legacy GPS record stored no USING text for "true"
+            // (a well-formed `kind = gps` record always has one); the rewrite
+            // stores it, as a GPS record without one is malformed.
+            .using_clause = existing.getUsingClause() orelse "true",
             .check_clause = existing.getCheckClause(),
             .audit_level = existing.audit_level,
             .created_by = existing.created_by,
             .created_at = existing.created_at,
+            // SONNY-2750: `findPolicyIdByName` found a GPS record (a legacy one
+            // included), which this re-persist records as such.
+            .kind = .gps,
+            .mode = .replace,
         });
         try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1631,6 +1799,9 @@ fn computePermissionHmac(hmac_key: *const [32]u8, record: *const UserStorageBack
     return computeRecordHmacChecked(hmac_key, &props);
 }
 
+/// SONNY-2750: the kind is covered once a record has one. A legacy record
+/// (no `kind` property) is hashed exactly as before, so its stored HMAC still
+/// verifies.
 fn computePolicyHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.PolicyRecord) [32]u8 {
     var id_buf: [20]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{record.id}) catch "0";
@@ -1665,7 +1836,18 @@ fn computePolicyHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.
         .{ .key = "using_clause", .value = using_clause },
     };
 
-    return computeRecordHmacChecked(hmac_key, &props);
+    const kind_value: ?[]const u8 = switch (record.kind) {
+        .legacy => null,
+        .gps, .rls => record.kind.property().?,
+        // Not a value any writer stores: it can only match a record signed
+        // with it, and no loader uses an `.invalid` record anyway.
+        .invalid => "<invalid>",
+    };
+    const kv = kind_value orelse return computeRecordHmacChecked(hmac_key, &props);
+    var with_kind: [props.len + 1]auth_hmac.KeyValue = undefined;
+    @memcpy(with_kind[0..props.len], &props);
+    with_kind[props.len] = .{ .key = "kind", .value = kv };
+    return computeRecordHmacChecked(hmac_key, &with_kind);
 }
 
 /// Sort HMACs by their byte representation for deterministic chain hash ordering.

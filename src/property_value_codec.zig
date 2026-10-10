@@ -1,4 +1,5 @@
 const std = @import("std");
+const value_order = @import("execution/value_order.zig");
 const schema = @import("schema");
 
 const eval_extended = @import("eval_extended.zig");
@@ -17,6 +18,7 @@ const uuid = @import("uuid");
 const vector = @import("types/vector.zig");
 const xml = @import("types/xml.zig");
 const eval_funcs = @import("types/evaluator_functions.zig");
+const narrowing = @import("types/narrowing.zig");
 
 pub const ExtValue = eval_extended.ExtValue;
 pub const Value = value_types.Value;
@@ -476,6 +478,20 @@ pub fn evalValueToHeapValue(value: Value) heap.Value {
     };
 }
 
+// CANARY: REQ=REQ-SONNY-2769-DECIMAL-SCALE; FEATURE="IntegerOverflow"; ASPECT=HeapDecimalScale; STATUS=TESTED; TEST=tests/test_sonny2769_integer_overflow.zig; OWNER=codec; UPDATED=2026-09-26
+/// A heap decimal (i16 scale) as a query decimal (u8 scale): a negative scale
+/// is folded into the coefficient (exactly, while it fits), a scale past 255
+/// is truncated to 255. Null when the value does not fit a query decimal.
+/// SONNY-2769: the scale was `@intCast` to u8, which aborted the server for a
+/// decimal() with a negative scale or a typed decimal parameter's bytes with
+/// any scale outside 0..255.
+fn heapDecimalAsU8Scale(d: @FieldType(heap.Value, "Decimal128")) ?struct { coeff: i128, scale: u8 } {
+    if (std.math.cast(u8, d.scale)) |s| return .{ .coeff = d.coeff, .scale = s };
+    if (d.scale > 0) return .{ .coeff = narrowing.decimalRound(d.coeff, @intCast(d.scale - 255), .trunc), .scale = 255 };
+    const factor = narrowing.pow10(@intCast(-@as(i32, d.scale))) orelse return if (d.coeff == 0) .{ .coeff = 0, .scale = 0 } else null;
+    return .{ .coeff = std.math.mul(i128, d.coeff, factor) catch return null, .scale = 0 };
+}
+
 pub fn heapValueToExtValue(value: heap.Value) ExtValue {
     return switch (value) {
         .Null => .{ .Null = {} },
@@ -499,7 +515,7 @@ pub fn heapValueToExtValue(value: heap.Value) ExtValue {
         .BigInt => |v| .{ .BigInt = v },
         .Real => |v| .{ .Real = v },
         .Double => |v| .{ .Double = v },
-        .Decimal128 => |v| .{ .Decimal = .{ .coeff = v.coeff, .scale = @intCast(v.scale) } },
+        .Decimal128 => |v| if (heapDecimalAsU8Scale(v)) |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } } else .{ .Null = {} },
         .Char => |v| .{ .Char = .{ .data = v.data, .n = v.n } },
         .Varchar => |v| .{ .Varchar = .{ .data = v.data, .n = v.n } },
         .Text => |v| .{ .Text = v },
@@ -533,7 +549,7 @@ pub fn heapValueToValue(value: heap.Value) Value {
         .Text => |s| .{ .Text = s },
         .Real => |f| .{ .Real = f },
         .Double => |d| .{ .Double = d },
-        .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale), .orig_scale = @intCast(d.scale), .orig_repr = null } },
+        .Decimal128 => |d| if (heapDecimalAsU8Scale(d)) |q| .{ .Decimal = .{ .coeff = q.coeff, .scale = q.scale, .orig_scale = q.scale, .orig_repr = null } } else .{ .Null = {} },
         .SmallInt => |i| .{ .SmallInt = i },
         .BigInt => |i| .{ .BigInt = i },
         .Char => |c| .{ .Char = .{ .data = c.data, .n = c.n } },
@@ -577,9 +593,33 @@ pub fn heapValueToPropertyValue(value: heap.Value) graph_store.PropertyValue {
         .Bool => |b| .{ .Bool = b },
         .Int => |i| .{ .Int = i },
         .Str => |s| .{ .String = s },
-        .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
+        .Decimal128 => |d| if (heapDecimalAsU8Scale(d)) |q| .{ .Decimal = .{ .coeff = q.coeff, .scale = q.scale } } else .Null,
         else => .{ .ExtValue = heapValueToExtValue(value) },
     };
+}
+
+/// The number a stored extended value holds, or null (SONNY-2806: the exact
+/// node-property index hashes numbers by value). `type_tag` and `data` are the
+/// storage engine's ext value as `graph_storage_adapter.toStorageProperty`
+/// writes it: the property tag, then [u32 length][heap encoding]; the heap
+/// encoding starts with its tag (storage/heap.zig: 0x02 INT, 0x20 SMALLINT,
+/// 0x21 BIGINT, 0x22 REAL, 0x23 DOUBLE, 0x24 DECIMAL). A decimal whose scale
+/// is outside 0..255 is left to its bytes.
+pub fn extPayloadNumber(type_tag: u16, data: []const u8) ?value_order.Number {
+    if (type_tag != property_tag_ext or data.len < 5) return null;
+    const h = data[4..];
+    switch (h[0]) {
+        0x02, 0x21 => if (h.len >= 9) return .{ .exact = .{ .coeff = std.mem.readInt(i64, h[1..9], .little), .scale = 0 } },
+        0x20 => if (h.len >= 3) return .{ .exact = .{ .coeff = std.mem.readInt(i16, h[1..3], .little), .scale = 0 } },
+        0x22 => if (h.len >= 5) return .{ .float = @as(f32, @bitCast(std.mem.readInt(u32, h[1..5], .little))) },
+        0x23 => if (h.len >= 9) return .{ .float = @bitCast(std.mem.readInt(u64, h[1..9], .little)) },
+        0x24 => if (h.len >= 19) {
+            const scale = std.mem.readInt(i16, h[17..19], .little);
+            if (scale >= 0 and scale <= 255) return .{ .exact = .{ .coeff = std.mem.readInt(i128, h[1..17], .little), .scale = @intCast(scale) } };
+        },
+        else => {},
+    }
+    return null;
 }
 
 pub fn encodeExtValueBinary(allocator: std.mem.Allocator, ext: ExtValue) ![]u8 {
@@ -610,13 +650,26 @@ pub fn encodeExtValueBinary(allocator: std.mem.Allocator, ext: ExtValue) ![]u8 {
     };
 }
 
+/// SONNY-2727: how deep a binary extended list may nest. Each level is a
+/// stack frame of the decoder, and a client chooses the bytes.
+const max_ext_list_depth = 64;
+
 pub fn decodeExtValueBinary(allocator: std.mem.Allocator, bytes: []const u8) !ExtValue {
+    return decodeExtValueBinaryAt(allocator, bytes, 0);
+}
+
+fn decodeExtValueBinaryAt(allocator: std.mem.Allocator, bytes: []const u8, depth: usize) !ExtValue {
     if (bytes.len == 0) return error.InvalidParams;
 
     if (bytes[0] == ext_tag_list) {
         if (bytes.len < 5) return error.InvalidParams;
+        // SONNY-2727: the decoder recursed once per level with no bound.
+        if (depth >= max_ext_list_depth) return error.InvalidParams;
 
         const item_count = std.mem.readInt(u32, bytes[1..5][0..4], .little);
+        // SONNY-2727: every item takes at least its 4-byte length, so a count
+        // the bytes cannot hold is refused before it sizes an allocation.
+        if (item_count > (bytes.len - 5) / 4) return error.InvalidParams;
         const list = try allocator.alloc(ExtValue, item_count);
         var initialized: usize = 0;
         errdefer {
@@ -634,7 +687,7 @@ pub fn decodeExtValueBinary(allocator: std.mem.Allocator, bytes: []const u8) !Ex
             offset += 4;
             const item_len_usize: usize = @intCast(item_len);
             if (offset + item_len_usize > bytes.len) return error.InvalidParams;
-            list[idx] = try decodeExtValueBinary(allocator, bytes[offset .. offset + item_len_usize]);
+            list[idx] = try decodeExtValueBinaryAt(allocator, bytes[offset .. offset + item_len_usize], depth + 1);
             initialized += 1;
             offset += item_len_usize;
         }
@@ -642,7 +695,21 @@ pub fn decodeExtValueBinary(allocator: std.mem.Allocator, bytes: []const u8) !Ex
         return .{ .List = list };
     }
 
-    return heapValueToExtValue(try heap.decodeValue(allocator, bytes));
+    return checkedHeapValueToExtValue(try heap.decodeValue(allocator, bytes));
+}
+
+/// SONNY-2727: `heapValueToExtValue` for a value decoded from a client's
+/// bytes. A binary Decimal128 carries an i16 scale, and the engine's decimal
+/// scale is a u8, so one outside it is refused (`heapValueToExtValue` narrowed
+/// it unchecked); so is the smallest i128 coefficient, which has no negation.
+fn checkedHeapValueToExtValue(value: heap.Value) error{InvalidParams}!ExtValue {
+    switch (value) {
+        .Decimal128 => |d| {
+            if (std.math.cast(u8, d.scale) == null or d.coeff == std.math.minInt(i128)) return error.InvalidParams;
+        },
+        else => {},
+    }
+    return heapValueToExtValue(value);
 }
 
 pub fn encodePropertyValue(allocator: std.mem.Allocator, value: graph_store.PropertyValue) ![]u8 {
@@ -826,7 +893,8 @@ fn dynamicArrayToProjectedValue(allocator: std.mem.Allocator, arr: arrays.Dynami
                 offset += 16;
                 const raw_scale = std.mem.readInt(i16, arr.data[offset .. offset + 2][0..2], .little);
                 offset += 2;
-                const scale: u8 = @intCast(if (raw_scale < 0) 0 else raw_scale);
+                // SONNY-2769: a scale past 255 aborted the server in the cast.
+                const scale: u8 = std.math.cast(u8, if (raw_scale < 0) 0 else raw_scale) orelse return error.InvalidParams;
                 values[i] = .{ .Decimal = .{
                     .coeff = coeff,
                     .scale = scale,
@@ -876,9 +944,11 @@ fn encodeDecimalArrayData(allocator: std.mem.Allocator, items: []const std.json.
     errdefer allocator.free(data);
     var offset: usize = 0;
     for (items) |item| {
+        // SONNY-2739: a float past the 38-digit decimal (or an integer past
+        // i64 / 10^6) aborted the server; it is DecimalOverflow (22003).
         const coeff: i128 = switch (item) {
-            .float => |value| @intFromFloat(value * 1_000_000.0),
-            .integer => |value| value * 1_000_000,
+            .float => |value| try @import("types/decimal128.zig").checkedScaledCoeff(value, 1_000_000.0),
+            .integer => |value| @as(i128, value) * 1_000_000,
             else => return error.InvalidParams,
         };
         std.mem.writeInt(i128, data[offset .. offset + 16][0..16], coeff, .little);
@@ -1013,7 +1083,10 @@ pub fn protoExtendedToHeapValue(allocator: std.mem.Allocator, ext: schema.Extend
                         },
                         else => extValueToHeapValue(decoded),
                     };
-                } else |_| {
+                } else |err| {
+                    // SONNY-2727: a list tag is no heap value; the list
+                    // decoder's refusal stands.
+                    if (bytes.len > 0 and bytes[0] == ext_tag_list) return err;
                     return heap.decodeValue(allocator, bytes);
                 }
             }
@@ -1029,13 +1102,15 @@ pub fn protoExtendedToHeapValue(allocator: std.mem.Allocator, ext: schema.Extend
         };
     }
     if (std.ascii.eqlIgnoreCase(type_name, "INTEGER") or std.ascii.eqlIgnoreCase(type_name, "INT")) return .{ .Int = try expectInt(ext.data) };
-    if (std.ascii.eqlIgnoreCase(type_name, "SMALLINT")) return .{ .SmallInt = @intCast(try expectInt(ext.data)) };
+    // SONNY-2727, SONNY-2769: the narrowings below are checked (they were
+    // bare casts); a SMALLINT parameter past i16 aborted the server in the cast.
+    if (std.ascii.eqlIgnoreCase(type_name, "SMALLINT")) return .{ .SmallInt = std.math.cast(i16, try expectInt(ext.data)) orelse return error.InvalidParams };
     if (std.ascii.eqlIgnoreCase(type_name, "BIGINT")) return .{ .BigInt = try expectInt(ext.data) };
-    if (std.ascii.eqlIgnoreCase(type_name, "REAL")) return .{ .Real = @floatCast(try expectDouble(ext.data)) };
+    if (std.ascii.eqlIgnoreCase(type_name, "REAL")) return .{ .Real = try checkedReal(try expectDouble(ext.data)) };
     if (std.ascii.eqlIgnoreCase(type_name, "DOUBLE")) return .{ .Double = try expectDouble(ext.data) };
     if (std.ascii.eqlIgnoreCase(type_name, "TEXT")) return .{ .Text = try allocator.dupe(u8, try expectText(ext.data)) };
-    if (std.ascii.eqlIgnoreCase(type_name, "CHAR")) return eval_funcs.Char(allocator, try expectText(ext.data), @intCast((try expectText(ext.data)).len));
-    if (std.ascii.eqlIgnoreCase(type_name, "VARCHAR")) return eval_funcs.Varchar(allocator, try expectText(ext.data), @intCast((try expectText(ext.data)).len));
+    if (std.ascii.eqlIgnoreCase(type_name, "CHAR")) return eval_funcs.Char(allocator, try expectText(ext.data), try checkedCharLen((try expectText(ext.data)).len));
+    if (std.ascii.eqlIgnoreCase(type_name, "VARCHAR")) return eval_funcs.Varchar(allocator, try expectText(ext.data), try checkedCharLen((try expectText(ext.data)).len));
     if (std.ascii.eqlIgnoreCase(type_name, "DATE")) return eval_funcs.Date(try expectText(ext.data));
     if (std.ascii.eqlIgnoreCase(type_name, "TIME")) return .{ .Time = try datetime.Time.fromStr(try expectText(ext.data)) };
     if (std.ascii.eqlIgnoreCase(type_name, "TIMETZ")) return .{ .TimeTZ = try datetime.TimeTZ.fromStr(try expectText(ext.data)) };
@@ -1120,12 +1195,27 @@ pub fn protoExtendedToExtValue(allocator: std.mem.Allocator, ext: schema.Extende
             if (!std.ascii.eqlIgnoreCase(type_name, "BYTEA") and !std.ascii.eqlIgnoreCase(type_name, "GEOMETRY")) {
                 if (decodeExtValueBinary(allocator, bytes)) |decoded| {
                     return decoded;
-                } else |_| {}
+                } else |err| {
+                    // SONNY-2727: a list tag is no heap value; the list
+                    // decoder's refusal stands.
+                    if (bytes.len > 0 and bytes[0] == ext_tag_list) return err;
+                }
             }
         },
         else => {},
     };
-    return heapValueToExtValue(try protoExtendedToHeapValue(allocator, ext));
+    return checkedHeapValueToExtValue(try protoExtendedToHeapValue(allocator, ext));
+}
+
+/// SONNY-2727: a REAL as f32; a finite value outside f32 is refused.
+fn checkedReal(v: f64) error{InvalidParams}!f32 {
+    if (std.math.isFinite(v) and @abs(v) > std.math.floatMax(f32)) return error.InvalidParams;
+    return @floatCast(v);
+}
+
+/// SONNY-2727: a CHAR or VARCHAR length as the type's u16.
+fn checkedCharLen(len: usize) error{InvalidParams}!u16 {
+    return std.math.cast(u16, len) orelse error.InvalidParams;
 }
 
 fn expectPropertyValueEqual(expected: graph_store.PropertyValue, actual: graph_store.PropertyValue) !void {

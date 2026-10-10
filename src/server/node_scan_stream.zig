@@ -4,12 +4,19 @@ const gs = @import("graph_storage");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const execution = @import("../execution.zig");
+// SONNY-3321: the compile-time field allowlist (`onlyFields`).
+const write_shape = @import("../execution/write_shape.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+const stored_property_equality = @import("../execution/stored_property_equality.zig");
 const property_value_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const result_utils = @import("../execution/result_utils.zig");
 const type_helpers = @import("../eval/type_helpers.zig");
+// SONNY-1221 (GEO-UP-008): the executor path's schema typing
+// (`buildSchemaDefinition`), so this path's schema frame types a projection
+// column exactly the way the executor's does.
+const proto_util = @import("proto_util.zig");
 // SONNY-1229 (GEO-UP-002): the shared strict-tenancy / tenant-scope decision.
 // Same leaf module `crud_operations.tenantFilterFromContext`,
 // `match_operations.getSessionTenantFilter` and
@@ -17,6 +24,9 @@ const type_helpers = @import("../eval/type_helpers.zig");
 // "can I serve it?" answer is derived from the SAME resolution as the
 // executor's "what may it see?" answer.
 const tenancy = @import("../execution/tenancy.zig");
+// SONNY-2656: `hasEncryptedFields` decides whether a WHERE may run on the
+// per-node scratch arena (see `predicateAllocator`).
+const fle_integration = @import("../fle_integration.zig");
 
 const ExecutionContext = execution.ExecutionContext;
 const ExecutionResult = execution.ExecutionResult;
@@ -100,6 +110,10 @@ pub const NodeScanStream = struct {
     var_name: []const u8,
     slot_ids: []u64,
     next_index: usize = 0,
+    /// Where `prepare` started the cursor: the OFFSET when there is no WHERE
+    /// (slot collection is bounded by OFFSET+LIMIT, so the cursor skips the
+    /// first OFFSET slots), else 0. `rewind` returns here (SONNY-1221).
+    first_index: usize = 0,
     flags: [][]const u8,
 
     mode: ProjectionMode,
@@ -162,7 +176,27 @@ pub const NodeScanStream = struct {
     /// boundary exactly like a set `cancel_token`. `0` means "no deadline".
     deadline_mono_ns: u64 = 0,
 
+    /// SONNY-1221: rows built BEFORE the schema frame (`prefetchSchemaSample`),
+    /// so the frame can type each projection column from real values.
+    /// `buildNextPage` serves them first, in order, before it scans on, so no
+    /// row is dropped, repeated or reordered. null once all have been served.
+    prefetched: ?Prefetched = null,
+    /// SONNY-1221: set by `prefetchSchemaSample`. `buildSchema` asserts it for
+    /// a projection, so a call site that skips the prefetch fails loudly in a
+    /// safe build instead of silently typing every column NULL.
+    prefetch_attempted: bool = false,
+
+    const Prefetched = struct {
+        result: ExecutionResult,
+        /// Index of the first row not yet moved to a page.
+        next: usize = 0,
+        /// The allocator `result` was built with. It is also the one passed to
+        /// `buildNextPage`, whose pages free the rows they are handed.
+        allocator: std.mem.Allocator,
+    };
+
     pub fn deinit(self: *NodeScanStream) void {
+        self.dropPrefetched();
         self.allocator.free(self.slot_ids);
         for (self.flags) |flag| {
             self.allocator.free(flag);
@@ -175,6 +209,12 @@ pub const NodeScanStream = struct {
 
     pub fn hasRemaining(self: *const NodeScanStream) bool {
         if (self.mode == .count) return !self.count_emitted;
+        return self.prefetched != null or self.scanRemaining();
+    }
+
+    /// True while the slot scan can still produce rows (cursor not exhausted,
+    /// LIMIT not reached). Rows already prefetched are not counted here.
+    fn scanRemaining(self: *const NodeScanStream) bool {
         return self.next_index < self.slot_ids.len and self.rows_emitted < self.row_limit;
     }
 
@@ -191,6 +231,41 @@ pub const NodeScanStream = struct {
             if (graph_store.monoNanosNowPub() >= self.deadline_mono_ns) return true;
         }
         return false;
+    }
+
+    // CANARY: REQ=REQ-SONNY-1221-FAST-PATH-SCHEMA; FEATURE="EngineDirectProjectionSchema"; ASPECT=SchemaFrameTyping; STATUS=TESTED; TEST=tests/test_sonny1221_fast_path_schema.zig; OWNER=engine; UPDATED=2026-09-24
+    /// SONNY-1221: build, BEFORE the schema frame is sent, the rows the frame's
+    /// projection column types are inferred from: the first
+    /// `proto_util.column_type_sample_rows` rows of this stream's result, the
+    /// executor path's sample. The rows stay on the stream and `buildNextPage`
+    /// serves them first, so the scan does no extra work and the page
+    /// boundaries a caller asks for are unchanged. `allocator` must be the one
+    /// later passed to `buildNextPage` (the pages that serve these rows free
+    /// them). Node and count columns have fixed types, so only a projection
+    /// prefetches. Call once, before `buildSchema` and before any page.
+    pub fn prefetchSchemaSample(self: *NodeScanStream, allocator: std.mem.Allocator) !void {
+        self.prefetch_attempted = true;
+        if (self.mode != .projection or self.prefetched != null) return;
+        const page = try self.buildNextPage(allocator, proto_util.column_type_sample_rows);
+        var result = page.result;
+        if (result.rows.len == 0) {
+            result.deinit(allocator);
+            return;
+        }
+        self.prefetched = .{ .result = result, .allocator = allocator };
+    }
+
+    /// Restart from the first row: drop any prefetched rows and reset the scan
+    /// cursor (to where `prepare` put it, which honours a no-WHERE OFFSET), the
+    /// LIMIT/OFFSET counters and the count flag. Only for a stream that has not
+    /// sent a single row yet (the QUIC inline path re-serves the whole result
+    /// over PULL when its FIRST inline page fails to build).
+    pub fn rewind(self: *NodeScanStream) void {
+        self.dropPrefetched();
+        self.next_index = self.first_index;
+        self.rows_emitted = 0;
+        self.rows_skipped = 0;
+        self.count_emitted = false;
     }
 
     pub fn buildSchema(self: *const NodeScanStream, allocator: std.mem.Allocator) !schema.SchemaDefinition {
@@ -212,20 +287,24 @@ pub const NodeScanStream = struct {
                 return .{ .columns = cols };
             },
             .projection => {
-                var cols = try std.ArrayList(schema.ColumnDefinition).initCapacity(allocator, self.columns.len);
-                for (self.columns) |name| {
-                    try cols.append(allocator, .{
-                        .name = try allocator.dupe(u8, name),
-                        // Projection element types are value-dependent; the
-                        // authoritative per-value type rides on each DataPage
-                        // Value. The snapshot path infers a placeholder column
-                        // type from the first rows (NULL when unknown). We emit
-                        // NULL here so transport schema matches the snapshot
-                        // path's "unknown until first row" contract.
-                        .type = try allocator.dupe(u8, "NULL"),
-                    });
-                }
-                return .{ .columns = cols };
+                // SONNY-1221: a projection's column types depend on its values.
+                // Type them with the executor path's own inference
+                // (`proto_util.buildSchemaDefinition`: the first non-null value
+                // among the first `column_type_sample_rows` rows) over the rows
+                // `prefetchSchemaSample` built -- exactly the rows this stream
+                // serves first -- so both paths report the same type for the
+                // same rows, and NULL only when every sampled value is null or
+                // no row matched. This used to hard-code NULL for every column.
+                // Without the prefetch there are no rows to type from, and
+                // every column would silently come out NULL.
+                std.debug.assert(self.prefetch_attempted);
+                const sample: [][]Value = if (self.prefetched) |pre| pre.result.rows[pre.next..] else &.{};
+                const view = ExecutionResult{
+                    .columns = self.columns,
+                    .rows = sample,
+                    .flags = std.ArrayList([]const u8).empty,
+                };
+                return proto_util.buildSchemaDefinition(allocator, &view);
             },
         }
     }
@@ -239,7 +318,7 @@ pub const NodeScanStream = struct {
         if (self.mode == .count) return self.buildCountPage(allocator);
 
         const page_len = if (page_size == 0) default_page_rows else page_size;
-        if (self.next_index >= self.slot_ids.len or self.rows_emitted >= self.row_limit) {
+        if (self.prefetched == null and !self.scanRemaining()) {
             return .{
                 .result = try self.emptyResult(allocator),
                 .final = true,
@@ -249,14 +328,29 @@ pub const NodeScanStream = struct {
         var rows = try std.ArrayList([]Value).initCapacity(allocator, @min(page_len, 256));
         errdefer {
             for (rows.items) |row| {
-                for (row) |val| execution.freeValue(allocator, val);
+                for (row) |val| property_value_codec.freeValue(allocator, val);
                 allocator.free(row);
             }
             rows.deinit(allocator);
         }
 
         var owned_entities = try OwnedGraphEntities.init(allocator);
+        // CANARY: REQ=REQ-SONNY-2463-BARE-NODE-LEAK; FEATURE="EngineDirectNodeOwnership"; ASPECT=PageFreesReturnedNode; STATUS=TESTED; TEST=tests/test_sonny2463_bare_node_leak.zig; OWNER=engine; UPDATED=2026-09-25
+        // SONNY-2463: a node this page returns owns its whole interior (see
+        // "Node ownership" at `destroyNode`), so page teardown frees all of it.
+        owned_entities.destroy_node = destroyNode;
         errdefer owned_entities.deinit();
+
+        // SONNY-1221: rows built for the schema frame are served first. When
+        // they fill the page, or nothing is left to scan, no scan runs.
+        try self.takePrefetched(allocator, &rows, owned_entities, page_len);
+        if (rows.items.len >= page_len or !self.scanRemaining()) {
+            const result = try self.finishResult(allocator, rows, owned_entities);
+            return .{
+                .result = result,
+                .final = self.prefetched == null and !self.scanRemaining(),
+            };
+        }
 
         // Materialization reads node pages, so it runs under the per-graph
         // SHARED read lock — but CHUNKED: acquire + release per
@@ -271,6 +365,9 @@ pub const NodeScanStream = struct {
         var lock_held = true;
         errdefer if (lock_held) graph_store.releaseGraphLock(lock);
         var batch_count: usize = 0;
+        // SONNY-2656: each node's WHERE runs on this arena, reset after it.
+        var scratch = std.heap.ArenaAllocator.init(allocator);
+        defer scratch.deinit();
 
         // Fill the page up to `page_len` MATCHED rows. With a predicate this
         // may scan more slots than rows produced (O(scanned)); LIMIT still
@@ -319,14 +416,20 @@ pub const NodeScanStream = struct {
             // ONLY those keys (cheap per-key directory lookup) instead of
             // decoding+duping every persisted property.
             const node = if (self.needed_keys) |keys|
-                materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch continue
+                materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch |err| {
+                    if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                    continue;
+                }
             else
-                materializeNode(allocator, self.graph_name, slot_id) catch continue;
+                materializeNode(allocator, self.graph_name, slot_id) catch |err| {
+                    if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                    continue;
+                };
             var node_tracked = false;
             errdefer if (!node_tracked) destroyNode(allocator, node);
 
             if (self.where_expr) |where_expr| {
-                const passes = self.evalPredicate(allocator, where_expr, node) catch false;
+                const passes = try self.evalPredicate(&scratch, allocator, where_expr, node);
                 if (!passes) {
                     destroyNode(allocator, node);
                     continue;
@@ -377,12 +480,17 @@ pub const NodeScanStream = struct {
                 // error path, so we don't free it here.
                 var produced: usize = 0;
                 errdefer {
-                    for (row[0..produced]) |val| execution.freeValue(allocator, val);
+                    for (row[0..produced]) |val| property_value_codec.freeValue(allocator, val);
                     allocator.free(row);
                 }
                 var produced_node_value = false;
                 for (self.ret_items, 0..) |item, i| {
-                    row[i] = try eval.evalExpr(allocator, item.expr, env);
+                    const value = try eval.evalExpr(allocator, item.expr, env);
+                    // SONNY-2472 / SONNY-2464: the cell never shares memory
+                    // with the node (see "Node ownership" at `destroyNode`).
+                    // It is set before `produced` counts it, so the errdefer
+                    // frees only cells that own what they hold.
+                    row[i] = try detachFromNode(allocator, node, value);
                     produced = i + 1;
                     if (row[i] == .Node) produced_node_value = true;
                 }
@@ -392,7 +500,8 @@ pub const NodeScanStream = struct {
                     try owned_entities.trackNode(node);
                     node_tracked.* = true;
                 } else {
-                    // No reference to the node escapes the row; free it now.
+                    // No reference to the node escapes the row, and no cell
+                    // points into it: free all of it now.
                     destroyNode(allocator, node);
                     node_tracked.* = true;
                 }
@@ -415,14 +524,68 @@ pub const NodeScanStream = struct {
             .columns = columns,
             .rows = try rows_mut.toOwnedSlice(allocator),
             .flags = std.ArrayList([]const u8).empty,
-            // Projection rows own their scalar values (strings duplicated by
-            // evalExpr); freeValue is a no-op for .Node, which is owned by
-            // owned_graph_entities — so no double free for mixed rows.
+            // A projection cell owns what it holds: `detachFromNode` copies
+            // any string that still points into its node, so freeing every
+            // cell here never frees node memory (SONNY-2472, SONNY-2464).
+            // freeValue is a no-op for .Node, which is owned by
+            // owned_graph_entities, so a mixed row is freed once too.
             .owns_value_memory = self.mode == .projection,
+            // SONNY-2656: every other cell is a fresh clone of the kind it
+            // projects (Text, Json, Bytea, ...), so free every kind.
+            .free_value = property_value_codec.freeValue,
             .owned_graph_entities = if (owned) owned_entities else null,
         };
         if (!owned) owned_entities.deinit();
         return result;
+    }
+
+    /// SONNY-1221: move prefetched rows, in order, onto `rows` until it holds
+    /// `page_len`. A row that projects the bare node carries that node, and the
+    /// node moves with the row to `owned_entities`, so the serving page keeps it
+    /// alive exactly as it would a node it had materialized itself. Space is
+    /// reserved before anything moves, so an allocation failure leaves every
+    /// row and node owned by exactly one side.
+    fn takePrefetched(
+        self: *NodeScanStream,
+        allocator: std.mem.Allocator,
+        rows: *std.ArrayList([]Value),
+        owned_entities: *OwnedGraphEntities,
+        page_len: usize,
+    ) !void {
+        const pre = if (self.prefetched) |*p| p else return;
+        while (rows.items.len < page_len and pre.next < pre.result.rows.len) {
+            const row = pre.result.rows[pre.next];
+            try rows.ensureUnusedCapacity(allocator, 1);
+            // Only rows that projected a bare node carry one to move.
+            if (pre.result.owned_graph_entities != null) {
+                try owned_entities.nodes.ensureUnusedCapacity(owned_entities.allocator, row.len);
+            }
+            rows.appendAssumeCapacity(row);
+            // Leave an empty slice behind: the prefetched result's deinit then
+            // frees only the rows it still owns (freeing a zero-length slice is
+            // a no-op).
+            pre.result.rows[pre.next] = row[0..0];
+            pre.next += 1;
+            if (pre.result.owned_graph_entities) |from| {
+                for (row) |val| {
+                    if (val != .Node) continue;
+                    for (from.nodes.items, 0..) |node, idx| {
+                        if (node != val.Node) continue;
+                        owned_entities.nodes.appendAssumeCapacity(from.nodes.swapRemove(idx));
+                        break;
+                    }
+                }
+            }
+        }
+        if (pre.next == pre.result.rows.len) self.dropPrefetched();
+    }
+
+    /// Free whatever the prefetched rows still own.
+    fn dropPrefetched(self: *NodeScanStream) void {
+        if (self.prefetched) |*pre| {
+            pre.result.deinit(pre.allocator);
+            self.prefetched = null;
+        }
     }
 
     fn emptyResult(self: *NodeScanStream, allocator: std.mem.Allocator) !ExecutionResult {
@@ -432,6 +595,7 @@ pub const NodeScanStream = struct {
             .rows = try allocator.alloc([]Value, 0),
             .flags = std.ArrayList([]const u8).empty,
             .owns_value_memory = self.mode == .projection,
+            .free_value = property_value_codec.freeValue,
         };
     }
 
@@ -510,6 +674,10 @@ pub const NodeScanStream = struct {
                 var count_lock_held = true;
                 errdefer if (count_lock_held) graph_store.releaseGraphLock(lock);
                 var batch_count: usize = 0;
+                // SONNY-2656: each node's WHERE runs on this arena, reset
+                // after it.
+                var scratch = std.heap.ArenaAllocator.init(allocator);
+                defer scratch.deinit();
                 for (self.slot_ids) |slot_id| {
                     if (batch_count == materialize_batch_nodes) {
                         graph_store.releaseGraphLock(lock);
@@ -529,12 +697,17 @@ pub const NodeScanStream = struct {
                     // GAP-0902: a filtered count needs ONLY the predicate's keys
                     // (no projection, no node escape), so read just those keys.
                     const node = if (self.needed_keys) |keys|
-                        materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch continue
+                        materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch |err| {
+                            if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                            continue;
+                        }
                     else
-                        materializeNode(allocator, self.graph_name, slot_id) catch continue;
+                        materializeNode(allocator, self.graph_name, slot_id) catch |err| {
+                            if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+                            continue;
+                        };
                     defer destroyNode(allocator, node);
-                    const passes = self.evalPredicate(allocator, where_expr, node) catch false;
-                    if (passes) matched += 1;
+                    if (try self.evalPredicate(&scratch, allocator, where_expr, node)) matched += 1;
                 }
                 // Released already if we bailed at a batch boundary on cancel.
                 if (count_lock_held) graph_store.releaseGraphLock(lock);
@@ -585,22 +758,101 @@ pub const NodeScanStream = struct {
         };
     }
 
-    fn evalPredicate(self: *NodeScanStream, allocator: std.mem.Allocator, where_expr: ast.Expr, node: *graph_store.Node) !bool {
-        const env = self.makeEnv(allocator, node);
-        const where_result = try eval.evalExpr(allocator, where_expr, env);
-        // Match the snapshot executor's label-scan WHERE coercion exactly
-        // (match_operations.zig generateCombinations): Bool→value, Null→false,
-        // Int→nonzero, else→false.
-        return switch (where_result) {
-            .Bool => |b| b,
-            .Null => false,
-            .Int => |i| i != 0,
-            else => false,
+    /// Whether `node` passes `where_expr`. The evaluation runs on `scratch`
+    /// (see `predicateAllocator`), which is reset before this returns. An
+    /// evaluation error is a miss, as it always was, except a limit
+    /// (SONNY-3251, round 15: 54001, 53200, 57014), which fails the read:
+    /// this stream is served outside the statement chokepoint that fails a
+    /// statement on a limit it swallowed.
+    fn evalPredicate(self: *NodeScanStream, scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator, where_expr: ast.Expr, node: *graph_store.Node) !bool {
+        defer _ = scratch.reset(.retain_capacity);
+        const eval_allocator = predicateAllocator(scratch, allocator);
+        const env = self.makeEnv(eval_allocator, node);
+        const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch |err| {
+            if (eval.isResourceLimitError(err)) return err;
+            return false;
         };
+        return predicateHolds(where_result);
     }
 };
 
+// Node ownership on the engine-direct scan (SONNY-2472, SONNY-2464,
+// SONNY-2463).
+//
+// Every node this file materializes (`materializeNode`,
+// `materializeNodeProjected`) owns ALL of its memory, on the allocator it was
+// built with: the struct, the label slice and each label, the graph name, every
+// property key and value, and the property map's entry slice. Two rules make
+// every one of those allocations, and every row cell, freed exactly once:
+//
+//   1. A row never shares memory with a node. `.Member` evaluation hands a cell
+//      the node's own string, not a copy; `detachFromNode` replaces such a cell
+//      with a copy before the row keeps it. So a cell owns exactly what it
+//      holds, and the page frees it (`owns_value_memory`), however many cells
+//      read the same property (SONNY-2472). Every other value a cell can hold
+//      is a fresh clone, of any extended kind, so the page frees cells with
+//      `property_value_codec.freeValue`, which frees every kind (SONNY-2656).
+//   2. A node has exactly one owner, which frees all of it once with
+//      `destroyNode`. That is the code that materialized it, straight after
+//      use, whenever no row returns the node itself: a WHERE miss, an OFFSET
+//      skip, a filtered count's tally, `slotMatchesPredicate`'s check, and a
+//      projection row that only reads properties. So a value is freed whether
+//      or not a row read it (SONNY-2464). A node that a row returns (`RETURN
+//      n`, or a bare `n` column) belongs to the page's `OwnedGraphEntities`
+//      instead, which `buildNextPage` creates with `destroy_node =
+//      destroyNode`, so page teardown frees it in full, after the rows that
+//      point at it (SONNY-2463). A prefetched row's node moves with its row
+//      from one such tracker to another, and is never in two.
+//
+// No arena is involved, so nothing is released in bulk and no cell can be left
+// pointing at memory released under it.
+
+// CANARY: REQ=REQ-SONNY-2472-DUPLICATE-PROJECTION; FEATURE="EngineDirectProjectionOwnership"; ASPECT=CellOwnsItsString; STATUS=TESTED; TEST=tests/test_sonny2472_duplicate_projection.zig; OWNER=engine; UPDATED=2026-09-25
+/// Rule 1 of "Node ownership": `value`, made independent of `node`. A string
+/// that points into one of the node's string values is replaced by a copy.
+/// Only a `.Str` can point into the node: every other value `.Member` or
+/// `.PropertyAccess` yields is a fresh allocation (a `.PropertyAccess` string,
+/// a projected list or extended value, a decrypted field) or holds no memory
+/// (a scalar, or `.Node`, which is the node itself and belongs to its owner).
+/// If the copy cannot be made, `value` still belongs to the node, so the caller
+/// has nothing of its own to free.
+fn detachFromNode(allocator: std.mem.Allocator, node: *const graph_store.Node, value: Value) !Value {
+    const s = switch (value) {
+        .Str => |s| s,
+        else => return value,
+    };
+    // An empty slice owns no memory, so freeing it is a no-op either way.
+    if (s.len == 0 or !nodeHoldsBytes(node, s)) return value;
+    return .{ .Str = try allocator.dupe(u8, s) };
+}
+
+/// True when `bytes` starts inside one of `node`'s string property values.
+fn nodeHoldsBytes(node: *const graph_store.Node, bytes: []const u8) bool {
+    const at = @intFromPtr(bytes.ptr);
+    var props = node.properties.iterator();
+    while (props.next()) |entry| {
+        const owned = switch (entry.value_ptr.*) {
+            .String => |owned| owned,
+            else => continue,
+        };
+        const start = @intFromPtr(owned.ptr);
+        if (at >= start and at < start + owned.len) return true;
+    }
+    return false;
+}
+
+// CANARY: REQ=REQ-SONNY-2464-STRING-VALUE-LEAKS; FEATURE="EngineDirectNodeOwnership"; ASPECT=DeepNodeDestroy; STATUS=TESTED; TEST=tests/test_sonny2464_string_value_leaks.zig; OWNER=engine; UPDATED=2026-09-25
+/// Rule 2 of "Node ownership": free everything `node` owns, then the node.
+/// Safe whatever the rows hold, because no row cell points into a node (rule
+/// 1). Frees exactly what `materializeNode` / `materializeNodeProjected`
+/// allocate; `graph_store.freeNodeValue` would also free `tenant_id`, which
+/// these nodes leave at its static default.
 fn destroyNode(allocator: std.mem.Allocator, node: *graph_store.Node) void {
+    var props = node.properties.iterator();
+    while (props.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        property_value_codec.freePropertyValue(allocator, entry.value_ptr.*);
+    }
     node.properties.deinit();
     allocator.free(node.graph_name);
     for (node.labels) |label| allocator.free(label);
@@ -952,6 +1204,7 @@ pub fn prepare(
         .var_name = var_name,
         .slot_ids = slot_ids,
         .next_index = start_index,
+        .first_index = start_index,
         .flags = owned_flags,
         .mode = eligibility.mode,
         .ret_items = ret_items,
@@ -1000,7 +1253,10 @@ fn collectExprPropertyKeys(
         .PropertyAccess => |pa| {
             if (std.ascii.eqlIgnoreCase(pa.object, variable_name)) try addKeyUnique(arena, pa.property, out);
         },
-        .Member => |m| {
+        .Member => |top| {
+            // SONNY-3189: down a member chain with a loop.
+            var m = top;
+            while (m.target.* == .Member) m = m.target.Member;
             if (m.target.* == .Ident and
                 (std.ascii.eqlIgnoreCase(m.target.Ident.orig, variable_name) or std.ascii.eqlIgnoreCase(m.target.Ident.cnf, variable_name)))
             {
@@ -1011,8 +1267,18 @@ fn collectExprPropertyKeys(
         },
         .Unary => |u| try collectExprPropertyKeys(arena, u.expr.*, variable_name, out),
         .Binary => |b| {
-            try collectExprPropertyKeys(arena, b.left.*, variable_name, out);
-            try collectExprPropertyKeys(arena, b.right.*, variable_name, out);
+            // SONNY-3189: a left-deep chain with a loop, not one recursion per
+            // operator; keys in the order the recursion found them.
+            var rights: std.ArrayList(*const ast.Expr) = .empty;
+            try rights.append(arena, b.right);
+            var leaf: *const ast.Expr = b.left;
+            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) try rights.append(arena, leaf.Binary.right);
+            try collectExprPropertyKeys(arena, leaf.*, variable_name, out);
+            var i = rights.items.len;
+            while (i > 0) {
+                i -= 1;
+                try collectExprPropertyKeys(arena, rights.items[i].*, variable_name, out);
+            }
         },
         .IsNull => |n| try collectExprPropertyKeys(arena, n.target.*, variable_name, out),
         .Call => |c| {
@@ -1056,7 +1322,25 @@ pub fn isEligible(q: *const ast.Query, session_tenant_id: ?[]const u8) bool {
     return eligibleQuery(q) != null;
 }
 
+// CANARY: REQ=REQ-SONNY-3321-STREAM-ALLOWLIST; FEATURE="NodeScanStream"; ASPECT=FieldAllowlist; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3321: the `ast.Query` fields the stream reads. Every other field
+/// must hold its empty value (`write_shape.onlyFields`, checked field by
+/// field at compile time), so a field added to the AST, or one this path
+/// does not apply, makes the statement ineligible instead of being dropped.
+/// The hand-written list it replaces missed `let_bindings`: over QUIC and
+/// gRPC `LET $x = 1 IN (... SET ...) MATCH (n:G) RETURN count(*)` was
+/// answered here before the write-shape validator could refuse it, and
+/// `LET $x = 2 MATCH (n:G) WHERE n.i = $x RETURN n` read $x as unbound.
+const stream_fields = [_][]const u8{
+    "match", "where_clause", "filter_clause", "ret",
+    "limit", "offset",       "limit_param",   "offset_param",
+};
+
 fn eligibleQuery(q: *const ast.Query) ?Eligibility {
+    if (!write_shape.onlyFields(q.*, &stream_fields)) return null;
+    // One predicate: a WHERE and a FILTER together are both to hold, and the
+    // stream applies one (`WHERE n.i > 0 FILTER n.i < 3` returned 9 rows).
+    if (q.where_clause != null and q.filter_clause != null) return null;
     if (q.optional_match) return null;
     if (q.with_clause != null or q.group_by != null or q.having != null) return null;
     if (q.order_by != null or q.ret.distinct) return null;
@@ -1188,7 +1472,26 @@ fn isStreamableProjectionExpr(expr: ast.Expr, variable_name: []const u8) bool {
 /// params. Rejects anything referencing other variables or needing cross-row
 /// context, so the per-node `eval.evalExpr` is guaranteed identical to the
 /// snapshot executor's per-node evaluation.
-fn isStreamablePredicateExpr(expr: ast.Expr) bool {
+fn isStreamablePredicateExpr(root: ast.Expr) bool {
+    // SONNY-3189: down AND/OR/comparison, NOT and member chains with a loop,
+    // not one recursion per link.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |b| switch (b.op) {
+            .And, .Or, .Eq, .Ne, .Lt, .Le, .Gt, .Ge => {
+                if (!isStreamablePredicateExpr(b.right.*)) return false;
+                at = b.left;
+            },
+            else => return false,
+        },
+        .Unary => |u| {
+            if (u.op != .Not) return false;
+            at = u.expr;
+        },
+        .Member => |m| at = m.target,
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Bool, .Int, .Null, .String, .Decimal, .Param => true,
         .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .TextLit => true,
@@ -1207,7 +1510,19 @@ fn isStreamablePredicateExpr(expr: ast.Expr) bool {
 /// Every Ident / property-access target inside the predicate references only
 /// the scanned variable (or a parameter). Guards against `WHERE m.x = 1`
 /// where `m` is some other (unbound here) variable.
-fn predicateOnlyReferences(expr: ast.Expr, variable_name: []const u8) bool {
+fn predicateOnlyReferences(root: ast.Expr, variable_name: []const u8) bool {
+    // SONNY-3189: down binary, unary and member chains with a loop.
+    var at: *const ast.Expr = &root;
+    while (true) switch (at.*) {
+        .Binary => |b| {
+            if (!predicateOnlyReferences(b.right.*, variable_name)) return false;
+            at = b.left;
+        },
+        .Unary => |u| at = u.expr,
+        .Member => |m| at = m.target,
+        else => break,
+    };
+    const expr = at.*;
     return switch (expr) {
         .Bool, .Int, .Null, .String, .Decimal, .Param => true,
         .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .TextLit => true,
@@ -1231,19 +1546,21 @@ fn resolveGraphName(context: ExecutionContext) []const u8 {
     return graph_store.DEFAULT_GRAPH_NAME;
 }
 
+// CANARY: REQ=REQ-SONNY-2473-SKIP-WITHOUT-LIMIT; FEATURE="EngineDirectRowWindow"; ASPECT=UnboundedWithoutLimit; STATUS=TESTED; TEST=tests/test_sonny2473_skip_without_limit.zig; OWNER=engine; UPDATED=2026-09-25
+/// How many slots a scan with no WHERE must collect (matched == scanned):
+/// OFFSET + LIMIT, or null (every slot) when there is no LIMIT.
+/// `collectMatchingSlotIds` caps collection at this, and `prepare` starts the
+/// cursor at the OFFSET. An OFFSET alone bounds nothing: `SKIP k` returns every
+/// row after the first k (SONNY-2473: this answered k+1 for it, so `SKIP k`
+/// returned one row).
 fn resolveRequiredRows(
     q: *const ast.Query,
     param_names: []const []const u8,
     param_values: []const Value,
 ) ?usize {
+    const limit = resolveWindowValue(q.limit, q.limit_param, param_names, param_values) orelse return null;
     const offset = resolveWindowValue(q.offset, q.offset_param, param_names, param_values) orelse 0;
-    if (resolveWindowValue(q.limit, q.limit_param, param_names, param_values)) |limit| {
-        return std.math.add(usize, offset, limit) catch std.math.maxInt(usize);
-    }
-    if (offset != 0) {
-        return std.math.add(usize, offset, 1) catch std.math.maxInt(usize);
-    }
-    return null;
+    return std.math.add(usize, offset, limit) catch std.math.maxInt(usize);
 }
 
 fn resolveWindowValue(
@@ -1389,8 +1706,18 @@ fn appendSeekableWhereProps(
         else => return,
     };
     if (b.op == .And) {
-        try appendSeekableWhereProps(arena, b.left.*, var_name, out);
-        try appendSeekableWhereProps(arena, b.right.*, var_name, out);
+        // SONNY-3189: an AND chain with a loop, not one recursion per AND;
+        // conjuncts in the order the recursion appended them.
+        var rights: std.ArrayList(*const ast.Expr) = .empty;
+        try rights.append(arena, b.right);
+        var leaf: *const ast.Expr = b.left;
+        while (leaf.* == .Binary and leaf.Binary.op == .And) : (leaf = leaf.Binary.left) try rights.append(arena, leaf.Binary.right);
+        try appendSeekableWhereProps(arena, leaf.*, var_name, out);
+        var i = rights.items.len;
+        while (i > 0) {
+            i -= 1;
+            try appendSeekableWhereProps(arena, rights.items[i].*, var_name, out);
+        }
         return;
     }
     if (b.op != .Eq) return;
@@ -1545,6 +1872,10 @@ fn collectMatchingSlotIds(
         // (correct: 0-match returns none, selective-near-end still scans most).
         if (where_pushdown) |wp| {
             if (try adapter.beginLabelScan(graph_name, pattern.labels[0])) |cursor| {
+                // SONNY-2656: each candidate's WHERE runs on this arena,
+                // reset after it.
+                var scratch = std.heap.ArenaAllocator.init(allocator);
+                defer scratch.deinit();
                 var shard_idx: usize = 0;
                 outer: while (shard_idx < cursor.shard_count) : (shard_idx += 1) {
                     var chunk = std.ArrayList(u64).empty;
@@ -1556,7 +1887,7 @@ fn collectMatchingSlotIds(
                         // predicate. Only predicate-passing slots count toward
                         // `match_cap`; capping on raw slots would under-return.
                         if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
-                        if (!slotMatchesPredicate(allocator, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
+                        if (!try slotMatchesPredicate(allocator, &scratch, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
                         try result.append(allocator, slot_id);
                         if (result.items.len >= wp.match_cap) break :outer;
                     }
@@ -1645,8 +1976,28 @@ fn seekIndexedCandidates(
         // restricted inline values to streamable literals/params, so this is a
         // pure constant fold. A failure or a non-scalar (e.g. NULL / list /
         // node ref) means we cannot seek on this prop — skip it.
-        const expected = eval.evalExpr(allocator, prop.value.*, env) catch continue;
-        const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch continue;
+        // SONNY-3316 (round 16, I4): a limit (54001, 53200, a budget or a
+        // cancel) fails the read; only a value that cannot be sought skips.
+        const expected = eval.evalExpr(allocator, prop.value.*, env) catch |err| {
+            if (eval.isResourceLimitError(err)) {
+                if (best_pv) |b| property_value_codec.freePropertyValue(allocator, b);
+                return err;
+            }
+            continue;
+        };
+        // SONNY-2806: the index hashes a duration or a zoned time by its
+        // representation, and two equal ones can differ (P1D and PT24H,
+        // 01:00+14:00 and 11:00+00:00), so a seek could miss one. Such a
+        // property is matched by the scan, which compares by value. (A number
+        // hashes by its value; see graph_storage_adapter.hashStorageProperty.)
+        if (expected == .Interval or expected == .TimeTZ) continue;
+        const pv = property_value_codec.valueToPropertyValue(allocator, expected) catch |err| {
+            if (eval.isResourceLimitError(err)) {
+                if (best_pv) |b| property_value_codec.freePropertyValue(allocator, b);
+                return err;
+            }
+            continue;
+        };
         // NULL inline equality never matches via the index path the same way
         // (`{p: null}` is unusual); leave it to the scan/verify path.
         if (pv == .Null) {
@@ -1725,9 +2076,16 @@ fn nodeMatchesPattern(
     };
 
     for (pattern.props.?) |prop| {
-        const expected = eval.evalExpr(allocator, prop.value.*, env) catch return false;
+        // SONNY-3316 (round 16, I4): a limit fails the read, not the row.
+        const expected = eval.evalExpr(allocator, prop.value.*, env) catch |err| {
+            if (eval.isResourceLimitError(err)) return err;
+            return false;
+        };
         const actual = props.get(prop.key) orelse return false;
-        if (!storagePropertyMatches(expected, actual)) {
+        // SONNY-2806: by value, as the executor compares (a decimal by
+        // representation and every extended value never, a DOUBLE included).
+        // A stored value that cannot be decoded fails the read.
+        if (!try stored_property_equality.matches(allocator, expected, actual)) {
             return false;
         }
     }
@@ -1744,6 +2102,7 @@ fn nodeMatchesPattern(
 /// paging path's catch-skip — so the bounded set never includes a stale slot.
 fn slotMatchesPredicate(
     allocator: std.mem.Allocator,
+    scratch: *std.heap.ArenaAllocator,
     graph_name: []const u8,
     slot_id: u64,
     where_expr: ast.Expr,
@@ -1751,9 +2110,16 @@ fn slotMatchesPredicate(
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
-) bool {
-    const node = materializeNode(allocator, graph_name, slot_id) catch return false;
+) !bool {
+    const node = materializeNode(allocator, graph_name, slot_id) catch |err| {
+        if (eval.isResourceLimitError(err)) return err; // SONNY-3349
+        return false;
+    };
     defer destroyNode(allocator, node);
+    // SONNY-2656: as in `evalPredicate`, the evaluation runs on `scratch`,
+    // reset before this returns.
+    defer _ = scratch.reset(.retain_capacity);
+    const eval_allocator = predicateAllocator(scratch, allocator);
     var names = [_][]const u8{var_name};
     var values = [_]Value{.{ .Node = node }};
     const env = Env{
@@ -1761,13 +2127,22 @@ fn slotMatchesPredicate(
         .values = values[0..1],
         .param_names = param_names,
         .param_values = param_values,
-        .allocator = allocator,
+        .allocator = eval_allocator,
         .exec_context = @constCast(&context),
     };
-    // Same as evalPredicate: do NOT free `where_result` — the eligible boolean
-    // predicate folds to a fresh Bool (no heap), and freeing risks touching a
-    // value that borrows the node/params.
-    const where_result = eval.evalExpr(allocator, where_expr, env) catch return false;
+    // SONNY-3251 (round 15, F6): a limit fails the read; any other error is
+    // a miss.
+    const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch |err| {
+        if (eval.isResourceLimitError(err)) return err;
+        return false;
+    };
+    return predicateHolds(where_result);
+}
+
+/// The snapshot executor's label-scan WHERE coercion, exactly
+/// (match_operations.zig generateCombinations): Bool is itself, Null is false,
+/// Int is nonzero, and anything else is false.
+fn predicateHolds(where_result: Value) bool {
     return switch (where_result) {
         .Bool => |b| b,
         .Null => false,
@@ -1776,9 +2151,61 @@ fn slotMatchesPredicate(
     };
 }
 
+// CANARY: REQ=REQ-SONNY-2656-EXTENDED-VALUE-LEAKS; FEATURE="EngineDirectExtendedValueOwnership"; ASPECT=PredicateScratchArena; STATUS=TESTED; TEST=tests/test_sonny2656_extended_value_leaks.zig; OWNER=engine; UPDATED=2026-09-25
+/// The allocator a WHERE runs on for one node (SONNY-2656). A WHERE yields
+/// only a Bool, but what it reads along the way is allocated: `.Member`
+/// hands back a fresh clone of an extended value (Text, Json, Bytea, a list,
+/// ...), and `IS NULL` and the comparisons drop it unfreed. So the WHERE runs
+/// on `scratch`, which its caller resets after each node, and the clones go
+/// with it. The one exception is a deployment with encrypted fields:
+/// decrypting one can create the process-wide FLE key manager on the
+/// evaluation allocator, and that must never be an arena that is reset. There
+/// the WHERE runs on `allocator`, as it always did.
+fn predicateAllocator(scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator) std.mem.Allocator {
+    if (fle_integration.hasEncryptedFields()) return allocator;
+    return scratch.allocator();
+}
+
+// CANARY: REQ=REQ-SONNY-3349-PROFILE-RELAY; FEATURE="NodeScanStream"; ASPECT=MaterializeLimitFails; STATUS=TESTED; TEST=tests/test_sonny3349_profile_relay.zig; OWNER=server; UPDATED=2026-09-28
+/// SONNY-3349 (round 17): a test seam. When set on a thread, `materializeNode`
+/// and `materializeNodeProjected` fail with it, as an allocation or a node
+/// deleted under the scan would. Never set outside tests.
+///
+/// The scan skips a node it cannot materialize, which a concurrent delete
+/// explains; a resource limit (out of memory) is not a missing node, and
+/// fails the query (the paging scan, the filtered count, and the WHERE +
+/// LIMIT enumeration). It became a row the query did not return.
+pub threadlocal var test_materialize_error: ?error{ OutOfMemory, NodeNotFound } = null;
+
 fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
+    if (test_materialize_error) |err| return err;
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    const node = try newNode(allocator, adapter, graph_name, slot_id);
+    // SONNY-2463: the node owns everything put into it from here on, so a
+    // failure part way frees all of it (see "Node ownership" at `destroyNode`).
+    errdefer destroyNode(allocator, node);
+
+    var props = try adapter.getAllNodeProperties(graph_name, slot_id, allocator);
+    defer freeStoragePropertyMap(allocator, &props);
+
+    var iter = props.iterator();
+    while (iter.next()) |entry| {
+        try putProperty(allocator, node, entry.key_ptr.*, entry.value_ptr.*);
+    }
+
+    return node;
+}
+
+/// The node for `slot_id` with its id, labels and graph name, and no
+/// properties yet. It owns what it holds, so `destroyNode` frees it whatever
+/// is later put into it. On failure, nothing is left allocated.
+fn newNode(
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    slot_id: u64,
+) !*graph_store.Node {
     const store = graph_store.getGlobalStore(allocator);
     const external_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id);
 
@@ -1787,31 +2214,51 @@ fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id
         for (labels) |label| allocator.free(label);
         allocator.free(labels);
     }
+    const owned_graph_name = try allocator.dupe(u8, graph_name);
+    errdefer allocator.free(owned_graph_name);
 
     const node = try allocator.create(graph_store.Node);
-    errdefer allocator.destroy(node);
     node.* = .{
         .id = external_id,
         .labels = labels,
         .properties = graph_store.CompactPropertyMap.init(allocator),
-        .graph_name = try allocator.dupe(u8, graph_name),
+        .graph_name = owned_graph_name,
     };
-    errdefer {
-        node.properties.deinit();
-        allocator.free(node.graph_name);
-    }
-
-    var props = try adapter.getAllNodeProperties(graph_name, slot_id, allocator);
-    defer freeStoragePropertyMap(allocator, &props);
-
-    var iter = props.iterator();
-    while (iter.next()) |entry| {
-        const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const value = try graph_storage_adapter.fromStorageProperty(allocator, entry.value_ptr.*);
-        try node.properties.put(key, value);
-    }
-
     return node;
+}
+
+// CANARY: REQ=REQ-SONNY-2463-MATERIALIZE-OOM; FEATURE="EngineDirectNodeOwnership"; ASPECT=PartialNodeFreed; STATUS=TESTED; TEST=tests/test_sonny2463_materialize_oom.zig; OWNER=engine; UPDATED=2026-09-25
+/// Put a copy of `key` = `value` (a storage read) into `node`. `node` owns the
+/// copies once the put succeeds. If a copy or the put itself fails, the copies
+/// made so far are freed here, and the node is unchanged (a failed put leaves
+/// the map as it was).
+fn putProperty(allocator: std.mem.Allocator, node: *graph_store.Node, key: []const u8, value: gs.PropertyValue) !void {
+    const owned_key = try allocator.dupe(u8, key);
+    errdefer allocator.free(owned_key);
+    const decoded = try graph_storage_adapter.fromStorageProperty(allocator, value);
+    errdefer property_value_codec.freePropertyValue(allocator, decoded);
+    try node.properties.put(owned_key, decoded);
+}
+
+/// Test-only (SONNY-2463): build the node for `slot_id` exactly as the scan
+/// does, from `needed_keys` when given (`materializeNodeProjected`), else in
+/// full (`materializeNode`), so a test can drive it under a failing
+/// allocator. Free the result with `destroyNodeForTest`.
+pub fn materializeNodeForTest(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64, needed_keys: ?[]const []const u8) !*graph_store.Node {
+    if (needed_keys) |keys| return materializeNodeProjected(allocator, graph_name, slot_id, keys);
+    return materializeNode(allocator, graph_name, slot_id);
+}
+
+/// SONNY-3350 (round 17): a test seam: `resolveExternalNodeId`.
+pub fn resolveExternalNodeIdForTest(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !u64 {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    return resolveExternalNodeId(allocator, adapter, graph_store.getGlobalStore(allocator), graph_name, slot_id);
+}
+
+/// Test-only (SONNY-2463): `destroyNode`, for a node `materializeNodeForTest`
+/// built.
+pub fn destroyNodeForTest(allocator: std.mem.Allocator, node: *graph_store.Node) void {
+    destroyNode(allocator, node);
 }
 
 /// GAP-0902 (selective scan): materialize a node reading ONLY `needed_keys` —
@@ -1830,29 +2277,13 @@ fn materializeNodeProjected(
     slot_id: u64,
     needed_keys: []const []const u8,
 ) !*graph_store.Node {
+    if (test_materialize_error) |err| return err; // SONNY-3349
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
-    const store = graph_store.getGlobalStore(allocator);
-    const external_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id);
-
-    const labels = try adapter.getNodeLabels(graph_name, slot_id, allocator);
-    errdefer {
-        for (labels) |label| allocator.free(label);
-        allocator.free(labels);
-    }
-
-    const node = try allocator.create(graph_store.Node);
-    errdefer allocator.destroy(node);
-    node.* = .{
-        .id = external_id,
-        .labels = labels,
-        .properties = graph_store.CompactPropertyMap.init(allocator),
-        .graph_name = try allocator.dupe(u8, graph_name),
-    };
-    errdefer {
-        node.properties.deinit();
-        allocator.free(node.graph_name);
-    }
+    const node = try newNode(allocator, adapter, graph_name, slot_id);
+    // SONNY-2463: as in `materializeNode`, a failure part way (an allocation,
+    // or a later key's read finding the node deleted) frees all of it.
+    errdefer destroyNode(allocator, node);
 
     for (needed_keys) |key| {
         const maybe_val = adapter.getNodeProperty(graph_name, slot_id, key, allocator) catch |err| switch (err) {
@@ -1860,61 +2291,13 @@ fn materializeNodeProjected(
             else => return err,
         };
         const val = maybe_val orelse continue;
-        defer switch (val) {
-            .string => |s| allocator.free(s),
-            else => {},
-        };
-        const decoded = try graph_storage_adapter.fromStorageProperty(allocator, val);
-        const owned_key = try allocator.dupe(u8, key);
+        defer freeStoragePropertyValue(allocator, val);
         // `needed_keys` is deduplicated by `addKeyUnique`, so no key repeats —
         // a plain put is correct (no duplicate to reconcile).
-        try node.properties.put(owned_key, decoded);
+        try putProperty(allocator, node, key, val);
     }
 
     return node;
-}
-
-fn storagePropertyMatches(expected: Value, actual: gs.PropertyValue) bool {
-    return switch (actual) {
-        .string => |text| switch (expected) {
-            .Str => |expected_text| std.mem.eql(u8, expected_text, text),
-            .Text => |expected_text| std.mem.eql(u8, expected_text, text),
-            .Varchar => |expected_text| std.mem.eql(u8, expected_text.data, text),
-            .Char => |expected_text| std.mem.eql(u8, expected_text.data, text),
-            else => false,
-        },
-        .int => |number| switch (expected) {
-            .Int => |expected_number| expected_number == number,
-            .SmallInt => |expected_number| expected_number == number,
-            .BigInt => |expected_number| expected_number == number,
-            else => false,
-        },
-        .bool => |boolean| switch (expected) {
-            .Bool => |expected_boolean| expected_boolean == boolean,
-            else => false,
-        },
-        .null => expected == .Null,
-        .decimal => |decimal| switch (expected) {
-            .Decimal => |expected_decimal| expected_decimal.coeff == decimal.coeff and expected_decimal.scale == decimal.scale,
-            else => false,
-        },
-        .float => |float_value| switch (expected) {
-            .Decimal => |decimal| decimalToFloat(decimal.coeff, decimal.scale) == float_value,
-            .Real => |expected_float| expected_float == float_value,
-            .Double => |expected_float| expected_float == float_value,
-            else => false,
-        },
-        .ext => false,
-    };
-}
-
-fn decimalToFloat(coeff: i128, scale: u8) f64 {
-    var divisor: f64 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) {
-        divisor *= 10;
-    }
-    return @as(f64, @floatFromInt(coeff)) / divisor;
 }
 
 fn labelsContainAll(actual: []const []const u8, required: []const []const u8) bool {
@@ -1942,43 +2325,49 @@ fn resolveExternalNodeId(
     graph_name: []const u8,
     slot_id: u64,
 ) !u64 {
-    // Fast path: IdMap already has the mapping.
-    if (store.getIdMap(graph_name)) |id_map| {
-        if (id_map.nodeUuid(slot_id)) |uuid_128| {
-            return @as(u64, @truncate(uuid_128));
-        }
-    }
+    // Fast path: IdMap already has the mapping. SONNY-3350: read with the
+    // map pinned (`GraphStore.idMapNodeId`).
+    if (store.idMapNodeId(graph_name, slot_id)) |id| return id;
 
     // Slow path: read the persisted public ID property from the adapter.
-    if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
-        defer switch (stored_prop) {
-            .string => |text| allocator.free(text),
-            else => {},
-        };
+    // SONNY-3348 round 18 (review M1): a resource limit fails the query (it
+    // was swallowed, and the slot used as the id: a wrong row).
+    // SONNY-3348 round 19 (review m4): only a node or graph that is gone
+    // is skipped; any other read error (an engine I/O error) fails the
+    // query instead of dropping the row silently.
+    const stored = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch |err| switch (err) {
+        error.NodeNotFound, error.GraphNotFound => return error.NodeNotFound,
+        else => return err,
+    };
+    if (stored) |stored_prop| {
+        defer freeStoragePropertyValue(allocator, stored_prop);
         const public_id: ?u64 = switch (stored_prop) {
             .string => |text| graph_store.parsePersistedPublicId(text),
             .int => |n| if (n >= 0) @as(u64, @intCast(n)) else null,
             else => null,
         };
         if (public_id) |pid| {
-            // Back-fill the IdMap for future lookups.
-            const im = store.getOrCreateIdMap(graph_name) catch return pid;
-            im.insertNodeWithSlot(@as(u128, pid), slot_id) catch {};
+            // Back-fill the IdMap for future lookups (SONNY-3350: pinned).
+            store.idMapBackfillNode(graph_name, pid, slot_id);
             return pid;
         }
     }
 
-    // Neither the IdMap nor the persisted property had a mapping for this
-    // slot.  This happens for nodes created within the current session whose
-    // graph has no IdMap yet (e.g. freshly-created test graphs).  Fall back
-    // to using the slot_id directly as the external ID so that
-    // materializeNode can still succeed.
-    return slot_id;
+    // Neither the IdMap nor the persisted property has a public id for this
+    // slot: the node is gone (a DROP GRAPH, or a delete, after the scan read
+    // the slot). SONNY-3348 round 18 (review M1): the caller skips it. The
+    // slot was returned as the node's id, a row with an id no node has.
+    return error.NodeNotFound;
 }
 
+/// Free a value the storage adapter read for this file (`getNodeProperty`,
+/// `getAllNodeProperties`). The engine's decode copies both a string and an
+/// extended value's bytes onto the caller's allocator (SONNY-2464: the
+/// extended value's bytes used to leak on every read).
 fn freeStoragePropertyValue(allocator: std.mem.Allocator, value: gs.PropertyValue) void {
     switch (value) {
         .string => |text| allocator.free(text),
+        .ext => |ext| allocator.free(ext.data),
         else => {},
     }
 }
@@ -2024,6 +2413,36 @@ fn cloneIdent(arena: std.mem.Allocator, id: ast.IdentRepr) CloneError!ast.IdentR
     return .{ .orig = try arena.dupe(u8, id.orig), .cnf = try arena.dupe(u8, id.cnf) };
 }
 
+/// SONNY-3189: copy a chain of member accesses and binary operators with a
+/// loop: down the member targets and left operands, each copied link's child
+/// slot filled by the next link; right operands and the innermost operand
+/// through `cloneExprPtr`.
+fn cloneChain(arena: std.mem.Allocator, e: ast.Expr) CloneError!ast.Expr {
+    var result: ast.Expr = undefined;
+    var slot: *ast.Expr = &result;
+    var src: *const ast.Expr = &e;
+    while (true) {
+        switch (src.*) {
+            .Member => |m| {
+                const child = try arena.create(ast.Expr);
+                slot.* = .{ .Member = .{ .target = child, .field = try arena.dupe(u8, m.field) } };
+                slot = child;
+                src = m.target;
+            },
+            .Binary => |b| {
+                const child = try arena.create(ast.Expr);
+                slot.* = .{ .Binary = .{ .op = b.op, .left = child, .right = try cloneExprPtr(arena, b.right) } };
+                slot = child;
+                src = b.left;
+            },
+            else => {
+                slot.* = try cloneExpr(arena, src.*);
+                return result;
+            },
+        }
+    }
+}
+
 fn cloneExpr(arena: std.mem.Allocator, e: ast.Expr) CloneError!ast.Expr {
     return switch (e) {
         .Null => .Null,
@@ -2042,18 +2461,12 @@ fn cloneExpr(arena: std.mem.Allocator, e: ast.Expr) CloneError!ast.Expr {
             .object = try arena.dupe(u8, pa.object),
             .property = try arena.dupe(u8, pa.property),
         } },
-        .Member => |m| .{ .Member = .{
-            .target = try cloneExprPtr(arena, m.target),
-            .field = try arena.dupe(u8, m.field),
-        } },
+        // SONNY-3189: member and binary chains are copied with a loop
+        // (`cloneChain`), not one recursion per link.
+        .Member, .Binary => cloneChain(arena, e),
         .Unary => |u| .{ .Unary = .{
             .op = u.op,
             .expr = try cloneExprPtr(arena, u.expr),
-        } },
-        .Binary => |b| .{ .Binary = .{
-            .op = b.op,
-            .left = try cloneExprPtr(arena, b.left),
-            .right = try cloneExprPtr(arena, b.right),
         } },
         .IsNull => |n| .{ .IsNull = .{
             .target = try cloneExprPtr(arena, n.target),

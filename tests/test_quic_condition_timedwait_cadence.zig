@@ -354,7 +354,11 @@ test "quic endpoint poll cycle has a receive fairness budget" {
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-142") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "server_poll_receive_batches") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "fn maxPacketsPerPollCycleForRole(role: EndpointRole) usize") != null);
-    try testing.expect(std.mem.indexOf(u8, endpoint, "const max_packets_this_poll = maxPacketsPerPollCycleForRole(self.role);") != null);
+    // REQ-QUIC-HC (acceptor-wedge RC-A, 2026-xx): the master socket-drain cap
+    // was decoupled from the per-poll-cycle processing budget so servers can
+    // drain a larger slice while per-class processing stays bounded
+    // separately (see maxSocketDrainPacketsForRole's doc comment).
+    try testing.expect(std.mem.indexOf(u8, endpoint, "const max_packets_this_poll = maxSocketDrainPacketsForRole(self.role);") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "stats.packets_processed >= max_packets_this_poll") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-123") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "server_short_header_receive_batches") != null);
@@ -754,9 +758,11 @@ test "query cache misses singleflight by key without serializing unrelated misse
     try testing.expect(std.mem.indexOf(u8, plan_hit, "std.Thread.spawn") != null);
 
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-166") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "const program_is_mutating = isMutatingProgram(&parse_result.program);") != null);
+    // SONNY-2743: both come from `statementPlan` (the whole program's
+    // `isMutatingProgram`), whatever lock the program takes.
+    try testing.expect(std.mem.indexOf(u8, handler, "const program_is_mutating = stmt_plan.is_mutation;") != null);
     try testing.expect(std.mem.indexOf(u8, handler, "if (!program_is_mutating) {") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "const is_mutation = needs_store_lock and program_is_mutating;") != null);
+    try testing.expect(std.mem.indexOf(u8, handler, "const is_mutation = stmt_plan.is_mutation;") != null);
 }
 
 test "cooperative first stream clears running before consuming reschedule flags" {
@@ -1044,8 +1050,12 @@ test "store-free scalar reads bypass graph snapshot locks" {
     try testing.expect(std.mem.indexOf(u8, traits, "MATCH (n:Person) RETURN 1 AS c") != null);
 
     try testing.expect(std.mem.indexOf(u8, handler, "REQ=REQ-QUIC-HC-110") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "analysis.kind == .rows and analysis.is_store_free") != null);
-    try testing.expect(std.mem.indexOf(u8, handler, "snapshotUnderReadLock(gpa, query_graph_name)") != null);
+    // SONNY-2743: the decision moved to `query_traits.statementPlan`, which
+    // bypasses the lock only when the rest of the program does nothing.
+    try testing.expect(std.mem.indexOf(u8, handler, "query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, homeGraphName(state), .quic)") != null);
+    try testing.expect(std.mem.indexOf(u8, traits, "analysis.kind == .rows and analysis.is_store_free and rest_is_noop") != null);
+    // SONNY-2749: reads snapshot the graph the program reads (`lock_graph`).
+    try testing.expect(std.mem.indexOf(u8, handler, "snapshotUnderReadLock(gpa, lock_graph)") != null);
 }
 
 test "password auth coalesces concurrent identical verifies" {
@@ -1217,8 +1227,14 @@ test "quic short header processing uses endpoint rx lifetime guard" {
     try testing.expect(std.mem.indexOf(u8, conn, "refs + 1") != null);
     try testing.expect(std.mem.indexOf(u8, conn, "releaseEndpointRxRef") != null);
     try testing.expect(std.mem.indexOf(u8, conn, "beginEndpointDestroy") != null);
-    try testing.expect(std.mem.indexOf(u8, api, "conn.beginEndpointDestroy();") != null);
-    try testing.expect(std.mem.indexOf(u8, api, "ep.clearShortHeaderRouteCacheForConnection(conn);") != null);
+    // REQ-QUIC-HC-099 (batch teardown) moved these two calls out of api.zig's
+    // single-conn destroy() into Endpoint.destroyConnections() (endpoint.zig),
+    // which destroy() and destroyBatch() now both call. Check the calls where
+    // they live today, and that the public single-conn entrypoint still
+    // delegates into the guarded batch path instead of bypassing it.
+    try testing.expect(std.mem.indexOf(u8, endpoint, "conn.beginEndpointDestroy();") != null);
+    try testing.expect(std.mem.indexOf(u8, endpoint, "self.clearShortHeaderRouteCacheForConnection(conn);") != null);
+    try testing.expect(std.mem.indexOf(u8, api, "ep.destroyConnections(&[_]*Connection{conn});") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-052") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-054") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-098") != null);
@@ -1438,8 +1454,8 @@ test "quic udp transport raises socket buffers for high fanout" {
 
 test "quic deferred destroy removes all endpoint side-set references" {
     // Handler threads queue inner connections for main-thread destruction.
-    // Before api.destroy() frees the connection, Geode must remove every
-    // endpoint side-set that stores raw connection pointers.
+    // Before api.destroyBatch() frees the batch, Geode must remove every
+    // endpoint side-set that stores raw connection pointers for each member.
     const allocator = testing.allocator;
 
     const maybe_transport = try readFile(allocator, "src/transport/quic.zig");
@@ -1451,7 +1467,11 @@ test "quic deferred destroy removes all endpoint side-set references" {
     try testing.expect(std.mem.indexOf(u8, transport, "ep.pto_dirty_set.remove(inner_conn)") != null);
     try testing.expect(std.mem.indexOf(u8, transport, "ep.pending_hs_send_set.remove(inner_conn)") != null);
     try testing.expect(std.mem.indexOf(u8, transport, "ep.pto_lifetime_mu.lockUncancelable") != null);
-    try testing.expect(std.mem.indexOf(u8, transport, "api.destroy(ep, inner_conn)") != null);
+    // REQ-QUIC-HC-099: the old per-conn api.destroy() loop was replaced by a
+    // single api.destroyBatch() call over the whole drained batch (one O(N +
+    // keys) map sweep instead of O(B x N)); side-set removal above still runs
+    // per-connection before the batch is freed.
+    try testing.expect(std.mem.indexOf(u8, transport, "api.destroyBatch(ep, doomed)") != null);
 }
 
 test "quic connection handlers are not cpu-count auto sized" {
@@ -1504,7 +1524,14 @@ test "quic high fanout defaults avoid setup admission collapse" {
     const main_content = maybe_main orelse return error.FileNotFound;
     defer allocator.free(main_content);
     try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64 else 4096") != null);
-    try testing.expect(std.mem.indexOf(u8, main_content, "quic_connection_admission_stack_size = 1024 * 1024") != null);
+    // SONNY-3191 (N-5): an admission thread runs a connection's first stream
+    // itself when the stream pool refuses it, so it has a request-sized stack
+    // (reserved, not committed), not 1 MiB. SONNY-3253 (round 15, F13): 16 MiB
+    // in Debug, 8 MiB in a release build, GEODE_QUIC_ADMISSION_STACK_MB to
+    // override, and every admission thread is spawned with it.
+    try testing.expect(std.mem.indexOf(u8, main_content, "default_quic_admission_stack_mb: usize = if (builtin.mode == .Debug) 16 else 8") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, "\"GEODE_QUIC_ADMISSION_STACK_MB\"") != null);
+    try testing.expect(std.mem.indexOf(u8, main_content, ".stack_size = g_quic_admission_stack_size") != null);
 
     const maybe_registry = try readFile(allocator, "src/server/active_stream_registry.zig");
     const registry_content = maybe_registry orelse return error.FileNotFound;
@@ -1781,7 +1808,16 @@ test "multi-property merge mutations avoid whole graph writer lock" {
     try testing.expect(std.mem.indexOf(u8, adapter_content, "lockCandidateShardReads") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "if (candidates.len == 0) return null;") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "id_map.nodeUuid(slot_id)") != null);
-    try testing.expect(std.mem.indexOf(u8, adapter_content, "store.getNodesByLabel(graph_name, label)") == null);
+    // Whole-file scope false-positives on the UNRELATED, read-lock-only
+    // getNodesByLabel() fallback inside lookupPublicNodeIdByLabelAndAllProps
+    // (2026-06-24, bulk-edge endpoint resolution; runs under a brief SHARED
+    // read lock, never a graph writer lock, and is not the multi-property
+    // MERGE dedup path this test guards). Scope the check to
+    // findNodeMatchingMergeProps's own body, which still starts from the
+    // smallest exact-property posting and never label-scans, so a real
+    // regression there still fails this test.
+    const merge_probe_body = try sliceBetween(adapter_content, "fn findNodeMatchingMergeProps(", "/// Result of `StorageAdapter.acquireGraphReadLock`");
+    try testing.expect(std.mem.indexOf(u8, merge_probe_body, "store.getNodesByLabel(graph_name, label)") == null);
 
     const maybe_group = try readFile(allocator, "src/storage/group_commit.zig");
     const group_content = maybe_group orelse return error.FileNotFound;
@@ -2376,13 +2412,24 @@ test "quic non-transactional simple mutations use default fast paths" {
     // clause (skip the single-node fast path when clustered). Match the prefix
     // (drop the trailing `)`) so this audit survives that and future clauses.
     const block_start = std.mem.indexOf(u8, content, "if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled() and graph_store.getGlobalAdapter() != null") orelse return error.MissingDefaultFastPathBlock;
-    const block = content[block_start..@min(content.len, block_start + 1800)];
+    // The whole block, up to the GAP-0894 graph-selector section that follows
+    // it. A fixed-size window broke as soon as the guards grew: SONNY-2686's
+    // session gate pushed `executeBulkSimpleMerge` past the 1800th byte.
+    const block_end = std.mem.indexOfPos(u8, content, block_start, "// GAP-0894: a `<graph-selector>") orelse return error.MissingGraphSelectorSection;
+    const block = content[block_start..block_end];
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_create") != null);
     try testing.expect(std.mem.indexOf(u8, block, "executeBulkSimpleCreate") != null);
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_create_edge") != null);
     try testing.expect(std.mem.indexOf(u8, block, "executeBulkMatchCreateEdge") != null);
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge") != null);
     try testing.expect(std.mem.indexOf(u8, block, "executeBulkSimpleMerge") != null);
+    // SONNY-2686: the shapes that find existing nodes by merge key alone (no
+    // tenant check, no RLS) serve only a session nothing restricts; a CREATE
+    // of a new node finds nothing and is not gated. This pins the wiring only;
+    // the SONNY-2724 regression pins the behaviour over QUIC.
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_create_edge and key_resolved_writes_ok") != null);
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_merge_edge and key_resolved_writes_ok") != null);
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge and key_resolved_writes_ok") != null);
 }
 
 test "quic session auth validation uses epoch fast path" {
@@ -2420,7 +2467,7 @@ test "quic count-only reads bypass query snapshot clone" {
     const point_read_lock = std.mem.indexOf(u8, content, "graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read)") orelse return error.MissingPointReadLock;
     try testing.expect(direct_count < point_read_lock);
     const fast_path = std.mem.indexOf(u8, content, "execution.countNodesFastPath") orelse return error.MissingCountFastPath;
-    const snapshot_path = std.mem.indexOf(u8, content, "graph_store.snapshotUnderReadLock(gpa, query_graph_name)") orelse return error.MissingSnapshotPath;
+    const snapshot_path = std.mem.indexOf(u8, content, "graph_store.snapshotUnderReadLock(gpa, lock_graph)") orelse return error.MissingSnapshotPath;
     try testing.expect(fast_path < snapshot_path);
     try testing.expect(std.mem.indexOf(u8, content, "graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read)") != null);
 }
@@ -2438,7 +2485,8 @@ test "quic count fast path batches schema and page responses" {
 
     const fast_path_start = std.mem.indexOf(u8, content, "execution.countNodesFastPath") orelse return error.MissingCountFastPath;
     const fast_path_rest = content[fast_path_start..];
-    const audit_idx = std.mem.indexOf(u8, fast_path_rest, "auditQueryExecution(state, query_text, is_mutation)") orelse return error.MissingCountFastPathAudit;
+    // SONNY-2799: the audit takes the graph the request ran on (lock_graph).
+    const audit_idx = std.mem.indexOf(u8, fast_path_rest, "auditQueryExecution(lock_graph, query_text, is_mutation)") orelse return error.MissingCountFastPathAudit;
     const fast_path_body = fast_path_rest[0..audit_idx];
 
     try testing.expect(std.mem.indexOf(u8, fast_path_body, "try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result)") != null);
@@ -2672,7 +2720,11 @@ test "quic high fanout e2e runs in single stream stress mode" {
     const init_content = maybe_init orelse return error.FileNotFound;
     defer allocator.free(init_content);
     try testing.expect(std.mem.indexOf(u8, init_content, "REQ=REQ-QUIC-HC-030") != null);
-    try testing.expect(std.mem.indexOf(u8, init_content, "quic_stream_multiplexing_enabled: bool = false") != null);
+    // 2026-06-10: default flipped true -- a non-multiplexing server hangs the
+    // Go client on secondary streams (verified). The single-stream stress
+    // scenario below forces GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING=0 itself, so
+    // this only pins the compiled default's documented value.
+    try testing.expect(std.mem.indexOf(u8, init_content, "quic_stream_multiplexing_enabled: bool = true") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "\"GEODE_QUIC_ENABLE_STREAM_MULTIPLEXING\"") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "REQ=REQ-QUIC-HC-054") != null);
     try testing.expect(std.mem.indexOf(u8, init_content, "quic_cooperative_first_streams_enabled: bool = true") != null);
@@ -2848,7 +2900,10 @@ test "quic group commit keeps bulk create properties in shard transaction" {
     try testing.expect(std.mem.indexOf(u8, adapter_content, "mg.engine.getOrAssignLabel(label)") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-022") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn)") != null);
-    try testing.expect(std.mem.indexOf(u8, adapter_content, "addIndexedNodeProperty(mg, label_id, slot_id, kv.key, storage_val)") != null);
+    // GAP-0900 throughput: bulk insert reserves a FRESH slot_id that was never
+    // indexed, so the call now skips the O(N) de-dup scan via the `Ex` variant
+    // (trailing `true` = assume_new); it still indexes the property.
+    try testing.expect(std.mem.indexOf(u8, adapter_content, "addIndexedNodePropertyEx(mg, label_id, slot_id, kv.key, storage_val, true)") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "setNodePropertiesBatchInMemoryOnly") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "store.setNodePropertiesBatch(reserved_id, entries)") == null);
 

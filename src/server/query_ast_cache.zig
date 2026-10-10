@@ -111,6 +111,7 @@ pub const QueryAstCache = struct {
                         .column = er.column,
                         .token = er.token,
                         .has_double_dash_comment = er.has_double_dash_comment,
+                        .code = er.code,
                     },
                 };
             },
@@ -201,6 +202,8 @@ pub const ParseError = struct {
     column: u32,
     token: token.TokenKind,
     has_double_dash_comment: bool,
+    /// SONNY-3244: the SQLSTATE of the refusal (`geode.parseErrorCode`).
+    code: []const u8 = "42000",
 };
 
 pub const AstParseOutcome = union(enum) {
@@ -412,6 +415,7 @@ pub const SharedAstCache = struct {
                         .column = er.column,
                         .token = er.token,
                         .has_double_dash_comment = er.has_double_dash_comment,
+                        .code = er.code,
                     },
                 };
             },

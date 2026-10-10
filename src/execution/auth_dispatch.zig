@@ -1276,18 +1276,22 @@ fn handlePolicyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
         }
     }
 
+    // SONNY-2757 (P26): the checks and the write-through of CREATE POLICY
+    // (`policy_ddl.create`). This used the tolerant `addPolicy`: no length
+    // limits, a condition that does not compile installed fail-closed, and
+    // nothing persisted, so the policy was gone at the next restart. With no
+    // catalog it reported success and created nothing.
     const policy_catalog_mod = @import("../security/policy_catalog.zig");
-    if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-        const actions = [_]policy_catalog_mod.Action{.read};
-        try pol_cat.addPolicy(.{
-            .name = name,
-            .scope_graph = table,
-            .actions = &actions,
-            .effect = .allow,
-            .expression_source = condition,
-            .enabled = true,
-        });
-    }
+    const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
+    const actions = [_]policy_catalog_mod.Action{.read};
+    try execution.policy_ddl.create(pol_cat, .{
+        .name = name,
+        .scope_graph = table,
+        .actions = &actions,
+        .effect = .allow,
+        .expression_source = condition,
+        .enabled = true,
+    });
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
@@ -1300,19 +1304,24 @@ fn handlePolicyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
 // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS Policy DDL"; ASPECT=AuthDispatchPolicyList; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
 fn handlePolicyList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     const policy_catalog_mod = @import("../security/policy_catalog.zig");
-    const columns = try allocator.alloc([]const u8, 2);
+    // SONNY-2732: `valid` is false for a stored policy whose expression no
+    // longer compiles (kept fail-closed until rewritten).
+    const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "name");
     columns[1] = try allocator.dupe(u8, "scope_graph");
+    columns[2] = try allocator.dupe(u8, "valid");
     var rows_list = std.ArrayList([]Value).empty;
     if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-        for (pol_cat.listPolicies()) |pol| {
-            const row = try allocator.alloc(Value, 2);
+        for (pol_cat.listPolicies()) |*pol| {
+            const row = try allocator.alloc(Value, 3);
             row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
             row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
+            row[2] = Value{ .Bool = policy_catalog_mod.PolicyCatalog.policyIsValid(pol) };
             try rows_list.append(allocator, row);
         }
     }
-    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    // The result owns its duplicated strings (they were leaked before).
+    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 // CANARY: REQ=REQ-GPS-DDL-002; FEATURE="GPS Policy DDL"; ASPECT=AuthDispatchPolicyDelete; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
@@ -1324,10 +1333,11 @@ fn handlePolicyDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
     }
     const policy_catalog_mod = @import("../security/policy_catalog.zig");
     if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-        // Swallow PolicyNotFound — procedure interface is idempotent.
-        pol_cat.removePolicy(name) catch |err| {
-            if (err != error.PolicyNotFound) return err;
-        };
+        // Idempotent: a missing policy is not an error. SONNY-2757: the stored
+        // record goes first, as for DROP POLICY (`policy_ddl.drop`); the
+        // procedure used to drop the policy from the catalog only, and it came
+        // back at the next restart.
+        _ = try execution.policy_ddl.drop(pol_cat, name, true);
     }
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
@@ -1407,6 +1417,11 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
 
     // Apply grant/revoke for each action code. Callback failures are logged and
     // skipped — best effort; don't fail the whole handler.
+    // CANARY: REQ=REQ-SONNY-3038-REVOKE-DURABLE; FEATURE="GQL Auth DDL Persistence"; ASPECT=RevokeFailureReported; STATUS=TESTED; TEST=tests/test_sonny3038_revoke_and_schema_ddl.zig; OWNER=security; UPDATED=2026-09-27
+    // SONNY-3038: except a revoke: one that could not be saved fails the
+    // call (`RevokeNotPersisted`). It reported "Revoked", and the privilege
+    // came back at the next start.
+    var revoke_failure: ?anyerror = null;
     for (actions) |action| {
         if (is_grant) {
             if (g_grant_persist.grant_fn) |f| {
@@ -1428,9 +1443,20 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
                         Attr.string("graph", resource),
                         Attr.uint("action", @as(u64, action)),
                     });
+                    if (revoke_failure == null) revoke_failure = e;
                 };
             }
         }
+    }
+
+    if (revoke_failure != null) {
+        // The in-memory RBAC state may have moved; tell the LSP providers.
+        schema_change_notifier.notify();
+        allocator.free(columns[0]);
+        allocator.free(columns);
+        allocator.free(row);
+        allocator.free(rows);
+        return error.RevokeNotPersisted;
     }
 
     // Return the status row with wording the geodetestlab spec asserts.

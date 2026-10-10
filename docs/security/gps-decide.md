@@ -190,3 +190,87 @@ that refactor is a Phase 4+ concern because it touches the auth startup path.
 module entry in `build.zig`, and add `tests/test_gps_resolve_role_from_graph.zig`
 with an in-memory `GraphStore` fixture (User node + HAS_ROLE edge + Role node).
 Tag the new test with `CANARY: REQ=REQ-GPS-PDP-008; ASPECT=AuthRoleGraphLookupIsolated`.
+
+## Deny-effect policies (SONNY-2744)
+
+A GPS policy's effect is `allow` or `deny`. Before SONNY-2744, `decide()`
+skipped deny-effect policies when it scanned the catalog, and the builtin-role
+check ran before the catalog anyway, so a deny never denied.
+
+`decide()` now checks deny-effect policies right after the authentication
+check, before every path that can allow:
+
+1. `--insecure-allow-all` → allow. This is the one exception: the flag
+   bypasses all authorization, deny policies included.
+2. No principal → `.unauthenticated`.
+3. **An enabled deny-effect policy whose action, resource and USING
+   expression match → `.deny`, reason `policy_deny`.**
+4. The special cases (Admin shortcuts, bind_graph, admin_tenant), the
+   builtin roles and the allow policies, as before.
+
+### What a deny enforces today (SONNY-2781)
+
+A policy can name read, match, write, create, update, delete, schema,
+decrypt_field and unwrap_key, and `decide()` evaluates a deny for any of them.
+But a deny only takes effect where enforcement calls `decide()`, and it calls
+it for few actions:
+
+- **DENY WRITE** refuses every request that changes data. The QUIC and gRPC
+  write gate (`gps.writePermitted`, `decide(write, database)`) runs for every
+  program that `isMutatingProgram` counts as a change. That is all DML
+  (CREATE, MERGE, SET, REMOVE, DELETE, INSERT), the graph, graph type,
+  schema, index and constraint DDL, BACKUP and RESTORE, and CALLs of
+  procedures that change data.
+  - Not covered: the security DDL (CREATE/ALTER/DROP USER, CREATE/DROP ROLE,
+    GRANT, REVOKE, CREATE/ALTER/DROP POLICY). It is counted as read-only
+    (SONNY-2751) and has its own Admin role check, so a DENY WRITE does not
+    reach it.
+- **DENY READ and DENY WRITE** apply to `CALL` procedures. A read-only
+  procedure asks for read on the procedure, and one that changes data asks
+  for write.
+- **DENY DECRYPT_FIELD** applies to field-level decryption.
+
+A deny on any other action is accepted but **not enforced**, because nothing
+calls `decide()` with that action:
+
+- DENY READ does not stop a plain MATCH.
+- DENY MATCH, CREATE, UPDATE, DELETE, SCHEMA and UNWRAP_KEY stop nothing.
+- `execution.checkPermission()` would ask for read, write or schema, but it
+  has no callers.
+
+SONNY-2781 tracks wiring the rest (v0.8.24). bind_graph, admin_tenant,
+execute_procedure and show_metadata have no policy analogue, so no policy
+names them.
+
+Resources match as they do for allow policies. `*` matches everything. A
+graph-scoped policy matches that graph and every non-graph resource
+(database, tenant, node, edge, procedure, metadata). So a deny scoped to one
+graph also refuses the handlers' database-level write check, and, for DENY
+READ, every read-only procedure (SONNY-2753).
+
+A deny whose USING expression does not compile (a record loaded fail-closed)
+keeps denying until it is rewritten, and so does a deny when the principal's
+attributes cannot be read.
+
+**Where deny policies come from.** `CREATE POLICY` has no effect clause and
+always creates allow policies. A deny reaches the catalog in two ways:
+
+- from `__geode_security`, where a GPS :Policy record with
+  `permissive = false` loads as effect deny. A record without the property
+  is malformed and does not load (SONNY-2750);
+- through the `PolicyCatalog` API.
+
+**Who is affected.** The `decide()` callers that enforce:
+
+- the QUIC and gRPC write gate (`gps.writePermitted`, which QUIC now consults
+  for every authenticated session, SONNY-2743);
+- `CALL` procedures (read or write on the procedure);
+- FLE decryption (`decrypt_field`).
+
+EXPLAIN POLICY reports the decision a statement would get, but enforces
+nothing.
+
+Regression suite:
+[`tests/test_sonny2744_gps_deny.zig`](../../tests/test_sonny2744_gps_deny.zig)
+(`zig build test-sonny2744-gps-deny`); the restart case is in
+`tests/test_gps_policy_persistence.zig`.

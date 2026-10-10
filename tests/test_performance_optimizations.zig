@@ -101,8 +101,17 @@ test "ThreadPool: parallel work execution" {
 
     try testing.expectEqual(@as(u32, num_tasks), counter.load(.acquire));
 
-    // Verify statistics
-    const stats = pool.getStats();
+    // Verify statistics. A worker counts a task as completed only AFTER its
+    // callback returns, so the callbacks' own counter can reach num_tasks
+    // while the last completions are still being recorded: wait (bounded)
+    // for the pool's accounting instead of reading it immediately
+    // (SONNY-2394: expected 100, found 98 in a loaded aggregate shard).
+    var stats = pool.getStats();
+    while (stats.total_completed < num_tasks and timeout < 5000) {
+        compat_sleep(1 * std.time.ns_per_ms);
+        timeout += 1;
+        stats = pool.getStats();
+    }
     try testing.expectEqual(@as(u64, num_tasks), stats.total_submitted);
     try testing.expectEqual(@as(u64, num_tasks), stats.total_completed);
 }

@@ -1929,13 +1929,6 @@ fn valueOrder(a: BindingValue, b: BindingValue) std.math.Order {
     };
 }
 
-fn pow10(scale: u8) i128 {
-    var p: i128 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) p *= 10;
-    return p;
-}
-
 fn scaleToPow10(coeff: i128, from: u8, to: u8) error{Overflow}!i128 {
     if (from == to) return coeff;
     if (from > to) {

@@ -605,6 +605,48 @@ test "atomicity (g) guard: an explicit transaction still rolls back a failed bat
 }
 
 // ---------------------------------------------------------------------------
+// (k) An explicit transaction rolls back what MERGE created, as it does what
+//     CREATE created: the node of a node MERGE, the endpoints and edge of a
+//     relationship MERGE, and an edge MERGE'd between existing nodes. MERGE
+//     wrote no undo entry, so ROLLBACK kept all of them (found by the
+//     SONNY-2816 test, where a bulk-ingest MERGE in a transaction now takes
+//     the executor).
+// ---------------------------------------------------------------------------
+test "atomicity (k): an explicit transaction rolls back the nodes and edges MERGE created" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    try h.run("CREATE (:AtomKEnd {k: 1})");
+    try h.run("CREATE (:AtomKEnd {k: 2})");
+
+    try h.begin();
+    try h.run("MERGE (n:AtomK {k: 1}) SET n.v = 'merged'");
+    try h.run("MERGE (a:AtomKA {k: 1})-[:AtomKR]->(b:AtomKB {k: 1})");
+    try h.run("MATCH (a:AtomKEnd {k: 1}), (b:AtomKEnd {k: 2}) MERGE (a)-[:AtomKM]->(b)");
+    // Inside the transaction the changes are there.
+    try testing.expectEqual(@as(i64, 1), try h.countLabel("AtomK"));
+    try testing.expectEqual(@as(i64, 1), (try h.scalar("MATCH ()-[r:AtomKM]->() RETURN count(r) AS c")).Int);
+    try h.rollback();
+
+    try expectNoNodes(&h, "AtomK", "after rollback");
+    try expectNoNodes(&h, "AtomKA", "after rollback");
+    try expectNoNodes(&h, "AtomKB", "after rollback");
+    try testing.expectEqual(@as(i64, 0), (try h.scalar("MATCH ()-[r:AtomKR]->() RETURN count(r) AS c")).Int);
+    try testing.expectEqual(@as(i64, 0), (try h.scalar("MATCH ()-[r:AtomKM]->() RETURN count(r) AS c")).Int);
+    // What the transaction did not create stays.
+    try testing.expectEqual(@as(i64, 2), try h.countLabel("AtomKEnd"));
+
+    // Committed, the same MERGEs stand.
+    try h.begin();
+    try h.run("MERGE (n:AtomK {k: 1}) SET n.v = 'merged'");
+    try h.run("MATCH (a:AtomKEnd {k: 1}), (b:AtomKEnd {k: 2}) MERGE (a)-[:AtomKM]->(b)");
+    try h.run("COMMIT");
+    h.in_txn = false;
+    try testing.expectEqual(@as(i64, 1), try h.countLabel("AtomK"));
+    try testing.expectEqual(@as(i64, 1), (try h.scalar("MATCH ()-[r:AtomKM]->() RETURN count(r) AS c")).Int);
+}
+
+// ---------------------------------------------------------------------------
 // (h) The shared predicate itself. It is the single place that decides whether
 //     an entry is storable, so its boundaries are pinned directly.
 // ---------------------------------------------------------------------------

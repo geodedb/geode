@@ -1,4 +1,5 @@
 const std = @import("std");
+const perf_gate = @import("perf_gate");
 
 // Zig 0.16 compat helpers for test code
 fn compat_milliTimestamp() i64 {
@@ -53,10 +54,11 @@ test "TestCANARY_REQ_GQL_024_PlanEnumerationEngine" {
     const root = enumerator_mod.LogicalPlan{ .op = .join, .children = join_children[0..] };
 
     var enumerator = enumerator_mod.PlanEnumerator.init(alloc, .{});
+    defer enumerator.deinit();
     var plans = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+    // SONNY-2394: this defer used to appear twice (double free -> GPF).
     defer plans.deinit(alloc);
     try plans.ensureTotalCapacity(alloc, 16);
-    defer plans.deinit(alloc);
     try enumerator.enumerateUnmanaged(root, alloc, &plans);
     try std.testing.expect(plans.items.len >= 2); // original + swapped
     // check distinct signatures
@@ -89,6 +91,7 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var enumerator = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 512 });
+        defer enumerator.deinit();
         var plans_iter = std.ArrayList(enumerator_mod.CandidatePlan).empty;
         try plans_iter.ensureTotalCapacity(alloc, 32);
         const start = compat_nanoTimestamp();
@@ -133,6 +136,8 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope" {
     const p95_mean = p95 / mean;
 
     // Thresholds: CV≤0.22, p95/mean≤2.55
-    try std.testing.expect(cv <= 0.22);
-    try std.testing.expect(p95_mean <= 2.55);
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
+    try perf_gate.envelope("plan enumeration", cv, p95_mean, 0.22, 2.55);
 }

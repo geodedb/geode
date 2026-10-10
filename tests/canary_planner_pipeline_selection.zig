@@ -1,4 +1,5 @@
 const std = @import("std");
+const perf_gate = @import("perf_gate");
 
 // Zig 0.16 compat helpers for test code
 fn compat_milliTimestamp() i64 {
@@ -48,7 +49,8 @@ test "TestCANARY_REQ_GQL_024_PlanSelectionPipelineAdoption" {
     const q = pipeline.defaultEmptyQuery();
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
-    const res = try pipeline.planQuerySelectBest(gpa.allocator(), q, .{ .max_plans = 128, .enable_prune = true, .prune_factor = 2.0 });
+    var res = try pipeline.planQuerySelectBest(gpa.allocator(), q, .{ .max_plans = 128, .enable_prune = true, .prune_factor = 2.0 });
+    defer res.deinit();
     try std.testing.expect(res.best != null and res.total_candidates > 0);
 }
 
@@ -62,8 +64,9 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionPipelineVarianceEnvelope" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         const start = compat_nanoTimestamp();
-        _ = try pipeline.planQuerySelectBest(gpa.allocator(), q, .{ .max_plans = 256, .enable_prune = true, .prune_factor = 2.5 });
+        var res = try pipeline.planQuerySelectBest(gpa.allocator(), q, .{ .max_plans = 256, .enable_prune = true, .prune_factor = 2.5 });
         const end = compat_nanoTimestamp();
+        res.deinit();
         samples[i] = @as(u64, @intCast(end - start));
     }
     var s: f128 = 0;
@@ -94,5 +97,8 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionPipelineVarianceEnvelope" {
     const p95 = @as(f128, @floatFromInt(scratch[rank]));
     const cv = std.math.sqrt(variance) / mean;
     const p95_mean = p95 / mean;
-    try std.testing.expect(cv <= 0.22 and p95_mean <= 2.55);
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
+    try perf_gate.envelope("pipeline plan selection", cv, p95_mean, 0.22, 2.55);
 }

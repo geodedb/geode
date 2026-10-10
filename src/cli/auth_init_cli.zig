@@ -10,6 +10,8 @@ const std = @import("std");
 const cli_auth = @import("cli_auth_helpers.zig");
 const AuthGraphManager = cli_auth.AuthGraphManager;
 const auth_graph_manager = @import("auth_graph_manager");
+// SONNY-2778: `writeAdminPasswordFile`, shared with the server and SecurityManager.
+const geode_auth = @import("geode_auth");
 
 // Zig 0.16 compat: std.process.getEnvVarOwned was removed.  Mirrors the
 // shim used in src/server/server_init.zig and src/cli/cli_auth_helpers.zig.
@@ -46,6 +48,37 @@ fn hasHelpFlag(argv: [][:0]u8, start_idx: usize) bool {
 }
 
 // -- geode auth init --
+
+/// Whether GEODE_ADMIN_PASSWORD or GEODE_DEFAULT_PASSWORD seeds the admin's
+/// password (the bootstrap's precedence). Then no password is generated, and
+/// none is written to a file.
+fn adminPasswordFromEnv(allocator: std.mem.Allocator) bool {
+    for ([_][]const u8{ "GEODE_ADMIN_PASSWORD", "GEODE_DEFAULT_PASSWORD" }) |name| {
+        if (getEnvVarOwned(allocator, name)) |value| {
+            allocator.free(value);
+            return true;
+        } else |_| {}
+    }
+    return false;
+}
+
+/// The data directory `initCliAuthManager` resolved (--data-dir, then
+/// GEODE_DATA_DIR, then /var/lib/geode): a generated password's file goes
+/// there (SONNY-2778).
+const PasswordFileDir = struct {
+    path: []const u8,
+    owned: ?[]u8 = null,
+
+    fn deinit(self: PasswordFileDir, allocator: std.mem.Allocator) void {
+        if (self.owned) |o| allocator.free(o);
+    }
+};
+
+fn passwordFileDir(allocator: std.mem.Allocator, data_dir: ?[]const u8) PasswordFileDir {
+    if (data_dir) |d| return .{ .path = d };
+    if (getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |d| return .{ .path = d, .owned = d } else |_| {}
+    return .{ .path = "/var/lib/geode" };
+}
 
 fn printAuthInitUsage() void {
     std.debug.print(
@@ -87,6 +120,9 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    // SONNY-2798: a store that already has records must verify (the
+    // bootstrap below refuses it anyway; this says why when it is tampered).
+    cli_auth.requireIntactChain(allocator, &mgr, "auth", "init");
 
     // Resolve HMAC key
     const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
@@ -99,6 +135,23 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     if (mgr.hasAuthRecords()) {
         std.debug.print("Error: Auth records already exist. Use 'geode auth reseal' to recompute chain.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+
+    // SONNY-2778: a generated password is written to a new file only. When
+    // something is already at the path, refuse now, before the admin is
+    // created with a password that could not be recorded.
+    if (!adminPasswordFromEnv(allocator)) {
+        const dir = passwordFileDir(allocator, data_dir);
+        defer dir.deinit(allocator);
+        if (geode_auth.adminPasswordFilePresent(dir.path)) {
+            std.debug.print(
+                "Error: {s}/.geode_admin_password already exists. The generated admin password is written to a new file,\n" ++
+                    "and an existing file (or symbolic link) at that path is never overwritten. Read it and remove it,\n" ++
+                    "or set GEODE_ADMIN_PASSWORD, then re-run 'geode auth init'. The admin user was not created.\n",
+                .{dir.path},
+            );
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
     }
 
     // Bootstrap
@@ -132,19 +185,7 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     // `<data_dir>/.geode_admin_password` at mode 0o600 and surface only a
     // pointer.  When an env var seeded the password the operator already
     // has the plaintext; we just confirm the user was created.
-    const admin_env_present = blk_env: {
-        if (getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
-            allocator.free(env_pw);
-            break :blk_env true;
-        } else |_| {}
-        if (getEnvVarOwned(allocator, "GEODE_DEFAULT_PASSWORD")) |env_pw| {
-            allocator.free(env_pw);
-            break :blk_env true;
-        } else |_| {}
-        break :blk_env false;
-    };
-
-    if (admin_env_present) {
+    if (adminPasswordFromEnv(allocator)) {
         std.debug.print(
             "Admin user created: {s}\n" ++
                 "Password sourced from GEODE_ADMIN_PASSWORD / GEODE_DEFAULT_PASSWORD env (not echoed).\n" ++
@@ -154,45 +195,18 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         return;
     }
 
-    // No env-supplied password.  Resolve the same data_dir that
-    // initCliAuthManager used (--data-dir flag → GEODE_DATA_DIR →
-    // /var/lib/geode) so the pointer message matches the file we write.
-    const env_dir_owned: ?[]u8 = if (data_dir == null)
-        (getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null)
-    else
-        null;
-    defer if (env_dir_owned) |d| allocator.free(d);
+    // No env-supplied password: the data directory initCliAuthManager used,
+    // so the pointer message matches the file we write.
+    const pw_dir = passwordFileDir(allocator, data_dir);
+    defer pw_dir.deinit(allocator);
 
-    const pw_dir: []const u8 = if (data_dir) |d|
-        d
-    else if (env_dir_owned) |d|
-        d
-    else
-        "/var/lib/geode";
-
-    const pw_path = std.fmt.allocPrint(allocator, "{s}/.geode_admin_password", .{pw_dir}) catch {
-        std.debug.print(
-            "Error: Failed to allocate bootstrap password file path; rotate via 'geode user reset-password'.\n",
-            .{},
-        );
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    defer allocator.free(pw_path);
-
-    const io_pw = std.Io.Threaded.global_single_threaded.io();
-    if (std.Io.Dir.cwd().createFile(io_pw, pw_path, .{
-        .truncate = true,
-        .permissions = std.Io.File.Permissions.fromMode(0o600),
-    })) |file| {
-        defer file.close(io_pw);
-        file.writeStreamingAll(io_pw, result.password) catch |err| {
-            std.debug.print(
-                "Error: Failed to write bootstrap password file at {s}: {s}\n" ++
-                    "Use 'geode user reset-password' after setting GEODE_ADMIN_PASSWORD to recover.\n",
-                .{ pw_path, @errorName(err) },
-            );
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
+    // SONNY-2778: O_CREAT|O_EXCL|O_NOFOLLOW, mode 0600, never over an
+    // existing file (`geode_auth.writeAdminPasswordFile`). It truncated
+    // whatever was at the path, keeping its mode and following a symlink.
+    // The check before the bootstrap refuses an occupied path; this refuses
+    // one that appeared since.
+    if (geode_auth.writeAdminPasswordFile(allocator, pw_dir.path, result.password)) |pw_path| {
+        defer allocator.free(pw_path);
         std.debug.print(
             "Admin user created: {s}\n" ++
                 "Bootstrap password written to: {s} (mode 0600, read once; rotate immediately).\n" ++
@@ -201,9 +215,10 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         );
     } else |err| {
         std.debug.print(
-            "Error: Failed to create bootstrap password file at {s}: {s}\n" ++
-                "Set GEODE_ADMIN_PASSWORD before re-running 'geode auth init', or rotate via 'geode user reset-password'.\n",
-            .{ pw_path, @errorName(err) },
+            "Error: Failed to create bootstrap password file {s}/.geode_admin_password: {s}\n" ++
+                "An existing file (or symbolic link) at that path is never overwritten. Remove it after reading it, then rotate\n" ++
+                "the admin password via 'geode user reset-password', or set GEODE_ADMIN_PASSWORD before re-running 'geode auth init'.\n",
+            .{ pw_dir.path, @errorName(err) },
         );
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
@@ -219,10 +234,19 @@ fn printAuthResealUsage() void {
             "\n" ++
             "Options:\n" ++
             "  --data-dir <path>    Data directory (default: GEODE_DATA_DIR env or ./data)\n" ++
+            "  --accept-legacy-policy <id>\n" ++
+            "                       Sign this policy record although it has no kind and\n" ++
+            "                       its HMAC does not verify (repeat for each record)\n" ++
+            "  --drop-legacy-policy <id>\n" ++
+            "                       Delete this policy record, which has no kind and whose\n" ++
+            "                       HMAC does not verify (repeat for each record)\n" ++
             "  -h, --help           Show this help\n" ++
             "\n" ++
             "Recomputes all per-record HMACs and the chain root hash.\n" ++
             "Use after legitimate manual intervention (e.g. direct graph edits).\n" ++
+            "A policy record written before record kinds existed, whose HMAC does not\n" ++
+            "verify, is refused: it may have been planted, and GPS would load it by its\n" ++
+            "shape. Check each one, then drop it or accept it by id.\n" ++
             "\n" ++
             "Examples:\n" ++
             "  geode auth reseal --data-dir /var/lib/geode\n" ++
@@ -253,9 +277,41 @@ pub fn cmdAuthReseal(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: us
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
-    // Seal chain
-    mgr.sealChain(&kr.key) catch |err| {
-        std.debug.print("Error: Failed to reseal chain: {s}\n", .{@errorName(err)});
+    // SONNY-2791: the operator's decisions for the policy records that have no
+    // kind and whose HMAC does not verify: sign (accept) or delete (drop).
+    var accept: std.ArrayList(u64) = .empty;
+    defer accept.deinit(allocator);
+    var drop: std.ArrayList(u64) = .empty;
+    defer drop.deinit(allocator);
+    var ai = start_idx;
+    while (ai < argv.len) : (ai += 1) {
+        const list = if (std.mem.eql(u8, argv[ai], "--accept-legacy-policy"))
+            &accept
+        else if (std.mem.eql(u8, argv[ai], "--drop-legacy-policy"))
+            &drop
+        else
+            continue;
+        if (ai + 1 >= argv.len) {
+            std.debug.print("Error: {s} requires a policy record id\n", .{argv[ai]});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        const id = std.fmt.parseInt(u64, argv[ai + 1], 10) catch {
+            std.debug.print("Error: {s} takes a policy record id, not '{s}'\n", .{ argv[ai], argv[ai + 1] });
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        try list.append(allocator, id);
+        ai += 1;
+    }
+
+    // Seal chain (SONNY-2791: refusing unsigned legacy policy records)
+    mgr.resealChain(&kr.key, .{ .accept = accept.items, .drop = drop.items }) catch |err| {
+        if (err == error.UnsignedLegacyPolicyRecord) {
+            std.debug.print("Error: refusing to reseal: policy records without a kind do not verify and may have been planted (their ids are in the log). Check each one, then re-run with --drop-legacy-policy <id> (delete it) or --accept-legacy-policy <id> (sign it).\n", .{});
+        } else if (err == error.ConflictingLegacyPolicyDecision) {
+            std.debug.print("Error: a policy record id is given to both --accept-legacy-policy and --drop-legacy-policy\n", .{});
+        } else {
+            std.debug.print("Error: Failed to reseal chain: {s}\n", .{@errorName(err)});
+        }
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
@@ -300,10 +356,16 @@ pub fn cmdAuthVerify(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: us
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
-    // Resolve HMAC key
-    const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
+    // SONNY-3035: an empty store (no records, no chain root) verifies with
+    // no key; otherwise the key is looked up, never generated: a key made up
+    // now cannot verify an existing chain, and verifying wrote it.
+    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) {
+        std.debug.print("HMAC chain verified: 0 records, integrity OK.\n", .{});
+        return;
+    }
+    const kr = auth_graph_manager.AuthGraphManager.resolveExistingHmacKey(allocator, data_dir) catch |err| {
         std.debug.print("Error: Failed to resolve HMAC key: {s}\n", .{@errorName(err)});
-        std.debug.print("Set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY, or create .geode_hmac_key in the data directory.\n", .{});
+        std.debug.print("Set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY, or place the store's .geode_hmac_key in the data directory.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 

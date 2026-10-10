@@ -18,8 +18,16 @@ pub fn protoValueToPropertyValue(allocator: Allocator, value: schema.Value, dept
         .double_val => |dv| graph_store.PropertyValue{ .Float = dv.value },
         .string_val => |sv| graph_store.PropertyValue{ .String = try allocator.dupe(u8, sv.value) },
         .decimal_val => |dec| blk: {
+            // SONNY-2727: a peer node's decimal is checked like a client's
+            // parameter (proto_util.protoValueToValue). Its wire u32 scale
+            // must fit the u8 scale (`@intCast` aborted the node), and the
+            // smallest i128 coefficient, outside every DECIMAL, is refused
+            // (negating it overflows).
+            // CANARY: REQ=REQ-SONNY-2727-PARAM-DECODER-NARROWING; FEATURE="WireParameters"; ASPECT=PeerDecimal; STATUS=TESTED; TEST=tests/test_sonny2727_param_decoder_narrowing.zig; OWNER=distributed; UPDATED=2026-09-26
             const coeff = std.fmt.parseInt(i128, dec.coeff, 10) catch return error.InvalidDecimal;
-            break :blk graph_store.PropertyValue{ .Decimal = .{ .coeff = coeff, .scale = @intCast(dec.scale) } };
+            if (coeff == std.math.minInt(i128)) return error.InvalidDecimal;
+            const scale = std.math.cast(u8, dec.scale) orelse return error.InvalidDecimal;
+            break :blk graph_store.PropertyValue{ .Decimal = .{ .coeff = coeff, .scale = scale } };
         },
         .bytes_val => |bv| graph_store.PropertyValue{ .ExtValue = .{ .Bytea = try allocator.dupe(u8, bv.value) } },
         .ext_val => |ev| property_codec.extValueToPropertyValue(try property_codec.protoExtendedToExtValue(allocator, ev)),
@@ -142,22 +150,38 @@ fn protoValueToJsonValue(allocator: Allocator, value: schema.Value, depth: usize
             const encoded = try base64Encode(allocator, bv.value);
             break :blk std.json.Value{ .string = encoded };
         },
+        // SONNY-2727: a refused item (past the depth limit) frees the items
+        // converted before it, and a repeated map key frees the duplicate
+        // key and the value it replaces (the last value still wins).
         .list_val => |lv| blk: {
             var arr = std.json.Array.init(allocator);
+            errdefer freeJsonValue(allocator, .{ .array = arr });
             for (lv.values.items) |item| {
-                try arr.append(try protoValueToJsonValue(allocator, item, depth + 1));
+                const converted = try protoValueToJsonValue(allocator, item, depth + 1);
+                arr.append(converted) catch |err| {
+                    freeJsonValue(allocator, converted);
+                    return err;
+                };
             }
             break :blk std.json.Value{ .array = arr };
         },
         .map_val => |mv| blk: {
             var obj = @as(std.json.ObjectMap, .empty);
+            errdefer freeJsonValue(allocator, .{ .object = obj });
             for (mv.entries.items) |entry| {
                 const key = try allocator.dupe(u8, entry.key);
+                errdefer allocator.free(key);
                 const val = if (entry.value) |v|
                     try protoValueToJsonValue(allocator, v, depth + 1)
                 else
                     std.json.Value{ .null = {} };
-                try obj.put(allocator, key, val);
+                errdefer freeJsonValue(allocator, val);
+                const slot = try obj.getOrPut(allocator, key);
+                if (slot.found_existing) {
+                    allocator.free(key);
+                    freeJsonValue(allocator, slot.value_ptr.*);
+                }
+                slot.value_ptr.* = val;
             }
             break :blk std.json.Value{ .object = obj };
         },

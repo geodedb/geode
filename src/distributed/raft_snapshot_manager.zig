@@ -81,14 +81,25 @@ pub fn installSnapshotData(
         return error.ChecksumMismatch;
     }
 
-    // 2. Clear existing store data
-    store.clearNodes();
+    // CANARY: REQ=REQ-SONNY-3317-RAFT-INSTALL-LOCKED; FEATURE="Raft Snapshot Persistence"; ASPECT=InstallUnderStoreLock; STATUS=TESTED; TEST=tests/test_sonny3317_round15_minors.zig; OWNER=distributed; UPDATED=2026-09-28
+    // SONNY-3317 (round 16, M7; pre-existing): the store is cleared and
+    // rebuilt under its write lock (exclusive): every request's graph lock
+    // takes it shared first, so none reads or writes a store half replaced.
+    // It ran with no lock.
+    // The fulltext rebuild below takes graph locks itself: it runs after.
+    {
+        graph_store.acquireStoreWriteLock();
+        defer graph_store.releaseStoreWriteLock();
 
-    // 3. Parse JSON-lines and recreate nodes/edges
-    var line_iter = std.mem.splitScalar(u8, data, '\n');
-    while (line_iter.next()) |line| {
-        if (line.len == 0) continue;
-        try parseLine(store, line);
+        // 2. Clear existing store data
+        store.clearNodes();
+
+        // 3. Parse JSON-lines and recreate nodes/edges
+        var line_iter = std.mem.splitScalar(u8, data, '\n');
+        while (line_iter.next()) |line| {
+            if (line.len == 0) continue;
+            try parseLine(store, line);
+        }
     }
 
     // 4. Rebuild fulltext indexes from the restored store (see hook docs

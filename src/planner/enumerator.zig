@@ -47,21 +47,28 @@ pub const PlanEnumerator = struct {
     stats: EnumeratorStats = .{},
     best_cost: f64 = std.math.inf(f64),
     join_sig_set: std.AutoHashMap(u64, void) = undefined,
+    /// SONNY-2394: owns the children arrays of join-commutativity (swapped)
+    /// candidates. They used to point at a stack buffer inside
+    /// generateUnmanaged, so every swapped CandidatePlan.plan.children dangled
+    /// as soon as the recursion returned, and any consumer walking the plan
+    /// (pipeline.planQuerySelectBest, rescore) read a dead stack frame.
+    /// Candidate plans borrow from this arena: they stay valid until the next
+    /// enumerate call on this enumerator, or deinit().
+    swap_arena: std.heap.ArenaAllocator = undefined,
 
     pub fn init(alloc: std.mem.Allocator, config: EnumeratorConfig) PlanEnumerator {
-        return .{ .allocator = alloc, .config = config, .join_sig_set = std.AutoHashMap(u64, void).init(alloc) };
-    }
-
-    pub fn enumerate(self: *PlanEnumerator, root: LogicalPlan, list: *std.ArrayList(CandidatePlan)) !void {
-        self.best_cost = std.math.inf(f64);
-        self.join_sig_set.clearRetainingCapacity();
-        try self.generateArrayList(root, list, 0);
-        self.stats.unique_join_signatures = self.join_sig_set.count();
+        return .{
+            .allocator = alloc,
+            .config = config,
+            .join_sig_set = std.AutoHashMap(u64, void).init(alloc),
+            .swap_arena = std.heap.ArenaAllocator.init(alloc),
+        };
     }
 
     pub fn enumerateUnmanaged(self: *PlanEnumerator, root: LogicalPlan, gpa: std.mem.Allocator, list: *std.ArrayListUnmanaged(CandidatePlan)) !void {
         self.best_cost = std.math.inf(f64);
         self.join_sig_set.clearRetainingCapacity();
+        _ = self.swap_arena.reset(.retain_capacity);
         try self.generateUnmanaged(root, gpa, list, 0);
         self.stats.unique_join_signatures = self.join_sig_set.count();
     }
@@ -76,33 +83,6 @@ pub const PlanEnumerator = struct {
             if (cp.cost < best.cost) best = cp;
         }
         return best;
-    }
-
-    fn generateArrayList(self: *PlanEnumerator, node: LogicalPlan, list: *std.ArrayList(CandidatePlan), depth: usize) !void {
-        self.stats.explored_levels = @max(self.stats.explored_levels, depth + 1);
-        const max_plans = self.config.max_plans;
-        if (list.items.len < max_plans) {
-            const sig = self.signatureOf(node);
-            try list.append(.{ .cost = self.estimateCost(node), .plan = node, .signature = sig });
-            self.stats.generated += 1;
-            if (list.items[list.items.len - 1].cost < self.best_cost) self.best_cost = list.items[list.items.len - 1].cost;
-            if (node.op == .join) _ = try self.join_sig_set.put(sig, {});
-        }
-        // pruning guard
-        if (self.config.enable_prune and self.best_cost < std.math.inf(f64)) {
-            const projected = self.estimateCost(node);
-            if (projected > self.best_cost * self.config.prune_factor) return; // skip deep exploration
-        }
-        for (node.children) |child| try self.generateArrayList(child, list, depth + 1);
-        if (node.op == .join and node.children.len == 2 and self.config.enable_join_commutativity and list.items.len < max_plans) {
-            var swapped = node;
-            var buf: [2]LogicalPlan = .{ node.children[1], node.children[0] };
-            swapped.children = buf[0..];
-            const sig2 = self.signatureOf(swapped);
-            try list.append(.{ .cost = self.estimateCost(swapped) * 0.98, .plan = swapped, .signature = sig2 });
-            self.stats.generated += 1;
-            _ = try self.join_sig_set.put(sig2, {});
-        }
     }
 
     fn generateUnmanaged(self: *PlanEnumerator, node: LogicalPlan, gpa: std.mem.Allocator, list: *std.ArrayListUnmanaged(CandidatePlan), depth: usize) !void {
@@ -122,8 +102,10 @@ pub const PlanEnumerator = struct {
         for (node.children) |child| try self.generateUnmanaged(child, gpa, list, depth + 1);
         if (node.op == .join and node.children.len == 2 and self.config.enable_join_commutativity and list.items.len < max_plans) {
             var swapped = node;
-            var buf: [2]LogicalPlan = .{ node.children[1], node.children[0] };
-            swapped.children = buf[0..];
+            const buf = try self.swap_arena.allocator().alloc(LogicalPlan, 2);
+            buf[0] = node.children[1];
+            buf[1] = node.children[0];
+            swapped.children = buf;
             const sig2 = self.signatureOf(swapped);
             try list.append(gpa, .{ .cost = self.estimateCost(swapped) * 0.98, .plan = swapped, .signature = sig2 });
             self.stats.generated += 1;
@@ -157,5 +139,6 @@ pub const PlanEnumerator = struct {
 
     pub fn deinit(self: *PlanEnumerator) void {
         self.join_sig_set.deinit();
+        self.swap_arena.deinit();
     }
 };

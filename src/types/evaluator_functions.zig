@@ -1,9 +1,11 @@
 const std = @import("std");
+const decimal_text = @import("decimal_text.zig");
 
 const builtin = @import("builtin");
 const heap = @import("../storage/heap.zig");
 const Value = heap.Value;
 const decimal128 = @import("decimal128.zig");
+const narrowing = @import("narrowing.zig");
 const datetime = @import("datetime.zig");
 const jsonb = @import("jsonb.zig");
 const xml = @import("xml.zig");
@@ -404,8 +406,15 @@ pub fn Double(val: Value) EvaluatorError!Value {
 
 pub fn Decimal(allocator: std.mem.Allocator, value_str: []const u8, scale_val: ?i16) EvaluatorError!Value {
     _ = allocator;
-    const dec = decimal128.Decimal128.fromStr(value_str) catch return EvaluatorError.InvalidFormat;
+    const dec = decimal128.Decimal128.fromStr(value_str) catch |err| return switch (err) {
+        error.Overflow => EvaluatorError.DecimalOverflow,
+        else => EvaluatorError.InvalidFormat,
+    };
     const final_scale = scale_val orelse dec.scale;
+    // SONNY-2769: a query's decimal has a scale of 0..255; a negative or
+    // larger one aborted the server when the value was converted (`@intCast`
+    // to u8).
+    if (final_scale < 0 or final_scale > std.math.maxInt(u8)) return EvaluatorError.DecimalOverflow;
     const rounded = dec.roundHalfEven(final_scale) catch return EvaluatorError.DecimalOverflow;
     return Value{ .Decimal128 = rounded };
 }
@@ -531,14 +540,16 @@ pub fn RangeValue(allocator: std.mem.Allocator, base_type: []const u8, lower_arg
 
     const bounds = range.IntRange.Bounds.fromString(bounds_str) orelse return EvaluatorError.RangeBoundsError;
 
+    // SONNY-2769: an int4 range bound past i32 is Overflow (22003); the cast
+    // aborted the server.
     const lower_val = if (lower_arg) |l| switch (l) {
-        .Int => |i| @as(i32, @intCast(i)),
+        .Int => |i| std.math.cast(i32, i) orelse return EvaluatorError.Overflow,
         .SmallInt => |i| @as(i32, i),
         else => return EvaluatorError.TypeMismatch,
     } else null;
 
     const upper_val = if (upper_arg) |u| switch (u) {
-        .Int => |i| @as(i32, @intCast(i)),
+        .Int => |i| std.math.cast(i32, i) orelse return EvaluatorError.Overflow,
         .SmallInt => |i| @as(i32, i),
         else => return EvaluatorError.TypeMismatch,
     } else null;
@@ -902,8 +913,9 @@ pub fn range_contains(range_val: Value, element: Value) EvaluatorError!Value {
         else => return EvaluatorError.TypeMismatch,
     };
 
+    // SONNY-2769: an int4 range holds no value past i32 (the cast aborted).
     const val = switch (element) {
-        .Int => |i| @as(i32, @intCast(i)),
+        .Int => |i| std.math.cast(i32, i) orelse return Value{ .Bool = false },
         .SmallInt => |i| @as(i32, i),
         else => return EvaluatorError.TypeMismatch,
     };
@@ -1036,12 +1048,13 @@ pub fn replace(allocator: std.mem.Allocator, text: Value, search: Value, replace
 pub fn abs_val(val: Value) EvaluatorError!Value {
     return switch (val) {
         .Null => Value{ .Null = {} },
-        .Int => |i| Value{ .Int = @intCast(@abs(i)) },
-        .SmallInt => |i| Value{ .SmallInt = @intCast(@abs(i)) },
-        .BigInt => |i| Value{ .BigInt = @intCast(@abs(i)) },
+        // SONNY-2769: abs(minInt) does not fit its type; the cast aborted.
+        .Int => |i| Value{ .Int = std.math.cast(i64, @abs(i)) orelse return EvaluatorError.Overflow },
+        .SmallInt => |i| Value{ .SmallInt = std.math.cast(i16, @abs(i)) orelse return EvaluatorError.Overflow },
+        .BigInt => |i| Value{ .BigInt = std.math.cast(i64, @abs(i)) orelse return EvaluatorError.Overflow },
         .Real => |f| Value{ .Real = @abs(f) },
         .Double => |d| Value{ .Double = @abs(d) },
-        .Decimal128 => |d| Value{ .Decimal128 = .{ .coeff = @intCast(@abs(d.coeff)), .scale = d.scale } },
+        .Decimal128 => |d| Value{ .Decimal128 = .{ .coeff = std.math.cast(i128, @abs(d.coeff)) orelse return EvaluatorError.Overflow, .scale = d.scale } },
         else => EvaluatorError.TypeMismatch,
     };
 }
@@ -1238,6 +1251,20 @@ pub fn sqrt_val(val: Value) EvaluatorError!Value {
     };
 }
 
+// CANARY: REQ=REQ-SONNY-2739-CHECKED-NARROWING; FEATURE="NumericNarrowing"; ASPECT=HeapRounding; STATUS=TESTED; TEST=tests/test_sonny2739_float_narrowing.zig; OWNER=types; UPDATED=2026-09-25
+/// A Decimal128 rounded to an i64, exactly (a negative scale is a power-of-ten
+/// multiplier), or Overflow. SONNY-2739: ceil, floor and toInteger went
+/// through f64 and a bare or wrongly guarded `@intFromFloat`, which aborts the
+/// process past i64.
+fn decimal128ToInt(dec: decimal128.Decimal128, mode: narrowing.Rounding) EvaluatorError!i64 {
+    if (dec.scale < 0) {
+        const factor = narrowing.pow10(@intCast(-@as(i32, dec.scale))) orelse return EvaluatorError.Overflow;
+        const v = std.math.mul(i128, dec.coeff, factor) catch return EvaluatorError.Overflow;
+        return std.math.cast(i64, v) orelse EvaluatorError.Overflow;
+    }
+    return narrowing.decimalToInt(dec.coeff, @intCast(dec.scale), mode) catch EvaluatorError.Overflow;
+}
+
 pub fn ceil_val(val: Value) EvaluatorError!Value {
     return switch (val) {
         .Int => val,
@@ -1245,12 +1272,7 @@ pub fn ceil_val(val: Value) EvaluatorError!Value {
         .BigInt => val,
         .Real => |f| Value{ .Real = @ceil(f) },
         .Double => |d| Value{ .Double = @ceil(d) },
-        .Decimal128 => |dec| blk: {
-            // Convert to float, apply ceil, convert back
-            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
-            const ceiled = @ceil(float_val);
-            break :blk Value{ .Int = @as(i64, @intFromFloat(ceiled)) };
-        },
+        .Decimal128 => |dec| Value{ .Int = try decimal128ToInt(dec, .ceil) },
         else => EvaluatorError.TypeMismatch,
     };
 }
@@ -1262,12 +1284,7 @@ pub fn floor_val(val: Value) EvaluatorError!Value {
         .BigInt => val,
         .Real => |f| Value{ .Real = @floor(f) },
         .Double => |d| Value{ .Double = @floor(d) },
-        .Decimal128 => |dec| blk: {
-            // Convert to float, apply floor, convert back
-            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
-            const floored = @floor(float_val);
-            break :blk Value{ .Int = @as(i64, @intFromFloat(floored)) };
-        },
+        .Decimal128 => |dec| Value{ .Int = try decimal128ToInt(dec, .floor) },
         else => EvaluatorError.TypeMismatch,
     };
 }
@@ -1349,11 +1366,16 @@ pub fn toString_val(allocator: std.mem.Allocator, val: Value) EvaluatorError!Val
             const result = std.fmt.allocPrint(allocator, "{d}", .{d}) catch return EvaluatorError.OutOfMemory;
             break :blk result;
         },
+        // SONNY-2769 (round 6): exact (through f64 the text lost every digit
+        // past the 17th). A negative scale multiplies by 10^-scale.
         .Decimal128 => |dec| blk: {
-            // Convert Decimal128 to string representation
-            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
-            const result = std.fmt.allocPrint(allocator, "{d}", .{float_val}) catch return EvaluatorError.OutOfMemory;
-            break :blk result;
+            if (dec.scale >= 0) break :blk decimal_text.alloc(allocator, dec.coeff, @intCast(dec.scale)) catch return EvaluatorError.OutOfMemory;
+            if (dec.coeff == 0) break :blk "0";
+            var aw: std.Io.Writer.Allocating = .init(allocator);
+            errdefer aw.deinit();
+            aw.writer.print("{d}", .{dec.coeff}) catch return EvaluatorError.OutOfMemory;
+            aw.writer.splatByteAll('0', @intCast(-@as(i32, dec.scale))) catch return EvaluatorError.OutOfMemory;
+            break :blk aw.toOwnedSlice() catch return EvaluatorError.OutOfMemory;
         },
         .Str => |s| s,
         .Text => |s| s,
@@ -1372,19 +1394,11 @@ pub fn toInteger_val(val: Value) EvaluatorError!Value {
             if (i > std.math.maxInt(i64) or i < std.math.minInt(i64)) return EvaluatorError.Overflow;
             return Value{ .Int = @intCast(i) };
         },
-        .Real => |f| {
-            if (f > 9.223372e18 or f < -9.223372e18) return EvaluatorError.Overflow;
-            return Value{ .Int = @intFromFloat(f) };
-        },
-        .Double => |d| {
-            if (d > 9.223372036854775807e18 or d < -9.223372036854775808e18) return EvaluatorError.Overflow;
-            return Value{ .Int = @intFromFloat(d) };
-        },
-        .Decimal128 => |dec| blk: {
-            const float_val = @as(f64, @floatFromInt(dec.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(dec.scale));
-            if (float_val > 9.223372036854775807e18 or float_val < -9.223372036854775808e18) return EvaluatorError.Overflow;
-            break :blk Value{ .Int = @intFromFloat(float_val) };
-        },
+        // SONNY-2739: the guards compared with 9.223372036854775807e18, which
+        // is 2^63 as a float, so 2^63 and NaN got through to `@intFromFloat`.
+        .Real => |f| Value{ .Int = narrowing.floatToInt(i64, f) catch return EvaluatorError.Overflow },
+        .Double => |d| Value{ .Int = narrowing.floatToInt(i64, d) catch return EvaluatorError.Overflow },
+        .Decimal128 => |dec| Value{ .Int = try decimal128ToInt(dec, .trunc) },
         .Bool => |b| Value{ .Int = if (b) 1 else 0 },
         .Str => |s| blk: {
             const result = std.fmt.parseInt(i64, s, 10) catch return EvaluatorError.InvalidFormat;

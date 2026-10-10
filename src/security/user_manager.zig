@@ -59,8 +59,34 @@ pub const UserManager = struct {
     security_manager: *auth.SecurityManager,
     rls_engine: *rls.RLSEngine,
     user_storage: *user_storage.UserStorageBackend,
+    /// SONNY-2778: the strings this manager copied into each RLS policy it
+    /// installed, by policy id. The engine keeps pointers to them and never
+    /// frees a policy's strings (SONNY-2773), so they leaked for the life of
+    /// the process: every policy, and every failed create.
+    policy_strings: std.AutoHashMapUnmanaged(u64, PolicyStrings) = .empty,
 
     const Self = @This();
+
+    /// SONNY-2778: the copies one policy holds.
+    const PolicyStrings = struct {
+        name: []const u8,
+        description: []const u8,
+        graph: []const u8,
+        table: []const u8,
+        roles: []const auth.RoleId,
+        using_raw: ?[]const u8,
+        check_raw: ?[]const u8,
+
+        fn free(self: PolicyStrings, allocator: Allocator) void {
+            allocator.free(self.name);
+            allocator.free(self.description);
+            allocator.free(self.graph);
+            allocator.free(self.table);
+            allocator.free(self.roles);
+            if (self.using_raw) |raw| allocator.free(raw);
+            if (self.check_raw) |raw| allocator.free(raw);
+        }
+    };
 
     pub fn init(
         allocator: Allocator,
@@ -76,8 +102,13 @@ pub const UserManager = struct {
         };
     }
 
+    /// SONNY-2778: frees the strings of the policies this manager installed.
+    /// The engine still points at them: deinit the manager just before the
+    /// engine, or delete its policies first.
     pub fn deinit(self: *Self) void {
-        _ = self;
+        var it = self.policy_strings.valueIterator();
+        while (it.next()) |strings| strings.free(self.allocator);
+        self.policy_strings.deinit(self.allocator);
     }
 
     // User CRUD Operations
@@ -469,25 +500,49 @@ pub const UserManager = struct {
             }
         }
 
-        const policy_id = @as(u64, @intCast(compat_milliTimestamp()));
+        // SONNY-2777: the policy id sequence every policy writer shares. It
+        // was the wall-clock millisecond: two policies created in one
+        // millisecond shared an id, and a GPS policy could hold it.
+        const policy_id = self.user_storage.nextPolicyId();
+
+        // SONNY-2778: the copies are kept in `policy_strings` and freed with
+        // the policy; on any failure below they are freed here.
+        const roles = try role_ids.toOwnedSlice(self.allocator);
+        var strings = PolicyStrings{
+            .name = &.{},
+            .description = &.{},
+            .graph = &.{},
+            .table = &.{},
+            .roles = roles,
+            .using_raw = null,
+            .check_raw = null,
+        };
+        errdefer strings.free(self.allocator);
+        strings.name = try self.allocator.dupe(u8, request.name);
+        strings.description = try self.allocator.dupe(u8, request.description);
+        strings.graph = try self.allocator.dupe(u8, request.graph);
+        strings.table = try self.allocator.dupe(u8, request.table);
+        if (request.using_clause) |clause| strings.using_raw = try self.allocator.dupe(u8, clause);
+        if (request.check_clause) |clause| strings.check_raw = try self.allocator.dupe(u8, clause);
+        try self.policy_strings.ensureUnusedCapacity(self.allocator, 1);
 
         const policy = rls.RLSEngine.Policy{
             .id = policy_id,
-            .name = try self.allocator.dupe(u8, request.name),
-            .description = try self.allocator.dupe(u8, request.description),
-            .graph = try self.allocator.dupe(u8, request.graph),
-            .table = try self.allocator.dupe(u8, request.table),
+            .name = strings.name,
+            .description = strings.description,
+            .graph = strings.graph,
+            .table = strings.table,
             .operation = request.operation,
             .permissive = request.permissive,
-            .roles = try role_ids.toOwnedSlice(self.allocator),
-            .using_expr = if (request.using_clause) |clause| rls.RLSEngine.Expression{
-                .raw = try self.allocator.dupe(u8, clause),
+            .roles = strings.roles,
+            .using_expr = if (strings.using_raw) |raw| rls.RLSEngine.Expression{
+                .raw = raw,
                 .parsed = null,
                 .compiled = null,
                 .parameters = &[_]rls.RLSEngine.Expression.Parameter{},
             } else null,
-            .check_expr = if (request.check_clause) |clause| rls.RLSEngine.Expression{
-                .raw = try self.allocator.dupe(u8, clause),
+            .check_expr = if (strings.check_raw) |raw| rls.RLSEngine.Expression{
+                .raw = raw,
                 .parsed = null,
                 .compiled = null,
                 .parameters = &[_]rls.RLSEngine.Expression.Parameter{},
@@ -501,8 +556,16 @@ pub const UserManager = struct {
             .audit_level = request.audit_level,
         };
 
+        // SONNY-2732: createPolicy refuses an expression that does not
+        // compile (error.InvalidRlsExpression) before anything is stored, and
+        // a policy that cannot be persisted is taken out again, so the engine
+        // and the store never disagree.
         try self.rls_engine.createPolicy(policy);
-        try self.persistPolicy(policy);
+        self.persistPolicy(policy, .create) catch |err| {
+            self.rls_engine.deletePolicy(policy_id) catch {};
+            return err;
+        };
+        self.policy_strings.putAssumeCapacity(policy_id, strings);
 
         return policy_id;
     }
@@ -518,13 +581,20 @@ pub const UserManager = struct {
         var found_policy: ?rls.RLSEngine.Policy = null;
         var policy_key: ?rls.RLSEngine.PolicyKey = null;
 
-        var it = self.rls_engine.policies.iterator();
-        while (it.next()) |entry| {
-            for (entry.value_ptr.items) |policy| {
-                if (policy.id == policy_id) {
-                    found_policy = policy;
-                    policy_key = entry.key_ptr.*;
-                    break;
+        {
+            // SONNY-2679 (review): query threads read this map; copy the
+            // policy out under the engine's read lock (`updatePolicy` below
+            // takes it exclusively).
+            self.rls_engine.acquirePoliciesRead();
+            defer self.rls_engine.releasePoliciesRead();
+            var it = self.rls_engine.policies.iterator();
+            while (it.next()) |entry| {
+                for (entry.value_ptr.items) |policy| {
+                    if (policy.id == policy_id) {
+                        found_policy = policy;
+                        policy_key = entry.key_ptr.*;
+                        break;
+                    }
                 }
             }
         }
@@ -536,18 +606,26 @@ pub const UserManager = struct {
             policy.enabled = e;
         }
 
-        if (using_clause) |clause| {
+        // SONNY-2778: a new clause is a new copy; the one it replaces is
+        // freed once the engine holds the new one. A failure frees the new one.
+        var handed_over = false;
+        const new_using: ?[]const u8 = if (using_clause) |clause| try self.allocator.dupe(u8, clause) else null;
+        errdefer if (!handed_over) if (new_using) |raw| self.allocator.free(raw);
+        const new_check: ?[]const u8 = if (check_clause) |clause| try self.allocator.dupe(u8, clause) else null;
+        errdefer if (!handed_over) if (new_check) |raw| self.allocator.free(raw);
+
+        if (new_using) |raw| {
             policy.using_expr = rls.RLSEngine.Expression{
-                .raw = try self.allocator.dupe(u8, clause),
+                .raw = raw,
                 .parsed = null,
                 .compiled = null,
                 .parameters = &[_]rls.RLSEngine.Expression.Parameter{},
             };
         }
 
-        if (check_clause) |clause| {
+        if (new_check) |raw| {
             policy.check_expr = rls.RLSEngine.Expression{
-                .raw = try self.allocator.dupe(u8, clause),
+                .raw = raw,
                 .parsed = null,
                 .compiled = null,
                 .parameters = &[_]rls.RLSEngine.Expression.Parameter{},
@@ -555,11 +633,25 @@ pub const UserManager = struct {
         }
 
         try self.rls_engine.updatePolicy(policy_id, policy);
-        try self.persistPolicy(policy);
+        // The engine holds the new copies now.
+        handed_over = true;
+        if (self.policy_strings.getPtr(policy_id)) |strings| {
+            if (new_using) |raw| {
+                if (strings.using_raw) |old| self.allocator.free(old);
+                strings.using_raw = raw;
+            }
+            if (new_check) |raw| {
+                if (strings.check_raw) |old| self.allocator.free(old);
+                strings.check_raw = raw;
+            }
+        }
+        try self.persistPolicy(policy, .replace);
     }
 
     pub fn deletePolicy(self: *Self, policy_id: u64) !void {
         try self.rls_engine.deletePolicy(policy_id);
+        // SONNY-2778: the engine no longer points at its strings.
+        if (self.policy_strings.fetchRemove(policy_id)) |kv| kv.value.free(self.allocator);
         try self.removePolicyFromStorage(policy_id);
     }
 
@@ -697,7 +789,7 @@ pub const UserManager = struct {
         );
     }
 
-    fn persistPolicy(self: *Self, policy: rls.RLSEngine.Policy) !void {
+    fn persistPolicy(self: *Self, policy: rls.RLSEngine.Policy, mode: user_storage.UserStorageBackend.PersistMode) !void {
         const operation_byte: u8 = switch (policy.operation) {
             .select => 0,
             .insert => 1,
@@ -731,6 +823,9 @@ pub const UserManager = struct {
             .check_clause = check_clause,
             .audit_level = audit_level_byte,
             .created_by = policy.created_by,
+            // SONNY-2750: an RLS record, which GPS never loads.
+            .kind = .rls,
+            .mode = mode,
         });
     }
 

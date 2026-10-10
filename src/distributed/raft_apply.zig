@@ -413,6 +413,30 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
         else => return err,
     };
 
+    // CANARY: REQ=REQ-SONNY-3348-CLUSTER-BATCH; FEATURE="DistributedCluster"; ASPECT=ApplyStatementBatch; STATUS=TESTED; TEST=tests/test_sonny3348_cluster_batch.zig; OWNER=distributed; UPDATED=2026-09-29
+    // SONNY-3348 (round 19): one statement's writes, as one entry (GBAT,
+    // proposed as a `.create`). Every entry of the batch is checked before
+    // any is applied. A version this build does not know is logged and
+    // skipped, as a build before round 19 skips the whole batch (its create
+    // arm's unknown-magic branch below).
+    if (cluster_replication.isBatchPayload(gm.data)) {
+        const applied = cluster_replication.applyBatchPayload(allocator, store, gm.data, raft_index, g_idempotency_dedup) catch |err| switch (err) {
+            error.UnsupportedBatchVersion => {
+                log.err("raft apply: statement batch of an unknown version — skipping (nothing applied)", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.uint("raft_index", raft_index),
+                });
+                return allocator.alloc(u8, 0);
+            },
+            else => return err,
+        };
+        log.info("raft apply: replicated statement batch", &.{
+            Attr.uint("entries", applied),
+            Attr.string("graph", graph_name),
+        });
+        return allocator.alloc(u8, 0);
+    }
+
     switch (gm.mutation_type) {
         .create => {
             // RC-3 (2026-06-12): a keyed create wrapper (GN1K / GN2K) carries an
@@ -611,10 +635,30 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
         },
 
         .drop_graph => {
+            // CANARY: REQ=REQ-SONNY-3350-ROUND16-MINORS; FEATURE="DistributedCluster"; ASPECT=RaftDropGraphLock; STATUS=TESTED; TEST=tests/test_sonny3350_round16_minors.zig; OWNER=distributed; UPDATED=2026-09-28
+            // SONNY-3350 (round 17): under the graph's write lock, as DROP
+            // GRAPH's handlers run it (SONNY-3028): the drop waits for the
+            // graph's readers and writers, and none starts during it. The
+            // apply thread dropped it with no lock, and freed the graph under
+            // requests holding it. A graph that is not there is not locked
+            // (the lock would create it); the drop is idempotent.
+            if (!store.graphExists(sc.graph)) {
+                log.info("raft apply: drop_graph of a graph that is not there (idempotent)", &.{
+                    Attr.string("graph", sc.graph),
+                });
+                return allocator.alloc(u8, 0);
+            }
+            const lock = graph_store_mod.acquireGraphWriteLock(sc.graph);
+            defer graph_store_mod.releaseGraphLock(lock);
             store.dropGraph(sc.graph) catch |err| switch (err) {
                 error.GraphNotFound => {}, // idempotent
                 error.CannotDropDefaultGraph => {
                     log.warn("raft apply: attempted to drop default graph, ignoring", &.{});
+                },
+                // SONNY-3028: the apply thread has no engine transaction open
+                // on the graph; kept for the error set.
+                error.ObjectInUse => {
+                    log.warn("raft apply: graph in use by this thread's transaction, not dropped", &.{});
                 },
             };
             log.info("raft apply: dropped graph via schema_change", &.{

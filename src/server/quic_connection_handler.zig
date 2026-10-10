@@ -614,6 +614,9 @@ fn executeBulkSimpleCreate(
         // helpers must hold their SHARED across probe+insert, because a
         // general-path `executeMerge` running under the whole-graph EXCLUSIVE
         // is otherwise free to interleave between the two.
+        // SONNY-3029: the batch's statement transaction is open only while no
+        // thread holds or waits for the graph's write lock
+        // (`StorageAdapter.enterBatchTxn`).
         mut_sample.markLockAcquired();
         var op = group_commit.ApplyOp{ .bulk_insert_node = .{
             .labels = node_pattern.labels,
@@ -669,7 +672,7 @@ fn executeBulkSimpleCreate(
 
     // Keep txn / audit / session state tracking consistent with the
     // regular mutation path so downstream handlers don't observe drift.
-    auditQueryExecution(state, "bulk_simple_create", true);
+    auditQueryExecution(query_graph_name, "bulk_simple_create", true);
     // Auto-index the node label(s) — mirrors the regular-executor hook at
     // `src/execution/crud_operations.zig:696` and the edge fast-path at
     // `executeBulkMatchCreateEdge` above.  The bulk fast path bypasses
@@ -678,7 +681,7 @@ fn executeBulkSimpleCreate(
     // `CREATE (n:L {...})` never lists `auto_idx_<label>_id` in SHOW INDEXES.
     execution.ensureAutoIndexes(gpa, node_pattern.labels);
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
 /// Shared helper: send the "0 rows affected, success" wire response that
@@ -816,10 +819,10 @@ fn executeBulkMatchCreateEdge(
         try sendBulkEdgeSuccessResponse(gpa, stream);
         if (result_id == 0) {
             mut_sample.record("bulk_match_create_edge_skipped");
-            auditQueryExecution(state, "bulk_match_create_edge_skipped", true);
+            auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped", true);
         } else {
             mut_sample.record("bulk_match_create_edge");
-            auditQueryExecution(state, "bulk_match_create_edge", true);
+            auditQueryExecution(query_graph_name, "bulk_match_create_edge", true);
             // Auto-index the edge type — mirrors the regular-executor
             // hook at `src/execution/crud_operations.zig:690`.  The bulk
             // fast path bypasses `executeProgramWithContext`, so without
@@ -828,7 +831,7 @@ fn executeBulkMatchCreateEdge(
             execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
         }
         syncGraphFromSession(state);
-        updateTxnStateFromProgram(state, program);
+        updateTxnStateFromProgram(state, program, query_graph_name);
         return;
     }
 
@@ -863,9 +866,9 @@ fn executeBulkMatchCreateEdge(
     if (resolved == null) {
         try sendBulkEdgeSuccessResponse(gpa, stream);
         mut_sample.record("bulk_match_create_edge_skipped");
-        auditQueryExecution(state, "bulk_match_create_edge_skipped", true);
+        auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped", true);
         syncGraphFromSession(state);
-        updateTxnStateFromProgram(state, program);
+        updateTxnStateFromProgram(state, program, query_graph_name);
         return;
     }
     const source_id: u64 = resolved.?.src;
@@ -906,9 +909,9 @@ fn executeBulkMatchCreateEdge(
                 error.SourceNodeNotFound, error.TargetNodeNotFound => {
                     try sendBulkEdgeSuccessResponse(gpa, stream);
                     mut_sample.record("bulk_match_create_edge_skipped_race");
-                    auditQueryExecution(state, "bulk_match_create_edge_skipped_race", true);
+                    auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped_race", true);
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, program);
+                    updateTxnStateFromProgram(state, program, query_graph_name);
                     return;
                 },
                 else => {
@@ -931,12 +934,12 @@ fn executeBulkMatchCreateEdge(
 
     mut_sample.record("bulk_match_create_edge");
 
-    auditQueryExecution(state, "bulk_match_create_edge", true);
+    auditQueryExecution(query_graph_name, "bulk_match_create_edge", true);
     // Auto-index the edge type — non-coordinator path counterpart of the
     // call above.  See note in coordinator-path branch.
     execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
 /// FIX #3 (edge-phase 40001): fast-path dispatcher for the relationship-MERGE
@@ -1042,9 +1045,9 @@ fn executeBulkMatchMergeEdge(
     if (resolved == null) {
         try sendBulkEdgeSuccessResponse(gpa, stream);
         mut_sample.record("bulk_match_merge_edge_skipped");
-        auditQueryExecution(state, "bulk_match_merge_edge_skipped", true);
+        auditQueryExecution(query_graph_name, "bulk_match_merge_edge_skipped", true);
         syncGraphFromSession(state);
-        updateTxnStateFromProgram(state, program);
+        updateTxnStateFromProgram(state, program, query_graph_name);
         return;
     }
     const source_id = resolved.?.src;
@@ -1081,9 +1084,9 @@ fn executeBulkMatchMergeEdge(
             error.SourceNodeNotFound, error.TargetNodeNotFound => {
                 try sendBulkEdgeSuccessResponse(gpa, stream);
                 mut_sample.record("bulk_match_merge_edge_skipped_race");
-                auditQueryExecution(state, "bulk_match_merge_edge_skipped_race", true);
+                auditQueryExecution(query_graph_name, "bulk_match_merge_edge_skipped_race", true);
                 syncGraphFromSession(state);
-                updateTxnStateFromProgram(state, program);
+                updateTxnStateFromProgram(state, program, query_graph_name);
                 return;
             },
             else => {
@@ -1098,10 +1101,10 @@ fn executeBulkMatchMergeEdge(
 
     try sendBulkEdgeSuccessResponse(gpa, stream);
     mut_sample.record("bulk_match_merge_edge");
-    auditQueryExecution(state, "bulk_match_merge_edge", true);
+    auditQueryExecution(query_graph_name, "bulk_match_merge_edge", true);
     execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
 // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=BulkMergeDimensionGuard; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
@@ -1471,7 +1474,7 @@ fn executeBulkSimpleMerge(
 
     mut_sample.record("bulk_simple_merge");
 
-    auditQueryExecution(state, "bulk_simple_merge", true);
+    auditQueryExecution(query_graph_name, "bulk_simple_merge", true);
     // Auto-index the merge label — mirrors the regular-executor MERGE hook at
     // `src/execution/crud_operations.zig:2293`, which runs unconditionally
     // regardless of create-vs-match (`ensureAutoIndexes` is idempotent).  The
@@ -1480,7 +1483,7 @@ fn executeBulkSimpleMerge(
     // INDEXES never lists `auto_idx_<label>_id`.
     execution.ensureAutoIndexes(gpa, &.{spec.label});
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
 /// GAP-0900 lever (c): concurrent batch-write fast path.
@@ -1728,9 +1731,9 @@ fn executeBatchSimpleMerge(
     try sendEmptySuccessResult(gpa, stream);
 
     mut_sample.record("batch_simple_merge");
-    auditQueryExecution(state, "batch_simple_merge", true);
+    auditQueryExecution(query_graph_name, "batch_simple_merge", true);
     syncGraphFromSession(state);
-    updateTxnStateFromProgram(state, program);
+    updateTxnStateFromProgram(state, program, query_graph_name);
     return true;
 }
 
@@ -2172,6 +2175,20 @@ pub fn decodeBufferedMessageForTest(
     return reader.decodeBufferedMessage();
 }
 
+/// SONNY-3348 (round 19, m3/m5): the error a failed COMMIT or ROLLBACK
+/// message carries (the code the statement form answers), owned by
+/// `allocator`: `sendQuicMessage` frees the message it sends.
+fn txnEndErrorOwned(allocator: std.mem.Allocator, err: anyerror) !schema.Error {
+    const info = proto_util.mapError(err);
+    const code = try allocator.dupe(u8, info.code);
+    errdefer allocator.free(code);
+    const message = try allocator.dupe(u8, info.message);
+    errdefer allocator.free(message);
+    const kind = try allocator.dupe(u8, "ERROR");
+    errdefer allocator.free(kind);
+    return .{ .code = code, .message = message, .type = kind, .anchor = try allocator.dupe(u8, "") };
+}
+
 fn sendQuicMessage(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, msg: schema.QuicServerMessage) !void {
     const first_stream_response_start_ns = monoNsFromHandler();
     defer quic_response_metrics.recordFirstStreamResponseSend(monoNsFromHandler() -| first_stream_response_start_ns);
@@ -2278,6 +2295,13 @@ fn sendSinglePageExecutionResultBatched(
     try sendQuicMessagesBatched(ra, stream, &batched);
 }
 
+/// SONNY-2729: the RLS post-filter could not run and withheld every row;
+/// the request is answered with its error instead of the rows.
+fn sendPostFilterError(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, err: anyerror) !void {
+    const info = proto_util.mapError(err);
+    try sendExecuteError(allocator, stream, info.code, info.message, &.{}, &.{});
+}
+
 fn sendExecuteError(
     allocator: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -2350,7 +2374,16 @@ fn extractVarProperty(expr: gql_ast.Expr) ?struct { variable: []const u8, proper
 
 /// Check if a WHERE clause contains an equality predicate on a property
 /// that matches a catalog index for the given label and variable name.
-fn whereHasIndexedEq(where_expr: gql_ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+fn whereHasIndexedEq(root: gql_ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+    // SONNY-3189: down an AND chain with a loop, not one recursion (and one
+    // copy of the expression) per AND: EXPLAIN reaches this before
+    // authorization.
+    var at: *const gql_ast.Expr = &root;
+    while (at.* == .Binary and at.Binary.op == .And) {
+        if (whereHasIndexedEq(at.Binary.right.*, var_name, label, cat)) return true;
+        at = at.Binary.left;
+    }
+    const where_expr = at.*;
     switch (where_expr) {
         .Binary => |bin| {
             if (bin.op == .And) {
@@ -2924,6 +2957,7 @@ fn deinitQuicServerState(gpa: std.mem.Allocator, state: *ServerState, context: [
         });
     };
     state.resetResult();
+    state.clearTxnGraph(); // SONNY-2776
     if (state.current_graph) |g| {
         gpa.free(g);
         state.current_graph = null;
@@ -6193,8 +6227,10 @@ pub fn handleQuicConnection(
 /// aligns audit with the other per-graph security features (FLE, TDE,
 /// KMS) and drops a measurable write-path overhead on the msft-graph
 /// hot path.
-fn resolveAuditLogger(state: *const ServerState) ?*audit_mod.AuditLogger {
-    const graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+/// SONNY-2799: `graph_name` is the graph the request ran on (its lock graph,
+/// or the fast path's graph). It was `state.current_graph`, the copy synced
+/// after a request: the graph of the request before.
+fn resolveAuditLogger(graph_name: []const u8) ?*audit_mod.AuditLogger {
     const adapter = graph_store.getGlobalAdapter() orelse return null;
     return adapter.getAuditLogger(graph_name);
 }
@@ -6208,8 +6244,8 @@ fn resolveAuditLogger(state: *const ServerState) ?*audit_mod.AuditLogger {
 /// The per-thread tenant_id is already set earlier in the request flow
 /// via `audit_mod.setCurrentAuditTenantId`, so we do not pass it
 /// explicitly here.
-fn auditQueryExecution(state: *const ServerState, query_text: []const u8, is_mutation: bool) void {
-    const logger = resolveAuditLogger(state) orelse return;
+fn auditQueryExecution(graph_name: []const u8, query_text: []const u8, is_mutation: bool) void {
+    const logger = resolveAuditLogger(graph_name) orelse return;
     const event_type: audit_mod.AuditEventType = if (is_mutation) .data_modification else .data_access;
     logger.logEvent(.{
         .event_type = event_type,
@@ -6225,9 +6261,11 @@ fn auditQueryExecution(state: *const ServerState, query_text: []const u8, is_mut
 /// the session has been switched to a different graph.
 fn syncGraphFromSession(state: *ServerState) void {
     // Graph-authorization invariant (NEW-1 #861): sess.graph is ONLY ever set
-    // after a gps.decide(.bind_graph) authorization succeeds — at the QUIC HELLO
-    // bind path, the race-recovery bind path (both guarded in this file), and the
-    // mid-session USE GRAPH path (gated in execution.zig). Therefore current_graph,
+    // after a bind_graph authorization succeeds — at the QUIC HELLO bind path,
+    // the race-recovery bind path (both guarded in this file), and the
+    // mid-session USE GRAPH / SESSION SET [PROPERTY] GRAPH / SESSION RESET path.
+    // SONNY-2775: all of them go through `execution.session_graph` (`mayBind`,
+    // `set`, `change`); SESSION SET used to skip the check. Therefore current_graph,
     // copied from sess.graph below, is always an already-authorized graph. We do
     // NOT re-check RBAC here: there is no principal in scope at sync time, and a
     // re-check would only duplicate the gate that already ran at bind time.
@@ -6250,33 +6288,64 @@ fn syncGraphFromSession(state: *ServerState) void {
         null;
 }
 
-fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program) void {
-    var has_start: bool = false;
-    var has_commit: bool = false;
-    var has_rollback: bool = false;
+// CANARY: REQ=REQ-SONNY-2805-TXN-PROGRAM-ORDER; FEATURE="TransactionManagement"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+/// Track the session's transaction after `program` ran. SONNY-2776:
+/// `write_graph` is the graph the program changed (null if it changed none);
+/// the first graph an open transaction changes becomes its graph.
+///
+/// SONNY-2805: the statements are followed in program order, as the executor
+/// ran them. A COMMIT or ROLLBACK used to end the transaction whatever came
+/// after it: after `COMMIT; START TRANSACTION; ...` the handler had no
+/// transaction and the executor had begun one. The transaction's id is the
+/// undo log's (`ServerState.leaveSessionTxn`). A transaction the handler holds
+/// and the undo log does not is begun, so its changes are recorded.
+fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program, write_graph: ?[]const u8) void {
+    for (program.statements) |*stmt| noteTxnStatement(state, stmt, write_graph);
+    if (state.in_txn and txn_undo_log.currentThreadTxnId() == 0) txn_undo_log.getGlobalUndoLog(state.allocator).begin();
+}
 
-    for (program.statements) |stmt| {
-        switch (stmt) {
-            .StartTransaction => |st| {
-                if (st.body == null) has_start = true;
-            },
-            .Commit => has_commit = true,
-            .Rollback => has_rollback = true,
-            else => {},
-        }
+fn noteTxnStatement(state: *ServerState, stmt: *const gql_ast.Statement, write_graph: ?[]const u8) void {
+    switch (stmt.*) {
+        .StartTransaction => |st| {
+            if (st.body == null and !state.in_txn) {
+                state.clearTxnGraph();
+                state.in_txn = true;
+            }
+        },
+        .Commit, .Rollback => state.endTransaction(),
+        // SONNY-3026: a PROFILE ran the statement it wraps (the handler
+        // refuses one of transaction control; this keeps the bookkeeping
+        // honest anyway). An EXPLAIN ran nothing.
+        .Profile => |p| noteTxnStatement(state, p.query, write_graph),
+        .Explain => {},
+        else => if (state.in_txn and query_traits.isMutatingStatement(stmt)) {
+            // A failed allocation leaves the transaction without a graph; its
+            // end then locks the session's graph, as before SONNY-2776.
+            if (write_graph) |g| state.noteTxnWrite(g) catch {};
+        },
     }
+}
 
-    if (has_commit or has_rollback) {
-        state.in_txn = false;
-        state.txn_id = 0;
-        return;
-    }
-
-    if (has_start) {
-        state.in_txn = true;
-        if (state.txn_id == 0) {
-            state.txn_id = @intCast(compat_milliTimestamp());
-        }
+// CANARY: REQ=REQ-SONNY-2799-FAILED-TXN-ROLLBACK; FEATURE="TransactionManagement"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+/// SONNY-2799: after a request whose execution failed. If the undo log's
+/// transaction is still open on this thread, the executor failed it
+/// (GAP-0917) and left the undo to the handler (`defer_failed_txn_rollback`):
+/// roll it back as ROLLBACK does (the session engine transaction first),
+/// under the write lock of the graph it changed (or `request_graph`, the
+/// graph the request ran on). The request's own lock is released by now. If
+/// the handler thought a transaction open that the executor ended, end it.
+fn abortFailedTransaction(state: *ServerState, request_graph: []const u8, ended_txn: bool) void {
+    const open = txn_undo_log.currentThreadTxnId();
+    if (open != 0) {
+        state.txn_id = open;
+        state.rollBackTransaction(request_graph);
+        // SONNY-3348 (round 18, I2): and the session stays in the aborted
+        // transaction until the client ends it (`query_traits.abortedTxnVerdict`),
+        // unless the program itself ended it last (`ended_txn`: a COMMIT that
+        // failed, which rolls back).
+        state.txn_aborted = !ended_txn;
+    } else if (state.in_txn) {
+        state.endTransaction();
     }
 }
 
@@ -6480,8 +6549,7 @@ fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) v
         log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
         // Safety: ensure the flags are cleared even if the hook errored
         // out partway through.
-        state.in_txn = false;
-        state.txn_id = 0;
+        state.endTransaction();
     };
     state.current_user_id = null;
     if (state.authenticated_user) |user| {
@@ -6615,6 +6683,19 @@ fn authenticatedReadNeedsRlsSnapshot(state: *const ServerState) bool {
     return execution.activeRlsPoliciesConfigured();
 }
 
+// CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=KeyResolvedWriteFastPathGate; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2686: may a key-resolved write fast path serve this request? The MERGE
+/// fast paths and the MATCH … CREATE edge fast path find existing nodes by
+/// merge key alone, with no tenant check and no row-level security, so they
+/// may serve only a session that neither restricts (see
+/// `bulk_ingest.sessionAllowsKeyResolvedWrites`); any other request takes the
+/// general executor, whose MERGE / MATCH apply both. The server-side label
+/// engine is checked as the read gate above checks it.
+fn keyResolvedWriteFastPathServes(state: *const ServerState, exec_context: *const execution.ExecutionContext) bool {
+    if (authenticatedReadNeedsRlsSnapshot(state)) return false;
+    return geode.bulk_ingest.sessionAllowsKeyResolvedWrites(exec_context);
+}
+
 /// GAP-0900 (scan-no-clone): true iff this read will be served by the
 /// engine-backed `node_scan_stream` path in the `.rows` arm, so the handler
 /// can skip the O(graph) `QueryReadSession` deep-clone. The conditions are a
@@ -6654,6 +6735,20 @@ fn preamblePermitsStreaming(analysis: *const query_traits.ProgramAnalysis, query
 /// stream itself will be judged against.
 fn sessionTenantId(state: *const ServerState) ?[]const u8 {
     return if (state.session_config) |cfg| cfg.tenant_id else null;
+}
+
+/// SONNY-2749: the session's graph as the executor sees it: the graph a
+/// program's statements start on. `state.current_graph` is a copy synced after
+/// a request that succeeds, so it is stale after one that failed part way.
+fn sessionGraphName(state: *const ServerState) []const u8 {
+    if (state.exec_session) |*sess| return sess.graph orelse graph_store.DEFAULT_GRAPH_NAME;
+    return state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+}
+
+/// SONNY-2775: where SESSION RESET and SESSION CLOSE take the session: the
+/// graph HELLO bound it to (`graph_bound`), or the default graph.
+fn homeGraphName(state: *const ServerState) []const u8 {
+    return if (state.graph_bound) sessionGraphName(state) else graph_store.DEFAULT_GRAPH_NAME;
 }
 
 fn readWillStreamEngineSide(
@@ -6786,6 +6881,14 @@ fn handleClientMessage(
             return;
         }
     }
+    // CANARY: REQ=REQ-SONNY-2799-SESSION-UNDO-TXN; FEATURE="TransactionUndoLog"; ASPECT=QuicPerMessage; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+    // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=QuicPerMessage; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
+    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
+    // are this thread's for the message, and the thread holds neither between
+    // messages. The cooperative scheduler and the mutation offload pool serve
+    // many streams on one thread, and one stream on several.
+    const txn_scope = state.enterSessionTxn();
+    defer state.leaveSessionTxn(txn_scope);
     switch (msg) {
         .hello => |hello_req| {
             // SONNY-1835: record that this stream received its own HELLO, so a
@@ -6957,6 +7060,23 @@ fn handleClientMessage(
             var resolved_graph: ?[]const u8 = null;
             if (hello_req.graph) |requested_graph| {
                 if (requested_graph.len > 0) {
+                    // SONNY-2775: the bind check is `execution.session_graph.mayBind`,
+                    // the one every session graph change uses; with authentication
+                    // off there is no principal to check.
+                    const hello_role_names: []const []const u8 = if (state.authenticated_role) |r|
+                        &[_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(r)))}
+                    else
+                        &.{};
+                    const hello_principal = geode.security.principal_derive.derivePrincipal(.{
+                        .username = state.authenticated_user,
+                        .role_names = hello_role_names,
+                        .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                        .active_graph = requested_graph,
+                        .auth_version = state.authenticated_auth_version,
+                        .auth_method = .password,
+                        .source = .quic_handler,
+                    });
+                    const bind_principal: ?*const geode.security.principal.Principal = if (user_mgmt.isAuthEnabled()) &hello_principal else null;
                     // Validate graph name: max 128 chars, alphanumeric + underscore only
                     if (requested_graph.len > 128) {
                         const resp = schema.QuicServerMessage{ .hello = .{
@@ -6980,49 +7100,37 @@ fn handleClientMessage(
                             return;
                         }
                     }
+                    // SONNY-2791: the __geode_* graphs are the engine's own; no
+                    // session binds (or auto-creates) one.
+                    if (graph_store.isInternalGraphName(requested_graph)) {
+                        const resp = schema.QuicServerMessage{ .hello = .{
+                            .success = false,
+                            .session_id = try gpa.dupe(u8, ""),
+                            .error_message = try gpa.dupe(u8, "Invalid graph name: the __geode_* graphs are internal"),
+                            .capabilities = caps,
+                        } };
+                        try sendQuicMessage(gpa, stream, resp);
+                        return;
+                    }
                     const store = graph_store.getGlobalStore(gpa);
                     const cat = try execution.ensureCatalogInstance(gpa);
 
-                    const in_store = store.graphExists(requested_graph);
-                    const in_catalog = cat.hasGraph(requested_graph);
-
-                    if (in_store or in_catalog) {
-                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=TESTED; TEST=tests/test_new1_cross_graph_bola.zig; OWNER=security; UPDATED=2026-06-27
-                        // NEW-1 (#861) + NEW-11 (#869): route QUIC HELLO graph-bind through
-                        // gps.decide(.bind_graph) — the same fail-closed gate used by mid-session
-                        // USE GRAPH and (post-Task-4) the gRPC HELLO handler. Deletes the
-                        // Wyhash(username) uid derivation (closing NEW-11; GPS resolves uid via
-                        // agm.findUserIdByName inside graphGrantCheck). Fail-closed on GPS error.
-                        const rbac_allowed = blk: {
-                            if (!user_mgmt.isAuthEnabled()) break :blk true; // auth-off = allow
-                            // Compatibility invariant: any authenticated user may always bind the
-                            // default graph by name (belt-and-suspenders; preserves single-graph
-                            // deployments that never issue per-graph grants).
-                            if (std.mem.eql(u8, requested_graph, graph_store.DEFAULT_GRAPH_NAME)) break :blk true;
-                            const gps_mod = geode.security.gps;
-                            const role_names_hello: []const []const u8 = if (state.authenticated_role) |r|
-                                &[_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(r)))}
-                            else
-                                &.{};
-                            const hello_principal = geode.security.principal_derive.derivePrincipal(.{
-                                .username = state.authenticated_user,
-                                .role_names = role_names_hello,
-                                .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
-                                .active_graph = requested_graph,
-                                .auth_version = state.authenticated_auth_version,
-                                .auth_method = .password,
-                                .source = .quic_handler,
-                            });
-                            const gps_req = gps_mod.DecisionRequest{
-                                .principal = &hello_principal,
-                                .action = .bind_graph,
-                                .resource = .{ .graph = requested_graph },
-                            };
-                            const decision = gps_mod.decide(gpa, &gps_req) catch break :blk false;
-                            break :blk (decision.kind == .allow);
-                        };
-
-                        if (!rbac_allowed) {
+                    // CANARY: REQ=REQ-SONNY-2824-HELLO-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=QuicHello; STATUS=TESTED; TEST=tests/test_sonny2824_hello_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+                    // SONNY-2824: the session-graph gate decides: permission
+                    // (bind_graph), then existence, and a graph that does not
+                    // exist is created only for a principal that may change its
+                    // schema, as CREATE GRAPH needs (SONNY-2803). HELLO created
+                    // it for any Admin or ReadWrite role.
+                    switch (execution.session_graph.helloGraph(bind_principal, cat, requested_graph)) {
+                        .refused => {
+                            // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=TESTED; TEST=tests/test_new1_cross_graph_bola.zig; OWNER=security; UPDATED=2026-06-27
+                            // NEW-1 (#861) + NEW-11 (#869): route QUIC HELLO graph-bind through
+                            // gps.decide(.bind_graph) — the same fail-closed gate used by mid-session
+                            // USE GRAPH and (post-Task-4) the gRPC HELLO handler. Deletes the
+                            // Wyhash(username) uid derivation (closing NEW-11; GPS resolves uid via
+                            // agm.findUserIdByName inside graphGrantCheck). Fail-closed on GPS error.
+                            // Compatibility invariant (kept in mayBind): any authenticated user
+                            // may always bind the default graph by name.
                             const resp = schema.QuicServerMessage{ .hello = .{
                                 .success = false,
                                 .session_id = try gpa.dupe(u8, ""),
@@ -7031,24 +7139,25 @@ fn handleClientMessage(
                             } };
                             try sendQuicMessage(gpa, stream, resp);
                             return;
-                        }
-
-                        // Graph exists — bind session to it
-                        if (state.exec_session) |*sess| {
-                            if (sess.graph) |old| gpa.free(old);
-                            sess.graph = try gpa.dupe(u8, requested_graph);
-                        }
-                        state.graph_bound = true;
-                        resolved_graph = requested_graph;
-                    } else {
-                        // Graph does not exist — check if user can create it
-                        const role_val = state.authenticated_role;
-                        const can_create = if (role_val) |r| blk: {
-                            const role = @as(user_mgmt.Role, @enumFromInt(r));
-                            break :blk role == .Admin or role == .ReadWrite;
-                        } else !user_mgmt.isAuthEnabled(); // No auth = allow
-
-                        if (can_create) auto_create_done: {
+                        },
+                        .missing => {
+                            // User lacks permission to create graph
+                            const resp = schema.QuicServerMessage{ .hello = .{
+                                .success = false,
+                                .session_id = try gpa.dupe(u8, ""),
+                                .error_message = try gpa.dupe(u8, "Graph does not exist and user lacks permission to create it"),
+                                .capabilities = caps,
+                            } };
+                            try sendQuicMessage(gpa, stream, resp);
+                            return;
+                        },
+                        .bind => {
+                            // Graph exists — bind session to it
+                            if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
+                            state.graph_bound = true;
+                            resolved_graph = requested_graph;
+                        },
+                        .create => auto_create_done: {
                             _ = store.createGraph(requested_graph) catch |err| {
                                 // dsn_graph_binding.yml defense-in-depth
                                 // (2026-05-24): createGraph errored but the
@@ -7056,61 +7165,22 @@ fn handleClientMessage(
                                 // be satisfied — e.g. a CREATE GRAPH DDL on
                                 // the SAME server registered the graph in
                                 // the catalog between this connection's
-                                // earlier pre-check (line 2911-2912) and
-                                // this auto-create, leaving createGraph to
-                                // race with the adapter's hash put.  When
-                                // the graph is now visible to either store
-                                // or catalog, the user's goal is achieved;
-                                // bind to it instead of bouncing the
-                                // client with "Failed to create graph".
+                                // existence check and this auto-create,
+                                // leaving createGraph to race with the
+                                // adapter's hash put.  When the graph is now
+                                // visible to either store or catalog, the
+                                // user's goal is achieved; bind to it instead
+                                // of bouncing the client with "Failed to
+                                // create graph".
                                 if (store.graphExists(requested_graph) or cat.hasGraph(requested_graph)) {
                                     log.warn("createGraph errored but graph is present; binding instead", &.{
                                         Attr.string("graph", requested_graph),
                                         Attr.string("error", @errorName(err)),
                                     });
-                                    // NEW-1 (#861) race-recovery guard: createGraph errored but graph already
-                                    // exists (concurrent create). Before binding, apply the SAME GPS gate as
-                                    // the existing-graph path to prevent a ReadWrite user from binding a graph
-                                    // they don't hold a per-graph grant for.
-                                    const race_rbac_allowed = blk: {
-                                        if (!user_mgmt.isAuthEnabled()) break :blk true;
-                                        if (std.mem.eql(u8, requested_graph, graph_store.DEFAULT_GRAPH_NAME)) break :blk true;
-                                        const gps_mod = geode.security.gps;
-                                        const role_names_race: []const []const u8 = if (state.authenticated_role) |r|
-                                            &[_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(r)))}
-                                        else
-                                            &.{};
-                                        const race_principal = geode.security.principal_derive.derivePrincipal(.{
-                                            .username = state.authenticated_user,
-                                            .role_names = role_names_race,
-                                            .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
-                                            .active_graph = requested_graph,
-                                            .auth_version = state.authenticated_auth_version,
-                                            .auth_method = .password,
-                                            .source = .quic_handler,
-                                        });
-                                        const gps_req_race = gps_mod.DecisionRequest{
-                                            .principal = &race_principal,
-                                            .action = .bind_graph,
-                                            .resource = .{ .graph = requested_graph },
-                                        };
-                                        const decision = gps_mod.decide(gpa, &gps_req_race) catch break :blk false;
-                                        break :blk (decision.kind == .allow);
-                                    };
-                                    if (!race_rbac_allowed) {
-                                        const resp = schema.QuicServerMessage{ .hello = .{
-                                            .success = false,
-                                            .session_id = try gpa.dupe(u8, ""),
-                                            .error_message = try gpa.dupe(u8, "Access denied: insufficient permissions for graph"),
-                                            .capabilities = caps,
-                                        } };
-                                        try sendQuicMessage(gpa, stream, resp);
-                                        return;
-                                    }
-                                    if (state.exec_session) |*sess| {
-                                        if (sess.graph) |old| gpa.free(old);
-                                        sess.graph = try gpa.dupe(u8, requested_graph);
-                                    }
+                                    // NEW-1 (#861) race-recovery guard: the
+                                    // gate's bind check (SONNY-2824: before
+                                    // existence) already allowed this graph.
+                                    if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
                                     state.graph_bound = true;
                                     resolved_graph = requested_graph;
                                     break :auto_create_done;
@@ -7142,13 +7212,12 @@ fn handleClientMessage(
                                 // dsn_graph_binding.yml race fix (2026-05-23):
                                 // another connection won the race to register
                                 // this graph in the catalog between our
-                                // `cat.hasGraph` pre-check (line 2912) and
-                                // this add.  The graph IS present — proceed
-                                // to bind.  Pre-fix we'd drop the graph the
-                                // race winner just created, then surface
-                                // "Failed to persist graph metadata" to the
-                                // client and leave the catalog inconsistent
-                                // with the store.
+                                // existence check and this add.  The graph IS
+                                // present — proceed to bind.  Pre-fix we'd
+                                // drop the graph the race winner just
+                                // created, then surface "Failed to persist
+                                // graph metadata" to the client and leave the
+                                // catalog inconsistent with the store.
                                 error.GraphAlreadyExists => {},
                                 else => {
                                     store.dropGraph(requested_graph) catch {};
@@ -7167,23 +7236,12 @@ fn handleClientMessage(
                                 },
                             };
 
-                            if (state.exec_session) |*sess| {
-                                if (sess.graph) |old| gpa.free(old);
-                                sess.graph = try gpa.dupe(u8, requested_graph);
-                            }
+                            // SONNY-2775: the session binds the graph it just created
+                            // (the gate allowed binding it).
+                            if (state.exec_session) |*sess| try execution.session_graph.set(sess, requested_graph);
                             state.graph_bound = true;
                             resolved_graph = requested_graph;
-                        } else {
-                            // User lacks permission to create graph
-                            const resp = schema.QuicServerMessage{ .hello = .{
-                                .success = false,
-                                .session_id = try gpa.dupe(u8, ""),
-                                .error_message = try gpa.dupe(u8, "Graph does not exist and user lacks permission to create it"),
-                                .capabilities = caps,
-                            } };
-                            try sendQuicMessage(gpa, stream, resp);
-                            return;
-                        }
+                        },
                     }
                 }
             }
@@ -7294,7 +7352,8 @@ fn handleClientMessage(
                                 diagnostics.defaultMessage(.GB02CommentDisabled)
                             else
                                 err_info.msg;
-                            try sendExecuteError(gpa, stream, "42000", err_msg, &.{}, &.{});
+                            // SONNY-3244: a parser limit answers its class 54 code.
+                            try sendExecuteError(gpa, stream, if (err_info.has_double_dash_comment) "42000" else err_info.code, err_msg, &.{}, &.{});
                             return;
                         },
                         .Ok => |handle| {
@@ -7310,7 +7369,8 @@ fn handleClientMessage(
                             diagnostics.defaultMessage(.GB02CommentDisabled)
                         else
                             err_info.msg;
-                        try sendExecuteError(gpa, stream, "42000", err_msg, &.{}, &.{});
+                        // SONNY-3244: a parser limit answers its class 54 code.
+                        try sendExecuteError(gpa, stream, if (err_info.has_double_dash_comment) "42000" else err_info.code, err_msg, &.{}, &.{});
                         return;
                     },
                     .Ok => |pr| {
@@ -7325,6 +7385,30 @@ fn handleClientMessage(
                 try sendExecuteError(gpa, stream, "42000", diagnostics.defaultMessage(.GB02CommentDisabled), &.{}, &.{});
                 return;
             }
+
+            // SONNY-3348 (round 18, I2): a session whose transaction a failed
+            // statement aborted runs nothing until it ends the transaction.
+            if (state.txn_aborted) {
+                const verdict = query_traits.abortedTxnVerdict(&parse_result.program);
+                if (verdict != .refuse) state.txn_aborted = false;
+                // SONNY-3348 (round 19, m3): the ROLLBACK or COMMIT that ends
+                // it reports a rollback that could not undo every change.
+                const incomplete = verdict != .refuse and state.takeRollbackIncomplete();
+                if (verdict != .rollback or incomplete) {
+                    const info = proto_util.mapError(if (incomplete) error.RollbackIncomplete else if (verdict == .commit) error.TransactionRolledBack else error.TransactionAborted);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
+                }
+            }
+
+            // SONNY-3247: every parameter the program names is one the request
+            // supplies (42P02 otherwise), checked before any path runs it: the
+            // write fast paths below evaluated a missing one as null.
+            execution.checkProgramParams(&parse_result.program, bindings.names, bindings.values) catch |err| {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            };
 
             // #830: a multi-statement program containing BEGIN/START TRANSACTION
             // followed by mutations followed by ROLLBACK was silently committing
@@ -7369,12 +7453,43 @@ fn handleClientMessage(
                 return;
             }
 
-            const analysis = query_traits.analyzeProgram(&parse_result.program);
+            // SONNY-2805: `analyzeRequest` keeps a program with transaction
+            // control off the fast paths that run only its last query.
+            const analysis = query_traits.analyzeRequest(&parse_result.program);
             var traits = analysis.traits;
             const ordered = traits.ordered;
             const distinct = traits.distinct;
             const heur_index = traits.has_where_eq or traits.has_filter_eq;
-            const program_is_mutating = isMutatingProgram(&parse_result.program);
+            // SONNY-2749: the graph the program starts on is the executor
+            // session's (`exec_session.graph`); `state.current_graph` is a copy
+            // synced only after a request that succeeds. Copied, because a USE
+            // GRAPH in the program frees the session's string.
+            const query_graph_name = try gpa.dupe(u8, sessionGraphName(state));
+            defer gpa.free(query_graph_name);
+            // CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25
+            // SONNY-2743: the lock, and whether the write gate applies, come
+            // from the whole program (`statementPlan`), never from its last
+            // query alone.
+            const stmt_plan = query_traits.statementPlan(&parse_result.program, &analysis, query_graph_name, homeGraphName(state), .quic);
+            const program_is_mutating = stmt_plan.is_mutation;
+            // CANARY: REQ=REQ-SONNY-2799-TXN-END-LOCK; FEATURE="TransactionManagement"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
+            // SONNY-2799: a COMMIT or ROLLBACK in the program ends the
+            // session's transaction, which changed `state.txn_graph`. The
+            // program runs under that graph's write lock (a ROLLBACK changes
+            // it back) and touches no other graph's data (a handler holds one
+            // lock). It ran under the request's own lock: for a ROLLBACK a
+            // read lock, a read snapshot the undo went into, or none. Copied:
+            // the COMMIT frees the session's copy.
+            const txn_end_graph: ?[]const u8 = blk: {
+                if (!state.in_txn or !query_traits.transactionControl(&parse_result.program).ends) break :blk null;
+                const g = state.txn_graph orelse break :blk null;
+                break :blk try gpa.dupe(u8, g);
+            };
+            defer if (txn_end_graph) |g| gpa.free(g);
+            // CANARY: REQ=REQ-SONNY-2749-PROGRAM-GRAPH-LOCK; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2749_program_graph_lock.zig; OWNER=security; UPDATED=2026-09-25
+            // SONNY-2749: every lock below is on the graph the program's
+            // statements run on, which a USE GRAPH in it moves.
+            const lock_graph = txn_end_graph orelse stmt_plan.lock_graph;
 
             // Spec geode-vectorization-and-reranking: per-request hard read-only
             // floor, independent of the principal's role ("authorization must be
@@ -7564,6 +7679,8 @@ fn handleClientMessage(
                 // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
                 .rls_engine = @import("rls_types").getGlobalExprRLSEngine(),
                 .pending_index_rebuilds = null,
+                // SONNY-2799: see `abortFailedTransaction`.
+                .defer_failed_txn_rollback = true,
                 // RC-3 (2026-06-12): thread the optional client idempotency key
                 // (ExecuteRequest field 5) into the context so a clustered create
                 // dedups a client retry at apply time. Null when the client did
@@ -7630,8 +7747,18 @@ fn handleClientMessage(
             // Pure scalar row queries such as `RETURN 1 AS c` do not touch
             // graph storage, so they should not contend with mutation-heavy
             // workloads on the graph read/snapshot path.
-            const needs_store_lock = analysis.kind != .explain and !(analysis.kind == .rows and analysis.is_store_free);
-            const is_mutation = needs_store_lock and program_is_mutating;
+            // SONNY-2733: a lone CALL of a procedure that takes each graph's
+            // lock itself (geode.tenant.backfill_edge_tags) runs holding none:
+            // under this graph's lock it would deadlock on it, or hold two. It
+            // is still a mutation for the permission gate below.
+            // SONNY-2743: `stmt_plan` decides over the whole program. A store-free
+            // last query (`CREATE (:X); RETURN 1 AS c`) no longer drops the
+            // lock, and a mutation anywhere in the program is gated.
+            const self_locking = stmt_plan.self_locking;
+            const needs_store_lock = stmt_plan.needs_store_lock or txn_end_graph != null;
+            const is_mutation = stmt_plan.is_mutation;
+            // The write lock: for a change, or for the end of a transaction.
+            const write_locked = is_mutation or txn_end_graph != null;
 
             // CANARY: REQ=REQ-GPS-PDP-010; FEATURE="GPS Phase 2/4 Enforcement"; ASPECT=MutationGateViaDecide; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
             // GAP-0526 was originally enforced by a direct `user_mgmt.hasPermission` call
@@ -7639,31 +7766,74 @@ fn handleClientMessage(
             // `current_user() = '...'` or `true` could not override the role-based deny.
             // Phase 2's `decide()` already implements role + policy evaluation; route the
             // mutation gate through it so policies actually take effect at the wire layer.
-            if (is_mutation) {
-                if (state.authenticated_role) |role_u8| {
-                    const auth_role = @as(user_mgmt.Role, @enumFromInt(role_u8));
-                    if (!user_mgmt.hasPermission(auth_role, .Write)) {
-                        // Builtin role lacks WRITE — consult the policy catalog before denying.
-                        const gps_mod = geode.security.gps;
-                        const req_local = gps_mod.DecisionRequest{
-                            .principal = &principal_for_request,
-                            .action = .write,
-                            .resource = .{ .database = {} },
-                        };
-                        const decision_kind = blk: {
-                            const decision = gps_mod.decide(gpa, &req_local) catch break :blk gps_mod.PolicyDecisionKind.unauthorized;
-                            break :blk decision.kind;
-                        };
-                        if (decision_kind != .allow) {
-                            try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
-                            return;
-                        }
-                    }
+            // SONNY-2743: the gate is `gps.writePermitted` (`decide(write)`),
+            // the same function gRPC runs. A builtin role with WRITE passes
+            // there as it did in the role check this replaces. A session with
+            // no role (auth disabled) is not gated, as before.
+            if (is_mutation and state.authenticated_role != null) {
+                if (!geode.security.gps.writePermitted(gpa, &principal_for_request)) {
+                    try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
+                    return;
                 }
             }
 
-            const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+            // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2802 / SONNY-2752: the .explain and .profile arms plan or
+            // run one statement. A program with anything else in it is
+            // refused rather than run in part under the whole program's lock.
+            if (query_traits.explainOrProfileHasCompany(&parse_result.program, &analysis, query_graph_name)) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.explain_profile_alone_message, &.{}, &.{});
+                return;
+            }
+            // CANARY: REQ=REQ-SONNY-3026-PROFILE-TXN-CONTROL; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny3026_profile_txn_control.zig; OWNER=security; UPDATED=2026-09-27
+            // SONNY-3026: nor an EXPLAIN or PROFILE of transaction control, a
+            // session statement or graph selection. `PROFILE ROLLBACK` undid
+            // the transaction under a read lock and the transaction stayed open.
+            if (query_traits.explainOrProfileTargetRefused(&parse_result.program)) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.explain_profile_target_message, &.{}, &.{});
+                return;
+            }
+            // SONNY-2749: one graph's write lock cannot cover a program that
+            // changes data on several, and a handler never holds two.
+            if (stmt_plan.spans_graphs) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.spans_graphs_message, &.{}, &.{});
+                return;
+            }
+            // CANARY: REQ=REQ-SONNY-3130-GRAPH-DDL-ALONE; FEATURE="MultiGraphIsolation"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny3130_graph_ddl_alone.zig; OWNER=storage; UPDATED=2026-09-27
+            // SONNY-3130: nor graph DDL with a statement on graph data. The
+            // lock taken below is the old graph's; a CREATE OR REPLACE (or a
+            // DROP then CREATE) puts a new graph, with its own lock, under the
+            // name, and the program's writes landed there without it.
+            if (stmt_plan.graph_ddl_has_company) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.graph_ddl_alone_message, &.{}, &.{});
+                return;
+            }
+            // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2776_session_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
+            // SONNY-2776: an open transaction changes one graph (its end takes
+            // that graph's write lock); a change of another is refused.
+            if (stmt_plan.is_mutation and state.txnWouldSpanGraphs(lock_graph)) {
+                try sendExecuteError(gpa, stream, "0A000", query_traits.txn_spans_graphs_message, &.{}, &.{});
+                return;
+            }
+            if (txn_end_graph) |g| {
+                if (!query_traits.programDataOnlyOn(&parse_result.program, query_graph_name, homeGraphName(state), g)) {
+                    try sendExecuteError(gpa, stream, "0A000", query_traits.txn_end_graph_message, &.{}, &.{});
+                    return;
+                }
+            }
+
+            // SONNY-2799: a failed statement's transaction is rolled back
+            // after the request's lock is released: this defer is registered
+            // before the lock's, so it runs after it.
+            var failed_in_txn = false;
+            defer if (failed_in_txn) abortFailedTransaction(state, lock_graph, query_traits.endsTransactionLast(&parse_result.program));
+
             quic_response_metrics.recordFirstStreamQueryPrepare(monoNsFromHandler() -| first_stream_prepare_start_ns);
+
+            // SONNY-2686: the fast paths below that find existing nodes by
+            // merge key (every MERGE shape, and MATCH … CREATE edge) serve a
+            // session only when no tenant scope or RLS policy restricts it.
+            const key_resolved_writes_ok = is_mutation and keyResolvedWriteFastPathServes(state, &exec_context);
 
             // GAP-0900 lever (c): opt-in concurrent batch-merge fast path.
             // A client signals "this program is a batch of independent simple
@@ -7683,10 +7853,30 @@ fn handleClientMessage(
             const batch_requested = std.mem.startsWith(u8, query_text, BATCH_SENTINEL);
             if (batch_requested and
                 is_mutation and
+                key_resolved_writes_ok and
                 !state.in_txn and
                 graph_store.getGlobalAdapter() != null and
                 geode.distributed.cluster.getGlobalClusterCoordinator() == null)
             {
+                // CANARY: REQ=REQ-SONNY-3033-BATCH-GRAPH-GATE; FEATURE="MultiGraphIsolation"; ASPECT=QuicBatchRoute; STATUS=TESTED; TEST=tests/test_sonny3033_batch_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
+                // SONNY-3033: the session's graph passes the session-graph
+                // gate (internal, bind, existence) first. The route ran before
+                // any existence check, and the coordinator created whatever
+                // graph it was given: a batch recreated a dropped graph for a
+                // principal without the schema permission. The coordinator
+                // now creates none (it fails the ops of a graph that is gone),
+                // and a DROP GRAPH waits for a batch's open transactions
+                // (SONNY-3029), so the route takes no graph lock itself: its
+                // ops take the graph's lock SHARED, and a writer waits for
+                // them, so holding the write lock across them would deadlock.
+                // No principal with authentication off, as the write gate
+                // above and the HELLO do.
+                const batch_principal: ?*const @TypeOf(principal_for_request) = if (state.authenticated_role != null) &principal_for_request else null;
+                execution.session_graph.requireWritable(batch_principal, catalog, query_graph_name) catch |err| {
+                    const info = proto_util.mapError(err);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
+                };
                 if (try executeBatchSimpleMerge(gpa, stream, state, &parse_result.program, query_graph_name, exec_context)) {
                     return;
                 }
@@ -7702,7 +7892,7 @@ fn handleClientMessage(
             // `MATCH (n:Label) RETURN count(n)` requests queue behind snapshots
             // and writers. Execute that shape under a brief shared read lock,
             // then release the lock before protobuf serialization.
-            if (needs_store_lock and !is_mutation) count_fast_path_blk: {
+            if (needs_store_lock and !write_locked) count_fast_path_blk: {
                 const target = analysis.target orelse break :count_fast_path_blk;
                 if (target.* != .Query) break :count_fast_path_blk;
                 // GAP-0892: a multi-statement program (e.g. `SESSION SET
@@ -7751,9 +7941,9 @@ fn handleClientMessage(
                         }
 
                         try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
-                        auditQueryExecution(state, query_text, is_mutation);
+                        auditQueryExecution(lock_graph, query_text, is_mutation);
                         syncGraphFromSession(state);
-                        updateTxnStateFromProgram(state, &parse_result.program);
+                        updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                         return;
                     }
                 }
@@ -7792,9 +7982,9 @@ fn handleClientMessage(
                     // do not double stream write pressure.
                     try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
 
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, &parse_result.program);
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return;
                 }
 
@@ -7812,9 +8002,9 @@ fn handleClientMessage(
                     }
 
                     try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, &parse_result.program);
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return;
                 }
 
@@ -7839,9 +8029,9 @@ fn handleClientMessage(
                     }
 
                     try sendSinglePageExecutionResultBatched(gpa, stream, &exec_result);
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, &parse_result.program);
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     return;
                 }
             }
@@ -7860,14 +8050,19 @@ fn handleClientMessage(
             // bypassing the Raft propose hook in crud_operations, so skip it
             // whenever a cluster coordinator is active.
             // CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-CREATE; FEATURE="DistributedCluster"; ASPECT=BulkFastPathClusterBypass; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+            // CANARY: REQ=REQ-SONNY-2816-BULK-INGEST-TXN; FEATURE="TransactionUndoLog"; ASPECT=BulkIngestFastPathInTxn; STATUS=TESTED; TEST=tests/test_sonny2816_bulk_ingest_txn.zig; OWNER=transport; UPDATED=2026-09-27
+            // SONNY-2816: autocommit only, as the default fast paths below.
+            // These paths skip the undo log, so a change they served inside
+            // an open transaction was written outside it, and its ROLLBACK
+            // did not undo it.
             const cluster_active = geode.distributed.cluster.getGlobalClusterCoordinator() != null;
-            if (is_mutation and geode.bulk_ingest.isEnabled() and !cluster_active) {
+            if (is_mutation and !state.in_txn and geode.bulk_ingest.isEnabled() and !cluster_active) {
                 const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
                 if (bulk_shape == .simple_node_create) {
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
                     return;
                 }
-                if (bulk_shape == .match_create_edge) {
+                if (bulk_shape == .match_create_edge and key_resolved_writes_ok) {
                     if (geode.bulk_ingest.matchEdgeSpec(&parse_result.program)) |edge_spec| {
                         try executeBulkMatchCreateEdge(gpa, stream, state, &parse_result.program, edge_spec, query_graph_name, exec_context);
                         return;
@@ -7876,7 +8071,7 @@ fn handleClientMessage(
                     // fall through to the regular executor (programming error
                     // — noise not worth a dedicated error code).
                 }
-                if (bulk_shape == .match_merge_edge) {
+                if (bulk_shape == .match_merge_edge and key_resolved_writes_ok) {
                     // FIX #3: the from-dump edge-phase shape — route to the
                     // shard-locked deduped edge MERGE so it coexists with
                     // readers instead of the whole-graph EXCLUSIVE (40001).
@@ -7885,7 +8080,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge) {
+                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -7923,7 +8118,7 @@ fn handleClientMessage(
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
                     return;
                 }
-                if (bulk_shape == .match_create_edge) {
+                if (bulk_shape == .match_create_edge and key_resolved_writes_ok) {
                     if (geode.bulk_ingest.matchEdgeSpec(&parse_result.program)) |edge_spec| {
                         try executeBulkMatchCreateEdge(gpa, stream, state, &parse_result.program, edge_spec, query_graph_name, exec_context);
                         return;
@@ -7931,7 +8126,7 @@ fn handleClientMessage(
                     // Spec/detector disagreement — fall through to the
                     // general executor as the original block does.
                 }
-                if (bulk_shape == .match_merge_edge) {
+                if (bulk_shape == .match_merge_edge and key_resolved_writes_ok) {
                     // FIX #3: shard-locked deduped edge MERGE (see the
                     // GEODE_BULK_INGEST block above).
                     if (geode.bulk_ingest.matchMergeEdgeSpec(&parse_result.program)) |merge_edge_spec| {
@@ -7939,7 +8134,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge) {
+                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -7964,7 +8159,7 @@ fn handleClientMessage(
             // falls through so the graph-access check + session rebind run in
             // the regular executor. Same gating as the single-statement fast
             // paths: autocommit, non-cluster (cluster writes must reach Raft).
-            if (is_mutation and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
+            if (is_mutation and key_resolved_writes_ok and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
                 if (geode.bulk_ingest.matchGraphSelectorThenMerge(&parse_result.program)) |gs| {
                     if (std.mem.eql(u8, gs.graph_name, query_graph_name)) {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, gs.merge, query_graph_name, exec_context);
@@ -7999,7 +8194,7 @@ fn handleClientMessage(
             // mutation path.
             var mut_sample: ?mutation_timing.Sample = null;
             if (needs_store_lock) {
-                if (is_mutation) {
+                if (write_locked) {
                     mut_sample = mutation_timing.begin();
                     // Mutations: exclusive writer lock held across execute to
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
@@ -8012,29 +8207,60 @@ fn handleClientMessage(
                     // shutdown warning under the 16-worker ingest workload.
                     const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
                     const deadline = monoNanosNow() + write_lock_timeout_ns;
-                    if (graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline)) |h| {
+                    // SONNY-2749: the graph the program writes, not the session's.
+                    if (graph_store.acquireProgramWriteLockCancelable(lock_graph, query_graph_name, deadline)) |h| {
                         graph_lock_handle = h;
                         if (mut_sample) |*s| s.markLockAcquired();
                     } else |err| {
                         if (err == error.Deadline) {
                             log.warn("Write lock acquisition timed out", &.{
-                                Attr.string("graph", query_graph_name),
+                                Attr.string("graph", lock_graph),
                                 Attr.uint("timeout_ns", write_lock_timeout_ns),
                             });
                             try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
                             return;
                         }
-                        return err;
+                        if (err == error.GraphNotFound) {
+                            // SONNY-3028: CREATE GRAPH of a new graph, or
+                            // DROP GRAPH IF EXISTS of a missing one: no lock
+                            // to take.
+                            if (!stmt_plan.lock_graph_may_be_missing) {
+                                const info = proto_util.mapError(err);
+                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                return;
+                            }
+                        } else return err;
                     }
-                } else if (analysis.is_point_read and !execution.wouldEvaluateRLS()) {
+                } else if (stmt_plan.reads_several_graphs) {
+                    // CANARY: REQ=REQ-SONNY-3312-MULTI-GRAPH-READ; FEATURE="MultiGraphIsolation"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny3312_multi_graph_read.zig; OWNER=storage; UPDATED=2026-09-28
+                    // SONNY-3312: a read whose statements run on several
+                    // graphs snapshots each of them, under each one's read
+                    // lock taken in name order. A snapshot of `lock_graph`
+                    // (the session graph) alone read the others as empty.
+                    // No live fallback: it would hold one graph's lock.
+                    const read_graphs = try query_traits.programDataGraphList(gpa, &parse_result.program, query_graph_name, homeGraphName(state));
+                    defer gpa.free(read_graphs);
+                    if (graph_store.snapshotUnderReadLocks(gpa, read_graphs, &exec_context)) |session| {
+                        read_session = session;
+                        prev_active_read_store = graph_store.pushActiveQueryReadStore(
+                            read_session.?.store(),
+                        );
+                    } else |err| {
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    }
+                } else if (stmt_plan.point_read and !execution.wouldEvaluateRLS()) {
                     // GAP-0805: hold the shared read lock across the brief
                     // point-read execute window, backed by a zero-copy view.
+                    // SONNY-2743: only when the rest of the program does
+                    // nothing (`stmt_plan.point_read`).
                     // `graph_lock_handle` keeps the lock alive until the
                     // defer block releases it.
                     // NOTE: RLS-evaluating reads bypass this path (wouldEvaluateRLS()
                     // returns true) and fall through to the snapshot path below, so
                     // the SHARED rwlock is released before per-node row construction.
-                    graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read);
+                    graph_lock_handle = graph_store.acquireGraphReadLockTagged(lock_graph, .point_read);
                     const store_ref = graph_store.getWritableGlobalStore(gpa);
                     if (graph_store.PointReadView.init(store_ref)) |view| {
                         point_read_view = view;
@@ -8046,13 +8272,13 @@ fn handleClientMessage(
                         // took and use the snapshot path instead.
                         if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                         graph_lock_handle = null;
-                        if (graph_store.snapshotUnderReadLock(gpa, query_graph_name)) |session| {
+                        if (graph_store.snapshotUnderReadLock(gpa, lock_graph)) |session| {
                             read_session = session;
                             prev_active_read_store = graph_store.pushActiveQueryReadStore(
                                 read_session.?.store(),
                             );
                         } else |_| {
-                            graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
+                            graph_lock_handle = graph_store.acquireGraphReadLockTagged(lock_graph, .fallback);
                         }
                     }
                 } else if (readServedEngineDirect(state, &analysis, query_graph_name)) {
@@ -8093,7 +8319,8 @@ fn handleClientMessage(
                     // Reads: snapshot under the shared reader lock, then
                     // release immediately. Executor reads from the thread-
                     // local active-snapshot store installed below.
-                    if (graph_store.snapshotUnderReadLock(gpa, query_graph_name)) |session| {
+                    // SONNY-2749: the graph the program reads (`lock_graph`).
+                    if (graph_store.snapshotUnderReadLock(gpa, lock_graph)) |session| {
                         read_session = session;
                         prev_active_read_store = graph_store.pushActiveQueryReadStore(
                             read_session.?.store(),
@@ -8102,7 +8329,7 @@ fn handleClientMessage(
                         // Snapshot path unavailable (e.g. legacy no-adapter
                         // test path): fall back to the wide-scope shared
                         // reader lock, same semantics as GAP-0752.
-                        graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
+                        graph_lock_handle = graph_store.acquireGraphReadLockTagged(lock_graph, .fallback);
                     }
                 }
             }
@@ -8150,7 +8377,7 @@ fn handleClientMessage(
                         // reads the store, so it does not need the graph write lock.
                         // This prevents MERGE stalls under sustained ingest.
                         graph_store.releaseGraphLock(h);
-                        rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                        rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                     }
                 }
                 // The snapshot session is owned by this handler scope —
@@ -8218,19 +8445,50 @@ fn handleClientMessage(
                         return;
                     };
 
+                    // SONNY-3139, SONNY-3182, SONNY-3184 (round-3 review C1):
+                    // the whole program passes the write-shape allowlist before
+                    // the statement a PROFILE wraps runs by either path below.
+                    // The planned runtime reached the query dispatcher with no
+                    // validation (it also declines a statement that writes now).
+                    execution.validateProgramShapes(&parse_result.program, exec_context) catch |err| {
+                        failed_in_txn = true;
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
+
                     if (target_stmt.* == .Query) {
                         var planned_query = target_stmt.Query;
-                        if (try planned_read_runtime.executeProfiledIfSupported(
+                        if (planned_read_runtime.executeProfiledIfSupported(
                             gpa,
                             &planned_query,
                             exec_context,
                             bindings.names,
                             bindings.values,
                             true,
-                        )) |planned| {
+                        ) catch |err| {
+                            failed_in_txn = true;
+                            const info = proto_util.mapError(err);
+                            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                            return;
+                        }) |planned| {
                             var owned_planned = planned;
                             defer owned_planned.deinitMetadata(gpa);
                             defer owned_planned.result.deinit(gpa);
+                            // CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=QuicProfileSettle; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+                            // SONNY-3027: the session engine transaction the
+                            // program's changes opened commits here, while the
+                            // request still holds its write lock.
+                            geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
+                                failed_in_txn = true;
+                                const info = proto_util.mapError(err);
+                                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                return;
+                            };
+                            // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=QuicProfileTxn; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
+                            // SONNY-2802: a PROFILE'd change is its transaction's,
+                            // recorded as soon as it ran, as the .rows arm does.
+                            updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
 
                             for (flags.items) |flag| {
                                 try appendFlagToResult(gpa, &owned_planned.result, flag);
@@ -8245,15 +8503,15 @@ fn handleClientMessage(
                                 if (graph_lock_handle) |h| {
                                     // GAP-0511: Release lock before index rebuild
                                     graph_store.releaseGraphLock(h);
-                                    rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                                    rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                                 }
                                 lock_released = true;
                             }
 
                             if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                                 if (state.authenticated_user) |auth_user| {
-                                    const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                                    _ = rls_filter.applyRLSFilter(gpa, &owned_planned.result, rls_engine, auth_user, rls_graph);
+                                    const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
+                                    _ = rls_filter.applyRLSFilter(gpa, &owned_planned.result, rls_engine, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
                                 }
                             }
 
@@ -8277,17 +8535,26 @@ fn handleClientMessage(
                             };
                             try sendQuicMessage(gpa, stream, .{ .execute = resp });
                             // Route audit event to per-graph logger (falls back to global).
-                            auditQueryExecution(state, query_text, is_mutation);
+                            auditQueryExecution(lock_graph, query_text, is_mutation);
                             return;
                         }
                     }
 
                     var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
+                        failed_in_txn = true;
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
                     };
                     defer exec_result.deinit(gpa);
+                    geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
+                        failed_in_txn = true;
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
+                    // SONNY-2802: see the planned path above.
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
 
                     for (flags.items) |flag| {
                         try appendFlagToResult(gpa, &exec_result, flag);
@@ -8303,8 +8570,8 @@ fn handleClientMessage(
                     // Algorithm RLS filter on PROFILE path — requires store lock.
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                            _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
+                            const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
+                            _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
                         }
                     }
 
@@ -8314,7 +8581,7 @@ fn handleClientMessage(
                         if (graph_lock_handle) |h| {
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
-                            rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                         }
                         lock_released = true;
                     }
@@ -8322,8 +8589,8 @@ fn handleClientMessage(
                     // S1: RLS filter on PROFILE path (same logic as .rows path).
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph);
+                            const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
+                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
                         }
                     }
 
@@ -8348,7 +8615,7 @@ fn handleClientMessage(
                     try sendQuicMessage(gpa, stream, .{ .execute = resp });
 
                     // Route audit event to per-graph logger (falls back to global).
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
 
                     // GAP-0260: Non-txn saves deferred to background persistence thread
                 },
@@ -8378,7 +8645,18 @@ fn handleClientMessage(
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 const query_ptr = &target.Query;
-                                if (try node_scan_stream.prepare(gpa, query_ptr, exec_context, bindings.names, bindings.values, flags.items)) |prepared_stream| {
+                                // SONNY-3251 (round 15, F6): a limit the scan's
+                                // WHERE ran into answers its SQLSTATE.
+                                const prepared_opt = node_scan_stream.prepare(gpa, query_ptr, exec_context, bindings.names, bindings.values, flags.items) catch |err| {
+                                    // SONNY-3348 (round 19, m2): any error the
+                                    // scan fails with fails its transaction.
+                                    failed_in_txn = true;
+                                    if (!geode.eval.isResourceLimitError(err)) return err;
+                                    const info = proto_util.mapError(err);
+                                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                    return;
+                                };
+                                if (prepared_opt) |prepared_stream| {
                                     var active_stream = prepared_stream;
                                     errdefer active_stream.deinit();
 
@@ -8398,11 +8676,27 @@ fn handleClientMessage(
                                         if (graph_lock_handle) |h| {
                                             // GAP-0511: Release lock before index rebuild
                                             graph_store.releaseGraphLock(h);
-                                            rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                                         }
                                         lock_released = true;
                                     }
 
+                                    // SONNY-1221: build the rows the schema
+                                    // frame's column types come from BEFORE
+                                    // the frame (the executor path types its
+                                    // columns from its first rows). They stay
+                                    // on the stream and are served first. If
+                                    // they cannot be built, answer as the
+                                    // executor path does when its rows fail.
+                                    active_stream.prefetchSchemaSample(gpa) catch |err| {
+                                        // SONNY-3348 (round 19, m2): and it fails
+                                        // its transaction, as the executor's do.
+                                        failed_in_txn = true;
+                                        const info = proto_util.mapError(err);
+                                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                                        active_stream.deinit();
+                                        return;
+                                    };
                                     {
                                         var schema_arena = std.heap.ArenaAllocator.init(gpa);
                                         defer schema_arena.deinit();
@@ -8444,16 +8738,18 @@ fn handleClientMessage(
                                         while (true) {
                                             var page_result = active_stream.buildNextPage(gpa, inline_max) catch |err| {
                                                 // Inline page failed (e.g. concurrent ingest modified
-                                                // nodes). If nothing was sent yet, reset the cursor so
-                                                // PULL starts clean and fall through to store the stream
-                                                // for PULL. If pages were already pushed, we cannot
-                                                // cleanly restart mid-stream — leave the cursor where it
-                                                // is and defer the REMAINDER to PULL (page_final stays
-                                                // false, so the stream is stored below).
+                                                // nodes). If nothing was sent yet, rewind the stream so
+                                                // PULL starts clean (cursor, LIMIT/OFFSET counters and
+                                                // any rows prefetched for the schema frame, SONNY-1221)
+                                                // and fall through to store the stream for PULL. If
+                                                // pages were already pushed, we cannot cleanly restart
+                                                // mid-stream — leave the cursor where it is and defer
+                                                // the REMAINDER to PULL (page_final stays false, so the
+                                                // stream is stored below).
                                                 log.warn("Inline page build failed, deferring to PULL", &.{
                                                     Attr.string("error", @errorName(err)),
                                                 });
-                                                if (pages_sent == 0) active_stream.next_index = 0;
+                                                if (pages_sent == 0) active_stream.rewind();
                                                 break :inline_blk;
                                             };
                                             defer page_result.result.deinit(gpa);
@@ -8485,10 +8781,10 @@ fn handleClientMessage(
                                     }
 
                                     // Route audit event to per-graph logger (falls back to global).
-                                    auditQueryExecution(state, query_text, is_mutation);
+                                    auditQueryExecution(lock_graph, query_text, is_mutation);
 
                                     syncGraphFromSession(state);
-                                    updateTxnStateFromProgram(state, &parse_result.program);
+                                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                                     return;
                                 }
                             }
@@ -8497,6 +8793,7 @@ fn handleClientMessage(
 
                     const first_stream_execute_start_ns = monoNsFromHandler();
                     var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
+                        failed_in_txn = true;
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
@@ -8510,16 +8807,31 @@ fn handleClientMessage(
                     // Task 1: mark execute phase complete (before lock release).
                     if (mut_sample) |*s| s.markExecuteDone();
                     defer exec_result.deinit(gpa);
+                    // SONNY-3027: see the .profile arm.
+                    geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
+                        failed_in_txn = true;
+                        const info = proto_util.mapError(err);
+                        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                        return;
+                    };
+                    // SONNY-2805: the session's transaction as the program left
+                    // it, recorded before anything below (the post-filter, the
+                    // response) can fail the request.
+                    updateTxnStateFromProgram(state, &parse_result.program, if (stmt_plan.is_mutation) lock_graph else null);
                     const store = graph_store.getGlobalStore(gpa);
 
                     // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=QUICWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
                     // S1: Algorithm RLS filter BEFORE lock release — requires store access
                     // to look up node labels for integer nodeId values in algorithm results.
                     // Must run while store read lock is held for thread-safe HashMap access.
-                    if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
-                        if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                            _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph);
+                    // SONNY-2733: a self-locking program holds no lock here, and
+                    // its rows (edge ids) carry no node ids to look up.
+                    if (!self_locking) {
+                        if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+                            if (state.authenticated_user) |auth_user| {
+                                const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
+                                _ = rls_filter.applyAlgorithmRLSFilter(gpa, &exec_result, rls_engine, store, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
+                            }
                         }
                     }
 
@@ -8531,7 +8843,7 @@ fn handleClientMessage(
                         if (graph_lock_handle) |h| {
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
-                            rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
+                            rebuildPendingIndexes(gpa, lock_graph, &pending_index_rebuilds);
                         }
                         lock_released = true;
                     }
@@ -8547,8 +8859,8 @@ fn handleClientMessage(
                     // CANARY: REQ=REQ-SEC-RLS-WIRE-003; FEATURE="RLS Query Enforcement"; ASPECT=PostResultFilter; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
                     if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
                         if (state.authenticated_user) |auth_user| {
-                            const rls_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph);
+                            const rls_graph = state.sessionGraph(); // SONNY-2776: the graph the rows came from
+                            _ = rls_filter.applyRLSFilter(gpa, &exec_result, rls_engine, auth_user, rls_graph) catch |err| return sendPostFilterError(gpa, stream, err);
                         }
                     }
 
@@ -8619,10 +8931,9 @@ fn handleClientMessage(
                     }
 
                     // Route audit event to per-graph logger (falls back to global).
-                    auditQueryExecution(state, query_text, is_mutation);
+                    auditQueryExecution(lock_graph, query_text, is_mutation);
 
                     syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, &parse_result.program);
                 },
             }
         },
@@ -8703,6 +9014,20 @@ fn handleClientMessage(
                 // O(scanned) WHERE scan (where-scan-writer-progress). No outer
                 // lock here — an outer hold would defeat the chunking.
                 var page_result = active_stream.buildNextPage(gpa, page_size) catch |err| {
+                    // SONNY-3251 (round 15, F6): a limit a page's WHERE ran
+                    // into ends the stream with its SQLSTATE, not a final
+                    // page that reads as a complete answer.
+                    if (geode.eval.isResourceLimitError(err)) {
+                        const info = proto_util.mapError(err);
+                        var lim_resp = try buildErrorResponse(pa, info.code, info.message, &.{}, &.{});
+                        _ = &lim_resp;
+                        state.resetResult();
+                        // SONNY-3348 (round 19, m2): a later page's failure
+                        // fails the transaction the statement ran in.
+                        if (state.in_txn) abortFailedTransaction(state, state.sessionGraph(), false);
+                        try sendQuicMessage(pa, stream, .{ .pull = .{ .response = lim_resp } });
+                        return;
+                    }
                     // Node disappeared during concurrent ingest — send empty
                     // final page so the client sees what was collected so far.
                     log.warn("PULL page build failed, closing stream", &.{
@@ -8797,15 +9122,19 @@ fn handleClientMessage(
                     return;
                 },
             }
-            if (state.in_txn) {
+            // SONNY-3348 (round 18, I2): nor while its last transaction is aborted.
+            if (state.in_txn or state.txn_aborted) {
                 try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, ""), .tx_id = try gpa.dupe(u8, "") } });
                 return;
             }
 
+            state.clearTxnGraph();
             state.in_txn = true;
-            state.txn_id = @intCast(compat_milliTimestamp());
             state.session_snapshot_ts = state.global_commit_ts;
+            // SONNY-2799: the transaction's id is its undo-log transaction's,
+            // which the session keeps across messages (`leaveSessionTxn`).
             txn_undo_log.getGlobalUndoLog(gpa).begin();
+            state.txn_id = txn_undo_log.currentThreadTxnId();
 
             // R9 (2026-04-22, updated): do NOT open a session engine txn
             // eagerly here.  Under the msft-graph DSN graph-binding flow
@@ -8836,36 +9165,52 @@ fn handleClientMessage(
                     return;
                 },
             }
+            // SONNY-3348 (round 18, I2): COMMIT of an aborted transaction ends
+            // it, and fails: it was rolled back.
+            if (state.txn_aborted) {
+                state.txn_aborted = false;
+                // SONNY-3348 (round 19, m5): with the code a COMMIT statement
+                // answers (40000), or 40003 for an incomplete rollback.
+                try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, if (state.takeRollbackIncomplete()) error.RollbackIncomplete else error.TransactionRolledBack) } });
+                return;
+            }
             if (state.in_txn) {
                 // GAP-0511: COMMIT acquires the write lock for state cleanup only.
                 // Index rebuilds are deferred to after lock release to prevent
                 // the O(N) populateAdvancedIndex scan from blocking other connections.
-                const commit_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                // SONNY-2776: the graph the transaction changed (it used to be
+                // the session's latest graph).
+                const commit_graph = state.txnLockGraph(state.sessionGraph());
                 const undo = txn_undo_log.getGlobalUndoLog(gpa);
                 {
                     const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
                     defer graph_store.releaseGraphLock(commit_lock);
-                    undo.commitDeferRebuilds();
 
                     // R9 (2026-04-22): commit the session-scoped engine
                     // txn that R8's per-statement shortcut joined during
                     // this batch — ONE fsync for the whole Geode txn.
-                    if (graph_store.getGlobalAdapter()) |ad| {
-                        ad.commitSessionTxn() catch |err| switch (err) {
-                            error.NoActiveSessionTxn => {},
-                            else => log.warn("session engine txn commit failed", &.{
-                                Attr.string("error", @errorName(err)),
-                            }),
+                    // SONNY-2823: the program that opened it committed it
+                    // when it returned; none spans messages. A backstop.
+                    // CANARY: REQ=REQ-SONNY-3031-SESSION-COMMIT-FAILURE; FEATURE="TransactionManagement"; ASPECT=QuicCommit; STATUS=TESTED; TEST=tests/test_sonny3031_session_commit_failure.zig; OWNER=storage; UPDATED=2026-09-27
+                    // SONNY-3031: first, and a failure rolls the transaction
+                    // back and fails the COMMIT (it was logged, and the
+                    // COMMIT reported success).
+                    geode.graph_storage_adapter.settleThreadSessionTxn() catch {
+                        undo.rollback(graph_store.getWritableGlobalStore(gpa)) catch |err| {
+                            log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
                         };
-                    }
+                        state.endTransaction();
+                        try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.SessionCommitFailed) } });
+                        return;
+                    };
+                    undo.commitDeferRebuilds();
                 }
                 // Flush deferred index rebuilds outside the write lock.
                 const store = graph_store.getGlobalStore(gpa);
                 undo.flushPendingRebuilds(store);
 
                 state.global_commit_ts += 1;
-                state.in_txn = false;
-                state.txn_id = 0;
+                state.endTransaction();
                 try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
@@ -8879,26 +9224,47 @@ fn handleClientMessage(
                     return;
                 },
             }
+            // SONNY-3348 (round 18, I2): ROLLBACK ends an aborted transaction
+            // (the failed statement's handler already undid it).
+            if (state.txn_aborted) {
+                state.txn_aborted = false;
+                // SONNY-3348 (round 19, m3): an incomplete rollback is
+                // reported (40003).
+                if (state.takeRollbackIncomplete()) {
+                    try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.RollbackIncomplete) } });
+                    return;
+                }
+                try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
+                return;
+            }
             if (state.in_txn) {
                 // GAP-0001: Rollback reverses mutations on the store — needs exclusive lock
                 // P1: Per-graph write lock scoped to the session's current graph.
-                const rb_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                const rb_graph = state.txnLockGraph(state.sessionGraph()); // SONNY-2776
                 const rb_lock = graph_store.acquireGraphWriteLock(rb_graph);
                 defer graph_store.releaseGraphLock(rb_lock);
 
                 // R9 (2026-04-22): abort the session-scoped engine txn
                 // first so any pending WAL page records are discarded
                 // before the undo-log replay re-mutates the store.
+                // SONNY-2823: none spans messages (the program that opened
+                // it committed it); a backstop.
                 if (graph_store.getGlobalAdapter()) |ad| {
                     ad.abortSessionTxn();
                 }
 
                 const store = graph_store.getGlobalStore(gpa);
+                var rollback_complete = true;
                 txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
                     log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
+                    rollback_complete = false;
                 };
-                state.in_txn = false;
-                state.txn_id = 0;
+                state.endTransaction();
+                // SONNY-3348 (round 19, m3): reported, not answered as a success.
+                if (!rollback_complete) {
+                    try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false, .@"error" = try txnEndErrorOwned(gpa, error.RollbackIncomplete) } });
+                    return;
+                }
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = true } });
             } else {
                 try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });
@@ -8937,7 +9303,7 @@ fn handleClientMessage(
                 try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = false } });
             } else {
                 // P1: Per-graph write lock for rollback-to-savepoint.
-                const rts_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                const rts_graph = state.txnLockGraph(state.sessionGraph()); // SONNY-2776
                 const rts_lock = graph_store.acquireGraphWriteLock(rts_graph);
                 defer graph_store.releaseGraphLock(rts_lock);
                 const store = graph_store.getGlobalStore(gpa);

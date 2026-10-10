@@ -450,6 +450,36 @@ test "geode#876: FOR … MATCH … SET updates exactly the matched rows" {
     try testing.expectEqualSlices(i64, &[_]i64{ 0, 1, 2 }, vs);
 }
 
+// SONNY-2463 (review m3): a FOR body whose iterations each return nodes hands
+// the accumulator one `OwnedGraphEntities` per iteration, and `absorb` merges
+// them into the first. The merged nodes are then freed the first tracker's way
+// (`destroy_node`), so `absorb` asserts both trackers free their nodes the
+// same way. This drives that merge: each iteration returns one matched node,
+// and the result's single tracker must hold both.
+test "SONNY-2463: a FOR body that returns nodes from two iterations merges their trackers" {
+    lockStore();
+    defer unlockStore();
+
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    _ = try h.exec("CREATE GRAPH for876_merge");
+    _ = try h.exec("USE GRAPH for876_merge");
+    _ = try h.exec("CREATE (:N876 {k: 1})");
+    _ = try h.exec("CREATE (:N876 {k: 2})");
+    _ = try h.exec("CREATE (:N876 {k: 3})");
+
+    const res = try h.exec("FOR i IN [1, 2] MATCH (n:N876 {k: i}) RETURN n");
+    try testing.expectEqual(@as(usize, 2), res.rows.len);
+    const entities = res.owned_graph_entities orelse return error.ExpectedTrackedNodes;
+    try testing.expectEqual(@as(usize, 2), entities.nodes.items.len);
+    try testing.expect(entities.destroy_node == null);
+    for (res.rows, 0..) |row, i| {
+        const k = (row[0].Node.properties.get("k") orelse return error.NodePropertyMissing).Int;
+        try testing.expectEqual(@as(i64, @intCast(i + 1)), k);
+    }
+}
+
 // ===========================================================================
 // CLASSIFICATION: a write-bodied FOR MUST be classified as mutating.
 // Getting this wrong is a security + concurrency defect (read-only user gate,

@@ -785,15 +785,18 @@ test "GAP58: MERGE (a)-[:REL]->(b) parses edge pattern in hops" {
     try std.testing.expectEqualStrings("KNOWS", hop.rel.types[0]);
 }
 
-// GAP #57: WITH after MERGE parses as two statements (MERGE + Query with MERGE chain)
-test "GAP57: MERGE WITH MERGE RETURN parses without error" {
-    var result = lib.parse(std.testing.allocator, "MERGE (a:T1 {id: 'a1'}) WITH a MERGE (b:T2 {id: 'b1'}) RETURN a.id AS a_id, b.id AS b_id", .{}) catch |err| {
-        std.debug.print("GAP57 FAIL: parse error: {}\n", .{err});
-        return err;
-    };
+// GAP #57 / SONNY-3166: `MERGE ... WITH a MERGE ...` used to parse as two
+// statements, the second running with `a` unbound. A statement now ends only
+// at ';', so the split is a syntax error (42601) and nothing runs.
+test "GAP57: MERGE WITH MERGE RETURN is refused, not split into two statements" {
+    if (lib.parse(std.testing.allocator, "MERGE (a:T1 {id: 'a1'}) WITH a MERGE (b:T2 {id: 'b1'}) RETURN a.id AS a_id, b.id AS b_id", .{})) |r| {
+        var result = r;
+        result.deinit();
+        return error.TestUnexpectedResult;
+    } else |_| {}
+    // With the ';' it is two statements, as written.
+    var result = try lib.parse(std.testing.allocator, "MERGE (a:T1 {id: 'a1'}); MATCH (a:T1) MERGE (b:T2 {id: 'b1'}) RETURN a.id AS a_id, b.id AS b_id", .{});
     defer result.deinit();
-    // Should parse as 2 statements: MERGE + Query(WITH...MERGE...RETURN)
-    try std.testing.expect(result.program.statements.len >= 2);
+    try std.testing.expectEqual(@as(usize, 2), result.program.statements.len);
     try std.testing.expect(result.program.statements[0] == .Merge);
-    try std.testing.expect(result.program.statements[1] == .Query);
 }

@@ -361,6 +361,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    // SONNY-2798: verify the chain before a change, and seal the change.
+    if (subcommandMutatesAuthStore(subcommand)) cli_auth.requireIntactChain(allocator, &mgr, "user", subcommand);
 
     if (std.mem.eql(u8, subcommand, "create")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
@@ -1198,6 +1200,10 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    // SONNY-2798: verify the chain before a change, and seal the change.
+    if (std.mem.eql(u8, subcommand, "create") or std.mem.eql(u8, subcommand, "delete")) {
+        cli_auth.requireIntactChain(allocator, &mgr, "role", subcommand);
+    }
 
     if (std.mem.eql(u8, subcommand, "create")) {
         if (hasHelpFlag(argv, start_idx + 2)) {

@@ -150,7 +150,7 @@ pub fn resetWarnState() void {
 
 /// Returns true if `tid` represents a concrete tenant scope (i.e. NOT the empty
 /// string and NOT the wildcard "default" sentinel).
-fn isConcreteScope(tid: []const u8) bool {
+pub fn isConcreteScope(tid: []const u8) bool {
     if (tid.len == 0) return false;
     return !std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID);
 }

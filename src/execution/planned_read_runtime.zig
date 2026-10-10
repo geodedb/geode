@@ -2,11 +2,14 @@ const std = @import("std");
 const gs = @import("graph_storage");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
+const statement_undo = @import("../statement_undo.zig");
 const execution = @import("../execution.zig");
+const write_walk = @import("write_walk.zig");
 const result_utils = @import("result_utils.zig");
 const value_utilities = @import("value_utilities.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+const stored_property_equality = @import("stored_property_equality.zig");
 const value_types = @import("../value_types.zig");
 const query_arena = @import("../server/query_arena.zig");
 const pattern_helpers = @import("pattern_helpers.zig");
@@ -199,6 +202,21 @@ const PathEdge = struct {
     prop_head: u64,
 };
 
+/// Does the session resolve to a concrete tenant scope? A strict-tenancy
+/// refusal counts as concrete: the legacy path re-resolves and surfaces it.
+fn sessionTenantConcrete(context: ExecutionContext) bool {
+    const resolved = tenancy.resolveTenantFilter(context.tenant_id) catch return true;
+    return resolved != null;
+}
+
+/// SONNY-2679: may this session's rows be hidden from it (a concrete tenant
+/// scope, or an RLS policy that may deny a row)? The storage-native runtime
+/// enforces neither, so `buildPlanIfSupported` demotes such a session to the
+/// legacy executor, and the ungated walks here refuse to run for one.
+fn sessionIsRestricted(context: ExecutionContext) bool {
+    return sessionTenantConcrete(context) or execution.wouldEvaluateRLS();
+}
+
 pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, context: ExecutionContext) !?Plan {
     var binding_names = std.ArrayList([]const u8).empty;
     errdefer {
@@ -227,10 +245,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
     // mode; we ignore that error here and let the legacy path re-resolve and
     // surface it (so this guard never changes error behaviour).
     if (execution_mode == .storage_native and q.match.chains.len > 0) {
-        const concrete = blk: {
-            const resolved = tenancy.resolveTenantFilter(context.tenant_id) catch break :blk true;
-            break :blk resolved != null;
-        };
+        const concrete = sessionTenantConcrete(context);
         // REQ-PROFILE-RLS-TENANT-001: the storage-native runtime also has NO
         // RLS enforcement of its own — passesRLSFilter/passesRLSExprFilter
         // live in match_operations (the legacy executor). Normal
@@ -390,7 +405,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             if (with_clause.limit != null or with_clause.offset != null or with_clause.limit_param != null or with_clause.offset_param != null) {
                 try ops.append(allocator, .{ .kind = .Limit });
             }
-            if (q.where_clause != null) {
+            if (withStageWhere(q) != null) {
                 try ops.append(allocator, .{ .kind = .Filter });
             }
         }
@@ -460,6 +475,80 @@ pub fn executeProfiledIfSupported(
     // CANARY: REQ=REQ-PROFILE-RLS-TENANT-001; FEATURE="PROFILE"; ASPECT=ActiveContextPush; STATUS=TESTED; TEST=tests/test_profile_rls_tenant.zig; OWNER=security; UPDATED=2026-08-29
     const prev_ctx = execution.pushActiveContext(&context);
     defer execution.popActiveContext(prev_ctx);
+    // CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProfiledEntryPoint; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
+    // SONNY-3027: a profiled query is a program of its own, like one run
+    // through `executeProgramWithContext`: the session engine transaction a
+    // change in it opened (`executeMerge`, `executeCreate`) is committed when
+    // it returns, while the handler still holds the request's write lock. It
+    // stayed open, and the backstop committed it after the lock was released.
+    execution.enterEntryPoint();
+    defer execution.leaveEntryPoint();
+    // SONNY-3135 (N7b): a failed profiled change aborts its engine transaction.
+    errdefer execution.failEntryPoint();
+
+    // CANARY: REQ=REQ-SONNY-3349-PROFILE-RELAY; FEATURE="ExpressionEvaluator"; ASPECT=ProfiledRelayScope; STATUS=TESTED; TEST=tests/test_sonny3349_profile_relay.zig; OWNER=eval; UPDATED=2026-09-28
+    // SONNY-3349 (round 17): the profiled run is a statement of its own, so
+    // it opens the relay's scope (`execution.executeStatementWithContext`
+    // does for every other statement) and fails with what a caller
+    // swallowed in it: a limit (54001, out of memory, the read budget) or an
+    // IN type error. PROFILE answered those as a profile (00000), and a
+    // PROFILE'd change kept its writes; inside the scope the store's write
+    // fence refuses them too (SONNY-3348). Nested under a statement's own
+    // scope (`executeIfSupported`), it does not own the scope, and the
+    // statement fails instead.
+    const owns_scope = eval.enterInPredicateScope();
+    // SONNY-3348 (round 18): and its statement undo record: a profiled
+    // statement that fails has its changes undone, as any other statement
+    // (`execution.executeStatementWithContext`).
+    // SONNY-3348 (round 19): and its held replicated writes (one entry).
+    execution.beginStatementScope(owns_scope);
+    var profiled = (executeProfiledInScope(allocator, q, context, param_names, param_values, apply_window) catch |err| {
+        _ = eval.exitInPredicateScope(owns_scope);
+        _ = eval.takeDeferredLimitError(owns_scope);
+        return execution.endStatementFailed(owns_scope, err);
+    }) orelse {
+        _ = eval.exitInPredicateScope(owns_scope);
+        _ = eval.takeDeferredLimitError(owns_scope);
+        // Nothing ran (no plan); the caller runs the statement another way.
+        switch (execution.endStatementFailed(owns_scope, error.NoPlan)) {
+            error.NoPlan => {},
+            else => |e| return e,
+        }
+        return null;
+    };
+    const limit_error = eval.takeDeferredLimitError(owns_scope);
+    const in_type_error = eval.exitInPredicateScope(owns_scope);
+    if (in_type_error or limit_error != null) {
+        profiled.result.deinit(allocator);
+        profiled.deinitMetadata(allocator);
+        if (in_type_error) return execution.endStatementFailed(owns_scope, error.InListRequiresList);
+        return execution.endStatementFailed(owns_scope, limit_error.?);
+    }
+    execution.endStatementSucceeded(owns_scope) catch |err| {
+        profiled.result.deinit(allocator);
+        profiled.deinitMetadata(allocator);
+        return err;
+    };
+    return profiled;
+}
+
+/// SONNY-3349: `executeProfiledIfSupported`'s run, inside its relay scope.
+fn executeProfiledInScope(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    context: ExecutionContext,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    apply_window: bool,
+) !?ProfiledExecution {
+    // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=PlannedRuntimeDeclinesWrites; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=engine; UPDATED=2026-09-28
+    // SONNY-3139, SONNY-3182 (round-3 review C1): the planned runtime is a
+    // read runtime. A query that writes (a write clause, a part that writes,
+    // a write hidden in an expression or a CTE body: the one write walk) is
+    // declined, so it runs through the statement dispatcher, which validates
+    // it against the write-shape allowlist. The QUIC and gRPC PROFILE arms
+    // handed a write straight to `executeLegacyProfiled`, unvalidated.
+    if (write_walk.queryWrites(q, .{})) return null;
 
     var plan = (try buildPlanIfSupported(allocator, q, context)) orelse return null;
     errdefer plan.deinit(allocator);
@@ -491,7 +580,7 @@ pub fn executeProfiledIfSupported(
         try applyResultFilters(
             allocator,
             &result,
-            if (q.with_clause == null) q.where_clause else null,
+            if (q.with_clause == null) q.where_clause else preWithWhere(q),
             q.filter_clause,
             context,
             param_names,
@@ -511,7 +600,9 @@ pub fn executeProfiledIfSupported(
         const with_stage = stripWithExecutionModifiers(with_clause);
         const input_rows = result.rows.len;
         const start_ns = nowNs();
-        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.group_by, q.having, param_names, param_values);
+        // SONNY-2667: a HAVING without a GROUP BY is a WHERE after RETURN, so it
+        // belongs to the RETURN stage below, not to this one.
+        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.group_by, execution.withStageHaving(q.*), param_names, param_values);
         transferOwnedGraphEntities(&result, &with_result);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 
@@ -543,12 +634,12 @@ pub fn executeProfiledIfSupported(
                 &trace.ops[op_index],
             );
         }
-        if (q.where_clause != null) {
+        if (withStageWhere(q) != null) {
             const op_index = nextOpIndex(trace.ops, .Filter, &filter_occurrence) orelse unreachable;
             try applyResultFilters(
                 allocator,
                 &result,
-                q.where_clause,
+                withStageWhere(q),
                 null,
                 context,
                 param_names,
@@ -560,7 +651,9 @@ pub fn executeProfiledIfSupported(
 
     if (needsFinalProjection(q)) {
         const return_group_by = if (q.with_clause == null) q.group_by else null;
-        const return_having = if (q.with_clause == null) q.having else null;
+        // SONNY-2667: a WHERE after RETURN (parsed as a HAVING with no GROUP BY)
+        // filters the RETURN's rows, with or without a WITH before it.
+        const return_having = if (q.with_clause == null or q.group_by == null) q.having else null;
         const return_kind: OpKind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project;
         const return_op_index = switch (return_kind) {
             .Aggregate => nextOpIndex(trace.ops, .Aggregate, &aggregate_occurrence),
@@ -756,13 +849,21 @@ fn executePatternQuery(
     // window — no WHERE residual filter, no ORDER BY (reorders), no
     // DISTINCT/aggregate (cardinality), no WITH (reshape). Otherwise null =
     // materialize all (unchanged); the window is applied post-hoc.
+    // SONNY-2652: the bound is `materializeWindowEnd` (null without a LIMIT),
+    // not the start-slot threshold, which answers offset+1 for an OFFSET alone.
+    // A FILTER removes rows after materialization exactly as a WHERE does. A
+    // GROUP BY merges rows (with or without an aggregate) and a HAVING removes
+    // them, both after materialization too.
     const materialize_cap: ?usize = blk: {
         if (q.where_clause != null) break :blk null;
+        if (q.filter_clause != null) break :blk null;
+        if (q.group_by != null) break :blk null;
+        if (q.having != null) break :blk null;
         if (q.order_by != null) break :blk null;
         if (q.with_clause != null) break :blk null;
         if (q.ret.distinct) break :blk null;
         if (hasAggregationItems(q.ret.items)) break :blk null;
-        break :blk requiredStartRows(q, param_names, param_values); // null if no limit/offset
+        break :blk materializeWindowEnd(q, param_names, param_values); // null if no limit
     };
 
     if (!adapter.graphExists(plan.graph_name)) {
@@ -807,7 +908,7 @@ fn executePatternQuery(
         adapter,
         plan.graph_name,
         start_pattern,
-        requiredStartRows(q, param_names, param_values),
+        staleLabelIndexThreshold(q, param_names, param_values),
         param_names,
         param_values,
         context,
@@ -1395,7 +1496,15 @@ const VarLenExec = struct {
 
     /// Faithful engine-direct port of PathIterator.next() drained to
     /// completion, emitting endpoint rows for one seed.
+    ///
+    /// SONNY-2679: this BFS applies NO tenant, RLS or per-edge visibility
+    /// check to the nodes and edges it walks (PathIterator's HopScope gate has
+    /// no counterpart here). It is safe only because `buildPlanIfSupported`
+    /// never builds a storage-native plan for a restricted session (a concrete
+    /// tenant scope, strict tenancy, or an RLS policy that may deny a row), so
+    /// such a session never gets here. Fail closed if that ever changes.
     fn runSeed(self: *VarLenExec, seed_slot: u64) !void {
+        if (sessionIsRestricted(self.context)) return error.RestrictedSessionOnPlannedRead;
         const seed_node = try materializeNode(self.allocator, self.graph_name, seed_slot);
         try self.owned_entities.trackNode(seed_node);
 
@@ -1598,7 +1707,28 @@ fn propertyAccessVar(expr: ast.Expr) ?struct { obj: []const u8, prop: []const u8
     }
 }
 
-fn extractJoinPredicate(expr: ast.Expr, chain_vars: []const ?[]const u8) ?JoinPredicate {
+fn extractJoinPredicate(root: ast.Expr, chain_vars: []const ?[]const u8) ?JoinPredicate {
+    // SONNY-3189: an AND chain with a loop, not one recursion per AND: its
+    // innermost left conjunct first, then the right ones from the bottom up,
+    // the order the recursion tried them in (the first join predicate wins).
+    if (root == .Binary and root.Binary.op == .And) {
+        var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+        const la = sfa.get();
+        var rights: std.ArrayList(*const ast.Expr) = .empty;
+        defer rights.deinit(la);
+        var leaf: *const ast.Expr = &root;
+        while (leaf.* == .Binary and leaf.Binary.op == .And) : (leaf = leaf.Binary.left) {
+            rights.append(la, leaf.Binary.right) catch return null;
+        }
+        if (extractJoinPredicate(leaf.*, chain_vars)) |p| return p;
+        var i = rights.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (extractJoinPredicate(rights.items[i].*, chain_vars)) |p| return p;
+        }
+        return null;
+    }
+    const expr = root;
     switch (expr) {
         .Binary => |b| {
             switch (b.op) {
@@ -1743,13 +1873,17 @@ fn executeMultiChainHashJoin(
 
     if (!adapter.graphExists(plan.graph_name)) {
         const col_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        owned_entities.deinit();
-        return ExecutionResult{
+        // Release the tracker only after the last fallible step: a failed
+        // toOwnedSlice would otherwise run the errdefer on a freed tracker
+        // (same order as the other three early-return sites).
+        const empty_result = ExecutionResult{
             .columns = col_result.columns,
             .rows = try rows.toOwnedSlice(allocator),
             .flags = std.ArrayList([]const u8).empty,
             .column_buffer = col_result.buffer,
         };
+        owned_entities.deinit();
+        return empty_result;
     }
 
     const n_chains = q.match.chains.len;
@@ -1812,13 +1946,21 @@ fn executeMultiChainHashJoin(
     // residual filter, no ORDER BY (reorders), no DISTINCT/aggregate (cardinality),
     // no WITH (reshape). The hash-join branch requires where_clause != null, so this
     // cap applies only to the pure-cartesian loops.
+    // SONNY-2652: the bound is `materializeWindowEnd` (null without a LIMIT);
+    // an OFFSET alone used to cap the loops at offset+1 rows. A FILTER removes
+    // rows after materialization exactly as a WHERE does. A GROUP BY merges
+    // rows (with or without an aggregate) and a HAVING removes them, both
+    // after materialization too.
     const materialize_cap: ?usize = blk: {
         if (q.where_clause != null) break :blk null;
+        if (q.filter_clause != null) break :blk null;
+        if (q.group_by != null) break :blk null;
+        if (q.having != null) break :blk null;
         if (q.order_by != null) break :blk null;
         if (q.with_clause != null) break :blk null;
         if (q.ret.distinct) break :blk null;
         if (hasAggregationItems(q.ret.items)) break :blk null;
-        break :blk requiredStartRows(q, param_names, param_values); // null if no limit
+        break :blk materializeWindowEnd(q, param_names, param_values); // null if no limit
     };
 
     // Extract a cross-chain join predicate from the WHERE clause (if any).
@@ -2170,7 +2312,99 @@ fn findBindingIndex(plan: *const Plan, name: []const u8) ?usize {
     return null;
 }
 
+// CANARY: REQ=REQ-SONNY-3189-HAVING-WALKERS; FEATURE="PlannedReadRuntime"; ASPECT=ProjectionWalker; STATUS=TESTED; TEST=tests/test_sonny3189_grouped_having_chains.zig; OWNER=engine; UPDATED=2026-09-28
+/// SONNY-3189 (round 15): the projection analysis walks every RETURN and
+/// WITH item, GROUP BY key, HAVING and ORDER BY key of a planned read with a
+/// hop. Round 14 looped binary and member chains, but an index or slice
+/// link recursed on its target with no stack guard: `RETURN l[0][0] ... [0]`
+/// with 4,000 links is one frame per link. Now every chain the parser builds
+/// as long as its input (a binary link's left operand, a unary operand, and
+/// the target of a member, index or slice link) is followed with a loop; a
+/// link's other children (a right operand, an index, a slice's bounds) are
+/// analysed after the chain's innermost operand, innermost link first: the
+/// order the recursion took. They are nested expressions, bounded by the
+/// parser's 128 levels.
 fn analyzeExprForProjection(
+    allocator: std.mem.Allocator,
+    expr: ast.Expr,
+    plan: *const Plan,
+    projections: []BindingProjection,
+    key_lists: []std.ArrayList([]const u8),
+    failed: *bool,
+) void {
+    if (failed.*) return;
+    var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+    const la = sfa.get();
+    var links: std.ArrayList(*const ast.Expr) = .empty;
+    defer links.deinit(la);
+    var at: *const ast.Expr = &expr;
+    spine: while (true) {
+        switch (at.*) {
+            .Binary => |bin| {
+                links.append(la, at) catch {
+                    failed.* = true;
+                    return;
+                };
+                at = bin.left;
+            },
+            .Index => |ix| {
+                links.append(la, at) catch {
+                    failed.* = true;
+                    return;
+                };
+                at = ix.target;
+            },
+            .Slice => |sl| {
+                links.append(la, at) catch {
+                    failed.* = true;
+                    return;
+                };
+                at = sl.target;
+            },
+            .Unary => |un| at = un.expr,
+            // p.key → record (p, key). Down a member chain: the link whose
+            // target is not a member access decides.
+            .Member => |top| {
+                var m = top;
+                while (m.target.* == .Member) m = m.target.Member;
+                if (m.target.* == .Ident) {
+                    const target_ident = m.target.Ident;
+                    if (findBindingIndex(plan, target_ident.orig)) |idx| {
+                        if (plan.binding_kinds[idx] == .node) {
+                            recordBindingKey(allocator, idx, m.field, projections, key_lists, failed);
+                        }
+                        break :spine;
+                    }
+                }
+                at = m.target;
+            },
+            else => {
+                analyzeLeafForProjection(allocator, at.*, plan, projections, key_lists, failed);
+                break :spine;
+            },
+        }
+    }
+    var i = links.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (failed.*) return;
+        switch (links.items[i].*) {
+            .Binary => |bin| analyzeExprForProjection(allocator, bin.right.*, plan, projections, key_lists, failed),
+            .Index => |ix| analyzeExprForProjection(allocator, ix.index.*, plan, projections, key_lists, failed),
+            .Slice => |sl| {
+                if (sl.start) |st| {
+                    analyzeExprForProjection(allocator, st.*, plan, projections, key_lists, failed);
+                    if (failed.*) return;
+                }
+                if (sl.end) |en| analyzeExprForProjection(allocator, en.*, plan, projections, key_lists, failed);
+            },
+            else => unreachable,
+        }
+    }
+}
+
+/// `analyzeExprForProjection` for an expression that is no chain link.
+fn analyzeLeafForProjection(
     allocator: std.mem.Allocator,
     expr: ast.Expr,
     plan: *const Plan,
@@ -2191,19 +2425,8 @@ fn analyzeExprForProjection(
                 }
             }
         },
-        // p.key → record (p, key).
-        .Member => |m| {
-            if (m.target.* == .Ident) {
-                const target_ident = m.target.Ident;
-                if (findBindingIndex(plan, target_ident.orig)) |idx| {
-                    if (plan.binding_kinds[idx] == .node) {
-                        recordBindingKey(allocator, idx, m.field, projections, key_lists, failed);
-                    }
-                    return;
-                }
-            }
-            analyzeExprForProjection(allocator, m.target.*, plan, projections, key_lists, failed);
-        },
+        // Chain links: `analyzeExprForProjection`.
+        .Member, .Binary, .Unary, .Index, .Slice => analyzeExprForProjection(allocator, expr, plan, projections, key_lists, failed),
         .PropertyAccess => |pa| {
             if (findBindingIndex(plan, pa.object)) |idx| {
                 if (plan.binding_kinds[idx] == .node) {
@@ -2211,34 +2434,10 @@ fn analyzeExprForProjection(
                 }
             }
         },
-        .Binary => |bin| {
-            analyzeExprForProjection(allocator, bin.left.*, plan, projections, key_lists, failed);
-            if (failed.*) return;
-            analyzeExprForProjection(allocator, bin.right.*, plan, projections, key_lists, failed);
-        },
-        .Unary => |un| {
-            analyzeExprForProjection(allocator, un.expr.*, plan, projections, key_lists, failed);
-        },
         .Call => |call| {
             for (call.args) |arg| {
                 analyzeExprForProjection(allocator, arg.*, plan, projections, key_lists, failed);
                 if (failed.*) return;
-            }
-        },
-        .Index => |ix| {
-            analyzeExprForProjection(allocator, ix.target.*, plan, projections, key_lists, failed);
-            if (failed.*) return;
-            analyzeExprForProjection(allocator, ix.index.*, plan, projections, key_lists, failed);
-        },
-        .Slice => |sl| {
-            analyzeExprForProjection(allocator, sl.target.*, plan, projections, key_lists, failed);
-            if (failed.*) return;
-            if (sl.start) |s| {
-                analyzeExprForProjection(allocator, s.*, plan, projections, key_lists, failed);
-                if (failed.*) return;
-            }
-            if (sl.end) |e| {
-                analyzeExprForProjection(allocator, e.*, plan, projections, key_lists, failed);
             }
         },
         .List => |items| {
@@ -2458,6 +2657,14 @@ fn propertyAccessMatches(expr: ast.Expr, pattern_name: []const u8) ?[]const u8 {
     };
 }
 
+/// Whether the double nearest `i` is `i` itself (always within 2^53).
+fn doubleHoldsExactly(i: i64) bool {
+    const f: f64 = @floatFromInt(i);
+    // maxInt(i64) rounds up to 2^63, which no i64 holds.
+    if (f >= 0x1p63) return false;
+    return @as(i64, @intFromFloat(f)) == i;
+}
+
 fn tryExtractPatternEqPredicate(
     pattern_name: ?[]const u8,
     where: ast.Expr,
@@ -2488,7 +2695,8 @@ fn collectStartSlots(
     adapter: *graph_storage_adapter.StorageAdapter,
     graph_name: []const u8,
     pattern: ast.NodePattern,
-    required_rows: ?usize,
+    /// `staleLabelIndexThreshold`, or null. Never a cap on the slots returned.
+    stale_index_threshold: ?usize,
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
@@ -2542,6 +2750,9 @@ fn collectStartSlots(
         // Seed key+value are set atomically so neither is ever valid without
         // the other — eliminates the `undefined` field and the dead `orelse`.
         var seed: ?struct { key: []const u8, pv: graph_store.PropertyValue } = null;
+        // SONNY-2807: the WHERE arm's second seek, for an integer no double
+        // holds (see below).
+        var nearest_double: ?graph_store.PropertyValue = null;
 
         if (pattern.props) |props| {
             if (props.len == 0) break :fp;
@@ -2591,7 +2802,18 @@ fn collectStartSlots(
             const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch break :fp;
             const seed_pv: graph_store.PropertyValue = switch (expected_val) {
                 .Str => |s| graph_store.PropertyValue{ .String = s },
-                .Int => |i| graph_store.PropertyValue{ .Int = i },
+                .Int => |i| blk: {
+                    // SONNY-2807: `=` compares a stored DOUBLE with an
+                    // integer in a double, and the seek finds the nodes whose
+                    // value is exactly the integer. Past 2^53 a double may
+                    // not hold the integer: `n.x = 9007199254740993` is true
+                    // for a stored DOUBLE 2^53, which the seek missed. Seek
+                    // the nearest double too; the WHERE filter that follows
+                    // drops what `=` does not keep.
+                    const nearest: f64 = @floatFromInt(i);
+                    if (!doubleHoldsExactly(i)) nearest_double = .{ .Float = nearest };
+                    break :blk graph_store.PropertyValue{ .Int = i };
+                },
                 .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                 else => break :fp,
             };
@@ -2601,7 +2823,20 @@ fn collectStartSlots(
         }
 
         const s = seed orelse break :fp;
-        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
+        const exact = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
+        const candidates = if (nearest_double) |d| blk: {
+            defer allocator.free(exact);
+            const near = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, d, allocator) catch break :fp;
+            defer allocator.free(near);
+            // Two values, two postings: disjoint but for a hash collision.
+            var both = try std.ArrayList(u64).initCapacity(allocator, exact.len + near.len);
+            errdefer both.deinit(allocator);
+            both.appendSliceAssumeCapacity(exact);
+            for (near) |slot| {
+                if (std.mem.indexOfScalar(u64, exact, slot) == null) both.appendAssumeCapacity(slot);
+            }
+            break :blk try both.toOwnedSlice(allocator);
+        } else exact;
         defer allocator.free(candidates);
 
         var verified = try std.ArrayList(u64).initCapacity(allocator, candidates.len);
@@ -2628,7 +2863,9 @@ fn collectStartSlots(
     };
     errdefer allocator.free(initial);
 
-    if (required_rows) |needed| {
+    // Fewer label-index slots than the window needs: the index may be stale,
+    // so collect the start slots from a full scan instead.
+    if (stale_index_threshold) |needed| {
         if (pattern.labels.len > 0 and initial.len < needed) {
             allocator.free(initial);
             return scanAndFilterStartSlots(allocator, adapter, graph_name, pattern, param_names, param_values, context);
@@ -2829,7 +3066,7 @@ fn propsMatch(
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
-) bool {
+) !bool {
     for (props) |prop| {
         const expected = eval.evalExpr(allocator, prop.value.*, Env{
             .names = &.{},
@@ -2840,7 +3077,10 @@ fn propsMatch(
             .exec_context = @constCast(&context),
         }) catch return false;
         const actual = actual_props.get(prop.key) orelse return false;
-        if (!storagePropertyMatches(expected, actual)) {
+        // SONNY-2806: by value, as the legacy executor compares (a decimal by
+        // representation, a DOUBLE and every extended value never). A stored
+        // value that cannot be decoded fails the read.
+        if (!try stored_property_equality.matches(allocator, expected, actual)) {
             return false;
         }
     }
@@ -2894,6 +3134,7 @@ fn materializeNodeProjected(
             else => return err,
         };
         const val = maybe_val orelse continue;
+        defer freeStoragePropertyValue(scratch, val);
         const decoded = try graph_storage_adapter.fromStorageProperty(scratch, val);
         const owned_key = try scratch.dupe(u8, key);
         try node.properties.put(owned_key, decoded);
@@ -2954,8 +3195,8 @@ fn materializeEdge(allocator: std.mem.Allocator, graph_name: []const u8, edge_st
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const store = graph_store.getGlobalStore(allocator);
-    const id_map = store.getIdMap(graph_name) orelse return error.IdMapNotLoaded;
-    const edge_id = @as(u64, @truncate(id_map.edgeUuid(edge_step.edge_id) orelse return error.EdgeSlotMappingMissing));
+    // SONNY-3350: read with the IdMap pinned (`GraphStore.idMapEdgeId`).
+    const edge_id = store.idMapEdgeId(graph_name, edge_step.edge_id) orelse return error.EdgeSlotMappingMissing;
     const from_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, edge_step.actual_from_slot);
     const to_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, edge_step.actual_to_slot);
 
@@ -3001,38 +3242,39 @@ fn resolveExternalNodeId(
     graph_name: []const u8,
     slot_id: u64,
 ) !u64 {
-    // Fast path: IdMap already has the mapping.
-    if (store.getIdMap(graph_name)) |id_map| {
-        if (id_map.nodeUuid(slot_id)) |uuid_128| {
-            return @as(u64, @truncate(uuid_128));
-        }
-    }
+    // Fast path: IdMap already has the mapping. SONNY-3350: read with the
+    // map pinned (`GraphStore.idMapNodeId`).
+    if (store.idMapNodeId(graph_name, slot_id)) |id| return id;
 
     // Slow path: read the persisted public ID property from the adapter.
-    if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
-        defer switch (stored_prop) {
-            .string => |text| allocator.free(text),
-            else => {},
-        };
+    // SONNY-3348 round 18 (review M1): a resource limit fails the query (it
+    // was swallowed, and the slot used as the id: a wrong row).
+    // SONNY-3348 round 19 (review m4): only a node or graph that is gone
+    // is skipped; any other read error (an engine I/O error) fails the
+    // query instead of dropping the row silently.
+    const stored = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch |err| switch (err) {
+        error.NodeNotFound, error.GraphNotFound => return error.NodeNotFound,
+        else => return err,
+    };
+    if (stored) |stored_prop| {
+        defer freeStoragePropertyValue(allocator, stored_prop);
         const public_id: ?u64 = switch (stored_prop) {
             .string => |text| graph_store.parsePersistedPublicId(text),
             .int => |n| if (n >= 0) @as(u64, @intCast(n)) else null,
             else => null,
         };
         if (public_id) |pid| {
-            // Back-fill the IdMap for future lookups.
-            const im = store.getOrCreateIdMap(graph_name) catch return pid;
-            im.insertNodeWithSlot(@as(u128, pid), slot_id) catch {};
+            // Back-fill the IdMap for future lookups (SONNY-3350: pinned).
+            store.idMapBackfillNode(graph_name, pid, slot_id);
             return pid;
         }
     }
 
-    // Neither the IdMap nor the persisted property had a mapping for this
-    // slot.  This happens for nodes created within the current session whose
-    // graph has no IdMap yet (e.g. freshly-created test graphs).  Fall back
-    // to using the slot_id directly as the external ID so that
-    // materializeNode can still succeed.
-    return slot_id;
+    // Neither the IdMap nor the persisted property has a public id for this
+    // slot: the node is gone (a DROP GRAPH, or a delete, after the scan read
+    // the slot). SONNY-3348 round 18 (review M1): the caller skips it. The
+    // slot was returned as the node's id, a row with an id no node has.
+    return error.NodeNotFound;
 }
 
 fn buildColumns(allocator: std.mem.Allocator, items: []const ast.ReturnItem) !struct { columns: [][]const u8, buffer: []u8 } {
@@ -3135,8 +3377,10 @@ fn applyResultFilters(
             .exec_context = @constCast(&context),
         };
 
+        // SONNY-3251 (round 15, F6): a limit (54001, 53200, 57014) is the
+        // query's; any other error is the row's false, as it was.
         const passes_where = if (where_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch Value{ .Bool = false })
+            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err)) return err else Value{ .Bool = false })
         else
             true;
         if (!passes_where) {
@@ -3145,7 +3389,7 @@ fn applyResultFilters(
         }
 
         const passes_filter = if (filter_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch Value{ .Bool = false })
+            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err)) return err else Value{ .Bool = false })
         else
             true;
         if (!passes_filter) {
@@ -3275,42 +3519,6 @@ fn truthyPredicate(value: Value) bool {
     };
 }
 
-fn storagePropertyMatches(expected: Value, actual: gs.PropertyValue) bool {
-    return switch (actual) {
-        .string => |text| switch (expected) {
-            .Str => |expected_text| std.mem.eql(u8, expected_text, text),
-            else => false,
-        },
-        .int => |number| switch (expected) {
-            .Int => |expected_number| expected_number == number,
-            else => false,
-        },
-        .bool => |boolean| switch (expected) {
-            .Bool => |expected_boolean| expected_boolean == boolean,
-            else => false,
-        },
-        .null => expected == .Null,
-        .decimal => |decimal| switch (expected) {
-            .Decimal => |expected_decimal| expected_decimal.coeff == decimal.coeff and expected_decimal.scale == decimal.scale,
-            else => false,
-        },
-        .float => |float_value| switch (expected) {
-            .Decimal => |decimal| decimalToFloat(decimal.coeff, decimal.scale) == float_value,
-            else => false,
-        },
-        .ext => false,
-    };
-}
-
-fn decimalToFloat(coeff: i128, scale: u8) f64 {
-    var divisor: f64 = 1;
-    var i: u8 = 0;
-    while (i < scale) : (i += 1) {
-        divisor *= 10;
-    }
-    return @as(f64, @floatFromInt(coeff)) / divisor;
-}
-
 fn labelsContainAll(actual: []const []const u8, required: []const []const u8) bool {
     for (required) |required_label| {
         var found = false;
@@ -3334,9 +3542,16 @@ fn freeTrackedEntities(allocator: std.mem.Allocator, nodes: []const *graph_store
     }
 }
 
+// CANARY: REQ=REQ-SONNY-2653-PLANNED-READ-EXT-LEAK; FEATURE="PlannedReadStorageReads"; ASPECT=FreeExtendedReadCopy; STATUS=TESTED; TEST=tests/test_sonny2653_planned_read_ext_read_leak.zig; OWNER=engine; UPDATED=2026-09-25
+/// Free a value the storage adapter read for this file (`getNodeProperty`,
+/// `getAllNodeProperties`, `getAllEdgeProperties`). The engine's decode copies
+/// both a string and an extended value's bytes onto the caller's allocator
+/// (SONNY-2653: the extended value's bytes used to leak on every read, the
+/// planned-read twin of SONNY-2464).
 fn freeStoragePropertyValue(allocator: std.mem.Allocator, value: gs.PropertyValue) void {
     switch (value) {
         .string => |text| allocator.free(text),
+        .ext => |ext| allocator.free(ext.data),
         else => {},
     }
 }
@@ -3350,9 +3565,15 @@ fn freeStoragePropertyMap(allocator: std.mem.Allocator, map: *std.StringHashMap(
     map.deinit();
 }
 
+/// SONNY-3122: a read resolves an edge type's name from the graph it read,
+/// looked up only and pinned while its dictionary is read. It called
+/// `getOrCreateGraph`: on the read path, with no lock of the adapter's, it
+/// could create a graph dropped meanwhile again, and read one that a DROP
+/// was freeing (review of round 13).
 fn edgeTypeName(allocator: std.mem.Allocator, graph_name: []const u8, rel_type: gs.LabelId) ![]const u8 {
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
-    const managed_graph = try adapter.getOrCreateGraph(graph_name);
+    const managed_graph = adapter.pinGraph(graph_name) orelse return error.GraphNotFound;
+    defer adapter.unpinGraph(managed_graph);
     return try allocator.dupe(u8, managed_graph.label_dict.getString(rel_type) orelse "UNKNOWN");
 }
 
@@ -3446,7 +3667,14 @@ fn nodeCanUseIndex(context: ExecutionContext, node: ast.NodePattern, where_claus
     return false;
 }
 
-fn whereClauseHasIndexedEquality(expr: ast.Expr, var_name: []const u8, label: []const u8, context: ExecutionContext) bool {
+fn whereClauseHasIndexedEquality(root: ast.Expr, var_name: []const u8, label: []const u8, context: ExecutionContext) bool {
+    // SONNY-3189: down an AND chain with a loop, not one recursion per AND.
+    var at: *const ast.Expr = &root;
+    while (at.* == .Binary and at.Binary.op == .And) {
+        if (whereClauseHasIndexedEquality(at.Binary.right.*, var_name, label, context)) return true;
+        at = at.Binary.left;
+    }
+    const expr = at.*;
     switch (expr) {
         .Binary => |bin| {
             if (bin.op == .And) {
@@ -3509,23 +3737,60 @@ fn elapsedSince(start_ns: i128) u64 {
     return if (now > start_ns) @intCast(now - start_ns) else 0;
 }
 
-fn requiredStartRows(
+// CANARY: REQ=REQ-SONNY-2652-PLANNED-READ-SKIP; FEATURE="PlannedReadRowWindow"; ASPECT=MaterializeCapNeedsLimit; STATUS=TESTED; TEST=tests/test_sonny2652_planned_read_skip_without_limit.zig; OWNER=engine; UPDATED=2026-09-25
+/// The most rows a planned read needs to materialize when its first rows are
+/// the answer's first rows (the caller decides that): OFFSET + LIMIT, or null
+/// (every row) when there is no LIMIT. It feeds `materialize_cap`, which stops
+/// the materialization loops. An OFFSET alone bounds nothing: `SKIP k` returns
+/// every row after the first k (SONNY-2652: the cap used to be
+/// `staleLabelIndexThreshold`, which answers k+1 for it, so `SKIP k` returned
+/// one row).
+fn materializeWindowEnd(
     q: *const ast.Query,
     param_names: []const []const u8,
     param_values: []const Value,
 ) ?usize {
+    const limit = resolveWindowValue(q.limit, q.limit_param, param_names, param_values) orelse return null;
     const offset = resolveWindowValue(q.offset, q.offset_param, param_names, param_values) orelse 0;
-    if (resolveWindowValue(q.limit, q.limit_param, param_names, param_values)) |limit| {
-        return std.math.add(usize, offset, limit) catch std.math.maxInt(usize);
-    }
-    if (offset != 0) {
-        return std.math.add(usize, offset, 1) catch std.math.maxInt(usize);
-    }
-    return null;
+    return std.math.add(usize, offset, limit) catch std.math.maxInt(usize);
+}
+
+/// The fewest start slots `collectStartSlots` expects from a label index
+/// before it trusts it: OFFSET + LIMIT with a LIMIT, OFFSET + 1 with an OFFSET
+/// alone (the window needs at least one row after the offset), and null (no
+/// expectation) with neither. A label index that returns fewer is treated as
+/// possibly stale, and the start slots come from a full scan instead. This is
+/// a threshold, not a cap: it never bounds how many rows are materialized
+/// (that is `materializeWindowEnd`).
+fn staleLabelIndexThreshold(
+    q: *const ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) ?usize {
+    if (materializeWindowEnd(q, param_names, param_values)) |end| return end;
+    const offset = resolveWindowValue(q.offset, q.offset_param, param_names, param_values) orelse 0;
+    if (offset == 0) return null;
+    return std.math.add(usize, offset, 1) catch std.math.maxInt(usize);
 }
 
 fn hasPreProjectionFilter(q: *const ast.Query) bool {
-    return q.filter_clause != null or (q.with_clause == null and q.where_clause != null);
+    return q.filter_clause != null or (q.with_clause == null and q.where_clause != null) or preWithWhere(q) != null;
+}
+
+/// SONNY-3140: with a WITH after the MATCH, the WHERE before it filters the
+/// pattern's rows. The parser joins it to the WHERE after the WITH in
+/// `where_clause`, which was evaluated over the WITH's rows, where a variable
+/// the WITH renamed or dropped no longer exists.
+fn preWithWhere(q: *const ast.Query) ?ast.Expr {
+    if (q.with_clause == null or q.is_initial_with) return null;
+    return q.pre_with_where;
+}
+
+/// The WHERE over a WITH's rows: the one after it (or, for a query the
+/// parser did not split, the joined one, as before).
+fn withStageWhere(q: *const ast.Query) ?ast.Expr {
+    if (q.with_clause != null and !q.is_initial_with and (q.pre_with_where != null or q.with_where != null)) return q.with_where;
+    return q.where_clause;
 }
 
 fn hasAggregationItems(items: []const ast.ReturnItem) bool {
@@ -3659,7 +3924,7 @@ fn appendLegacyPlanOps(
         if (with_clause.limit != null or with_clause.offset != null or with_clause.limit_param != null or with_clause.offset_param != null) {
             try ops.append(allocator, .{ .kind = .Limit });
         }
-        if (q.where_clause != null) {
+        if (withStageWhere(q) != null) {
             try ops.append(allocator, .{ .kind = .Filter });
         }
     }
@@ -4046,4 +4311,10 @@ fn containsName(names: []const []const u8, candidate: []const u8) bool {
         if (std.mem.eql(u8, name, candidate)) return true;
     }
     return false;
+}
+
+/// SONNY-3350 (round 17): a test seam: `resolveExternalNodeId`.
+pub fn resolveExternalNodeIdForTest(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !u64 {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    return resolveExternalNodeId(allocator, adapter, graph_store.getGlobalStore(allocator), graph_name, slot_id);
 }

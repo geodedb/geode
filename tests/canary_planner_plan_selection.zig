@@ -1,4 +1,5 @@
 const std = @import("std");
+const perf_gate = @import("perf_gate");
 
 // Zig 0.16 compat helpers for test code
 fn compat_milliTimestamp() i64 {
@@ -54,6 +55,7 @@ test "TestCANARY_REQ_GQL_024_PlanSelectionIntegration" {
     const root = enumerator_mod.LogicalPlan{ .op = .join, .children = join_children[0..] };
 
     var enumr = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 32 });
+    defer enumr.deinit();
     var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
     const best = try enumr.selectBestUnmanaged(root, alloc, &buf) orelse return error.UnexpectedEmptyEnumeration;
     // Expect cost non-negative and enumerate produced at least 2 plans
@@ -83,6 +85,7 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var enumr = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 128 });
+        defer enumr.deinit();
         var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
         const start = compat_nanoTimestamp();
         _ = try enumr.selectBestUnmanaged(join2, alloc, &buf);
@@ -118,6 +121,8 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope" {
     }
     const p95 = @as(f128, @floatFromInt(scratch[rank]));
     const p95_mean = p95 / mean;
-    try std.testing.expect(cv <= 0.22);
-    try std.testing.expect(p95_mean <= 2.55);
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
+    try perf_gate.envelope("plan selection", cv, p95_mean, 0.22, 2.55);
 }

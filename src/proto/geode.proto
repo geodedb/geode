@@ -470,12 +470,18 @@ message CommitRequest {
 }
 message CommitResponse {
   bool success = 1;
+  // SONNY-3348 (round 19): why it failed (40000: rolled back; 40003: the
+  // rollback could not undo every change). Unset on success.
+  Error error = 2;
 }
 message RollbackRequest {
   string session_id = 1; // Required for gRPC; ignored for QUIC
 }
 message RollbackResponse {
   bool success = 1;
+  // SONNY-3348 (round 19): why it failed (40000: rolled back; 40003: the
+  // rollback could not undo every change). Unset on success.
+  Error error = 2;
 }
 message SavepointRequest {
   string name = 1;

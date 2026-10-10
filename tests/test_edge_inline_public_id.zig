@@ -206,7 +206,9 @@ test "GAP-ENT-0024: mixed store — legacy property-tagged edge (pre-switch shap
     defer a.free(data_dir);
 
     const labels = [_][]const u8{"MixedNode"};
-    const legacy_public_id: u64 = 0xBEEF_CAFE_0000_0042;
+    // Bit 63 clear: no public id has it, and a persisted one with it is
+    // refused at load (`parsePersistedPublicId`, SONNY-2806).
+    const legacy_public_id: u64 = 0x3EEF_CAFE_0000_0042;
     var inline_id: u64 = 0;
 
     // ---- Boot 1: one edge via the NEW inline path, one edge hand-built the

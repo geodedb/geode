@@ -332,6 +332,11 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    // SONNY-2798: a key is minted or revoked for a user of this store; the
+    // store must verify first.
+    if (std.mem.eql(u8, subcommand, "create") or std.mem.eql(u8, subcommand, "revoke") or std.mem.eql(u8, subcommand, "revoke-all")) {
+        cli_auth.requireIntactChain(allocator, &mgr, "apikey", subcommand);
+    }
 
     // Initialize API key manager
     var manager = api_keys.ApiKeyManager.init(allocator, geode_api_key_config);

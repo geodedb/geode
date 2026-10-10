@@ -1161,6 +1161,63 @@ test-zig-release-safe:
       allow_failure: true
 
 # =============================================================================
+# Test Stage - Enforced perf gates (SCHEDULED pipelines only)
+# SONNY-2394 / SONNY-2439: tests/perf_gate.zig only REPORTS perf-ratio /
+# variance-envelope / latency claims unless GEODE_PERF_GATES=enforce is set,
+# with or without CI, so on their own they are never enforced by any
+# automation or local run. This job runs every gated step with the override,
+# in ReleaseFast (the claims are release-build claims), on scheduled pipelines
+# only. The schedule itself is a GitLab project setting (CI/CD > Schedules)
+# and is NOT created by this file; SONNY-2439 creates it once the claims
+# measure the product.
+# =============================================================================
+
+test-perf-gates-enforced:
+  stage: test
+  image: $ZIG_IMAGE
+  tags:
+    - company
+    - k8s
+    - linux
+  timeout: 3h
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+    GEODE_PERF_GATES: "enforce"
+  before_script:
+    - *zig-vendor-cache
+  script:
+    - mkdir -p reports
+    - |
+      rc=0
+      for step in \
+        test-perf-gate \
+        test-canary-txn-phantom-anomaly \
+        test-canary-txn-phantom-range \
+        test-canary-path-varlen-predicate \
+        test-canary-storage-redo-delta \
+        test-json-optimization \
+        test-canary-physiological-redo \
+        test-canary-planner-prune \
+        test-canary-planner-enumerator \
+        test-canary-planner-plan-selection \
+        test-canary-planner-pipeline-selection \
+        test-canary-txn-write-skew \
+        test-canary-recovery-corrupt-latency; do
+        echo "=== ${step} (GEODE_PERF_GATES=enforce, ReleaseFast) ==="
+        zig build "${step}" -Doptimize=ReleaseFast --summary failures > "reports/perf_gate_${step}.log" 2>&1 || rc=1
+        grep -E "PERF_CLAIM_VIOLATED|Build Summary" "reports/perf_gate_${step}.log" || true
+      done
+      exit "${rc}"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      allow_failure: false
+  artifacts:
+    when: always
+    paths:
+      - reports/perf_gate_*.log
+    expire_in: 2 weeks
+
+# =============================================================================
 # Test Stage - Performance Benchmarks (REQ-0009 enforcement)
 # CANARY: REQ=REQ-0009; FEATURE="Performance Budget Enforcement"; ASPECT=CI; STATUS=TESTED; TEST=test-performance-benchmarks; OWNER=ci; UPDATED=2026-01-30
 # GAP-0244: Enforces performance budgets as CI merge gate

@@ -978,14 +978,15 @@ pub fn measureOverhead(allocator: std.mem.Allocator) !struct {
     }
     const encrypted_time = compat_microTimestamp() - encrypted_start;
 
-    // Calculate ops/sec
-    const baseline_ops = (@as(f64, iterations) / @as(f64, @floatFromInt(baseline_time))) * 1000000.0;
-    const encrypted_ops = (@as(f64, iterations) / @as(f64, @floatFromInt(encrypted_time))) * 1000000.0;
+    // Calculate ops/sec. SONNY-2739: a loop timed at 0 us made the rate
+    // infinite and `@intFromFloat` aborted the server; time at least 1 us.
+    const baseline_ops = (@as(f64, iterations) / @as(f64, @floatFromInt(@max(baseline_time, 1)))) * 1000000.0;
+    const encrypted_ops = (@as(f64, iterations) / @as(f64, @floatFromInt(@max(encrypted_time, 1)))) * 1000000.0;
     const overhead = ((baseline_ops - encrypted_ops) / baseline_ops) * 100.0;
 
     return .{
-        .baseline_ops_per_sec = @intFromFloat(baseline_ops),
-        .encrypted_ops_per_sec = @intFromFloat(encrypted_ops),
+        .baseline_ops_per_sec = std.math.lossyCast(i64, baseline_ops),
+        .encrypted_ops_per_sec = std.math.lossyCast(i64, encrypted_ops),
         .overhead_percentage = overhead,
         .passes_threshold = overhead < 5.0, // <5% overhead threshold
     };
@@ -1007,7 +1008,8 @@ pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32,
     // fips-exempt: non-security test-plaintext fill
     compat_fillRandom(test_data);
 
-    const iterations = duration_seconds * 10; // Simulate transactions
+    // SONNY-2739: u64, so a large duration cannot overflow the product.
+    const iterations = @as(u64, duration_seconds) * 10; // Simulate transactions
 
     // Without encryption
     const unencrypted_start = compat_milliTimestamp();
@@ -1028,15 +1030,16 @@ pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32,
     }
     const encrypted_time = compat_milliTimestamp() - encrypted_start;
 
-    const tps_unencrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(unencrypted_time))) * 1000.0;
-    const tps_encrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(encrypted_time))) * 1000.0;
+    // SONNY-2739: a loop timed at 0 ms made the rate infinite; see above.
+    const tps_unencrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(@max(unencrypted_time, 1)))) * 1000.0;
+    const tps_encrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(@max(encrypted_time, 1)))) * 1000.0;
     const avg_time = @as(f64, @floatFromInt(encrypted_time)) / @as(f64, @floatFromInt(iterations));
     const degradation = ((tps_unencrypted - tps_encrypted) / tps_unencrypted) * 100.0;
 
     return .{
         .avg_transaction_time_ms = avg_time,
-        .tps_with_encryption = @intFromFloat(tps_encrypted),
-        .tps_without_encryption = @intFromFloat(tps_unencrypted),
+        .tps_with_encryption = std.math.lossyCast(i64, tps_encrypted),
+        .tps_without_encryption = std.math.lossyCast(i64, tps_unencrypted),
         .degradation_percentage = degradation,
     };
 }

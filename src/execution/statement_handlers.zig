@@ -79,7 +79,9 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .cluster_status => return admin_ddl.executeShowClusterStatus(allocator, context),
         // GPS policy DDL (Phase 4): SHOW POLICIES returns empty result set until
         // Phase 5 wires the persistent catalog.  Column schema matches Phase 5 plan.
-        .policies => &[_][]const u8{ "name", "graph", "actions", "enabled" },
+        // SONNY-2732: `valid` is false for a stored policy whose expression no
+        // longer compiles (kept fail-closed until rewritten).
+        .policies => &[_][]const u8{ "name", "graph", "actions", "enabled", "valid" },
         // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsColumns; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
         .grants_for => &[_][]const u8{ "policy_name", "graph", "actions", "effect", "enabled" },
     };
@@ -306,7 +308,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .policies => {
             const policy_catalog_mod = @import("../security/policy_catalog.zig");
             if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-                for (pol_cat.listPolicies()) |pol| {
+                for (pol_cat.listPolicies()) |*pol| {
                     // Build "actions" column: comma-separated action names.
                     var actions_buf = std.ArrayList(u8).empty;
                     for (pol.actions, 0..) |a, ai| {
@@ -315,11 +317,12 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                     }
                     const actions_str = try actions_buf.toOwnedSlice(allocator);
 
-                    var row = try allocator.alloc(Value, 4);
+                    var row = try allocator.alloc(Value, 5);
                     row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
                     row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
                     row[2] = Value{ .Str = actions_str };
                     row[3] = Value{ .Bool = pol.enabled };
+                    row[4] = Value{ .Bool = policy_catalog_mod.PolicyCatalog.policyIsValid(pol) };
                     try rows_list.append(allocator, row);
                 }
             }
@@ -539,6 +542,11 @@ const ForBodyAccumulator = struct {
 
         if (result.owned_graph_entities) |entities| {
             if (self.entities) |acc_entities| {
+                // SONNY-2463: the merged nodes are freed with the
+                // accumulator's `destroy_node`, so both trackers must free
+                // their nodes the same way. Every executor tracker has the
+                // default (struct only); only a node-scan page frees in full.
+                std.debug.assert(acc_entities.destroy_node == entities.destroy_node);
                 try acc_entities.nodes.ensureUnusedCapacity(acc_entities.allocator, entities.nodes.items.len);
                 try acc_entities.edges.ensureUnusedCapacity(acc_entities.allocator, entities.edges.items.len);
                 acc_entities.nodes.appendSliceAssumeCapacity(entities.nodes.items);
@@ -546,8 +554,7 @@ const ForBodyAccumulator = struct {
                 // Ownership of the pointers moved to the accumulator.
                 entities.nodes.clearRetainingCapacity();
                 entities.edges.clearRetainingCapacity();
-                entities.deinit();
-                entities.allocator.destroy(entities);
+                entities.deinit(); // also frees the tracker (SONNY-2394)
             } else {
                 self.entities = entities;
             }
@@ -595,8 +602,7 @@ const ForBodyAccumulator = struct {
         }
         if (self.flags) |*flags| flags.deinit(allocator);
         if (self.entities) |entities| {
-            entities.deinit();
-            entities.allocator.destroy(entities);
+            entities.deinit(); // also frees the tracker (SONNY-2394)
         }
         if (self.bindings) |bindings| {
             bindings.deinit();
@@ -678,6 +684,20 @@ fn executeForBody(
     }
 
     return acc.finish(allocator);
+}
+
+/// SONNY-3144: `body` once per element of `items`, with `variable` bound to
+/// the element as a parameter (ahead of the context's), as a FOR body runs;
+/// the results appended in order. An UNWIND before a write runs this way.
+pub fn executeQueryPerElement(
+    allocator: std.mem.Allocator,
+    variable: []const u8,
+    items: []const Value,
+    body: *const ast.Query,
+    context: ExecutionContext,
+) anyerror!ExecutionResult {
+    const for_stmt = ast.ForStatement{ .variable = variable, .collection = .Null, .body = @constCast(body) };
+    return executeForBody(allocator, for_stmt, body, items, &.{}, &.{}, context);
 }
 
 pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, with_result: ExecutionResult, context: ExecutionContext) !ExecutionResult {
@@ -1140,7 +1160,14 @@ fn extractVarProp(expr: ast.Expr) ?struct { variable: []const u8, property: []co
     return null;
 }
 
-fn whereHasIndexedEquality(where_expr: ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+fn whereHasIndexedEquality(root: ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
+    // SONNY-3189: down an AND chain with a loop, not one recursion per AND.
+    var at: *const ast.Expr = &root;
+    while (at.* == .Binary and at.Binary.op == .And) {
+        if (whereHasIndexedEquality(at.Binary.right.*, var_name, label, cat)) return true;
+        at = at.Binary.left;
+    }
+    const where_expr = at.*;
     switch (where_expr) {
         .Binary => |bin| {
             if (bin.op == .And) {

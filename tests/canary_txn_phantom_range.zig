@@ -1,4 +1,5 @@
 const std = @import("std");
+const perf_gate = @import("perf_gate");
 
 // Zig 0.16 compat helpers for test code
 fn compat_milliTimestamp() i64 {
@@ -131,10 +132,11 @@ test "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope" {
     const ratio_p95_mean_range = if (m_range == 0) 0 else p95_range / m_range;
 
     // Envelope thresholds (general CV <=0.22, p95/mean <=2.55) + overhead guard <5%
-    try std.testing.expect(cv_range <= 0.22);
-    try std.testing.expect(ratio_p95_mean_range <= 2.55);
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
     const overhead = if (m_base == 0) 0 else (m_range - m_base) / m_base;
-    try std.testing.expect(overhead <= 0.05);
-
     std.debug.print("CANARY_RANGE_OVERHEAD mean_base={d:.2} mean_range={d:.2} overhead={d:.4} cv_range={d:.4} p95/mean={d:.2}\n", .{ m_base, m_range, overhead, cv_range, ratio_p95_mean_range });
+    try perf_gate.envelope("range-tracked commit latency", cv_range, ratio_p95_mean_range, 0.22, 2.55);
+    try perf_gate.check("range tracking overhead <= 5%", overhead <= 0.05, "overhead={d:.4}", .{overhead});
 }

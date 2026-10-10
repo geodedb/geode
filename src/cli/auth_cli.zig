@@ -79,6 +79,10 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    // SONNY-2798: verify the chain before a change, and seal the change.
+    if (std.mem.eql(u8, subcmd, "create") or std.mem.eql(u8, subcmd, "delete")) {
+        cli_auth.requireIntactChain(allocator, &mgr, "policy", subcmd);
+    }
 
     if (std.mem.eql(u8, subcmd, "create")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
@@ -102,23 +106,9 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 i += 1;
             }
         }
-        const policy_id = mgr.next_user_id;
-        mgr.next_user_id += 1;
-
-        try mgr.storage.persistPolicy(.{
-            .policy_id = policy_id,
-            .name = name,
-            .description = "",
-            .graph = "",
-            .table = table,
-            .operation = 0,
-            .permissive = false,
-            .enabled = true,
-            .using_clause = condition,
-            .check_clause = null,
-            .audit_level = 0,
-            .created_by = 0,
-        });
+        // SONNY-2777: a new id from the policy id sequence; it used to be the
+        // next user id, which could overwrite a GPS policy's record.
+        _ = try cli_auth.createRlsPolicyRecord(&mgr, name, table, condition);
         printOut("RLS policy '{s}' created for table '{s}'\n", .{ name, table });
         return;
     } else if (std.mem.eql(u8, subcmd, "list")) {
@@ -126,21 +116,16 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             printPolicyUsage();
             return;
         }
+        // SONNY-2750: RLS records only; GPS policies share the record type.
         var found = false;
         var it = mgr.storage.policyIterator();
-        while (it.next()) |_| {
+        while (it.next()) |record| {
+            if (record.effectiveKind() != .rls) continue;
+            if (!found) printOut("Policies:\n", .{});
             found = true;
-            break;
+            printOut("- {s} on {s}\n", .{ record.getName(), record.getTable() });
         }
-        if (!found) {
-            printOut("No policies configured (RLS list)\n", .{});
-        } else {
-            printOut("Policies:\n", .{});
-            var it2 = mgr.storage.policyIterator();
-            while (it2.next()) |record| {
-                printOut("- {s} on {s}\n", .{ record.getName(), record.getTable() });
-            }
-        }
+        if (!found) printOut("No policies configured (RLS list)\n", .{});
         return;
     } else if (std.mem.eql(u8, subcmd, "show")) {
         if (subcmd_idx + 1 >= argv.len) {
@@ -152,6 +137,8 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         var found = false;
         var it = mgr.storage.policyIterator();
         while (it.next()) |record| {
+            // SONNY-2750: RLS records only.
+            if (record.effectiveKind() != .rls) continue;
             if (std.mem.eql(u8, record.getName(), name)) {
                 const using = record.getUsingClause() orelse "";
                 printOut("Policy: {s}\nTable: {s}\nCondition: {s}\n", .{ record.getName(), record.getTable(), using });
@@ -172,6 +159,8 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         // Find and remove policy by name
         var it = mgr.storage.policy_cache.iterator();
         while (it.next()) |entry| {
+            // SONNY-2750: never a GPS policy of the same name.
+            if (entry.value_ptr.effectiveKind() != .rls) continue;
             if (std.mem.eql(u8, entry.value_ptr.getName(), name)) {
                 mgr.storage.removePolicy(entry.key_ptr.*) catch {};
                 break;
@@ -255,11 +244,17 @@ pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
+    // SONNY-2798: verify the chain before the change.
+    cli_auth.requireIntactChain(allocator, &mgr, "grant", permission);
+
     // Persist the permission grant in the graph store
-    const perm_id = mgr.next_user_id;
-    mgr.next_user_id += 1;
+    // SONNY-3037: a permission id of its own (it took the next user id, so
+    // every grant replaced the one before it).
+    const perm_id = mgr.storage.nextPermissionId();
     try mgr.storage.persistPermission(perm_id, permission, resource, 0, target);
     printOut("Granted permission '{s}' to '{s}'{s}{s}\n", .{ permission, target.?, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
+    // SONNY-2798: exit skips the deferred save; seal and save first.
+    cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
@@ -324,15 +319,35 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    // Find and remove matching permission from graph store
+    // SONNY-2798: verify the chain before the change.
+    cli_auth.requireIntactChain(allocator, &mgr, "revoke", permission);
+
+    // CANARY: REQ=REQ-SONNY-3037-REVOKE-PRINCIPAL; FEATURE="OfflineAuthStoreSafety"; ASPECT=RevokeMatchesPrincipal; STATUS=TESTED; TEST=tests/test_sonny3037_revoke_principal.zig; OWNER=security; UPDATED=2026-09-27
+    // SONNY-3037: the grants of `permission` to `target` (the principal
+    // `geode grant` records in the permission's conditions), on `resource`
+    // when one is named. It removed the first record with the permission's
+    // name, which could be another principal's, and reported success
+    // whether or not anything matched.
+    var matches = std.ArrayList(u64).empty;
+    defer matches.deinit(allocator);
     var it = mgr.storage.permission_cache.iterator();
     while (it.next()) |entry| {
-        if (std.mem.eql(u8, entry.value_ptr.getName(), permission)) {
-            mgr.storage.removePermission(entry.key_ptr.*) catch {};
-            break;
-        }
+        const record = entry.value_ptr;
+        if (!std.mem.eql(u8, record.getName(), permission)) continue;
+        const holder = record.getConditions() orelse continue;
+        if (!std.mem.eql(u8, holder, target.?)) continue;
+        if (resource.len > 0 and !std.mem.eql(u8, record.getResource(), resource)) continue;
+        try matches.append(allocator, entry.key_ptr.*);
     }
+    if (matches.items.len == 0) {
+        std.debug.print("Error: '{s}' holds no grant of permission '{s}'{s}{s}; nothing was revoked.\n", .{ target.?, permission, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
+        cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+    for (matches.items) |id| try mgr.storage.removePermission(id);
     printOut("Revoked permission '{s}' from '{s}'{s}{s}\n", .{ permission, target.?, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
+    // SONNY-2798: exit skips the deferred save; seal and save first.
+    cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 

@@ -189,6 +189,46 @@ pub const UserStorageBackend = struct {
         }
     };
 
+    // CANARY: REQ=REQ-SONNY-2750-POLICY-RECORD-KIND; FEATURE="GPS Policy Persistence"; ASPECT=RecordKind; STATUS=TESTED; TEST=tests/test_sonny2750_policy_record_kind.zig; OWNER=security; UPDATED=2026-09-25
+    /// SONNY-2750: which policy system a :Policy record in `__geode_security`
+    /// belongs to. GPS (`policy_persistence`, CREATE POLICY) and RLS (the
+    /// geode-auth CLI through `user_manager`, and `geode auth policy create`)
+    /// write the same record type, with different meanings for `operation`,
+    /// `permissive` and the USING text. GPS startup hydration loaded every
+    /// record as a GPS policy, so an RLS `update` policy came back as a GPS
+    /// "allow write on `default` for everyone". Stored as the `kind` property;
+    /// see `fromProperty`.
+    pub const PolicyKind = enum(u8) {
+        /// No `kind` property: written before SONNY-2750. `effectiveKind`
+        /// classifies it by shape.
+        legacy = 0,
+        gps = 1,
+        rls = 2,
+        /// A `kind` property that is neither "gps" nor "rls". No loader
+        /// accepts it.
+        invalid = 3,
+
+        /// Strict decoding of a stored `kind` property: exactly "gps" or
+        /// "rls"; any other value, or another type, is `.invalid`; a missing
+        /// property is `.legacy`.
+        pub fn fromProperty(value: ?graph_store.PropertyValue) PolicyKind {
+            const v = value orelse return .legacy;
+            if (v != .String) return .invalid;
+            if (std.mem.eql(u8, v.String, "gps")) return .gps;
+            if (std.mem.eql(u8, v.String, "rls")) return .rls;
+            return .invalid;
+        }
+
+        /// The stored form of a kind a writer may persist.
+        pub fn property(self: PolicyKind) ?[]const u8 {
+            return switch (self) {
+                .gps => "gps",
+                .rls => "rls",
+                .legacy, .invalid => null,
+            };
+        }
+    };
+
     pub const PolicyRecord = extern struct {
         id: u64,
         name: [64]u8,
@@ -210,9 +250,27 @@ pub const UserStorageBackend = struct {
         created_at: i64,
         updated_at: i64,
         created_by: u64,
+        /// SONNY-2750: see `PolicyKind`.
+        kind: PolicyKind,
+        /// SONNY-2750: for a `.legacy` record, the writer its stored
+        /// properties show (`legacyPolicyShape`), decided when it was
+        /// loaded; `.invalid` otherwise.
+        legacy_shape: PolicyKind,
+        /// SONNY-2750: a property a policy needs was missing or of the wrong
+        /// type when the record was loaded (`loadPoliciesFromGraph`). The
+        /// defaults stand in for it, so no loader may use the record.
+        malformed: bool,
 
         pub fn getName(self: *const PolicyRecord) []const u8 {
             return self.name[0..self.name_len];
+        }
+
+        /// SONNY-2750: the record's kind; for a `.legacy` record (no `kind`
+        /// property, written before SONNY-2750), the writer its stored
+        /// properties show (`legacy_shape`), which is `.invalid` when a
+        /// property that decides it is missing.
+        pub fn effectiveKind(self: *const PolicyRecord) PolicyKind {
+            return if (self.kind == .legacy) self.legacy_shape else self.kind;
         }
 
         pub fn getDescription(self: *const PolicyRecord) []const u8 {
@@ -347,7 +405,8 @@ pub const UserStorageBackend = struct {
         record.is_superuser = getBoolProp(store, node_id, "is_superuser", false);
         record.mfa_enabled = getBoolProp(store, node_id, "mfa_enabled", false);
         record.mfa_secret_len = copyIntoField(&record.mfa_secret, getStringProp(store, node_id, "mfa_secret", ""));
-        record.failed_login_attempts = @intCast(@max(0, getIntProp(store, node_id, "failed_login_attempts", 0)));
+        // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
+        record.failed_login_attempts = storedInt(u16, getIntProp(store, node_id, "failed_login_attempts", 0), "failed_login_attempts", user_id) orelse return null;
         record.lockout_until = getIntProp(store, node_id, "lockout_until", 0);
         record.last_login = getIntProp(store, node_id, "last_login", 0);
         record.created_at = getIntProp(store, node_id, "created_at", compat_milliTimestamp());
@@ -460,7 +519,8 @@ pub const UserStorageBackend = struct {
         record.is_superuser = edGetBool(allocator, adapter, slot, "is_superuser", false);
         record.mfa_enabled = edGetBool(allocator, adapter, slot, "mfa_enabled", false);
         record.mfa_secret_len = edCopyStr(allocator, adapter, slot, "mfa_secret", &record.mfa_secret);
-        record.failed_login_attempts = @intCast(@max(0, edGetInt(allocator, adapter, slot, "failed_login_attempts", 0)));
+        // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
+        record.failed_login_attempts = storedInt(u16, edGetInt(allocator, adapter, slot, "failed_login_attempts", 0), "failed_login_attempts", user_id) orelse return null;
         record.lockout_until = edGetInt(allocator, adapter, slot, "lockout_until", 0);
         record.last_login = edGetInt(allocator, adapter, slot, "last_login", 0);
         record.created_at = edGetInt(allocator, adapter, slot, "created_at", compat_milliTimestamp());
@@ -609,7 +669,8 @@ pub const UserStorageBackend = struct {
             record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
             record.description_len = copyIntoField(&record.description, getStringProp(self.store, node_id, "description", ""));
             record.parent_role = @intCast(@max(0, getIntProp(self.store, node_id, "parent_role", 0)));
-            record.priority = @intCast(@max(0, getIntProp(self.store, node_id, "priority", 0)));
+            // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
+            record.priority = storedInt(u32, getIntProp(self.store, node_id, "priority", 0), "priority", role_id) orelse continue;
             record.is_system = getBoolProp(self.store, node_id, "is_system", false);
             record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
             record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
@@ -636,7 +697,8 @@ pub const UserStorageBackend = struct {
             var record = blankPermissionRecord(perm_id);
             record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
             record.resource_len = copyIntoField(&record.resource, getStringProp(self.store, node_id, "resource", ""));
-            record.action = @intCast(@max(0, getIntProp(self.store, node_id, "action", 0)));
+            // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
+            record.action = storedInt(u8, getIntProp(self.store, node_id, "action", 0), "action", perm_id) orelse continue;
             record.conditions_len = copyIntoField(&record.conditions, getStringProp(self.store, node_id, "conditions", ""));
             record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
 
@@ -660,16 +722,59 @@ pub const UserStorageBackend = struct {
             const policy_id: u64 = @intCast(id_val);
 
             var record = blankPolicyRecord(policy_id);
-            record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
+            const stored_name = getStringProp(self.store, node_id, "name", "");
+            const stored_graph = getStringProp(self.store, node_id, "graph", "");
+            const stored_using = getStringProp(self.store, node_id, "using_clause", "");
+            const stored_check = getStringProp(self.store, node_id, "check_clause", "");
+            record.name_len = copyIntoField(&record.name, stored_name);
             record.description_len = copyIntoField(&record.description, getStringProp(self.store, node_id, "description", ""));
-            record.graph_len = copyIntoField(&record.graph, getStringProp(self.store, node_id, "graph", ""));
+            record.graph_len = copyIntoField(&record.graph, stored_graph);
             record.table_len = copyIntoField(&record.table, getStringProp(self.store, node_id, "table", ""));
-            record.operation = @intCast(@max(0, getIntProp(self.store, node_id, "operation", 0)));
+            // SONNY-2757 (P29): an operation or audit level out of range makes
+            // the record malformed (below): it loads nowhere, and its HMAC no
+            // longer verifies. It used to abort a safe build here, at
+            // startup, before the chain was checked.
+            const stored_operation = storedInt(u8, getIntProp(self.store, node_id, "operation", 0), "operation", policy_id);
+            record.operation = stored_operation orelse 0;
             record.permissive = getBoolProp(self.store, node_id, "permissive", false);
             record.enabled = getBoolProp(self.store, node_id, "enabled", true);
-            record.using_clause_len = copyIntoField(&record.using_clause, getStringProp(self.store, node_id, "using_clause", ""));
-            record.check_clause_len = copyIntoField(&record.check_clause, getStringProp(self.store, node_id, "check_clause", ""));
-            record.audit_level = @intCast(@max(0, getIntProp(self.store, node_id, "audit_level", 0)));
+            // SONNY-2750: the kind, decoded strictly, and whether a property
+            // the policy needs is missing: its default must not stand in for
+            // it (an absent `enabled` read as true, an absent USING text as
+            // "true").
+            record.kind = PolicyKind.fromProperty(self.store.getNodeProperty(node_id, "kind"));
+            if (record.kind == .legacy) record.legacy_shape = legacyPolicyShape(self.store, node_id);
+            record.malformed = !hasProp(self.store, node_id, "name", .String) or
+                !hasProp(self.store, node_id, "graph", .String) or
+                !hasProp(self.store, node_id, "operation", .Int) or
+                !hasProp(self.store, node_id, "permissive", .Bool) or
+                !hasProp(self.store, node_id, "enabled", .Bool) or
+                // Since SONNY-2750 a GPS record stores its USING text even
+                // when it is "true"; a legacy one omitted it for "true".
+                (record.kind == .gps and !hasProp(self.store, node_id, "using_clause", .String));
+            // CANARY: REQ=REQ-SONNY-2731-POLICY-TEXT-LIMITS; FEATURE="GPS Policy Persistence"; ASPECT=OverlongStoredPolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-09-25
+            // SONNY-2731: a stored name, graph or clause longer than its field
+            // (persistPolicy never writes one; an older or foreign writer
+            // could) used to be cut to fit, and the cut policy text compiled
+            // at startup as a different policy. Such a policy is now loaded
+            // with a USING text that never compiles, so the catalog keeps it
+            // fail-closed (it grants nothing, and lists as invalid).
+            const overlong = stored_name.len > record.name.len or stored_graph.len > record.graph.len or
+                stored_using.len > record.using_clause.len or stored_check.len > record.check_clause.len;
+            if (overlong) {
+                log.warn("stored policy has a field longer than its record; loaded fail-closed", &.{
+                    Attr.uint("policy_id", policy_id),
+                    Attr.uint("using_len", @intCast(stored_using.len)),
+                });
+                record.using_clause_len = copyIntoField(&record.using_clause, overlong_policy_text);
+                record.check_clause_len = 0;
+            } else {
+                record.using_clause_len = copyIntoField(&record.using_clause, stored_using);
+                record.check_clause_len = copyIntoField(&record.check_clause, stored_check);
+            }
+            const stored_audit_level = storedInt(u8, getIntProp(self.store, node_id, "audit_level", 0), "audit_level", policy_id);
+            record.audit_level = stored_audit_level orelse 0;
+            if (stored_operation == null or stored_audit_level == null) record.malformed = true;
             record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
             record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
             record.created_by = @intCast(@max(0, getIntProp(self.store, node_id, "created_by", 0)));
@@ -733,7 +838,8 @@ pub const UserStorageBackend = struct {
             const stored_user_id: u64 = @intCast(uid_val);
             if (stored_user_id != user_id) continue;
 
-            const stored_action: u8 = @intCast(@max(0, getIntProp(self.store, node_id, "action", -1)));
+            // SONNY-2757 (P29): an action out of range matches nothing.
+            const stored_action = storedInt(u8, getIntProp(self.store, node_id, "action", -1), "action", grant_id) orelse continue;
             if (stored_action != action) continue;
 
             const stored_graph = getStringProp(self.store, node_id, "graph_name", "");
@@ -770,7 +876,8 @@ pub const UserStorageBackend = struct {
             const uid_val = getIntProp(self.store, node_id, "user_id", 0);
             record.user_id = if (uid_val >= 0) @intCast(uid_val) else 0;
             record.graph_name_len = copyIntoField(&record.graph_name, getStringProp(self.store, node_id, "graph_name", ""));
-            record.action = @intCast(@max(0, getIntProp(self.store, node_id, "action", 0)));
+            // SONNY-2757 (P29): out of range, the record is tampered: not listed.
+            record.action = storedInt(u8, getIntProp(self.store, node_id, "action", 0), "action", grant_id) orelse continue;
             record.granted_at = getIntProp(self.store, node_id, "granted_at", compat_timestamp());
             const gb_val = getIntProp(self.store, node_id, "granted_by", 0);
             record.granted_by = if (gb_val >= 0) @intCast(gb_val) else 0;
@@ -1195,6 +1302,20 @@ pub const UserStorageBackend = struct {
         try self.upsertPermissionNode(record);
     }
 
+    // CANARY: REQ=REQ-SONNY-3037-REVOKE-PRINCIPAL; FEATURE="OfflineAuthStoreSafety"; ASPECT=PermissionIdSequence; STATUS=TESTED; TEST=tests/test_sonny3037_revoke_principal.zig; OWNER=security; UPDATED=2026-09-27
+    /// SONNY-3037: the id for a new permission record: one more than any
+    /// permission record's, loaded or not (as `nextPolicyId`). `geode grant`
+    /// took the next user id, the same in every run over one set of users,
+    /// so each grant replaced the previous one.
+    pub fn nextPermissionId(self: *Self) u64 {
+        var max_id: u64 = 0;
+        var cached = self.permission_cache.keyIterator();
+        while (cached.next()) |id| max_id = @max(max_id, id.*);
+        var nodes = self.permission_nodes.keyIterator();
+        while (nodes.next()) |id| max_id = @max(max_id, id.*);
+        return max_id + 1;
+    }
+
     pub fn removePermission(self: *Self, permission_id: u64) !void {
         _ = self.permission_cache.remove(permission_id);
         if (self.permission_nodes.fetchRemove(permission_id)) |kv| {
@@ -1226,11 +1347,46 @@ pub const UserStorageBackend = struct {
         /// `created_at` so an enable/disable/rename does NOT falsify the
         /// original creation timestamp in the HMAC-chained security graph.
         created_at: ?i64 = null,
+        /// SONNY-2750: which system the record belongs to: `.gps` or `.rls`.
+        /// Required, with no default, so no writer can leave it out.
+        kind: PolicyKind,
+        /// SONNY-2777: whether the record is new or replaces one. Required,
+        /// with no default.
+        mode: PersistMode,
     };
+
+    /// SONNY-2777: `.create` writes a record whose id no record has
+    /// (`error.PolicyIdInUse` otherwise). `.replace` rewrites an existing
+    /// record of the same kind (`error.PolicyNotFound`,
+    /// `error.PolicyKindMismatch`). A create used to reuse the node of any
+    /// record with its id: `geode auth policy create` took its id from the
+    /// next *user* id, and overwrote a GPS policy that had it.
+    pub const PersistMode = enum { create, replace };
+
+    // CANARY: REQ=REQ-SONNY-2777-POLICY-IDS; FEATURE="GPS Policy Persistence"; ASPECT=PolicyIdSequence; STATUS=TESTED; TEST=tests/test_sonny2777_policy_ids.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2777: the id for a new policy record: one more than any policy
+    /// record's, loaded or not. Every policy writer takes its id here (GPS,
+    /// `geode auth policy create`, the geode-auth tool), so no two share one.
+    pub fn nextPolicyId(self: *Self) u64 {
+        var max_id: u64 = 0;
+        var cached = self.policy_cache.keyIterator();
+        while (cached.next()) |id| max_id = @max(max_id, id.*);
+        var nodes = self.policy_nodes.keyIterator();
+        while (nodes.next()) |id| max_id = @max(max_id, id.*);
+        return max_id + 1;
+    }
 
     pub fn persistPolicy(self: *Self, opts: PolicyPersistOptions) !void {
         if (opts.name.len > 63 or opts.description.len > 255 or opts.graph.len > 63 or opts.table.len > 63) {
             return error.FieldTooLong;
+        }
+        if (opts.kind.property() == null) return error.InvalidPolicyKind;
+        switch (opts.mode) {
+            .create => if (self.policy_cache.contains(opts.policy_id) or self.policy_nodes.contains(opts.policy_id)) return error.PolicyIdInUse,
+            .replace => {
+                const existing = self.policy_cache.get(opts.policy_id) orelse return error.PolicyNotFound;
+                if (existing.effectiveKind() != opts.kind) return error.PolicyKindMismatch;
+            },
         }
 
         var record = blankPolicyRecord(opts.policy_id);
@@ -1257,6 +1413,7 @@ pub const UserStorageBackend = struct {
         record.created_at = opts.created_at orelse now;
         record.updated_at = now;
         record.created_by = opts.created_by;
+        record.kind = opts.kind;
 
         try self.policy_cache.put(opts.policy_id, record);
         try self.upsertPolicyNode(record);
@@ -1372,6 +1529,9 @@ pub const UserStorageBackend = struct {
             .created_at = compat_milliTimestamp(),
             .updated_at = compat_milliTimestamp(),
             .created_by = 0,
+            .kind = .legacy,
+            .legacy_shape = .invalid,
+            .malformed = false,
         };
     }
 
@@ -1399,6 +1559,11 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "granted_by", .{ .Int = safeI64(record.granted_by) });
     }
 
+    /// SONNY-2731: the USING text a policy is loaded with when a stored field
+    /// is longer than its record. No policy compiler accepts it, so the
+    /// policy is kept fail-closed.
+    pub const overlong_policy_text = "<stored policy text longer than the record holds>";
+
     pub fn copyIntoField(dest: []u8, src: []const u8) u16 {
         const max_len = dest.len;
         const len = @min(src.len, max_len);
@@ -1420,11 +1585,65 @@ pub const UserStorageBackend = struct {
         return default;
     }
 
+    // CANARY: REQ=REQ-SONNY-2757-STORED-INT-CAST; FEATURE="AuthDDLPersistence"; ASPECT=CheckedStoredCasts; STATUS=TESTED; TEST=tests/test_sonny2757_policy_hygiene.zig; OWNER=security; UPDATED=2026-09-26
+    /// SONNY-2757 (P29): a stored integer read into a narrower field. Such values
+    /// were `@intCast` (negatives clamped to 0 first), which aborts a safe build
+    /// on a value out of range while the security graph loads, before any
+    /// signature check. Null (logged) when the value does not fit: the caller
+    /// treats the record as tampered.
+    fn storedInt(comptime T: type, value: i64, field: []const u8, record_id: u64) ?T {
+        return std.math.cast(T, value) orelse {
+            log.warn("security record has an out-of-range value; treated as tampered", &.{
+                Attr.uint("record_id", record_id),
+                Attr.string("field", field),
+                Attr.int("value", value),
+            });
+            return null;
+        };
+    }
+
     fn getIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: i64) i64 {
         if (store.getNodeProperty(node_id, key)) |val| {
             if (val == .Int) return val.Int;
         }
         return default;
+    }
+
+    /// SONNY-2750: does node `node_id` have property `key`, of type `tag`?
+    fn hasProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, tag: std.meta.Tag(graph_store.PropertyValue)) bool {
+        const val = store.getNodeProperty(node_id, key) orelse return false;
+        return val == tag;
+    }
+
+    /// SONNY-2750: which writer stored a :Policy record that has no `kind`
+    /// (written before SONNY-2750), by the properties each one wrote. GPS
+    /// (`AuthGraphManager.createPolicy`) wrote its scope graph (a name or
+    /// "*"), an empty description and table, no CHECK clause, and a zero
+    /// audit level and creator. The RLS writers do not: the geode-auth CLI
+    /// (`user_manager`) writes the description "RLS policy" and a table, and
+    /// `geode auth policy create` a table and an empty graph. A record that
+    /// lacks a property this reads, or has one of another type, is
+    /// `.invalid`: a missing property is never read as the value GPS wrote.
+    fn legacyPolicyShape(store: *graph_store.GraphStore, node_id: u64) PolicyKind {
+        const description = exactStringProp(store, node_id, "description") orelse return .invalid;
+        const graph = exactStringProp(store, node_id, "graph") orelse return .invalid;
+        const table = exactStringProp(store, node_id, "table") orelse return .invalid;
+        const audit_level = exactIntProp(store, node_id, "audit_level") orelse return .invalid;
+        const created_by = exactIntProp(store, node_id, "created_by") orelse return .invalid;
+        const has_check = store.getNodeProperty(node_id, "check_clause") != null;
+        const gps_shape = description.len == 0 and table.len == 0 and graph.len != 0 and !has_check and
+            audit_level == 0 and created_by == 0;
+        return if (gps_shape) .gps else .rls;
+    }
+
+    fn exactStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) ?[]const u8 {
+        const val = store.getNodeProperty(node_id, key) orelse return null;
+        return if (val == .String) val.String else null;
+    }
+
+    fn exactIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) ?i64 {
+        const val = store.getNodeProperty(node_id, key) orelse return null;
+        return if (val == .Int) val.Int else null;
     }
 
     fn getBoolProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: bool) bool {
@@ -1555,6 +1774,8 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "created_at", .{ .Int = record.created_at });
         try self.store.setNodeProperty(node_id, "updated_at", .{ .Int = record.updated_at });
         try self.store.setNodeProperty(node_id, "created_by", .{ .Int = safeI64(record.created_by) });
+        // SONNY-2750: persistPolicy admits only a kind with a stored form.
+        try self.store.setNodeProperty(node_id, "kind", .{ .String = record.kind.property() orelse return error.InvalidPolicyKind });
     }
 
     fn createEntityNode(self: *Self, label: []const u8) !u64 {

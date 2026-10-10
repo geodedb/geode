@@ -13,6 +13,7 @@ const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
 
 // GAP-0535: value ownership helpers for projection results
 const value_utilities = @import("value_utilities.zig");
+const value_order = @import("value_order.zig");
 
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
@@ -59,12 +60,35 @@ fn evalOrderByExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env) !Valu
             return eval.evalExpr(allocator, expr, env);
         },
         .Binary => |b| {
-            // For binary expressions, recursively evaluate both sides with member resolution
-            const left_val = try evalOrderByExpr(allocator, b.left.*, env);
-            const right_val = try evalOrderByExpr(allocator, b.right.*, env);
-            return eval.evalBinary(allocator, b.op, left_val, right_val);
+            // For binary expressions, evaluate both sides with member resolution.
+            // SONNY-3189: the left-deep chain `((a op b) op c) ...` with a
+            // loop (this runs in the sort comparator): down to `a`, then each
+            // link on the way back up, left operand before right as before.
+            const Link = struct { op: ast.BinOp, right: *const ast.Expr };
+            var sfa = std.heap.stackFallback(64 * @sizeOf(Link), std.heap.smp_allocator);
+            const la = sfa.get();
+            var links: std.ArrayList(Link) = .empty;
+            defer links.deinit(la);
+            try links.append(la, .{ .op = b.op, .right = b.right });
+            var leaf: *const ast.Expr = b.left;
+            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) {
+                try links.append(la, .{ .op = leaf.Binary.op, .right = leaf.Binary.right });
+            }
+            var acc = try evalOrderByExpr(allocator, leaf.*, env);
+            var i = links.items.len;
+            while (i > 0) {
+                i -= 1;
+                const right_val = try evalOrderByExpr(allocator, links.items[i].right.*, env);
+                // A new value, then `acc`: the result is not written over
+                // the operand it is computed from.
+                const next = try eval.evalBinary(allocator, links.items[i].op, acc, right_val);
+                acc = next;
+            }
+            return acc;
         },
         .Unary => |u| {
+            // SONNY-3189: a unary chain is bounded by the parser's nesting
+            // limit (128); it recurses.
             const val = try evalOrderByExpr(allocator, u.expr.*, env);
             return switch (u.op) {
                 .Not => .{ .Bool = !value_types.truthy(val) },
@@ -89,44 +113,55 @@ fn evalOrderByExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env) !Valu
 // CANARY: REQ=REQ-GQL-ORDERBY-EXPR-MATCH-001; FEATURE="OrderByExpressionMatch"; ASPECT=ExpressionEquality; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
 // D05 Fix: Compare two AST expressions for semantic equivalence
 // Used to match ORDER BY expressions against RETURN expressions when columns are aliased
-fn exprsEqual(a: ast.Expr, b: ast.Expr) bool {
-    // Check if the active union tags match
-    if (@intFromEnum(a) != @intFromEnum(b)) return false;
+fn exprsEqual(a_root: ast.Expr, b_root: ast.Expr) bool {
+    // SONNY-3189: the left operand, the member target, the unary operand and
+    // the callee are compared with a loop; right operands and arguments
+    // recurse (nesting bounds them).
+    var a: *const ast.Expr = &a_root;
+    var b: *const ast.Expr = &b_root;
+    while (true) {
+        // Check if the active union tags match
+        if (@intFromEnum(a.*) != @intFromEnum(b.*)) return false;
 
-    switch (a) {
-        .Ident => |a_id| {
-            const b_id = b.Ident;
-            return std.mem.eql(u8, a_id.orig, b_id.orig);
-        },
-        .Member => |a_mem| {
-            const b_mem = b.Member;
-            if (!std.mem.eql(u8, a_mem.field, b_mem.field)) return false;
-            return exprsEqual(a_mem.target.*, b_mem.target.*);
-        },
-        .Int => |a_int| return a_int == b.Int,
-        .String => |a_str| return std.mem.eql(u8, a_str, b.String),
-        .Bool => |a_bool| return a_bool == b.Bool,
-        .Binary => |a_bin| {
-            const b_bin = b.Binary;
-            if (a_bin.op != b_bin.op) return false;
-            return exprsEqual(a_bin.left.*, b_bin.left.*) and exprsEqual(a_bin.right.*, b_bin.right.*);
-        },
-        .Unary => |a_un| {
-            const b_un = b.Unary;
-            if (a_un.op != b_un.op) return false;
-            return exprsEqual(a_un.expr.*, b_un.expr.*);
-        },
-        .Call => |a_call| {
-            const b_call = b.Call;
-            // Compare callee expressions (typically Ident for function name)
-            if (!exprsEqual(a_call.callee.*, b_call.callee.*)) return false;
-            if (a_call.args.len != b_call.args.len) return false;
-            for (a_call.args, b_call.args) |a_arg, b_arg| {
-                if (!exprsEqual(a_arg.*, b_arg.*)) return false;
-            }
-            return true;
-        },
-        else => return false, // Complex expressions - conservative non-match
+        switch (a.*) {
+            .Ident => |a_id| {
+                const b_id = b.Ident;
+                return std.mem.eql(u8, a_id.orig, b_id.orig);
+            },
+            .Member => |a_mem| {
+                const b_mem = b.Member;
+                if (!std.mem.eql(u8, a_mem.field, b_mem.field)) return false;
+                a = a_mem.target;
+                b = b_mem.target;
+            },
+            .Int => |a_int| return a_int == b.Int,
+            .String => |a_str| return std.mem.eql(u8, a_str, b.String),
+            .Bool => |a_bool| return a_bool == b.Bool,
+            .Binary => |a_bin| {
+                const b_bin = b.Binary;
+                if (a_bin.op != b_bin.op) return false;
+                if (!exprsEqual(a_bin.right.*, b_bin.right.*)) return false;
+                a = a_bin.left;
+                b = b_bin.left;
+            },
+            .Unary => |a_un| {
+                const b_un = b.Unary;
+                if (a_un.op != b_un.op) return false;
+                a = a_un.expr;
+                b = b_un.expr;
+            },
+            .Call => |a_call| {
+                const b_call = b.Call;
+                // Compare callee expressions (typically Ident for function name)
+                if (a_call.args.len != b_call.args.len) return false;
+                for (a_call.args, b_call.args) |a_arg, b_arg| {
+                    if (!exprsEqual(a_arg.*, b_arg.*)) return false;
+                }
+                a = a_call.callee;
+                b = b_call.callee;
+            },
+            else => return false, // Complex expressions - conservative non-match
+        }
     }
 }
 
@@ -288,10 +323,22 @@ fn compareValues(a: Value, b: Value) i8 {
     return compareValuesWithNullsPolicy(a, b, .default);
 }
 
+// CANARY: REQ=REQ-SONNY-2675-TYPED-ORDERING; FEATURE="ValueOrdering"; ASPECT=NumericTextTemporal; STATUS=TESTED; TEST=tests/test_sonny2675_aggregate_semantics.zig; OWNER=execution; UPDATED=2026-09-25
+/// The order of two values: ORDER BY's, min's and max's. Returns -1, 0 or 1.
+///
+/// NULL sorts per `nulls`. Numbers compare by their exact value across their
+/// types (NaN after every number); strings compare by bytes across Str, Text,
+/// Char and Varchar; dates, times, timestamps and intervals compare with
+/// their own type (an interval by months, then by its day-to-second length);
+/// booleans false < true; nodes and edges by id. Values of different kinds
+/// order by kind (`getTypeOrder`). The numbers, intervals and zoned times
+/// are value_order.zig's, which GROUP BY and DISTINCT keys share: two values
+/// compare equal exactly when their keys are equal.
+///
+/// SONNY-2675: numbers other than Int and Decimal, and every temporal value,
+/// used to fall through to the kind order, which ranked them all equal, so
+/// `max(n.d)` over doubles or dates returned the group's first value.
 pub fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.NullsPolicy) i8 {
-    // Compare values for sorting
-    // Returns: -1 if a < b, 0 if a == b, 1 if a > b
-
     // Handle nulls based on policy
     if (a == .Null and b == .Null) return 0;
     if (a == .Null) {
@@ -307,95 +354,30 @@ pub fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.Nulls
         };
     }
 
-    // Compare same types
-    if (a == .Int and b == .Int) {
-        if (a.Int < b.Int) return -1;
-        if (a.Int > b.Int) return 1;
-        return 0;
+    if (numberOf(a)) |na| {
+        if (numberOf(b)) |nb| return compareNumbers(na, nb);
     }
-
-    if (a == .Str and b == .Str) {
-        const cmp = std.mem.order(u8, a.Str, b.Str);
-        return switch (cmp) {
-            .lt => -1,
-            .eq => 0,
-            .gt => 1,
-        };
+    if (textOf(a)) |ta| {
+        if (textOf(b)) |tb| return orderToI8(std.mem.order(u8, ta, tb));
     }
-
-    if (a == .Bool and b == .Bool) {
-        if (a.Bool == b.Bool) return 0;
-        return if (a.Bool) 1 else -1;
-    }
-
-    // CANARY: REQ=REQ-GQL-ORDERBY-DECIMAL-001; FEATURE="OrderByDecimalComparison"; ASPECT=DecimalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-    // Handle Decimal comparison for ORDER BY on aggregate results like avg()
-    if (a == .Decimal and b == .Decimal) {
-        // Convert decimals to comparable values (coeff / 10^scale)
-        const a_dec = a.Decimal;
-        const b_dec = b.Decimal;
-
-        // Normalize to same scale for comparison
-        // If scales differ, scale up the one with smaller scale
-        const a_scale = a_dec.scale;
-        const b_scale = b_dec.scale;
-
-        if (a_scale == b_scale) {
-            // Same scale - compare coefficients directly
-            if (a_dec.coeff < b_dec.coeff) return -1;
-            if (a_dec.coeff > b_dec.coeff) return 1;
-            return 0;
-        } else if (a_scale < b_scale) {
-            // Scale up a by (b_scale - a_scale) decimal places
-            const scale_diff = b_scale - a_scale;
-            var multiplier: i128 = 1;
-            for (0..scale_diff) |_| {
-                multiplier *= 10;
-            }
-            const scaled_a = a_dec.coeff * multiplier;
-            if (scaled_a < b_dec.coeff) return -1;
-            if (scaled_a > b_dec.coeff) return 1;
-            return 0;
-        } else {
-            // Scale up b by (a_scale - b_scale) decimal places
-            const scale_diff = a_scale - b_scale;
-            var multiplier: i128 = 1;
-            for (0..scale_diff) |_| {
-                multiplier *= 10;
-            }
-            const scaled_b = b_dec.coeff * multiplier;
-            if (a_dec.coeff < scaled_b) return -1;
-            if (a_dec.coeff > scaled_b) return 1;
-            return 0;
+    if (std.meta.activeTag(a) == std.meta.activeTag(b)) {
+        switch (a) {
+            .Bool => |x| return if (x == b.Bool) 0 else if (x) 1 else -1,
+            .Date => |x| return cmpOrdered(i32, x.days_since_epoch, b.Date.days_since_epoch),
+            .Time => |x| return cmpOrdered(i64, x.micros_since_midnight, b.Time.micros_since_midnight),
+            .TimeTZ => |x| return cmpOrdered(i128, value_order.timeTzUtcMicros(x), value_order.timeTzUtcMicros(b.TimeTZ)),
+            .Timestamp => |x| return cmpOrdered(i64, x.micros_since_epoch, b.Timestamp.micros_since_epoch),
+            .TimestampTZ => |x| return cmpOrdered(i64, x.micros_since_epoch_utc, b.TimestampTZ.micros_since_epoch_utc),
+            .Interval => |x| return value_order.compareIntervals(x, b.Interval),
+            .Node => |x| return cmpOrdered(u64, x.id, b.Node.id),
+            .Edge => |x| return cmpOrdered(u64, x.id, b.Edge.id),
+            .UUID => |x| return orderToI8(std.mem.order(u8, &x.bytes, &b.UUID.bytes)),
+            .Bytea => |x| return orderToI8(std.mem.order(u8, x, b.Bytea)),
+            else => {},
         }
     }
 
-    // Handle mixed Int/Decimal comparison
-    if (a == .Int and b == .Decimal) {
-        // Convert Int to Decimal scale for comparison
-        var multiplier: i128 = 1;
-        for (0..b.Decimal.scale) |_| {
-            multiplier *= 10;
-        }
-        const scaled_a = @as(i128, a.Int) * multiplier;
-        if (scaled_a < b.Decimal.coeff) return -1;
-        if (scaled_a > b.Decimal.coeff) return 1;
-        return 0;
-    }
-
-    if (a == .Decimal and b == .Int) {
-        // Convert Int to Decimal scale for comparison
-        var multiplier: i128 = 1;
-        for (0..a.Decimal.scale) |_| {
-            multiplier *= 10;
-        }
-        const scaled_b = @as(i128, b.Int) * multiplier;
-        if (a.Decimal.coeff < scaled_b) return -1;
-        if (a.Decimal.coeff > scaled_b) return 1;
-        return 0;
-    }
-
-    // Different types - define an arbitrary order
+    // Different kinds - define an arbitrary but consistent order
     const type_order_a = getTypeOrder(a);
     const type_order_b = getTypeOrder(b);
     if (type_order_a < type_order_b) return -1;
@@ -403,70 +385,121 @@ pub fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.Nulls
     return 0;
 }
 
+fn orderToI8(order: std.math.Order) i8 {
+    return switch (order) {
+        .lt => -1,
+        .eq => 0,
+        .gt => 1,
+    };
+}
+
+fn cmpOrdered(comptime T: type, a: T, b: T) i8 {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+}
+
+const Number = value_order.Number;
+const numberOf = value_order.numberOf;
+
+// CANARY: REQ=REQ-GQL-ORDERBY-DECIMAL-001; FEATURE="OrderByDecimalComparison"; ASPECT=DecimalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
+/// Decimals (and integers, and a decimal against an integer) compare exactly
+/// at a common scale, as ORDER BY on aggregate results like avg() needs; a
+/// double against them compares exactly too (value_order.zig, SONNY-2675).
+fn compareNumbers(a: Number, b: Number) i8 {
+    return value_order.compareNumbers(a, b);
+}
+
+fn textOf(v: Value) ?[]const u8 {
+    return switch (v) {
+        .Str => |t| t,
+        .Text => |t| t,
+        .Char => |c| c.data,
+        .Varchar => |c| c.data,
+        else => null,
+    };
+}
+
 fn getTypeOrder(v: Value) u8 {
     return switch (v) {
         .Null => 0,
         .Bool => 1,
-        .Int => 2,
-        .Decimal => 3,
-        .Str => 4,
+        .Int, .SmallInt, .BigInt, .Decimal, .Real, .Double => 2,
+        .Str, .Text, .Char, .Varchar => 4,
         .List => 5,
         .Node => 6,
         .Edge => 7,
         .Map => 8,
         .ExtValue => 9,
         .Path => 10,
+        .Date => 12,
+        .Time => 13,
+        .TimeTZ => 14,
+        .Timestamp => 15,
+        .TimestampTZ => 16,
+        .Interval => 17,
         else => 11,
     };
 }
 
 // CANARY: REQ=REQ-GQL-AGG-DETECT-001; FEATURE="AggregationDetection"; ASPECT=RecursiveCheck; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-pub fn isAggregationExpr(expr: ast.Expr) bool {
-    switch (expr) {
-        .Call => |call| {
-            if (call.callee.* == .Ident) {
-                const func_name = call.callee.Ident.orig;
-                // Use case-insensitive comparison for aggregation functions
-                return std.ascii.eqlIgnoreCase(func_name, "count") or
-                    std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
-                    std.ascii.eqlIgnoreCase(func_name, "sum") or
-                    std.ascii.eqlIgnoreCase(func_name, "avg") or
-                    std.ascii.eqlIgnoreCase(func_name, "min") or
-                    std.ascii.eqlIgnoreCase(func_name, "max") or
-                    std.ascii.eqlIgnoreCase(func_name, "collect");
-            }
-            return false;
-        },
-        .Binary => |bin| {
-            // Recursively check for aggregations in binary expressions (e.g., d.budget - sum(e.salary))
-            return isAggregationExpr(bin.left.*) or isAggregationExpr(bin.right.*);
-        },
-        .Unary => |un| {
-            // Recursively check for aggregations in unary expressions
-            return isAggregationExpr(un.expr.*);
-        },
-        else => return false,
+// CANARY: REQ=REQ-SONNY-3189-CHAIN-WALKERS; FEATURE="QueryAnalysis"; ASPECT=IterativeWalkers; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=execution; UPDATED=2026-09-27
+/// SONNY-3189: the left operand of a binary expression and the operand of a
+/// unary one are followed with a loop, not one recursion per operator (and
+/// a copy of the expression per level): `RETURN 1 + 1 + ...` is as deep as
+/// it is long. Right operands recurse; nesting bounds them.
+pub fn isAggregationExpr(root: ast.Expr) bool {
+    var expr: *const ast.Expr = &root;
+    while (true) {
+        switch (expr.*) {
+            .Call => |call| {
+                if (call.callee.* == .Ident) {
+                    const func_name = call.callee.Ident.orig;
+                    // Use case-insensitive comparison for aggregation functions
+                    return std.ascii.eqlIgnoreCase(func_name, "count") or
+                        std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
+                        std.ascii.eqlIgnoreCase(func_name, "sum") or
+                        std.ascii.eqlIgnoreCase(func_name, "avg") or
+                        std.ascii.eqlIgnoreCase(func_name, "min") or
+                        std.ascii.eqlIgnoreCase(func_name, "max") or
+                        std.ascii.eqlIgnoreCase(func_name, "collect");
+                }
+                return false;
+            },
+            .Binary => |bin| {
+                // Check for aggregations in binary expressions (e.g., d.budget - sum(e.salary))
+                if (isAggregationExpr(bin.right.*)) return true;
+                expr = bin.left;
+            },
+            // Check for aggregations in unary expressions
+            .Unary => |un| expr = un.expr,
+            else => return false,
+        }
     }
 }
 
-pub fn isNonConstantExpr(expr: ast.Expr) bool {
-    switch (expr) {
-        .PropertyAccess => return true,
-        .Ident => return true,
-        .Member => return true,
-        .Call => {
-            // Check if it's not an aggregation function
-            return !isAggregationExpr(expr);
-        },
-        .Binary => |bin| {
-            return isNonConstantExpr(bin.left.*) or isNonConstantExpr(bin.right.*);
-        },
-        .Unary => |un| {
-            return isNonConstantExpr(un.expr.*);
-        },
-        // Constants are not non-constant
-        .Int, .String, .Bool, .Null, .Decimal => return false,
-        else => return true,
+/// SONNY-3189: as `isAggregationExpr`, left operands and unary operands with
+/// a loop.
+pub fn isNonConstantExpr(root: ast.Expr) bool {
+    var expr: *const ast.Expr = &root;
+    while (true) {
+        switch (expr.*) {
+            .PropertyAccess => return true,
+            .Ident => return true,
+            .Member => return true,
+            .Call => {
+                // Check if it's not an aggregation function
+                return !isAggregationExpr(expr.*);
+            },
+            .Binary => |bin| {
+                if (isNonConstantExpr(bin.right.*)) return true;
+                expr = bin.left;
+            },
+            .Unary => |un| expr = un.expr,
+            // Constants are not non-constant
+            .Int, .String, .Bool, .Null, .Decimal => return false,
+            else => return true,
+        }
     }
 }
 

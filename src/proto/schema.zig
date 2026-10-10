@@ -972,9 +972,14 @@ pub const CommitRequest = struct {
 
 pub const CommitResponse = struct {
     success: bool = false,
+    /// SONNY-3348 (round 19, m5): why it failed (40000: the transaction was
+    /// rolled back; 40003: its rollback could not undo every change). Unset
+    /// on success; older clients ignore it.
+    @"error": ?Error = null,
 
     pub const _desc_table = .{
         .success = fd(1, .{ .scalar = .bool }),
+        .@"error" = fd(2, .{ .submessage = {} }),
     };
 
     pub fn deinit(self: *CommitResponse, allocator: std.mem.Allocator) void {
@@ -995,9 +1000,14 @@ pub const RollbackRequest = struct {
 
 pub const RollbackResponse = struct {
     success: bool = false,
+    /// SONNY-3348 (round 19, m5): why it failed (40000: the transaction was
+    /// rolled back; 40003: its rollback could not undo every change). Unset
+    /// on success; older clients ignore it.
+    @"error": ?Error = null,
 
     pub const _desc_table = .{
         .success = fd(1, .{ .scalar = .bool }),
+        .@"error" = fd(2, .{ .submessage = {} }),
     };
 
     pub fn deinit(self: *RollbackResponse, allocator: std.mem.Allocator) void {

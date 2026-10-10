@@ -6,6 +6,7 @@ const ast = @import("../../gql/ast.zig");
 const diagnostics = @import("../../diagnostics.zig");
 const eval_ext = @import("../../eval_extended.zig");
 const evaluator_functions = @import("../../types/evaluator_functions.zig");
+const decimal128 = @import("../../types/decimal128.zig");
 const heap = @import("../../storage/heap.zig");
 const property_codec = @import("../../property_value_codec.zig");
 const value_types = @import("../../value_types.zig");
@@ -654,7 +655,8 @@ fn evaluateExpressionInBinding(
                         .Value => |v| switch (v) {
                             .String => |s| eval_ext.ExtValue{ .Str = s },
                             .Int => |int_val| eval_ext.ExtValue{ .Int = int_val },
-                            .Float => |f| eval_ext.ExtValue{ .Decimal = .{ .coeff = @intFromFloat(f * 1_000_000.0), .scale = 6 } },
+                            // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+                            .Float => |f| eval_ext.ExtValue{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 1_000_000.0), .scale = 6 } },
                             .Bool => |b| eval_ext.ExtValue{ .Bool = b },
                             .Null => eval_ext.ExtValue{ .Null = {} },
                             .Decimal => |dec| eval_ext.ExtValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
@@ -663,7 +665,8 @@ fn evaluateExpressionInBinding(
                         .Property => |p| switch (p) {
                             .String => |s| eval_ext.ExtValue{ .Str = s },
                             .Int => |int_val| eval_ext.ExtValue{ .Int = int_val },
-                            .Float => |f| eval_ext.ExtValue{ .Decimal = .{ .coeff = @intFromFloat(f * 1_000_000.0), .scale = 6 } },
+                            // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+                            .Float => |f| eval_ext.ExtValue{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 1_000_000.0), .scale = 6 } },
                             .Bool => |b| eval_ext.ExtValue{ .Bool = b },
                             .Null => eval_ext.ExtValue{ .Null = {} },
                             .Decimal => |dec| eval_ext.ExtValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },

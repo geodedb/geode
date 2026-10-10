@@ -1,4 +1,5 @@
 const std = @import("std");
+const perf_gate = @import("perf_gate");
 
 // Zig 0.16 compat helpers for test code
 fn compat_milliTimestamp() i64 {
@@ -54,9 +55,15 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 
 const NODE_COUNT: usize = 4096;
 
-fn buildSnapshot(allocator: std.mem.Allocator) !void {
-    var store = try graph_store.GraphStore.init(allocator);
-    defer store.deinit();
+// SONNY-2394: GraphStore persistence goes through the storage adapter. A bare
+// `GraphStore.init()` store has no adapter, so `saveToFile()` wrote nothing and
+// `loadFromFile()` "starts empty" (documented test mode) -- this CANARY had
+// silently stopped persisting anything and loaded 0 nodes. Build the snapshot
+// on the real engine-backed global store and shut it down cleanly (full
+// checkpoint + IdMap/hydration snapshots): exactly the state a restart loads.
+fn buildSnapshot(allocator: std.mem.Allocator, data_dir: []const u8) !void {
+    const store = try graph_store.initGlobalStore(allocator, data_dir);
+    defer graph_store.deinitGlobalStore();
 
     try store.reserve(NODE_COUNT, 0);
     var labels = [_][]const u8{"Redo"};
@@ -78,13 +85,13 @@ test "TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness" {
     const base = try tmpDirRealpathAlloc(allocator, &td.sub_path);
     defer allocator.free(base);
 
-    graph_store.setDataDirOverride(allocator, base);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    try buildSnapshot(allocator);
+    try buildSnapshot(allocator, base);
 
-    var loaded = try graph_store.GraphStore.init(allocator);
-    defer loaded.deinit();
+    // Restart: reopen the same data dir and load what was persisted.
+    const loaded = try graph_store.initGlobalStore(allocator, base);
+    defer graph_store.deinitGlobalStore();
     try loaded.loadFromFile();
 
     try std.testing.expectEqual(NODE_COUNT, loaded.getNodeCount());
@@ -100,23 +107,25 @@ test "BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope" {
     const base = try tmpDirRealpathAlloc(allocator, &td.sub_path);
     defer allocator.free(base);
 
-    graph_store.setDataDirOverride(allocator, base);
     defer graph_store.setDataDirOverride(allocator, null);
 
-    try buildSnapshot(allocator);
+    try buildSnapshot(allocator, base);
 
     const sample_n: usize = 48;
     var samples = try allocator.alloc(u64, sample_n);
     defer allocator.free(samples);
 
+    // Each sample reopens the persisted store and times the load (previously
+    // this timed loadFromFile() on an adapter-less store: a no-op).
     var i: usize = 0;
     while (i < sample_n) : (i += 1) {
-        var store = try graph_store.GraphStore.init(allocator);
-        defer store.deinit();
+        const store = try graph_store.initGlobalStore(allocator, base);
+        defer graph_store.deinitGlobalStore();
         const t0 = compat_nanoTimestamp();
         try store.loadFromFile();
         const t1 = compat_nanoTimestamp();
         samples[i] = @intCast(t1 - t0);
+        try std.testing.expectEqual(NODE_COUNT, store.getNodeCount());
     }
 
     var sum: f128 = 0;
@@ -137,9 +146,9 @@ test "BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope" {
     const p95 = tmp[@min(tmp.len - 1, (tmp.len * 95) / 100)];
     const p95_ratio = @as(f128, @floatFromInt(p95)) / mean;
 
-    if (cv > 0.18 or p95_ratio > 2.3) {
-        std.debug.print("VARIANCE_FAIL GraphStoreLoadVarianceEnvelope cv={d:.4} p95_ratio={d:.2} mean={d:.2}\n", .{ cv, p95_ratio, mean });
-        return error.VarianceEnvelopeBreached;
-    }
-    std.debug.print("VARIANCE_OK GraphStoreLoadVarianceEnvelope cv={d:.4} p95_ratio={d:.2} mean={d:.2}\n", .{ cv, p95_ratio, mean });
+    // Perf claims go through the shared gate (SONNY-2394): reported unless
+    // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
+    // Correctness assertions in this file are not gated.
+    std.debug.print("GraphStoreLoadVarianceEnvelope cv={d:.4} p95_ratio={d:.2} mean={d:.2}\n", .{ cv, p95_ratio, mean });
+    try perf_gate.envelope("GraphStore reopen+load", cv, p95_ratio, 0.18, 2.3);
 }

@@ -5,6 +5,7 @@ const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const distinct_set = @import("distinct_set.zig");
+const decimal128 = @import("../types/decimal128.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -87,8 +88,24 @@ fn extractNodeVariableFromExpr(expr: ast.Expr) ?[]const u8 {
         },
         .Binary => |binary| {
             // Try left side first, then right
-            if (extractNodeVariableFromExpr(binary.left.*)) |v| return v;
-            if (extractNodeVariableFromExpr(binary.right.*)) |v| return v;
+            // SONNY-3189: a left-deep chain with a loop: its innermost left
+            // operand first, then the right operands from the bottom up, the
+            // order the recursion tried them in.
+            var sfa = std.heap.stackFallback(64 * @sizeOf(*const ast.Expr), std.heap.smp_allocator);
+            const la = sfa.get();
+            var rights: std.ArrayList(*const ast.Expr) = .empty;
+            defer rights.deinit(la);
+            rights.append(la, binary.right) catch return null;
+            var leaf: *const ast.Expr = binary.left;
+            while (leaf.* == .Binary) : (leaf = leaf.Binary.left) {
+                rights.append(la, leaf.Binary.right) catch return null;
+            }
+            if (extractNodeVariableFromExpr(leaf.*)) |v| return v;
+            var i = rights.items.len;
+            while (i > 0) {
+                i -= 1;
+                if (extractNodeVariableFromExpr(rights.items[i].*)) |v| return v;
+            }
         },
         .Case => |case_expr| {
             // Check WHEN conditions and THEN expressions
@@ -465,7 +482,8 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 const stddev = @sqrt(variance);
 
                                 // Return as Decimal with 6 decimal places
-                                return Value{ .Decimal = .{ .coeff = @intFromFloat(stddev * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                                // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+                                return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(stddev, 1_000_000.0), .scale = 6, .orig_scale = 6, .orig_repr = null } };
                             }
                             return Value{ .Null = {} };
                         }
@@ -528,7 +546,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                 const variance = sum_squared_dev / count;
 
                                 // Return as Decimal with 6 decimal places
-                                return Value{ .Decimal = .{ .coeff = @intFromFloat(variance * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                                return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(variance, 1_000_000.0), .scale = 6, .orig_scale = 6, .orig_repr = null } };
                             }
                             return Value{ .Null = {} };
                         }
@@ -566,7 +584,8 @@ pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node
                 switch (val) {
                     .String => |s| return Value{ .Str = s },
                     .Int => |n| return Value{ .Int = n },
-                    .Float => |f| return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+                    .Float => |f| return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 100.0), .scale = 2 } },
                     .Bool => |b| return Value{ .Bool = b },
                     .Null => return Value{ .Null = {} },
                     .ExtValue => |ext| return Value{ .ExtValue = ext },
@@ -582,7 +601,8 @@ pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node
                 switch (val) {
                     .String => |s| return Value{ .Str = s },
                     .Int => |n| return Value{ .Int = n },
-                    .Float => |f| return Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
+                    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
+                    .Float => |f| return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 100.0), .scale = 2 } },
                     .Bool => |b| return Value{ .Bool = b },
                     .Null => return Value{ .Null = {} },
                     .ExtValue => |ext| return Value{ .ExtValue = ext },
