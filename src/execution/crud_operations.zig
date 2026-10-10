@@ -1012,8 +1012,12 @@ fn applyEndpointProps(
     env: Env,
 ) !void {
     const props = node_pattern.props orelse return;
+    // A value read from the row can be a copy the evaluator made (a vector
+    // property): evaluated into an arena, which the write copies out of.
+    var value_arena = std.heap.ArenaAllocator.init(allocator);
+    defer value_arena.deinit();
     for (props) |prop| {
-        const value = try eval.evalExpr(allocator, prop.value.*, env);
+        const value = try eval.evalExpr(value_arena.allocator(), prop.value.*, env);
         try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
     }
 }
@@ -1109,6 +1113,14 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     var scope = if (binds) try WriteScope.initFrom(allocator, row_env) else WriteScope.init(allocator, &.{}, &.{});
     defer scope.deinit();
 
+    // The property values, evaluated against the row: one read from a
+    // matched node can be a copy the evaluator made (a vector property, which
+    // leaked once the row was bound, SONNY-3240). The writes copy what they
+    // store, so the values live in an arena for the batch.
+    var value_arena = std.heap.ArenaAllocator.init(allocator);
+    defer value_arena.deinit();
+    const va = value_arena.allocator();
+
     // Process CREATE pattern
     for (create_pattern.chains) |chain| {
         const chain_env = if (binds) scope.env(allocator) else row_env;
@@ -1135,7 +1147,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             // Set properties if present
             if (node_pattern.props) |props| {
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, chain_env);
+                    const value = try eval.evalExpr(va, prop.value.*, chain_env);
                     try property_mutation.setNodePropertyFromValue(allocator, store, node_pattern.labels, node_id, prop.key, value);
                 }
             }
@@ -1211,7 +1223,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             // Set relationship properties if present
             if (hop.rel.props) |props| {
                 for (props) |prop| {
-                    const value = try eval.evalExpr(allocator, prop.value.*, chain_env);
+                    const value = try eval.evalExpr(va, prop.value.*, chain_env);
                     try property_mutation.setEdgePropertyFromValue(allocator, store, edge_label, edge_id, prop.key, value);
                 }
             }

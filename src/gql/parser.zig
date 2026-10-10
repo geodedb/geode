@@ -764,6 +764,9 @@ pub const Parser = struct {
                 }
             }
             try list.append(self.arena.allocator(), st);
+            // ISO/IEC 39075 §10.3: `USE [GRAPH] g <statement>` is one focused
+            // statement; the USE needs no ';' before the statement it scopes.
+            if (st == .UseGraph and self.cur.kind != .semicolon) continue;
             try self.endStatement(.eof);
         }
         return .{ .statements = try list.toOwnedSlice(self.arena.allocator()) };
@@ -1489,7 +1492,9 @@ pub const Parser = struct {
                             const stmt = try self.parseNestedStatement();
                             try statements.append(self.arena.allocator(), stmt);
 
-                            // SONNY-3166: statements are separated by ';'.
+                            // SONNY-3166: statements are separated by ';'
+                            // (a USE scopes the statement after it, §10.3).
+                            if (stmt == .UseGraph and self.cur.kind != .semicolon) continue;
                             try self.endStatement(.r_brace);
                         }
 
