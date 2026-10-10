@@ -17,7 +17,20 @@
 
 ---
 
-## [v0.8.23] - Unreleased
+## [v0.8.23] - October 9, 2026
+
+The SONNY-738 hardening release: the two v0.8.23 lines reconciled into one
+(the v0823 line, with SONNY-2675's strict grouped HAVING, and the r12 line,
+review rounds 12-19). Statements that write are accepted only in
+allowlisted shapes and are atomic (a failed statement changes nothing and
+ROLLBACK undoes every change the store made; see Known limitations),
+integer and decimal arithmetic is checked, MERGE matches by exact value,
+the parser and evaluator are bounded, and graph, session and transaction
+lifetimes are closed against the races the reviews found. Where the lines disagreed the reconciliation keeps: the
+v0823 write step (a SET before a DELETE is applied, in order), the v0823
+query nesting limit (10) in front of the r12 stack guard, r12's expression
+link cap (4096) and r12's full ROLLBACK, which lets a label SET or REMOVE
+run inside an explicit transaction again.
 
 ### Security
 
@@ -1350,6 +1363,12 @@
 
 ### Fixed
 
+- **Inline TLS certificate options are honoured:** `--cert=...`,
+  `--key=...`, `--listen=...` / `--listen-quic=...`, `--listen-grpc=...`,
+  `--data-dir=...` / `--data_dir=...` and `--log-level=...` (the
+  `--name=value` form Kubernetes argv uses) were dropped silently, so a
+  server started that way ignored its explicit certificate and key. They
+  are parsed as the `--name value` form is.
 - **Bulk ingest leaves a transaction's changes to the executor
   (SONNY-2816):** with `GEODE_BULK_INGEST` set, QUIC's bulk-ingest fast
   paths (a simple CREATE or MERGE, and MATCH ... CREATE or MERGE of an edge)
@@ -2289,6 +2308,8 @@
   statements written without a `;` between them and run each on its own;
   that is now a syntax error (42601). Programs that relied on it (`CREATE
   ... CREATE ...` and `MERGE ... MERGE ...` stay one statement) need a `;`.
+  `USE [GRAPH] g <statement>` stays one focused statement (ISO/IEC 39075
+  §10.3) and needs none.
 - **Reads that are wrong on the legacy path (SONNY-3167, SONNY-3184):** a
   read through a hop pattern ignores WITH DISTINCT on the in-memory and RLS
   paths (X2); `CALL { }` returns the subquery's rows instead of the outer
