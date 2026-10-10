@@ -807,17 +807,13 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         try sortRows(allocator, &result, order);
     }
 
-    // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-    // Apply SKIP and LIMIT from the final query in the chain after ORDER BY
-    const start = final_query.offset orelse 0;
-    var end = result.rows.len;
-    if (final_query.limit) |limit_count| {
-        const end_limit = std.math.add(usize, start, limit_count) catch std.math.maxInt(usize);
-        end = @min(end, end_limit);
-    }
-    if (start != 0 or end != result.rows.len) {
-        try execution.applyRowWindow(allocator, &result, start, end);
-    }
+    // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2026-10-10
+    // Apply SKIP and LIMIT from the final query in the chain after ORDER BY.
+    // A SKIP or LIMIT given as a parameter (`LIMIT $n`, which the Go client
+    // sends for every `LIMIT ?` since v0.2) windows the chain as a literal
+    // does: only the literals were read here, so
+    // `MATCH (n) WITH n MATCH (m) ... RETURN m.i LIMIT $n` returned every row.
+    try execution.applyQueryWindow(allocator, &result, try execution.queryWindow(final_query, context));
 
     return result;
 }

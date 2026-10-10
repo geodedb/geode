@@ -801,13 +801,22 @@ fn applyUnionPagination(
         try sortRows(allocator, result, order.*);
     }
 
+    // A SKIP or LIMIT given as a parameter (`LIMIT $n`, which the Go client
+    // sends for every `LIMIT ?` since v0.2) windows the union as a literal
+    // does; only the literals were read, so `... UNION ... LIMIT $n` returned
+    // every row. The value is checked as everywhere else (22G03).
+    const union_offset: ?u64 = union_query.offset orelse
+        if (try execution.windowParam(union_query.offset_param, context)) |v| @as(u64, v) else null;
+    const union_limit: ?u64 = union_query.limit orelse
+        if (try execution.windowParam(union_query.limit_param, context)) |v| @as(u64, v) else null;
+
     // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled
-    if (context.strict_offset_validation and union_query.offset != null and union_query.order_by == null) {
+    if (context.strict_offset_validation and union_offset != null and union_query.order_by == null) {
         return execution.ExecutionError.UnorderedPagination;
     }
 
     // Apply SKIP and LIMIT from the union query (applies to entire result)
-    if (union_query.offset) |skip_count| {
+    if (union_offset) |skip_count| {
         // Convert skip_count to usize for 32-bit platforms
         const skip_usize = if (skip_count > std.math.maxInt(usize))
             std.math.maxInt(usize)
@@ -837,7 +846,7 @@ fn applyUnionPagination(
         }
     }
 
-    if (union_query.limit) |limit_count_u64| {
+    if (union_limit) |limit_count_u64| {
         // Convert u64 to usize for 32-bit platforms
         const limit_count = if (limit_count_u64 > std.math.maxInt(usize))
             std.math.maxInt(usize)
@@ -846,7 +855,7 @@ fn applyUnionPagination(
         // Check if LIMIT without ORDER BY - need to flag it and sort
         // But only if we don't have SKIP (which makes ordering deterministic in UNION context)
         // And only add once
-        if (union_query.order_by == null and union_query.offset == null) {
+        if (union_query.order_by == null and union_offset == null) {
             // Check if we haven't already added this flag
             var has_flag = false;
             for (result.flags.items) |flag| {
