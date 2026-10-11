@@ -801,12 +801,12 @@ test-cross-build:
   # 606 MiB at v0.8.15). Two mitigations, both needed: run the shards on the
   # dedicated (docker-executor) fleet, which has no per-pod memory cap, and
   # bound zig's compile parallelism so peak memory stays predictable.
-  tags:
-    - company
-    - dedicated
-    - docker
-    - linux
-    - x86
+  # 2026-10-11: the OVH Dedicated runner (the only one tagged `docker` +
+  # `dedicated`) has been wedged since 2026-10-10 13:42 UTC (its jobs never
+  # finish), so these shards sat pending for 13h+. Select the AWS-spot pool
+  # explicitly; it is a docker-autoscaler fleet with whole-VM memory, which
+  # is what the OOM note above needs. Same tag set as mentats' heavy jobs.
+  tags: [company, dedicated, linux, x86, aws-spot]
   # One shard per release target: the sequential all-targets loop outgrew the
   # 2h job timeout as the dep tree grew (pipeline #1508 timed out mid
   # riscv64-linux-gnu after 4 targets). Shards run in parallel, each finishes
@@ -1115,10 +1115,12 @@ test-zig-release-safe:
   # compete for the 3-node pool at once. See test-zig-unit's comment for the
   # full rationale.
   resource_group: "test-zig-release-safe-shard-$TEST_SHARD_INDEX"
-  tags:
-    - company
-    - k8s
-    - linux
+  # 2026-10-11: every shard dies OOMKilled (exit 137, runner_system_failure)
+  # on the k8s pool since 2026-10-10, on main, tags and MRs alike, three
+  # attempts each (pipelines #2934710451, #2935445607). Run on the AWS-spot
+  # docker-autoscaler pool, which has no per-pod memory cap (see the
+  # test-cross-build note).
+  tags: [company, dedicated, linux, x86, aws-spot]
   timeout: 6h
   parallel:
     matrix:
@@ -1897,6 +1899,10 @@ snapshot:
 dev-image-build:
   stage: release
   image: $ZIG_IMAGE
+  # 2026-10-11: OOMKilled on the k8s pool while cross-compiling aarch64
+  # (pipelines #2933449996, #2933995936), so main stopped refreshing :dev.
+  # Same move as test-zig-release-safe.
+  tags: [company, dedicated, linux, x86, aws-spot]
   needs: []
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
