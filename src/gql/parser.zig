@@ -2539,7 +2539,15 @@ pub const Parser = struct {
         // Optional WITH projection forwarding (works for both MATCH and CREATE)
         // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=TESTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
         var next_query_ptr: ?*ast.Query = null;
-        if (self.cur.kind == .WITH) {
+        if (have_match and self.cur.kind == .FOR and !have_create and merge_statement == null) {
+            // ISO/IEC 39075: a FOR after a MATCH extends each matched row
+            // (`MATCH (n) FOR x IN n.list RETURN sum(x)`). It is the chain
+            // `MATCH ... WITH <its variables> FOR ...`, whose FOR runs over
+            // every row of the MATCH; it was a syntax error.
+            with_clause = .{ .items = try self.patternVariableItems(pat) };
+            pre_with_where = where_expr;
+            next_query_ptr = try self.parseForContinuation();
+        } else if (self.cur.kind == .WITH) {
             self.advance();
             // Support WITH DISTINCT for post-MATCH WITH clause
             const post_match_with_distinct = if (self.cur.kind == .DISTINCT) blk: {
@@ -2616,33 +2624,7 @@ pub const Parser = struct {
             if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR or self.cur.kind == .MERGE) {
                 if (self.cur.kind == .FOR) {
                     // FOR needs special handling as it's a statement, not a query
-                    // Parse the FOR statement and store it in the query
-                    const for_stmt = try self.parseForStatement();
-                    // Allocate ForStatement on arena
-                    const for_ptr = try self.arena.allocator().create(ast.ForStatement);
-                    for_ptr.* = for_stmt.For;
-                    // Create a query wrapper for the FOR statement
-                    const next_query = ast.Query{
-                        .optional_match = false,
-                        .match = .{ .chains = &.{} }, // Empty match pattern
-                        .create_pattern = null,
-                        .where_clause = null,
-                        .with_clause = null,
-                        .set_clauses = &.{},
-                        .remove_clauses = &.{},
-                        .ret = for_stmt.For.return_clause orelse .{ .items = &.{}, .distinct = false },
-                        .order_by = for_stmt.For.order_by,
-                        .offset = for_stmt.For.offset,
-                        .limit = for_stmt.For.limit,
-                        .next_query = null,
-                        .group_by = null,
-                        .having = null,
-                        .for_statement = for_ptr,
-                    };
-                    // Allocate on arena and store pointer
-                    const next_ptr = try self.arena.allocator().create(ast.Query);
-                    next_ptr.* = next_query;
-                    next_query_ptr = next_ptr;
+                    next_query_ptr = try self.parseForContinuation();
                 } else if (self.cur.kind == .MERGE) {
                     // GAP #57: MERGE needs special handling as it's a statement, not a query.
                     // Parse the MERGE and wrap it in a query for chaining.
@@ -6236,7 +6218,65 @@ pub const Parser = struct {
         } };
     }
 
-    fn parseForStatement(self: *Parser) ParserError!ast.Statement {
+    /// One projection item per variable `pattern` binds (path, node and edge
+    /// variables, each once, in order): what a MATCH passes on to a FOR
+    /// after it.
+    fn patternVariableItems(self: *Parser, pattern: ast.GraphPattern) ParserError![]ast.ReturnItem {
+        const a = self.arena.allocator();
+        var names = std.ArrayList([]const u8).empty;
+        for (pattern.chains) |chain| {
+            var candidates = std.ArrayList(?[]const u8).empty;
+            try candidates.append(a, chain.name);
+            if (chain.head) |head| try candidates.append(a, head.name);
+            for (chain.hops) |hop| {
+                try candidates.append(a, hop.left.name);
+                try candidates.append(a, hop.rel.name);
+                try candidates.append(a, hop.right.name);
+            }
+            next: for (candidates.items) |maybe| {
+                const name = maybe orelse continue;
+                for (names.items) |seen| if (std.mem.eql(u8, seen, name)) continue :next;
+                try names.append(a, name);
+            }
+        }
+        const unicode = @import("../unicode/unicode_tables.zig");
+        const items = try a.alloc(ast.ReturnItem, names.items.len);
+        for (names.items, items) |name, *item| {
+            const cnf = unicode.caseFoldToUpper(a, name) catch name;
+            item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = cnf } }, .alias = null };
+        }
+        return items;
+    }
+
+    /// A FOR statement after a WITH (or a MATCH), as the next part of the
+    /// chain: a query that holds only the FOR.
+    fn parseForContinuation(self: *Parser) ParserError!*ast.Query {
+        const for_stmt = try self.parseForStatement();
+        const for_ptr = try self.arena.allocator().create(ast.ForStatement);
+        for_ptr.* = for_stmt.For;
+        const next_ptr = try self.arena.allocator().create(ast.Query);
+        next_ptr.* = ast.Query{
+            .optional_match = false,
+            .match = .{ .chains = &.{} }, // Empty match pattern
+            .create_pattern = null,
+            .where_clause = null,
+            .with_clause = null,
+            .set_clauses = &.{},
+            .remove_clauses = &.{},
+            .ret = for_stmt.For.return_clause orelse .{ .items = &.{}, .distinct = false },
+            .order_by = for_stmt.For.order_by,
+            .offset = for_stmt.For.offset,
+            .limit = for_stmt.For.limit,
+            .next_query = null,
+            .group_by = null,
+            .having = null,
+            .for_statement = for_ptr,
+        };
+        return next_ptr;
+    }
+
+    /// `FOR <variable> IN <collection> [WITH ORDINALITY v | WITH OFFSET v]`.
+    fn parseForHeader(self: *Parser) ParserError!ast.ForLoop {
         _ = try self.expect(.FOR);
 
         // Parse iteration variable: FOR item IN ...
@@ -6271,6 +6311,33 @@ pub const Parser = struct {
             } else {
                 return self.unexpected("expected ORDINALITY or OFFSET after WITH");
             }
+        }
+
+        return .{
+            .variable = variable,
+            .collection = collection,
+            .ordinality_var = ordinality_var,
+            .offset_var = offset_var,
+        };
+    }
+
+    fn parseForStatement(self: *Parser) ParserError!ast.Statement {
+        const header = try self.parseForHeader();
+        const variable = header.variable;
+        const collection = header.collection;
+        const ordinality_var = header.ordinality_var;
+        const offset_var = header.offset_var;
+
+        // A FOR that follows this one before the RETURN extends every row of
+        // this one: `FOR x IN [[1, 2], [3]] FOR y IN x RETURN sum(y)` sums
+        // 1, 2 and 3. Only before a RETURN: a write body runs once per
+        // element of one list.
+        var nested = std.ArrayList(ast.ForLoop).empty;
+        while (self.cur.kind == .FOR) {
+            try nested.append(self.arena.allocator(), try self.parseForHeader());
+        }
+        if (nested.items.len > 0 and self.cur.kind != .RETURN) {
+            return self.unexpected("expected RETURN after a nested FOR");
         }
 
         // CANARY: REQ=REQ-GQL-FOR-WRITE-BODY-876; FEATURE="ForStatement"; ASPECT=BodyParse; STATUS=TESTED; TEST=tests/test_for_write_body.zig; OWNER=parser; UPDATED=2026-08-29
@@ -6331,12 +6398,28 @@ pub const Parser = struct {
         try self.parseProjectionItems(&return_items);
 
         // CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="ForStatement"; ASPECT=NoGroupedReturn; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=parser; UPDATED=2026-09-25
-        // SONNY-2683: a FOR's RETURN neither groups nor filters. A GROUP BY,
-        // HAVING or WHERE here was left for an enclosing query to parse, so
-        // `MATCH (n) WITH n FOR x IN [1, 2] RETURN x, count(*) AS c GROUP BY x`
-        // grouped that query's WITH by `x` and returned unrelated rows.
-        if (self.cur.kind == .GROUP or self.cur.kind == .HAVING or self.cur.kind == .WHERE) {
-            return self.unexpected("GROUP BY, HAVING and WHERE are not supported after a FOR's RETURN");
+        // SONNY-2683: a FOR's RETURN does not filter. A HAVING or WHERE here
+        // was left for an enclosing query to parse, so `MATCH (n) WITH n FOR
+        // x IN [1, 2] RETURN x, count(*) AS c GROUP BY x HAVING c > 1`
+        // grouped that query's WITH by `x` and returned unrelated rows. Its
+        // GROUP BY is its own: the RETURN groups the loop's rows.
+        if (self.cur.kind == .HAVING or self.cur.kind == .WHERE) {
+            return self.unexpected("HAVING and WHERE are not supported after a FOR's RETURN");
+        }
+        var group_by: ?ast.GroupBy = null;
+        if (self.cur.kind == .GROUP) {
+            self.advance();
+            _ = try self.expect(.BY);
+            var keys = std.ArrayList(ast.Expr).empty;
+            while (true) {
+                try keys.append(self.arena.allocator(), try self.parseOrExpr());
+                if (self.cur.kind != .comma) break;
+                self.advance();
+            }
+            group_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+            if (self.cur.kind == .HAVING or self.cur.kind == .WHERE) {
+                return self.unexpected("HAVING and WHERE are not supported after a FOR's RETURN");
+            }
         }
 
         const return_clause = ast.ReturnClause{
@@ -6392,6 +6475,8 @@ pub const Parser = struct {
             .ordinality_var = ordinality_var,
             .offset_var = offset_var,
             .return_clause = return_clause,
+            .nested = try nested.toOwnedSlice(self.arena.allocator()),
+            .group_by = group_by,
             .order_by = order_by,
             .limit = limit,
             .offset = offset,
