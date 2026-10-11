@@ -1736,6 +1736,12 @@ snapshot:
     # broke the GoReleaser openssl before-hook ("error: 'ar' is required"
     # fetching libssl-dev_3.5.6-1~deb13u2_amd64.deb) — v0.8.10 build-release.
     - apk add --no-cache curl git bash tar xz zstd coreutils jq python3 binutils
+    # 2026-10-11: the checkout on the Lab Servers runner is owned by a
+    # different uid than the docker:latest job user, so git >= 2.35.2 refuses
+    # every command with "detected dubious ownership" (v0.8.23 build-release
+    # job 17083726482 died at `git clean`, exit 128). Trust the project dir for
+    # this job's git and GoReleaser's git calls.
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
     # Defensive cleanup: remove any stale artifacts or generated files
     # that could make GoReleaser detect a dirty git state.
     - git clean -fdx -e .zig-cache/ -e zig-cache/
@@ -2347,6 +2353,12 @@ build-release:
     # broke the GoReleaser openssl before-hook ("error: 'ar' is required"
     # fetching libssl-dev_3.5.6-1~deb13u2_amd64.deb) — v0.8.10 build-release.
     - apk add --no-cache curl git bash tar xz zstd coreutils jq python3 binutils
+    # 2026-10-11: the checkout on the Lab Servers runner is owned by a
+    # different uid than the docker:latest job user, so git >= 2.35.2 refuses
+    # every command with "detected dubious ownership" (v0.8.23 build-release
+    # job 17083726482 died at `git clean`, exit 128). Trust the project dir for
+    # this job's git and GoReleaser's git calls.
+    - git config --global --add safe.directory "$CI_PROJECT_DIR"
     # Defensive cleanup: remove any stale artifacts or generated files
     # that could make GoReleaser detect a dirty git state.
     - git clean -fdx -e .zig-cache/ -e zig-cache/
