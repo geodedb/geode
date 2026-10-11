@@ -8827,6 +8827,24 @@ pub fn build(b: *std.Build) void {
     const default_role_step = b.step("test-default-role-fail-closed", "Run the fail-closed default role regression (a user with no stored role gets no global read/write/admin; per-graph grants work as granted; explicit roles and the bootstrap admin unchanged)");
     default_role_step.dependOn(&run_default_role_tests.step);
 
+    // REQ-SEC-PER-GRAPH-GRANTS: a per-graph GRANT/REVOKE takes effect at once
+    // and only on its graph, for every role; grants survive a restart scoped.
+    const per_graph_grants_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_per_graph_grants.zig"), .target = target, .optimize = optimize });
+    per_graph_grants_test_mod.link_libc = true;
+    per_graph_grants_test_mod.addImport("geode", root_mod);
+    per_graph_grants_test_mod.addImport("schema", schema_mod);
+    per_graph_grants_test_mod.addImport("protobuf", protobuf_mod);
+    per_graph_grants_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    per_graph_grants_test_mod.addImport("logging", logging_mod);
+    per_graph_grants_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    per_graph_grants_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    per_graph_grants_test_mod.addImport("grant_migration", grant_migration_mod);
+    const per_graph_grants_tests = b.addTest(.{ .root_module = per_graph_grants_test_mod });
+    const run_per_graph_grants_tests = b.addRunArtifact(per_graph_grants_tests);
+    shardDep(test_step, &run_per_graph_grants_tests.step, 1, test_shard_loads, test_shard_index);
+    const per_graph_grants_step = b.step("test-per-graph-grants", "Run the per-graph grants regression (GRANT/REVOKE READ|WRITE|SCHEMA ON GRAPH take effect at once and only on that graph, for every role; global roles unchanged; grants survive a restart scoped)");
+    per_graph_grants_step.dependOn(&run_per_graph_grants_tests.step);
+
     // SONNY-2749: a program's writes run under the write lock of the graph they
     // write (query_traits.statementPlan.lock_graph), not the session graph's; a
     // program that changes data on several graphs is refused. Races MERGEs of

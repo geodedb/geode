@@ -191,12 +191,14 @@ pub const DecisionRequest = struct {
 };
 
 // CANARY: REQ=REQ-GPS-PDP-002; FEATURE="GPS Decision Engine"; ASPECT=BuiltinRoleGrants; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-21
-// Phase 6 (Task 6-6): Site #2 CLOSED via grant_migration.zig (commit 64ce3940).
-// All existing (:GraphGrant) records are migrated to (:Policy) rows at startup.
-// Phase 7 (Task 7-7): The generic graph_grant_check_fn widening shim has been
-// removed from decide(). The policy_catalog evaluation path below handles all
-// grant cases via migrated Policy rows. graph_grant_check_fn is still declared
-// in execution.zig for the bind_graph-specific path (Phase 3 Task 3-1).
+// Phase 6 (Task 6-6) migrated (:GraphGrant) records to (:Policy) rows at
+// startup, and Phase 7 (Task 7-7) removed the graph_grant_check_fn path from
+// decide(), leaving those rows the only way a grant reached it. That made a
+// GRANT wait for a restart, kept a revoked grant's row, and let a grant on one
+// graph match database-wide requests. REQ-SEC-PER-GRAPH-GRANTS (2026-10)
+// reads grants from the live GraphRBACPolicy through graph_grant_check_fn
+// again, scoped to the request's graph, and retires the migrated rows
+// (grant_migration.retireMigratedGrantPolicies).
 // REQ-GPS-INVARIANT-001 ASPECT=FailOpenInterim STATUS=COMPLETE for site #2.
 const user_mgmt = @import("user_management.zig");
 const execution = @import("../execution.zig");
@@ -495,26 +497,29 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     }
 
     // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrantOnlyGraphAccess; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
-    // A user with no stored role (`Role.None`) holds no builtin permission, so
-    // the loop above allowed nothing. On a graph the user holds a per-graph
-    // grant on, the grant allows its own action there: READ allows read,
-    // WRITE allows write, SCHEMA allows schema. Grants work as granted, as
-    // for every other role (docs/GQL_AUTH_DDL.md: grants are additive and
-    // widen access beyond the global role). The grant is read from the live
-    // GraphRBACPolicy, so a GRANT or REVOKE takes effect at once rather than
-    // after the restart that migrates grants to Policy rows. Only `None`
-    // principals take this path, so no other role's decisions change.
-    if (isGrantOnly(req.principal)) {
-        if (req.resource == .graph) {
-            if (grantActionCode(req.action)) |code| {
-                if (execution.graph_grant_check_fn) |grant_fn| {
-                    if (req.principal.username) |uname| {
-                        if (grant_fn(uname, req.resource.graph, code)) {
-                            return cacheAndReturn(cache_key, PolicyDecision{
-                                .kind = .allow,
-                                .reason_code = "graph_grant",
-                            });
-                        }
+    // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=LiveGrantInDecide; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
+    // Per-graph grants, for every role. The builtin role above allows an
+    // action on every graph; a per-graph grant allows its own action on its
+    // own graph only: READ allows read, WRITE allows write, SCHEMA allows
+    // schema (docs/GQL_AUTH_DDL.md: grants are additive over the global role).
+    // The grant is read from the live GraphRBACPolicy, which GRANT and REVOKE
+    // update at once (and bump the policy version, so no cached decision
+    // outlives them). Grants used to reach this function only as Policy rows
+    // that grant_migration wrote at startup: a GRANT did nothing until a
+    // restart, a REVOKE never removed the row, and the row, scoped to one
+    // graph, also matched database-wide requests (`policyMatchesResource`), so
+    // a WRITE grant on one graph allowed writes on all of them. A request on
+    // no graph in particular (the database, a procedure, `*`) is never allowed
+    // by a grant, and a deny policy, applied above, overrides one.
+    if (resourceGraph(req.resource)) |graph| {
+        if (grantActionCode(req.action)) |code| {
+            if (execution.graph_grant_check_fn) |grant_fn| {
+                if (req.principal.username) |uname| {
+                    if (grant_fn(uname, graph, code)) {
+                        return cacheAndReturn(cache_key, PolicyDecision{
+                            .kind = .allow,
+                            .reason_code = "graph_grant",
+                        });
                     }
                 }
             }
@@ -533,7 +538,7 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
             if (policy.effect != .allow) continue;
             if (!policy.enabled) continue;
             if (!policyMatchesAction(policy.*, req.action)) continue;
-            if (!policyMatchesResource(policy.*, req.resource)) continue;
+            if (!allowPolicyCovers(policy.*, req.resource)) continue;
             if (policyExpressionHolds(allocator, policy, req)) {
                 return cacheAndReturn(cache_key, PolicyDecision{
                     .kind = .allow,
@@ -550,11 +555,11 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
 }
 
 /// SONNY-2744: is there an enabled deny-effect policy that matches `req`
-/// (action, resource and USING expression)? Resources match as for allow
-/// policies (`policyMatchesResource`): a policy scoped to one graph matches
-/// that graph, and also every database-, tenant-, node-, edge-, procedure- and
+/// (action, resource and USING expression)? Resources match by
+/// `policyMatchesResource`: a policy scoped to one graph matches that graph,
+/// and also every database-, tenant-, node-, edge-, procedure- and
 /// metadata-scoped request, so a deny covers at least what the same allow
-/// would have granted.
+/// would grant (`allowPolicyCovers`, which is narrower).
 fn denyPolicyApplies(allocator: std.mem.Allocator, req: *const DecisionRequest) bool {
     const pc = @import("policy_catalog.zig");
     const cat = pc.getGlobalCatalog() orelse return false;
@@ -636,13 +641,6 @@ fn policyExpressionHolds(allocator: std.mem.Allocator, policy: *const @import("p
     return policy_expression.evaluate(cexpr, ctx);
 }
 
-// CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=WriteGate; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25
-/// SONNY-2743: the QUIC and gRPC handlers' write-permission gate: may
-/// `principal` run a program that changes the store
-/// (`query_traits.statementPlan(..).is_mutation`)? `decide(write, database)`
-/// answers; an error answers no. A builtin role with WRITE is allowed by
-/// `decide` itself, so this is what QUIC's inline role check followed by
-/// `decide` answered; both handlers now run this one function.
 // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrantOnlyPrincipal; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
 /// Is `principal` a user with no stored role (`user_management.Role.None`)?
 /// Such a principal holds no global permission and reaches a graph only
@@ -651,6 +649,17 @@ pub fn isGrantOnly(principal: *const principal_mod.Principal) bool {
     const none_name = @tagName(user_mgmt.Role.None);
     for (principal.roles) |role_name| {
         if (std.mem.eql(u8, role_name, none_name)) return true;
+    }
+    return false;
+}
+
+/// Does one of `principal`'s builtin roles hold `perm` globally, on every
+/// graph? A per-graph grant never counts here.
+pub fn holdsGlobalPermission(principal: *const principal_mod.Principal, perm: user_mgmt.Permission) bool {
+    for (principal.roles) |role_name| {
+        if (user_mgmt.Role.fromString(role_name)) |role| {
+            if (user_mgmt.hasPermission(role, perm)) return true;
+        }
     }
     return false;
 }
@@ -666,38 +675,63 @@ fn grantActionCode(action: Action) ?u8 {
     };
 }
 
-/// May `principal` read the data of `graph`? Every principal but a
-/// grant-only one (`isGrantOnly`) may, as before: its graph access is
-/// governed by `bind_graph`. A grant-only principal needs
-/// `decide(read, graph)`: a READ grant on the graph, or a policy.
+/// The one graph `resource` lies in, or null when it lies in no graph in
+/// particular: the database, a tenant, a procedure, metadata, or the
+/// wildcard graph `*` (every graph at once).
+fn resourceGraph(resource: ResourceRef) ?[]const u8 {
+    const graph = switch (resource) {
+        .graph => |g| g,
+        .node => |n| n.graph,
+        .edge => |e| e.graph,
+        .database, .tenant, .procedure, .metadata => return null,
+    };
+    if (std.mem.eql(u8, graph, "*")) return null;
+    return graph;
+}
+
+/// `decide(action, graph)` is allow; an error is no.
+fn allowedOn(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, action: Action, graph: []const u8) bool {
+    const req = DecisionRequest{
+        .principal = principal,
+        .action = action,
+        .resource = .{ .graph = graph },
+    };
+    const decision = decide(allocator, &req) catch return false;
+    return decision.kind == .allow;
+}
+
+// CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GraphReadGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
+/// May `principal` read the data of `graph`? A principal whose builtin role
+/// holds Read may read every graph, as before (its graph access is
+/// governed by `bind_graph`). Any other (a user with no stored role) needs
+/// `decide(read, graph)`: a READ grant on the graph, or a policy on it.
 pub fn graphReadPermitted(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, graph: []const u8) bool {
-    if (!isGrantOnly(principal)) return true;
-    const req = DecisionRequest{
-        .principal = principal,
-        .action = .read,
-        .resource = .{ .graph = graph },
-    };
-    const decision = decide(allocator, &req) catch return false;
-    return decision.kind == .allow;
+    if (holdsGlobalPermission(principal, .Read)) return true;
+    return allowedOn(allocator, principal, .read, graph);
 }
 
-/// The handlers' write gate for a program that changes `graph`'s data.
-/// Every principal but a grant-only one gets `writePermitted`, unchanged. A
-/// grant-only principal (`isGrantOnly`) needs `decide(write, graph)`: a
-/// WRITE grant on that graph, or a policy on it. Its database-wide
-/// `writePermitted` is not consulted: a grant on one graph must not let it
-/// write another.
+// CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GraphWriteGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
+/// The QUIC and gRPC handlers' write gate for a program that changes
+/// `graph`'s data (`StatementPlan.lock_graph`), for every principal:
+/// `decide(write, graph)`. A builtin role with Write allows it on every
+/// graph, unchanged; a WRITE grant on `graph`, or an allow policy scoped to
+/// `graph` or `*`, allows it there only; a deny policy on `graph` or `*`
+/// refuses it. A grant or policy on another graph does not count: the gate
+/// used to ask for write on the whole database, which any graph-scoped allow
+/// policy matched, so a WRITE grant on one graph let its holder write every
+/// graph.
 pub fn writePermittedOn(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, graph: []const u8) bool {
-    if (!isGrantOnly(principal)) return writePermitted(allocator, principal);
-    const req = DecisionRequest{
-        .principal = principal,
-        .action = .write,
-        .resource = .{ .graph = graph },
-    };
-    const decision = decide(allocator, &req) catch return false;
-    return decision.kind == .allow;
+    return allowedOn(allocator, principal, .write, graph);
 }
 
+// CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=WriteGate; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25
+/// SONNY-2743: may `principal` change the store as a whole, on no one graph
+/// in particular? `decide(write, database)`: a builtin role with Write, or an
+/// allow policy scoped to `*`. A grant or a policy scoped to one graph does
+/// not allow it (REQ-SEC-PER-GRAPH-GRANTS). A program that changes one
+/// graph's data is gated by `writePermittedOn` instead; this is the gate for
+/// a program that writes no single graph (a self-locking procedure CALL that
+/// takes each graph's lock itself). An error answers no.
 pub fn writePermitted(allocator: std.mem.Allocator, principal: *const principal_mod.Principal) bool {
     const req = DecisionRequest{
         .principal = principal,
@@ -733,6 +767,30 @@ fn policyMatchesAction(policy: @import("policy_catalog.zig").Policy, action: Act
         if (matches) return true;
     }
     return false;
+}
+
+// CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=AllowPolicyScope; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
+/// Does an allow policy scoped to `policy.scope_graph` cover `resource`? A
+/// policy scoped to `*` covers everything. A policy scoped to one graph
+/// covers that graph and the nodes and edges in it, and nothing else: not
+/// another graph, not `*` (every graph), and not a request on no graph in
+/// particular (the database, a tenant, a procedure, metadata).
+///
+/// Allow policies used to match by `policyMatchesResource`, which lets a
+/// graph-scoped policy match every non-graph resource. The handlers' write
+/// gate asked for write on the database, so an allow policy `FOR WRITE` on
+/// one graph (and every per-graph WRITE grant, which grant_migration turned
+/// into such a policy at startup) allowed writes on every graph. Deny
+/// policies keep the broad match: a deny on one graph still refuses a
+/// request on the whole database, which would include that graph.
+fn allowPolicyCovers(policy: @import("policy_catalog.zig").Policy, resource: ResourceRef) bool {
+    if (std.mem.eql(u8, policy.scope_graph, "*")) return true;
+    return switch (resource) {
+        .graph => |g| std.mem.eql(u8, policy.scope_graph, g),
+        .node => |n| std.mem.eql(u8, policy.scope_graph, n.graph),
+        .edge => |e| std.mem.eql(u8, policy.scope_graph, e.graph),
+        .database, .tenant, .procedure, .metadata => false,
+    };
 }
 
 fn policyMatchesResource(policy: @import("policy_catalog.zig").Policy, resource: ResourceRef) bool {

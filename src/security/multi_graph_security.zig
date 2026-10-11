@@ -126,6 +126,11 @@ pub const GraphRBACPolicy = struct {
     /// Per-graph explicit privilege grants: (user_id, graph_hash, action) -> present.
     /// action: 0=read, 1=write, 2=schema. Distinct from role-based access.
     graph_user_grants: std.AutoHashMap(GraphGrantKey, void),
+    /// Guards `graph_user_grants`. REQ-SEC-PER-GRAPH-GRANTS: gps.decide reads
+    /// grants on every connection's request (read, write and schema gates,
+    /// not only bind), while a GRANT or REVOKE on another connection may
+    /// rehash the map.
+    grants_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     const Self = @This();
 
@@ -318,7 +323,13 @@ pub const GraphRBACPolicy = struct {
     /// action: 0=read, 1=write, 2=schema
     pub fn grantGraphPermission(self: *Self, user_id: u64, graph_name: []const u8, action: u8) !void {
         const key = GraphGrantKey.init(user_id, graph_name, action);
-        const had = try self.graph_user_grants.fetchPut(key, {});
+        const had = blk: {
+            self.lockGrants();
+            defer self.unlockGrants();
+            break :blk try self.graph_user_grants.fetchPut(key, {});
+        };
+        // After the change, so a decision cached under the old version
+        // cannot be served once the version moves.
         if (had == null) _ = policy_version.incrementPolicyVersion();
     }
 
@@ -333,7 +344,11 @@ pub const GraphRBACPolicy = struct {
     /// graph until restart, and a deny cached before a GRANT outlived it.
     pub fn revokeGraphPermission(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
         const key = GraphGrantKey.init(user_id, graph_name, action);
-        const removed = self.graph_user_grants.remove(key);
+        const removed = blk: {
+            self.lockGrants();
+            defer self.unlockGrants();
+            break :blk self.graph_user_grants.remove(key);
+        };
         if (removed) _ = policy_version.incrementPolicyVersion();
         return removed;
     }
@@ -343,7 +358,17 @@ pub const GraphRBACPolicy = struct {
     /// action: 0=read, 1=write, 2=schema
     pub fn hasGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
         const key = GraphGrantKey.init(user_id, graph_name, action);
+        self.lockGrants();
+        defer self.unlockGrants();
         return self.graph_user_grants.contains(key);
+    }
+
+    fn lockGrants(self: *Self) void {
+        self.grants_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    fn unlockGrants(self: *Self) void {
+        self.grants_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-025; FEATURE="AuthDDLPersistence"; ASPECT=LoadGraphGrants; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
