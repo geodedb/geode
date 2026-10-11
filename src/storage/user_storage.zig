@@ -784,6 +784,37 @@ pub const UserStorageBackend = struct {
         }
     }
 
+    /// The id of a per-graph grant: a 64-bit hash of who, which graph and
+    /// which action. The auth graph manager keys `graph_grant_nodes` and each
+    /// grant's HMAC by it.
+    pub fn graphGrantId(user_id: u64, graph_name: []const u8, action: u8) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&user_id));
+        h.update(graph_name);
+        h.update(&[_]u8{action});
+        return h.final();
+    }
+
+    /// The id of the grant stored at `node_id`, derived from its fields, or
+    /// null when they are missing or out of range.
+    ///
+    /// The id is a 64-bit hash, so about half of all grants have one above
+    /// `maxInt(i64)`. It was written through `safeI64`, which clamped those to
+    /// `maxInt(i64)`, and read back from that property. A revoke then removed
+    /// the wrong `graph_grant_nodes` key and left the deleted node in the map,
+    /// so resealing the chain failed with NodeNotFound (SQLSTATE 58030). At
+    /// startup every clamped grant collapsed onto one key, and its HMAC (sealed
+    /// under the real id) failed to verify. Deriving the id from the fields the
+    /// HMAC already covers gives the real id for new and existing records.
+    fn graphGrantIdFromNode(store: *graph_store.GraphStore, node_id: u64) ?u64 {
+        const uid_val = getIntProp(store, node_id, "user_id", -1);
+        if (uid_val < 0) return null;
+        const action_val = getIntProp(store, node_id, "action", -1);
+        if (action_val < 0 or action_val > std.math.maxInt(u8)) return null;
+        const graph = getStringProp(store, node_id, "graph_name", "");
+        return graphGrantId(@intCast(uid_val), graph, @intCast(action_val));
+    }
+
     fn loadGraphGrantsFromGraph(self: *Self) !void {
         const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, GRAPH_GRANT_LABEL);
         if (nodes_opt == null) return;
@@ -794,9 +825,11 @@ pub const UserStorageBackend = struct {
             const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const id_val = getIntProp(self.store, node_id, "id", -1);
-            if (id_val < 0) continue;
-            const grant_id: u64 = @intCast(id_val);
+            // A record whose fields do not give an id (tampered: SONNY-2757) is
+            // still mapped, under its stored id, so the chain verification
+            // sees it and its HMAC fails rather than the record being skipped.
+            const grant_id = graphGrantIdFromNode(self.store, node_id) orelse
+                @as(u64, @bitCast(getIntProp(self.store, node_id, "id", -1)));
 
             try self.graph_grant_nodes.put(grant_id, node_id);
         }
@@ -829,9 +862,7 @@ pub const UserStorageBackend = struct {
             const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const id_val = getIntProp(self.store, node_id, "id", -1);
-            if (id_val < 0) continue;
-            const grant_id: u64 = @intCast(id_val);
+            const grant_id = graphGrantIdFromNode(self.store, node_id) orelse continue;
 
             const uid_val = getIntProp(self.store, node_id, "user_id", -1);
             if (uid_val < 0) continue;
@@ -868,9 +899,7 @@ pub const UserStorageBackend = struct {
             const node = self.store.getNodePtrHydrated(node_id) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const id_val = getIntProp(self.store, node_id, "id", -1);
-            if (id_val < 0) continue;
-            const grant_id: u64 = @intCast(id_val);
+            const grant_id = graphGrantIdFromNode(self.store, node_id) orelse continue;
 
             var record = blankGraphGrantRecord(grant_id);
             const uid_val = getIntProp(self.store, node_id, "user_id", 0);
@@ -1551,7 +1580,9 @@ pub const UserStorageBackend = struct {
         const node_id = self.graph_grant_nodes.get(record.id) orelse try self.createEntityNode(GRAPH_GRANT_LABEL);
         try self.graph_grant_nodes.put(record.id, node_id);
 
-        try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(record.id) });
+        // The id is a 64-bit hash: store its bit pattern, not a clamped value.
+        // Readers derive it from the fields (`graphGrantIdFromNode`).
+        try self.store.setNodeProperty(node_id, "id", .{ .Int = @bitCast(record.id) });
         try self.store.setNodeProperty(node_id, "user_id", .{ .Int = safeI64(record.user_id) });
         try self.store.setNodeProperty(node_id, "graph_name", .{ .String = record.getGraphName() });
         try self.store.setNodeProperty(node_id, "action", .{ .Int = record.action });

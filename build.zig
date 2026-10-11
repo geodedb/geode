@@ -12163,6 +12163,7 @@ pub fn build(b: *std.Build) void {
     agm_unit_test_mod.addImport("build_options", build_options_mod);
     agm_unit_test_mod.addImport("geode", root_mod);
     agm_unit_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    agm_unit_test_mod.addImport("user_storage", user_storage_mod);
     const agm_unit_tests = b.addTest(.{ .root_module = agm_unit_test_mod });
     const run_agm_unit_tests = b.addRunArtifact(agm_unit_tests);
     shardDep(test_step, &run_agm_unit_tests.step, 0, test_shard_loads, test_shard_index);
