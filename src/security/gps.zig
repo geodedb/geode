@@ -711,6 +711,7 @@ fn rowPolicyScopeMatches(scope_graph: []const u8, graph_name: []const u8) bool {
 pub fn rowPoliciesConfigured() bool {
     const pc = @import("policy_catalog.zig");
     const cat = pc.getGlobalCatalog() orelse return false;
+    if (cat.row_condition_policies == 0) return false;
     for (cat.listPolicies()) |*policy| {
         if (isRowPolicy(policy)) return true;
     }
@@ -736,6 +737,7 @@ pub fn rowPoliciesAllow(allocator: std.mem.Allocator, session: RowSession, graph
     const policy_expression = @import("policy_expression.zig");
     const pc = @import("policy_catalog.zig");
     const cat = pc.getGlobalCatalog() orelse return true;
+    if (cat.row_condition_policies == 0) return true;
 
     var attrs: ?SessionAttributes = null;
     var attrs_failed = false;

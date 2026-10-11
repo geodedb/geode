@@ -173,6 +173,13 @@ test "DDL refuses a row condition on a policy for a write action" {
     try cat.addPolicyStrict(spec("own_rows", "owner = current_user()"));
     try testing.expectEqual(@as(usize, 1), cat.listPolicies().len);
     try testing.expect(cat.listPolicies()[0].compiled.?.reads_row);
+
+    // The catalog counts its row-condition policies (the read path's O(1)
+    // "none installed" check).
+    try cat.addPolicyStrict(spec("lit", "current_user() = 'alice'"));
+    try testing.expectEqual(@as(usize, 1), cat.row_condition_policies);
+    try cat.removePolicy("own_rows");
+    try testing.expectEqual(@as(usize, 0), cat.row_condition_policies);
 }
 
 // ---------------------------------------------------------------------------

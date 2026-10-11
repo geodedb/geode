@@ -79,12 +79,19 @@ pub const PolicyCatalog = struct {
     // Use ArrayList which in Zig 0.16 is the unmanaged form: allocator passed
     // per-operation rather than stored inside the list.
     policies: std.ArrayList(Policy),
+    /// How many policies have a compiled row condition (enabled or not), so
+    /// the read path can skip the row-policy scan in O(1) when there are none.
+    row_condition_policies: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator) PolicyCatalog {
         return .{
             .allocator = allocator,
             .policies = .{ .items = &.{}, .capacity = 0 },
         };
+    }
+
+    fn hasRowCondition(compiled: ?policy_expression.CompiledExpression) bool {
+        return if (compiled) |c| c.reads_row else false;
     }
 
     pub fn deinit(self: *PolicyCatalog) void {
@@ -231,6 +238,7 @@ pub const PolicyCatalog = struct {
             .enabled = args.enabled,
             .compiled = compiled,
         });
+        if (hasRowCondition(compiled)) self.row_condition_policies += 1;
         // CANARY: REQ=REQ-GPS-DIST-001; FEATURE="GPS PolicyVersion"; ASPECT=PolicyCatalogAddBump; STATUS=TESTED; TEST=tests/test_gps_policy_version.zig; OWNER=security; UPDATED=2026-05-20
         _ = policy_version.incrementPolicyVersion();
         // CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=PolicyCatalogAddInvalidate; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
@@ -245,6 +253,7 @@ pub const PolicyCatalog = struct {
         while (i < self.policies.items.len) : (i += 1) {
             if (std.mem.eql(u8, self.policies.items[i].name, name)) {
                 var removed = self.policies.orderedRemove(i);
+                if (hasRowCondition(removed.compiled)) self.row_condition_policies -= 1;
                 self.allocator.free(removed.name);
                 self.allocator.free(removed.scope_graph);
                 self.allocator.free(removed.expression_source);
