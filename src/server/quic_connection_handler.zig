@@ -7770,9 +7770,22 @@ fn handleClientMessage(
             // the same function gRPC runs. A builtin role with WRITE passes
             // there as it did in the role check this replaces. A session with
             // no role (auth disabled) is not gated, as before.
+            // Fail-closed default role (REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED): for
+            // a user with no stored role, `writePermittedOn` asks for write on
+            // the graph the program changes (a WRITE grant there), not on the
+            // whole database; every other principal gets `writePermitted`.
             if (is_mutation and state.authenticated_role != null) {
-                if (!geode.security.gps.writePermitted(gpa, &principal_for_request)) {
+                if (!geode.security.gps.writePermittedOn(gpa, &principal_for_request, lock_graph)) {
                     try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
+                    return;
+                }
+            }
+            // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=QuicReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
+            // A user with no stored role reads only graphs it holds a READ
+            // grant on, the default graph included.
+            if (state.authenticated_role != null) {
+                if (!try execution.session_graph.programReadPermitted(gpa, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
+                    try sendExecuteError(gpa, stream, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
                     return;
                 }
             }

@@ -21,6 +21,7 @@ const catalog_mod = @import("../schema/catalog.zig");
 const query_traits = @import("../query/query_traits.zig");
 const gps = @import("../security/gps.zig");
 const principal_mod = @import("../security/principal.zig");
+const ast = @import("../gql/ast.zig");
 
 pub const GraphTarget = query_traits.GraphTarget;
 
@@ -79,6 +80,39 @@ pub fn mayBind(principal: ?*const principal_mod.Principal, graph: []const u8) bo
     // smp_allocator: the governance-approved global allocator in src/.
     const decision = gps.decide(std.heap.smp_allocator, &req) catch return false;
     return decision.kind == .allow;
+}
+
+// CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=ProgramGraphGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
+/// The QUIC and gRPC handlers' read gate for a user with no stored role
+/// (`gps.isGrantOnly`). May `principal` run a program whose statements touch
+/// the data of the graphs `programDataGraphList` names (from `start_graph`,
+/// the session's graph, with `home_graph` its home)? Every graph must pass
+/// `gps.graphReadPermitted`: a READ grant on it (or a policy). Any other
+/// principal: yes, unchanged; its graph access is `bind_graph`'s.
+///
+/// `bind_graph` alone cannot hold a grant-only user: every session starts on
+/// the default graph, which any authenticated user may bind
+/// (`mayBind`), so without this gate the user read the default graph with
+/// no grant on it. A program that reads no store (`RETURN 1`, analysed as
+/// `analysis`) or touches no graph data (a lone USE GRAPH, which
+/// `bind_graph` decides) passes. Writes are gated separately, by
+/// `gps.writePermittedOn`.
+pub fn programReadPermitted(
+    allocator: std.mem.Allocator,
+    principal: *const principal_mod.Principal,
+    program: *const ast.Program,
+    analysis: *const query_traits.ProgramAnalysis,
+    start_graph: []const u8,
+    home_graph: []const u8,
+) !bool {
+    if (!gps.isGrantOnly(principal)) return true;
+    if (analysis.kind == .rows and analysis.is_store_free and query_traits.restOfProgramIsNoop(analysis, start_graph)) return true;
+    const graphs = try query_traits.programDataGraphList(allocator, program, start_graph, home_graph);
+    defer allocator.free(graphs);
+    for (graphs) |g| {
+        if (!gps.graphReadPermitted(allocator, principal, g)) return false;
+    }
+    return true;
 }
 
 // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=MaySchema; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26

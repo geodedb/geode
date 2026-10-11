@@ -83,6 +83,17 @@ cat /var/lib/geode/.geode_admin_password && rm /var/lib/geode/.geode_admin_passw
 
 The file is not read again after bootstrap; deleting it changes nothing.
 
+### Users with no stored role (fail-closed default, 2026-10)
+
+A user whose record carries no built-in role (not a superuser, no `admin`,
+`user`, `readwrite` or `readonly` role) gets **no access** by default: no
+global read or write, no admin, and no access to any graph, the `default`
+graph included, except the graphs it holds a per-graph grant on, where it
+gets that grant's privileges. Before 2026-10 such a user fell back to
+`readwrite` (fail-open). The bootstrap admin above and users with an
+assigned role are unaffected. See
+[GQL_AUTH_DDL.md](GQL_AUTH_DDL.md#users-with-no-stored-role-fail-closed-default).
+
 ### Environment Configuration
 
 ```bash

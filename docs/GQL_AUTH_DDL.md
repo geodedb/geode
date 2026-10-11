@@ -90,6 +90,48 @@ Geode ships four built-in roles that cannot be deleted:
 The default bootstrap user (created by `ensureDefaultUser` at first startup) is
 a member of the `admin` role.
 
+### Users with no stored role (fail-closed default)
+
+**Breaking change (2026-10).** A user whose record in `__geode_security`
+carries no built-in role (no `HAS_ROLE` edge to `admin`, `user`, `readwrite`
+or `readonly`, and not a superuser) used to resolve to `readwrite`: read and
+write on every graph, with no grant. That failed open. Such a user now
+resolves to `none`:
+
+| | No stored role (`none`) |
+|---|---|
+| Global read, write or schema | None. |
+| Admin (user, role, tenant, policy administration) | None. |
+| A graph with no grant | No access: no bind (`USE GRAPH`, a HELLO graph), no read, no write. This includes the `default` graph every session starts on. |
+| A graph with a per-graph grant | That grant's privileges there, as for every role (see Persistence): `READ` binds and reads it, `WRITE` writes it, `SCHEMA` changes its schema. `ALL` gives all three. To write a graph the user also needs `READ` on it, to bind it. |
+| Programs that read no store (`RETURN 1`) | Allowed. |
+
+`none` is the absence of a role, not a built-in role: `Role.fromString`
+does not parse it, so `ALTER USER … SET ROLE none` does not assign it (it is
+refused as an unknown role unless a custom role of that name exists). `SHOW USERS`
+lists such a user with the role `none`. To give the user access, assign a
+built-in role (`ALTER USER u SET ROLE readonly`) or grant per graph
+(`GRANT READ ON GRAPH g TO u`).
+
+`CREATE USER` without a `ROLE` clause is unaffected: it stores the `user`
+role. Users are left with no stored role by records written outside the
+auth DDL (older versions, direct imports into `__geode_security`). The
+bootstrap admin is a superuser and resolves to `admin` with or without a
+role edge. Explicitly assigned roles resolve exactly as before.
+
+Write grants are not capped at read for these users. Grants are additive
+over the global role and a `WRITE` grant allows writes on its graph "even if
+the global role wouldn't" (Persistence, below); capping them for one role
+would break that contract. A grant-only user's grants are read from the live
+grant table, so a `GRANT` or `REVOKE` takes effect at once.
+
+Implementation: `role_resolver.authRoleFromRecord` (the fallback),
+`user_management.Role.None`, `gps.isGrantOnly` and the grant-only branch of
+`gps.decide`, `gps.writePermittedOn`, `gps.graphReadPermitted` and
+`session_graph.programReadPermitted` (the QUIC and gRPC handler gates).
+Regression: `tests/test_default_role_fail_closed.zig`
+(`zig build test-default-role-fail-closed`).
+
 `CREATE ROLE admin` (or any other built-in name) is **idempotent**: it returns
 an acknowledgement of the form `"already exists: <name> (built-in)"` and does
 not create a duplicate entry.
@@ -126,7 +168,9 @@ All auth DDL mutations persist to the HMAC-chained `__geode_security` graph via
   Grants are **additive** over the user's global role — they widen access, never
   restrict it. Enforcement occurs at BIND time (a READ grant allows `u` to bind
   graph `g`) and at query time (a WRITE/SCHEMA grant allows `u` to perform that
-  op on `g` even if the global role wouldn't).
+  op on `g` even if the global role wouldn't). For a user with no stored role
+  (see [Users with no stored role](#users-with-no-stored-role-fail-closed-default))
+  the grants are the only access, and they are also required to read a graph.
 
 On startup, `server_init` hydrates the security state from `__geode_security`:
 users are loaded via the existing `PersistentUserResolver`; custom roles are
@@ -172,7 +216,8 @@ create/revoke) are wired at startup in `server_init`.
    config).** In the default single-tenant configuration every authenticated user
    can bind any graph, so a `GRANT READ ON GRAPH g TO u` only becomes
    load-bearing under stricter multi-tenant modes where graph-level access is
-   restricted by default.
+   restricted by default, for `readonly`/`user` principals, and for users with
+   no stored role, for whom every grant is load-bearing.
 
 5. **No `SHOW GRANTS` statement yet.** Per-graph grant survival is verified
    indirectly via restart health and role-change assertions; a dedicated
