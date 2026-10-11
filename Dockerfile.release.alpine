@@ -24,8 +24,9 @@ COPY docker/health-check.sh /usr/local/bin/health-check.sh
 # Set execute permissions
 RUN chmod +x /usr/local/bin/geode /usr/local/bin/health-check.sh
 
-# Switch to non-root user
-USER geode
+# Switch to non-root user (numeric UID so the runtime can resolve it
+# without reading /etc/passwd; hadolint DL3066)
+USER 10000
 WORKDIR /home/geode
 
 # Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
@@ -40,7 +41,7 @@ EXPOSE 3141/udp 50051/tcp 9090/tcp
 
 # Health check using shared script (see docker/health-check.sh)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD /usr/local/bin/health-check.sh
+    CMD ["/usr/local/bin/health-check.sh"]
 
 # Default entrypoint
 ENTRYPOINT ["/usr/local/bin/geode"]

@@ -8,6 +8,7 @@ import datetime
 import hashlib
 import json
 import pathlib
+import re
 import sys
 from typing import Any
 
@@ -71,6 +72,14 @@ def render_install_block(spec: dict[str, Any]) -> list[str]:
     return lines
 
 
+def runtime_uid(spec: dict[str, Any]) -> str:
+    """Return the numeric UID that user_setup assigns to the geode user."""
+    match = re.search(r"-u\s+(\d+)", spec["user_setup"])
+    if match is None:
+        raise ValueError(f"{spec['path']} user_setup must set a numeric UID with -u")
+    return match.group(1)
+
+
 def render_dockerfile(spec: dict[str, Any]) -> str:
     lines: list[str] = [f"# {spec['path']} - {spec['title']}"]
     for note in spec.get("notes", []):
@@ -103,8 +112,9 @@ def render_dockerfile(spec: dict[str, Any]) -> str:
             "# Set execute permissions",
             "RUN chmod +x /usr/local/bin/geode /usr/local/bin/health-check.sh",
             "",
-            "# Switch to non-root user",
-            "USER geode",
+            "# Switch to non-root user (numeric UID so the runtime can resolve it",
+            "# without reading /etc/passwd; hadolint DL3066)",
+            f"USER {runtime_uid(spec)}",
             "WORKDIR /home/geode",
             "",
         ]
@@ -122,7 +132,7 @@ def render_dockerfile(spec: dict[str, Any]) -> str:
             "",
             "# Health check using shared script (see docker/health-check.sh)",
             "HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \\",
-            "    CMD /usr/local/bin/health-check.sh",
+            '    CMD ["/usr/local/bin/health-check.sh"]',
             "",
             "# Default entrypoint",
             'ENTRYPOINT ["/usr/local/bin/geode"]',

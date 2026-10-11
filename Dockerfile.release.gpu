@@ -27,7 +27,8 @@ COPY docker/health-check.sh /usr/local/bin/health-check.sh
 # Set execute permissions
 RUN chmod +x /usr/local/bin/geode /usr/local/bin/health-check.sh
 
-# Switch to non-root user
+# Switch to non-root user (numeric UID so the runtime can resolve it
+# without reading /etc/passwd; hadolint DL3066)
 USER 10000
 WORKDIR /home/geode
 
