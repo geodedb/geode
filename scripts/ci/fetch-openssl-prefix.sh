@@ -62,10 +62,10 @@ fi
 DEB_SNAPSHOT="https://deb.debian.org/debian/pool/main/o/openssl"
 DEB_VERSION="3.5.7-1~deb13u2"
 
-# Alpine v3.22, OpenSSL 3.5.8-r0. `openssl-dev` carries headers + link symlinks;
+# Alpine v3.22, OpenSSL 3.5.9-r0 (3.5.8-r0 was removed from the mirror; cross-build 404s, job 17097029064). `openssl-dev` carries headers + link symlinks;
 # `libssl3`/`libcrypto3` carry the runtime objects.
 APK_MIRROR="https://dl-cdn.alpinelinux.org/alpine/v3.22/main"
-APK_VERSION="3.5.8-r0"
+APK_VERSION="3.5.9-r0"
 
 # sha256 of each fetched artifact, keyed "<target>:<filename>".
 declare -A CHECKSUMS=(
@@ -73,12 +73,12 @@ declare -A CHECKSUMS=(
     ["x86_64-linux-gnu:libssl3t64_${DEB_VERSION}_amd64.deb"]="916f7f40b34a06e6ebfaefcdab331bff458328411da672598f126a760472467d"
     ["aarch64-linux-gnu:libssl-dev_${DEB_VERSION}_arm64.deb"]="b81910e8728fab596158c8384d6aa101c8249c1769eb2d33c73643b2be7a0bcf"
     ["aarch64-linux-gnu:libssl3t64_${DEB_VERSION}_arm64.deb"]="ec131326aa9fa9ec934eca386bc7991f328fe383eaefd3e43bd8901a9199c5ae"
-    ["x86_64-linux-musl:openssl-dev-${APK_VERSION}.apk"]="2f153a06be854681a2162879fca949021ba5db73450966804a6d2174aa9b0953"
-    ["x86_64-linux-musl:libssl3-${APK_VERSION}.apk"]="e8d3ea5e9750cb1f4c4b459d172630925fe6bc13c113c590ac36c78013821e62"
-    ["x86_64-linux-musl:libcrypto3-${APK_VERSION}.apk"]="1d111bc0ad6380fdda22e6513941dc2e7988d6b1621d535bed6b3fa5ef086fae"
-    ["aarch64-linux-musl:openssl-dev-${APK_VERSION}.apk"]="3b4785ca74e8f82320b41e98163dc4556b2560d134588f19dc576a2a559da5f7"
-    ["aarch64-linux-musl:libssl3-${APK_VERSION}.apk"]="2b175c982f9ff9a80fc88fa587f6db0ae1c58eef4b3f7fe69e8f066be9ff1090"
-    ["aarch64-linux-musl:libcrypto3-${APK_VERSION}.apk"]="094c5816644ade889f74387e8d91aad89dc9a05eda150494e3f91b80ffc15460"
+    ["x86_64-linux-musl:openssl-dev-${APK_VERSION}.apk"]="86cbdf7fbbef81ba79ee238b90a56bfde6d02a70fe71c00a7de05872b9f5d9c4"
+    ["x86_64-linux-musl:libssl3-${APK_VERSION}.apk"]="6801c740b9760b5b08da8db6367ebc18b2cc4dbaf371f7148429538b8bb04e23"
+    ["x86_64-linux-musl:libcrypto3-${APK_VERSION}.apk"]="3f5825ced5fde1c66a5376a3f6076b3c08538ad52d9ef23f069857e212d9175a"
+    ["aarch64-linux-musl:openssl-dev-${APK_VERSION}.apk"]="51c42d94ea97142e6aae53b1984891ec6e64039b4cdfa2c517851bd01c3c7397"
+    ["aarch64-linux-musl:libssl3-${APK_VERSION}.apk"]="338c9f6154582b4b76455a59f95538bcea8df039c5c72916dd2d8d0d844c9583"
+    ["aarch64-linux-musl:libcrypto3-${APK_VERSION}.apk"]="ede2ef7eca3b65a42e902aaf7890f9c5647dca0c55123a817179ad9f3bc6ef24"
 )
 
 case "$TARGET" in
