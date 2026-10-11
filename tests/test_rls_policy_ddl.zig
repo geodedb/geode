@@ -91,7 +91,7 @@ const uncompilable = [_][]const u8{
     "false", // valid GQL, outside the compiled subset
     "user.role == 'admin'", // wrong operator + unsupported operand
     "current_user() != 'x'", // inequality is not in the subset
-    "n.owner = current_user()", // row-property comparison is not in the subset
+    "n.owner = current_user()", // a variable-qualified property is not a row property
     "current_user() = \"x\"", // double quotes are not a string literal here
     "current_user()", // no comparison at all
     "banana() = 'x'", // unknown builtin

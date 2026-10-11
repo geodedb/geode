@@ -546,7 +546,57 @@ fn passesRLSFilter(
     // "default" (no label entries apply to it), as before.
     const unlabeled = [_][]const u8{"default"};
     const tables: []const []const u8 = if (node.labels.len > 0) node.labels else &unlabeled;
+    if (!gpsRowPoliciesAllow(ctx, username, &node.properties, node.graph_name)) return false;
     return rowPoliciesAllow(reusable_row, &node.properties, node.graph_name, tables, node.labels.len > 0, username);
+}
+
+const gps = @import("../security/gps.zig");
+const policy_expression = @import("../security/policy_expression.zig");
+
+/// A node's properties as a GPS row condition reads them.
+fn gpsRowValue(ctx: *const anyopaque, name: []const u8) policy_expression.RowValue {
+    const properties: *const graph_store.CompactPropertyMap = @ptrCast(@alignCast(ctx));
+    const value = properties.get(name) orelse return .missing;
+    return switch (value) {
+        .String => |s| .{ .string = s },
+        .Null => .null_,
+        else => .other,
+    };
+}
+
+// CANARY: REQ=REQ-RLS-SESSION-ROW-CONDITIONS; FEATURE="GPS Row Conditions"; ASPECT=MatchRowFilter; STATUS=TESTED; TEST=tests/test_rls_session_row_conditions.zig; OWNER=security; UPDATED=2026-10-11
+/// May this session see a node under the GPS policies with row conditions
+/// (`CREATE POLICY ... FOR READ USING (owner = current_user())`)? The session
+/// functions take this session's values now: the user RLS is evaluated under
+/// (`rlsUsername`), the principal's tenant and active graph (else the
+/// context's tenant and session graph), and the principal's attributes. An
+/// admin session bypasses row conditions, as it bypasses expression RLS
+/// policies (GAP-0284). Decided per row and never cached (see
+/// `gps.rowPoliciesAllow`). Policies with row conditions apply to nodes; an
+/// edge is reached only through nodes that passed.
+fn gpsRowPoliciesAllow(
+    ctx: *const ExecutionContext,
+    username: []const u8,
+    properties: *const graph_store.CompactPropertyMap,
+    graph_name: []const u8,
+) bool {
+    if (ctx.role) |r| {
+        if (r == .Admin) return true;
+    }
+    const principal = ctx.principal;
+    const session = gps.RowSession{
+        .username = username,
+        .tenant_id = if (principal) |p| (p.tenant_id orelse ctx.tenant_id) else ctx.tenant_id,
+        .active_graph = blk: {
+            if (principal) |p| {
+                if (p.active_graph) |g| break :blk g;
+            }
+            if (ctx.session_state) |ss| break :blk ss.graph;
+            break :blk null;
+        },
+        .attributes = if (principal) |p| p.attributes.entries else &.{},
+    };
+    return gps.rowPoliciesAllow(std.heap.smp_allocator, session, graph_name, .{ .ctx = properties, .getFn = gpsRowValue });
 }
 
 // GAP-0510 D2: Evaluate expression-based RLS policies against a node's properties.
@@ -648,6 +698,11 @@ fn rowPoliciesAllow(
 /// coarser "any engine registered" test that disabled streaming for every
 /// authenticated user even when no policies exist.
 pub fn activeRlsPoliciesConfigured() bool {
+    // A GPS policy with a row condition (`owner = current_user()`) filters
+    // rows in `passesRLSFilter`, so it counts as an RLS policy here: reads
+    // must not take a fast path that skips that filter.
+    if (gps.rowPoliciesConfigured()) return true;
+
     if (rls_types.getGlobalRLSFilterEngine()) |filter_engine| {
         if (filter_engine.policyCount() != 0) return true;
     }

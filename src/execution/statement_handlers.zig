@@ -81,7 +81,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         // Phase 5 wires the persistent catalog.  Column schema matches Phase 5 plan.
         // SONNY-2732: `valid` is false for a stored policy whose expression no
         // longer compiles (kept fail-closed until rewritten).
-        .policies => &[_][]const u8{ "name", "graph", "actions", "enabled", "valid" },
+        .policies => &[_][]const u8{ "name", "graph", "actions", "enabled", "valid", "using" },
         // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsColumns; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
         .grants_for => &[_][]const u8{ "policy_name", "graph", "actions", "effect", "enabled" },
     };
@@ -317,12 +317,14 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                     }
                     const actions_str = try actions_buf.toOwnedSlice(allocator);
 
-                    var row = try allocator.alloc(Value, 5);
+                    var row = try allocator.alloc(Value, 6);
                     row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
                     row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
                     row[2] = Value{ .Str = actions_str };
                     row[3] = Value{ .Bool = pol.enabled };
                     row[4] = Value{ .Bool = policy_catalog_mod.PolicyCatalog.policyIsValid(pol) };
+                    // The USING condition as written (`true` when there was none).
+                    row[5] = Value{ .Str = try allocator.dupe(u8, pol.expression_source) };
                     try rows_list.append(allocator, row);
                 }
             }

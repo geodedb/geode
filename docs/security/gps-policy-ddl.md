@@ -11,6 +11,90 @@
 - **Write-through hooks** — Installed in `main.zig`; every add/remove operation syncs to persistent storage.
 - **`decide()` policy evaluation** — Consults the catalog after builtin-role and graph-grant evaluation. When a policy with `expression_source = "true"` matches a query binding, returns `.allow` with reason `policy_match`.
 
+## USING conditions
+
+`CREATE POLICY <name> ON GRAPH (<graph> | *) FOR <actions> USING <condition>`
+and `CALL geode.auth.policy_create('<name>', '<graph>', '<condition>')` take a
+condition in this grammar:
+
+```text
+condition  ::= or_expr
+or_expr    ::= and_expr ( OR and_expr )*
+and_expr   ::= atom ( AND atom )*
+atom       ::= ( condition )
+             | true
+             | session_fn = 'literal'
+             | resource.label = 'literal'
+             | principal.attributes.<key> = 'literal'
+             | row_prop cmp_op session_fn          -- row condition
+             | session_fn cmp_op row_prop          -- row condition
+session_fn ::= current_user() | current_tenant() | current_graph()
+row_prop   ::= [A-Za-z_][A-Za-z0-9_]*
+cmp_op     ::= = | <>
+```
+
+`AND` binds tighter than `OR`. Comparisons are case-sensitive. Anything else,
+including `!=`, `<>` against a literal, a property compared with a literal, a
+qualified property such as `n.owner`, and functions geode does not have (for
+example `current_user_id()`), is refused when the policy is created, with
+SQLSTATE 42000 and nothing stored. A policy with no `USING` clause is `true`.
+
+The session functions return the reading session's values: `current_user()`
+is the authenticated user (a forwarded principal's user when there is one),
+`current_tenant()` the session's tenant, and `current_graph()` the
+principal's active graph (otherwise the session's graph). geode has no
+`current_role()`.
+
+### Row conditions
+
+A row condition compares a property of the row being read with a session
+function, for example:
+
+```gql
+CREATE POLICY own_rows ON GRAPH documents FOR READ USING owner = current_user();
+```
+
+A policy with a row condition filters rows. It does not grant access by
+itself; the session still needs read access (its builtin role, or another
+policy).
+
+- **Where it applies.** It applies to nodes read in the policy's graph (or
+  every graph, for `*`), through every read path: scans, label scans, hops,
+  aggregates, and the procedures that apply row-level security. A row
+  condition is accepted only on a policy `FOR READ` or `FOR MATCH`. On a
+  policy for any other action it is refused with 42000, because no write path
+  evaluates it. Edges are not filtered by row conditions; a traversal reaches
+  an edge only from a node that passed.
+- **How policies combine.** If no enabled row-condition policy applies to the
+  row's graph, the row is visible. Otherwise, as in PostgreSQL, the row is
+  visible only if at least one applicable allow policy's condition holds for
+  it, and no deny policy's condition does.
+- **Evaluated per session, at read time.** The function is evaluated when the
+  row is read, for the session reading it, never when the policy is created.
+  So one policy, `owner = current_user()`, shows each user their own rows.
+- **Fail closed.** A condition holds only when both sides are known strings. A
+  missing or null property, a non-string property (for example an integer
+  `owner`), or a session function with no value (an empty or absent user,
+  tenant or graph) makes the comparison false, for `=` and for `<>`, so the row
+  is denied.
+- **Not cached.** Each row is decided for the session in hand. A row verdict
+  is never put in the GPS decision cache. That cache holds statement-level
+  decisions only, and its key includes the user, tenant and active graph.
+- **Who is exempt.** An admin session bypasses row conditions, as it bypasses
+  the expression RLS policies. A session with no authenticated user, which is
+  possible only with authentication disabled, is not subject to any RLS policy.
+- **Statement-level decisions.** In `decide()` a row condition has no row, so
+  it is false. For example, `owner = current_user() OR current_user() =
+  'auditor'` grants statement access only to `auditor`.
+- **Listing.** `SHOW POLICIES` shows the condition text in its `using` column,
+  and `CALL geode.auth.policy_list()` in its `condition` column.
+- **Persistence.** The condition text is stored with the policy in
+  `__geode_security` and compiled again at startup.
+
+Policies stored before row conditions existed, such as `owner = current_user()`
+written before 42000 refusals began (b5130bf4), were loaded fail-closed and
+granted nothing. They now compile at startup and filter rows as described above.
+
 ## Stored lengths and validity (SONNY-2731, SONNY-2732)
 
 `__geode_security` keeps each policy in a fixed-size record:

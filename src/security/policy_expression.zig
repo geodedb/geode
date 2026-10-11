@@ -18,8 +18,22 @@
 //            | "current_graph()"  "=" string_lit
 //            | "resource.label"   "=" string_lit
 //            | "principal.attributes." identifier "=" string_lit   (Phase 6 Task 6-2)
+//            | row_prop cmp_op session_fn                        (row condition)
+//            | session_fn cmp_op row_prop                        (row condition)
 //
+//   session_fn ::= "current_user()" | "current_tenant()" | "current_graph()"
+//   row_prop   ::= [A-Za-z_][A-Za-z0-9_]*   (a property of the row, e.g. owner)
+//   cmp_op     ::= "=" | "<>"
 //   string_lit ::= "'" [^']* "'"
+//
+// Row conditions compare a property of the row being read with a function of
+// the session, e.g. `owner = current_user()`. The function is evaluated per
+// session when the row is read, never when the policy is created. A row
+// condition holds only when both sides are known strings: a missing or null
+// property, a property that is not a string, or a session function with no
+// value makes the comparison false (for `<>` too), so the row is denied. With
+// no row in the context (a statement-level decision) every row condition is
+// false.
 //
 // AND binds tighter than OR (standard SQL precedence).
 // Comparisons are case-sensitive.
@@ -58,6 +72,56 @@ pub const PolicyEvalContext = struct {
     /// Slice of principal attribute entries.  May be empty (never null) so
     /// that attribute predicates simply fail-closed when no attributes are set.
     principal_attributes: []const AttributeEntry = &.{},
+    /// The row being read, for row conditions (`owner = current_user()`).
+    /// Null for a statement-level decision: every row condition is then false.
+    row: ?RowAccessor = null,
+};
+
+/// The session functions a policy expression can call.
+pub const SessionFn = enum {
+    current_user,
+    current_tenant,
+    current_graph,
+
+    pub fn sourceName(self: SessionFn) []const u8 {
+        return switch (self) {
+            .current_user => "current_user()",
+            .current_tenant => "current_tenant()",
+            .current_graph => "current_graph()",
+        };
+    }
+
+    fn value(self: SessionFn, ctx: PolicyEvalContext) ?[]const u8 {
+        return switch (self) {
+            .current_user => ctx.current_user,
+            .current_tenant => ctx.current_tenant,
+            .current_graph => ctx.current_graph,
+        };
+    }
+};
+
+/// A comparison operator of a row condition.
+pub const CmpOp = enum { eq, ne };
+
+/// A row property as a row condition sees it. Only `string` compares; the
+/// others make every comparison false (fail-closed).
+pub const RowValue = union(enum) {
+    missing,
+    null_,
+    string: []const u8,
+    /// Any non-string value (integer, float, boolean, ...).
+    other,
+};
+
+/// Read access to the row being decided, supplied by the caller (the read
+/// path) so this module does not depend on the store's property types.
+pub const RowAccessor = struct {
+    ctx: *const anyopaque,
+    getFn: *const fn (ctx: *const anyopaque, name: []const u8) RowValue,
+
+    pub fn get(self: RowAccessor, name: []const u8) RowValue {
+        return self.getFn(self.ctx, name);
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -77,6 +141,8 @@ pub const Predicate = union(enum) {
     // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=PredicateIRAttr; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-20
     /// principal.attributes.<key> = '<value>'
     eq_principal_attr: struct { key: []const u8, value: []const u8 },
+    /// <row property> (= | <>) <session function>, in either order.
+    row_vs_session: struct { property: []const u8, func: SessionFn, op: CmpOp },
     and_: struct { left: *const Predicate, right: *const Predicate },
     or_: struct { left: *const Predicate, right: *const Predicate },
 };
@@ -87,6 +153,11 @@ pub const Predicate = union(enum) {
 pub const CompiledExpression = struct {
     arena: std.heap.ArenaAllocator,
     root: *const Predicate,
+    /// True when the expression has a row condition: the policy then
+    /// filters rows on the read path (see gps.rowPoliciesAllow).
+    reads_row: bool = false,
+    /// True when the expression reads `principal.attributes.<key>`.
+    reads_attributes: bool = false,
 
     pub fn deinit(self: *CompiledExpression) void {
         self.arena.deinit();
@@ -112,7 +183,12 @@ pub fn compileExpression(allocator: std.mem.Allocator, source: []const u8) !Comp
     if (parser.pos != parser.src.len) {
         return error.InvalidExpression;
     }
-    return CompiledExpression{ .arena = arena, .root = root };
+    return CompiledExpression{
+        .arena = arena,
+        .root = root,
+        .reads_row = parser.reads_row,
+        .reads_attributes = parser.reads_attributes,
+    };
 }
 
 // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=Evaluate; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
@@ -145,8 +221,27 @@ fn evalPredicate(p: *const Predicate, ctx: PolicyEvalContext) bool {
             // Key not present in the attribute set → fail-closed.
             break :blk false;
         },
+        .row_vs_session => |rc| evalRowCondition(rc.property, rc.func, rc.op, ctx),
         .and_ => |a| evalPredicate(a.left, ctx) and evalPredicate(a.right, ctx),
         .or_ => |o| evalPredicate(o.left, ctx) or evalPredicate(o.right, ctx),
+    };
+}
+
+/// A row condition. Fail-closed: false unless the session function has a
+/// non-empty value and the row property is a string; only then does `=` or
+/// `<>` compare them.
+fn evalRowCondition(property: []const u8, func: SessionFn, op: CmpOp, ctx: PolicyEvalContext) bool {
+    const session_value = func.value(ctx) orelse return false;
+    if (session_value.len == 0) return false;
+    const row = ctx.row orelse return false;
+    const row_value = switch (row.get(property)) {
+        .string => |v| v,
+        .missing, .null_, .other => return false,
+    };
+    const equal = std.mem.eql(u8, row_value, session_value);
+    return switch (op) {
+        .eq => equal,
+        .ne => !equal,
     };
 }
 
@@ -171,6 +266,8 @@ const ExprParser = struct {
     /// SONNY-3191: parentheses open, and AND/OR links so far.
     depth: u16 = 0,
     links: u32 = 0,
+    reads_row: bool = false,
+    reads_attributes: bool = false,
 
     fn countLink(self: *ExprParser) error{InvalidExpression}!void {
         self.links += 1;
@@ -238,27 +335,26 @@ const ExprParser = struct {
             return node;
         }
 
-        // "current_user() = '<lit>'"
-        if (self.consumeExact("current_user()")) {
-            const lit = try self.parseEqLiteral();
+        // "<session_fn> = '<lit>'" or "<session_fn> (= | <>) <row_prop>"
+        if (self.parseSessionFn()) |func| {
             const node = try self.allocator.create(Predicate);
-            node.* = .{ .eq_current_user = lit };
-            return node;
-        }
-
-        // "current_tenant() = '<lit>'"
-        if (self.consumeExact("current_tenant()")) {
-            const lit = try self.parseEqLiteral();
-            const node = try self.allocator.create(Predicate);
-            node.* = .{ .eq_current_tenant = lit };
-            return node;
-        }
-
-        // "current_graph() = '<lit>'"
-        if (self.consumeExact("current_graph()")) {
-            const lit = try self.parseEqLiteral();
-            const node = try self.allocator.create(Predicate);
-            node.* = .{ .eq_current_graph = lit };
+            self.skipWs();
+            const op = try self.parseCmpOp();
+            self.skipWs();
+            if (self.pos < self.src.len and self.src[self.pos] == '\'') {
+                // Session function against a literal: `=` only.
+                if (op != .eq) return error.InvalidExpression;
+                const lit = try self.parseQuotedLiteral();
+                node.* = switch (func) {
+                    .current_user => .{ .eq_current_user = lit },
+                    .current_tenant => .{ .eq_current_tenant = lit },
+                    .current_graph => .{ .eq_current_graph = lit },
+                };
+                return node;
+            }
+            const property = try self.parseRowProperty();
+            self.reads_row = true;
+            node.* = .{ .row_vs_session = .{ .property = property, .func = func, .op = op } };
             return node;
         }
 
@@ -279,10 +375,68 @@ const ExprParser = struct {
             const lit = try self.parseEqLiteral();
             const node = try self.allocator.create(Predicate);
             node.* = .{ .eq_principal_attr = .{ .key = key, .value = lit } };
+            self.reads_attributes = true;
+            return node;
+        }
+
+        // "<row_prop> (= | <>) <session_fn>"
+        if (isIdentStart(self.src[self.pos])) {
+            const property = try self.parseRowProperty();
+            self.skipWs();
+            const op = try self.parseCmpOp();
+            self.skipWs();
+            const func = self.parseSessionFn() orelse return error.InvalidExpression;
+            self.reads_row = true;
+            const node = try self.allocator.create(Predicate);
+            node.* = .{ .row_vs_session = .{ .property = property, .func = func, .op = op } };
             return node;
         }
 
         return error.InvalidExpression;
+    }
+
+    /// Consume a session function call, if one is next.
+    fn parseSessionFn(self: *ExprParser) ?SessionFn {
+        inline for (.{ SessionFn.current_user, SessionFn.current_tenant, SessionFn.current_graph }) |func| {
+            if (self.consumeExact(func.sourceName())) return func;
+        }
+        return null;
+    }
+
+    /// Consume `=` or `<>`.
+    fn parseCmpOp(self: *ExprParser) error{InvalidExpression}!CmpOp {
+        const rest = self.src[self.pos..];
+        if (std.mem.startsWith(u8, rest, "<>")) {
+            self.pos += 2;
+            return .ne;
+        }
+        if (rest.len > 0 and rest[0] == '=') {
+            self.pos += 1;
+            return .eq;
+        }
+        return error.InvalidExpression;
+    }
+
+    /// Scan a row property name: an identifier that is not followed by `.`
+    /// or `(` (a variable-qualified `n.owner` or an unknown function call is
+    /// not a row property). Returns a copy owned by the arena.
+    fn parseRowProperty(self: *ExprParser) ![]const u8 {
+        const start = self.pos;
+        if (self.pos >= self.src.len or !isIdentStart(self.src[self.pos])) return error.InvalidExpression;
+        while (self.pos < self.src.len and (std.ascii.isAlphanumeric(self.src[self.pos]) or self.src[self.pos] == '_')) {
+            self.pos += 1;
+        }
+        const name = self.src[start..self.pos];
+        if (self.pos < self.src.len and (self.src[self.pos] == '.' or self.src[self.pos] == '(')) return error.InvalidExpression;
+        // The connectives and the literal `true` are not property names.
+        for ([_][]const u8{ "AND", "OR", "true" }) |kw| {
+            if (std.ascii.eqlIgnoreCase(name, kw)) return error.InvalidExpression;
+        }
+        return self.allocator.dupe(u8, name);
+    }
+
+    fn isIdentStart(c: u8) bool {
+        return std.ascii.isAlphabetic(c) or c == '_';
     }
 
     /// Scan a bare attribute key: one or more alphanumeric, underscore, or
@@ -346,6 +500,11 @@ const ExprParser = struct {
         }
         self.pos += 1; // consume '='
         self.skipWs();
+        return self.parseQuotedLiteral();
+    }
+
+    /// Expect "'<literal>'" and return a copy of the literal string.
+    fn parseQuotedLiteral(self: *ExprParser) ![]const u8 {
         if (self.pos >= self.src.len or self.src[self.pos] != '\'') {
             return error.InvalidExpression;
         }

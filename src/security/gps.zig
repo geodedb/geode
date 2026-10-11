@@ -277,10 +277,23 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
             // decision for one principal is never served to another. Without this
             // mix bob's "unauthorized" decision could be returned to alice when
             // both share the same (auth_version, policy_version) tuple.
+            //
+            // A policy expression can also read the session's tenant and
+            // active graph (current_tenant(), current_graph()), so they are
+            // mixed in as well: the same user in another tenant or graph is a
+            // different key. Each field is length-prefixed so adjacent fields
+            // cannot run together.
             const principal_hash: u64 = blk: {
                 var h = std.hash.Wyhash.init(0);
                 if (req.principal.username) |u| h.update(u);
                 if (req.principal.user_id) |uid| h.update(std.mem.asBytes(&uid));
+                for ([_]?[]const u8{ req.principal.tenant_id, req.principal.active_graph }) |field| {
+                    if (field) |v| {
+                        const len: u64 = v.len;
+                        h.update(std.mem.asBytes(&len));
+                        h.update(v);
+                    } else h.update("\x00null");
+                }
                 break :blk h.final();
             };
             const key = decision_cache.Key{
@@ -598,35 +611,18 @@ fn policyExpressionHolds(allocator: std.mem.Allocator, policy: *const @import("p
     // to the security/user_attribute_store snapshot keyed by the
     // authenticated username when the principal's own attribute slice
     // is empty.
-    comptime std.debug.assert(@sizeOf(principal_mod.AttributeMap.Entry) == @sizeOf(policy_expression.AttributeEntry));
-    const raw_entries = req.principal.attributes.entries;
-    var owned_snapshot: ?[]policy_expression.AttributeEntry = null;
-    defer if (owned_snapshot) |snap| {
-        for (snap) |e| {
-            allocator.free(e.key);
-            allocator.free(e.value);
-        }
-        allocator.free(snap);
+    var attrs = SessionAttributes.resolve(allocator, req.principal.attributes.entries, req.principal.username) catch {
+        // The principal's attributes cannot be read. Fail closed: a deny
+        // holds, and an allow sees no attributes (so grants on none).
+        if (policy.effect == .deny) return true;
+        return policy_expression.evaluate(cexpr, .{
+            .current_user = req.principal.username,
+            .current_tenant = req.principal.tenant_id,
+            .current_graph = req.principal.active_graph,
+            .resource_label = null,
+        });
     };
-    const attr_entries: []const policy_expression.AttributeEntry = if (raw_entries.len > 0) blk: {
-        break :blk @as(
-            [*]const policy_expression.AttributeEntry,
-            @ptrCast(raw_entries.ptr),
-        )[0..raw_entries.len];
-    } else if (req.principal.username) |uname| blk: {
-        const snap = @import("user_attr_store").snapshotEntries(
-            allocator,
-            uname,
-            policy_expression.AttributeEntry,
-        ) catch {
-            // The principal's attributes cannot be read. Fail closed: a deny
-            // holds, and an allow sees no attributes (so grants on none).
-            if (policy.effect == .deny) return true;
-            break :blk &[_]policy_expression.AttributeEntry{};
-        };
-        if (snap.len > 0) owned_snapshot = snap;
-        break :blk snap;
-    } else &[_]policy_expression.AttributeEntry{};
+    defer attrs.deinit();
     const ctx = policy_expression.PolicyEvalContext{
         .current_user = req.principal.username,
         .current_tenant = req.principal.tenant_id,
@@ -636,9 +632,150 @@ fn policyExpressionHolds(allocator: std.mem.Allocator, policy: *const @import("p
             // Phase 5: a richer label-set predicate can land in Phase 6.
             else => null,
         },
-        .principal_attributes = attr_entries,
+        .principal_attributes = attrs.entries,
+        // A statement-level decision has no row: every row condition in the
+        // expression is false (see policy_expression.evalRowCondition).
+        .row = null,
     };
     return policy_expression.evaluate(cexpr, ctx);
+}
+
+/// The principal attributes a policy expression reads, resolved once.
+///
+/// GAP-0284 (2026-05-22): the principal carried by every transport (QUIC,
+/// gRPC, MCP, distributed) is currently constructed with
+/// attributes=emptySentinel() because derivePrincipal() runs without an
+/// allocator. To make ABAC predicates actually fire, fall back to the
+/// security/user_attribute_store snapshot keyed by the authenticated username
+/// when the principal's own attribute slice is empty.
+const SessionAttributes = struct {
+    allocator: std.mem.Allocator,
+    entries: []const @import("policy_expression.zig").AttributeEntry,
+    owned: ?[]@import("policy_expression.zig").AttributeEntry = null,
+
+    const AttributeEntry = @import("policy_expression.zig").AttributeEntry;
+
+    fn resolve(allocator: std.mem.Allocator, raw_entries: []const principal_mod.AttributeMap.Entry, username: ?[]const u8) !SessionAttributes {
+        comptime std.debug.assert(@sizeOf(principal_mod.AttributeMap.Entry) == @sizeOf(AttributeEntry));
+        if (raw_entries.len > 0) {
+            return .{
+                .allocator = allocator,
+                .entries = @as([*]const AttributeEntry, @ptrCast(raw_entries.ptr))[0..raw_entries.len],
+            };
+        }
+        const uname = username orelse return .{ .allocator = allocator, .entries = &.{} };
+        const snap = try @import("user_attr_store").snapshotEntries(allocator, uname, AttributeEntry);
+        return .{ .allocator = allocator, .entries = snap, .owned = snap };
+    }
+
+    fn deinit(self: *SessionAttributes) void {
+        const snap = self.owned orelse return;
+        for (snap) |e| {
+            self.allocator.free(e.key);
+            self.allocator.free(e.value);
+        }
+        self.allocator.free(snap);
+    }
+};
+
+// CANARY: REQ=REQ-RLS-SESSION-ROW-CONDITIONS; FEATURE="GPS Row Conditions"; ASPECT=RowPolicyApplicability; STATUS=TESTED; TEST=tests/test_rls_session_row_conditions.zig; OWNER=security; UPDATED=2026-10-11
+/// The session a row condition is evaluated for. Built per read from the
+/// active execution context, so a session function is always this session's
+/// value at query time, never a value captured when the policy was created.
+pub const RowSession = struct {
+    username: ?[]const u8,
+    tenant_id: ?[]const u8,
+    active_graph: ?[]const u8,
+    attributes: []const principal_mod.AttributeMap.Entry = &.{},
+};
+
+/// Does `policy` filter rows: enabled, compiled with a row condition, and for
+/// READ or MATCH (the only actions DDL accepts a row condition for)?
+fn isRowPolicy(policy: *const @import("policy_catalog.zig").Policy) bool {
+    if (!policy.enabled) return false;
+    const compiled = if (policy.compiled) |*c| c else return false;
+    if (!compiled.reads_row) return false;
+    for (policy.actions) |a| {
+        if (a == .read or a == .match_) return true;
+    }
+    return false;
+}
+
+fn rowPolicyScopeMatches(scope_graph: []const u8, graph_name: []const u8) bool {
+    return std.mem.eql(u8, scope_graph, "*") or std.mem.eql(u8, scope_graph, graph_name);
+}
+
+/// Is any row policy installed? The read path uses this to send reads to
+/// the executor that applies `rowPoliciesAllow` to every row, instead of a
+/// fast path that applies no row-level security.
+pub fn rowPoliciesConfigured() bool {
+    const pc = @import("policy_catalog.zig");
+    const cat = pc.getGlobalCatalog() orelse return false;
+    for (cat.listPolicies()) |*policy| {
+        if (isRowPolicy(policy)) return true;
+    }
+    return false;
+}
+
+// CANARY: REQ=REQ-RLS-SESSION-ROW-CONDITIONS; FEATURE="GPS Row Conditions"; ASPECT=RowPolicyVerdict; STATUS=TESTED; TEST=tests/test_rls_session_row_conditions.zig; OWNER=security; UPDATED=2026-10-11
+/// May `session` read a row of `graph_name` whose properties `row` reads,
+/// under the policies with row conditions (`owner = current_user()`)?
+///
+/// The row policies that apply are the enabled READ / MATCH policies with a
+/// row condition whose scope is `*` or `graph_name`. With none, the row is
+/// visible (they are an overlay, as other RLS policies are). Otherwise, as in
+/// PostgreSQL, the row is visible only if at least one allow policy's
+/// condition holds for it and no deny policy's condition does.
+///
+/// Every row is decided afresh for the session in hand: the decision is never
+/// put in the GPS decision cache, so one user's verdict cannot be served to
+/// another. Fail-closed: a condition that cannot be evaluated (a missing or
+/// null property or session value, or attributes that cannot be read) does
+/// not hold for an allow policy and does hold for a deny policy.
+pub fn rowPoliciesAllow(allocator: std.mem.Allocator, session: RowSession, graph_name: []const u8, row: @import("policy_expression.zig").RowAccessor) bool {
+    const policy_expression = @import("policy_expression.zig");
+    const pc = @import("policy_catalog.zig");
+    const cat = pc.getGlobalCatalog() orelse return true;
+
+    var attrs: ?SessionAttributes = null;
+    var attrs_failed = false;
+    defer if (attrs) |*a| a.deinit();
+
+    var allow_applies = false;
+    var allowed = false;
+    for (cat.listPolicies()) |*policy| {
+        if (!isRowPolicy(policy)) continue;
+        if (!rowPolicyScopeMatches(policy.scope_graph, graph_name)) continue;
+        const cexpr = &policy.compiled.?;
+
+        var entries: []const policy_expression.AttributeEntry = &.{};
+        if (cexpr.reads_attributes) {
+            if (attrs == null and !attrs_failed) {
+                attrs = SessionAttributes.resolve(allocator, session.attributes, session.username) catch blk: {
+                    attrs_failed = true;
+                    break :blk null;
+                };
+            }
+            if (attrs) |a| entries = a.entries else if (policy.effect == .deny) return false;
+        }
+
+        const holds = policy_expression.evaluate(cexpr, .{
+            .current_user = session.username,
+            .current_tenant = session.tenant_id,
+            .current_graph = session.active_graph,
+            .resource_label = null,
+            .principal_attributes = entries,
+            .row = row,
+        });
+        switch (policy.effect) {
+            .deny => if (holds) return false,
+            .allow => {
+                allow_applies = true;
+                if (holds) allowed = true;
+            },
+        }
+    }
+    return !allow_applies or allowed;
 }
 
 // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrantOnlyPrincipal; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11

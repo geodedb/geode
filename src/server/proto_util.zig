@@ -268,7 +268,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // compiled=null, which decide() then treats as fail-closed — the policy
         // silently denied everything it was written to allow.
         // CANARY: REQ=REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL; FEATURE="GPS Policy DDL"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-08-25
-        error.UnsupportedPolicyExpression => .{ .code = "42000", .message = "Unsupported policy USING expression: the policy predicate compiler accepts only true, current_user()/current_tenant()/current_graph()/resource.label/principal.attributes.<key> compared with = to a quoted literal, combined with AND / OR / parentheses" },
+        error.UnsupportedPolicyExpression => .{ .code = "42000", .message = "Unsupported policy USING expression: the policy predicate compiler accepts only true, current_user()/current_tenant()/current_graph()/resource.label/principal.attributes.<key> compared with = to a quoted literal, a row property compared with = or <> to current_user()/current_tenant()/current_graph() (e.g. owner = current_user()), combined with AND / OR / parentheses" },
+        error.RowConditionRequiresReadPolicy => .{ .code = "42000", .message = "Unsupported policy USING expression: a row condition (a row property compared with a session function, e.g. owner = current_user()) applies only to a policy FOR READ or MATCH" },
         // FTS-INDEX-OPTIONS: an OPTIONS { … } key on CREATE INDEX used to be parsed and
         // thrown away, so a user who tuned a fulltext index believed a setting
         // took effect that never existed. Same 42704 family as ENG-3906.

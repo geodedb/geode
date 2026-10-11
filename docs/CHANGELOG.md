@@ -44,12 +44,36 @@
 
 ### Added
 
+- **RLS row conditions with session functions:** a policy `USING` condition
+  can compare a row property with `current_user()`, `current_tenant()` or
+  `current_graph()`, with `=` or `<>`, in either order, for example
+  `CREATE POLICY own_rows ON GRAPH docs FOR READ USING owner = current_user()`
+  or `CALL geode.auth.policy_create('own_rows', 'docs', 'owner =
+  current_user()')`. A READ or MATCH policy with a row condition filters the
+  nodes each session reads, on every read path: a user sees the rows the
+  condition allows for them. The function is evaluated for the reading
+  session when the row is read. A missing, null or non-string property, or a
+  session function with no value, denies the row (fail-closed, `<>` too).
+  Row verdicts are never cached. Admin sessions bypass row conditions, as they
+  bypass expression RLS policies. A row condition on a policy for a write
+  action is refused with 42000. Until now these conditions were refused with
+  42000 (since b5130bf4), and before that they were stored but denied
+  everything. A policy stored in that earlier period now compiles at startup
+  and filters rows. See `docs/security/gps-policy-ddl.md`, "USING conditions".
+- **Policy listings show the condition:** `SHOW POLICIES` has a new last
+  column, `using`, and `CALL geode.auth.policy_list()` a new last column,
+  `condition`, holding the policy's USING text.
 - **CANARY Governance Tokens:** 24 CANARY markers added across timeseries source files (GAP-0281)
 - **Legacy GAP ID Mapping:** Documented mapping from Grey Cardinal GAP-004/005/006 to GAP-0279+ numbering (GAP-0288)
 - **Time-Series Audit Report:** `docs/TIMESERIES_AUDIT_REPORT.md` tracking all timeseries gap status
 
 ### Fixed
 
+- **GPS decision cache key includes the session's tenant and active graph:**
+  a policy condition such as `current_graph() = 'sales'` reads them. The key
+  held only the user, so the same user's cached decision in one graph or
+  tenant was served in another until a policy or auth change cleared the
+  cache.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

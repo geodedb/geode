@@ -191,6 +191,28 @@ pub const PolicyCatalog = struct {
         }
         errdefer if (compiled) |*c| c.deinit();
 
+        // CANARY: REQ=REQ-RLS-SESSION-ROW-CONDITIONS; FEATURE="GPS Row Conditions"; ASPECT=ReadOnlyRowConditions; STATUS=TESTED; TEST=tests/test_rls_session_row_conditions.zig; OWNER=security; UPDATED=2026-10-11
+        // A row condition (`owner = current_user()`) filters the rows a read
+        // returns (gps.rowPoliciesAllow); no write path evaluates one. DDL
+        // refuses it on a policy for any other action rather than install a
+        // write policy whose row condition is never true. A stored record
+        // like that is kept, and its row condition stays false.
+        if (on_compile_failure == .reject) {
+            if (compiled) |*c| {
+                if (c.reads_row) {
+                    for (args.actions) |a| {
+                        if (a != .read and a != .match_) {
+                            std.log.scoped(.gps).warn(
+                                "refusing policy '{s}': a row condition applies to READ and MATCH policies only, not {s}: {s}",
+                                .{ args.name, @tagName(a), args.expression_source },
+                            );
+                            return error.RowConditionRequiresReadPolicy;
+                        }
+                    }
+                }
+            }
+        }
+
         const name_dupe = try self.allocator.dupe(u8, args.name);
         errdefer self.allocator.free(name_dupe);
         const scope_dupe = try self.allocator.dupe(u8, args.scope_graph);

@@ -1305,17 +1305,20 @@ fn handlePolicyList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProc
     const policy_catalog_mod = @import("../security/policy_catalog.zig");
     // SONNY-2732: `valid` is false for a stored policy whose expression no
     // longer compiles (kept fail-closed until rewritten).
-    const columns = try allocator.alloc([]const u8, 3);
+    // `condition`: the USING condition as written (`true` when there was none).
+    const columns = try allocator.alloc([]const u8, 4);
     columns[0] = try allocator.dupe(u8, "name");
     columns[1] = try allocator.dupe(u8, "scope_graph");
     columns[2] = try allocator.dupe(u8, "valid");
+    columns[3] = try allocator.dupe(u8, "condition");
     var rows_list = std.ArrayList([]Value).empty;
     if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
         for (pol_cat.listPolicies()) |*pol| {
-            const row = try allocator.alloc(Value, 3);
+            const row = try allocator.alloc(Value, 4);
             row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
             row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
             row[2] = Value{ .Bool = policy_catalog_mod.PolicyCatalog.policyIsValid(pol) };
+            row[3] = Value{ .Str = try allocator.dupe(u8, pol.expression_source) };
             try rows_list.append(allocator, row);
         }
     }

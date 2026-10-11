@@ -89,6 +89,10 @@ live list. As of Phase 7, the shipped families and their coverage are:
   `current_graph()`, `resource.label`, `principal.attributes.<key>`, AND, OR,
   and parenthesized expressions. Compiled at `addPolicy` time into a
   `CompiledExpression` IR; evaluated at `decide()` time.
+- **Row conditions.** A READ or MATCH policy can compare a row property with a
+  session function (`owner = current_user()`, `=` or `<>`). The policy then
+  filters the rows each session reads, evaluated per row for that session and
+  never cached. See `gps-policy-ddl.md`, "USING conditions".
 - **ABAC.** `principal.attributes.<key> = '<value>'` predicates evaluate
   directly against the caller's `AttributeMap` with zero extra allocation.
 - **Non-bypassable tenant + graph enforcement.** `db.labels`,

@@ -12801,6 +12801,19 @@ pub fn build(b: *std.Build) void {
     const rls_policy_ddl_step = b.step("test-rls-policy-ddl", "Run RLS policy compile-error-at-DDL regressions");
     rls_policy_ddl_step.dependOn(&run_rls_policy_ddl_tests.step);
 
+    // RLS row conditions: a policy USING condition comparing a row property with
+    // a session function (owner = current_user()) filters each user's rows.
+    const rls_session_row_conditions_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rls_session_row_conditions.zig"), .target = target, .optimize = optimize });
+    rls_session_row_conditions_test_mod.addImport("geode", root_mod);
+    rls_session_row_conditions_test_mod.addImport("logging", logging_mod);
+    rls_session_row_conditions_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    rls_session_row_conditions_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    const rls_session_row_conditions_tests = b.addTest(.{ .root_module = rls_session_row_conditions_test_mod });
+    const run_rls_session_row_conditions_tests = b.addRunArtifact(rls_session_row_conditions_tests);
+    shardDep(test_step, &run_rls_session_row_conditions_tests.step, 1, test_shard_loads, test_shard_index);
+    const rls_session_row_conditions_step = b.step("test-rls-session-row-conditions", "Run RLS row-condition regressions (owner = current_user() per-user visibility, fail-closed, decision cache, restart, listing)");
+    rls_session_row_conditions_step.dependOn(&run_rls_session_row_conditions_tests.step);
+
     // FTS-INDEX-OPTIONS: CREATE INDEX ... OPTIONS { ... } parsed the braces and discarded
     // every key (same class as ENG-3906).
     const fts_index_options_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_fts_index_options.zig"), .target = target, .optimize = optimize });
