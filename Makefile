@@ -1104,7 +1104,7 @@ cross-macos-x86_64:
 	@echo "Cross-compiling for macOS x86_64..."
 	@# Only run on non-macOS systems or when on ARM macOS
 	@if [ "$$(uname)" != "Darwin" ] || [ "$$(uname -m)" = "arm64" ]; then \
-		$(ZIG) build -Dtarget=x86_64-macos -p zig-out/macos-x86_64 $(ZIG_FLAGS); \
+		$(ZIG) build -Dtarget=x86_64-macos -p zig-out/macos-x86_64 $(ZIG_FLAGS) && \
 		echo "✓ macOS x86_64 build successful"; \
 	else \
 		echo "Skipping macOS x86_64 cross-compile on x86_64 macOS"; \
@@ -1115,7 +1115,7 @@ cross-macos-arm64:
 	@echo "Cross-compiling for macOS ARM64..."
 	@# Only run on non-macOS systems or when on Intel macOS
 	@if [ "$$(uname)" != "Darwin" ] || [ "$$(uname -m)" = "x86_64" ]; then \
-		$(ZIG) build -Dtarget=aarch64-macos -p zig-out/macos-arm64 $(ZIG_FLAGS); \
+		$(ZIG) build -Dtarget=aarch64-macos -p zig-out/macos-arm64 $(ZIG_FLAGS) && \
 		echo "✓ macOS ARM64 build successful"; \
 	else \
 		echo "Skipping macOS ARM64 cross-compile on ARM64 macOS"; \

@@ -2828,6 +2828,7 @@ hook-env-regression:
   stage: lint
   image: python:3.14-slim-bookworm
   before_script:
-    - apt-get update -qq && apt-get install -y --no-install-recommends git
+    - apt-get update -qq && apt-get install -y --no-install-recommends git make
   script:
     - python3 scripts/test_hook_env.py
+    - python3 scripts/test_cross_compile_gates.py
