@@ -1706,10 +1706,15 @@ snapshot:
   # #2512528539). "Lab Servers" (`lab` tag) is the proven
   # docker-capable pool. The default tag set was also tightened to
   # `[company, k8s, linux]` so no other job can land on OVH.
+  # 2026-10-11: added `amd64`. `[company, lab, linux]` also matches the ARM
+  # "Lab Devices / Servers with GPU support" runner (arm64, no docker:dind
+  # daemon), where v0.8.23 build-release job 17091369970 failed with
+  # "Cannot connect to the Docker daemon". `amd64` pins it to Lab Servers.
   tags:
     - company
     - lab
     - linux
+    - amd64
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
   services:
@@ -2323,10 +2328,15 @@ build-release:
   # #2512528539). "Lab Servers" (`lab` tag) is the proven
   # docker-capable pool. The default tag set was also tightened to
   # `[company, k8s, linux]` so no other job can land on OVH.
+  # 2026-10-11: added `amd64`. `[company, lab, linux]` also matches the ARM
+  # "Lab Devices / Servers with GPU support" runner (arm64, no docker:dind
+  # daemon), where v0.8.23 build-release job 17091369970 failed with
+  # "Cannot connect to the Docker daemon". `amd64` pins it to Lab Servers.
   tags:
     - company
     - lab
     - linux
+    - amd64
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
   services:
@@ -2793,3 +2803,16 @@ publish-packages:
 #   - Rust: https://gitlab.com/devnw/codepros/geode/geode-client-rust
 #   - Test Harness: https://gitlab.com/devnw/codepros/geode/geode-test-harness
 # =============================================================================
+
+# 2026-10-11: the apt-publish@v1.48.0 component tags its jobs with
+# $RUNNER_TAG/$RUNNER_TAG_2 (company, linux), which also matches the arm64
+# "Lab Devices / Servers with GPU support" runner. Pin the apt chain to amd64
+# runners so a release can't stall or fail on ARM.
+apt-repo-apt-geodedb-com:
+  tags: [company, linux, amd64]
+
+apt-sign-apt-geodedb-com:
+  tags: [company, linux, amd64]
+
+apt-publish-apt-geodedb-com:
+  tags: [company, linux, amd64]
