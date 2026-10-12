@@ -129,7 +129,7 @@ repos:
       # own goreleaser install.
   - id: goreleaser-check
     name: goreleaser check
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -152,7 +152,7 @@ repos:
       # bumping every transitive importer to the same hash.
   - id: zig-fmt
     name: zig fmt (check)
-    entry: zig fmt --check
+    entry: bash scripts/hook-env.sh zig fmt --check
     language: system
     files: \.zig$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/|docker/zig-packages/|zig-pkg/)
@@ -161,7 +161,7 @@ repos:
     stages: [pre-commit, pre-push]
   - id: no-page-allocator
     name: governance — no std.heap.page_allocator in production src/
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -184,7 +184,7 @@ repos:
     stages: [pre-commit, pre-push]
   - id: zon-no-path-deps
     name: build.zig.zon no local path deps
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -212,7 +212,7 @@ repos:
       # fails (exit 1).
   - id: zon-hash-verify
     name: build.zig.zon hash freshness
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -238,7 +238,7 @@ repos:
       # zig-pkg/ isn't populated so fresh checkouts aren't blocked.
   - id: dep-options-collision
     name: build-options content collision guard
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -264,7 +264,7 @@ repos:
       # the team adds without thinking about runner OS.
   - id: ci-yaml-docker-linux-tag
     name: .gitlab-ci.yml docker jobs require linux tag
-    entry: python3
+    entry: bash scripts/hook-env.sh python3
     args: [scripts/lint_ci_yaml_runner_tags.py]
     language: system
     files: ^\.gitlab-ci\.ya?ml$
@@ -278,7 +278,7 @@ repos:
       # expands empty on misconfigured runners and hits the same error.
   - id: ci-yaml-docker-names
     name: .gitlab-ci.yml docker container names valid
-    entry: python3
+    entry: bash scripts/hook-env.sh python3
     args: [scripts/lint_ci_yaml_docker_names.py]
     language: system
     files: ^\.gitlab-ci\.ya?ml$
@@ -291,7 +291,7 @@ repos:
       # commits aren't blocked.
   - id: gitlab-ci-lint
     name: glab ci lint (.gitlab-ci.yml schema)
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -315,7 +315,7 @@ repos:
       # Zig build check (compilation) - moved to pre-push per #471 to reduce commit friction
   - id: zig-build
     name: zig build (compilation check)
-    entry: zig build
+    entry: bash scripts/hook-env.sh zig build
     language: system
     files: \.(zig|zon)$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
@@ -323,7 +323,7 @@ repos:
     stages: [pre-push]
   - id: cross-compile-check
     name: cross-compile (required targets)
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - make cross-compile-required 2>&1 | tail -20
@@ -360,7 +360,7 @@ repos:
       #      keeps a failure legible.
   - id: zig-test
     name: zig build test (sharded x4 parallel)
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -428,7 +428,7 @@ repos:
       # No feature flags check
   - id: no-feature-flags
     name: no feature flags check
-    entry: python3 tools/no_feature_flags_check.py --repo .
+    entry: bash scripts/hook-env.sh python3 tools/no_feature_flags_check.py --repo .
     language: system
     files: \.zig$
     exclude: ^(vendor/|dist/|zig-out/|docker/zig-packages/)
@@ -448,7 +448,7 @@ repos:
       # GAP-0225: CANARY marker lint check - runs on pre-commit for quick feedback
   - id: canary-lint
     name: CANARY marker lint
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -466,7 +466,7 @@ repos:
     stages: [pre-commit, pre-push]
   - id: canary-verify
     name: CANARY marker verification
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -480,7 +480,7 @@ repos:
     stages: [pre-push]
   - id: status-csv-check
     name: status.csv sync check
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -505,7 +505,7 @@ repos:
     stages: [pre-commit, pre-push]
   - id: status-generate-selftest
     name: CANARY parser/generator golden tests
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -516,7 +516,7 @@ repos:
     stages: [pre-commit, pre-push]
   - id: match-ops-campaign
     name: MATCH ops campaign (parity + bench + CLI transport)
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -534,7 +534,7 @@ repos:
     stages: [pre-push]
   - id: canaryscan-verify
     name: canaryscan GAP verify
-    entry: bash
+    entry: bash scripts/hook-env.sh bash
     args:
     - -c
     - |
@@ -558,13 +558,20 @@ repos:
   hooks:
   - id: detect-diamond-deps
     name: detect diamond deps in build.zig.zon
-    entry: uvx --refresh --from git+https://gitlab.com/devnw/zig/zig-tool detect-diamond-deps
+    entry: bash scripts/hook-env.sh uvx --refresh --from git+https://gitlab.com/devnw/zig/zig-tool detect-diamond-deps
     language: system
     files: ^build\.zig\.zon$
     pass_filenames: false
+  - id: hook-env-regression
+    name: hook Git environment isolation regressions
+    entry: bash scripts/hook-env.sh python3 scripts/test_hook_env.py
+    language: system
+    files: ^(scripts/(hook-env\.sh|test_hook_env\.py)|\.pre-commit-config\.yaml)$
+    pass_filenames: false
+    stages: [pre-commit, pre-push]
   - id: check-version-tag
     name: release tag matches build.zig.zon version
-    entry: uvx --refresh --from git+https://gitlab.com/devnw/zig/zig-tool zig-tool check-version-tag
+    entry: bash scripts/hook-env.sh uvx --refresh --from git+https://gitlab.com/devnw/zig/zig-tool zig-tool check-version-tag
     language: system
     stages: [pre-push]
     pass_filenames: false
@@ -580,3 +587,5 @@ ci:
   autoupdate_schedule: weekly
   skip: [zig-fmt, zig-build, zig-test, cross-compile-check, no-feature-flags, canary-verify, canaryscan-verify, match-ops-campaign, gitlab-ci-lint]
   submodules: false
+
+# SONNY-4778: hooks must not redirect tool-managed Git operations into this worktree.
