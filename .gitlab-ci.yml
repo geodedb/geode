@@ -1679,7 +1679,7 @@ security-trivy:
 # Snapshot release for main branch (non-tag builds)
 snapshot:
   stage: release
-  interruptible: false  # Never cancel in-flight release builds
+  interruptible: true  # Newer main commits supersede this build-only snapshot
   # Skip stage-based ordering: require key quality gates only.
   # All needs set artifacts: false — release jobs build from scratch and
   # downloaded artifacts pollute the workspace (causing GoReleaser dirty-git
