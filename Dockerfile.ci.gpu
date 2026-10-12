@@ -1,6 +1,6 @@
 # Lightweight GPU CI Dockerfile - uses pre-built binaries with GPU support
 # Based on NVIDIA CUDA for GPU acceleration
-FROM nvidia/cuda:13.3.1-base-ubuntu24.04
+FROM nvidia/cuda:13.4.2-base-ubuntu24.04
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -23,7 +23,7 @@ COPY docker/health-check.sh /usr/local/bin/health-check.sh
 RUN chmod +x /usr/local/bin/*
 
 # Switch to non-root user
-USER geode
+USER 10000
 WORKDIR /home/geode
 
 # Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
@@ -38,7 +38,7 @@ EXPOSE 3141/udp 9090/tcp
 
 # Health check using shared script (see docker/health-check.sh)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD /usr/local/bin/health-check.sh
+    CMD ["/usr/local/bin/health-check.sh"]
 
 # Default entrypoint
 # Production default: error-level logging only
