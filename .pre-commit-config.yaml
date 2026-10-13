@@ -1,470 +1,58 @@
-# Pre-commit configuration for Geode Graph Database
-# https://pre-commit.com/
-#
-# Install: pip install pre-commit && pre-commit install
-# Run manually: pre-commit run --all-files
-# Update hooks: pre-commit autoupdate
-
+minimum_pre_commit_version: '4.6.0'
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
 default_stages: [pre-commit]
 fail_fast: false
+exclude: |
+  (?x)^(
+    vendor/|
+    legacy/|
+    dist/|
+    build/|
+    node_modules/|
+    .*/.terraform/|
+    .*/zig-cache/|
+    .*/zig-out/
+  )
 
 repos:
-  # =============================================================================
-  # Standard pre-commit hooks (best practices)
-  # =============================================================================
-- repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: v6.0.0
-  hooks:
-      # Formatting
-  - id: trailing-whitespace
-    args: [--markdown-linebreak-ext=md]
-    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
-  - id: end-of-file-fixer
-    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/|.*\.bin$|.*\.der$|.*\.pem$)
-  - id: mixed-line-ending
-    args: [--fix=lf]
-    exclude: ^(vendor/|dist/|zig-out/|docs/status\.csv$)
-
-      # Syntax validation
-  - id: check-yaml
-    args: [--unsafe]      # Allow custom tags
-    exclude: ^(vendor/|dist/)
-  - id: check-json
-    exclude: ^(vendor/|dist/|zig-out/|\.devcontainer/)
-  - id: check-toml
-  - id: check-xml
-    exclude: ^(vendor/|dist/)
-
-      # Security
-  - id: detect-private-key
-    exclude: ^(certs/|test.*certs/|.*test.*\.pem$|tests/|src/tests/|docker/zig-packages/)
-  - id: check-added-large-files
-    args: [--maxkb=1024]
-    exclude: ^(vendor/|dist/|docs/kb/)
-
-      # Git hygiene
-  - id: check-merge-conflict
-  - id: check-case-conflict
-  - id: check-symlinks
-  - id: destroyed-symlinks
-
-      # Code quality
-  - id: check-executables-have-shebangs
-    exclude: ^(vendor/|dist/|zig-out/)
-  - id: check-shebang-scripts-are-executable
-    exclude: ^(vendor/|dist/|\.envrc)
-
-  # =============================================================================
-  # Shell script linting
-  # =============================================================================
-- repo: https://github.com/shellcheck-py/shellcheck-py
-  rev: v0.11.0.1
-  hooks:
-  - id: shellcheck
-    args: [--severity=error, --shell=bash]
-    exclude: ^(vendor/|dist/|docker/zig-packages/|tests/|scripts/test/|scripts/modularization/|geodetestlab/fixtures/|scripts/comprehensive_graph_test\.sh|scripts/current_graph_capabilities_test\.sh|scripts/graph_data_integration_test\.sh)
-
-  # =============================================================================
-  # Python linting (for test scripts and tools)
-  # =============================================================================
-- repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.14.14
-  hooks:
-  - id: ruff
-    args: [--fix, --exit-non-zero-on-fix]
-    exclude: ^(vendor/|dist/)
-  - id: ruff-format
-    exclude: ^(vendor/|dist/)
-
-  # =============================================================================
-  # Markdown linting
-  # =============================================================================
-- repo: https://github.com/igorshubovych/markdownlint-cli
-  rev: v0.43.0
-  hooks:
-  - id: markdownlint
-    args: [--fix, --disable, MD013, MD033, MD041, MD024, MD060, MD036, MD051, MD052, MD055, --]
-    exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md|specs/|docs/testing/|docker/zig-packages/|docs/superpowers/plans/|\.migration/)
-
-  # =============================================================================
-  # YAML formatting
-  # =============================================================================
-- repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
-  rev: v2.16.0
-  hooks:
-  - id: pretty-format-yaml
-    args: [--autofix, --indent, '2']
-    exclude: ^(vendor/|dist/|geodetestlab/specs/|\.gitlab-ci\.yml|docker-compose.*\.yml)
-
-  # =============================================================================
-  # Dockerfile linting
-  # =============================================================================
-- repo: https://github.com/hadolint/hadolint
-  rev: v2.14.0
-  hooks:
-  - id: hadolint-docker
-    args: [--ignore, DL3008, --ignore, DL3013, --ignore, DL3018, --ignore, DL3015, --ignore, DL4006, --ignore, DL3042, --ignore, SC2086]
-    # Exclude Dockerfile.dev - uses BuildKit heredocs which hadolint doesn't parse
-    exclude: ^(vendor/|dist/|Dockerfile\.dev$)
-
-  # =============================================================================
-  # Commit message validation (Conventional Commits)
-  # =============================================================================
-- repo: https://github.com/commitizen-tools/commitizen
-  rev: v4.12.1
-  hooks:
-  - id: commitizen
-    stages: [commit-msg]
-
-  # =============================================================================
-  # Local/Custom hooks for Zig and GoReleaser
-  # =============================================================================
-- repo: local
-  hooks:
-      # GoReleaser config validation (local hook since goreleaser repo doesn't have
-      # pre-commit support). Skips gracefully if goreleaser isn't installed locally
-      # so missing dev tooling doesn't block commits — CI still enforces via its
-      # own goreleaser install.
-  - id: goreleaser-check
-    name: goreleaser check
-    entry: bash
-    args:
-    - -c
-    - |
-      if command -v goreleaser >/dev/null 2>&1; then
-        goreleaser check
-      else
-        echo "goreleaser not installed locally — skipping (CI will enforce)"
-      fi
-    language: system
-    files: \.goreleaser\.ya?ml$
-    pass_filenames: false
-
-      # Diamond-dep detector — fail loud when build.zig.zon transitively
-      # pins the same package name to two different content hashes.
-      # Soft-fails (exit 2) if the zig package cache hasn't been
-      # populated yet, so a fresh checkout doesn't block commits before
-      # the developer has run `zig build --fetch` once.  Hard-fails
-      # (exit 1) on actual diamonds (e.g. thread_pool-0.2.0 + 0.2.1
-      # both linked into one binary) — those should be resolved by
-      # bumping every transitive importer to the same hash.
-  - id: zig-fmt
-    name: zig fmt (check)
-    entry: zig fmt --check
-    language: system
-    files: \.zig$
-    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/|docker/zig-packages/|zig-pkg/)
-    pass_filenames: false
-    args: [src/, tests/, tools/, benchmarks/, scripts/, build.zig, build.zig.zon]
-    stages: [pre-commit, pre-push]
-  - id: no-page-allocator
-    name: governance — no std.heap.page_allocator in production src/
-    entry: bash
-    args:
-    - -c
-    - |
-      set -euo pipefail
-      if rg -n "std\\.heap\\.page_allocator" src \
-        --glob '!src/test*' \
-        --glob '!src/tests/**' \
-        --glob '!src/probe_*' \
-        --glob '!src/lib.zig'; then
-        echo
-        echo "✗ page_allocator usage detected in production source paths"
-        echo "  smp_allocator is the governance-approved alternative — see"
-        echo "  src/monitoring/metrics_server.zig:75-77 for the precedent."
-        exit 1
-      fi
-    language: system
-    files: \.zig$
-    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/|docker/zig-packages/|zig-pkg/)
-    pass_filenames: false
-    stages: [pre-commit, pre-push]
-  - id: zon-no-path-deps
-    name: build.zig.zon no local path deps
-    entry: bash
-    args:
-    - -c
-    - |
-      if grep -n '\.path\s*=' build.zig.zon 2>/dev/null; then
-        echo ""
-        echo "✗ build.zig.zon contains .path dependencies that will fail in CI."
-        echo "  Use .url + .hash instead (run: zig fetch <git+https://...>)"
-        exit 1
-      fi
-    language: system
-    files: build\.zig\.zon$
-    pass_filenames: false
-
-      # Verify every recorded build.zig.zon hash matches what `zig fetch`
-      # produces from the same SHA. Caused pipeline #1004
-      # (bench-timeseries / bench-query-path / test-gql-compliance):
-      # geode pinned otel@0c34ce9b but the recorded hash was for the
-      # parent commit ee492166, so CI's fresh `zig fetch` produced a
-      # different hash and aborted with `hash mismatch: manifest declares
-      # ... but the fetched package has ...`.
-      #
-      # Soft-skips (exit 2 from the script) if `zig fetch` itself fails
-      # (network down, gitlab unreachable) so offline commits aren't
-      # blocked by infrastructure flake. Only an actual hash MISMATCH
-      # fails (exit 1).
-  - id: zon-hash-verify
-    name: build.zig.zon hash freshness
-    entry: bash
-    args:
-    - -c
-    - |
-      python3 scripts/verify_zon_hashes.py
-      rc=$?
-      if [ "$rc" = "2" ]; then
-        echo "zon-hash-verify: network/cache unavailable, skipping (CI will enforce)"
-        exit 0
-      fi
-      exit $rc
-    language: system
-    files: build\.zig\.zon$
-    pass_filenames: false
-
-      # GitLab CI YAML lint — enforce that any job using `image: docker:`
-      # or `services: docker:dind` also tags `linux` (or inherits a
-      # default that does). Caused pipeline #1009 (v0.5.2 tag):
-      # build-release was assigned to a Windows PowerShell runner that
-      # also matched `company,dedicated` tags; PowerShell choked on the
-      # bash script with `Missing '(' after 'if' in if statement`. The
-      # fix was to add `linux` to the tags list. Same trap exists for
-      # the `snapshot` job and would re-occur for any new docker job
-      # the team adds without thinking about runner OS.
-  - id: ci-yaml-docker-linux-tag
-    name: .gitlab-ci.yml docker jobs require linux tag
-    entry: python3
-    args: [scripts/lint_ci_yaml_runner_tags.py]
-    language: system
-    files: ^\.gitlab-ci\.ya?ml$
-    pass_filenames: false
-
-      # Zig build check (compilation) - moved to pre-push per #471 to reduce commit friction
-  - id: zig-build
-    name: zig build (compilation check)
-    entry: zig build
-    language: system
-    files: \.(zig|zon)$
-    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
-    pass_filenames: false
-    stages: [pre-push]
-  - id: cross-compile-check
-    name: cross-compile (required targets)
-    entry: bash
-    args:
-    - -c
-    - make cross-compile-required 2>&1 | tail -20
-    language: system
-    files: \.(zig|zon)$
-    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
-    pass_filenames: false
-    stages: [pre-push]      # Only on push, too slow for commit
-
-      # Quick unit tests — sharded 4x to keep local pre-push tractable.
-      # Unsharded `zig build test` runs ~6 h locally (memory: shard [3] at
-      # 2 h CI limit; pipeline #2516770059 cut 6 h → 56 min via sharding).
-      # Running the 4 shards in parallel keeps the pre-push hook within a
-      # tolerable window (~25 min wall, dominated by the slowest shard).
-  - id: zig-test
-    name: zig build test (sharded x4 parallel)
-    entry: bash
-    args:
-    - -c
-    - |
-      set -uo pipefail
-      # Heavy parallel sharding oversubscribes the local box (4 shards x
-      # 16-thread perf tests >> available cores), which breaks the
-      # timing-ratio assertions in test_two_phase_edge_lock,
-      # test_group_commit_coordinator, and test_gap0814_union_parallelism.
-      # Each of those tests already self-skips when CI=true, treating that
-      # as "the environment is too contended for perf-ratio claims to be
-      # meaningful". Local pre-push is the same scenario, so we set the
-      # same env so the same tests skip. Functional correctness tests are
-      # unaffected -- they do not gate on this env var.
-      export CI=1
-      # 2026-06-08: also opt out of subprocess cluster tests in the LOCAL
-      # pre-push gate. Each spawns 3 geode processes on distinct IPs with tight
-      # election/replication timeouts; running 4 shards in parallel oversubscribes
-      # the box far past what a 3-node subprocess cluster can converge under —
-      # exactly the "flaky CI runner" their own GEODE_SKIP_SUBPROC_CLUSTER opt-out
-      # is documented for. They get real coverage in the dedicated GitLab CI
-      # cluster jobs (isolated runners). The re-opened raft cluster replication
-      # bug is tracked separately (docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md);
-      # it must not wedge every unrelated .zig push behind a known-failing test.
-      export GEODE_SKIP_SUBPROC_CLUSTER=1
-      pids=()
-      for idx in 0 1 2 3; do
-        zig build test -Dtest-shard-total=4 -Dtest-shard-index="$idx" --summary all \
-          > ".zig-cache/pre-push-shard-${idx}.log" 2>&1 &
-        pids+=($!)
-      done
-      rc=0
-      for i in "${!pids[@]}"; do
-        wait "${pids[$i]}" || { echo "shard ${i} FAILED — see .zig-cache/pre-push-shard-${i}.log"; rc=1; }
-      done
-      if [ "$rc" -ne 0 ]; then
-        for i in 0 1 2 3; do
-          echo
-          echo "=== shard ${i} tail (.zig-cache/pre-push-shard-${i}.log) ==="
-          tail -30 ".zig-cache/pre-push-shard-${i}.log" || true
-        done
-      fi
-      exit "$rc"
-    language: system
-    files: \.(zig|zon)$
-    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
-    pass_filenames: false
-    stages: [pre-push]      # Only on push, may be slow
-
-      # No feature flags check
-  - id: no-feature-flags
-    name: no feature flags check
-    entry: python3 tools/no_feature_flags_check.py --repo .
-    language: system
-    files: \.zig$
-    exclude: ^(vendor/|dist/|zig-out/|docker/zig-packages/)
-    pass_filenames: false
-    stages: [pre-push]
-  - id: check-todos
-    name: check for TODOs/FIXMEs
-    entry: bash
-    args:
-    - -c
-    - |
-      git diff --cached --name-only | xargs grep -l -E "(TODO|FIXME|XXX|HACK)" 2>/dev/null && echo "Warning: Found TODO/FIXME markers in staged files" && exit 0 || exit 0
-    language: system
-    pass_filenames: false
-    verbose: true
-
-      # GAP-0225: CANARY marker lint check - runs on pre-commit for quick feedback
-  - id: canary-lint
-    name: CANARY marker lint
-    entry: bash
-    args:
-    - -c
-    - |
-      echo "Linting CANARY markers..."
-      python3 tools/canary_lint.py --repo . --fail-on-issues || {
-        echo "✗ CANARY markers have schema violations"
-        echo "Run 'python3 tools/canary_normalize.py --repo .' to fix"
-        exit 1
-      }
-      echo "✓ All CANARY markers conform to schema"
-    language: system
-    files: \.zig$
-    exclude: ^(vendor/|dist/|zig-out/|docker/zig-packages/)
-    pass_filenames: false
-    stages: [pre-commit, pre-push]
-  - id: canary-verify
-    name: CANARY marker verification
-    entry: bash
-    args:
-    - -c
-    - |
-      if [ -x tools/status_generate.py ]; then
-        python3 tools/status_generate.py --repo . --out /dev/null --check 2>&1 || echo "CANARY check skipped"
-      fi
-    language: system
-    files: \.zig$
-    exclude: ^(vendor/|dist/|zig-out/)
-    pass_filenames: false
-    stages: [pre-push]
-  - id: status-csv-check
-    name: status.csv sync check
-    entry: bash
-    args:
-    - -c
-    - |
-      echo "Checking if docs/status.csv is up to date..."
-      python3 tools/status_generate.py --repo . --out /tmp/status_check.csv 2>/dev/null
-      if ! diff -q docs/status.csv /tmp/status_check.csv > /dev/null 2>&1; then
-        echo "✗ docs/status.csv is stale - regenerating..."
-        python3 tools/status_generate.py --repo . --out docs/status.csv
-        git add docs/status.csv
-        echo "✓ Updated and staged docs/status.csv"
-      fi
-      echo "✓ docs/status.csv is up to date"
-    language: system
-    always_run: true
-    pass_filenames: false
-    stages: [pre-commit, pre-push]
-  - id: status-generate-selftest
-    name: CANARY parser/generator golden tests
-    entry: bash
-    args:
-    - -c
-    - |
-      python3 tools/test_status_generate.py && python3 tools/test_canary_lint.py
-    language: system
-    files: ^tools/(status_generate|test_status_generate|canary_lint|test_canary_lint)\.py$
-    pass_filenames: false
-    stages: [pre-commit, pre-push]
-  - id: match-ops-campaign
-    name: MATCH ops campaign (parity + bench + CLI transport)
-    entry: bash
-    args:
-    - -c
-    - |
-      echo "=== Running MATCH staged parity campaign ==="
-      zig build test-match-parity --summary all || exit 1
-      echo "=== Running MATCH staged benchmark campaign ==="
-      GEODE_MATCH_BENCH_ENABLE=1 zig build test-match-bench --summary all || exit 1
-      echo "=== Running CLI transport response parity goldens ==="
-      zig build test-cli-transport-parity --summary all || exit 1
-      echo "✓ MATCH and CLI transport parity campaigns passed"
-    language: system
-    files: \.(zig|zon)$
-    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
-    pass_filenames: false
-    stages: [pre-push]
-  - id: canaryscan-verify
-    name: canaryscan GAP verify
-    entry: bash
-    args:
-    - -c
-    - |
-      echo "Verifying GAP_ANALYSIS.md against CANARY markers..."
-      if command -v go &> /dev/null; then
-        cd tools/canaryscan && go build -o /tmp/canaryscan . 2>/dev/null
-        /tmp/canaryscan --root ../.. --verify ../../docs/GAP_ANALYSIS.md --out /tmp/canaryscan_status.json || {
-          echo "✗ GAP_ANALYSIS.md contains claims that don't match CANARY markers"
-          exit 1
-        }
-        echo "✓ GAP_ANALYSIS.md verified"
-      else
-        echo "⚠ Go not installed, skipping canaryscan verify"
-      fi
-    language: system
-    files: (\.zig$|GAP_ANALYSIS\.md$)
-    exclude: ^(vendor/|dist/|zig-out/)
-    pass_filenames: false
-    stages: [pre-push]
-- repo: local
-  hooks:
-  - id: detect-diamond-deps
-    name: detect diamond deps in build.zig.zon
-    entry: uvx --refresh --from git+https://gitlab.com/devnw/zig/zig-tool detect-diamond-deps
-    language: system
-    files: ^build\.zig\.zon$
-    pass_filenames: false
-  - id: check-version-tag
-    name: release tag matches build.zig.zon version
-    entry: uvx --refresh --from git+https://gitlab.com/devnw/zig/zig-tool zig-tool check-version-tag
-    language: system
-    stages: [pre-push]
-    pass_filenames: false
-    always_run: true
-ci:
-  autofix_prs: true
-  autofix_commit_msg: |
-    [pre-commit.ci] auto fixes from pre-commit hooks
-
-    For more info see https://pre-commit.ci
-  autoupdate_branch: ''
-  autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
-  autoupdate_schedule: weekly
-  skip: [zig-fmt, zig-build, zig-test, cross-compile-check, no-feature-flags, canary-verify, canaryscan-verify, match-ops-campaign]
-  submodules: false
+  - repo: git@gitlab.com:devnw/utility-projects/org-pre-commit-hooks
+    rev: v0.1.5
+    hooks:
+      - id: org-trailing-whitespace
+      - id: org-end-of-file-fixer
+      - id: org-mixed-line-ending
+        args: ["--fix=lf"]
+      - id: org-check-yaml
+      - id: org-check-json
+      - id: org-check-toml
+      - id: org-check-xml
+      - id: org-check-merge-conflict
+      - id: org-check-case-conflict
+      - id: org-check-symlinks
+      - id: org-check-shebang-scripts-are-executable
+      - id: org-check-executables-have-shebangs
+      - id: org-check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: org-detect-private-key
+      - id: org-check-todos
+      - id: org-conventional-commit
+      - id: org-conventional-branch
+      - id: org-detect-secrets
+      - id: org-shellcheck
+      - id: org-shfmt
+      - id: org-markdownlint-cli2
+      - id: org-make-pre-commit
+      - id: org-ruff
+      - id: org-ruff-format
+      - id: org-go-fmt
+      - id: org-go-mod-tidy-check
+      - id: org-go-vet
+      - id: org-go-test
+      - id: org-zig-fmt
+      - id: org-zig-build
+      - id: org-zig-test
+      - id: org-zig-detect-diamond-deps
+      - id: org-zig-check-version-tag
+      - id: org-zig-zon-no-path-deps
+      - id: org-zig-zon-hash-verify
+      - id: org-gitlab-ci-lint
