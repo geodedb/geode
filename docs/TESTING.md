@@ -207,6 +207,33 @@ governance-status-check:
     - diff docs/status.csv /tmp/status_check.csv
 ```
 
+`test-zig-unit` (8 Debug shards) is the blocking unit gate on MR, branch and
+default-branch pipelines; a branch push pipeline skips it while an MR is open
+because the MR pipeline for the same commit runs it.
+
+### Code coverage (kcov lane)
+
+Coverage is a dedicated lane (`test-code-coverage` + `test-code-coverage-report`)
+that runs only in a pipeline started by a schedule, the web UI or the API with
+`GEODE_COVERAGE_LANE=1`. It does not run on MR, branch or tag pipelines.
+
+```bash
+# What one lane shard does (needs kcov on PATH and ptrace allowed):
+mkdir -p coverage/raw
+zig build test -Dtest-coverage=true -Dtest-shard-total=8 -Dtest-shard-index=0
+python3 scripts/ci/kcov_coverage.py shard --shard 0 --build-rc $?
+# After all shards: merge and publish only when every manifest entry has data
+python3 scripts/ci/kcov_coverage.py report --total 8
+```
+
+`-Dtest-coverage=true` runs every test the shard owns under kcov, with the exact
+arguments the unit shard uses. The test binaries are built with the LLVM backend
+because kcov reads no line data from the self-hosted backend's DWARF. The build
+also installs `zig-out/coverage/manifest-shard-<i>.tsv`, which lists every run in
+the shard. The report job merges coverage only when every manifest entry produced
+data. Otherwise it prints `COVERAGE INCOMPLETE` or `COVERAGE UNAVAILABLE` and fails
+as an allowed failure. It never publishes a zero or stub report.
+
 ### Docker Testing
 
 ```bash
