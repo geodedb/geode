@@ -111,6 +111,15 @@ stages:
 #   - OVH Dedicated Runners      -> [company, dedicated, docker, linux, x86]
 # Jobs that need docker:dind override with `[company, lab, linux]`.
 default:
+  # SRE-173 follow-up (2026-10-14): runners now share an S3 cache, so the
+  # pull-push zig cache below really round-trips. `.zig-cache/tmp` holds the
+  # tests' scratch databases (std.testing.tmpDir), which then got archived and
+  # restored by every job until test-zig-unit pods were evicted at the 20Gi
+  # ephemeral-storage limit. GitLab's cache has no `exclude`, but after_script
+  # runs before the cache is archived, so drop the scratch dirs here. No job
+  # defines its own after_script, so this applies everywhere.
+  after_script:
+    - rm -rf .zig-cache/tmp zig-cache/tmp
   # 2026-10-10: `x86` matched no k8s runner after the Company Cluster Runner
   # was recreated on 2026-09-27 with [company, k8s, linux, amd64, ubuntu,
   # docker]; every default-tagged job sat in stuck_pending_no_matching_runners.
