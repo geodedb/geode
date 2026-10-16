@@ -175,6 +175,29 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
 /// each registered Run step's artifact to it.
 var g_test_compile_step: ?*std.Build.Step = null;
 
+/// SRE-187: `-Dtest-coverage=true` turns the aggregate `test` step into the
+/// kcov coverage lane. Every Run step this shard selects is executed under
+/// `kcov` (so its exact argv, cwd and env are preserved -- no second, lossy
+/// invocation) and its test artifact is built with the LLVM backend: kcov
+/// reads no line table from the self-hosted x86_64 backend's DWARF (verified
+/// with Zig 0.16.0 + kcov: 0 lines from a self-hosted Debug test binary,
+/// 100% from the same test built with -fllvm), so the default Debug binaries
+/// the blocking `test-zig-unit` shards build cannot be reused for coverage.
+/// Off by default: `zig build test` and every CI unit/ReleaseSafe shard are
+/// unaffected.
+var g_test_coverage: bool = false;
+/// Shard this invocation runs (copied from -Dtest-shard-index) so the
+/// coverage manifest names it.
+var g_test_coverage_shard: usize = 0;
+/// Global registration index of every shardDep call (all shards), so a run's
+/// coverage id is stable no matter which shard it lands on.
+var g_test_coverage_seq: usize = 0;
+/// Deterministic per-shard manifest of every Run step the shard executes:
+/// `id<TAB>shard<TAB>status<TAB>kcov_out_dir<TAB>source`. status is
+/// `instrumented` (kcov writes <kcov_out_dir>) or `uninstrumented:<reason>`.
+/// CI merges coverage only when every instrumented entry produced data.
+var g_test_coverage_manifest: std.ArrayList(u8) = .empty;
+
 // CI test sharding: `zig build test` aggregates ~176 separately-compiled
 // test binaries. On a CPU-constrained runner that exceeds the 6h job
 // budget. `shardDep` lets CI split the aggregate `test` step into N
@@ -224,7 +247,9 @@ fn shardDep(
     if (g_test_compile_step) |compile_all| {
         if (run.producer) |artifact| compile_all.dependOn(&artifact.step);
     }
+    g_test_coverage_seq += 1;
     if (loads.len <= 1) {
+        coverageWrap(run);
         test_step.dependOn(dep);
         return;
     }
@@ -233,7 +258,59 @@ fn shardDep(
         if (l < loads[min_idx]) min_idx = i;
     }
     loads[min_idx] += weight;
-    if (min_idx == index) test_step.dependOn(dep);
+    if (min_idx == index) {
+        coverageWrap(run);
+        test_step.dependOn(dep);
+    }
+}
+
+/// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
+/// `kcov --include-path=<root>/src <out>` and records it in the manifest. Only
+/// a run whose argv[0] is its own producer artifact (a `b.addRunArtifact`
+/// test) is instrumented; anything else is listed as uninstrumented so the
+/// manifest still accounts for every step the shard runs.
+fn coverageWrap(run: *std.Build.Step.Run) void {
+    if (!g_test_coverage) return;
+    const b = run.step.owner;
+    const id = g_test_coverage_seq;
+    const artifact: ?*std.Build.Step.Compile = blk: {
+        const producer = run.producer orelse break :blk null;
+        if (run.argv.items.len == 0) break :blk null;
+        switch (run.argv.items[0]) {
+            .artifact => |a| if (a.artifact == producer) break :blk producer,
+            else => {},
+        }
+        break :blk null;
+    };
+    const source: []const u8 = if (artifact) |a|
+        (if (a.root_module.root_source_file) |p| p.getDisplayName() else a.name)
+    else
+        run.step.name;
+    const art = artifact orelse {
+        g_test_coverage_manifest.print(b.allocator, "{d:0>4}\t{d}\tuninstrumented:not-an-artifact-run\t-\t{s}\n", .{ id, g_test_coverage_shard, source }) catch @panic("OOM");
+        return;
+    };
+    art.use_llvm = true;
+    const out = b.fmt("coverage/raw/{d:0>4}", .{id});
+    run.argv.insertSlice(b.allocator, 0, &.{
+        .{ .bytes = b.dupe("kcov") },
+        .{ .bytes = b.fmt("--include-path={s}", .{b.pathFromRoot("src")}) },
+        .{ .bytes = b.pathFromRoot(out) },
+    }) catch @panic("OOM");
+    g_test_coverage_manifest.print(b.allocator, "{d:0>4}\t{d}\tinstrumented\t{s}\t{s}\n", .{ id, g_test_coverage_shard, out, source }) catch @panic("OOM");
+}
+
+/// SRE-187: installs the shard's coverage manifest as
+/// zig-out/coverage/manifest-shard-<i>.tsv once every shardDep call has run.
+fn installTestCoverageManifest(b: *std.Build, test_step: *std.Build.Step) void {
+    if (!g_test_coverage) return;
+    const wf = b.addWriteFiles();
+    const manifest = wf.add("manifest.tsv", g_test_coverage_manifest.items);
+    const install = b.addInstallFile(manifest, b.fmt("coverage/manifest-shard-{d}.tsv", .{g_test_coverage_shard}));
+    test_step.dependOn(&install.step);
+    // Also reachable on its own so CI can record the expected set before
+    // (and independently of) the instrumented run.
+    b.step("test-coverage-manifest", "Install only the -Dtest-coverage shard manifest (SRE-187)").dependOn(&install.step);
 }
 
 /// SONNY-2746: `test-compile` also compiles every executable target of this
@@ -3804,7 +3881,12 @@ pub fn build(b: *std.Build) void {
     const test_shard_loads = b.allocator.alloc(usize, test_shard_total) catch @panic("OOM allocating test shard load tracker");
     @memset(test_shard_loads, 0);
 
+    g_test_coverage = b.option(bool, "test-coverage", "Run every `test` step selected by this shard under kcov, built with the LLVM backend, and install zig-out/coverage/manifest-shard-<i>.tsv (SRE-187 coverage lane; default false)") orelse false;
+    g_test_coverage_shard = test_shard_index;
+
     const test_step = b.step("test", "Run unit tests");
+    // SRE-187: deferred so the manifest lists every shardDep call below.
+    defer installTestCoverageManifest(b, test_step);
     g_test_compile_step = b.step("test-compile", "Compile every artifact the aggregate `test` step runs, in all shards, and every executable target, without running any of them (SONNY-2394, SONNY-2746)");
     // SONNY-2746: deferred so it runs once every step of build() exists.
     defer addExecutablesToTestCompile(b, target);

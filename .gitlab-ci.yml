@@ -776,6 +776,19 @@ test-zig-unit:
     # job 15304587101), making post-mortems impossible.
     - zig build test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/zig_test_shard_${TEST_SHARD_INDEX}.log
   rules:
+    # SRE-187 (MR admission): merge_request_event pipelines have no
+    # CI_COMMIT_BRANCH, so before this rule the MR pipeline -- the one that
+    # gates the merge -- never ran these shards; its only Debug test run was the
+    # allow_failure coverage matrix. The MR pipeline now runs the blocking
+    # shards itself.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      allow_failure: false
+    # ...and the branch push pipeline for the same SHA skips them while an MR
+    # is open, so the work is not doubled (and the per-shard resource_group
+    # does not serialize the push twin against the MR twin). Default-branch,
+    # MR-less branch, schedule and tag pipelines are unaffected.
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
+      when: never
     - if: '$CI_COMMIT_BRANCH'
       allow_failure: false  # GAP-0219: unit tests still block merge on branch/MR pipelines
     - if: '$CI_COMMIT_TAG'
@@ -1482,90 +1495,129 @@ bench-query-path:
     expire_in: 4 weeks
 
 # =============================================================================
-# Test Stage - Code Coverage Collection (GAP-0251)
-# CANARY: REQ=REQ-CI-COVERAGE-001; FEATURE="CodeCoverageCI"; ASPECT=Core; STATUS=IMPL; OWNER=ci; UPDATED=2026-03-13
-# GAP-0251: Collect line/branch coverage via kcov + Zig DWARF debug info
+# Test Stage - Code Coverage lane (GAP-0251, SRE-187)
+# CANARY: REQ=REQ-CI-COVERAGE-001; FEATURE="CodeCoverageCI"; ASPECT=Core; STATUS=IMPL; OWNER=ci; UPDATED=2026-10-13
+#
+# SRE-187: the old `test-code-coverage` job re-ran the full 8-shard Debug
+# compile + test on every MR and main pipeline (~600 runner-minutes per
+# pipeline), never had kcov (Ubuntu 24.04 -- the $ZIG_IMAGE base -- ships no
+# kcov package, so its apt/apk fallback chain always fell through), published a
+# zero Cobertura stub as success and sampled only the first 5 binaries found in
+# .zig-cache with errors ignored.
+#
+# Why coverage is not collected inside the blocking test-zig-unit shards:
+# kcov reads no line table from Zig 0.16's self-hosted x86_64 backend DWARF
+# (the default for Debug): a self-hosted Debug test binary gives 0 lines, the
+# same test built with -fllvm gives full line data. The authoritative Debug
+# binaries therefore cannot be reused, and shipping them as artifacts (579
+# runs) would not help. Coverage is instead a DEDICATED lane that is only
+# created on demand: a pipeline schedule (or a web/API run) that sets
+# GEODE_COVERAGE_LANE=1. It never runs on MR, branch or tag pipelines, so it
+# adds no compiler work to them.
+#
+# `zig build test -Dtest-coverage=true` (build.zig, SRE-187) executes every
+# Run step of the shard under kcov -- the exact argv/cwd/env the unit shard
+# uses -- with the test artifact built by the LLVM backend, and installs a
+# deterministic manifest (zig-out/coverage/manifest-shard-<i>.tsv) of every
+# run the shard owns. scripts/ci/kcov_coverage.py verifies every manifest entry
+# produced kcov line data and merges; any gap is reported explicitly as
+# COVERAGE INCOMPLETE / UNAVAILABLE and fails the (informational,
+# allow_failure) job. No stub or zero report is ever published.
+#
+# kcov comes from the upstream kcov image pinned by digest (Debian 12,
+# kcov v44-pre f65e); the pinned Zig release tarball is verified by sha256.
+# kcov needs ptrace + personality(ADDR_NO_RANDOMIZE): a runner whose seccomp
+# profile blocks them produces "Can't set personality" and the lane reports
+# COVERAGE INCOMPLETE rather than a number.
 # =============================================================================
+
+.coverage-lane-rules: &coverage-lane-rules
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $GEODE_COVERAGE_LANE == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "web" && $GEODE_COVERAGE_LANE == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "api" && $GEODE_COVERAGE_LANE == "1"'
+
+.coverage-lane-image: &coverage-lane-image
+  image: kcov/kcov@sha256:481289ae32e55e5b733019515acd10948a4f76dfed381765577db909664fc603
 
 test-code-coverage:
   stage: test
-  image: $ZIG_IMAGE
-  # 2026-05-11: this job's `zig build test -Doptimize=Debug` is the same
-  # ~176-binary build that blows past 6h on the k8s runner (pipelines
-  # #2510271779, #2512695029). Sharded the same way as test-zig-unit
-  # (8 shards, 3h cap — see that job's comment). Pass-rate metric + kcov
-  # sampling are now per-shard — acceptable, this is an informational job.
-  timeout: 3h
+  <<: [*coverage-lane-image, *coverage-lane-rules]
+  needs: []
+  # LLVM-backend Debug compile + kcov-instrumented run of the shard; same
+  # 8-way split as test-zig-unit (see that job for the timeout history).
+  timeout: 6h
   parallel:
     matrix:
       - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
-    COVERAGE_THRESHOLD: "50"  # Start conservative; raise as coverage improves
     TEST_SHARD_TOTAL: "8"
+    ZIG_DIST_URL: "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz"
+    ZIG_DIST_SHA256: "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00"
+  allow_failure: true  # informational lane; test-zig-unit is the blocking gate
   before_script:
-    - *zig-vendor-cache
-    - 'apt-get update -qq && apt-get install -y -qq kcov 2>/dev/null || apk add --no-cache kcov 2>/dev/null || echo "WARN: kcov not available, skipping instrumented coverage"'
-  script:
     - |
-      # Pre-create artifact paths up front so a mid-script failure still
-      # leaves behind well-formed artifacts (previous run exited before
-      # the else-branch ran, leaving the pipeline to fail on artifact upload).
-      set +e  # informational job; don't bail on grep/tee edge cases.
-      mkdir -p coverage_report
-      cat > coverage_report/cobertura.xml <<'XML'
-      <?xml version="1.0" ?>
-      <coverage line-rate="0" branch-rate="0" version="0.0.0" timestamp="0">
-        <sources><source>src</source></sources>
-        <packages/>
-      </coverage>
-      XML
-      echo "coverage: test-pass-rate" > metrics.txt
-
-      echo "=== Building Test Binary (shard ${TEST_SHARD_INDEX}/${TEST_SHARD_TOTAL}) ==="
-      zig build test -Doptimize=Debug -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee test_output.log
+      set -euo pipefail
+      kcov --version
+      # The kcov image has no TLS roots, curl or xz; these three are the only
+      # additions (no fallback chain) and the Zig tarball is sha256-pinned.
+      apt-get update -qq
+      apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils >/dev/null
+      curl -fsSL --retry 3 --retry-all-errors -o /tmp/zig.tar.xz "${ZIG_DIST_URL}"
+      echo "${ZIG_DIST_SHA256}  /tmp/zig.tar.xz" | sha256sum -c -
+      mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+      ln -sf /opt/zig/zig /usr/local/bin/zig
+      zig version
+    - *zig-vendor-cache
+  script:
+    - mkdir -p coverage/raw reports
+    # Expected set first, so a timed-out or crashed run still leaves the
+    # manifest the report job checks against.
+    - zig build test-coverage-manifest -Dtest-coverage=true -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX
+    - |
+      set +e
+      zig build test -Dtest-coverage=true -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/coverage_shard_${TEST_SHARD_INDEX}.log
       build_rc=${PIPESTATUS[0]}
-      echo "zig build test exit=${build_rc}"
-
-      # Count test pass rate as baseline metric (Zig prints "N/N tests passed").
-      TOTAL_TESTS=$(grep -oE '[0-9]+/[0-9]+ tests passed' test_output.log | head -1 | awk -F'/' '{print $1}')
-      echo "Total tests passed (this shard): ${TOTAL_TESTS:-0}"
-
-      # If kcov is available, run instrumented coverage
-      if command -v kcov >/dev/null 2>&1; then
-        echo "=== Running Coverage with kcov ==="
-        mkdir -p coverage_report
-        # Find compiled test binaries and run through kcov
-        find .zig-cache/o/ -maxdepth 2 -name "test" -type f -executable 2>/dev/null | head -5 | while read -r test_bin; do
-          kcov --include-path=src/ coverage_report "$test_bin" 2>/dev/null || true
-        done
-        # Extract coverage percentage
-        if [ -f coverage_report/index.json ]; then
-          COVERAGE=$(python3 -c "import json; d=json.load(open('coverage_report/index.json')); print(d.get('percent_covered','0'))" 2>/dev/null || echo "0")
-          echo "Line coverage: ${COVERAGE}%"
-          echo "coverage: ${COVERAGE}%" > metrics.txt
-        fi
-      else
-        echo "kcov not available — cobertura.xml stub already in place"
-      fi
-
-      echo "✓ GAP-0251: Coverage collection configured"
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: true  # Informational until kcov is reliably available in CI image
+      set -e
+      python3 scripts/ci/kcov_coverage.py shard --shard "$TEST_SHARD_INDEX" --build-rc "$build_rc"
   artifacts:
     when: always
     paths:
-      - coverage_report/
-      - metrics.txt
-      - test_output.log
+      - coverage/shard-*/
+      - reports/coverage_shard_*.log
+    expire_in: 1 week
+
+test-code-coverage-report:
+  stage: test
+  <<: *coverage-lane-image
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $GEODE_COVERAGE_LANE == "1"'
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "web" && $GEODE_COVERAGE_LANE == "1"'
+      when: always
+    - if: '$CI_PIPELINE_SOURCE == "api" && $GEODE_COVERAGE_LANE == "1"'
+      when: always
+  needs:
+    - job: test-code-coverage
+      artifacts: true
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive  # kcov resolves source paths of the merged report
+    TEST_SHARD_TOTAL: "8"
+  allow_failure: true  # informational; fails visibly when coverage is incomplete
+  script:
+    - python3 scripts/ci/kcov_coverage.py report --total "$TEST_SHARD_TOTAL"
+  artifacts:
+    when: always
+    paths:
+      - coverage/merged/
+      - coverage/coverage-manifest.tsv
     reports:
       coverage_report:
         coverage_format: cobertura
-        path: coverage_report/cobertura.xml
-    expire_in: 1 week
-  coverage: '/coverage: (\d+\.?\d*)%/'
+        path: coverage/merged/kcov-merged/cobertura.xml
+    expire_in: 4 weeks
+  coverage: '/^coverage: (\d+\.?\d*)%/'
 
 # =============================================================================
 # Test Stage - GQL Compliance Suite (geodetestlab)

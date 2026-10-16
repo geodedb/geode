@@ -262,3 +262,6 @@ otel-output/
 
 # Stray server-side backup artifacts from CLI backup tests
 server_backups/
+
+# SRE-187 kcov coverage lane output (zig build test -Dtest-coverage=true)
+/coverage/
