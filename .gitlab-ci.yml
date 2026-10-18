@@ -159,10 +159,17 @@ default:
 # once, every subsequent pipeline on any branch restores protoc and never
 # touches GitHub. Bump the key + path hash when protoc is upgraded (see the
 # `.@"protoc-*"` hashes in the protobuf dep's build.zig.zon).
+# 2026-10-18: branch key bumped to `zig-cache-v2-*`. Branch caches written
+# before SRE-173 (test scratch data excluded) grew past the k8s pods' 20Gi
+# ephemeral-storage limit, so any pull-push job restoring one failed as a
+# system failure after its script passed (MR !48: security-trivy
+# 17264887635, zig-fips-test 17267152864). v2 starts those caches fresh;
+# the old main caches stay as fallbacks.
 cache:
   - &zig-build-cache
-    key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+    key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
+      - "zig-cache-v2-main-protected"
       - "zig-cache-main-protected"
       - "zig-cache-main"
     paths:
@@ -863,8 +870,9 @@ test-cross-build:
   # test-zig-release-safe jobs are the cache producers; this consumer only
   # needs to read it (deps are vendored in zig-pkg/ regardless).
   cache:
-    key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+    key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
+      - "zig-cache-v2-main-protected"
       - "zig-cache-main-protected"
       - "zig-cache-main"
     paths:
@@ -963,8 +971,9 @@ test-macos-unit:
   # and zig-cache/ which exceed GitLab SaaS S3 upload limits (EntityTooLarge).
   # Dependency packages are vendored in docker/zig-packages/ anyway.
   cache:
-    key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+    key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
+      - "zig-cache-v2-main-protected"
       - "zig-cache-main-protected"
       - "zig-cache-main"
     paths:
