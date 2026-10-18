@@ -383,6 +383,13 @@ variables:
 
 # Zig governance jobs (image: $ZIG_IMAGE, vendor cache pre-populated)
 .governance-zig:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   extends: .governance-base
   image: $ZIG_IMAGE
   before_script:
@@ -724,6 +731,13 @@ harness-rerun-selftest:
 # =============================================================================
 
 test-zig-unit:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   # History of the timeout walk: 1h → 2h → 3h → 4h → 6h. Pipeline
@@ -1209,6 +1223,13 @@ test-zig-release-safe:
 # =============================================================================
 
 test-perf-gates-enforced:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   tags:
@@ -1261,6 +1282,13 @@ test-perf-gates-enforced:
 # =============================================================================
 
 test-performance-benchmarks:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   variables:
@@ -1369,6 +1397,13 @@ loadtest-regression:
 # =============================================================================
 
 bench-timeseries:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   # Blocking gate that previously had no retry: a single transient protobuf
@@ -1409,6 +1444,13 @@ bench-timeseries:
 # =============================================================================
 
 bench-query-path:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   # 2026-05-11: was hitting the project-default 1h budget while building
@@ -1639,6 +1681,13 @@ test-code-coverage-report:
 # =============================================================================
 
 test-gql-compliance:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   # The single-node geode server under the compliance harness occasionally goes
