@@ -163,15 +163,15 @@ default:
 # before SRE-173 (test scratch data excluded) grew past the k8s pods' 20Gi
 # ephemeral-storage limit, so any pull-push job restoring one failed as a
 # system failure after its script passed (MR !48: security-trivy
-# 17264887635, zig-fips-test 17267152864). v2 starts those caches fresh;
-# the old main caches stay as fallbacks.
+# 17264887635, zig-fips-test 17267152864). v2 starts every cache cold: the
+# old main caches were also written before SRE-173 and still overflow, so
+# they are not fallbacks. Jobs that don't build Zig set `cache: []`.
 cache:
   - &zig-build-cache
     key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
       - "zig-cache-v2-main-protected"
-      - "zig-cache-main-protected"
-      - "zig-cache-main"
+      - "zig-cache-v2-main"
     paths:
       - .zig-cache/
       - zig-cache/
@@ -371,6 +371,7 @@ variables:
 
 # Python governance jobs (image: python:3.12-slim)
 .governance-python:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
   image: python:3.14-slim
 
@@ -464,6 +465,7 @@ governance-match-ops-campaign:
       echo "✓ MATCH and CLI transport parity campaigns passed"
 
 governance-no-page-allocator:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
   image: alpine:3.24
   before_script:
@@ -572,6 +574,7 @@ governance-canary-lint:
 # =============================================================================
 
 governance-canaryscan-verify:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
   image: golang:1.27.2-alpine
   variables:
@@ -664,6 +667,7 @@ governance-conformance-sync:
 # when migration files (or the guard itself) change; scans the FULL tree so
 # a regression anywhere in migrations/ blocks the MR, not just the diff.
 migration-guard:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-python
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
@@ -685,6 +689,7 @@ migration-guard:
 # test-harness-integration (scripts/ci/harness_rerun.py). Pure Python, no
 # build. Runs when the selector, its tests, or the harness CI wiring change.
 harness-rerun-selftest:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-python
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
@@ -873,8 +878,7 @@ test-cross-build:
     key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
       - "zig-cache-v2-main-protected"
-      - "zig-cache-main-protected"
-      - "zig-cache-main"
+      - "zig-cache-v2-main"
     paths:
       - .zig-cache/
       - zig-cache/
@@ -974,8 +978,7 @@ test-macos-unit:
     key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
       - "zig-cache-v2-main-protected"
-      - "zig-cache-main-protected"
-      - "zig-cache-main"
+      - "zig-cache-v2-main"
     paths:
       - zig-cache/
     policy: pull
@@ -1320,6 +1323,7 @@ test-performance-benchmarks:
 # =============================================================================
 
 loadtest-regression:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: test
   image: python:3.14-slim
   before_script:
@@ -1703,6 +1707,7 @@ test-gql-compliance:
 # =============================================================================
 
 security-secrets:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: security
   needs: []  # Run independently of test stage
   # CI-FIX: GitLab's runner wraps `script:` commands in `sh -c "..."`, but
@@ -2911,6 +2916,7 @@ apt-publish-apt-geodedb-com:
 
 # SONNY-4778: tools must not redirect Git operations into this checkout.
 hook-env-regression:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: lint
   image: python:3.14-slim-bookworm
   before_script:
