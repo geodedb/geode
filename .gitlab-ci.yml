@@ -1170,12 +1170,20 @@ test-zig-release-safe:
   # test-cross-build note).
   tags: [company, dedicated, linux, x86, aws-spot]
   timeout: 6h
+  # 2026-10-19: 8 -> 12 shards. On the AWS-spot pool the 8 shards ran 2-6h
+  # each (shard [2]: 213, 310 and 324 min on earlier pipelines), and with a
+  # cold `zig-cache-v2-*` branch cache shard [2] hit the 6h cap (MR !48,
+  # job 17268963137). It was not hung: the log shows test binaries finishing
+  # steadily until the timeout killed the compile of the next one
+  # ("compile test ReleaseSafe native failure ... signal TERM"). Compiling
+  # the ReleaseSafe test binaries dominates, so 12 shards cut each shard's
+  # work by about a third.
   parallel:
     matrix:
-      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
+      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
-    TEST_SHARD_TOTAL: "8"
+    TEST_SHARD_TOTAL: "12"
   retry:
     # max: 2 covers the transient protobuf transitive-dep fetch flake
     # (HttpConnectionClosing) when the shared cache fails to extract — same
