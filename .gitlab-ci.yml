@@ -1259,7 +1259,8 @@ test-perf-gates-enforced:
         test-canary-planner-plan-selection \
         test-canary-planner-pipeline-selection \
         test-canary-txn-write-skew \
-        test-canary-recovery-corrupt-latency; do
+        test-canary-recovery-corrupt-latency \
+        test-perf-optimizations; do
         echo "=== ${step} (GEODE_PERF_GATES=enforce, ReleaseFast) ==="
         zig build "${step}" -Doptimize=ReleaseFast --summary failures > "reports/perf_gate_${step}.log" 2>&1 || rc=1
         grep -E "PERF_CLAIM_VIOLATED|Build Summary" "reports/perf_gate_${step}.log" || true

@@ -4797,6 +4797,9 @@ pub fn build(b: *std.Build) void {
     perf_opt_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     perf_opt_tests.root_module.addImport("transport/query_work_item", query_work_item_mod);
     perf_opt_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
+    // "Performance: scheduler overhead" is a latency claim: reported unless
+    // GEODE_PERF_GATES=enforce (test-perf-gates-enforced runs this step).
+    perf_opt_tests.root_module.addImport("perf_gate", perf_gate_mod);
     // GAP-0514 Phase 6: named step so the thread-pool/DRR/backoff suite is
     // runnable outside the (blocked) monolithic `zig build test` shard sweep.
     const run_perf_opt_tests = b.addRunArtifact(perf_opt_tests);

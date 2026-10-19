@@ -46,6 +46,7 @@ const testing = std.testing;
 const thread_pool = @import("transport/thread_pool");
 const QueryWorkItem = @import("transport/query_work_item").QueryWorkItem;
 const stream_scheduler = @import("transport/stream_scheduler");
+const perf_gate = @import("perf_gate");
 
 // ============================================================================
 // Thread Pool Tests
@@ -637,9 +638,24 @@ test "Performance: scheduler overhead" {
     std.debug.print("\nScheduler overhead: {} ns/call\n", .{per_call_ns});
 
     // Should be fast: < 10μs per call in optimized builds. Debug builds
-    // (the default for `zig build test-*`) carry ~2-3x overhead and run on
-    // shared/loaded hosts, so allow 50μs there — still catches the
-    // O(n²)-regression class this test exists for.
+    // (the default for `zig build test-*`) carry ~2-3x overhead, so allow
+    // 50μs there — still catches the O(n²)-regression class this test
+    // exists for.
+    //
+    // This is a wall-clock latency claim on a 10k-iteration microbenchmark,
+    // so it goes through the shared perf gate (tests/perf_gate.zig,
+    // SONNY-2394/2439): reported by default, enforced by the scheduled
+    // `test-perf-gates-enforced` job (ReleaseFast, GEODE_PERF_GATES=enforce).
+    // On the shared CI pools it measured a loaded host, not the scheduler:
+    // the same code took 3.9μs (ReleaseSafe) and 13.6μs (Debug) on an idle
+    // dev box but 10.3-13.4μs (ReleaseSafe, AWS-spot release-safe shard 0)
+    // and 62-179μs (Debug, k8s unit shard 0) in CI, so it failed main's
+    // pipelines with no change to the scheduler.
     const threshold_ns: i128 = if (@import("builtin").mode == .Debug) 50000 else 10000;
-    try testing.expect(per_call_ns < threshold_ns);
+    try perf_gate.check(
+        "scheduler overhead per getScheduledStreams call (100 streams)",
+        per_call_ns < threshold_ns,
+        "per_call_ns={d} (max {d})",
+        .{ per_call_ns, threshold_ns },
+    );
 }
