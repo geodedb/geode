@@ -83,6 +83,14 @@ include:
       project_key: SEC
       component_id: "12496"
 
+# jira-event-intake files SEC issues from this pipeline's scan reports. The
+# v1.55.8 component sets no `interruptible`, so it inherited the default
+# below and a newer commit cancelled it before it ran (pipelines 2956718298
+# and 2962288660). Intake is not disposable validation: keep it running
+# (SRE-172). ci-catalog v1.56.0+ pins this in the component itself.
+jira-event-intake:
+  interruptible: false
+
 workflow:
   auto_cancel:
     on_new_commit: interruptible
