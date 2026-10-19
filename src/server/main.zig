@@ -302,7 +302,7 @@ const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64
 // the round 14 and 15 regressions run on 8 MiB threads in ReleaseSafe. A
 // Debug build keeps 16 MiB (its frames are several times larger; 64
 // admission threads, 1 GiB). GEODE_QUIC_ADMISSION_STACK_MB overrides it
-// (8..1048576); lower GEODE_QUIC_CONNECTION_ADMISSION_THREADS under strict
+// (8..536870912); lower GEODE_QUIC_CONNECTION_ADMISSION_THREADS under strict
 // overcommit. A thread that cannot be spawned rejects its connection
 // (logged); the server serves on.
 //
@@ -316,6 +316,15 @@ const default_quic_connection_admission_threads = if (builtin.mode == .Debug) 64
 // A request's nesting limits hold on the smaller of the two.
 const default_quic_admission_stack_mb: usize = if (builtin.mode == .Debug) 16 else 8;
 const min_quic_admission_stack_mb: usize = 8;
+// The override's ceiling, 512 TiB, is above the default mmap window of every
+// 64-bit Linux user address space (47-bit on x86-64, 48-bit on arm64), so a
+// stack of that size can never be mapped. The F13 regression
+// (tests/test_sonny3253_round14_minors.zig) relies on that to make every
+// admission spawn fail. The old ceiling, 1 TiB, could be mapped: Zig reserves
+// the stack PROT_NONE and then makes it writable, and with
+// vm.overcommit_memory=1 (the kubelet default on the k8s CI nodes) the kernel
+// accepts 1 TiB, so the spawn succeeded and the connection was served.
+const max_quic_admission_stack_mb: usize = 512 * 1024 * 1024;
 var g_quic_admission_stack_size: usize = default_quic_admission_stack_mb * 1024 * 1024;
 
 // Process-global AuthProvider used by the embedded LSP TCP listener to
@@ -2720,7 +2729,7 @@ pub fn main() !void {
             "GEODE_QUIC_ADMISSION_STACK_MB",
             default_quic_admission_stack_mb,
             min_quic_admission_stack_mb,
-            1024 * 1024,
+            max_quic_admission_stack_mb,
         ) * 1024 * 1024;
 
         // CANARY: REQ=REQ-QUIC-HC-020; FEATURE="ConfigurableStreamThrottle"; ASPECT=ServerEnv; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26

@@ -12,7 +12,9 @@
 // address space (4096 x 16 MiB = 64 GiB); a release build now takes 8 MiB,
 // GEODE_QUIC_ADMISSION_STACK_MB overrides it, and a thread that cannot be
 // spawned rejects its connection while the server serves on (tested with a
-// stack no kernel will map).
+// stack no kernel will map: 512 TiB, above every 64-bit Linux mmap window.
+// The first version used 1 TiB, which a kernel with vm.overcommit_memory=1,
+// as on the k8s CI nodes, maps, so the connection was served).
 //
 // CANARY: REQ=REQ-SONNY-3253-RETIRED-IDMAPS; FEATURE="IdMap"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3253_round14_minors.zig; OWNER=storage; UPDATED=2026-09-28
 
@@ -105,11 +107,15 @@ test "SONNY-3253 (F13): a QUIC admission thread that cannot be spawned rejects i
     defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
-    // A 1 TiB admission stack: no kernel maps it, so every spawn fails.
+    // A 512 TiB admission stack (GEODE_QUIC_ADMISSION_STACK_MB's ceiling):
+    // larger than the 47-bit (x86-64) or 48-bit (arm64) mmap window, so even
+    // the PROT_NONE reservation fails and every spawn fails, whatever the
+    // kernel's overcommit policy. 1 TiB was mapped under
+    // vm.overcommit_memory=1 (k8s nodes) and the connection was served.
     var server = try util.spawnServer(
         allocator,
         &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
-        &.{ "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1", "GEODE_QUIC_ADMISSION_STACK_MB=1048576" },
+        &.{ "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1", "GEODE_QUIC_ADMISSION_STACK_MB=536870912" },
     );
     defer server.deinit();
     fx.sleepMs(4000);
