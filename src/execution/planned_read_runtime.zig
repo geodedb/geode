@@ -552,6 +552,11 @@ fn executeProfiledInScope(
 
     var plan = (try buildPlanIfSupported(allocator, q, context)) orelse return null;
     errdefer plan.deinit(allocator);
+    // REQ-GQL-028 fail-closed: storage-native plans read the engine directly
+    // and never pass the hydration chokepoint, so refuse a quarantined graph
+    // here (its data is known damaged; the plan would answer OK from the
+    // records that are left).
+    if (graph_store.quarantineErrorForGraph(allocator, plan.graph_name)) |err| return err;
 
     if (plan.execution_mode != .storage_native or (q.match.chains.len > 0 and graph_store.getGlobalAdapter() == null)) {
         return try executeLegacyProfiled(allocator, q, context, param_names, param_values, plan);

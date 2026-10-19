@@ -178,6 +178,16 @@ pub const ShardAccum = struct {
     }
 };
 
+/// Kill switch for the scan-vs-manifest live-node check in `scanShard`:
+/// GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK=1 lets an operator hydrate a store
+/// whose manifest counts are known to be wrong (e.g. to salvage what is left
+/// of a damaged graph). Read per shard scan, a cold path.
+fn liveCountCheckDisabled() bool {
+    const raw_z = std.c.getenv("GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK") orelse return false;
+    const raw = std.mem.span(raw_z);
+    return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
+}
+
 pub const ScanOptions = struct {
     /// False when the caller's edge-side products are fully covered by
     /// snapshots (P3 `skip_edge_scan`): passes 2 and the edge part of pass 3
@@ -318,6 +328,7 @@ pub fn scanShard(
     // behind in an arena) and are copied exact-size into the edge arena at the
     // end — the edge phase is the last consumer of the rows array.
     var rows: std.ArrayList(NodeRow) = .empty;
+    const durable_live_before = @atomicLoad(u64, &engine.manifest.node_count, .monotonic);
     {
         var reader = try makeReader(engine, .nodes, &dirty, page_buf);
         const npp = gs.node.nodesPerPage(page_size);
@@ -346,6 +357,23 @@ pub fn scanShard(
                 }
             }
         }
+    }
+
+    // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=ZeroedPageRebuildFailClosed; STATUS=TESTED; TEST=tests/canary_recovery_corrupt_latency.zig; OWNER=storage; UPDATED=2026-10-19
+    // REQ-GQL-028 fail-closed: the pager reads a zeroed page (torn write,
+    // zeroed sectors) as a FRESH page, so its node records look empty and
+    // pass 1 skips them. Hydration then built the graph's indexes without
+    // those nodes, and every read answered OK with them missing (0 of 300
+    // rows). The shard manifest's live-node count is maintained on every
+    // create and delete and persisted at checkpoint (WAL replay heals it), so
+    // finding fewer live records than it promises means lost node data. Fail
+    // the scan: the graph is quarantined and its reads fail closed. The
+    // smaller of the counts read before and after the pass is used, so a
+    // concurrent delete can never look like a loss.
+    const durable_live = @min(durable_live_before, @atomicLoad(u64, &engine.manifest.node_count, .monotonic));
+    if (rows.items.len < durable_live and !liveCountCheckDisabled()) {
+        std.log.scoped(.hydration_scan).warn("hydration scan found {d} live node record(s) but the shard manifest counts {d}: node pages lost or zeroed -- refusing to hydrate from partial data", .{ rows.items.len, durable_live });
+        return error.DataCorruption;
     }
 
     // ---- pass 2: adj_out.store (sequential read + in-memory chain walk) -----

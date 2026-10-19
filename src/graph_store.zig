@@ -1955,7 +1955,66 @@ const HydrationEntry = struct {
     /// the quarantine door). Never cleared for the process lifetime: the next
     /// reopen re-registers the graph fresh and re-scans (self-heal).
     failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Why the build failed, as a `GraphQuarantineError` code (set before
+    /// `failed`). Reads of the quarantined graph fail with this error.
+    failure: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(QuarantineCause.unknown)),
 };
+
+// CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=QuarantinedGraphFailClosed; STATUS=TESTED; TEST=tests/canary_recovery_corrupt_latency.zig; OWNER=storage; UPDATED=2026-10-19
+/// The errors a read of a quarantined graph fails with. A graph is
+/// quarantined when its first-touch hydration fails (`ensureGraphHydrated`):
+/// its resident loop2 indexes are PARTIAL, so serving a read from them would
+/// answer OK with missing rows (a corrupt graph read as empty). A storage
+/// corruption error from the build is reported as itself; any other cause
+/// (out of memory, I/O) as `GraphQuarantined`. Reopening the store
+/// re-registers the graph and retries the build.
+pub const GraphQuarantineError = error{ GraphQuarantined, ChecksumMismatch, DataCorruption, InvalidData };
+
+const QuarantineCause = enum(u8) {
+    unknown,
+    checksum_mismatch,
+    data_corruption,
+    invalid_data,
+
+    fn of(err: anyerror) QuarantineCause {
+        return switch (err) {
+            error.ChecksumMismatch => .checksum_mismatch,
+            error.DataCorruption => .data_corruption,
+            error.InvalidData => .invalid_data,
+            else => .unknown,
+        };
+    }
+
+    fn toError(cause: QuarantineCause) GraphQuarantineError {
+        return switch (cause) {
+            .unknown => error.GraphQuarantined,
+            .checksum_mismatch => error.ChecksumMismatch,
+            .data_corruption => error.DataCorruption,
+            .invalid_data => error.InvalidData,
+        };
+    }
+};
+
+/// The first quarantined graph this thread's current statement touched
+/// through `ensureGraphHydrated` (the hydration chokepoint every resident
+/// read and write passes). The executor clears it when a program starts and
+/// fails the statement with it (`takeQuarantinedReadError`), so every one of
+/// the chokepoint's callers fails closed without each having to return an
+/// error. The security graph is exempt: user queries cannot read it, and its
+/// internal readers already fall back to the engine (GAP-0061).
+threadlocal var t_quarantined_read: ?GraphQuarantineError = null;
+
+/// Clear this thread's quarantined-read note (start of a program).
+pub fn clearQuarantinedReadError() void {
+    t_quarantined_read = null;
+}
+
+/// Return and clear this thread's quarantined-read note.
+pub fn takeQuarantinedReadError() ?GraphQuarantineError {
+    const err = t_quarantined_read;
+    t_quarantined_read = null;
+    return err;
+}
 
 pub const GraphStore = struct {
     allocator: std.mem.Allocator,
@@ -12261,6 +12320,9 @@ pub const GraphStore = struct {
             defer self.hydration_mutex.unlock(io);
             break :blk self.pending_hydration.get(graph_name) orelse return;
         };
+        // Fail closed: note a quarantined graph for the executor (on every
+        // return path, including the build that just failed).
+        defer if (entry.failed.load(.acquire)) noteQuarantinedRead(graph_name, entry);
         if (entry.done.load(.acquire)) return;
         entry.mutex.lockUncancelable(io);
         defer entry.mutex.unlock(io);
@@ -12288,6 +12350,7 @@ pub const GraphStore = struct {
             // this flag to skip persisting them (and delete stale snapshot
             // files) so the next reopen re-scans cleanly instead of loading a
             // partial-but-counter-current snapshot forever.
+            entry.failure.store(@intFromEnum(QuarantineCause.of(err)), .release);
             entry.failed.store(true, .release);
             break :blk null;
         };
@@ -12319,6 +12382,32 @@ pub const GraphStore = struct {
         if (outcome == .rebuilt) {
             self.persistHydrationProductsForGraph(adapter, graph_name);
         }
+    }
+
+    fn noteQuarantinedRead(graph_name: []const u8, entry: *HydrationEntry) void {
+        if (std.mem.eql(u8, graph_name, SECURITY_GRAPH_NAME)) return;
+        if (t_quarantined_read != null) return;
+        t_quarantined_read = @as(QuarantineCause, @enumFromInt(entry.failure.load(.acquire))).toError();
+    }
+
+    /// The error a read of `graph_name` fails with if the graph is
+    /// quarantined (`GraphQuarantineError`), else null. Does NOT hydrate: for
+    /// the engine-direct read paths, which never need the resident indexes.
+    pub fn graphQuarantineError(self: *GraphStore, graph_name: []const u8) ?GraphQuarantineError {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.hydration_mutex.lockUncancelable(io);
+        defer self.hydration_mutex.unlock(io);
+        const entry = self.pending_hydration.get(graph_name) orelse return null;
+        if (!entry.failed.load(.acquire)) return null;
+        return @as(QuarantineCause, @enumFromInt(entry.failure.load(.acquire))).toError();
+    }
+
+    /// `ensureGraphHydrated`, then fail if the graph is quarantined: for the
+    /// entry points that must refuse a quarantined graph before reading it
+    /// (`snapshotUnderReadLock` copies the resident indexes).
+    pub fn requireGraphHydrated(self: *GraphStore, graph_name: []const u8) GraphQuarantineError!void {
+        self.ensureGraphHydrated(graph_name);
+        if (self.graphQuarantineError(graph_name)) |err| return err;
     }
 
     /// Hydrate EVERY graph that still has deferred resident indexes. Used by the
@@ -15952,7 +16041,9 @@ pub fn snapshotUnderReadLock(allocator: std.mem.Allocator, graph_name: []const u
     // precedent. Deadlock-free: `ensureGraphHydrated`'s build path
     // (loadOneGraphFromAdapterFull) takes only leaf mutexes + the store-wide
     // hydration_build_mutex, never the per-graph adapter rwlock acquired below.
-    getPrimaryGlobalStore(allocator).ensureGraphHydrated(graph_name);
+    // Fail closed: a quarantined graph's resident indexes are partial, and
+    // the snapshot would copy them.
+    try getPrimaryGlobalStore(allocator).requireGraphHydrated(graph_name);
 
     const handle = acquireGraphReadLockTagged(graph_name, .snapshot);
     defer releaseGraphLock(handle);
@@ -16007,7 +16098,7 @@ pub fn snapshotUnderReadLocks(allocator: std.mem.Allocator, graph_names: []const
     for (graph_names) |g| try session_graph.authorizeSnapshotRead(context.*, g);
     if (graph_names.len == 1) return snapshotUnderReadLock(allocator, graph_names[0]);
     const source = getPrimaryGlobalStore(allocator);
-    for (graph_names) |g| source.ensureGraphHydrated(g);
+    for (graph_names) |g| try source.requireGraphHydrated(g);
 
     const held = try allocator.alloc(?graph_storage_adapter.ReadLockAcquisition, graph_names.len);
     defer allocator.free(held);
@@ -17435,6 +17526,12 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 
 pub fn getWritableGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     return getPrimaryGlobalStore(allocator);
+}
+
+/// `GraphStore.graphQuarantineError` on the primary (live) store, whatever
+/// read store this thread has pushed: a snapshot copy has no hydration state.
+pub fn quarantineErrorForGraph(allocator: std.mem.Allocator, graph_name: []const u8) ?GraphQuarantineError {
+    return getPrimaryGlobalStore(allocator).graphQuarantineError(graph_name);
 }
 
 pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {

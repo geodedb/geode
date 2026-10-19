@@ -980,6 +980,10 @@ pub fn prepare(
     const aa = arena.allocator();
 
     const graph_name = try aa.dupe(u8, resolveGraphName(context));
+    // REQ-GQL-028 fail-closed: this engine-direct path skips the executor's
+    // statement gate, so refuse a quarantined graph here (no hydration: the
+    // stream reads the engine, not the resident indexes).
+    if (graph_store.quarantineErrorForGraph(allocator, graph_name)) |err| return err;
     const var_name = try aa.dupe(u8, variable_name);
 
     // Clone parameter bindings into the stream arena so PULL pages can

@@ -17,11 +17,17 @@
 //     status OK, while count() still said 300); it now fails with
 //     error.DataCorruption -- but only because the label index here is loaded
 //     from its (clean) snapshot and still lists the lost ids.
+//   * when the label index is instead REBUILT from the node store (a crash
+//     restart, or stale snapshots: the ReleaseSafe lane hit this), the lost
+//     ids vanish from it, but the graph's hydration scan now finds fewer live
+//     records than the shard manifests count and fails with
+//     error.DataCorruption. The graph is quarantined, and every read or write
+//     of a quarantined graph fails closed (GraphQuarantineError) instead of
+//     answering OK from its partial indexes.
 // NOT guaranteed (engine-level gaps, root fix tracked as SONNY-2409: the pager
 // must not treat a zeroed page below the written high-water mark as fresh):
-//   * zeroed pages read by an UNLABELED scan, or by a label scan after the
-//     derived label index is REBUILT from the node store (engine scanNodes
-//     skips empty records, so the lost ids vanish): partial rows, status OK;
+//   * zeroed pages read by an UNLABELED engine-direct scan before anything
+//     hydrates the graph: partial rows, status OK;
 //   * a page whose 32-byte HEADER alone is zeroed: CRC verification is
 //     skipped, so damage in the rest of that page can go undetected.
 //
@@ -222,6 +228,142 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
     try perf_gate.envelope("corrupt-page reopen-to-detection", cv, p95 / mean, 0.22, 2.55);
+}
+
+/// Reopen the store, run `hook` against it before any query (it may
+/// quarantine a graph or remove files), then run `query` through the executor
+/// exactly like `reopenAndReadAll`.
+fn reopenAndRun(
+    allocator: std.mem.Allocator,
+    data_dir: []const u8,
+    query: []const u8,
+    comptime hook: ?fn (*graph_store.GraphStore) anyerror!void,
+) !Outcome {
+    const store = try graph_store.initGlobalStore(allocator, data_dir);
+    defer graph_store.deinitGlobalStoreForTestCrash();
+    defer execution.cleanupCatalogInstance();
+    try store.loadFromFile();
+    if (hook) |h| try h(store);
+
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    const prev_scratch = query_arena.pushScratchAllocator(scratch.allocator());
+    defer query_arena.popScratchAllocator(prev_scratch);
+
+    var parsed = try geode.parseGql(query, allocator);
+    defer parsed.deinit();
+    const catalog = try execution.ensureCatalogInstance(allocator);
+    const ctx = execution.ExecutionContext{ .catalog = catalog };
+    var result = execution.executeProgramWithContext(allocator, &parsed.program, ctx) catch |err| return .{ .failed = err };
+    defer result.deinit(allocator);
+    return .{ .rows = result.rows.len };
+}
+
+/// Invalidate the derived-index snapshots under `data_dir`: delete geode's
+/// loop2 hydration snapshots and empty the engine's `labels.idx` (the engine
+/// rebuilds a label index it cannot load). The reopen then rebuilds the label
+/// index and the graph's resident indexes by scanning the node store, as
+/// after a crash or once a checkpoint has made the snapshots stale.
+fn invalidateDerivedIndexSnapshots(data_dir: []const u8) !usize {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = try std.Io.Dir.cwd().openDir(io, data_dir, .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(std.testing.allocator);
+    defer walker.deinit();
+    var invalidated: usize = 0;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        if (std.mem.eql(u8, entry.basename, "labels.idx")) {
+            var file = try entry.dir.openFile(io, entry.basename, .{ .mode = .read_write });
+            defer file.close(io);
+            try file.setLength(io, 0);
+            invalidated += 1;
+            continue;
+        }
+        if (!std.mem.startsWith(u8, entry.basename, "hydration_") or !std.mem.endsWith(u8, entry.basename, ".snap")) continue;
+        try entry.dir.deleteFile(io, entry.basename);
+        invalidated += 1;
+    }
+    return invalidated;
+}
+
+// CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=QuarantinedGraphFailClosed; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_QuarantinedGraphFailsClosed; OWNER=storage; UPDATED=2026-10-19
+// A graph whose lazy hydration failed is quarantined (its resident indexes
+// are partial). A query that reads it must fail with a typed error, never
+// answer OK from the partial indexes (which read as empty).
+test "TestCANARY_REQ_GQL_028_QuarantinedGraphFailsClosed" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+
+    try seedCleanStore(allocator, data_dir);
+    const Quarantine = struct {
+        fn hook(store: *graph_store.GraphStore) anyerror!void {
+            if (!store.forceHydrationQuarantineForTest(graph_store.DEFAULT_GRAPH_NAME)) return error.GraphNotDeferred;
+        }
+    };
+    const queries = [_][]const u8{
+        READ_ALL_NAMES,
+        "MATCH (n) RETURN n.name AS name",
+        "MATCH (n:Person) RETURN count(n) AS c",
+    };
+    for (queries) |q| {
+        switch (try reopenAndRun(allocator, data_dir, q, Quarantine.hook)) {
+            .rows => |n| {
+                std.debug.print("QUARANTINED GRAPH READ OK: '{s}' returned {d} row(s)\n", .{ q, n });
+                return error.QuarantinedGraphReadSucceeded;
+            },
+            .failed => |err| try std.testing.expectEqual(error.GraphQuarantined, err),
+        }
+    }
+    // A clean reopen re-registers the graph and serves every row again.
+    switch (try reopenAndReadAll(allocator, data_dir)) {
+        .rows => |n| try std.testing.expectEqual(NODES, n),
+        .failed => |e| return e,
+    }
+}
+
+// CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=ZeroedPageRebuildFailClosed; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_ZeroedPagesFailHydrationRebuild; OWNER=storage; UPDATED=2026-10-19
+// Zeroed node pages read as fresh, so a hydration that rebuilds the resident
+// indexes from the node store (no counter-current loop2 snapshot) used to
+// find 0 of 300 nodes and serve 0 rows with status OK. The rebuild now
+// checks the scan against each shard's durable live-node count and fails
+// with error.DataCorruption, which quarantines the graph and fails the read.
+test "TestCANARY_REQ_GQL_028_ZeroedPagesFailHydrationRebuild" {
+    const allocator = std.testing.allocator;
+    // The label scan only: an UNLABELED scan of zeroed pages still reads the
+    // engine without hydrating and returns partial rows (SONNY-2409).
+    const queries = [_][]const u8{ READ_ALL_NAMES, "MATCH (n:Person) RETURN count(n) AS c" };
+    for (queries) |q| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+        defer allocator.free(data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+
+        try seedCleanStore(allocator, data_dir);
+        try std.testing.expect(try damageFiles(data_dir, "nodes.store", .zero_page) > 0);
+        try std.testing.expect(try invalidateDerivedIndexSnapshots(data_dir) > 0);
+        // Twice: the failed rebuild must not persist its partial products
+        // (the next reopen would otherwise load an empty snapshot as truth).
+        for (0..2) |_| {
+            switch (try reopenAndRun(allocator, data_dir, q, null)) {
+                .rows => |n| {
+                    std.debug.print("SILENTLY ACCEPTED: '{s}' returned {d}/{d} rows over zeroed node pages\n", .{ q, n, NODES });
+                    return error.CorruptionSilentlyAccepted;
+                },
+                .failed => |err| {
+                    if (!isTypedCorruptionError(err)) {
+                        std.debug.print("'{s}': unexpected error.{s}\n", .{ q, @errorName(err) });
+                        return err;
+                    }
+                },
+            }
+        }
+    }
 }
 
 fn monotonicNs() u64 {

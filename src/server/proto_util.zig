@@ -485,6 +485,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // member chains are evaluated with loops). 54001 = SQLSTATE
         // statement_too_complex (class 54, program limit exceeded).
         error.ExpressionTooDeep => .{ .code = "54001", .message = "ExpressionTooDeep: the expression nests too deeply to evaluate on this server thread's stack; flatten it" },
+        // REQ-GQL-028: the graph's first-touch hydration failed and it is
+        // quarantined; reads and writes of it fail closed until the server
+        // reopens it. A storage corruption error from the build is reported
+        // as itself (58000 ChecksumMismatch / DataCorruption / InvalidData).
+        error.GraphQuarantined => .{ .code = "58000", .message = "GraphQuarantined: the graph's indexes could not be loaded from storage, so it is quarantined and refuses reads and writes; see the server log, then restart the server to retry" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
 }
