@@ -1778,3 +1778,80 @@ test "self-heal flush is bounded + non-fatal: rwlock busy past deadline skips th
 
     graph_store.deinitGlobalStoreForTestCrash();
 }
+
+// REQ-GQL-028 follow-up: property-value OVERFLOW (gs v0.4.x) stores a value
+// too large for a property page as a 13-byte stub naming a var.store chain.
+// The stream scan decoded the stub itself (`UnresolvedOverflowValue`, mapped
+// to DataCorruption), so ANY graph holding one large node or edge property
+// failed its hydration and was quarantined. Before reads of a quarantined
+// graph failed closed this was invisible (reads fell back to the engine);
+// after, every read of such a graph failed. The scan must resolve the stub's
+// chain exactly like gs `PropStore.decodeMaybeOverflow`.
+test "overflow values: stream scan resolves node and edge overflow stubs (no quarantine)" {
+    const allocator = testing.allocator;
+    graph_store.deinitGlobalStore();
+    _ = unsetenv(KILL_SWITCH);
+    _ = setenv(PERSIST_KILL_SWITCH, "1", 1);
+    defer _ = unsetenv(PERSIST_KILL_SWITCH);
+    geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(true);
+    defer geode.graph_storage_adapter.setEagerExactRebuildOnReopenDisabledForTest(null);
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    // Larger than a page (overflow) and spanning several var.store pages
+    // (multi-page chain); distinct bytes so a mis-assembled chain is caught.
+    const BIG: usize = 64 * 1024 + 123;
+    const big_node = try allocator.alloc(u8, BIG);
+    defer allocator.free(big_node);
+    for (big_node, 0..) |*b, i| b.* = 'a' + @as(u8, @intCast(i % 26));
+    const big_edge = try allocator.alloc(u8, BIG / 2);
+    defer allocator.free(big_edge);
+    for (big_edge, 0..) |*b, i| b.* = 'A' + @as(u8, @intCast((i * 7) % 26));
+
+    const N: usize = 40;
+    var ids: [N]u64 = undefined;
+    var big_id: u64 = 0;
+    var eid: u64 = 0;
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        for (&ids, 0..) |*id, i| {
+            id.* = try store.createNodeWithGraph(&[_][]const u8{"Blob"}, GRAPH);
+            try store.setNodeProperty(id.*, "idx", .{ .Int = @intCast(i) });
+        }
+        big_id = ids[N / 2];
+        try store.setNodeProperty(big_id, "blob", .{ .String = big_node });
+        eid = try store.createEdgeWithGraph(ids[0], ids[1], "LINKS", GRAPH);
+        try store.setEdgeProperty(eid, "payload", .{ .String = big_edge });
+        // LIGHT checkpoint (pages, no snapshots) + crash: the reopen below
+        // must scan-rebuild the graph through the streaming path.
+        try store.saveToFileEx(true);
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+
+    graph_store.setDataDirOverride(allocator, data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+    graph_store.resetLazyHydrateCounters();
+    const store = graph_store.getGlobalStore(allocator);
+    store.ensureGraphHydrated(GRAPH);
+
+    try testing.expect(graph_store.hydrationStreamingScanCount() >= 1);
+    // RED (pre-fix): DataCorruption -> quarantined.
+    try testing.expectEqual(@as(?graph_store.GraphQuarantineError, null), store.graphQuarantineError(GRAPH));
+    try testing.expectEqual(N, store.countNodesByLabel(GRAPH, "Blob", null));
+    try testing.expectEqual(@as(usize, 1), store.countEdgesForGraph(GRAPH));
+
+    // The resident bodies carry the resolved values, byte for byte.
+    const node = store.getNodePtr(big_id) orelse return error.NodeNotResident;
+    const nv = node.properties.get("blob") orelse return error.MissingProperty;
+    try testing.expectEqualStrings(big_node, nv.String);
+    const edge = store.getEdgePtr(eid) orelse return error.EdgeNotResident;
+    const ev = edge.properties.get("payload") orelse return error.MissingProperty;
+    try testing.expectEqualStrings(big_edge, ev.String);
+
+    graph_store.deinitGlobalStoreForTestCrash();
+}

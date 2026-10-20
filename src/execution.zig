@@ -1368,6 +1368,9 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     // SONNY-3247: at the outermost entry point, the parameters are the
     // request's (a nested entry's context carries the ones its caller bound).
     if (t_entry_depth == 0) try param_check.checkProgram(program, context.query_param_names, context.query_param_values);
+    // REQ-GQL-028 fail-closed: a quarantined graph noted before this program
+    // (another request on this thread) is not this program's.
+    if (t_entry_depth == 0) graph_store.clearQuarantinedReadError();
     // SONNY-2823: the program's session engine transaction ends with it.
     enterEntryPoint();
     defer leaveEntryPoint();
@@ -1571,6 +1574,7 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     // SONNY-3247: see `executeProgramWithContext`.
     if (t_entry_depth == 0) try param_check.checkStatement(&stmt, context.query_param_names, context.query_param_values);
+    if (t_entry_depth == 0) graph_store.clearQuarantinedReadError();
     // SONNY-2823: a statement run on its own (the PROFILE paths) is a
     // program; its session engine transaction ends with it.
     enterEntryPoint();
@@ -1617,6 +1621,15 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     // NULL, 0 or a skipped row somewhere inside, fails the statement: its
     // rows are not an answer (`eval.noteLimitError`).
     const limit_error = eval.takeDeferredLimitError(owns_in_predicate_scope);
+    // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=QuarantinedGraphFailClosed; STATUS=TESTED; TEST=tests/canary_recovery_corrupt_latency.zig; OWNER=storage; UPDATED=2026-10-19
+    // REQ-GQL-028 fail-closed: the statement touched a quarantined graph
+    // (its lazy hydration failed, so its resident indexes are partial):
+    // whatever it read is not an answer, and whatever it wrote is undone.
+    if (graph_store.takeQuarantinedReadError()) |err| {
+        _ = eval.exitInPredicateScope(owns_in_predicate_scope);
+        result.deinit(allocator);
+        return endStatementFailed(owns_in_predicate_scope, err);
+    }
     if (eval.exitInPredicateScope(owns_in_predicate_scope)) {
         result.deinit(allocator);
         return endStatementFailed(owns_in_predicate_scope, error.InListRequiresList);

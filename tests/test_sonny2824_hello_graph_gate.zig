@@ -20,6 +20,7 @@
 // CANARY: REQ=REQ-SONNY-2824-HELLO-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2824_hello_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -139,8 +140,18 @@ test "SONNY-2824: a HELLO over QUIC or gRPC creates a missing graph only for a p
     // An allow policy FOR SCHEMA on one graph, for everyone (USING true).
     try expectOk(&admin, allocator, "CREATE POLICY schema_2824 ON GRAPH granted_2824 FOR SCHEMA");
 
+    // The gRPC leg drives the listener with the plaintext GrpcProtoClient,
+    // which only a Debug server accepts (grpc_server
+    // .shouldAllowGrpcPlaintextFallback ignores the opt-in otherwise), and the
+    // spawned server is built with this test's -Doptimize. In ReleaseSafe the
+    // server reset the gRPC connection, so the whole test failed with
+    // ConnectionResetByPeer and no output (main's test-zig-release-safe
+    // shard [3] since this test landed). Run the QUIC leg in every mode and
+    // the gRPC leg where it can run, as test_sonny3032_grpc_session_expiry
+    // does.
+    const transports: []const Transport = if (builtin.mode == .Debug) &.{ .quic, .grpc } else &.{.quic};
     var wrong: usize = 0;
-    for ([_]Transport{ .quic, .grpc }) |t| {
+    for (transports) |t| {
         // ReadWrite has no schema permission: the HELLO is refused, and the
         // graph it named is not created (it was, and bound).
         var buf: [64]u8 = undefined;

@@ -159,12 +159,19 @@ default:
 # once, every subsequent pipeline on any branch restores protoc and never
 # touches GitHub. Bump the key + path hash when protoc is upgraded (see the
 # `.@"protoc-*"` hashes in the protobuf dep's build.zig.zon).
+# 2026-10-18: branch key bumped to `zig-cache-v2-*`. Branch caches written
+# before SRE-173 (test scratch data excluded) grew past the k8s pods' 20Gi
+# ephemeral-storage limit, so any pull-push job restoring one failed as a
+# system failure after its script passed (MR !48: security-trivy
+# 17264887635, zig-fips-test 17267152864). v2 starts every cache cold: the
+# old main caches were also written before SRE-173 and still overflow, so
+# they are not fallbacks. Jobs that don't build Zig set `cache: []`.
 cache:
   - &zig-build-cache
-    key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+    key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
-      - "zig-cache-main-protected"
-      - "zig-cache-main"
+      - "zig-cache-v2-main-protected"
+      - "zig-cache-v2-main"
     paths:
       - .zig-cache/
       - zig-cache/
@@ -364,6 +371,7 @@ variables:
 
 # Python governance jobs (image: python:3.12-slim)
 .governance-python:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
   image: python:3.14-slim
 
@@ -375,6 +383,13 @@ variables:
 
 # Zig governance jobs (image: $ZIG_IMAGE, vendor cache pre-populated)
 .governance-zig:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   extends: .governance-base
   image: $ZIG_IMAGE
   before_script:
@@ -457,6 +472,7 @@ governance-match-ops-campaign:
       echo "✓ MATCH and CLI transport parity campaigns passed"
 
 governance-no-page-allocator:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
   image: alpine:3.24
   before_script:
@@ -565,6 +581,7 @@ governance-canary-lint:
 # =============================================================================
 
 governance-canaryscan-verify:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
   image: golang:1.27.2-alpine
   variables:
@@ -657,6 +674,7 @@ governance-conformance-sync:
 # when migration files (or the guard itself) change; scans the FULL tree so
 # a regression anywhere in migrations/ blocks the MR, not just the diff.
 migration-guard:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-python
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
@@ -678,6 +696,7 @@ migration-guard:
 # test-harness-integration (scripts/ci/harness_rerun.py). Pure Python, no
 # build. Runs when the selector, its tests, or the harness CI wiring change.
 harness-rerun-selftest:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-python
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
@@ -712,6 +731,13 @@ harness-rerun-selftest:
 # =============================================================================
 
 test-zig-unit:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   # History of the timeout walk: 1h → 2h → 3h → 4h → 6h. Pipeline
@@ -863,10 +889,10 @@ test-cross-build:
   # test-zig-release-safe jobs are the cache producers; this consumer only
   # needs to read it (deps are vendored in zig-pkg/ regardless).
   cache:
-    key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+    key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
-      - "zig-cache-main-protected"
-      - "zig-cache-main"
+      - "zig-cache-v2-main-protected"
+      - "zig-cache-v2-main"
     paths:
       - .zig-cache/
       - zig-cache/
@@ -963,10 +989,10 @@ test-macos-unit:
   # and zig-cache/ which exceed GitLab SaaS S3 upload limits (EntityTooLarge).
   # Dependency packages are vendored in docker/zig-packages/ anyway.
   cache:
-    key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+    key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
     fallback_keys:
-      - "zig-cache-main-protected"
-      - "zig-cache-main"
+      - "zig-cache-v2-main-protected"
+      - "zig-cache-v2-main"
     paths:
       - zig-cache/
     policy: pull
@@ -1144,12 +1170,20 @@ test-zig-release-safe:
   # test-cross-build note).
   tags: [company, dedicated, linux, x86, aws-spot]
   timeout: 6h
+  # 2026-10-19: 8 -> 12 shards. On the AWS-spot pool the 8 shards ran 2-6h
+  # each (shard [2]: 213, 310 and 324 min on earlier pipelines), and with a
+  # cold `zig-cache-v2-*` branch cache shard [2] hit the 6h cap (MR !48,
+  # job 17268963137). It was not hung: the log shows test binaries finishing
+  # steadily until the timeout killed the compile of the next one
+  # ("compile test ReleaseSafe native failure ... signal TERM"). Compiling
+  # the ReleaseSafe test binaries dominates, so 12 shards cut each shard's
+  # work by about a third.
   parallel:
     matrix:
-      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
+      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
-    TEST_SHARD_TOTAL: "8"
+    TEST_SHARD_TOTAL: "12"
   retry:
     # max: 2 covers the transient protobuf transitive-dep fetch flake
     # (HttpConnectionClosing) when the shared cache fails to extract — same
@@ -1197,6 +1231,13 @@ test-zig-release-safe:
 # =============================================================================
 
 test-perf-gates-enforced:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   tags:
@@ -1226,7 +1267,8 @@ test-perf-gates-enforced:
         test-canary-planner-plan-selection \
         test-canary-planner-pipeline-selection \
         test-canary-txn-write-skew \
-        test-canary-recovery-corrupt-latency; do
+        test-canary-recovery-corrupt-latency \
+        test-perf-optimizations; do
         echo "=== ${step} (GEODE_PERF_GATES=enforce, ReleaseFast) ==="
         zig build "${step}" -Doptimize=ReleaseFast --summary failures > "reports/perf_gate_${step}.log" 2>&1 || rc=1
         grep -E "PERF_CLAIM_VIOLATED|Build Summary" "reports/perf_gate_${step}.log" || true
@@ -1249,6 +1291,13 @@ test-perf-gates-enforced:
 # =============================================================================
 
 test-performance-benchmarks:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   variables:
@@ -1311,6 +1360,7 @@ test-performance-benchmarks:
 # =============================================================================
 
 loadtest-regression:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: test
   image: python:3.14-slim
   before_script:
@@ -1356,6 +1406,13 @@ loadtest-regression:
 # =============================================================================
 
 bench-timeseries:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   # Blocking gate that previously had no retry: a single transient protobuf
@@ -1396,6 +1453,13 @@ bench-timeseries:
 # =============================================================================
 
 bench-query-path:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   # 2026-05-11: was hitting the project-default 1h budget while building
@@ -1626,6 +1690,13 @@ test-code-coverage-report:
 # =============================================================================
 
 test-gql-compliance:
+  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
+  # zig build cache (~9G for one shard's Debug build) and then building on
+  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
+  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
+  # build measured 9.2G locally, which fits.
+  cache:
+    - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
   # The single-node geode server under the compliance harness occasionally goes
@@ -1694,6 +1765,7 @@ test-gql-compliance:
 # =============================================================================
 
 security-secrets:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: security
   needs: []  # Run independently of test stage
   # CI-FIX: GitLab's runner wraps `script:` commands in `sh -c "..."`, but
@@ -1721,6 +1793,12 @@ security-trivy:
   image:
     name: aquasec/trivy:0.74.0
     entrypoint: [""]
+  # The scan skips .zig-cache/ and zig-cache/, so it doesn't need the global
+  # zig build cache. Inheriting it (pull-push) restored a multi-GB branch
+  # cache into the pod and then re-archived it, which pushed the pod past
+  # its 20Gi ephemeral-storage limit: the scan passed and the job still
+  # failed as a system failure (MR !48, jobs 17264887635 and 17265588251).
+  cache: []
   retry:
     max: 2
     when:
@@ -2139,6 +2217,16 @@ zig-fips-test-0.16.0:
   stage: test
   image: registry.gitlab.com/devnw/ci-catalog/zig-fips:0.16.0
   needs: []
+  # Read the zig build cache but never save it. Restoring the shared cache
+  # plus this job's two FIPS-mode builds leaves too little room to archive
+  # it inside the k8s pod's 20Gi ephemeral-storage limit: the job passed
+  # 18/18 in both modes and then failed as a system failure while saving the
+  # cache (MR !48, jobs 17267152864 and 17267557035). The release-safe and
+  # unit shards produce this cache; this gate only consumes it.
+  cache:
+    - <<: *zig-build-cache
+      policy: pull
+    - *zig-protoc-cache
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
@@ -2886,6 +2974,7 @@ apt-publish-apt-geodedb-com:
 
 # SONNY-4778: tools must not redirect Git operations into this checkout.
 hook-env-regression:
+  cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: lint
   image: python:3.14-slim-bookworm
   before_script:

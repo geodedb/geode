@@ -542,10 +542,23 @@ fn authFlightKey(username: []const u8, password: []const u8, stored_hash: []cons
 }
 
 /// Upper bound on how long a single-flight WAITER blocks for the owner to
-/// publish its result. The owner's critical section is exactly one Argon2id
-/// verification (10-50 ms), so this is ~40x headroom; it exists only so that an
-/// owner which never publishes cannot hang the auth path forever (ENG-3954 R-C).
-const auth_flight_wait_timeout_ns: u64 = 2 * std.time.ns_per_s;
+/// publish its result. It exists only so that an owner which never publishes
+/// cannot hang the auth path forever (ENG-3954 R-C); the owner's `defer`
+/// already publishes on every exit, so the bound is a last-resort net and must
+/// never fire on an owner that is still verifying.
+///
+/// The owner's critical section is one Argon2id verification: 10-50 ms in a
+/// release build on an idle core, but ~360 ms in a Debug build, and several
+/// times that on a CPU-starved host or under a HELLO fan-out where many
+/// verifications for different users share the cores. The old 2 s bound fired
+/// there: the waiters gave up with AuthFlightTimeout (AuthUnavailable to the
+/// client) while the owner went on to accept the same credentials, so the
+/// failure was spurious (authenticate_concurrent_cached_user_singleflights_
+/// persistent_refresh: 1-4 of 8 logins on the k8s CI shards, and locally with
+/// the test pinned to one core next to 16 busy loops). 30 s is longer than any
+/// verification we have seen and still bounds a stuck owner. A `var` only so
+/// the abandoned-owner regression in this file can shorten it.
+var auth_flight_wait_timeout_ns: u64 = 30 * std.time.ns_per_s;
 
 /// Drop the registration for `key` only when it still points at `flight`.
 /// Caller holds `auth_flight_mutex`. Guarding on identity keeps a late owner
@@ -1887,6 +1900,12 @@ fn authFlightCountForTest() usize {
 }
 
 test "auth_flight_abandoned_owner_does_not_strand_waiters" {
+    // The production bound is 30 s; this test needs the waiter to give up
+    // inside its 3 s budget, which is what the bound is for.
+    const saved_wait_timeout_ns = auth_flight_wait_timeout_ns;
+    auth_flight_wait_timeout_ns = 2 * std.time.ns_per_s;
+    defer auth_flight_wait_timeout_ns = saved_wait_timeout_ns;
+
     // Key built exactly as authenticateChecked:780 builds it.
     const key = try authFlightKey("alice", "Password1!", "$argon2id$v=19$stub", 1, authFlightLane());
 
