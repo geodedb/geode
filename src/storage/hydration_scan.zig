@@ -613,6 +613,55 @@ fn durableFor(allocs: ScanAllocs, consumer: PropConsumer) Allocator {
     };
 }
 
+/// Property-value OVERFLOW (gs v0.4.x): resolves an overflow stub's var.store
+/// chain to the ORIGINAL encoded value bytes, mirroring gs
+/// `PropStore.decodeMaybeOverflow` + `VarStore.read` (legacy chain only: gs
+/// writes overflow values with `writeLegacyChain`). Overflow values are rare
+/// (only values too large for a property page spill), so each chain is read
+/// on demand through its own var.store reader rather than batched into the
+/// ascending pass-4 sweep. Results live in scratch: the caller decodes them
+/// into its durable arena immediately.
+const OverflowResolver = struct {
+    engine: *gs.engine.GraphEngine,
+    dirty: *const DirtySet,
+    scratch: Allocator,
+    reader: ?PageReader = null,
+
+    fn resolve(self: *OverflowResolver, stub: gs.property.OverflowStub) ![]u8 {
+        if (self.reader == null) {
+            const buf = try self.scratch.alloc(u8, self.engine.buffer_pool.page_size);
+            self.reader = try makeReader(self.engine, .var_store, self.dirty, buf);
+        }
+        const reader = &self.reader.?;
+        // VarStore.dataCapacity: page minus header/meta and the TDE tag tail.
+        const cap: u32 = self.engine.buffer_pool.page_size - PAGE_HEADER_SIZE - VAR_META_SIZE - self.engine.var_store.tail_reserve;
+        // A stub's ref is always a legacy chain; a slab head or page 0 here
+        // means the stub is damaged.
+        if (gs.var_store.isSlabHead(stub.var_ref)) return error.DataCorruption;
+        var current = gs.var_store.VarStore.refFirstPage(stub.var_ref);
+        if (current == 0) return error.DataCorruption;
+
+        const out = try self.scratch.alloc(u8, stub.encoded_len);
+        var len: usize = 0;
+        var hops: u32 = 0;
+        while (current != 0) : (hops += 1) {
+            if (hops >= MAX_CHAIN_HOPS) return error.CircularChainDetected;
+            const data = try reader.read(current);
+            const next = std.mem.bytesToValue(u64, data[PAGE_HEADER_SIZE..][0..8]);
+            const data_len = std.mem.bytesToValue(u32, data[PAGE_HEADER_SIZE + 8 ..][0..4]);
+            if (data_len > cap) return error.DataCorruption;
+            // R10 (gs): the chain must hold exactly the length the stub
+            // recorded; a longer chain is corruption, not a value to truncate.
+            if (len + data_len > out.len) return error.DataCorruption;
+            @memcpy(out[len..][0..data_len], data[PAGE_HEADER_SIZE + VAR_META_SIZE ..][0..data_len]);
+            len += data_len;
+            current = next;
+        }
+        if (len != out.len) return error.DataCorruption;
+        return out;
+    }
+};
+
 fn scanProps(
     allocs: ScanAllocs,
     engine: *gs.engine.GraphEngine,
@@ -631,6 +680,8 @@ fn scanProps(
     // MANY nodes' blobs — the whole point of the sequential pass. Pure
     // scaffolding: scratch.
     var wanted: std.AutoHashMapUnmanaged(u64, std.ArrayList(PendingChain)) = .empty;
+
+    var overflow = OverflowResolver{ .engine = engine, .dirty = dirty, .scratch = allocs.scratch };
 
     for (rows, 0..) |*row, ri| {
         if (row.corrupt_skip) continue;
@@ -707,10 +758,10 @@ fn scanProps(
                     .node => |ri| {
                         const row = &rows[ri];
                         if (gs.prop_store.isSlabHead(row.prop_head) and chain.hops == 0) {
-                            try consumeSlabBlob(allocs, logical, row, opts, chain);
+                            try consumeSlabBlob(allocs, logical, row, opts, chain, &overflow);
                             continue;
                         }
-                        try consumeLegacyPage(allocs, logical, chain, rows, opts, &next_wanted);
+                        try consumeLegacyPage(allocs, logical, chain, rows, opts, &next_wanted, &overflow);
                     },
                     .edge => |e| {
                         const er = &rows[e.row].edges[e.edge];
@@ -718,10 +769,10 @@ fn scanProps(
                         // (hops==0), decoded like the node slab path — NOT the
                         // legacy page-chain parser.
                         if (gs.prop_store.isSlabHead(er.entry.prop_head) and chain.hops == 0) {
-                            try consumeEdgeSlabBlob(allocs, logical, er, opts, chain);
+                            try consumeEdgeSlabBlob(allocs, logical, er, opts, chain, &overflow);
                             continue;
                         }
-                        try consumeLegacyPage(allocs, logical, chain, rows, opts, &next_wanted);
+                        try consumeLegacyPage(allocs, logical, chain, rows, opts, &next_wanted, &overflow);
                     },
                 }
             }
@@ -738,13 +789,14 @@ fn consumeSlabBlob(
     row: *NodeRow,
     opts: ScanOptions,
     chain: *PendingChain,
+    overflow: *OverflowResolver,
 ) !void {
     const blob = slabBlobSlice(logical, row.prop_head) catch |err| {
         return nodeBlobCorrupt(row, opts, chain.saw_internal_id, err);
     };
     if (blob.len < 4) return nodeBlobCorrupt(row, opts, chain.saw_internal_id, error.DataCorruption);
     const entry_count = std.mem.readInt(u32, blob[0..4], .little);
-    parseEntries(allocs, blob[4..], entry_count, opts.internal_id_key, chain) catch |err| switch (err) {
+    parseEntries(allocs, blob[4..], entry_count, opts.internal_id_key, chain, overflow) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return nodeBlobCorrupt(row, opts, chain.saw_internal_id, err),
     };
@@ -765,11 +817,12 @@ fn consumeEdgeSlabBlob(
     er: *EdgeRow,
     opts: ScanOptions,
     chain: *PendingChain,
+    overflow: *OverflowResolver,
 ) !void {
     const blob = try slabBlobSlice(logical, er.entry.prop_head);
     if (blob.len < 4) return error.DataCorruption;
     const entry_count = std.mem.readInt(u32, blob[0..4], .little);
-    try parseEntries(allocs, blob[4..], entry_count, opts.internal_id_key, chain);
+    try parseEntries(allocs, blob[4..], entry_count, opts.internal_id_key, chain, overflow);
     er.props = try allocs.edge.dupe(PropEntry, chain.entries.items);
 }
 
@@ -804,6 +857,7 @@ fn consumeLegacyPage(
     rows: []NodeRow,
     opts: ScanOptions,
     next_wanted: *std.AutoHashMapUnmanaged(u64, std.ArrayList(PendingChain)),
+    overflow: *OverflowResolver,
 ) !void {
     if (chain.hops >= MAX_CHAIN_HOPS) return error.CircularChainDetected;
     chain.hops += 1;
@@ -814,7 +868,7 @@ fn consumeLegacyPage(
         // Mirror gs readEntryCountChecked: min entry 3 bytes + 4 dir bytes.
         const capacity = @as(u32, @intCast(logical.len)) - PROP_DATA_OFFSET - PROP_DIR_COUNT_SIZE;
         if (entry_count > capacity / (3 + PROP_DIR_ENTRY_SIZE)) break :blk error.DataCorruption;
-        parseEntriesRegion(allocs, logical[PROP_DATA_OFFSET..], entry_count, opts.internal_id_key, chain) catch |err| switch (err) {
+        parseEntriesRegion(allocs, logical[PROP_DATA_OFFSET..], entry_count, opts.internal_id_key, chain, overflow) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => break :blk err,
         };
@@ -870,8 +924,9 @@ fn parseEntries(
     entry_count: u32,
     internal_id_key: []const u8,
     chain: *PendingChain,
+    overflow: *OverflowResolver,
 ) !void {
-    return parseEntriesRegion(allocs, region, entry_count, internal_id_key, chain);
+    return parseEntriesRegion(allocs, region, entry_count, internal_id_key, chain, overflow);
 }
 
 /// Shared entry-region parser (slab blob body / legacy page entry region):
@@ -888,6 +943,7 @@ fn parseEntriesRegion(
     entry_count: u32,
     internal_id_key: []const u8,
     chain: *PendingChain,
+    overflow: *OverflowResolver,
 ) !void {
     const durable = durableFor(allocs, chain.consumer);
     var off: usize = 0;
@@ -899,8 +955,25 @@ fn parseEntriesRegion(
         if (off + key_len > region.len) return error.DataCorruption;
         const key_src = region[off..][0..key_len];
         off += key_len;
-        const decoded = gs.property.decode(durable, region[off..]) catch return error.DataCorruption;
-        off += decoded.bytes_read;
+        // Property-value OVERFLOW (gs v0.4.x): a value too large for the
+        // page is stored as a 13-byte stub naming a var.store chain that
+        // holds the encoded value. Resolve it exactly like gs's
+        // `PropStore.decodeMaybeOverflow`: decoding the stub itself is
+        // `UnresolvedOverflowValue`, which used to fail every hydration of a
+        // graph holding one large value (DataCorruption -> quarantine).
+        const decoded = if (gs.property.isOverflowStub(region[off..])) blk: {
+            const stub = gs.property.readOverflowStub(region[off..]) catch return error.DataCorruption;
+            off += gs.property.OVERFLOW_STUB_SIZE;
+            const real = try overflow.resolve(stub);
+            // Decoded into the durable arena below; give the (possibly
+            // large) scratch copy back (the arena reclaims its last block).
+            defer overflow.scratch.free(real);
+            break :blk gs.property.decode(durable, real) catch return error.DataCorruption;
+        } else blk: {
+            const inline_value = gs.property.decode(durable, region[off..]) catch return error.DataCorruption;
+            off += inline_value.bytes_read;
+            break :blk inline_value;
+        };
 
         if (std.mem.eql(u8, key_src, internal_id_key)) chain.saw_internal_id = true;
 
