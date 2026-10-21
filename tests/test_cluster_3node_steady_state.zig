@@ -84,14 +84,23 @@ fn binaryPresent() bool {
 
 const ADMIN_PW = "SteadyStatePw123!";
 
+/// CA that signed the nodes' leaf cert; set by makeCerts. `geode query` trusts it
+/// via --ca-cert so the client VERIFIES the node's TLS certificate. The client
+/// refuses --insecure-tls-skip-verify in a release build (SEC-CLI-01), so a
+/// skip-verify client exits 1 before connecting under ReleaseSafe and every
+/// query of this suite came back empty.
+var query_ca_path: ?[]const u8 = null;
+
 /// Run `geode query` against `ip:3141` and return captured stdout (caller frees
 /// with `gpa`). Bounded by a hard timeout so a hung query can't wedge the suite.
+/// A client that exits non-zero has its stderr printed, so a failure says why.
 fn runQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []const u8, q: []const u8) ![]u8 {
     const server = try std.fmt.allocPrint(aa, "{s}:3141", .{ip});
+    const ca = query_ca_path orelse return error.NoQueryCa;
     const argv = [_][]const u8{
-        BINARY_PATH,                  "query", "--server", server,
-        "--insecure-tls-skip-verify", "-U",    "geode",    "-P",
-        ADMIN_PW,                     q,
+        BINARY_PATH, "query",  "--server", server,
+        "--ca-cert", ca,       "-U",       "geode",
+        "-P",        ADMIN_PW, q,
     };
     const res = try std.process.run(gpa, io, .{
         .argv = &argv,
@@ -100,7 +109,10 @@ fn runQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []con
             .clock = .awake,
         } },
     });
-    gpa.free(res.stderr);
+    defer gpa.free(res.stderr);
+    if (res.term != .exited or res.term.exited != 0) {
+        std.debug.print("[query] {s} on {s} exited {any}: {s}\n", .{ q, ip, res.term, res.stderr[0..@min(res.stderr.len, 400)] });
+    }
     return res.stdout;
 }
 
@@ -143,6 +155,7 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
+    query_ca_path = ca;
     return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
 }
 

@@ -815,7 +815,7 @@ REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommitAwarePostProposeWait
 REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommittedIndexAccessor,TESTED,,,distributed,2026-06-12,src/distributed/cluster.zig,2636
 REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommittedIndexAccessor,TESTED,,,distributed,2026-06-12,src/distributed/raft_consensus.zig,3389
 REQ-DIST-CLUSTER-CONFIG-001,DistributedClusterCoordinator,ConfigBootstrap,TESTED,,,distributed,2026-05-25,tests/test_cluster_coordinator_config.zig,1
-REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,E2EFailClosed,TESTED,,,distributed,2026-08-28,tests/test_cluster_replicable_mutations.zig,894
+REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,E2EFailClosed,TESTED,,,distributed,2026-08-28,tests/test_cluster_replicable_mutations.zig,907
 REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateAuthDDL,TESTED,,,distributed,2026-06-10,src/execution/admin_ddl.zig,66
 REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateAuthProcedures,TESTED,,,distributed,2026-06-10,src/execution/auth_dispatch.zig,473
 REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateConstraintDDL,TESTED,,,distributed,2026-06-10,src/execution.zig,2297
@@ -873,8 +873,8 @@ REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ApplyAbsoluteIdEdge,T
 REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,DispatchRouteMatchCreate,TESTED,,,distributed,2026-06-10,src/execution/query_execution.zig,2049
 REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ExecutorRouteMatchCreate,TESTED,,,distributed,2026-06-10,src/execution/crud_operations.zig,4657
 REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,LeaderProposeMatchCreate,TESTED,,,distributed,2026-06-10,src/execution/crud_operations.zig,4451
-REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,MatchCreateFollowerFailClosed,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,813
-REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ReplicateMatchCreateEdge,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,765
+REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,MatchCreateFollowerFailClosed,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,826
+REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ReplicateMatchCreateEdge,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,778
 REQ-DIST-CLUSTER-REPLICATE-MATCH-SET,DistributedCluster,ApplyUpdate,TESTED,,,distributed,2026-06-09,src/distributed/raft_apply.zig,594
 REQ-DIST-CLUSTER-REPLICATE-MATCH-SET,DistributedCluster,DispatchRouteUpdate,TESTED,,,distributed,2026-06-09,src/execution/query_execution.zig,2231
 REQ-DIST-CLUSTER-REPLICATE-MATCH-SET,DistributedCluster,ExecutorRouteUpdate,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,4407
@@ -885,11 +885,11 @@ REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,ApplyMergeIntegration,TESTED
 REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,ExecutorProposeMerge,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,3808
 REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,LeaderProposeMerge,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,3260
 REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,MergeCodec,TESTED,,,distributed,2026-06-09,src/distributed/cluster_replication.zig,736
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateDelete,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,574
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateEdgeCreate,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,530
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateDelete,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,587
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateEdgeCreate,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,543
 REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateEdgeDeleteMergeSet,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,1
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMatchSet,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,709
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMerge,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,667
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMatchSet,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,722
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMerge,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,680
 REQ-DIST-CLUSTER-ROLE,ClusterCoordinator Public Propose,Role,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig,2682
 REQ-DIST-CLUSTER-STEADY-STATE-TLS,DistributedCluster,SteadyStateLeaderHoldDistinctIpTls,TESTED,,,distributed,2026-06-04,tests/test_cluster_3node_steady_state.zig,1
 REQ-DIST-CLUSTER-TERM,ClusterCoordinator Public Propose,CurrentTerm,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig,2690
@@ -5454,7 +5454,7 @@ REQ-SONNY-3041-WRITE-GUARD,WriteStep,StructuralWriteGuard,TESTED,,,engine,2026-0
 REQ-SONNY-3042-REFUSE-BEFORE-WRITE,WriteStep,Regression,TESTED,,,engine,2026-09-27,tests/test_sonny3042_refuse_before_write.zig,16
 REQ-SONNY-3043-MIXED-WRITE-CLAUSES,WriteStep,Regression,TESTED,,,engine,2026-09-27,tests/test_sonny3043_mixed_write_clauses.zig,23
 REQ-SONNY-3044-CLUSTER-DELETE-RETURN,DistributedCluster,DeleteReturnBeforePropose,TESTED,,,distributed,2026-09-27,src/execution/crud_operations.zig,4077
-REQ-SONNY-3044-CLUSTER-DELETE-RETURN,DistributedCluster,Regression,TESTED,,,distributed,2026-09-27,tests/test_cluster_replicable_mutations.zig,633
+REQ-SONNY-3044-CLUSTER-DELETE-RETURN,DistributedCluster,Regression,TESTED,,,distributed,2026-09-27,tests/test_cluster_replicable_mutations.zig,646
 REQ-SONNY-3045-AUDIT-TEXT-ESCAPING,AuditDurability,ExporterEscaping,TESTED,,,security,2026-09-27,src/security/audit_formatter.zig,15
 REQ-SONNY-3045-AUDIT-TEXT-ESCAPING,AuditDurability,JoinAuditTextUnambiguous,TESTED,,,security,2026-09-27,src/execution/crud_operations.zig,216
 REQ-SONNY-3045-AUDIT-TEXT-ESCAPING,AuditDurability,Regression,TESTED,,,security,2026-09-27,tests/test_sonny3045_audit_text_escaping.zig,20
