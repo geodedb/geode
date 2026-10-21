@@ -100,6 +100,7 @@ fn hello(allocator: std.mem.Allocator, server: *Server, transport: Transport, us
         .quic => blk: {
             var client = try util.QuicProtoClient.connect(allocator, server.quic_addr);
             defer client.deinit();
+            client.watchServerLiveness(server.handle.child.id.?);
             break :blk try client.helloWithGraph(allocator, user, pass, graph);
         },
         .grpc => blk: {
@@ -132,6 +133,11 @@ test "SONNY-2824: a HELLO over QUIC or gRPC creates a missing graph only for a p
 
     var admin = try util.QuicProtoClient.connect(allocator, server.quic_addr);
     defer admin.deinit();
+    // SONNY-2394: reply waits follow the server's liveness, not a fixed 5 s
+    // deadline. CREATE USER hashes with Argon2id, which under a loaded CI
+    // shard can take longer than 5 s on a live server; a server that exits
+    // still fails at once, and a hang at the 60 s cap.
+    admin.watchServerLiveness(server.handle.child.id.?);
     var ah = try admin.hello(allocator, util.defaultUsername(), util.defaultPassword());
     defer ah.deinit(allocator);
     try testing.expect(ah.success);
