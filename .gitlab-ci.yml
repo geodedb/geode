@@ -369,11 +369,11 @@ variables:
       - runner_system_failure
       - stuck_or_timeout_failure
 
-# Python governance jobs (image: python:3.12-slim)
+# Python governance jobs (image: python:3.15-slim)
 .governance-python:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
-  image: python:3.14-slim
+  image: python:3.15-slim
 
 # Python governance jobs that need pyyaml installed
 .governance-python-pyyaml:
@@ -1362,7 +1362,7 @@ test-performance-benchmarks:
 loadtest-regression:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: test
-  image: python:3.14-slim
+  image: python:3.15-slim
   before_script:
     # Bump UDP rmem so the quic-go client doesn't drop at high concurrency
     # (see docs/performance/host-tuning.md). Best-effort: sudo may not be
@@ -1791,7 +1791,7 @@ security-trivy:
   # image's ENTRYPOINT is the `trivy` binary so the runner's `sh -c ...`
   # wrap becomes `trivy sh -c "..."`. Override to empty string.
   image:
-    name: aquasec/trivy:0.74.0
+    name: aquasec/trivy:0.76.0
     entrypoint: [""]
   # The scan skips .zig-cache/ and zig-cache/, so it doesn't need the global
   # zig build cache. Inheriting it (pull-push) restored a multi-GB branch
@@ -2976,7 +2976,7 @@ apt-publish-apt-geodedb-com:
 hook-env-regression:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: lint
-  image: python:3.14-slim-bookworm
+  image: python:3.15-slim-bookworm
   before_script:
     - apt-get update -qq && apt-get install -y --no-install-recommends git
   script:
