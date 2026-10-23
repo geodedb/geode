@@ -781,6 +781,10 @@ test-zig-unit:
     matrix:
       - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
   variables:
+    # These Linux workers have two CPUs. Run one build step at a time so
+    # test executables do not compete with compiler processes for the quota.
+    # This also bounds peak memory; timing assertions remain unchanged.
+    ZIG_BUILD_JOBS: "1"
     GIT_SUBMODULE_STRATEGY: recursive
     TEST_SHARD_TOTAL: "8"
   retry:
@@ -796,7 +800,7 @@ test-zig-unit:
     # 2>&1: zig writes test failures/panics to STDERR — a stdout-only tee
     # produced 0-byte shard-log artifacts on every failed job (verified on
     # job 15304587101), making post-mortems impossible.
-    - zig build test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/zig_test_shard_${TEST_SHARD_INDEX}.log
+    - zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/zig_test_shard_${TEST_SHARD_INDEX}.log
   rules:
     # SRE-187 (MR admission): merge_request_event pipelines have no
     # CI_COMMIT_BRANCH, so before this rule the MR pipeline -- the one that
@@ -1178,6 +1182,10 @@ test-zig-release-safe:
     matrix:
       - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
   variables:
+    # These Linux workers have two CPUs. Run one build step at a time so
+    # test executables do not compete with compiler processes for the quota.
+    # This also bounds peak memory; timing assertions remain unchanged.
+    ZIG_BUILD_JOBS: "1"
     GIT_SUBMODULE_STRATEGY: recursive
     TEST_SHARD_TOTAL: "12"
   retry:
@@ -1195,14 +1203,14 @@ test-zig-release-safe:
     - |
       if [ "$TEST_SHARD_INDEX" = "0" ]; then
         echo "=== [shard 0] Building with ReleaseSafe optimization (REQ-0008) ==="
-        zig build -Doptimize=ReleaseSafe --summary all
+        zig build -j${ZIG_BUILD_JOBS} -Doptimize=ReleaseSafe --summary all
         echo "=== [shard 0] Verifying ReleaseSafe binary ==="
         ls -la zig-out/bin/geode 2>/dev/null || echo "Binary built successfully"
         echo "✓ REQ-0008 ReleaseSafe build requirements enforced"
       fi
 
       echo "=== Running ReleaseSafe tests, shard ${TEST_SHARD_INDEX}/${TEST_SHARD_TOTAL} ==="
-      zig build test -Doptimize=ReleaseSafe -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all
+      zig build -j${ZIG_BUILD_JOBS} test -Doptimize=ReleaseSafe -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
       allow_failure: false
@@ -1609,6 +1617,10 @@ test-code-coverage:
     matrix:
       - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
   variables:
+    # These Linux workers have two CPUs. Run one build step at a time so
+    # test executables do not compete with compiler processes for the quota.
+    # This also bounds peak memory; timing assertions remain unchanged.
+    ZIG_BUILD_JOBS: "1"
     GIT_SUBMODULE_STRATEGY: recursive
     TEST_SHARD_TOTAL: "8"
     ZIG_DIST_URL: "https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz"
@@ -1632,10 +1644,10 @@ test-code-coverage:
     - mkdir -p coverage/raw reports
     # Expected set first, so a timed-out or crashed run still leaves the
     # manifest the report job checks against.
-    - zig build test-coverage-manifest -Dtest-coverage=true -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX
+    - zig build -j${ZIG_BUILD_JOBS} test-coverage-manifest -Dtest-coverage=true -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX
     - |
       set +e
-      zig build test -Dtest-coverage=true -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/coverage_shard_${TEST_SHARD_INDEX}.log
+      zig build -j${ZIG_BUILD_JOBS} test -Dtest-coverage=true -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/coverage_shard_${TEST_SHARD_INDEX}.log
       build_rc=${PIPESTATUS[0]}
       set -e
       python3 scripts/ci/kcov_coverage.py shard --shard "$TEST_SHARD_INDEX" --build-rc "$build_rc"
