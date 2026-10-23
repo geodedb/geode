@@ -78,8 +78,7 @@ const logging = @import("logging");
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
     while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
@@ -306,8 +305,7 @@ pub const AuthGraphManager = struct {
             while (elapsed < target_ns and !self.shutdown.load(.acquire)) {
                 {
                     const req = std.os.linux.timespec{ .sec = 1, .nsec = 0 };
-                    var rem: std.os.linux.timespec = undefined;
-                    _ = std.os.linux.nanosleep(&req, &rem);
+                    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
                 }
                 elapsed += std.time.ns_per_s;
             }

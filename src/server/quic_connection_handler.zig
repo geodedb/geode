@@ -46,12 +46,7 @@ fn compat_microTimestamp() i64 {
 }
 
 fn compat_sleepNs(ns: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 // Zig 0.16 compat: std.process.getEnvVarOwned was removed.
@@ -268,8 +263,11 @@ var g_first_stream_detach_gate = FirstStreamDetachGate{};
 /// to avoid widening the metric module's API surface for what is
 /// really a handler-internal concern.
 fn monoNsFromHandler() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
     return sec * std.time.ns_per_s + nsec;
@@ -8986,8 +8984,7 @@ fn handleClientMessage(
                         if (found_result or found_stream) break;
                         {
                             const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
-                            var rem: std.os.linux.timespec = undefined;
-                            _ = std.os.linux.nanosleep(&req, &rem);
+                            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
                         }
                     }
                 }
@@ -9796,8 +9793,7 @@ test "SharedConnState: waitForStreamSlot wakes when active stream releases" {
     const thread = try std.Thread.spawn(.{}, struct {
         fn run(s: *SharedConnState) void {
             const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             s.releaseActiveStream();
         }
     }.run, .{&state});
@@ -9817,8 +9813,7 @@ test "SharedConnState: waitForAllStreamsDrained parks until release" {
     const thread = try std.Thread.spawn(.{}, struct {
         fn run(s: *SharedConnState) void {
             const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             s.releaseActiveStream();
         }
     }.run, .{&state});
@@ -9968,8 +9963,7 @@ test "StreamAcceptorContext: waitUntilDone wakes on markDone" {
     const thread = try std.Thread.spawn(.{}, struct {
         fn run(c: *StreamAcceptorContext) void {
             const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             c.markDone();
         }
     }.run, .{ctx});
@@ -10050,8 +10044,7 @@ test "StreamAcceptorContext: owner-bails-then-acceptor-finishes does not UAF or 
             var spins: usize = 0;
             while (!c.shutdown.load(.acquire)) {
                 const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
                 spins += 1;
                 if (spins > 10_000) {
                     // Safety: bail if shutdown never arrives (test bug).

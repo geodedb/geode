@@ -40,12 +40,7 @@ const rls_filter = @import("grpc_impl").rls_filter;
 const ServerState = geode.server_state.ServerState;
 
 fn sleepMs(ms: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ms / std.time.ms_per_s),
-        .nsec = @intCast((ms % std.time.ms_per_s) * std.time.ns_per_ms),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 /// Holds `graph`'s read lock for `hold_ms`, then lets go. `letting_go` is set

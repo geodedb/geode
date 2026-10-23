@@ -52,9 +52,13 @@ fn count(client: *util.QuicProtoClient, query: []const u8) !i64 {
     };
 }
 
-fn login(addr: []const u8, user: []const u8, password: []const u8) !util.QuicProtoClient {
+fn login(server_pid: std.posix.pid_t, addr: []const u8, user: []const u8, password: []const u8) !util.QuicProtoClient {
     var client = try util.QuicProtoClient.connect(testing.allocator, addr);
     errdefer client.deinit();
+    // SONNY-2394: reply waits follow the server's liveness, not a fixed
+    // 5 s deadline (a live server on a loaded CI shard can take longer);
+    // a server that exits still fails at once, a hang at the 60 s cap.
+    client.watchServerLiveness(server_pid);
     var h = try client.hello(testing.allocator, user, password);
     defer h.deinit(testing.allocator);
     if (!h.success) return error.HelloRefused;
@@ -79,14 +83,14 @@ test "SONNY-3033: over QUIC a /*+BATCH*/ against a graph another session dropped
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 30000);
 
-    var admin = try login(addr, util.defaultUsername(), util.defaultPassword());
+    var admin = try login(server.child.id.?, addr, util.defaultUsername(), util.defaultPassword());
     defer admin.deinit();
     try expectOk(&admin, "CREATE USER rw3033 SET PASSWORD 'Rw3033pass1' ROLE readwrite");
     try expectOk(&admin, "CREATE GRAPH gb3033");
     try expectOk(&admin, "CREATE GRAPH ga3033");
 
     // A ReadWrite user (no schema permission) batches into gb3033.
-    var rw = try login(addr, "rw3033", "Rw3033pass1");
+    var rw = try login(server.child.id.?, addr, "rw3033", "Rw3033pass1");
     defer rw.deinit();
     try expectOk(&rw, "USE GRAPH gb3033");
     try expectOk(&rw, "/*+BATCH*/MERGE (n:B {k: 1}); MERGE (n:B {k: 2})");
@@ -104,7 +108,7 @@ test "SONNY-3033: over QUIC a /*+BATCH*/ against a graph another session dropped
     try expectOk(&admin, "USE GRAPH default");
 
     // The same for an Admin: a batch never creates a graph.
-    var admin2 = try login(addr, util.defaultUsername(), util.defaultPassword());
+    var admin2 = try login(server.child.id.?, addr, util.defaultUsername(), util.defaultPassword());
     defer admin2.deinit();
     try expectOk(&admin2, "USE GRAPH ga3033");
     try expectOk(&admin, "DROP GRAPH ga3033");

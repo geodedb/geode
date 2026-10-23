@@ -52,12 +52,7 @@ pub fn connectSession(allocator: std.mem.Allocator, addr: []const u8) !geode.rep
 // Zig 0.16: std.Thread.sleep was removed — same linux nanosleep compat shim
 // shape proto_test_util.zig uses.
 fn compatSleep(ns: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 fn connectWithRetry(session: *geode.repl.repl_dispatch.ClientSession) !void {

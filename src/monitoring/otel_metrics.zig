@@ -94,13 +94,7 @@ var g_tracer_flush_interval_ms: u64 = 5_000;
 // flush thread only runs in the server (never the CLI), and the std.os.linux
 // namespace still compiles for cross-target builds.
 fn tracerFlushSleep(ms: u64) void {
-    const ns = ms * std.time.ns_per_ms;
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 fn tracerFlushLoop() void {

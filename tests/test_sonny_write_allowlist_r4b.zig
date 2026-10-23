@@ -275,9 +275,7 @@ var run_tag: u64 = 0;
 
 fn runTag() u64 {
     if (run_tag == 0) {
-        var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
-        run_tag = @as(u64, @intCast(ts.sec)) *% 1_000_000_000 +% @as(u64, @intCast(ts.nsec));
+        run_tag = @intCast(std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
     }
     return run_tag;
 }
@@ -658,7 +656,10 @@ const CartJob = struct {
 
 fn monoMillis() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
 }
 
@@ -1069,8 +1070,7 @@ const BoundJob = struct {
         defer geode.read_budget.setStreamCancelSource(null);
         const Setter = struct {
             fn run(flag: *std.atomic.Value(bool)) void {
-                var ts: std.posix.timespec = .{ .sec = 0, .nsec = 200 * std.time.ns_per_ms };
-                _ = std.os.linux.nanosleep(&ts, null);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(200), .awake) catch {};
                 flag.store(true, .release);
             }
         };

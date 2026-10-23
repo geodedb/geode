@@ -11,8 +11,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     // Strip trailing NUL if present
     var actual_len = cwd_len;
     while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
@@ -16476,8 +16475,7 @@ inline fn applyTestHydrationMergeDelay() void {
                 .sec = @intCast(delay_ns / std.time.ns_per_s),
                 .nsec = @intCast(delay_ns % std.time.ns_per_s),
             };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
         } else {
             const req = std.c.timespec{
                 .sec = @intCast(delay_ns / std.time.ns_per_s),
@@ -16907,8 +16905,7 @@ pub fn acquireStoreWriteLockCancelable(deadline_mono_ns: u64) !void {
                 .sec = @intCast(nap_ns / std.time.ns_per_s),
                 .nsec = @intCast(nap_ns % std.time.ns_per_s),
             };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
         }
         if (g_store_rwlock.tryLock(io)) {
             t_store_lock_depth += 1;

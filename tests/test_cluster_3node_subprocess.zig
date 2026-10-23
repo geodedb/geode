@@ -34,6 +34,8 @@
 // Skip semantics:
 //   The test SKIPS (returns error.SkipZigTest) when:
 //     - the geode binary is missing — build it first with `zig build`.
+//     - openssl is unavailable (the test CA and node leaf are generated
+//       with it; peers verify each other's TLS certificate against it).
 //     - $GEODE_SKIP_SUBPROC_CLUSTER is set, so flaky CI runs can opt out
 //       without removing the test from the build matrix.
 //   Skip is preferred over hard-fail because the test depends on a
@@ -42,44 +44,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-
-fn runOpenssl(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
-    const result = try std.process.run(gpa, io, .{ .argv = argv });
-    defer gpa.free(result.stdout);
-    defer gpa.free(result.stderr);
-    if (result.term != .exited or result.term.exited != 0) return error.OpensslFailed;
-}
-
-const Certs = struct { dir: []const u8, ca: []const u8, leaf: []const u8, key: []const u8 };
-
-fn makeCerts(aa: std.mem.Allocator, io: std.Io, dir: []const u8) !Certs {
-    const spawn_gpa = std.heap.smp_allocator;
-    var threaded = std.Io.Threaded.init(spawn_gpa, .{});
-    defer threaded.deinit();
-    const sio = threaded.io();
-    const j = struct {
-        fn p(al: std.mem.Allocator, d: []const u8, f: []const u8) []const u8 {
-            return std.fmt.allocPrint(al, "{s}/{s}", .{ d, f }) catch unreachable;
-        }
-    }.p;
-    const ca_key = j(aa, dir, "ca.key");
-    const ca = j(aa, dir, "ca.crt");
-    const leaf_key = j(aa, dir, "leaf.key");
-    const leaf_csr = j(aa, dir, "leaf.csr");
-    const leaf = j(aa, dir, "leaf.crt");
-    const ext = j(aa, dir, "leaf.ext");
-
-    try std.Io.Dir.cwd().writeFile(io, .{
-        .sub_path = ext,
-        .data = "subjectAltName=IP:127.0.0.1,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
-    });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ca_key });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-subprocess-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
-    return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
-}
 
 // Zig 0.16 compat: std.posix.getenv was removed.  Mirror the helper used
 // across the geode codebase (e.g. src/distributed/cluster_auth.zig) so
@@ -110,8 +74,7 @@ fn sleepMs(ms: u64) void {
             .sec = @intCast(ms / 1000),
             .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
         };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     } else {
         const req = std.c.timespec{
             .sec = @intCast(ms / 1000),
@@ -134,6 +97,53 @@ fn setNonBlocking(file: std.Io.File) !void {
     const new_flags = flags | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
     const rc = std.os.linux.fcntl(fd, std.posix.F.SETFL, new_flags);
     if (@as(isize, @bitCast(rc)) < 0) return error.FcntlSetFailed;
+}
+
+fn runOpenssl(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
+    const result = try std.process.run(gpa, io, .{ .argv = argv });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    if (result.term != .exited or result.term.exited != 0) return error.OpensslFailed;
+}
+
+const Certs = struct { dir: []const u8, ca: []const u8, leaf: []const u8, key: []const u8 };
+
+/// A test CA plus one CA-signed leaf (SAN IP:127.0.0.1) shared by the three
+/// nodes, so peers verify each other's TLS certificate against
+/// GEODE_CLUSTER_CA_CERT. The nodes cannot use GEODE_CLUSTER_INSECURE=1:
+/// release builds refuse it (GAP-0737 SEC-INFRA-01), each node then falls
+/// back to its own self-signed cert, every peer handshake fails with
+/// HandshakeError and no leader is ever elected. SKIPs if openssl is missing.
+fn makeCerts(aa: std.mem.Allocator, io: std.Io, dir: []const u8) !Certs {
+    const spawn_gpa = std.heap.smp_allocator;
+    var threaded = std.Io.Threaded.init(spawn_gpa, .{});
+    defer threaded.deinit();
+    const sio = threaded.io();
+    runOpenssl(spawn_gpa, sio, &.{ "openssl", "version" }) catch return error.SkipZigTest;
+
+    std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    const j = struct {
+        fn p(al: std.mem.Allocator, d: []const u8, f: []const u8) ![]const u8 {
+            return std.fmt.allocPrint(al, "{s}/{s}", .{ d, f });
+        }
+    }.p;
+    const ca_key = try j(aa, dir, "ca.key");
+    const ca = try j(aa, dir, "ca.crt");
+    const leaf_key = try j(aa, dir, "leaf.key");
+    const leaf_csr = try j(aa, dir, "leaf.csr");
+    const leaf = try j(aa, dir, "leaf.crt");
+    const ext = try j(aa, dir, "leaf.ext");
+
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = ext,
+        .data = "subjectAltName=IP:127.0.0.1,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
+    });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ca_key });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-subproc-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
+    return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
 }
 
 /// Per-child accumulator that owns the stderr capture buffer.
@@ -310,6 +320,10 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
     }
     defer for (tmp_dirs) |dir| std.Io.Dir.cwd().deleteTree(io_fs, dir) catch {};
 
+    const certs_dir = try std.fmt.allocPrint(aa, "/tmp/geode-test-cluster-certs-{d}", .{ts_suffix});
+    defer std.Io.Dir.cwd().deleteTree(io_fs, certs_dir) catch {};
+    const certs = try makeCerts(aa, io_fs, certs_dir);
+
     // Spawn the 3 children.  Zig 0.16 replaced `Child.init` + `spawn()`
     // with the standalone `std.process.spawn(io, SpawnOptions)`, so we
     // also stash the per-child Environ.Map in the arena to keep its
@@ -324,9 +338,6 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
     defer spawn_threaded.deinit();
     const io_proc = spawn_threaded.io();
 
-    // Use the same CA-backed peer trust as production in every build mode.
-    // ReleaseSafe intentionally refuses GEODE_CLUSTER_INSECURE.
-    const certs = try makeCerts(aa, io_proc, tmp_dirs[0]);
     var children: [3]std.process.Child = undefined;
     var spawned: usize = 0;
     var captures: [3]ChildCapture = .{ .{}, .{}, .{} };
@@ -358,8 +369,10 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
 
         // Build env: arena-owned Environ.Map.  We populate exactly the
         // keys the cluster bootstrap path consumes (token, node_id,
-        // trusted CA, admin password) plus PATH/HOME so openssl
-        // (cert_gen) can find its dependencies.
+        // cluster CA, admin password) plus PATH/HOME so openssl
+        // (cert_gen) can find its dependencies.  Peer TLS is verified
+        // against the test CA (see makeCerts): GEODE_CLUSTER_INSECURE=1
+        // is refused in release builds, so it cannot be used here.
         const env_ptr = try aa.create(std.process.Environ.Map);
         env_ptr.* = std.process.Environ.Map.init(aa);
         try env_ptr.put("GEODE_CLUSTER_TOKEN", "test-subprocess-cluster");

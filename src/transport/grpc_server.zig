@@ -226,8 +226,7 @@ fn throttleInvalidSessionProbe() void {
         .sec = @intCast(ns / std.time.ns_per_s),
         .nsec = @intCast(ns % std.time.ns_per_s),
     };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
 }
 
 fn rebuildPendingIndexes(
@@ -745,8 +744,7 @@ pub const SessionStore = struct {
             var waited: u64 = 0;
             while (waited < interval and !self.reaper_stop.load(.acquire) and self.pending_teardown_count.load(.acquire) == 0) : (waited += 25) {
                 const req = std.os.linux.timespec{ .sec = 0, .nsec = 25 * std.time.ns_per_ms };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             }
             if (self.reaper_stop.load(.acquire)) break;
             // A pass counts as a handler for the shutdown drain
@@ -831,8 +829,7 @@ pub fn waitForGrpcInflightZero(timeout_ms: u64) u32 {
         // builds never linked libc so never saw it. Mirrors quic.zig
         // compat_sleepNs. std.Thread.sleep is unavailable in Zig 0.16.
         const req = std.os.linux.timespec{ .sec = 0, .nsec = 25 * std.time.ns_per_ms };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     }
 }
 

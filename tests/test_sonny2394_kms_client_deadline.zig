@@ -29,18 +29,16 @@ const quic = @import("transport/quic");
 const kms_tls = @import("kms_test_tls.zig");
 
 fn monoMs() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ms_per_s + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
 }
 
 fn sleepMs(ms: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ms / std.time.ms_per_s),
-        .nsec = @intCast((ms % std.time.ms_per_s) * std.time.ns_per_ms),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 /// A RemoteKmsServer driven by a background serving thread that the test can

@@ -103,8 +103,11 @@ fn repsFor(shape: Shape, which: usize) usize {
 }
 
 fn monoMs() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ms_per_s + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
 }
 
@@ -533,9 +536,14 @@ test "SONNY-3181: over QUIC chains are evaluated up to the cap and refused (4200
                 continue;
             }
             // A connection per query: a transport stall on one cannot hide the
-            // server's answer to the next.
-            var qc = try util.QuicProtoClient.connect(allocator, addr);
+            // server's answer to the next. The probes above can leave a Debug
+            // server on a loaded CI shard busy for tens of seconds (a 1 MiB
+            // probe that timed out is still being served), so the handshake
+            // and the replies wait on the server's liveness (SONNY-2394), not
+            // a fixed 5 s: a server that exits still fails at once.
+            var qc = try util.QuicProtoClient.connectWithHandshakeTimeout(allocator, addr, 60);
             defer qc.deinit();
+            qc.watchServerLiveness(server.child.id.?);
             var qh = try qc.hello(allocator, util.defaultUsername(), util.defaultPassword());
             qh.deinit(allocator);
             const t0 = monoMs();

@@ -2,12 +2,7 @@ const std = @import("std");
 
 // Zig 0.16 compat: std.Thread.sleep was removed; use raw linux nanosleep.
 fn compat_sleepNs(ns: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 /// Monotonic clock reader in nanoseconds, used for poll-loop cycle latency
@@ -15,8 +10,11 @@ fn compat_sleepNs(ns: u64) void {
 /// propagating an error — the metric is observability-only and a missed
 /// sample is preferable to crashing the poll thread.
 fn monoNsRaw() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
     return sec * std.time.ns_per_s + nsec;
@@ -2346,9 +2344,7 @@ pub const QuicClient = struct {
         const timeout_ns = @as(u64, timeout_secs) * std.time.ns_per_s;
         const nowNs = struct {
             fn f() i128 {
-                var ts: std.os.linux.timespec = undefined;
-                _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-                return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+                return std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds();
             }
         }.f;
         const start = nowNs();
@@ -2361,8 +2357,7 @@ pub const QuicClient = struct {
             // GAP-0200: Reduced sleep from 10ms to 1ms for faster handshake completion
             {
                 const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             }
         }
 

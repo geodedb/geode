@@ -1227,13 +1227,30 @@ test "quic short header processing uses endpoint rx lifetime guard" {
     try testing.expect(std.mem.indexOf(u8, conn, "refs + 1") != null);
     try testing.expect(std.mem.indexOf(u8, conn, "releaseEndpointRxRef") != null);
     try testing.expect(std.mem.indexOf(u8, conn, "beginEndpointDestroy") != null);
-    // REQ-QUIC-HC-099 (batch teardown) moved these two calls out of api.zig's
+    // quic v0.1.45 (endpoint-mu deadlock fix) split beginEndpointDestroy() into
+    // markEndpointDestroying() (non-blocking: acquireEndpointRxRef refuses new
+    // pins from then on) and waitEndpointRxRefsDrained() (blocks until every
+    // in-flight pin is released), so destroyConnections() can wait for pins
+    // with Endpoint.mu released. The rx lifetime guarantee is unchanged: no
+    // new pin after the mark, and no free until every pin has drained.
+    try testing.expect(std.mem.indexOf(u8, conn, "pub fn markEndpointDestroying") != null);
+    try testing.expect(std.mem.indexOf(u8, conn, "pub fn waitEndpointRxRefsDrained") != null);
+    try testing.expect(std.mem.indexOf(u8, conn, "if (self.endpoint_destroying.load(.acquire)) return false;") != null);
+    // REQ-QUIC-HC-099 (batch teardown) moved the teardown out of api.zig's
     // single-conn destroy() into Endpoint.destroyConnections() (endpoint.zig),
     // which destroy() and destroyBatch() now both call. Check the calls where
-    // they live today, and that the public single-conn entrypoint still
-    // delegates into the guarded batch path instead of bypassing it.
-    try testing.expect(std.mem.indexOf(u8, endpoint, "conn.beginEndpointDestroy();") != null);
-    try testing.expect(std.mem.indexOf(u8, endpoint, "self.clearShortHeaderRouteCacheForConnection(conn);") != null);
+    // they live today, in order (mark -> wait for pins -> clear route cache ->
+    // free), and that the public single-conn entrypoint still delegates into
+    // the guarded batch path instead of bypassing it.
+    const destroy_fn = std.mem.indexOf(u8, endpoint, "pub fn destroyConnections(") orelse return error.TestExpectedEqual;
+    const destroy_body = endpoint[destroy_fn..];
+    const mark_at = std.mem.indexOf(u8, destroy_body, "conn.markEndpointDestroying();") orelse return error.TestExpectedEqual;
+    const wait_at = std.mem.indexOf(u8, destroy_body, "conn.waitEndpointRxRefsDrained();") orelse return error.TestExpectedEqual;
+    const clear_at = std.mem.indexOf(u8, destroy_body, "self.clearShortHeaderRouteCacheForConnection(conn);") orelse return error.TestExpectedEqual;
+    const free_at = std.mem.indexOf(u8, destroy_body, "conn.deinit();") orelse return error.TestExpectedEqual;
+    try testing.expect(mark_at < wait_at);
+    try testing.expect(wait_at < clear_at);
+    try testing.expect(clear_at < free_at);
     try testing.expect(std.mem.indexOf(u8, api, "ep.destroyConnections(&[_]*Connection{conn});") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-052") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-054") != null);

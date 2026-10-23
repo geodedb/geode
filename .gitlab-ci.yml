@@ -1307,12 +1307,10 @@ test-performance-benchmarks:
   script:
     - |
       echo "=== Running Performance Benchmark Tests ==="
-      # Build with ReleaseSafe for consistent benchmark results
-      zig build -Doptimize=ReleaseSafe --summary all
-
-      echo "=== Executing Performance Tests ==="
-      # Run benchmark-focused build step.
-      zig build benchmark --summary all 2>&1 | tee benchmark_output.log
+      # Use the optimized configuration for the benchmark artifacts themselves.
+      # Serialize compilation and measurement so concurrent Zig compiler work
+      # cannot distort the variance envelopes on shared CI runners.
+      zig build -j1 -Doptimize=ReleaseSafe benchmark --summary all 2>&1 | tee benchmark_output.log
 
       echo "=== Verifying Benchmark Results ==="
       # Reject known regression signatures from benchmark envelope tests.
