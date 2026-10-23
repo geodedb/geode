@@ -43,6 +43,44 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+fn runOpenssl(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
+    const result = try std.process.run(gpa, io, .{ .argv = argv });
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+    if (result.term != .exited or result.term.exited != 0) return error.OpensslFailed;
+}
+
+const Certs = struct { dir: []const u8, ca: []const u8, leaf: []const u8, key: []const u8 };
+
+fn makeCerts(aa: std.mem.Allocator, io: std.Io, dir: []const u8) !Certs {
+    const spawn_gpa = std.heap.smp_allocator;
+    var threaded = std.Io.Threaded.init(spawn_gpa, .{});
+    defer threaded.deinit();
+    const sio = threaded.io();
+    const j = struct {
+        fn p(al: std.mem.Allocator, d: []const u8, f: []const u8) []const u8 {
+            return std.fmt.allocPrint(al, "{s}/{s}", .{ d, f }) catch unreachable;
+        }
+    }.p;
+    const ca_key = j(aa, dir, "ca.key");
+    const ca = j(aa, dir, "ca.crt");
+    const leaf_key = j(aa, dir, "leaf.key");
+    const leaf_csr = j(aa, dir, "leaf.csr");
+    const leaf = j(aa, dir, "leaf.crt");
+    const ext = j(aa, dir, "leaf.ext");
+
+    try std.Io.Dir.cwd().writeFile(io, .{
+        .sub_path = ext,
+        .data = "subjectAltName=IP:127.0.0.1,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
+    });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ca_key });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-subprocess-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
+    return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
+}
+
 // Zig 0.16 compat: std.posix.getenv was removed.  Mirror the helper used
 // across the geode codebase (e.g. src/distributed/cluster_auth.zig) so
 // the test reads environment variables the same way the binary it
@@ -110,10 +148,82 @@ const ChildCapture = struct {
         try self.buf.appendSlice(allocator, chunk);
     }
 
+    fn drain(self: *ChildCapture, allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) void {
+        var buf: [8192]u8 = undefined;
+        const n = file.readStreaming(io, &.{&buf}) catch return;
+        self.appendChunk(allocator, buf[0..n]) catch {};
+    }
+
     fn deinit(self: *ChildCapture, allocator: std.mem.Allocator) void {
         self.buf.deinit(allocator);
     }
 };
+
+fn tryReap(pid: i32, flags: u32) bool {
+    var status: u32 = undefined;
+    const rc = std.os.linux.waitpid(pid, &status, flags);
+    return @as(isize, @bitCast(rc)) > 0;
+}
+
+fn teardownNodes(children: []std.process.Child, captures: []ChildCapture, spawned: usize, gpa: std.mem.Allocator, io: std.Io) void {
+    // Phase 1: SIGTERM and keep draining pipes so a node's graceful-shutdown
+    // logging never blocks on a full pipe.  Poll (non-blocking) for exit.
+    for (children[0..spawned]) |*ch| {
+        if (ch.id) |pid| std.posix.kill(pid, std.posix.SIG.TERM) catch {};
+    }
+    const term_deadline = nowMillis() + 5_000;
+    while (nowMillis() < term_deadline) {
+        drainAll(captures[0..spawned], children[0..spawned], gpa, io);
+        var all_gone = true;
+        for (children[0..spawned]) |*ch| {
+            if (ch.id == null) continue;
+            if (tryReap(ch.id.?, std.os.linux.W.NOHANG)) {
+                ch.id = null; // reaped
+            } else {
+                all_gone = false;
+            }
+        }
+        if (all_gone) break;
+        sleepMs(100);
+    }
+    // Phase 2: SIGKILL + blocking reap anything that ignored SIGTERM.
+    for (children[0..spawned]) |*ch| {
+        if (ch.id) |pid| {
+            std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+            _ = tryReap(pid, 0);
+            ch.id = null;
+        }
+    }
+    // Close the inherited pipe FDs so the test process leaks none.
+    for (children[0..spawned]) |*ch| {
+        if (ch.stdout) |f| {
+            f.close(io);
+            ch.stdout = null;
+        }
+        if (ch.stderr) |f| {
+            f.close(io);
+            ch.stderr = null;
+        }
+        if (ch.stdin) |f| {
+            f.close(io);
+            ch.stdin = null;
+        }
+    }
+}
+
+/// Continuously drain every node's stdout+stderr pipe.  CRITICAL: the three
+/// `--log-level info` nodes keep logging throughout the replication phases; if
+/// the harness ever stops reading, a node's pipe buffer (64 KiB) fills, its
+/// logging thread blocks in `pipe_write`, and the whole node stalls — which both
+/// spuriously fails replication AND wedges teardown (`ch.kill` → `do_wait` while
+/// the node can't exit on a blocked pipe).  Call this inside every sleep in the
+/// replication/hold loops, not just startup.
+fn drainAll(captures: []ChildCapture, children: []std.process.Child, gpa: std.mem.Allocator, io: std.Io) void {
+    for (children, 0..) |*ch, i| {
+        if (ch.stdout) |f| captures[i].drain(gpa, io, f);
+        if (ch.stderr) |f| captures[i].drain(gpa, io, f);
+    }
+}
 
 test "three geode subprocesses on loopback form a 3-node Raft cluster" {
     const a = std.testing.allocator;
@@ -213,26 +323,23 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
     var spawn_threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
     defer spawn_threaded.deinit();
     const io_proc = spawn_threaded.io();
+
+    // Use the same CA-backed peer trust as production in every build mode.
+    // ReleaseSafe intentionally refuses GEODE_CLUSTER_INSECURE.
+    const certs = try makeCerts(aa, io_proc, tmp_dirs[0]);
     var children: [3]std.process.Child = undefined;
     var spawned: usize = 0;
-    defer {
-        // Best-effort: SIGTERM, then wait for clean exit.  If kill itself
-        // fails (process already gone), Child.wait surfaces NoSuchProcess
-        // which we discard.
-        for (children[0..spawned]) |*ch| {
-            ch.kill(io_proc);
-        }
-    }
-
     var captures: [3]ChildCapture = .{ .{}, .{}, .{} };
+    // Teardown must drain pipes before their capture buffers are freed.
     defer for (&captures) |*cap| cap.deinit(a);
+    defer teardownNodes(&children, &captures, spawned, a, io_proc);
 
     for (0..3) |i| {
         const cluster_port_str = try std.fmt.allocPrint(aa, "{d}", .{cluster_ports[i]});
         const listen_quic = try std.fmt.allocPrint(aa, "127.0.0.1:{d}", .{client_ports[i]});
         const node_id_str = try std.fmt.allocPrint(aa, "{d}", .{i + 1});
 
-        const args = try aa.alloc([]const u8, 11);
+        const args = try aa.alloc([]const u8, 15);
         args[0] = binary_path;
         args[1] = "serve";
         args[2] = "--listen";
@@ -244,16 +351,20 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
         args[8] = "--data-dir";
         args[9] = tmp_dirs[i];
         args[10] = "--log-level=info";
+        args[11] = "--cert";
+        args[12] = certs.leaf;
+        args[13] = "--key";
+        args[14] = certs.key;
 
         // Build env: arena-owned Environ.Map.  We populate exactly the
         // keys the cluster bootstrap path consumes (token, node_id,
-        // insecure flag, admin password) plus PATH/HOME so openssl
+        // trusted CA, admin password) plus PATH/HOME so openssl
         // (cert_gen) can find its dependencies.
         const env_ptr = try aa.create(std.process.Environ.Map);
         env_ptr.* = std.process.Environ.Map.init(aa);
         try env_ptr.put("GEODE_CLUSTER_TOKEN", "test-subprocess-cluster");
         try env_ptr.put("GEODE_NODE_ID", node_id_str);
-        try env_ptr.put("GEODE_CLUSTER_INSECURE", "1");
+        try env_ptr.put("GEODE_CLUSTER_CA_CERT", certs.ca);
         try env_ptr.put("GEODE_ADMIN_PASSWORD", "GeodeTestPassword123!");
         if (posixGetenv("PATH")) |p| try env_ptr.put("PATH", p);
         if (posixGetenv("HOME")) |p| try env_ptr.put("HOME", p);
@@ -336,7 +447,8 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
             if (n > 0) {
                 try captures[i].appendChunk(a, buf[0..n]);
             }
-            // Scan captured stderr for any "state=leader" marker.
+            captures[i].drain(a, io_check, ch.stdout.?);
+            // Scan captured logs for any "state=leader" marker.
             if (std.mem.indexOf(u8, captures[i].buf.items, "state=leader") != null) {
                 captures[i].leader_seen = true;
                 leader_seen = true;
@@ -364,12 +476,5 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
         return error.LeaderNeverElected;
     }
 
-    // Phase 3: graceful shutdown — kill all three children and wait for
-    // them to exit.  We don't assert on exit code because SIGTERM-driven
-    // shutdown emits memory-leak diagnostics under DebugAllocator that
-    // are tracked separately (the leak in cluster.zig:548 — `ep` string
-    // — is benign at shutdown and queued for a separate cleanup pass).
-    for (children[0..spawned]) |*ch| {
-        ch.kill(io_proc);
-    }
+    // The deferred teardown drains output and bounds graceful shutdown.
 }
