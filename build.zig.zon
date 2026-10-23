@@ -207,8 +207,8 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git?ref=v0.1.15#6a5015cfc39e2d6e886983f88bada18dc98b8d59",
-            .hash = "slog-0.1.15-SamEDyr7BwAE8WaNO8joc2QI1aqoX38PVFMAR7_KZuRS",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git?ref=cc52d6604e3662eb189afe7b31a40af819656732#cc52d6604e3662eb189afe7b31a40af819656732",
+            .hash = "slog-0.1.15-SamED0_5BwDjEO-i_tcG2pY86JOX7NZ-IR6_KGYw4fay",
         },
 
         // OpenTelemetry client library - metrics, tracing, logs surface.

@@ -140,7 +140,7 @@ test "TestSONNY2394_ListenerCertAutogenExplicitPolicy" {
 
 /// Stands in for `openssl`. Into the certificate path it was asked to write
 /// (`-out <path>`) it records that it ran, the OPENSSL_CONF it was given, and
-/// its own ignored-signal mask (`SigIgn` from /proc/<pid>/status).
+/// whether it inherited ignored SIGPIPE, checked by sending itself SIGPIPE.
 const openssl_shim =
     \\#!/bin/sh
     \\out=""
@@ -148,11 +148,10 @@ const openssl_shim =
     \\  if [ "$1" = "-out" ]; then out="$2"; fi
     \\  shift
     \\done
-    \\sigign=""
-    \\while IFS= read -r line; do
-    \\  case "$line" in SigIgn:*) sigign="${line#SigIgn:}" ;; esac
-    \\done < /proc/$$/status
-    \\printf 'geode-openssl-shim OPENSSL_CONF=%s\nSigIgn=%s\n' "$OPENSSL_CONF" "$sigign" > "$out"
+    \\# A handler is reset by exec; an ignored signal stays ignored. A child
+    \\# with default SIGPIPE exits here, before it can record success.
+    \\kill -s PIPE "$$"
+    \\printf 'geode-openssl-shim OPENSSL_CONF=%s\nSIGPIPE=ignored\n' "$OPENSSL_CONF" > "$out"
     \\
 ;
 
@@ -187,9 +186,6 @@ fn sigpipeAction() std.posix.Sigaction {
 fn handlerAddress(action: std.posix.Sigaction) usize {
     return if (action.handler.handler) |h| @intFromPtr(h) else 0;
 }
-
-/// SIGPIPE's bit in a /proc/<pid>/status signal mask (bit n-1 for signal n).
-const sigpipe_mask_bit: u64 = @as(u64, 1) << (@intFromEnum(std.posix.SIG.PIPE) - 1);
 
 /// A shim `openssl` first on PATH, a sentinel OPENSSL_CONF, and SIGPIPE
 /// ignored, for one test. `deinit` puts all three back.
@@ -248,7 +244,7 @@ const ShimEnv = struct {
     /// The shim, not a real openssl, wrote `cert_path`; it saw OPENSSL_CONF;
     /// and it inherited the ignored SIGPIPE. That last part pins a78b2f29:
     /// exec keeps an ignored signal ignored but resets a handled one to the
-    /// default, so the bit is set only if nothing installed a SIGPIPE handler
+    /// default, so the child survives only if nothing installed a SIGPIPE handler
     /// in this process while the child was spawned.
     fn expectRan(self: *const ShimEnv, cert_path: []const u8) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -260,16 +256,7 @@ const ShimEnv = struct {
         defer self.allocator.free(expected);
         try std.testing.expectEqualStrings(expected, lines.next() orelse "");
 
-        const sigign = lines.next() orelse "";
-        if (!std.mem.startsWith(u8, sigign, "SigIgn=")) {
-            std.debug.print("shim output has no SigIgn line: {s}\n", .{written});
-            return error.TestUnexpectedResult;
-        }
-        const mask = try std.fmt.parseInt(u64, std.mem.trim(u8, sigign["SigIgn=".len..], " \t"), 16);
-        if (mask & sigpipe_mask_bit == 0) {
-            std.debug.print("the child did not inherit the ignored SIGPIPE (SigIgn={x:0>16}): a handler was installed while it was spawned\n", .{mask});
-            return error.TestUnexpectedResult;
-        }
+        try std.testing.expectEqualStrings("SIGPIPE=ignored", lines.next() orelse "");
     }
 };
 
