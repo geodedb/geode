@@ -3553,6 +3553,7 @@ pub fn build(b: *std.Build) void {
     e2e_ts_tests.root_module.addImport("gql_functions", ts_gql_mod);
     e2e_ts_tests.root_module.addImport("timeseries_wrapper", timeseries_wrapper_mod);
     const run_e2e_ts_tests = b.addRunArtifact(e2e_ts_tests);
+    b.step("test-e2e-timeseries", "Run time-series storage and query integration tests").dependOn(&run_e2e_ts_tests.step);
 
     // GAP-0279: ts_store_integration test (Store API surface)
     const ts_store_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/ts_store_integration.zig"), .target = target, .optimize = optimize }) });
