@@ -327,6 +327,12 @@ fn assertReplicatesToHealthyFollowers(
     create_q: []const u8,
 ) !void {
     const read_q = try std.fmt.allocPrint(aa, "MATCH (n:{s}) RETURN count(n) AS c", .{label});
+    // Creates actually handed to a node. A create whose client call failed
+    // (timeout) or that came back ClusterNotLeader after the old leader had
+    // already appended it can still commit, and an external retry is not
+    // deduplicated (crud_operations.zig effectiveIdempotencyKey: the
+    // documented residual), so the label may end up with up to `sent` rows.
+    var sent: usize = 0;
     var attempt: usize = 0;
     const li: usize = while (attempt < 12) : (attempt += 1) {
         drainAll(captures, children, gpa, io);
@@ -334,6 +340,7 @@ fn assertReplicatesToHealthyFollowers(
             sleepMs(500);
             continue;
         };
+        sent += 1;
         const out = runQuery(gpa, io, aa, NODE_IPS[idx], create_q) catch {
             sleepMs(500);
             continue;
@@ -359,27 +366,60 @@ fn assertReplicatesToHealthyFollowers(
     }
     if (expected == 0) return error.NoHealthyFollower;
 
-    // Poll only the healthy followers (a never-started node is skipped, so it
-    // cannot stall this loop). Replication is asserted by the row appearing on
-    // every healthy follower, independent of how long commit took.
-    var poll: usize = 0;
-    while (poll < 18) : (poll += 1) {
+    // Replication is asserted by EVERY healthy node (the leader the create went
+    // to and every healthy follower) reporting the same row count, at least 1
+    // and at most the number of creates sent. A never-started node is skipped,
+    // so it cannot stall this loop. Bounded wait (60 s) for commit + apply on a
+    // loaded host; a follower that never receives the row still fails.
+    var last_out: [3][]const u8 = .{ "", "", "" };
+    const deadline = nowMillis() + 60_000;
+    var polls: usize = 0;
+    while (nowMillis() < deadline) {
         sleepMs(1000);
+        polls += 1;
         drainAll(captures, children, gpa, io);
-        var got: usize = 0;
-        for (0..3) |fi| {
-            if (fi == li or !isNodeHealthy(captures, fi)) continue;
-            const read_out = runQuery(gpa, io, aa, NODE_IPS[fi], read_q) catch continue;
+        var agreed: ?u64 = null;
+        var all_agree = true;
+        for (0..3) |ni| {
+            if (ni != li and !isNodeHealthy(captures, ni)) continue;
+            const read_out = runQuery(gpa, io, aa, NODE_IPS[ni], read_q) catch |err| {
+                last_out[ni] = @errorName(err);
+                all_agree = false;
+                continue;
+            };
             defer gpa.free(read_out);
-            if (std.mem.indexOf(u8, read_out, "\"c\":1") != null) got += 1;
+            last_out[ni] = aa.dupe(u8, read_out[0..@min(read_out.len, 300)]) catch "";
+            const c = countOf(read_out) orelse {
+                all_agree = false;
+                continue;
+            };
+            if (agreed) |a| {
+                if (a != c) all_agree = false;
+            } else agreed = c;
         }
-        if (got >= expected) {
-            std.debug.print("[repl] '{s}' replicated to all {d} healthy follower(s) after {d}s\n", .{ label, expected, poll + 1 });
+        if (all_agree) if (agreed) |n| if (n >= 1 and n <= sent) {
+            if (n > 1) std.debug.print("[repl] '{s}': {d} rows from {d} creates sent (a retried create also committed)\n", .{ label, n, sent });
+            std.debug.print("[repl] '{s}' replicated to all {d} healthy follower(s) after {d} poll(s)\n", .{ label, expected, polls });
             return;
-        }
+        };
     }
-    std.debug.print("[repl] '{s}' did NOT replicate to all {d} healthy follower(s)\n", .{ label, expected });
+    std.debug.print("[repl] '{s}' did NOT replicate to all {d} healthy follower(s) ({d} create(s) sent, leader node {d})\n", .{ label, expected, sent, li + 1 });
+    for (0..3) |ni| std.debug.print("[repl]   node {d} last read: {s}\n", .{ ni + 1, last_out[ni] });
     return error.ReplicationIncomplete;
+}
+
+/// The integer after `"c":` in a `geode query` JSON result, or null.
+fn countOf(out: []const u8) ?u64 {
+    const key = "\"c\":";
+    const at = std.mem.indexOf(u8, out, key) orelse return null;
+    var i = at + key.len;
+    var n: u64 = 0;
+    var digits: usize = 0;
+    while (i < out.len and out[i] >= '0' and out[i] <= '9') : (i += 1) {
+        n = n * 10 + (out[i] - '0');
+        digits += 1;
+    }
+    return if (digits == 0) null else n;
 }
 
 test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader" {
