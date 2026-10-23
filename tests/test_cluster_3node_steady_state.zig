@@ -84,14 +84,23 @@ fn binaryPresent() bool {
 
 const ADMIN_PW = "SteadyStatePw123!";
 
+/// CA that signed the nodes' leaf cert; set by makeCerts. `geode query` trusts it
+/// via --ca-cert so the client VERIFIES the node's TLS certificate. The client
+/// refuses --insecure-tls-skip-verify in a release build (SEC-CLI-01), so a
+/// skip-verify client exits 1 before connecting under ReleaseSafe and every
+/// query of this suite came back empty.
+var query_ca_path: ?[]const u8 = null;
+
 /// Run `geode query` against `ip:3141` and return captured stdout (caller frees
 /// with `gpa`). Bounded by a hard timeout so a hung query can't wedge the suite.
+/// A client that exits non-zero has its stderr printed, so a failure says why.
 fn runQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []const u8, q: []const u8) ![]u8 {
     const server = try std.fmt.allocPrint(aa, "{s}:3141", .{ip});
+    const ca = query_ca_path orelse return error.NoQueryCa;
     const argv = [_][]const u8{
-        BINARY_PATH,                  "query", "--server", server,
-        "--insecure-tls-skip-verify", "-U",    "geode",    "-P",
-        ADMIN_PW,                     q,
+        BINARY_PATH, "query",  "--server", server,
+        "--ca-cert", ca,       "-U",       "geode",
+        "-P",        ADMIN_PW, q,
     };
     const res = try std.process.run(gpa, io, .{
         .argv = &argv,
@@ -100,7 +109,10 @@ fn runQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []con
             .clock = .awake,
         } },
     });
-    gpa.free(res.stderr);
+    defer gpa.free(res.stderr);
+    if (res.term != .exited or res.term.exited != 0) {
+        std.debug.print("[query] {s} on {s} exited {any}: {s}\n", .{ q, ip, res.term, res.stderr[0..@min(res.stderr.len, 400)] });
+    }
     return res.stdout;
 }
 
@@ -143,6 +155,7 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
+    query_ca_path = ca;
     return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
 }
 
@@ -184,6 +197,22 @@ fn lastState(buf: []const u8, id: usize) struct { role: ?[]const u8, term: i64 }
         search = after;
     }
     return .{ .role = role, .term = term };
+}
+
+/// State lines node `id` logged in `buf[off..]`: how many, and whether any
+/// reported `state=leader`.
+fn stateLinesSince(buf: []const u8, off: usize, id: usize) struct { lines: usize, leader: bool } {
+    var prefix_buf: [48]u8 = undefined;
+    const prefix = std.fmt.bufPrint(&prefix_buf, "node {d} state=", .{id}) catch return .{ .lines = 0, .leader = false };
+    var lines: usize = 0;
+    var leader = false;
+    var search: usize = @min(off, buf.len);
+    while (std.mem.indexOfPos(u8, buf, search, prefix)) |pos| {
+        lines += 1;
+        if (std.mem.startsWith(u8, buf[pos + prefix.len ..], "leader")) leader = true;
+        search = pos + prefix.len;
+    }
+    return .{ .lines = lines, .leader = leader };
 }
 
 /// Robust teardown: SIGTERM each node, then keep draining its stdout+stderr
@@ -540,30 +569,66 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     // (the re-open's "exit 0 fast, committed locally, never replicated"). It
     // must now be rejected (error.ClusterNotLeader) and NOT applied anywhere —
     // a follower must never hold data the rest of the cluster does not.
-    const cur_leader = currentLeaderIdx(&captures) orelse return error.LeaderDidNotHold;
-    // Pick a HEALTHY follower (a node that actually started); never probe a node
-    // that failed to start (its :3141 would be answered by an unrelated process).
-    var follower_idx: ?usize = null;
-    for (0..3) |i| {
-        if (i != cur_leader and isNodeHealthy(&captures, i)) {
-            follower_idx = i;
-            break;
+    //
+    // Roles come from the nodes' ~1 s `[raft] node N state=...` lines, so on a
+    // loaded host leadership can move to the probed node between choosing it
+    // and sending the write; it then accepts the write as the LEADER, which is
+    // correct. Such an attempt is recognised from the probed node's own state
+    // lines around the probe and retried on a fresh label; a write accepted by
+    // a node that stayed a follower throughout fails the test.
+    var attempt: usize = 0;
+    while (attempt < 5) : (attempt += 1) {
+        drainAll(&captures, &children, gpa, io);
+        const cur_leader = currentLeaderIdx(&captures) orelse return error.LeaderDidNotHold;
+        // Pick a HEALTHY node whose latest state line says follower; never
+        // probe a node that failed to start (its :3141 would be answered by an
+        // unrelated process).
+        var follower_idx: ?usize = null;
+        for (0..3) |i| {
+            const st = lastState(captures[i].buf.items, i + 1);
+            if (i != cur_leader and st.role != null and std.mem.eql(u8, st.role.?, "follower")) {
+                follower_idx = i;
+                break;
+            }
         }
+        const fidx = follower_idx orelse {
+            sleepMs(1000);
+            continue;
+        };
+        const follower_ip = NODE_IPS[fidx];
+        const label = try std.fmt.allocPrint(aa, "FollowerReject{d}", .{attempt});
+        const create_q = try std.fmt.allocPrint(aa, "CREATE (:{s} {{v:9}})", .{label});
+        const read_q = try std.fmt.allocPrint(aa, "MATCH (n:{s}) RETURN count(n) AS c", .{label});
+
+        const log_off = captures[fidx].buf.items.len;
+        const rej_out = runQuery(gpa, io, aa, follower_ip, create_q) catch |err| {
+            std.debug.print("[repl] follower-write probe {s} failed: {s}\n", .{ follower_ip, @errorName(err) });
+            return error.FollowerWriteProbeFailed;
+        };
+        defer gpa.free(rej_out);
+        // Let the probed node log at least two more state lines (bounded), so
+        // its role around the probe is known.
+        const settle_deadline = nowMillis() + 10_000;
+        while (nowMillis() < settle_deadline) {
+            sleepMs(250);
+            drainAll(&captures, &children, gpa, io);
+            if (stateLinesSince(captures[fidx].buf.items, log_off, fidx + 1).lines >= 2) break;
+        }
+        const fr_read = runQuery(gpa, io, aa, follower_ip, read_q) catch return error.FollowerWriteProbeFailed;
+        defer gpa.free(fr_read);
+        // The follower must NOT have applied the write (the divergence bug).
+        if (std.mem.indexOf(u8, fr_read, "\"c\":0") != null) return;
+
+        // Applied. Correct only if the probed node was the leader by then.
+        const seen = stateLinesSince(captures[fidx].buf.items, log_off, fidx + 1);
+        const prior = lastState(captures[fidx].buf.items[0..log_off], fidx + 1);
+        const was_leader = seen.leader or (prior.role != null and std.mem.eql(u8, prior.role.?, "leader"));
+        if (!was_leader) {
+            std.debug.print("[repl] FOLLOWER SILENTLY APPLIED A WRITE (divergence): node {d} probe={s} read={s}\n", .{ fidx + 1, rej_out, fr_read });
+            return error.FollowerAppliedWriteLocally;
+        }
+        std.debug.print("[repl] node {d} became leader around the follower-write probe (attempt {d}); retrying\n", .{ fidx + 1, attempt });
     }
-    const fidx = follower_idx orelse return error.NoHealthyFollower;
-    const follower_ip = NODE_IPS[fidx];
-    const rej_out = runQuery(gpa, io, aa, follower_ip, "CREATE (:FollowerReject {v:9})") catch |err| {
-        std.debug.print("[repl] follower-write probe {s} failed: {s}\n", .{ follower_ip, @errorName(err) });
-        return error.FollowerWriteProbeFailed;
-    };
-    defer gpa.free(rej_out);
-    sleepMs(1500);
-    drainAll(&captures, &children, gpa, io);
-    // The follower must NOT have applied the write locally (the divergence bug).
-    const fr_read = runQuery(gpa, io, aa, follower_ip, "MATCH (n:FollowerReject) RETURN count(n) AS c") catch return error.FollowerWriteProbeFailed;
-    defer gpa.free(fr_read);
-    if (std.mem.indexOf(u8, fr_read, "\"c\":0") == null) {
-        std.debug.print("[repl] FOLLOWER SILENTLY APPLIED A WRITE (divergence): {s}\n", .{fr_read});
-        return error.FollowerAppliedWriteLocally;
-    }
+    std.debug.print("[repl] no follower-write probe reached a node that stayed a follower in 5 attempts\n", .{});
+    return error.FollowerWriteProbeInconclusive;
 }
