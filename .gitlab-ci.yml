@@ -113,8 +113,8 @@ default:
   # tests' scratch databases (std.testing.tmpDir), which then got archived and
   # restored by every job until test-zig-unit pods were evicted at the 20Gi
   # ephemeral-storage limit. GitLab's cache has no `exclude`, but after_script
-  # runs before the cache is archived, so drop the scratch dirs here. No job
-  # defines its own after_script, so this applies everywhere.
+  # runs before the cache is archived, so drop the scratch dirs here. Jobs
+  # without a bounded writer hook inherit this cleanup.
   after_script:
     - rm -rf .zig-cache/tmp zig-cache/tmp
   # 2026-10-10: `x86` matched no k8s runner after the Company Cluster Runner
@@ -142,48 +142,47 @@ default:
       - scheduler_failure
       - unknown_failure
 
-# Issue #465: Global Zig build cache for CI pipeline efficiency
-#
-# GAP-0838 / pipeline #2571779098 hardening: a second, STABLE-keyed cache holds
-# the immutable pinned `protoc` binary. The protobuf dep resolves its host
-# protoc via an UNCONDITIONAL `b.lazyDependency("protoc-<host>")` in its
-# build(), so every cold-cache `zig build` fetches
-# `protoc-32.1-linux-x86_64.zip` from GitHub releases — which intermittently
-# fails with `HttpConnectionClosing`. The per-branch cache below goes cold
-# (even `zig-cache-main-protected` was missing in #2571779098), so this
-# version-keyed cache (NOT branch/commit-scoped) survives evictions: warmed
-# once, every subsequent pipeline on any branch restores protoc and never
-# touches GitHub. Bump the key + path hash when protoc is upgraded (see the
-# `.@"protoc-*"` hashes in the protobuf dep's build.zig.zon).
-# 2026-10-18: branch key bumped to `zig-cache-v2-*`. Branch caches written
-# before SRE-173 (test scratch data excluded) grew past the k8s pods' 20Gi
-# ephemeral-storage limit, so any pull-push job restoring one failed as a
-# system failure after its script passed (MR !48: security-trivy
-# 17264887635, zig-fips-test 17267152864). v2 starts every cache cold: the
-# old main caches were also written before SRE-173 and still overflow, so
-# they are not fallbacks. Jobs that don't build Zig set `cache: []`.
-cache:
-  - &zig-build-cache
-    key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
-    fallback_keys:
-      - "zig-cache-v2-main-protected"
-      - "zig-cache-v2-main"
-    paths:
-      - .zig-cache/
-      - zig-cache/
-    policy: pull-push
-  - &zig-protoc-cache
-    key: "zig-protoc-v32.1-blob" # gitleaks:allow -- public cache key name, not a credential
-    paths:
-      # protoc-linux-x86_64 (host protoc for every linux runner), addressed by
-      # the protobuf dep's pinned hash N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ.
-      # 2026-07-13: zig 0.16 stores fetched packages as `p/<hash>.tar.gz`
-      # BLOBS and IGNORES pre-seeded extracted `p/<hash>/` directories
-      # (verified empirically: dir-seeded cache still fetched from GitHub,
-      # blob-seeded cache resolved offline). The old dir path cached a
-      # layout zig never read.
-      - zig-cache/p/N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ.tar.gz
-    policy: pull-push
+# Cache only jobs that consume Zig outputs. Publishing and report jobs have
+# no compiler work and must not download or upload compiler archives.
+cache: []
+
+.zig-cache-config:
+  cache:
+    - &zig-build-cache
+      key:
+        prefix: "geode-zig-native-v3-${ZIG_VERSION}"
+        files: [build.zig.zon]
+      paths:
+        - .zig-cache/
+        - zig-cache/
+      policy: pull
+    - &zig-protoc-cache
+      key: "zig-protoc-v32.1-blob" # gitleaks:allow -- public cache key name, not a credential
+      paths:
+        # protoc-linux-x86_64 (host protoc for every linux runner), addressed by
+        # the protobuf dep's pinned hash N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ.
+        # 2026-07-13: zig 0.16 stores fetched packages as `p/<hash>.tar.gz`
+        # BLOBS and IGNORES pre-seeded extracted `p/<hash>/` directories
+        # (verified empirically: dir-seeded cache still fetched from GitHub,
+        # blob-seeded cache resolved offline). The old dir path cached a
+        # layout zig never read.
+        - zig-cache/p/N-V-__8AAGKbngAmNuaBMSXq_WgmQi6N8WVWVKp0moFSTvoJ.tar.gz
+      policy: pull-push
+
+.zig-cache-writer:
+  # Match the catalog's 2 GiB bound. Keep recent compiler outputs and package
+  # downloads instead of spending minutes compressing an archive S3 rejects.
+  # CANARY: REQ=REQ-CI-CACHE-001; FEATURE="BoundedZigCache"; ASPECT=CI; STATUS=TESTED; TEST=scripts/ci/test_prune_zig_cache.py; OWNER=ci; UPDATED=2026-10-24
+  after_script: &zig-cache-writer-after-script
+    - python3 scripts/ci/prune_zig_cache.py
+
+.zig-fips-cache-config:
+  cache:
+    - &zig-fips-build-cache
+      <<: *zig-build-cache
+      key:
+        prefix: "geode-zig-fips-v3-${ZIG_VERSION}"
+        files: [build.zig.zon]
 
 variables:
   DOCKER_BUILDKIT: 1
@@ -434,6 +433,7 @@ governance-ci-yaml-lint:
       echo "=== Linting .gitlab-ci.yml (runner tags + docker names) ==="
       python3 scripts/lint_ci_yaml_runner_tags.py
       python3 scripts/lint_ci_yaml_docker_names.py
+      python3 -m unittest discover -s scripts/ci -p test_prune_zig_cache.py
       echo "✓ CI YAML lints passed"
 
 governance-zig-package-cache:
@@ -884,18 +884,12 @@ test-cross-build:
   # release target produces ~10K cache files whose pull-push archival overruns
   # the job timeout AND leaves the shared `zig-cache-main-protected` cache
   # half-written, which cascades into "Failed to extract cache" → network
-  # re-fetch flakes in every later job. The native test-zig-unit /
-  # test-zig-release-safe jobs are the cache producers; this consumer only
+  # re-fetch flakes in every later job. The native dev-image-build job
+  # produces the shared compiler cache; this consumer only
   # needs to read it (deps are vendored in zig-pkg/ regardless).
   cache:
-    key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
-    fallback_keys:
-      - "zig-cache-v2-main-protected"
-      - "zig-cache-v2-main"
-    paths:
-      - .zig-cache/
-      - zig-cache/
-    policy: pull
+    - *zig-build-cache
+    - *zig-protoc-cache
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
     # Mirror of the parallel:matrix ZIG_TARGET list above, used by the drift
@@ -984,17 +978,15 @@ test-macos-unit:
       - runner_system_failure
       - stuck_or_timeout_failure
       - script_failure
-  # Pull-only cache: macOS Debug builds produce ~27K files across .zig-cache/
-  # and zig-cache/ which exceed GitLab SaaS S3 upload limits (EntityTooLarge).
-  # Dependency packages are vendored in docker/zig-packages/ anyway.
+  # Native macOS outputs have their own bounded cache. The old Linux branch
+  # cache never provided a warm macOS compiler cache and could not be uploaded.
   cache:
-    key: "zig-cache-v2-${CI_COMMIT_REF_SLUG}"
-    fallback_keys:
-      - "zig-cache-v2-main-protected"
-      - "zig-cache-v2-main"
-    paths:
-      - zig-cache/
-    policy: pull
+    <<: *zig-build-cache
+    key:
+      prefix: "geode-zig-macos-aarch64-v3-${ZIG_VERSION}"
+      files: [build.zig.zon]
+    policy: pull-push
+  after_script: *zig-cache-writer-after-script
   variables:
     # Disable git credential storage to avoid Keychain errors on macOS runners
     GIT_CONFIG_COUNT: 3
@@ -1136,6 +1128,16 @@ test-macos-unit:
 # =============================================================================
 
 test-zig-release-safe:
+  # Each shard keeps its own bounded outputs across branches. Twelve writers
+  # to one branch key previously replaced one another's disjoint binaries.
+  cache:
+    - <<: *zig-build-cache
+      key:
+        prefix: "geode-zig-release-safe-v3-${ZIG_VERSION}-${TEST_SHARD_TOTAL}-${TEST_SHARD_INDEX}"
+        files: [build.zig.zon]
+      policy: pull-push
+    - *zig-protoc-cache
+  after_script: *zig-cache-writer-after-script
   stage: test
   image: $ZIG_IMAGE
   # Timeout walk for the ReleaseSafe suite: 1h → 2h → 4h → 6h. Pipeline
@@ -1606,6 +1608,9 @@ bench-query-path:
   image: kcov/kcov@sha256:481289ae32e55e5b733019515acd10948a4f76dfed381765577db909664fc603
 
 test-code-coverage:
+  # Keep the k8s lane within the same storage budget as the Debug shards.
+  cache:
+    - *zig-protoc-cache
   stage: test
   <<: [*coverage-lane-image, *coverage-lane-rules]
   needs: []
@@ -1822,6 +1827,9 @@ security-trivy:
 
 # Snapshot release for main branch (non-tag builds)
 snapshot:
+  cache:
+    - *zig-build-cache
+    - *zig-protoc-cache
   stage: release
   interruptible: true  # Newer main commits supersede this build-only snapshot
   # Skip stage-based ordering: require key quality gates only.
@@ -2046,6 +2054,12 @@ snapshot:
 # with the test stage, and never block main.
 # ---------------------------------------------------------------------------
 dev-image-build:
+  # The native build is the sole writer of the shared native compiler key.
+  cache:
+    - <<: *zig-build-cache
+      policy: pull-push
+    - *zig-protoc-cache
+  after_script: *zig-cache-writer-after-script
   stage: release
   image: $ZIG_IMAGE
   # 2026-10-11: OOMKilled on the k8s pool while cross-compiling aarch64
@@ -2226,11 +2240,10 @@ zig-fips-test-0.16.0:
   # plus this job's two FIPS-mode builds leaves too little room to archive
   # it inside the k8s pod's 20Gi ephemeral-storage limit: the job passed
   # 18/18 in both modes and then failed as a system failure while saving the
-  # cache (MR !48, jobs 17267152864 and 17267557035). The release-safe and
-  # unit shards produce this cache; this gate only consumes it.
+  # cache (MR !48, jobs 17267152864 and 17267557035). The FIPS dev-image
+  # build produces this cache; this gate only consumes it.
   cache:
-    - <<: *zig-build-cache
-      policy: pull
+    - *zig-fips-build-cache
     - *zig-protoc-cache
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
@@ -2254,6 +2267,11 @@ zig-fips-test-0.16.0:
 # FIPS dev binary; the attempt in dev-image-build (standard ZIG_IMAGE) is
 # best-effort and will likely fail there.
 dev-image-build-fips:
+  cache:
+    - <<: *zig-fips-build-cache
+      policy: pull-push
+    - *zig-protoc-cache
+  after_script: *zig-cache-writer-after-script
   stage: release
   image: registry.gitlab.com/devnw/ci-catalog/zig-fips:0.16.0
   needs: []
@@ -2458,6 +2476,9 @@ verify-packages:
     expire_in: 1 week
 
 build-release:
+  cache:
+    - *zig-build-cache
+    - *zig-protoc-cache
   stage: release
   interruptible: false  # Never cancel in-flight release builds
   # Only require unit tests, release-safe build, and harness to pass before building release.
