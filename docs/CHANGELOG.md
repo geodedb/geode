@@ -25,6 +25,22 @@
 - **Per-graph `GRANT` and `REVOKE` take effect at once:** they now
   invalidate cached authorization decisions, so a revoked `READ` grant stops
   working without a restart.
+- **Per-graph grants are scoped to their graph and take effect at once, for
+  every role (REQ-SEC-PER-GRAPH-GRANTS).** For a user with an explicit role,
+  a runtime `GRANT WRITE ON GRAPH g TO u` only took effect after a server
+  restart, and from then on it allowed writes on **every** graph: grants
+  reached authorization only as Policy rows migrated from them at startup,
+  and the handlers' database-wide write check matched any graph-scoped allow
+  policy. `REVOKE` never removed the migrated row, so a migrated grant could
+  not be revoked. Now `gps.decide` reads `READ`, `WRITE` and `SCHEMA` grants
+  from the live grant table for every role, on the request's graph only;
+  the write gate asks for write on the graph the program changes; an allow
+  policy scoped to one graph (`CREATE POLICY ... ON GRAPH g`) covers only
+  that graph; and startup drops the `auto_migrated_grant_*` policies earlier
+  versions created. Global role permissions are unchanged. A `FOR WRITE`
+  policy that relied on a single-graph scope to allow writes everywhere must
+  be re-created `ON GRAPH *`. See docs/GQL_AUTH_DDL.md, "Per-graph grant
+  semantics". Regression: `zig build test-per-graph-grants`.
 
 ### Added
 

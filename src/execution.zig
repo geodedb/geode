@@ -1204,13 +1204,15 @@ pub fn checkPermission(context: ExecutionContext, permission: @import("security/
     };
 
     // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-003; FEATURE="GQL Auth DDL Persistence"; ASPECT=Enforcement; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
-    // Graph-grant widening now lives inside decide() (Task 2-5). The semantics
-    // are unchanged: a GRANT on the active graph widens access beyond the
-    // user's global role. Phase 4 will promote grants to first-class Policy rows.
+    // A GRANT on the active graph widens access beyond the user's global role
+    // there (gps.decide reads the live grant table). REQ-SEC-PER-GRAPH-GRANTS:
+    // the request names the active graph, so a grant or a graph-scoped policy
+    // counts on that graph only; with no active graph it is database-wide and
+    // only a global permission (or a `*` policy) allows it.
     const req = gps.DecisionRequest{
         .principal = principal_ptr,
         .action = action,
-        .resource = .{ .database = {} },
+        .resource = if (principal_ptr.active_graph) |g| .{ .graph = g } else .{ .database = {} },
     };
     // smp_allocator is the governance-approved global allocator for src/ (page_allocator is banned).
     const decision = try gps.decide(std.heap.smp_allocator, &req);
