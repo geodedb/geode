@@ -96,6 +96,16 @@ pub const Role = enum {
     User, // Limited access: read only
     ReadWrite, // Read and write access
     ReadOnly, // Explicit read-only access
+    // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=NoneRole; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
+    /// No stored role: the default for a user whose record carries no
+    /// built-in role (no `HAS_ROLE` edge to one, not a superuser). It holds no
+    /// global permission at all: no read, no write, no schema, no admin. Such a
+    /// user reaches a graph only through a per-graph grant on it, and gets
+    /// that grant's privileges there (`gps.decide`, `isGrantOnly`). It is not
+    /// assignable: `fromString` does not parse "none", so `ALTER USER ... SET
+    /// ROLE none` is refused like any unknown role. Until 2026-10 the default
+    /// was `ReadWrite`, which failed open.
+    None,
 
     pub fn fromString(s: []const u8) ?Role {
         if (std.ascii.eqlIgnoreCase(s, "admin")) return .Admin;
@@ -111,6 +121,7 @@ pub const Role = enum {
             .User => "user",
             .ReadWrite => "readwrite",
             .ReadOnly => "readonly",
+            .None => "none",
         };
     }
 };
@@ -125,6 +136,7 @@ pub const Permission = enum {
             .Admin => &[_]Permission{ .Read, .Write, .Schema },
             .ReadWrite => &[_]Permission{ .Read, .Write },
             .User, .ReadOnly => &[_]Permission{.Read},
+            .None => &[_]Permission{},
         };
     }
 };

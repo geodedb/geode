@@ -8812,6 +8812,22 @@ pub fn build(b: *std.Build) void {
     const sonny2743_step = b.step("test-sonny2743-whole-program-gate", "Run SONNY-2743 regression (a program that changes the store is write-gated and write-locked whatever its last query; store-free and point-read paths only for programs that do nothing else; read-only gRPC sessions are refused and the store is unchanged)");
     sonny2743_step.dependOn(&run_sonny2743_tests.step);
 
+    // Fail-closed default role (REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED): a user with
+    // no stored role gets no global access, only what its per-graph grants give.
+    const default_role_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_default_role_fail_closed.zig"), .target = target, .optimize = optimize });
+    default_role_test_mod.link_libc = true;
+    default_role_test_mod.addImport("geode", root_mod);
+    default_role_test_mod.addImport("schema", schema_mod);
+    default_role_test_mod.addImport("protobuf", protobuf_mod);
+    default_role_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    default_role_test_mod.addImport("logging", logging_mod);
+    default_role_test_mod.addImport("user_storage", user_storage_mod);
+    const default_role_tests = b.addTest(.{ .root_module = default_role_test_mod });
+    const run_default_role_tests = b.addRunArtifact(default_role_tests);
+    shardDep(test_step, &run_default_role_tests.step, 1, test_shard_loads, test_shard_index);
+    const default_role_step = b.step("test-default-role-fail-closed", "Run the fail-closed default role regression (a user with no stored role gets no global read/write/admin; per-graph grants work as granted; explicit roles and the bootstrap admin unchanged)");
+    default_role_step.dependOn(&run_default_role_tests.step);
+
     // SONNY-2749: a program's writes run under the write lock of the graph they
     // write (query_traits.statementPlan.lock_graph), not the session graph's; a
     // program that changes data on several graphs is refused. Races MERGEs of
@@ -12164,6 +12180,7 @@ pub fn build(b: *std.Build) void {
     agm_unit_test_mod.addImport("build_options", build_options_mod);
     agm_unit_test_mod.addImport("geode", root_mod);
     agm_unit_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    agm_unit_test_mod.addImport("user_storage", user_storage_mod);
     const agm_unit_tests = b.addTest(.{ .root_module = agm_unit_test_mod });
     const run_agm_unit_tests = b.addRunArtifact(agm_unit_tests);
     shardDep(test_step, &run_agm_unit_tests.step, 0, test_shard_loads, test_shard_index);

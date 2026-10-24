@@ -2,6 +2,30 @@
 
 ## [Unreleased] - Time-Series Audit and Gap Closure
 
+### Security
+
+- **BREAKING: fail-closed default role.** A user with no stored built-in
+  role (not a superuser, no `HAS_ROLE` edge to `admin`, `user`, `readwrite`
+  or `readonly`) used to fall back to `readwrite` and could read and write
+  every graph. It now resolves to `none`: no global read, write, schema or
+  admin, and no access to any graph (the `default` graph included) except
+  those it holds a per-graph grant on, where the grant works as granted
+  (`READ` reads, `WRITE` writes). The bootstrap admin, `CREATE USER` (which
+  stores the `user` role when no `ROLE` is given) and explicitly assigned
+  roles are unchanged. Operators upgrading a store with users that have no
+  role must assign one (`ALTER USER u SET ROLE readwrite`) or grant per
+  graph. See docs/GQL_AUTH_DDL.md, "Users with no stored role".
+  Regression: `zig build test-default-role-fail-closed`.
+- **`SHOW USERS` no longer raises read-only users to `readwrite`:** the
+  persistent auth resolver read a query's read snapshot, which lacks the
+  security graph, and fell back to the default role.
+- **Per-graph `REVOKE` removes the right grant:** grant ids above
+  `maxInt(i64)` were clamped when stored, so a revoke failed (58030) or hit
+  another grant, and the auth chain failed to verify at restart.
+- **Per-graph `GRANT` and `REVOKE` take effect at once:** they now
+  invalidate cached authorization decisions, so a revoked `READ` grant stops
+  working without a restart.
+
 ### Added
 
 - **CANARY Governance Tokens:** 24 CANARY markers added across timeseries source files (GAP-0281)

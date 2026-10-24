@@ -1873,11 +1873,7 @@ fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.Ke
 /// Derive a stable, deterministic grant id from the (user_id, graph_name, action) triple.
 /// Uses Wyhash for speed; collisions are astronomically unlikely for realistic input sets.
 fn graphGrantId(user_id: u64, graph_name: []const u8, action: u8) u64 {
-    var h = std.hash.Wyhash.init(0);
-    h.update(std.mem.asBytes(&user_id));
-    h.update(graph_name);
-    h.update(&[_]u8{action});
-    return h.final();
+    return UserStorageBackend.graphGrantId(user_id, graph_name, action);
 }
 
 /// Compute the HMAC for a GraphGrant node by reading its properties from the store.

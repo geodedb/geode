@@ -101,9 +101,9 @@ test "authRoleFromRecord: is_superuser=true → Admin" {
     try std.testing.expectEqual(geode.user_management.Role.Admin, role_resolver.authRoleFromRecord(rec));
 }
 
-test "authRoleFromRecord: is_superuser=false → ReadWrite" {
+test "authRoleFromRecord: is_superuser=false → None (fail-closed default, was ReadWrite)" {
     const rec = makeRecord("bob", false);
-    try std.testing.expectEqual(geode.user_management.Role.ReadWrite, role_resolver.authRoleFromRecord(rec));
+    try std.testing.expectEqual(geode.user_management.Role.None, role_resolver.authRoleFromRecord(rec));
 }
 
 test "resolveRoleFromGraph: is_superuser=true fast-path, no graph needed" {
@@ -141,7 +141,7 @@ test "resolveRoleFromGraph: HAS_ROLE edge → Admin" {
     try std.testing.expectEqual(geode.user_management.Role.Admin, role_resolver.resolveRoleFromGraph(store, rec));
 }
 
-test "resolveRoleFromGraph: no User node → fallback ReadWrite" {
+test "resolveRoleFromGraph: no User node → fallback None" {
     const allocator = std.testing.allocator;
     var h = try Harness.init(allocator);
     defer h.deinit();
@@ -149,10 +149,10 @@ test "resolveRoleFromGraph: no User node → fallback ReadWrite" {
     const store = graph_store.getGlobalStore(allocator);
     // No nodes inserted — user not found in security graph, fallback applies.
     const rec = makeRecord("unknown", false);
-    try std.testing.expectEqual(geode.user_management.Role.ReadWrite, role_resolver.resolveRoleFromGraph(store, rec));
+    try std.testing.expectEqual(geode.user_management.Role.None, role_resolver.resolveRoleFromGraph(store, rec));
 }
 
-test "resolveRoleFromGraph: wrong username in graph → fallback ReadWrite" {
+test "resolveRoleFromGraph: wrong username in graph → fallback None" {
     const allocator = std.testing.allocator;
     var h = try Harness.init(allocator);
     defer h.deinit();
@@ -162,10 +162,10 @@ test "resolveRoleFromGraph: wrong username in graph → fallback ReadWrite" {
     try plantHasRoleEdge(store, "eve", "admin");
 
     const rec = makeRecord("frank", false);
-    try std.testing.expectEqual(geode.user_management.Role.ReadWrite, role_resolver.resolveRoleFromGraph(store, rec));
+    try std.testing.expectEqual(geode.user_management.Role.None, role_resolver.resolveRoleFromGraph(store, rec));
 }
 
-test "resolveRoleFromGraph: unrecognised role name → fallback ReadWrite" {
+test "resolveRoleFromGraph: unrecognised role name → fallback None" {
     const allocator = std.testing.allocator;
     var h = try Harness.init(allocator);
     defer h.deinit();
@@ -175,7 +175,7 @@ test "resolveRoleFromGraph: unrecognised role name → fallback ReadWrite" {
     try plantHasRoleEdge(store, "grace", "supervigilante");
 
     const rec = makeRecord("grace", false);
-    try std.testing.expectEqual(geode.user_management.Role.ReadWrite, role_resolver.resolveRoleFromGraph(store, rec));
+    try std.testing.expectEqual(geode.user_management.Role.None, role_resolver.resolveRoleFromGraph(store, rec));
 }
 
 // Plant an additional HAS_ROLE edge for an existing User node.

@@ -106,6 +106,34 @@ outgoing `HAS_ROLE` edges, reads the `name` property of each target `Role`
 node, and maps it through `Role.fromString()`. The fallback is the legacy
 `authRoleFromRecord` behavior. Closing commit: `6a307cf0`.
 
+### Fail-closed default role (2026-10, breaking)
+
+`authRoleFromRecord` returned `.ReadWrite` for every non-superuser, so a
+user with no stored built-in role could read and write every graph. It now
+returns `.None` ("none"), a role with no builtin permission. In `decide()`:
+
+- `.None` grants nothing in the builtin-role step, and is neither `Admin`
+  (no admin shortcuts) nor `ReadWrite` (no permissive single-tenant bind).
+- `isGrantOnly(principal)` is true for it. After the builtin-role step, on a
+  `.graph` resource, a grant-only principal is allowed an action its live
+  per-graph grant covers (`graph_grant_check_fn`: READ for `read`/`match_`,
+  WRITE for `write`/`create`/`update`/`delete`, SCHEMA for `schema`),
+  `reason_code = "graph_grant"`. Policies still apply after that, as for
+  every principal.
+
+The handlers add two gates that apply only to grant-only principals:
+`gps.writePermittedOn(principal, lock_graph)` (write on the graph the
+program changes, in place of the database-wide `writePermitted`) and
+`session_graph.programReadPermitted` (read on every graph the program
+touches, the `default` graph included, which `mayBind` lets every
+authenticated user bind). Every other principal gets the gates it had.
+
+Write grants are not capped at read for `.None`: per-graph grants are
+documented as additive over the global role (docs/GQL_AUTH_DDL.md), so a
+WRITE grant works as granted. See
+[GQL_AUTH_DDL.md](../GQL_AUTH_DDL.md#users-with-no-stored-role-fail-closed-default).
+Regression: `tests/test_default_role_fail_closed.zig`.
+
 ## How to call `decide()` in new code (Phase 2+)
 
 ```zig

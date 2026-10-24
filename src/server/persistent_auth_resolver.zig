@@ -101,7 +101,7 @@ pub fn lookupPersistentAuthUser(_: ?*anyopaque, allocator: std.mem.Allocator, us
     const access = try beginResolverRead();
     defer geode.graph_store.endStoreRead(access);
 
-    const store = geode.graph_store.getGlobalStore(allocator);
+    const store = geode.graph_store.getLiveGlobalStore(allocator);
     const record = try user_storage.UserStorageBackend.findUserByUsernameInGraphChecked(store, username) orelse return null;
     return try duplicatePersistentUser(allocator, store, record);
 }
@@ -111,7 +111,7 @@ pub fn persistentAuthUsersExist(_: ?*anyopaque) anyerror!bool {
     const access = try beginResolverRead();
     defer geode.graph_store.endStoreRead(access);
 
-    const store = geode.graph_store.getGlobalStore(std.heap.c_allocator);
+    const store = geode.graph_store.getLiveGlobalStore(std.heap.c_allocator);
     return user_storage.UserStorageBackend.hasUserRecordsInGraph(store);
 }
 
@@ -123,7 +123,7 @@ pub fn lookupPersistentAuthVersion(_: ?*anyopaque, username: []const u8) anyerro
     const access = try beginResolverRead();
     defer geode.graph_store.endStoreRead(access);
 
-    const store = geode.graph_store.getGlobalStore(std.heap.c_allocator);
+    const store = geode.graph_store.getLiveGlobalStore(std.heap.c_allocator);
     return user_storage.UserStorageBackend.findUserAuthVersionByUsernameInGraph(store, username);
 }
 
@@ -132,7 +132,7 @@ pub fn listPersistentAuthUsers(_: ?*anyopaque, allocator: std.mem.Allocator) any
     const access = try beginResolverRead();
     defer geode.graph_store.endStoreRead(access);
 
-    const store = geode.graph_store.getGlobalStore(allocator);
+    const store = geode.graph_store.getLiveGlobalStore(allocator);
     const records = try user_storage.UserStorageBackend.listUsersFromGraph(allocator, store);
     defer allocator.free(records);
 

@@ -3378,12 +3378,23 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // Phase 2: delegated to gps.decide() so the PDP is uniform across all transports.
             // principal_for_request is derived above (line ~1964) and is in scope here.
             // SONNY-2743: `gps.writePermitted`, the same gate QUIC runs.
+            // Fail-closed default role (REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED): a
+            // user with no stored role needs write on the graph the program
+            // changes; see the QUIC handler.
             if (is_mutation) {
-                if (!geode.security.gps.writePermitted(std.heap.smp_allocator, &principal_for_request)) {
+                if (!geode.security.gps.writePermittedOn(std.heap.smp_allocator, &principal_for_request, lock_graph)) {
                     var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
                 }
+            }
+            // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrpcReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
+            // A user with no stored role reads only graphs it holds a READ
+            // grant on, the default graph included.
+            if (!try execution.session_graph.programReadPermitted(allocator, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
+                var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
             }
 
             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
