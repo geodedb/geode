@@ -87,7 +87,7 @@ services:
 
   # HashiCorp Vault - Development Mode
   vault:
-    image: hashicorp/vault:2.1
+    image: hashicorp/vault:2.2
     container_name: geode-dev-vault
     restart: unless-stopped
     ports:

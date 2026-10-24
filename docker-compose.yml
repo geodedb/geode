@@ -4,7 +4,7 @@
 services:
   # HashiCorp Vault - Secrets Management
   vault:
-    image: hashicorp/vault:2.1
+    image: hashicorp/vault:2.2
     container_name: geode-vault
     restart: unless-stopped
     ports:
