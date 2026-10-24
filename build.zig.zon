@@ -518,8 +518,8 @@
             // no overflowed values stay byte-compatible (no manifest bump; the
             // stub tag is the versioning). Same transitive deps as v0.3.2 (no
             // diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=4082884d20427f32f862dfc1b8e8e80c5b36656b#4082884d20427f32f862dfc1b8e8e80c5b36656b",
-            .hash = "graph_storage-0.4.10-9UyJS7q1LAAkg-1YuvvNFiDSsk7zh0gelqC4CXFOWs6t",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=5fe21929aa851e7df97dc3bbdff5d48ca64e77b5#5fe21929aa851e7df97dc3bbdff5d48ca64e77b5",
+            .hash = "graph_storage-0.4.10-9UyJS7TBLAC90y84DCss2l2n9_gx_6jbUYU2Zawpxten",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
