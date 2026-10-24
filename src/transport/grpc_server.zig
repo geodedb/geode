@@ -3399,11 +3399,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrpcReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
             // A principal with no global Read (a user with no stored role)
             // reads only graphs it holds a READ grant on, the default graph
-            // included.
-            if (!try execution.session_graph.programReadPermitted(allocator, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
-                var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
-                defer resp.deinit(allocator);
-                return encodeMessage(allocator, resp);
+            // included. A session with no role (auth disabled) is not gated,
+            // as on QUIC: it has no principal for `gps.decide` to allow.
+            if (role != null) {
+                if (!try execution.session_graph.programReadPermitted(allocator, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
+                    var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                }
             }
 
             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
