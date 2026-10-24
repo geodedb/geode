@@ -336,6 +336,10 @@ const Server = struct {
     fn connect(self: *Server) !util.QuicProtoClient {
         var client = try util.QuicProtoClient.connect(testing.allocator, self.addr);
         errdefer client.deinit();
+        // SONNY-2394: reply waits follow the server's liveness, not a fixed
+        // 5 s deadline (a live server on a loaded CI shard can take longer);
+        // a server that exits still fails at once, a hang at the 60 s cap.
+        client.watchServerLiveness(self.handle.child.id.?);
         var hello = try client.hello(testing.allocator, util.defaultUsername(), util.defaultPassword());
         defer hello.deinit(testing.allocator);
         if (!hello.success) {

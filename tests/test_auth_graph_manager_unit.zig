@@ -200,3 +200,72 @@ test "SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)
     const tok3 = try sm.authenticate("hydrated", "brand new horse battery St4ple!");
     _ = tok3;
 }
+
+// ── Per-graph grant ids above maxInt(i64) (geode-test-harness
+// rbac_revoke_invalidates_session::revoke-revoke-bob-read-grant) ─────────────
+//
+// A grant's id is a 64-bit Wyhash of (user, graph, action), so about half of
+// all grants have one above maxInt(i64). The "id" node property was written
+// through safeI64, which clamped those to maxInt(i64), and the readers took the
+// id from it. A revoke then removed the wrong graph_grant_nodes key, deleted the
+// node and resealed the chain over the stale entry: NodeNotFound, reported to
+// the client as 58030 "The revoke could not be saved". A reload mapped every
+// clamped grant to one key, so the chain no longer verified.
+//
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-017; FEATURE="AuthDDLPersistence"; ASPECT=GrantIdAboveI64Max; STATUS=TESTED; TEST=tests/test_auth_graph_manager_unit.zig; OWNER=security; UPDATED=2026-10-11
+
+const user_storage = @import("user_storage");
+
+/// The first `prefix<n>` graph name whose READ grant for `uid` has an id above
+/// maxInt(i64).
+fn graphWithHighGrantId(buf: []u8, prefix: []const u8, uid: u64) ![]const u8 {
+    var i: usize = 0;
+    while (i < 1000) : (i += 1) {
+        const name = try std.fmt.bufPrint(buf, "{s}{d}", .{ prefix, i });
+        const id = user_storage.UserStorageBackend.graphGrantId(uid, name, 0);
+        if (id > @as(u64, std.math.maxInt(i64))) return name;
+    }
+    return error.NoHighGrantId;
+}
+
+test "a grant whose id is above maxInt(i64) revokes, reseals and reloads" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+    var mgr = try AuthGraphManager.init(testing.allocator, &store);
+    defer mgr.deinit();
+
+    const uid = try mgr.createUser(&HMAC_KEY, "bob", "b@x", "fakehash", false);
+    var buf_a: [32]u8 = undefined;
+    var buf_b: [32]u8 = undefined;
+    const graph_a = try graphWithHighGrantId(&buf_a, "ga", uid);
+    const graph_b = try graphWithHighGrantId(&buf_b, "gb", uid);
+
+    try mgr.grantUserGraphPermission(&HMAC_KEY, uid, graph_a, 0);
+    try mgr.grantUserGraphPermission(&HMAC_KEY, uid, graph_b, 0);
+    try mgr.verifyChain(&HMAC_KEY);
+
+    // A reload keys each grant by its real id: two grants, and the chain the
+    // writer sealed verifies.
+    {
+        var reloaded = try AuthGraphManager.init(testing.allocator, &store);
+        defer reloaded.deinit();
+        try testing.expectEqual(@as(u32, 2), reloaded.storage.graph_grant_nodes.count());
+        try testing.expect(reloaded.storage.graph_grant_nodes.contains(user_storage.UserStorageBackend.graphGrantId(uid, graph_a, 0)));
+        try reloaded.verifyChain(&HMAC_KEY);
+    }
+
+    // The revoke removes the grant it deleted and reseals.
+    try testing.expect(try mgr.revokeUserGraphPermission(&HMAC_KEY, uid, graph_a, 0));
+    try testing.expectEqual(@as(u32, 1), mgr.storage.graph_grant_nodes.count());
+    try mgr.verifyChain(&HMAC_KEY);
+    const left = try mgr.listGraphGrants(testing.allocator);
+    defer testing.allocator.free(left);
+    try testing.expectEqual(@as(usize, 1), left.len);
+    try testing.expectEqualStrings(graph_b, left[0].getGraphName());
+
+    try testing.expect(try mgr.revokeUserGraphPermission(&HMAC_KEY, uid, graph_b, 0));
+    try testing.expectEqual(@as(u32, 0), mgr.storage.graph_grant_nodes.count());
+    try mgr.verifyChain(&HMAC_KEY);
+    // A second revoke of the same grant finds nothing and is not an error.
+    try testing.expect(!try mgr.revokeUserGraphPermission(&HMAC_KEY, uid, graph_b, 0));
+}

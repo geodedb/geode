@@ -3,6 +3,7 @@
 // Extends RBAC, FLE, and Audit with graph-scoped access control
 
 const std = @import("std");
+const policy_version = @import("policy_version.zig");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -317,15 +318,24 @@ pub const GraphRBACPolicy = struct {
     /// action: 0=read, 1=write, 2=schema
     pub fn grantGraphPermission(self: *Self, user_id: u64, graph_name: []const u8, action: u8) !void {
         const key = GraphGrantKey.init(user_id, graph_name, action);
-        try self.graph_user_grants.put(key, {});
+        const had = try self.graph_user_grants.fetchPut(key, {});
+        if (had == null) _ = policy_version.incrementPolicyVersion();
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-040; FEATURE="AuthDDLPersistence"; ASPECT=RevokeGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
     /// Remove an explicit per-graph privilege grant for a user.
     /// Returns true if the grant was present (and removed), false if it was absent.
+    ///
+    /// A change bumps the GPS policy version. gps.decide caches decisions keyed
+    /// by (auth_version, policy_version, ...), and a grant changes neither the
+    /// user's auth_version nor a policy: without the bump a revoked READ grant
+    /// kept allowing bind_graph from the cache, so the user went on reading the
+    /// graph until restart, and a deny cached before a GRANT outlived it.
     pub fn revokeGraphPermission(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
         const key = GraphGrantKey.init(user_id, graph_name, action);
-        return self.graph_user_grants.remove(key);
+        const removed = self.graph_user_grants.remove(key);
+        if (removed) _ = policy_version.incrementPolicyVersion();
+        return removed;
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-041; FEATURE="AuthDDLPersistence"; ASPECT=HasGraphGrant; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12

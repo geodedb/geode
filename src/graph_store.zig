@@ -17534,6 +17534,19 @@ pub fn quarantineErrorForGraph(allocator: std.mem.Allocator, graph_name: []const
     return getPrimaryGlobalStore(allocator).graphQuarantineError(graph_name);
 }
 
+/// The live global store, never the calling thread's active query read
+/// snapshot (`pushActiveQueryReadStore`).
+///
+/// A read query runs against a `QueryReadSession` snapshot that carries only
+/// the graphs that query reads. Internal graphs such as `__geode_security`
+/// are not in it, so a lookup there through `getGlobalStore` finds nothing:
+/// the persistent auth resolver then rebuilt every non-admin user with the
+/// fallback role (ReadWrite), and `SHOW USERS` wrote that role back into the
+/// user cache. Security-graph readers use this instead.
+pub fn getLiveGlobalStore(allocator: std.mem.Allocator) *GraphStore {
+    return getPrimaryGlobalStore(allocator);
+}
+
 pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     if (g_active_query_read_store) |snapshot| {
         return snapshot;

@@ -630,3 +630,76 @@ test "store-lock hold accounting balances across both modes (ENG-3979)" {
     graph_store.endStoreRead(access);
     try testing.expect(!graph_store.storeLockHeldByCurrentThread());
 }
+
+// ── The resolver reads the live store, not a query's read snapshot ───────────
+//
+// geode-test-harness rbac_users_roles_grants_audit::phase1-bob-readonly-cannot-write:
+// after an admin ran SHOW USERS, a readonly user's CREATE succeeded.
+//
+// SHOW USERS is a read query, so it runs with a QueryReadSession snapshot
+// pushed as the thread's active read store, and `graph_store.getGlobalStore`
+// returns that snapshot. The snapshot carries only the graphs the query reads,
+// not `__geode_security`, so the resolver's HAS_ROLE lookup found no user node
+// and fell back to ReadWrite for every non-admin. `user_management.listUsers`
+// then wrote that role over the cached one, and the readonly user could write.
+// SHOW PERMISSIONS FOR <user> hit the same path (geode_auth_ddl
+// auth-ddl-permissions-carol-after: an ALTER USER ... SET ROLE admin showed no
+// schema permission).
+//
+// CANARY: REQ=REQ-SEC-AUTH-ROLE-LIVE-STORE-001; FEATURE="AuthOutcomeClassification"; ASPECT=ResolverIgnoresReadSnapshot; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-10-11
+
+fn seedGlobalUserWithRole(user_id: u64, username: []const u8, role_id: u64, role_name: []const u8) !void {
+    const store = graph_store.getGlobalStore(std.heap.c_allocator);
+    var backend = try UserStorageBackend.init(std.heap.c_allocator, store);
+    defer backend.deinit();
+    _ = try backend.upsertManagedUser(.{
+        .user_id = user_id,
+        .username = username,
+        .email = "user@localhost",
+        .password_hash = stub_hash,
+        .is_active = true,
+    });
+    try backend.persistRole(role_id, role_name, "", 0, 0, false);
+    _ = try backend.assignUserRole(user_id, role_id);
+}
+
+test "persistent resolver resolves the stored role while a query read snapshot is active" {
+    try requireNoGlobalAdapter();
+    try seedGlobalUserWithRole(5151, "snap_readonly", 5152, "readonly");
+
+    // Baseline, no snapshot.
+    {
+        const user = (try persistent_auth_resolver.lookupPersistentAuthUser(null, testing.allocator, "snap_readonly")) orelse
+            return error.SeededPrincipalNotResolvable;
+        var owned = user;
+        defer owned.deinit(testing.allocator);
+        try testing.expectEqual(um.Role.ReadOnly, owned.role);
+    }
+
+    // A read query's snapshot: a store that does not carry __geode_security.
+    var snapshot = try graph_store.GraphStore.init(testing.allocator);
+    defer snapshot.deinit();
+    const previous = graph_store.pushActiveQueryReadStore(&snapshot);
+    defer graph_store.popActiveQueryReadStore(previous);
+    try testing.expect(graph_store.getGlobalStore(std.heap.c_allocator) == &snapshot);
+
+    const user = (try persistent_auth_resolver.lookupPersistentAuthUser(null, testing.allocator, "snap_readonly")) orelse
+        return error.PrincipalLostUnderReadSnapshot;
+    var owned = user;
+    defer owned.deinit(testing.allocator);
+    try testing.expectEqual(um.Role.ReadOnly, owned.role);
+
+    // The list path SHOW USERS takes, which writes into the user cache.
+    const users = try persistent_auth_resolver.listPersistentAuthUsers(null, testing.allocator);
+    defer {
+        for (users) |*u| u.deinit(testing.allocator);
+        testing.allocator.free(users);
+    }
+    var found = false;
+    for (users) |u| {
+        if (!std.mem.eql(u8, u.username, "snap_readonly")) continue;
+        found = true;
+        try testing.expectEqual(um.Role.ReadOnly, u.role);
+    }
+    try testing.expect(found);
+}

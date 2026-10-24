@@ -494,6 +494,33 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         }
     }
 
+    // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrantOnlyGraphAccess; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
+    // A user with no stored role (`Role.None`) holds no builtin permission, so
+    // the loop above allowed nothing. On a graph the user holds a per-graph
+    // grant on, the grant allows its own action there: READ allows read,
+    // WRITE allows write, SCHEMA allows schema. Grants work as granted, as
+    // for every other role (docs/GQL_AUTH_DDL.md: grants are additive and
+    // widen access beyond the global role). The grant is read from the live
+    // GraphRBACPolicy, so a GRANT or REVOKE takes effect at once rather than
+    // after the restart that migrates grants to Policy rows. Only `None`
+    // principals take this path, so no other role's decisions change.
+    if (isGrantOnly(req.principal)) {
+        if (req.resource == .graph) {
+            if (grantActionCode(req.action)) |code| {
+                if (execution.graph_grant_check_fn) |grant_fn| {
+                    if (req.principal.username) |uname| {
+                        if (grant_fn(uname, req.resource.graph, code)) {
+                            return cacheAndReturn(cache_key, PolicyDecision{
+                                .kind = .allow,
+                                .reason_code = "graph_grant",
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // CANARY: REQ=REQ-GPS-POLICY-EVAL-001; FEATURE="GPS Policy Evaluation"; ASPECT=ExplicitAllow; STATUS=TESTED; TEST=tests/test_gps_policy_evaluation.zig; OWNER=security; UPDATED=2026-05-20
     // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=DecideEvalExpression; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
     // Phase 4: explicit policy match via the global PolicyCatalog.
@@ -616,6 +643,61 @@ fn policyExpressionHolds(allocator: std.mem.Allocator, policy: *const @import("p
 /// answers; an error answers no. A builtin role with WRITE is allowed by
 /// `decide` itself, so this is what QUIC's inline role check followed by
 /// `decide` answered; both handlers now run this one function.
+// CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrantOnlyPrincipal; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
+/// Is `principal` a user with no stored role (`user_management.Role.None`)?
+/// Such a principal holds no global permission and reaches a graph only
+/// through a per-graph grant on it.
+pub fn isGrantOnly(principal: *const principal_mod.Principal) bool {
+    const none_name = @tagName(user_mgmt.Role.None);
+    for (principal.roles) |role_name| {
+        if (std.mem.eql(u8, role_name, none_name)) return true;
+    }
+    return false;
+}
+
+/// The per-graph grant action code (`GraphRBACPolicy`: 0=read, 1=write,
+/// 2=schema) that covers `action`, or null when no per-graph grant does.
+fn grantActionCode(action: Action) ?u8 {
+    return switch (action) {
+        .read, .match_ => 0,
+        .write, .create, .update, .delete => 1,
+        .schema => 2,
+        else => null,
+    };
+}
+
+/// May `principal` read the data of `graph`? Every principal but a
+/// grant-only one (`isGrantOnly`) may, as before: its graph access is
+/// governed by `bind_graph`. A grant-only principal needs
+/// `decide(read, graph)`: a READ grant on the graph, or a policy.
+pub fn graphReadPermitted(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, graph: []const u8) bool {
+    if (!isGrantOnly(principal)) return true;
+    const req = DecisionRequest{
+        .principal = principal,
+        .action = .read,
+        .resource = .{ .graph = graph },
+    };
+    const decision = decide(allocator, &req) catch return false;
+    return decision.kind == .allow;
+}
+
+/// The handlers' write gate for a program that changes `graph`'s data.
+/// Every principal but a grant-only one gets `writePermitted`, unchanged. A
+/// grant-only principal (`isGrantOnly`) needs `decide(write, graph)`: a
+/// WRITE grant on that graph, or a policy on it. Its database-wide
+/// `writePermitted` is not consulted: a grant on one graph must not let it
+/// write another.
+pub fn writePermittedOn(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, graph: []const u8) bool {
+    if (!isGrantOnly(principal)) return writePermitted(allocator, principal);
+    const req = DecisionRequest{
+        .principal = principal,
+        .action = .write,
+        .resource = .{ .graph = graph },
+    };
+    const decision = decide(allocator, &req) catch return false;
+    return decision.kind == .allow;
+}
+
 pub fn writePermitted(allocator: std.mem.Allocator, principal: *const principal_mod.Principal) bool {
     const req = DecisionRequest{
         .principal = principal,

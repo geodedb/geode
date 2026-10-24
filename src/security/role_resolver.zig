@@ -15,22 +15,29 @@ const geode = @import("geode");
 // build.zig as the "user_storage" named import on the role_resolver module.
 const user_storage = @import("user_storage");
 
+// CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=RecordFallback; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
 /// Convert a UserRecord to a built-in Role without consulting the graph.
-/// Returns .Admin when is_superuser is true, .ReadWrite otherwise.
-/// This is the legacy fallback; prefer resolveRoleFromGraph when a store
-/// is available.
+/// Returns .Admin when is_superuser is true, .None otherwise.
+/// This is the fallback for a user with no stored role; prefer
+/// resolveRoleFromGraph when a store is available.
+///
+/// Fail-closed default (2026-10): the fallback used to be .ReadWrite, so a
+/// user whose record carried no built-in role (no HAS_ROLE edge, or one to a
+/// role name that is not built in) could read and write every graph. It is
+/// now .None: no global permission, and access only to the graphs the user
+/// holds a per-graph grant on.
 pub fn authRoleFromRecord(record: user_storage.UserStorageBackend.UserRecord) geode.user_management.Role {
-    return if (record.is_superuser) .Admin else .ReadWrite;
+    return if (record.is_superuser) .Admin else .None;
 }
 
 // CANARY: REQ=REQ-GPS-PDP-008; FEATURE="GPS Canonical Principal"; ASPECT=AuthRoleGraphLookupIsolated; STATUS=TESTED; TEST=tests/test_gps_role_resolver.zig; OWNER=security; UPDATED=2026-05-20
 /// Resolve the user's built-in role from the __geode_security graph by
 /// traversing the HAS_ROLE edge from the user node to the role node.  Falls
-/// back to authRoleFromRecord (is_superuser→Admin, else ReadWrite) when no
+/// back to authRoleFromRecord (is_superuser→Admin, else None) when no
 /// HAS_ROLE edge or recognisable role name is found.
 ///
 /// This corrects a gap in authRoleFromRecord: it only checked is_superuser
-/// and always fell back to .ReadWrite for non-admin users, even when a
+/// and always fell back to the default role for non-admin users, even when a
 /// `readonly` or `user` role had been persisted via writerCreateUser /
 /// writerSetRole (which writes a HAS_ROLE edge + bumps auth_version, causing
 /// the cache to be re-fetched from the graph on the next authentication).
