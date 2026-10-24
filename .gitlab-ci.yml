@@ -371,7 +371,7 @@ variables:
 .governance-python:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
-  image: python:3.14-slim
+  image: python:3.15-slim
   variables:
     KUBERNETES_CPU_REQUEST: "250m"
     KUBERNETES_MEMORY_REQUEST: "512Mi"
@@ -1363,7 +1363,7 @@ test-performance-benchmarks:
 loadtest-regression:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: test
-  image: python:3.14-slim
+  image: python:3.15-slim
   before_script:
     # Bump UDP rmem so the quic-go client doesn't drop at high concurrency
     # (see docs/performance/host-tuning.md). Best-effort: sudo may not be
@@ -1796,7 +1796,7 @@ security-trivy:
   # image's ENTRYPOINT is the `trivy` binary so the runner's `sh -c ...`
   # wrap becomes `trivy sh -c "..."`. Override to empty string.
   image:
-    name: aquasec/trivy:0.74.0
+    name: aquasec/trivy:0.76.0
     entrypoint: [""]
   # The scan skips .zig-cache/ and zig-cache/, so it doesn't need the global
   # zig build cache. Inheriting it (pull-push) restored a multi-GB branch
@@ -2981,7 +2981,7 @@ apt-publish-apt-geodedb-com:
 hook-env-regression:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: lint
-  image: python:3.14-slim-bookworm
+  image: python:3.15-slim-bookworm
   before_script:
     - apt-get update -qq && apt-get install -y --no-install-recommends git
   script:
