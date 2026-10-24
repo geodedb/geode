@@ -197,8 +197,11 @@
             // 2026-07-13: v0.1.38 — pin-only release aligning quic's
             // thread_pool to v0.2.7 (popMany stalled-producer livelock fix)
             // in lockstep with geode + timeseries-storage.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.46#aab1d8b30d9090e25484c65a3678f9154b219281",
-            .hash = "quic-0.1.46-gBIqUWQ8QABlPGwDT2o8jG9dBgB-D023yhLLJp1rl6CM",
+            // 2026-10-24: v0.1.47 — keep lost STREAM data until it is retransmitted
+            // (quic !87); fixes `geode backup create` hanging at 0% on hosts with
+            // a ~212 KB rmem_max. Lockstep with geode-client-zig be724ae.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.47#3ca1e9fc9a4b515cb9ed3fd5b3a3a6af4c38fcd1",
+            .hash = "quic-0.1.47-gBIqUVmIQADARfwKza2h8HB4V8lrL4ZzRYNh6Vg67qUo",
         },
 
         // =======================================================================
@@ -394,8 +397,15 @@
             // 2026-10-20: main commit 8819899 (geode-client-zig !34), lockstep with
             // geode's quic v0.1.46 bump (client Finished retransmit until
             // HANDSHAKE_DONE). Still no client tag on this quic, hence ref=main.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=main#881989992cde62491ec1f0b023d788e931091fac",
-            .hash = "geode_client_zig-0.3.8-8ysbVz51CwAw-_Zn7UrZSx0os42Pyj80WL5TTnqDxjJ0",
+            // 2026-10-24: main commit be724ae (geode-client-zig !38), lockstep with
+            // geode's quic v0.1.47 bump (lost STREAM data kept until retransmitted:
+            // fixes the backup-create stall under small UDP receive buffers). This
+            // client main also carries the portable-entropy uuid/auth pins, so
+            // uuid, auth and their consumers (wal, raft, graph-storage,
+            // timeseries-storage) move to the matching main commits to keep the
+            // graph diamond-free.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=main#be724ae1064e0ec17dd3d8e81668dca6129a1a85",
+            .hash = "geode_client_zig-0.3.8-8ysbV157CwBieO_AdiWqVcZ8k6ucY8v1cs0Yoz1wrZ4-",
         },
 
         // =======================================================================
@@ -404,14 +414,14 @@
 
         // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
         .uuid = .{
-            .url = "git+https://gitlab.com/devnw/zig/uuid.git?ref=v0.1.9#88374241b83ced6c6ec8996b8e5529ee0573bbc5",
-            .hash = "uuid-0.1.9-tL1irrHrHABbxhdPA7uz_Qk5mAXaS6QoDVEKL-mK9twq",
+            .url = "git+https://gitlab.com/devnw/zig/uuid.git?ref=c8206cbf2f3abc756b62b9e099715c81a452a2aa#c8206cbf2f3abc756b62b9e099715c81a452a2aa",
+            .hash = "uuid-0.1.9-tL1iruPmHAAJ2ebApUBKroge9t-yDmrcPJ-2A2FEduNj",
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.22#97a8602b00e7431231b6dc9b4a5928073c46c3c1",
-            .hash = "wal-0.1.22-EqPqpgQ1BwC0q08qVDuR8qWuFU-39WPbuXfY55dqDokJ",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=8a17e4080f77f45c6c9169682105dc31fef7ec8d#8a17e4080f77f45c6c9169682105dc31fef7ec8d",
+            .hash = "wal-0.1.22-EqPqppQ5BwBoP4VyV5UqOInJ4UWxA3xfjxdRTfixr7j-",
         },
 
         // Page-based graph storage engine
@@ -518,8 +528,8 @@
             // no overflowed values stay byte-compatible (no manifest bump; the
             // stub tag is the versioning). Same transitive deps as v0.3.2 (no
             // diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.10#fa4d77996c06b1140d90caa8aa4e5e61f8d0d9f9",
-            .hash = "graph_storage-0.4.10-9UyJS2q1LAC1rchFt-eJ2VA8Kh-M6PQA-x3K1CD6tISQ",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=4082884d20427f32f862dfc1b8e8e80c5b36656b#4082884d20427f32f862dfc1b8e8e80c5b36656b",
+            .hash = "graph_storage-0.4.10-9UyJS7q1LAAkg-1YuvvNFiDSsk7zh0gelqC4CXFOWs6t",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -535,8 +545,8 @@
         // residual). After N consecutive failed elections the candidate now steps
         // down + backs off (Config.candidate_demote_threshold, default 4).
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.1.21#a247ada9ea1e6b6612d901a4b683fe37bdb21d07",
-            .hash = "raft-0.1.21-PqJyvnenCABVb76ciQ-CW6aUOI-Fll3qd-9NInTT58Pf",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=b80fd49f7bb445636b4c23d63e6f171b9ecc28dc#b80fd49f7bb445636b4c23d63e6f171b9ecc28dc",
+            .hash = "raft-0.1.21-PqJyvpinCADH3w-cgzAwsvA0eSk703D7J5yFyKr6TjJ0",
         },
 
         // =======================================================================
@@ -588,8 +598,8 @@
         .timeseries_storage = .{
             // 2026-07-13: v0.2.10 — carries the thread_pool v0.2.7 lockstep pin
             // (popMany stalled-producer livelock fix) plus accumulated main.
-            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.18#bcd2c016e2df09ef2c3f7da172cbaf35ce855b6d",
-            .hash = "timeseries_storage-0.2.18-5wzBJBsnFAAY_kSOAfr1ULy_6Sn8feJCvrLR_6dVzOHt",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=c56a3346a2852b221dadf02f69bc1b29d1554826#c56a3346a2852b221dadf02f69bc1b29d1554826",
+            .hash = "timeseries_storage-0.2.18-5wzBJP5QFADY0rToFMMPnYb4-TjJJbipGQF-zzSWuzue",
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{
@@ -603,8 +613,8 @@
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
         .auth = .{
-            .url = "git+https://gitlab.com/devnw/zig/auth.git?ref=v0.1.22#caf8d8e281fc85bd3235bef321f943af7bf327d2",
-            .hash = "auth-0.1.22-W76ZZ6jrAgCCl3HMs_i8SplOFGIGpCRon67_ANGM6tas",
+            .url = "git+https://gitlab.com/devnw/zig/auth.git?ref=4620287e7e99107d87f26f5cf5e8e07c046397e5#4620287e7e99107d87f26f5cf5e8e07c046397e5",
+            .hash = "auth-0.1.22-W76ZZzjwAgC00Xx0xfUNK7N8nMYJOfCeqq43H7gn5LWR",
         },
 
         // FIPS crypto seam — OpenSSL FIPS 140-3 backend (used when -Dfips=true).
