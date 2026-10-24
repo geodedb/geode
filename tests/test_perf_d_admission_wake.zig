@@ -22,6 +22,10 @@
 //      result rather than blocking — proving the re-check discipline
 //      works.
 //
+// The upper latency bounds exclude the time a thread sat runnable waiting
+// for a CPU (its schedstat `run_delay`): that is the CI runner's scheduler,
+// not the futex path; see `threadRunDelayNs`.
+//
 // We test the futex-word primitives directly against
 // `QuicTransport.connection_slot_freed_gen` rather than driving
 // `destroyConnection` end-to-end, because the latter requires a fully
@@ -48,6 +52,41 @@ fn nowMonoNs() i64 {
     return @as(i64, ts.sec) * std.time.ns_per_s + @as(i64, ts.nsec);
 }
 
+/// Time (ns) the calling thread has spent runnable but waiting for a CPU:
+/// field 2 (`run_delay`) of /proc/thread-self/schedstat. 0 when the kernel
+/// does not expose it (no /proc, or sched_info accounting off), so the
+/// latency assertions below then fall back to plain wall time.
+///
+/// The latency bounds in this file are about the futex primitive (does the
+/// wait return on the wake, or on the timeout, promptly?), not about the CI
+/// runner's scheduler. On a CPU-starved runner (many test binaries in
+/// parallel, a cgroup CPU quota) a thread whose futex returned on time can
+/// sit runnable for tens of ms before it runs again and reads the clock
+/// (job 17406246495: the 5 ms timeout case overran its 55 ms bound). That
+/// wait is exactly this counter, so subtracting its delta over the timed
+/// window removes the starvation and nothing else: a wait that really
+/// blocks past its timeout, or misses a wake, is time spent ASLEEP, which
+/// `run_delay` does not count, and still fails the same bound.
+fn threadRunDelayNs() u64 {
+    const linux = std.os.linux;
+    const fd_rc = linux.open("/proc/thread-self/schedstat", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+    if (linux.errno(fd_rc) != .SUCCESS) return 0;
+    const fd: i32 = @intCast(fd_rc);
+    defer _ = linux.close(fd);
+    var buf: [128]u8 = undefined;
+    const n = linux.read(fd, &buf, buf.len);
+    if (linux.errno(n) != .SUCCESS) return 0;
+    var it = std.mem.tokenizeAny(u8, buf[0..n], " \n");
+    _ = it.next() orelse return 0; // sum_exec_runtime
+    const run_delay = it.next() orelse return 0;
+    return std.fmt.parseInt(u64, run_delay, 10) catch 0;
+}
+
+/// Wall time minus the scheduler wait accrued over the same window.
+fn awakeLatencyNs(wall_ns: i64, run_delay_ns: u64) i64 {
+    return wall_ns - @as(i64, @intCast(@min(run_delay_ns, @as(u64, std.math.maxInt(i64)))));
+}
+
 fn sleepNs(ns: i64) void {
     const req = std.os.linux.timespec{
         .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
@@ -65,6 +104,9 @@ const WaiterCtx = struct {
     wake_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     start_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     woke_on_signal: std.atomic.Value(u32) = std.atomic.Value(u32).init(0), // 1 = woke
+    /// Scheduler wait (ns) of this thread from just before the park to just
+    /// after it woke (see `threadRunDelayNs`).
+    run_delay_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     fn run(self: *WaiterCtx) void {
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -81,10 +123,12 @@ const WaiterCtx = struct {
             .raw = std.Io.Duration.fromNanoseconds(@intCast(self.timeout_ns)),
             .clock = .awake,
         } };
+        const rd0 = threadRunDelayNs();
         io.futexWaitTimeout(u32, &self.transport.connection_slot_freed_gen.raw, snap, timeout) catch |err| switch (err) {
             error.Canceled => {},
         };
         self.wake_ns.store(nowMonoNs(), .release);
+        self.run_delay_ns.store(threadRunDelayNs() -| rd0, .release);
 
         // If the gen counter actually moved, the producer signaled us.
         const after = self.transport.connection_slot_freed_gen.load(.acquire);
@@ -117,21 +161,28 @@ test "PERF-D follow-up: producer-side fetchAdd+futexWake unblocks parked admissi
     // exactly: bump the gen counter and wake one waiter. This is the
     // same code those producers run, just exercised directly against
     // the same atomic word on the same QuicTransport instance.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const main_rd0 = threadRunDelayNs();
     const release_t0 = nowMonoNs();
     _ = transport.connection_slot_freed_gen.fetchAdd(1, .release);
-    const io = std.Io.Threaded.global_single_threaded.io();
     io.futexWake(u32, &transport.connection_slot_freed_gen.raw, 1);
+    const main_run_delay_ns = threadRunDelayNs() -| main_rd0;
 
     t.join();
 
     try testing.expectEqual(@as(u32, 1), ctx.woke_on_signal.load(.acquire));
 
-    const wake_latency_ns = ctx.wake_ns.load(.acquire) - release_t0;
+    const wall_latency_ns = ctx.wake_ns.load(.acquire) - release_t0;
+    try testing.expect(wall_latency_ns >= 0);
+    // Scheduler wait of the producer (between its clock read and the wake)
+    // and of the waiter (between the wake and its clock read) is runner
+    // starvation, not wake latency; see `threadRunDelayNs`.
+    const wake_latency_ns = awakeLatencyNs(wall_latency_ns, main_run_delay_ns +| ctx.run_delay_ns.load(.acquire));
     // Critical assertion: wake within 2 ms. The pre-follow-up nanosleep
     // poll always sat out at least 5 ms (and could miss a slot-free
     // entirely if more than 5 ms passed between checks).
+    if (wake_latency_ns >= 2 * std.time.ns_per_ms) std.debug.print("PERF-D wake: wall {d} ns, scheduler wait {d}+{d} ns\n", .{ wall_latency_ns, main_run_delay_ns, ctx.run_delay_ns.load(.acquire) });
     try testing.expect(wake_latency_ns < 2 * std.time.ns_per_ms);
-    try testing.expect(wake_latency_ns >= 0);
 }
 
 test "PERF-D follow-up: parked admission waiter wakes via timeout when no producer signals" {
@@ -148,16 +199,24 @@ test "PERF-D follow-up: parked admission waiter wakes via timeout when no produc
         .clock = .awake,
     } };
 
+    const rd0 = threadRunDelayNs();
     const start = nowMonoNs();
     io.futexWaitTimeout(u32, &transport.connection_slot_freed_gen.raw, snap, timeout) catch {};
-    const elapsed_ns: u64 = @intCast(nowMonoNs() - start);
+    const wall_ns = nowMonoNs() - start;
+    const run_delay_ns = threadRunDelayNs() -| rd0;
+    const elapsed_ns: u64 = @intCast(wall_ns);
 
-    // Must wait at least most of the timeout (no premature wakeup).
+    // Must wait at least most of the timeout (no premature wakeup). Plain
+    // wall time: scheduler wait can only lengthen it.
     try testing.expect(elapsed_ns >= timeout_ns - 2 * std.time.ns_per_ms);
     // Must NOT wait substantially longer than the timeout. The 5 ms
     // safety-net IS the per-iteration upper bound for the admission
     // loop, so an order-of-magnitude overrun would defeat the purpose.
-    try testing.expect(elapsed_ns < timeout_ns + 50 * std.time.ns_per_ms);
+    // Measured without the time this thread sat runnable waiting for a
+    // CPU after the timeout fired (see `threadRunDelayNs`).
+    const awake_ns = awakeLatencyNs(wall_ns, run_delay_ns);
+    if (awake_ns >= timeout_ns + 50 * std.time.ns_per_ms) std.debug.print("PERF-D timeout: wall {d} ns, scheduler wait {d} ns\n", .{ wall_ns, run_delay_ns });
+    try testing.expect(awake_ns < timeout_ns + 50 * std.time.ns_per_ms);
 }
 
 test "PERF-D follow-up: gen mismatch returns immediately (lost-wake race guard)" {
@@ -174,15 +233,20 @@ test "PERF-D follow-up: gen mismatch returns immediately (lost-wake race guard)"
     const snap = transport.connection_slot_freed_gen.load(.acquire);
     _ = transport.connection_slot_freed_gen.fetchAdd(1, .release);
 
-    const start = nowMonoNs();
     const timeout: std.Io.Timeout = .{ .duration = .{
         .raw = std.Io.Duration.fromNanoseconds(500 * std.time.ns_per_ms),
         .clock = .awake,
     } };
+    const rd0 = threadRunDelayNs();
+    const start = nowMonoNs();
     io.futexWaitTimeout(u32, &transport.connection_slot_freed_gen.raw, snap, timeout) catch {};
-    const elapsed_ns: u64 = @intCast(nowMonoNs() - start);
+    const wall_ns = nowMonoNs() - start;
+    const run_delay_ns = threadRunDelayNs() -| rd0;
 
     // Must return within a small fraction of the 500 ms timeout — well
-    // under 10 ms even on a slow CI runner.
-    try testing.expect(elapsed_ns < 10 * std.time.ns_per_ms);
+    // under 10 ms even on a slow CI runner, once the time this thread sat
+    // runnable waiting for a CPU is taken out (see `threadRunDelayNs`).
+    const awake_ns = awakeLatencyNs(wall_ns, run_delay_ns);
+    if (awake_ns >= 10 * std.time.ns_per_ms) std.debug.print("PERF-D mismatch: wall {d} ns, scheduler wait {d} ns\n", .{ wall_ns, run_delay_ns });
+    try testing.expect(awake_ns < 10 * std.time.ns_per_ms);
 }

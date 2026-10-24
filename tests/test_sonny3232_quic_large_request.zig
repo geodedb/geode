@@ -39,6 +39,16 @@
 // time, is printed). The 1 MiB and 4 MiB outcomes are recorded, not
 // asserted.
 //
+// Every HELLO, and the small request that checks the server serves on, waits
+// for its reply as long as the server process stays alive, capped at 60 s
+// (SONNY-2394, `watchServerLiveness`), not a fixed 5 s: after a large probe a
+// Debug server on a CPU-starved CI runner can still be busy (loss recovery,
+// closing the probe's connection, Argon2id for the next HELLO) for longer
+// than 5 s, and job 17420288318 failed the next HELLO with error.Timeout
+// while the server was alive; for the same reason each QUIC handshake gets
+// 30 s, not 5 s. The probe request itself keeps its fixed deadline, since
+// its outcome and time are what this test records.
+//
 // CANARY: REQ=REQ-SONNY-3232-QUIC-LARGE-REQUEST; FEATURE="QuicTransport"; ASPECT=Diagnosis; STATUS=TESTED; TEST=tests/test_sonny3232_quic_large_request.zig; OWNER=transport; UPDATED=2026-09-28
 
 const std = @import("std");
@@ -70,6 +80,12 @@ test "SONNY-3232: a QUIC request of 256 KiB is answered, one past the 16 MiB max
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 30000);
 
+    const server_pid = server.child.id.?;
+    // The QUIC handshake after a large probe meets the same busy server, so
+    // it gets more than the default 5 s (a fixed bound: the handshake has no
+    // liveness wait).
+    const handshake_timeout_s: u32 = 30;
+
     const Case = struct { bytes: usize, served: ?bool };
     const cases = [_]Case{
         .{ .bytes = 256 * 1024, .served = true },
@@ -89,10 +105,13 @@ test "SONNY-3232: a QUIC request of 256 KiB is answered, one past the 16 MiB max
         try q.appendSlice(allocator, "RETURN '");
         try q.appendNTimes(allocator, 'a', c.bytes);
         try q.appendSlice(allocator, "' AS x");
-        var pc = try util.QuicProtoClient.connect(allocator, addr);
+        var pc = try util.QuicProtoClient.connectWithHandshakeTimeout(allocator, addr, handshake_timeout_s);
         defer pc.deinit();
+        pc.watchServerLiveness(server_pid);
         var ph = try pc.hello(allocator, util.defaultUsername(), util.defaultPassword());
         ph.deinit(allocator);
+        // The probe keeps its fixed deadline (see the file comment).
+        pc.server_pid = null;
         const t0 = monoMs();
         const timeout_s: u32 = if (c.served == null) 30 else 90;
         const outcome: []const u8 = if (pc.executeAndCollectWithTimeout(allocator, q.items, util.emptyParams(), 10, timeout_s)) |r0| blk: {
@@ -102,14 +121,15 @@ test "SONNY-3232: a QUIC request of 256 KiB is answered, one past the 16 MiB max
         } else |err| try allocator.dupe(u8, @errorName(err));
         defer allocator.free(outcome);
         const ms = monoMs() - t0;
-        const alive = util.processAlive(server.child.id.?);
+        const alive = util.processAlive(server_pid);
         const served = std.mem.eql(u8, outcome, "served");
         const ok = alive and (c.served == null or served == c.served.?);
         std.debug.print("QUIC {s}: a {d}-byte request -> {s} in {d} ms; server alive={}{s}{s}\n", .{ @tagName(builtin.mode), c.bytes, outcome, ms, alive, if (ok) "" else "  <-- UNEXPECTED", if (c.served != null and !c.served.?) " (observation: not a clean, quick refusal; SONNY-3232)" else "" });
         if (!ok) failures += 1;
         // A small request on a new connection is served.
-        var sc = try util.QuicProtoClient.connect(allocator, addr);
+        var sc = try util.QuicProtoClient.connectWithHandshakeTimeout(allocator, addr, handshake_timeout_s);
         defer sc.deinit();
+        sc.watchServerLiveness(server_pid);
         var sh = try sc.hello(allocator, util.defaultUsername(), util.defaultPassword());
         sh.deinit(allocator);
         var small = try sc.executeAndCollectWithTimeout(allocator, "RETURN 1 AS x", util.emptyParams(), 10, 30);
