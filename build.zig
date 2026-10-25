@@ -244,6 +244,13 @@ fn shardDep(
             .{ what, @tagName(dep.id) },
         );
     };
+    // Include the test source even when a process aborts before reporting a
+    // test name; a generic "run test" otherwise hides the failing artifact.
+    if (run.producer) |artifact| {
+        if (artifact.root_module.root_source_file) |source| {
+            dep.name = dep.owner.fmt("run {s}", .{source.getDisplayName()});
+        }
+    }
     if (g_test_compile_step) |compile_all| {
         if (run.producer) |artifact| compile_all.dependOn(&artifact.step);
     }
