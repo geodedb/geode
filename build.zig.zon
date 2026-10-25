@@ -396,8 +396,8 @@
             // 2026-10-20: main commit 8819899 (geode-client-zig !34), lockstep with
             // geode's quic v0.1.46 bump (client Finished retransmit until
             // HANDSHAKE_DONE). Still no client tag on this quic, hence ref=main.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=df4870278b98f4cc4d433b4156f66e7d322c297b#df4870278b98f4cc4d433b4156f66e7d322c297b",
-            .hash = "geode_client_zig-0.3.8-8ysbV157CwBh2TQS1lY7EeovR4Y8zdOQRSL6zc4Y2Uu0",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=57240957a2b5e690b83829d5de3a827a3004d6c8#57240957a2b5e690b83829d5de3a827a3004d6c8",
+            .hash = "geode_client_zig-0.3.8-8ysbV1WBCwDb9bKkda9TcgMGWmGNfxTxyumNnCQRyUyI",
         },
 
         // =======================================================================
