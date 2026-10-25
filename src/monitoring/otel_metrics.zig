@@ -60,6 +60,28 @@ pub const InMemoryRecorder = otel.exporters.in_memory.Recorder;
 pub const SCOPE_NAME = "com.geodedb.geode";
 pub const SCHEMA_URL = "https://schemas.geodedb.com/otel/geode/metrics/1.0.0";
 
+/// Elapsed instrumentation time uses the monotonic clock, never Unix time.
+/// NTP adjustments must not panic in a query's metrics defer or distort latency.
+pub const DurationTimer = struct {
+    io: std.Io,
+    started_ns: i96,
+
+    pub fn start() DurationTimer {
+        return startWithIo(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    pub fn startWithIo(io: std.Io) DurationTimer {
+        return .{ .io = io, .started_ns = std.Io.Clock.awake.now(io).nanoseconds };
+    }
+
+    pub fn seconds(self: DurationTimer) f64 {
+        const now_ns = std.Io.Clock.awake.now(self.io).nanoseconds;
+        // An unavailable or faulty clock must not break the instrumented work.
+        const elapsed_ns = @max(now_ns -| self.started_ns, 0);
+        return @as(f64, @floatFromInt(elapsed_ns)) / std.time.ns_per_s;
+    }
+};
+
 // --- Module-level globals (one per process) ---
 
 var g_provider: ?*MeterProvider = null;
