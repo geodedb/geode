@@ -25,7 +25,7 @@
 //! NOTE on the GUPD stale-term assertion (amended in Task 13): the original
 //! red test expected the OLD term to be GONE after a replicated SET, citing
 //! "the executor re-runs delete-then-index". That premise was factually
-//! wrong: the executor's SET chokepoint deliberately uses op `.create` (NOT
+//! wrong: the executor's SET chokepoint deliberately uses op `.upsert` (NOT
 //! delete-then-reindex) because fts-storage tombstones are PERMANENT per
 //! doc_id — `deleteNode` adds the id to the engine's `all_tombstones` set and
 //! a later `indexDocument` never clears it, so delete+reindex of the same
@@ -213,7 +213,7 @@ test "raft GUPD update apply maintains the fulltext index (new term indexed, exe
     try testing.expectEqualStrings("fresh zosprey token", body.String);
 
     // SYMMETRY CONTRACT (red before Task 13): the NEW term must be searchable,
-    // exactly as it would be after an executor SET (which fires op `.create`).
+    // exactly as it would be after an executor SET (which fires op `.upsert`).
     try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zosprey"));
     // EXECUTOR-PARITY RESIDUAL (amended — see file header): the OLD term stays
     // searchable on BOTH the executor and apply paths. The executor SET

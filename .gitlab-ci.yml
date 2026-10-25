@@ -68,8 +68,14 @@ macos-memory-stack-diagnostic:
     \  fi\n  echo \"attempt $i failed:\"\n  cat /tmp/zig-fetch-protoc.log || true\n  [ \"$i\" -lt 5 ] && { echo\
     \ \"retrying in 15s...\"; sleep 15; }\ndone\nif [ -z \"$fetched\" ]; then\n  echo \"\u26A0 protoc pre-fetch\
     \ failed after 5 attempts; zig build will retry on its own\"\nfi\n"
-  - zig build test-sonny2977-inline-map-set test-quic-condition-cadence test-datadir-lock-subprocess -j2 --summary
-    all
+  - 'echo "Initial descriptor limit: $(ulimit -S -n)"
+
+    ulimit -S -n 4096
+
+    echo "Native test descriptor limit: $(ulimit -S -n)"'
+  - zig build test-admin-bootstrap-hardening test-quic-accept-reactor test-sonny2729-postfilter-fail-closed test-sonny2776-session-graph-uses
+    test-sonny3313-grpc-peer-ip test-sonny3253-round14-minors test-fts-rebuild test-fts-storage-adapter test-fts-bulk-merge-maintenance
+    test-fts-apply-symmetry test-fts-e2e test-fts-authorization -j2 --summary all
   stage: test
   timeout: 45m
   interruptible: true
