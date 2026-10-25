@@ -606,19 +606,23 @@ test "SONNY-3368 (I-1): a comma join with a WHERE, a window and a write answers 
 /// segment may grow by 2 GiB at most, so a regression fails the case instead
 /// of the machine.
 const CartJob = struct {
+    // Match optimized server allocations (src/server/main.zig). A raw page
+    // per retained row costs 16 KiB on Darwin, hitting the child's physical
+    // limit before the logical read budget even though that budget works.
+    // Both the 64 MiB read budget and the 2 GiB child guard stay enforced.
+    const allocator = std.heap.c_allocator;
+
     s: *h.Session,
     ok: bool = false,
 
     fn check(self: *CartJob, query: []const u8, want: ?[]const []const u8, want_err: ?anyerror, max_ms: i64) bool {
-        std.debug.print("CART before: RSS={d} peak={d} page={d} query={s}\n", .{ statusBytes("VmRSS"), statusBytes("VmHWM"), std.heap.pageSize(), query });
-        defer std.debug.print("CART after: RSS={d} peak={d}\n", .{ statusBytes("VmRSS"), statusBytes("VmHWM") });
         const start = monoMillis();
-        var result = runProgram(self.s, stmt_alloc, query) catch |err| {
+        var result = runProgram(self.s, allocator, query) catch |err| {
             if (want_err) |w| if (err == w) return true;
             std.debug.print("  {s}: error {s}\n", .{ query, @errorName(err) });
             return false;
         };
-        defer result.deinit(stmt_alloc);
+        defer result.deinit(allocator);
         const took = monoMillis() - start;
         if (want_err) |w| {
             std.debug.print("  {s}: answered {d} row(s); expected {s}\n", .{ query, result.rows.len, @errorName(w) });
@@ -639,9 +643,9 @@ const CartJob = struct {
         const cart = "MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d)";
         var ok = true;
         // `range(1, 1500)`'s pairs, as the store counts them.
-        var counted = runProgram(self.s, stmt_alloc, "MATCH (p:P) RETURN count(*) AS n") catch return;
+        var counted = runProgram(self.s, allocator, "MATCH (p:P) RETURN count(*) AS n") catch return;
         const pairs = (h.renderRows(self.s.arena.allocator(), counted) catch return)[0];
-        counted.deinit(stmt_alloc);
+        counted.deinit(allocator);
         // A 64 MiB read budget: the product (2.25 million bindings) is far
         // past it, what LIMIT 1 and the WHERE keep is far inside.
         geode.read_budget.setBudgetBytesForTest(64 << 20);
@@ -690,7 +694,6 @@ test "SONNY-3368 (I-1): LIMIT 1 over two 1,500-pair chains is bounded, a WHERE s
     var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 1500) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
     setup.deinit(stmt_alloc);
     var job: CartJob = .{ .s = &s };
-    std.debug.print("CART parent before fork: RSS={d} peak={d}\n", .{ statusBytes("VmRSS"), statusBytes("VmHWM") });
     const pid = std.c.fork();
     try testing.expect(pid >= 0);
     if (pid == 0) {
@@ -1066,7 +1069,7 @@ const ChildMemoryGuard = struct {
     }
 
     fn check(self: *@This()) void {
-        const memory = darwinMemory() catch std.c._exit(9);
+        const memory = darwinMemory() catch std.c._exit(8);
         if (memory.peak > self.limit) {
             std.debug.print("child resident peak {d} exceeds memory limit {d}\n", .{ memory.peak, self.limit });
             std.c._exit(9);
