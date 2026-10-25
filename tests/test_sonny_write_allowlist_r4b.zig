@@ -610,6 +610,8 @@ const CartJob = struct {
     ok: bool = false,
 
     fn check(self: *CartJob, query: []const u8, want: ?[]const []const u8, want_err: ?anyerror, max_ms: i64) bool {
+        std.debug.print("CART before: RSS={d} peak={d} page={d} query={s}\n", .{ statusBytes("VmRSS"), statusBytes("VmHWM"), std.heap.pageSize(), query });
+        defer std.debug.print("CART after: RSS={d} peak={d}\n", .{ statusBytes("VmRSS"), statusBytes("VmHWM") });
         const start = monoMillis();
         var result = runProgram(self.s, stmt_alloc, query) catch |err| {
             if (want_err) |w| if (err == w) return true;
@@ -688,6 +690,7 @@ test "SONNY-3368 (I-1): LIMIT 1 over two 1,500-pair chains is bounded, a WHERE s
     var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 1500) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
     setup.deinit(stmt_alloc);
     var job: CartJob = .{ .s = &s };
+    std.debug.print("CART parent before fork: RSS={d} peak={d}\n", .{ statusBytes("VmRSS"), statusBytes("VmHWM") });
     const pid = std.c.fork();
     try testing.expect(pid >= 0);
     if (pid == 0) {
