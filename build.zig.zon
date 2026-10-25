@@ -197,10 +197,10 @@
             // 2026-07-13: v0.1.38 — pin-only release aligning quic's
             // thread_pool to v0.2.7 (popMany stalled-producer livelock fix)
             // in lockstep with geode + timeseries-storage.
-            // Portable entropy, monotonic clocks, and sleep for native macOS.
-            // Qualified against the current QUIC parent with three paired runs.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=445097710d81daecb0db1b9f6ca27fe34ec3e7e2#445097710d81daecb0db1b9f6ca27fe34ec3e7e2",
-            .hash = "quic-0.1.47-gBIqUdV5QACPiPklpTOIy9Sc68qkY-6akZXMrxO_19Hl",
+            // Portable entropy, clocks, sleep, and checked nonblocking POSIX sockets.
+            // Native macOS transport and current-main paired UDP gate passed.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=4c20fbabd7e1b756f6776a87af59f1e3fc8f239a#4c20fbabd7e1b756f6776a87af59f1e3fc8f239a",
+            .hash = "quic-0.1.47-gBIqUb9-QAAkC9VxvIxRKD9mjRH1fSZY_Vj5Hc23QxA2",
         },
 
         // =======================================================================
