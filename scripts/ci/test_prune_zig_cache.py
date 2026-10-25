@@ -35,6 +35,34 @@ class PruneCacheTests(unittest.TestCase):
         self.assertTrue(new.exists())
         self.assertTrue(package.exists())
 
+    def test_output_eviction_invalidates_both_caches_manifests(self):
+        old = self.file(".zig-cache/o/old/libanswer.a", 70, 1)
+        new = self.file("zig-cache/o/new/test", 60, 2)
+        package = self.file("zig-cache/p/protoc.tar.gz", 30)
+        local_manifest = self.file(".zig-cache/h/local", 10)
+        global_manifest = self.file("zig-cache/h/global", 10)
+        self.assertEqual(prune(self.caches, 100), (180, 90, 3))
+        self.assertFalse(old.exists())
+        self.assertFalse(local_manifest.exists())
+        self.assertFalse(global_manifest.exists())
+        self.assertTrue(new.exists())
+        self.assertTrue(package.exists())
+
+    def test_warm_manifests_are_retained_without_output_eviction(self):
+        self.file(".zig-cache/o/keep/test", 40)
+        manifest = self.file(".zig-cache/h/keep", 10)
+        self.assertEqual(prune(self.caches, 100), (50, 50, 0))
+        self.assertTrue(manifest.exists())
+
+    def test_manifest_symlink_is_removed_without_following_it(self):
+        self.file(".zig-cache/o/old/libanswer.a", 70, 1)
+        outside = self.file("outside/manifest", 10)
+        manifests = self.caches[0] / "h"
+        manifests.symlink_to(outside.parent, target_is_directory=True)
+        self.assertEqual(prune(self.caches, 0)[1], 0)
+        self.assertFalse(manifests.is_symlink())
+        self.assertTrue(outside.exists())
+
     def test_scratch_databases_are_not_archived(self):
         scratch = self.file(".zig-cache/tmp/database", 1000)
         output = self.file(".zig-cache/o/keep/test", 20)

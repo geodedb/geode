@@ -54,13 +54,29 @@ def prune(roots: list[Path], maximum: int) -> tuple[int, int, int]:
                 # evicted last if they alone exceed the archive budget.
                 candidates.append((2 if child.name == "p" else 1, child.lstat().st_mtime_ns, child))
     removed = 0
-    for _, _, path in sorted(candidates):
+    invalidated = False
+    for priority, _, path in sorted(candidates):
         if total <= maximum:
             break
+        # An earlier output eviction may already have removed this manifest.
+        if not path.exists() and not path.is_symlink():
+            continue
         amount = size(path)
         remove(path)
         total -= amount
         removed += 1
+        if not invalidated and (priority == 0 or any(path == root / "o" for root in roots)):
+            # Zig 0.16 can trust a manifest for a static library whose output
+            # was evicted, then fail linking with "lib*.a: file not found".
+            # Both caches can refer to the removed output. Invalidate their
+            # manifests once, retaining all remaining outputs and downloads.
+            for root in roots:
+                manifests = root / "h"
+                if manifests.exists() or manifests.is_symlink():
+                    total -= size(manifests)
+                    remove(manifests)
+                    removed += 1
+            invalidated = True
     after = sum(size(root) for root in roots if root.exists())
     if after > maximum:
         raise RuntimeError(f"cache remains above limit: {after} > {maximum}")
