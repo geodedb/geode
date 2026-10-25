@@ -5179,6 +5179,9 @@ pub fn build(b: *std.Build) void {
     metrics_server_lifetime_tests.root_module.addImport("prometheus", prometheus_mod_for_metrics_tests);
     metrics_server_lifetime_tests.root_module.addImport("metrics_server", metrics_server_mod_for_tests);
     const run_metrics_server_lifetime_tests = b.addRunArtifact(metrics_server_lifetime_tests);
+    // Diagnostic only: expose startup stderr outside the test-server protocol.
+    run_metrics_server_lifetime_tests.stdio = .inherit;
+    run_metrics_server_lifetime_tests.argv.shrinkRetainingCapacity(1);
     const metrics_server_lifetime_test_step = b.step("test-metrics-server", "Run MetricsServer HTTP listener lifecycle regression (issue #749)");
     metrics_server_lifetime_test_step.dependOn(&run_metrics_server_lifetime_tests.step);
     shardDep(test_step, &run_metrics_server_lifetime_tests.step, 1, test_shard_loads, test_shard_index);
