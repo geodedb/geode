@@ -9047,6 +9047,20 @@ pub fn build(b: *std.Build) void {
     const sonny2824_step = b.step("test-sonny2824-hello-graph-gate", "Run SONNY-2824 regression (spawns a server: a QUIC or gRPC HELLO naming a missing graph creates it only for a principal with the schema permission on it; a ReadWrite user is refused and nothing is created; a GPS FOR SCHEMA policy grants it)");
     sonny2824_step.dependOn(&run_sonny2824_tests.step);
 
+    // `geode backup create` reports a failed remote backup as a failure
+    // (exit 1, no output file) instead of silently writing a local
+    // data-directory backup and printing success; the local path runs only
+    // with --local and an explicit data directory. Spawns the installed CLI
+    // against a closed loopback port; no server.
+    const backup_remote_failure_mod = b.createModule(.{ .root_source_file = b.path("tests/test_backup_create_remote_failure.zig"), .target = target, .optimize = optimize });
+    backup_remote_failure_mod.link_libc = true;
+    const backup_remote_failure_tests = b.addTest(.{ .root_module = backup_remote_failure_mod });
+    const run_backup_remote_failure_tests = b.addRunArtifact(backup_remote_failure_tests);
+    run_backup_remote_failure_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_backup_remote_failure_tests.step, 1, test_shard_loads, test_shard_index);
+    const backup_remote_failure_step = b.step("test-backup-create-remote-failure", "Run backup-create regression (a failed remote backup exits non-zero with no output file instead of falling back to a local backup; --local needs an explicit data directory)");
+    backup_remote_failure_step.dependOn(&run_backup_remote_failure_tests.step);
+
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
     // look inside PROFILE and EXPLAIN. The real gRPC handler in process
@@ -10236,7 +10250,7 @@ pub fn build(b: *std.Build) void {
         mod.addImport("geode", root_mod);
         mod.addImport("logging", logging_mod);
         mod.addImport("rls_types", rls_types_mod);
-        const tests = b.addTest(.{ .root_module = mod, .filters = &.{ "I-1): LIMIT 1", "child memory guard" } });
+        const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         const step = b.step("test-sonny-write-allowlist-r4b", "Run the Task W round 4b-1 regression (SONNY-3318, 3319, 3320, 3322, 3248, 3244): a comma pattern binds every chain for reads and writes, and aggregates; a label SET beside a vector SET checks the new label's index; chained MERGE actions fire on the last MERGE clause; a relationship variable is read by id after 150 and 600 more edge inserts; SKIP / LIMIT parameters window every read; one SET clause assigns a property once (22G03); a LET is scoped to its query; in the in-memory, plain persisted, tenant-scoped and RLS-policy sessions");

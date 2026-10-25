@@ -41,9 +41,7 @@ extern "c" fn chmod(path: [*:0]const u8, mode: c_uint) c_int;
 extern "c" fn symlink(target: [*:0]const u8, link: [*:0]const u8) c_int;
 
 fn nowMillis() i64 {
-    var ts: linux.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = linux.clock_gettime(.MONOTONIC, &ts);
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    return std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toMilliseconds();
 }
 
 /// A fresh directory under /tmp.
@@ -62,10 +60,9 @@ fn removeDir(dir: []const u8) void {
 
 /// The mode bits of `path` (not following a symbolic link), or null.
 fn modeOf(path: [:0]const u8) ?u32 {
-    var st: linux.Statx = undefined;
-    const rc = linux.statx(linux.AT.FDCWD, path, linux.AT.SYMLINK_NOFOLLOW, .{ .MODE = true }, &st);
-    if (@as(isize, @bitCast(rc)) != 0) return null;
-    return @as(u32, st.mode) & 0o7777;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const st = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch return null;
+    return @as(u32, st.permissions.toMode()) & 0o7777;
 }
 
 fn readAll(aa: std.mem.Allocator, path: []const u8) ![]u8 {
