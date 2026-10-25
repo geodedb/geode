@@ -472,6 +472,18 @@ test "write during rebuild window is queued, indexed exactly once" {
 
     _ = try ctx.result; // propagate any rebuild failure as a test failure
 
+    // Also force the late-hook ordering deterministically: backfill has
+    // already indexed this id and flushed it, but its create notification can
+    // still arrive afterward. Replaying that notification must not append a
+    // second posting or change its BM25 score relative to the reference.
+    try execution.fts_index_ops.maintainFulltextOnWrite(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        racer_id,
+        &.{"RbwFull"},
+        .create,
+    );
+
     {
         var res = try h.runQuery("CALL geode.fts.search('rbw_full_idx', 'canaryparity', 10)");
         defer res.deinit(aa);

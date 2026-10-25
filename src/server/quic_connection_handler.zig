@@ -10470,33 +10470,12 @@ test "accept reactor: a wedged OOM teardown still leaves register answering on t
 // already uses for guards no type system can express.
 // =============================================================================
 
-/// Read a file via raw Linux syscalls — same reason as the cadence audit: no
-/// Io.Dir/allocator churn between Zig versions, self-contained.
+/// Read source guards on every supported test host.
 fn preHelloReadSource(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
-    const linux = std.os.linux;
-    var pathz: [4096]u8 = undefined;
-    if (path.len + 1 > pathz.len) return error.PathTooLong;
-    @memcpy(pathz[0..path.len], path);
-    pathz[path.len] = 0;
-
-    const open_flags: linux.O = .{ .ACCMODE = .RDONLY };
-    const rc = linux.open(@ptrCast(&pathz), open_flags, 0);
-    if (@as(isize, @bitCast(rc)) < 0) return null;
-    const fd: i32 = @intCast(rc);
-    defer _ = linux.close(fd);
-
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
-    var chunk: [16384]u8 = undefined;
-    while (true) {
-        const n_rc = linux.read(fd, &chunk, chunk.len);
-        const n_signed: isize = @bitCast(n_rc);
-        if (n_signed < 0) return error.ReadFailed;
-        const n: usize = @intCast(n_signed);
-        if (n == 0) break;
-        try buf.appendSlice(allocator, chunk[0..n]);
-    }
-    return try buf.toOwnedSlice(allocator);
+    return std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), path, allocator, .unlimited) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => null,
+        else => return err,
+    };
 }
 
 const pre_hello_handler_source_path = "src/server/quic_connection_handler.zig";

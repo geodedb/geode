@@ -49,39 +49,63 @@ fn churn(st: *graph_store.GraphStore, n: usize) !void {
     }
 }
 
-test "SONNY-3253 (F11): a dropped graph's IdMap is freed when no walk holds it, and when the last walk lets go otherwise" {
-    var f: fx.Fixture = undefined;
-    try f.init();
-    defer f.deinit();
+// IdMap lifetime is GraphStore behavior in both supported storage modes.
+// The large sweep uses the real in-memory store; the persisted sweep also
+// exercises the adapter without opening more files than Darwin permits.
+fn checkIdMapRetirement(st: *graph_store.GraphStore, held_graph_count: usize, churn_count: usize) !void {
     std.debug.print("sizeof(IdMap)={d} bytes, a retired entry {d} bytes more\n", .{ @sizeOf(graph_store.IdMap), @sizeOf(graph_store.GraphStore.IdMapRef) });
-    // No walk: nothing is kept (round 14 kept all 200).
-    try churn(f.st, 200);
-    std.debug.print("after 200 drops with no walk: retired={d}\n", .{f.st.retired_id_maps.items.len});
-    try testing.expectEqual(@as(usize, 0), f.st.retired_id_maps.items.len);
-    // A walk lists 50 graphs, which are then dropped: they are kept, then
+    // No walk: nothing is kept.
+    try churn(st, churn_count);
+    std.debug.print("after {d} drops with no walk: retired={d}\n", .{ churn_count, st.retired_id_maps.items.len });
+    try testing.expectEqual(@as(usize, 0), st.retired_id_maps.items.len);
+    // A walk lists every held graph; dropped maps are kept, then
     // freed when it lets go. SONNY-3314 (round 16, M1): a graph made and
     // dropped after the walk began is not on its list, and is freed at once
     // (round 15 kept it until no walk at all ran).
     var buf: [32]u8 = undefined;
     var i: usize = 0;
-    while (i < 50) : (i += 1) {
+    while (i < held_graph_count) : (i += 1) {
         const name = try std.fmt.bufPrint(&buf, "held{d}", .{i});
-        try f.st.createGraph(name);
-        _ = try f.st.createNodeWithGraph(&labels_z, name);
+        try st.createGraph(name);
+        _ = try st.createNodeWithGraph(&labels_z, name);
     }
-    const refs = try f.st.idMapsSnapshotForTest(testing.allocator);
+    const refs = try st.idMapsSnapshotForTest(testing.allocator);
+    // Every created graph must have a real IdMap on the snapshot, so the
+    // in-memory path cannot pass with an empty set of maps.
+    var held_maps: usize = 0;
+    for (refs) |r| if (std.mem.startsWith(u8, r.graph_name, "held")) {
+        held_maps += 1;
+    };
+    try testing.expectEqual(held_graph_count, held_maps);
     i = 0;
-    while (i < 50) : (i += 1) {
+    while (i < held_graph_count) : (i += 1) {
         const name = try std.fmt.bufPrint(&buf, "held{d}", .{i});
-        try f.st.dropGraph(name);
+        try st.dropGraph(name);
     }
-    try churn(f.st, 20);
+    try churn(st, 20);
     // The IdMaps the walk listed are still whole (their contents emptied).
     for (refs) |r| _ = r.map.nodeCount();
-    std.debug.print("50 listed graphs dropped while a walk holds the list, and 20 unlisted ones: retired={d}\n", .{f.st.retired_id_maps.items.len});
-    try testing.expectEqual(@as(usize, 50), f.st.retired_id_maps.items.len);
-    f.st.releaseIdMapsForTest(testing.allocator, refs);
-    try testing.expectEqual(@as(usize, 0), f.st.retired_id_maps.items.len);
+    std.debug.print("{d} listed graphs dropped while a walk holds the list, and 20 unlisted ones: retired={d}\n", .{ held_graph_count, st.retired_id_maps.items.len });
+    try testing.expectEqual(held_graph_count, st.retired_id_maps.items.len);
+    st.releaseIdMapsForTest(testing.allocator, refs);
+    try testing.expectEqual(@as(usize, 0), st.retired_id_maps.items.len);
+}
+
+test "SONNY-3253 (F11): a dropped graph's IdMap is freed when no walk holds it, and when the last walk lets go otherwise" {
+    try testing.expect(graph_store.getGlobalAdapter() == null);
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+    try checkIdMapRetirement(&store, 50, 200);
+}
+
+test "SONNY-3253 (F11): persisted graph drops retain exactly the IdMaps held by a walk" {
+    var f: fx.Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    // Each graph owns sixteen real storage shards. Sixteen simultaneously
+    // held graphs stay below Zig's Darwin OPEN_MAX ceiling while exercising
+    // the same adapter-backed drop and retirement paths as production.
+    try checkIdMapRetirement(f.st, 16, 20);
 }
 
 test "SONNY-3253 (F11): clearNodes (reload, Raft snapshot install) keeps an IdMap a walk holds until the walk lets go" {

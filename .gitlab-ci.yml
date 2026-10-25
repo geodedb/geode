@@ -2240,6 +2240,7 @@ dev-image:
 #   -Dfips=false : std.crypto shim backend
 #   -Dfips=true  : validated OpenSSL FIPS provider (OPENSSL_CONF + -Dopenssl_path)
 zig-fips-test-0.16.0:
+  tags: [company, aws-spot, linux, amd64]
   stage: test
   image: registry.gitlab.com/devnw/ci-catalog/zig-fips:0.16.0
   needs: []
@@ -3007,6 +3008,7 @@ apt-publish-apt-geodedb-com:
 
 # SONNY-4778: tools must not redirect Git operations into this checkout.
 hook-env-regression:
+  tags: [company, aws-spot, linux, amd64]
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: lint
   image: python:3.15-slim-bookworm

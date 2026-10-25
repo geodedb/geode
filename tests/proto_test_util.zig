@@ -315,39 +315,11 @@ pub fn spawnServer(
     errdefer threaded.deinit();
     const io = threaded.io();
 
-    // Zig 0.16: build the child env map from /proc/self/environ
-    // (NUL-separated key=value entries from the parent process's
-    // address space).  std.posix.environ was retired in 0.16 and
-    // std.c.environ would require link_libc on every test target
-    // that pulls in proto_test_util.zig — too invasive.  Reading
-    // /proc/self/environ is stdlib-only, linux-specific (which the
-    // tests here are anyway: `quic-smoke-strict` and
-    // `transport-parity-smokes` only run on the linux CI image).
-    var map = std.process.Environ.Map.init(allocator);
+    // Use the startup environment on every host. /proc/self/environ is
+    // Linux-only; reading it on macOS silently gave child servers an empty
+    // environment, dropping HOME, PATH and the requested startup diagnostics.
+    var map = try std.Io.Threaded.global_single_threaded.environ.process_environ.createMap(allocator);
     errdefer map.deinit();
-
-    {
-        // Reuse the outer `io` rather than shadowing it.
-        var environ_file = std.Io.Dir.cwd().openFile(io, "/proc/self/environ", .{ .mode = .read_only }) catch null;
-        if (environ_file) |*f| {
-            defer f.close(io);
-            // Bounded read; this proc file is tiny in practice.
-            var buf: [64 * 1024]u8 = undefined;
-            const n = f.readPositionalAll(io, &buf, 0) catch 0;
-            const data = buf[0..n];
-            var start: usize = 0;
-            for (data, 0..) |c, i| {
-                if (c != 0) continue;
-                if (i > start) {
-                    const entry = data[start..i];
-                    if (std.mem.indexOfScalar(u8, entry, '=')) |eq| {
-                        try map.put(entry[0..eq], entry[eq + 1 ..]);
-                    }
-                }
-                start = i + 1;
-            }
-        }
-    }
 
     if (map.get("GEODE_ADMIN_USERNAME") == null) {
         map.put("GEODE_ADMIN_USERNAME", DefaultAuth.username) catch {};

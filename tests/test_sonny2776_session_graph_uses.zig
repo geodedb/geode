@@ -329,24 +329,7 @@ test "SONNY-2776: the stream-close teardown (QUIC's invalidated session too) rol
 
 /// `path` from the repository root (the build runs tests there).
 fn readSource(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var pathz: [4096]u8 = undefined;
-    if (path.len + 1 > pathz.len) return error.PathTooLong;
-    @memcpy(pathz[0..path.len], path);
-    pathz[path.len] = 0;
-    const rc = std.os.linux.open(@ptrCast(&pathz), .{ .ACCMODE = .RDONLY }, 0);
-    if (@as(isize, @bitCast(rc)) < 0) return error.FileNotFound;
-    const fd: i32 = @intCast(rc);
-    defer _ = std.os.linux.close(fd);
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
-    var chunk: [8192]u8 = undefined;
-    while (true) {
-        const n = std.os.linux.read(fd, &chunk, chunk.len);
-        if (@as(isize, @bitCast(n)) < 0) return error.ReadFailed;
-        if (n == 0) break;
-        try buf.appendSlice(allocator, chunk[0..n]);
-    }
-    return buf.toOwnedSlice(allocator);
+    return std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), path, allocator, .unlimited);
 }
 
 test "SONNY-2776: the QUIC handler makes the same graph choices (source text; there is no in-process QUIC harness)" {
