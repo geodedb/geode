@@ -7768,19 +7768,27 @@ fn handleClientMessage(
             // the same function gRPC runs. A builtin role with WRITE passes
             // there as it did in the role check this replaces. A session with
             // no role (auth disabled) is not gated, as before.
-            // Fail-closed default role (REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED): for
-            // a user with no stored role, `writePermittedOn` asks for write on
-            // the graph the program changes (a WRITE grant there), not on the
-            // whole database; every other principal gets `writePermitted`.
+            // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=QuicWriteGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
+            // REQ-SEC-PER-GRAPH-GRANTS: for every principal, write on the
+            // graph the program changes (`lock_graph`), not on the whole
+            // database: a builtin role with Write passes on every graph, a
+            // WRITE grant or a graph-scoped policy on that graph only. A
+            // self-locking CALL writes no one graph and needs database-wide
+            // write (`writePermitted`).
             if (is_mutation and state.authenticated_role != null) {
-                if (!geode.security.gps.writePermittedOn(gpa, &principal_for_request, lock_graph)) {
+                const write_ok = if (self_locking)
+                    geode.security.gps.writePermitted(gpa, &principal_for_request)
+                else
+                    geode.security.gps.writePermittedOn(gpa, &principal_for_request, lock_graph);
+                if (!write_ok) {
                     try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     return;
                 }
             }
             // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=QuicReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
-            // A user with no stored role reads only graphs it holds a READ
-            // grant on, the default graph included.
+            // A principal with no global Read (a user with no stored role)
+            // reads only graphs it holds a READ grant on, the default graph
+            // included.
             if (state.authenticated_role != null) {
                 if (!try execution.session_graph.programReadPermitted(gpa, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
                     try sendExecuteError(gpa, stream, "42501", "Permission denied: no grant on the graph", &.{}, &.{});

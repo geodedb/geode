@@ -1,25 +1,35 @@
-// CANARY: REQ=REQ-GPS-MIGRATE-001; FEATURE="GPS Grant Migration"; ASPECT=Module; STATUS=TESTED; TEST=tests/test_gps_grant_migration.zig; OWNER=security; UPDATED=2026-05-20
+// CANARY: REQ=REQ-GPS-MIGRATE-001; FEATURE="GPS Grant Migration"; ASPECT=Module; STATUS=TESTED; TEST=tests/test_gps_grant_migration.zig; OWNER=security; UPDATED=2026-10-11
 //
-// grant_migration.zig — one-shot startup task that converts legacy (:GraphGrant)
-// nodes in __geode_security into first-class (:Policy) rows understood by the GPS
-// decision engine (gps.decide).
+// grant_migration.zig — startup task that retires the (:Policy) rows earlier
+// versions migrated legacy (:GraphGrant) nodes into.
 //
-// Design:
-//   - Reads every GraphGrantRecord via agm.listGraphGrants().
-//   - For each grant, resolves the user_id → username via agm.storage.getUser().
-//   - Constructs a deterministic policy name:
-//       "auto_migrated_grant_<username>_<graph>_<action>"
-//   - Idempotent: skips any policy whose name already exists in the catalog.
-//   - Writes via policy_persistence.persistPolicy so the HMAC chain stays
-//     consistent.  Also adds the policy to the in-memory catalog so decide()
-//     picks it up without a restart.
+// History: GPS Phase 6 (Task 6-4) turned every (:GraphGrant) into an allow
+// Policy named "auto_migrated_grant_<username>_<graph>_<action>" at startup,
+// and gps.decide() read grants only through those rows. That was wrong three
+// ways (REQ-SEC-PER-GRAPH-GRANTS, 2026-10):
+//   - a runtime GRANT updated the live GraphRBACPolicy, which decide() did not
+//     read for most actions, so it took effect only after a restart;
+//   - REVOKE removed the (:GraphGrant) but never the migrated Policy row, so
+//     once a restart had migrated a grant, revoking it changed nothing, at
+//     once or after any later restart;
+//   - the row was scoped to the grant's graph, but a graph-scoped allow policy
+//     matched database-wide requests, so a WRITE grant on one graph allowed
+//     writes on every graph.
 //
-// Thread-safety: None.  Must be called before the QUIC listener accepts
-// connections (i.e. inside wireGpsPolicyHooks, after hydrateCatalog).
+// Now decide() reads grants from the live GraphRBACPolicy (hydrated from the
+// (:GraphGrant) nodes at startup, updated at once by GRANT and REVOKE), scoped
+// to the request's graph. The (:GraphGrant) nodes stay the only record of a
+// grant. Each startup drops the migrated rows (catalog and __geode_security)
+// so a stale one cannot keep a revoked grant alive. Nothing else writes
+// policies with the prefix; a policy an operator created under that name is
+// dropped too (documented in docs/GQL_AUTH_DDL.md).
+//
+// Thread-safety: None. Must be called before the QUIC listener accepts
+// connections (inside wireGpsPolicyHooks, after hydrateCatalog).
 //
 // Circular-import note: this file imports both auth_graph_manager and
-// policy_persistence.  Both are named build modules (not relative-path
-// imports).  If a file in the geode root module needs to reference this
+// policy_persistence. Both are named build modules (not relative-path
+// imports). If a file in the geode root module needs to reference this
 // module it must also be wired as a named module in build.zig — see the
 // grant_migration_mod definition there.
 
@@ -31,123 +41,50 @@ const policy_catalog = @import("geode").security.policy_catalog;
 const policy_persistence = @import("policy_persistence");
 const auth_graph_manager = @import("auth_graph_manager");
 
-const PolicySpec = policy_catalog.PolicySpec;
 const PolicyCatalog = policy_catalog.PolicyCatalog;
-const Action = policy_catalog.Action;
 const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
+/// The name prefix of the Policy rows earlier versions migrated grants into.
+pub const migrated_policy_prefix = "auto_migrated_grant_";
 
-// CANARY: REQ=REQ-GPS-MIGRATE-001; FEATURE="GPS Grant Migration"; ASPECT=MigrateGraphGrantsToPolicies; STATUS=TESTED; TEST=tests/test_gps_grant_migration.zig; OWNER=security; UPDATED=2026-05-20
-/// Migrate legacy (:GraphGrant) nodes to (:Policy) rows in __geode_security.
+// CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=RetireMigratedGrantPolicies; STATUS=TESTED; TEST=tests/test_gps_grant_migration.zig; OWNER=security; UPDATED=2026-10-11
+/// Drop every policy named `migrated_policy_prefix`* from `cat` and from
+/// __geode_security (resealing the HMAC chain). Returns how many were
+/// dropped. Grants are not touched: they live on as (:GraphGrant) nodes and
+/// in the live GraphRBACPolicy, which gps.decide() reads.
 ///
-/// For every GraphGrantRecord held by `agm`:
-///   1. Resolve user_id → username.  Grants whose user_id no longer maps to a
-///      live user record are silently skipped (the grant is orphaned).
-///   2. Compute a deterministic policy name.  If a policy with that name already
-///      exists in the catalog the grant is skipped (idempotent restart).
-///   3. Persist the policy via policy_persistence.persistPolicy, which writes the
-///      :Policy node to __geode_security and reseals the HMAC chain.
-///   4. Add the policy to the in-memory catalog so decide() uses it immediately.
-///
-/// `hmac_key` must be the same key used to seal the __geode_security chain (i.e.
-/// agm.hmac_key at the server — passed explicitly so callers and tests can
-/// supply the correct key without mutating agm.hmac_key first).
-///
-/// Returns the count of grants actually migrated (i.e. not already present).
-pub fn migrateGraphGrantsToPolicies(
+/// `hmac_key` must be the key that seals the __geode_security chain
+/// (agm.hmac_key at the server).
+pub fn retireMigratedGrantPolicies(
     allocator: std.mem.Allocator,
     agm: *AuthGraphManager,
     hmac_key: *const [32]u8,
     cat: *PolicyCatalog,
 ) !u32 {
-    var migrated: u32 = 0;
-
-    // Fetch all persisted grants.  Caller owns the slice.
-    const grants = try agm.listGraphGrants(allocator);
-    defer allocator.free(grants);
-
-    for (grants) |grant| {
-        // Resolve user_id → username.
-        const user_record = agm.storage.getUser(grant.user_id) orelse {
-            // Orphaned grant — user was deleted.  Skip silently.
-            continue;
-        };
-        const username = user_record.getUsername();
-        const graph_name = grant.getGraphName();
-        const action_str = actionName(grant.action);
-
-        // Build deterministic policy name.
-        const policy_name = try std.fmt.allocPrint(
-            allocator,
-            "auto_migrated_grant_{s}_{s}_{s}",
-            .{ username, graph_name, action_str },
-        );
-        defer allocator.free(policy_name);
-
-        // Idempotency check: skip if already in the catalog.
-        var already_exists = false;
-        for (cat.listPolicies()) |p| {
-            if (std.mem.eql(u8, p.name, policy_name)) {
-                already_exists = true;
-                break;
-            }
-        }
-        if (already_exists) continue;
-
-        // Build the filter expression: current_user() = '<username>'
-        // This matches the pattern used by the GPS expression engine's
-        // eq_current_user predicate.
-        const expr = try std.fmt.allocPrint(
-            allocator,
-            "current_user() = '{s}'",
-            .{username},
-        );
-        defer allocator.free(expr);
-
-        const actions = [_]Action{actionFromCode(grant.action)};
-
-        const spec = PolicySpec{
-            .name = policy_name,
-            .scope_graph = graph_name,
-            .actions = &actions,
-            .effect = .allow,
-            .expression_source = expr,
-            .enabled = true,
-        };
-
-        // Persist to __geode_security (reseals HMAC chain).
-        try policy_persistence.persistPolicy(agm, hmac_key, spec);
-
-        // Add to the live in-memory catalog so decide() uses it immediately.
-        try cat.addPolicy(spec);
-
-        migrated += 1;
+    // Collect first: removePolicy reorders the catalog's list.
+    var names: std.ArrayList([]u8) = .empty;
+    defer {
+        for (names.items) |n| allocator.free(n);
+        names.deinit(allocator);
+    }
+    for (cat.listPolicies()) |p| {
+        if (!std.mem.startsWith(u8, p.name, migrated_policy_prefix)) continue;
+        try names.append(allocator, try allocator.dupe(u8, p.name));
     }
 
-    return migrated;
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn actionFromCode(code: u8) Action {
-    return switch (code) {
-        0 => .read,
-        1 => .write,
-        2 => .schema,
-        else => .read,
-    };
-}
-
-fn actionName(code: u8) []const u8 {
-    return switch (code) {
-        0 => "read",
-        1 => "write",
-        2 => "schema",
-        else => "unknown",
-    };
+    var retired: u32 = 0;
+    for (names.items) |name| {
+        // The stored record first: a row left in the store would come back at
+        // the next restart. A row missing from the store (only ever in the
+        // catalog) is still dropped from the catalog.
+        policy_persistence.dropPolicy(agm, hmac_key, name) catch |err| switch (err) {
+            error.PolicyNotFound => {},
+            else => return err,
+        };
+        // PolicyNotFound is removePolicy's only error, and cannot happen:
+        // the name was just read from the catalog.
+        cat.removePolicy(name) catch {};
+        retired += 1;
+    }
+    return retired;
 }

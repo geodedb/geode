@@ -1144,19 +1144,22 @@ pub fn wireGpsPolicyHooks(
 
     log.info("GPS policy persistence hooks installed", &.{});
 
-    // CANARY: REQ=REQ-GPS-MIGRATE-001; FEATURE="GPS Grant Migration"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_gps_grant_migration.zig; OWNER=security; UPDATED=2026-05-20
-    // GPS Phase 6 (Task 6-4): migrate legacy (:GraphGrant) nodes to (:Policy) rows.
-    // This runs after hydrateCatalog so idempotency works correctly.
+    // CANARY: REQ=REQ-GPS-MIGRATE-001; FEATURE="GPS Grant Migration"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_gps_grant_migration.zig; OWNER=security; UPDATED=2026-10-11
+    // REQ-SEC-PER-GRAPH-GRANTS: grants are no longer migrated to Policy rows
+    // (gps.decide reads the live GraphRBACPolicy, hydrated in
+    // wireAuthDDLCallbacks). Drop the rows earlier versions migrated: a
+    // stale one kept a revoked grant alive and, scoped to one graph, allowed
+    // database-wide writes. Runs after hydrateCatalog, which loaded them.
     const grant_migration = @import("grant_migration");
-    const migrated = grant_migration.migrateGraphGrantsToPolicies(allocator, agm, &agm.hmac_key, catalog) catch |err| blk: {
-        log.warn("GPS grant migration failed — legacy graph grants may not have Policy rows", &.{
+    const retired = grant_migration.retireMigratedGrantPolicies(allocator, agm, &agm.hmac_key, catalog) catch |err| blk: {
+        log.warn("GPS: retiring grant-migrated Policy rows failed; a stale row may keep a revoked grant in force until the next restart", &.{
             Attr.string("error", @errorName(err)),
         });
         break :blk 0;
     };
-    if (migrated > 0) {
-        log.info("GPS grant migration: migrated legacy graph grants to Policy rows", &.{
-            Attr.int("count", @intCast(migrated)),
+    if (retired > 0) {
+        log.info("GPS: retired grant-migrated Policy rows (grants are read from the live grant table)", &.{
+            Attr.int("count", @intCast(retired)),
         });
     }
 }
