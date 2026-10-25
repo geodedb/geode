@@ -966,6 +966,9 @@ test-cross-build:
 
 test-macos-unit:
   stage: test
+  # This job builds from source and fetches its own dependencies. Start native
+  # portability validation without waiting for the Linux governance queue.
+  needs: []
   timeout: 2h
   tags:
     - saas-macos-medium-m1
