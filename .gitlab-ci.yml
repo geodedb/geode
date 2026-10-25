@@ -346,6 +346,9 @@ variables:
 
 # Base template: shared stage, variables, rules, and allow_failure default
 .governance-base:
+  # Use autoscaled workers: the Kubernetes pool exhausted its CPU requests
+  # before these container-only checks could start. Keep Go/KVM workers free.
+  tags: [company, aws-spot, linux, amd64]
   stage: governance
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
@@ -970,6 +973,9 @@ test-macos-unit:
   # portability validation without waiting for the Linux governance queue.
   needs: []
   timeout: 2h
+  parallel:
+    matrix:
+      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
   tags:
     - saas-macos-medium-m1
   retry:
@@ -984,11 +990,13 @@ test-macos-unit:
   cache:
     <<: *zig-build-cache
     key:
-      prefix: "geode-zig-macos-aarch64-v3-${ZIG_VERSION}"
+      prefix: "geode-zig-macos-aarch64-v4-${ZIG_VERSION}-${TEST_SHARD_INDEX}"
       files: [build.zig.zon]
     policy: pull-push
   after_script: *zig-cache-writer-after-script
   variables:
+    TEST_SHARD_TOTAL: "8"
+    ZIG_BUILD_JOBS: "2"
     # Disable git credential storage to avoid Keychain errors on macOS runners
     GIT_CONFIG_COUNT: 3
     GIT_CONFIG_KEY_0: "credential.helper"
@@ -1053,25 +1061,9 @@ test-macos-unit:
       eval "$(zvm env)"
       zvm use "${ZIG_VERSION}"
       zig version
-    # Provision the validated OpenSSL FIPS provider for the geode-fips build
-    # (-Dopenssl_path=/usr/local/ssl): extract /usr/local/ssl (libs + headers +
-    # fips.so + openssl.cnf) from the ci-catalog zig-fips image into this build
-    # container. Cross-project pull uses the CI job token.
-    - |
-      if command -v docker >/dev/null 2>&1; then for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep 2; done; fi
-      if docker info >/dev/null 2>&1; then
-        echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
-        echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
-        docker rm -f "fipsprov-${CI_JOB_ID:-local}" 2>/dev/null || true
-        docker create --name "fipsprov-${CI_JOB_ID:-local}" "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
-        docker cp "fipsprov-${CI_JOB_ID:-local}":/usr/local/ssl /usr/local/ssl
-        docker rm "fipsprov-${CI_JOB_ID:-local}"
-        [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
-      else
-        echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"
-      fi
-    # Debug build and tests only - ReleaseSafe is covered by test-cross-build jobs
-    # ReleaseSafe compilation on macOS M1 runners exceeds the 1h job timeout.
+    # Native Debug coverage uses the same complete weighted partition as Linux.
+    # The single aggregate run exceeded two hours before reaching every test.
+    # ReleaseSafe target compilation remains in test-cross-build.
     #
     # Pre-fetch the lazy protoc binary via `zig fetch` so Zig's content-addressed
     # cache (`${ZIG_GLOBAL_CACHE_DIR}/p/<hash>/`) is primed before `zig build`
@@ -1105,8 +1097,16 @@ test-macos-unit:
       if [ -z "$fetched" ]; then
         echo "⚠ protoc pre-fetch failed after 5 attempts; zig build will retry on its own"
       fi
-    - zig build --summary all
-    - zig build test --summary all
+    # Build all installed targets once; each test shard also builds its own
+    # declared executable dependencies through build.zig.
+    - if [ "$TEST_SHARD_INDEX" = "0" ]; then zig build -j${ZIG_BUILD_JOBS} --summary all; fi
+    - mkdir -p reports
+    - zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/zig_test_macos_shard_${TEST_SHARD_INDEX}.log
+  artifacts:
+    when: always
+    expire_in: 7 days
+    paths:
+      - reports/zig_test_macos_shard_*.log
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -1776,6 +1776,9 @@ test-gql-compliance:
 # =============================================================================
 
 security-secrets:
+  # Use autoscaled workers: the Kubernetes pool exhausted its CPU requests
+  # before these container-only checks could start. Keep Go/KVM workers free.
+  tags: [company, aws-spot, linux, amd64]
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: security
   needs: []  # Run independently of test stage
@@ -1796,6 +1799,9 @@ security-secrets:
   allow_failure: false
 
 security-trivy:
+  # Use autoscaled workers: the Kubernetes pool exhausted its CPU requests
+  # before these container-only checks could start. Keep Go/KVM workers free.
+  tags: [company, aws-spot, linux, amd64]
   stage: security
   needs: []  # Run independently of test stage
   # CI-FIX: same entrypoint override as security-secrets above — trivy

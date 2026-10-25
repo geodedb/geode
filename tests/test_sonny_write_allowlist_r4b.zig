@@ -692,11 +692,10 @@ test "SONNY-3368 (I-1): LIMIT 1 over two 1,500-pair chains is bounded, a WHERE s
     try testing.expect(pid >= 0);
     if (pid == 0) {
         std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
-        const have = dataSegmentBytes();
-        if (have == 0) std.c._exit(9);
-        const cap = have + (2 << 30);
-        std.posix.setrlimit(.DATA, .{ .cur = cap, .max = cap }) catch std.c._exit(9);
+        var memory: ChildMemoryGuard = .{};
+        memory.start(2 << 30) catch std.c._exit(9);
         job.run();
+        memory.stop();
         std.c._exit(if (job.ok) 0 else 1);
     }
     var status: c_int = 0;
@@ -995,9 +994,10 @@ test "SONNY-3386: a comma join applies its FILTER and the WITH after it, in ever
     try runCases("SONNY-3386", &f3386_cases);
 }
 
-/// The process's peak resident set, reset (`/proc/self/clear_refs` 5) and
-/// read (VmHWM), in bytes.
+/// Linux can reset VmHWM. Darwin's kernel peak is lifetime-wide, so retaining
+/// it is conservative: an earlier peak can fail the bound, never hide growth.
 fn resetPeakRss() void {
+    if (comptime @import("builtin").os.tag.isDarwin()) return;
     const fd = std.c.open("/proc/self/clear_refs", .{ .ACCMODE = .WRONLY });
     if (fd < 0) return;
     defer _ = std.c.close(fd);
@@ -1005,6 +1005,12 @@ fn resetPeakRss() void {
 }
 
 fn statusBytes(field: []const u8) usize {
+    if (comptime @import("builtin").os.tag.isDarwin()) {
+        const memory = darwinMemory() catch @panic("could not measure Darwin process memory");
+        if (std.mem.eql(u8, field, "VmRSS")) return memory.resident;
+        if (std.mem.eql(u8, field, "VmHWM")) return memory.peak;
+        @panic("unsupported Darwin process memory field");
+    }
     var buf: [8192]u8 = undefined;
     const fd = std.c.open("/proc/self/status", .{});
     if (fd < 0) return 0;
@@ -1020,6 +1026,93 @@ fn statusBytes(field: []const u8) usize {
         return kb * 1024;
     }
     return 0;
+}
+
+const ResidentMemory = struct { resident: usize, peak: usize };
+
+fn darwinMemory() !ResidentMemory {
+    var info: std.c.task_vm_info_data_t = std.mem.zeroes(std.c.task_vm_info_data_t);
+    var count: std.c.mach_msg_type_number_t = std.c.TASK.VM.INFO_COUNT;
+    if (std.c.task_info(std.c.mach_task_self(), std.c.TASK.VM.INFO, @ptrCast(&info), &count) != 0)
+        return error.MemoryMeasurementFailed;
+    const required = (@offsetOf(std.c.task_vm_info_data_t, "resident_size_peak") + @sizeOf(u64)) / @sizeOf(std.c.natural_t);
+    if (count < required or info.resident_size == 0 or info.resident_size_peak < info.resident_size)
+        return error.MemoryMeasurementFailed;
+    return .{ .resident = @intCast(info.resident_size), .peak = @intCast(info.resident_size_peak) };
+}
+
+/// Keep runaway regressions inside the forked child's memory allowance.
+/// Linux bounds anonymous allocations with RLIMIT_DATA. Darwin does not have
+/// Linux's VmData accounting: monitor the real kernel resident peak instead,
+/// including a final check so an allocation freed between samples is caught.
+const ChildMemoryGuard = struct {
+    done: std.atomic.Value(bool) = .init(false),
+    thread: ?std.Thread = null,
+    limit: usize = 0,
+
+    fn start(self: *@This(), allowance: usize) !void {
+        if (comptime @import("builtin").os.tag == .linux) {
+            const have = dataSegmentBytes();
+            if (have == 0) return error.MemoryMeasurementFailed;
+            const cap = try std.math.add(usize, have, allowance);
+            try std.posix.setrlimit(.DATA, .{ .cur = cap, .max = cap });
+        } else if (comptime @import("builtin").os.tag.isDarwin()) {
+            self.limit = try std.math.add(usize, (try darwinMemory()).resident, allowance);
+            self.thread = try std.Thread.spawn(.{}, watch, .{self});
+        } else return error.UnsupportedMemoryGuardPlatform;
+    }
+
+    fn check(self: *@This()) void {
+        const memory = darwinMemory() catch std.c._exit(9);
+        if (memory.peak > self.limit) {
+            std.debug.print("child resident peak {d} exceeds memory limit {d}\n", .{ memory.peak, self.limit });
+            std.c._exit(9);
+        }
+    }
+
+    fn watch(self: *@This()) void {
+        while (!self.done.load(.acquire)) {
+            self.check();
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(1), .awake) catch {};
+        }
+    }
+
+    fn stop(self: *@This()) void {
+        if (comptime @import("builtin").os.tag.isDarwin()) {
+            self.done.store(true, .release);
+            self.thread.?.join();
+            self.check();
+        }
+    }
+};
+
+test "child memory guard measures real memory and rejects an oversized allocation" {
+    const resident = statusBytes("VmRSS");
+    try testing.expect(resident > 0);
+    try testing.expect(statusBytes("VmHWM") >= resident);
+    const pid = std.c.fork();
+    try testing.expect(pid >= 0);
+    if (pid == 0) {
+        var memory: ChildMemoryGuard = .{};
+        // A setup error has its own exit code; it must not satisfy the
+        // expected memory-limit refusal below.
+        memory.start(32 << 20) catch std.c._exit(8);
+        _ = std.c.alarm(10);
+        const size = 128 << 20;
+        const raw = std.c.mmap(null, size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
+        if (raw == std.c.MAP_FAILED) std.c._exit(9);
+        const bytes: [*]volatile u8 = @ptrCast(raw);
+        // Fault in every page: a virtual reservation alone is not RSS.
+        var offset: usize = 0;
+        while (offset < size) : (offset += std.heap.page_size_min) bytes[offset] = 1;
+        memory.stop();
+        std.c._exit(0);
+    }
+    var status: c_int = 0;
+    try testing.expectEqual(pid, std.c.waitpid(pid, &status, 0));
+    const st: u32 = @bitCast(status);
+    try testing.expect(!std.os.linux.W.IFSIGNALED(st));
+    try testing.expectEqual(@as(u32, 9), std.os.linux.W.EXITSTATUS(st));
 }
 
 /// Round 4b-1c: the join's memory is flat in the product, and every step
@@ -1040,13 +1133,16 @@ const BoundJob = struct {
         defer geode.read_budget.setBudgetBytesForTest(0);
         resetPeakRss();
         const before = statusBytes("VmRSS");
+        if (before == 0) return self.fail("resident memory measurement unavailable", .{});
         const start = monoMillis();
         var r = runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d) WHERE 1 = 2 RETURN a.i") catch |err| {
             return self.fail("WHERE 1 = 2: error {s}", .{@errorName(err)});
         };
         defer r.deinit(stmt_alloc);
         const took = monoMillis() - start;
-        const grew = statusBytes("VmHWM") -| before;
+        const peak = statusBytes("VmHWM");
+        if (peak < before) return self.fail("peak memory measurement unavailable", .{});
+        const grew = peak - before;
         if (r.rows.len != 0) self.fail("WHERE 1 = 2: {d} row(s)", .{r.rows.len});
         // 1,500 pairs: about 700 MB before the fix.
         if (grew > 128 << 20) self.fail("WHERE 1 = 2: the peak grew {d} MiB (at most 128)", .{grew >> 20});
@@ -1092,13 +1188,12 @@ fn runBoundInChild(job: *BoundJob, comptime which: fn (*BoundJob) void) !void {
     try testing.expect(pid >= 0);
     if (pid == 0) {
         std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
-        const have = dataSegmentBytes();
-        if (have == 0) std.c._exit(9);
-        const cap = have + (1 << 30);
-        std.posix.setrlimit(.DATA, .{ .cur = cap, .max = cap }) catch std.c._exit(9);
+        var memory: ChildMemoryGuard = .{};
+        memory.start(1 << 30) catch std.c._exit(9);
         // A regression that stops polling is killed, not waited for.
         _ = std.c.alarm(300);
         which(job);
+        memory.stop();
         std.c._exit(if (job.ok) 0 else 1);
     }
     var status: c_int = 0;
