@@ -50,6 +50,19 @@ fn churn(st: *graph_store.GraphStore, n: usize) !void {
 }
 
 test "SONNY-3253 (F11): a dropped graph's IdMap is freed when no walk holds it, and when the last walk lets go otherwise" {
+    // Fifty simultaneously open real graph engines need more descriptors
+    // than the 4096 inherited by Zig tests on macOS. Provision this fixture
+    // without changing the host's hard limit or reducing the graph count.
+    const original_limit = try std.posix.getrlimit(.NOFILE);
+    const fixture_limit = 16_384;
+    if (original_limit.cur < fixture_limit) {
+        if (original_limit.max < fixture_limit) return error.InsufficientFileDescriptorLimit;
+        try std.posix.setrlimit(.NOFILE, .{ .cur = fixture_limit, .max = original_limit.max });
+    }
+    defer if (original_limit.cur < fixture_limit) std.posix.setrlimit(.NOFILE, original_limit) catch {};
+    std.debug.print("graph lifecycle fixture: descriptor limit {d} -> {d} (hard {d})\n", .{
+        original_limit.cur, (try std.posix.getrlimit(.NOFILE)).cur, original_limit.max,
+    });
     var f: fx.Fixture = undefined;
     try f.init();
     defer f.deinit();
