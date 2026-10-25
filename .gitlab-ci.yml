@@ -21,7 +21,7 @@ macos-memory-stack-diagnostic:
     GIT_CONFIG_VALUE_1: https://gitlab.com/
     GIT_CONFIG_KEY_2: url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf
     GIT_CONFIG_VALUE_2: git+https://gitlab.com/
-    GEODE_TEST_SERVER_STDIO: '1'
+    GEODE_TEST_INHERIT_SERVER_STDERR: '1'
   before_script:
   - 'git config --global credential.helper ""
 
