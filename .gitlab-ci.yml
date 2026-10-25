@@ -973,14 +973,12 @@ test-macos-unit:
   tags:
     - saas-macos-medium-m1
   retry:
-    # macOS runners frequently see HttpConnectionClosing when fetching lazy
-    # protoc binaries from GitHub; two retries on script_failure cover the
-    # transient. See test-macos-unit failure in pipelines #883/#885.
+    # Retry runner failures only. The protoc download already retries below;
+    # retrying a test failure repeats the complete native suite needlessly.
     max: 2
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
-      - script_failure
   # Native macOS outputs have their own bounded cache. The old Linux branch
   # cache never provided a warm macOS compiler cache and could not be uploaded.
   cache:

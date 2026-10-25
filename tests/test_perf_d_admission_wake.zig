@@ -71,6 +71,10 @@ fn nowMonoNs() i64 {
 /// blocks past its timeout, or misses a wake, is time spent ASLEEP, which
 /// `run_delay` does not count, and still fails the same bound.
 fn threadRunDelayNs() u64 {
+    // /proc and these raw syscall numbers are Linux-only. On macOS a
+    // Linux open syscall raises SIGSYS instead of returning a missing file.
+    // Keep the documented wall-clock fallback on every other platform.
+    if (comptime @import("builtin").os.tag != .linux) return 0;
     const linux = std.os.linux;
     const fd_rc = linux.open("/proc/thread-self/schedstat", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
     if (linux.errno(fd_rc) != .SUCCESS) return 0;
