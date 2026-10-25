@@ -103,10 +103,13 @@ test "stack bounds are known on both request thread stack sizes" {
     if (comptime builtin.link_libc and (builtin.os.tag == .linux or builtin.os.tag.isDarwin())) {
         const Probe = struct {
             left: ?usize = null,
+            actual_size: usize = 0,
             refuses_excess: bool = false,
 
             fn run(self: *@This()) void {
                 self.left = remaining(@frameAddress());
+                const bounds = threadStack();
+                self.actual_size = bounds.high - bounds.low;
                 if (self.left) |left| self.refuses_excess = !hasRoomBelow(@frameAddress(), left + 1);
             }
         };
@@ -116,8 +119,10 @@ test "stack bounds are known on both request thread stack sizes" {
             thread.join();
             try std.testing.expect(probe.left != null);
             try std.testing.expect(probe.left.? > 1 << 20);
-            std.debug.print("stack request={d} remaining={d}\n", .{ size, probe.left.? });
-            try std.testing.expect(probe.left.? <= size);
+            // pthread stack sizes are minimums. Darwin reserves additional
+            // space at the top for pthread metadata (PTHREAD_T_OFFSET).
+            try std.testing.expect(probe.actual_size >= size);
+            try std.testing.expect(probe.left.? <= probe.actual_size);
             try std.testing.expect(probe.refuses_excess);
         }
     }

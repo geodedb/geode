@@ -67,17 +67,8 @@ macos-memory-stack-diagnostic:
     \  fi\n  echo \"attempt $i failed:\"\n  cat /tmp/zig-fetch-protoc.log || true\n  [ \"$i\" -lt 5 ] && { echo\
     \ \"retrying in 15s...\"; sleep 15; }\ndone\nif [ -z \"$fetched\" ]; then\n  echo \"\u26A0 protoc pre-fetch\
     \ failed after 5 attempts; zig build will retry on its own\"\nfi\n"
-  - 'stack_result=0
-
-    zig test src/stack_guard.zig -lc || stack_result=$?
-
-    regression_result=0
-
-    zig build test-sonny-write-allowlist-r4b -j2 --summary all || regression_result=$?
-
-    test "$stack_result" -eq 0 && test "$regression_result" -eq 0
-
-    '
+  - zig test src/stack_guard.zig -lc
+  - zig build test-sonny-write-allowlist-r4b -j2 --summary all
   stage: test
   timeout: 45m
   interruptible: true
