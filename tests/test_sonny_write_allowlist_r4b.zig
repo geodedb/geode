@@ -1033,7 +1033,7 @@ const ResidentMemory = struct { resident: usize, peak: usize };
 fn darwinMemory() !ResidentMemory {
     var info: std.c.task_vm_info_data_t = std.mem.zeroes(std.c.task_vm_info_data_t);
     var count: std.c.mach_msg_type_number_t = std.c.TASK.VM.INFO_COUNT;
-    if (std.c.task_info(std.c.mach_task_self(), std.c.TASK.VM.INFO, @ptrCast(&info), &count) != .SUCCESS)
+    if (std.c.task_info(std.c.mach_task_self(), std.c.TASK.VM.INFO, @ptrCast(&info), &count) != 0)
         return error.MemoryMeasurementFailed;
     const required = (@offsetOf(std.c.task_vm_info_data_t, "resident_size_peak") + @sizeOf(u64)) / @sizeOf(std.c.natural_t);
     if (count < required or info.resident_size == 0 or info.resident_size_peak < info.resident_size)
