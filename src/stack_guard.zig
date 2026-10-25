@@ -116,6 +116,7 @@ test "stack bounds are known on both request thread stack sizes" {
             thread.join();
             try std.testing.expect(probe.left != null);
             try std.testing.expect(probe.left.? > 1 << 20);
+            std.debug.print("stack request={d} remaining={d}\n", .{ size, probe.left.? });
             try std.testing.expect(probe.left.? <= size);
             try std.testing.expect(probe.refuses_excess);
         }
