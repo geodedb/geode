@@ -30,22 +30,22 @@ macos-memory-stack-diagnostic:
     git config --global "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf" "git+https://gitlab.com/"
 
     '
-  - "if ! command -v jq >/dev/null 2>&1; then\n  if command -v brew >/dev/null 2>&1; then\n    brew install\
-    \ jq\n  else\n    echo \"jq is required for zvm installation on macOS\"\n    exit 1\n  fi\nfi\nexport\
-    \ ZVM_NO_MODIFY=1\nexport PATH=\"$HOME/bin:$PATH\"\ncurl -fsSL https://zig.sh/install.sh | bash\n\
-    eval \"$(zvm env)\"\nzvm install \"${ZIG_VERSION}\"\nzvm use \"${ZIG_VERSION}\"\nzig version\n"
-  - "if command -v docker >/dev/null 2>&1; then for i in $(seq 1 20); do docker info >/dev/null 2>&1 &&\
-    \ break; sleep 2; done; fi\nif docker info >/dev/null 2>&1; then\n  echo \"=== provisioning OpenSSL\
-    \ FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ===\"\n  echo \"${CI_JOB_TOKEN}\" | docker\
-    \ login -u gitlab-ci-token --password-stdin registry.gitlab.com || true\n  docker rm -f \"fipsprov-${CI_JOB_ID:-local}\"\
-    \ 2>/dev/null || true\n  docker create --name \"fipsprov-${CI_JOB_ID:-local}\" \"registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}\"\
+  - "if ! command -v jq >/dev/null 2>&1; then\n  if command -v brew >/dev/null 2>&1; then\n    brew install jq\n\
+    \  else\n    echo \"jq is required for zvm installation on macOS\"\n    exit 1\n  fi\nfi\nexport ZVM_NO_MODIFY=1\n\
+    export PATH=\"$HOME/bin:$PATH\"\ncurl -fsSL https://zig.sh/install.sh | bash\neval \"$(zvm env)\"\nzvm install\
+    \ \"${ZIG_VERSION}\"\nzvm use \"${ZIG_VERSION}\"\nzig version\n"
+  - "if command -v docker >/dev/null 2>&1; then for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep\
+    \ 2; done; fi\nif docker info >/dev/null 2>&1; then\n  echo \"=== provisioning OpenSSL FIPS provider from ci-catalog\
+    \ zig-fips:${ZIG_VERSION} ===\"\n  echo \"${CI_JOB_TOKEN}\" | docker login -u gitlab-ci-token --password-stdin\
+    \ registry.gitlab.com || true\n  docker rm -f \"fipsprov-${CI_JOB_ID:-local}\" 2>/dev/null || true\n  docker\
+    \ create --name \"fipsprov-${CI_JOB_ID:-local}\" \"registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}\"\
     \n  docker cp \"fipsprov-${CI_JOB_ID:-local}\":/usr/local/ssl /usr/local/ssl\n  docker rm \"fipsprov-${CI_JOB_ID:-local}\"\
-    \n  [ -x /usr/local/ssl/bin/openssl ] && echo \"FIPS provider ready at /usr/local/ssl\" || { echo\
-    \ \"ERROR: FIPS provider extraction failed\"; exit 1; }\nelse\n  echo \"no docker daemon \u2014 skipping\
-    \ FIPS provider provisioning (non-GoReleaser job)\"\nfi\n"
-  - "mkdir -p \"${ZIG_GLOBAL_CACHE_DIR}/p\"\nif [ -d \"zig-pkg\" ] && ls zig-pkg/* >/dev/null 2>&1; then\n\
-    \  cp -rn zig-pkg/* \"${ZIG_GLOBAL_CACHE_DIR}/p/\" 2>/dev/null || true\nfi\nif [ -d \"docker/zig-packages\"\
-    \ ] && ls docker/zig-packages/* >/dev/null 2>&1; then\n  cp -rn docker/zig-packages/* \"${ZIG_GLOBAL_CACHE_DIR}/p/\"\
+    \n  [ -x /usr/local/ssl/bin/openssl ] && echo \"FIPS provider ready at /usr/local/ssl\" || { echo \"ERROR: FIPS\
+    \ provider extraction failed\"; exit 1; }\nelse\n  echo \"no docker daemon \u2014 skipping FIPS provider provisioning\
+    \ (non-GoReleaser job)\"\nfi\n"
+  - "mkdir -p \"${ZIG_GLOBAL_CACHE_DIR}/p\"\nif [ -d \"zig-pkg\" ] && ls zig-pkg/* >/dev/null 2>&1; then\n  cp -rn\
+    \ zig-pkg/* \"${ZIG_GLOBAL_CACHE_DIR}/p/\" 2>/dev/null || true\nfi\nif [ -d \"docker/zig-packages\" ] && ls\
+    \ docker/zig-packages/* >/dev/null 2>&1; then\n  cp -rn docker/zig-packages/* \"${ZIG_GLOBAL_CACHE_DIR}/p/\"\
     \ 2>/dev/null || true\nfi\n"
   script:
   - 'export PATH="$HOME/bin:$PATH"
@@ -57,21 +57,19 @@ macos-memory-stack-diagnostic:
     zig version
 
     '
-  - "# macOS SaaS runners' per-session $TMPDIR (/var/folders/.../T) can be\n# rotated/cleaned mid-job,\
-    \ so `zig fetch` failed CONSISTENTLY with\n# \"failed to create temporary zip file: FileNotFound\"\
-    \ (distinct from the\n# transient HttpConnectionClosing network flakes). Pin TMPDIR + zig's\n# cache\
-    \ tmp to job-local dirs we create here; exported so the later\n# `zig build` / `zig build test` steps\
-    \ reuse the same valid temp roots.\nexport TMPDIR=\"${CI_PROJECT_DIR}/.zig-tmp\"\nmkdir -p \"$TMPDIR\"\
-    \ \"${ZIG_GLOBAL_CACHE_DIR}/p\" \"${ZIG_GLOBAL_CACHE_DIR}/tmp\"\nPROTOC_URL=\"https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-osx-aarch_64.zip\"\
-    \necho \"Pre-fetching protoc-osx-aarch_64 via zig fetch with retries (TMPDIR=$TMPDIR)...\"\nfetched=\"\
-    \"\nfor i in 1 2 3 4 5; do\n  if zig fetch \"$PROTOC_URL\" >/tmp/zig-fetch-protoc.log 2>&1; then\n\
-    \    echo \"\u2713 protoc pre-fetch succeeded on attempt $i (hash=$(cat /tmp/zig-fetch-protoc.log))\"\
-    \n    fetched=1\n    break\n  fi\n  echo \"attempt $i failed:\"\n  cat /tmp/zig-fetch-protoc.log ||\
-    \ true\n  [ \"$i\" -lt 5 ] && { echo \"retrying in 15s...\"; sleep 15; }\ndone\nif [ -z \"$fetched\"\
-    \ ]; then\n  echo \"\u26A0 protoc pre-fetch failed after 5 attempts; zig build will retry on its own\"\
-    \nfi\n"
-  - zig build test-sonny2694-write-behind-aggregate -j2 --summary all
-  - zig build test-sonny2977-inline-map-set -j2 --summary all
+  - "# macOS SaaS runners' per-session $TMPDIR (/var/folders/.../T) can be\n# rotated/cleaned mid-job, so `zig fetch`\
+    \ failed CONSISTENTLY with\n# \"failed to create temporary zip file: FileNotFound\" (distinct from the\n# transient\
+    \ HttpConnectionClosing network flakes). Pin TMPDIR + zig's\n# cache tmp to job-local dirs we create here; exported\
+    \ so the later\n# `zig build` / `zig build test` steps reuse the same valid temp roots.\nexport TMPDIR=\"${CI_PROJECT_DIR}/.zig-tmp\"\
+    \nmkdir -p \"$TMPDIR\" \"${ZIG_GLOBAL_CACHE_DIR}/p\" \"${ZIG_GLOBAL_CACHE_DIR}/tmp\"\nPROTOC_URL=\"https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-osx-aarch_64.zip\"\
+    \necho \"Pre-fetching protoc-osx-aarch_64 via zig fetch with retries (TMPDIR=$TMPDIR)...\"\nfetched=\"\"\nfor\
+    \ i in 1 2 3 4 5; do\n  if zig fetch \"$PROTOC_URL\" >/tmp/zig-fetch-protoc.log 2>&1; then\n    echo \"\u2713\
+    \ protoc pre-fetch succeeded on attempt $i (hash=$(cat /tmp/zig-fetch-protoc.log))\"\n    fetched=1\n    break\n\
+    \  fi\n  echo \"attempt $i failed:\"\n  cat /tmp/zig-fetch-protoc.log || true\n  [ \"$i\" -lt 5 ] && { echo\
+    \ \"retrying in 15s...\"; sleep 15; }\ndone\nif [ -z \"$fetched\" ]; then\n  echo \"\u26A0 protoc pre-fetch\
+    \ failed after 5 attempts; zig build will retry on its own\"\nfi\n"
+  - zig build test-sonny2977-inline-map-set test-quic-condition-cadence test-datadir-lock-subprocess -j2 --summary
+    all
   stage: test
   timeout: 45m
   interruptible: true
