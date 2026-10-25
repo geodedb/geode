@@ -191,13 +191,7 @@ test "T5 cancel: mid-query cancellation from another thread aborts within the sc
 
     const Setter = struct {
         fn compatSleepNs(ns: u64) void {
-            // Zig 0.16: std.Thread.sleep was removed; nanosleep directly.
-            const req = std.os.linux.timespec{
-                .sec = @intCast(ns / std.time.ns_per_s),
-                .nsec = @intCast(ns % std.time.ns_per_s),
-            };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@intCast(ns)), .awake) catch {};
         }
         fn run(flag: *std.atomic.Value(bool)) void {
             // Fire quickly — the poll sites must observe it at the next
@@ -207,6 +201,7 @@ test "T5 cancel: mid-query cancellation from another thread aborts within the sc
         }
     };
     const t = try std.Thread.spawn(.{}, Setter.run, .{&cancel_flag});
+    defer t.join();
 
     // Either the cancel lands mid-scan (ReadQueryCancelled) or the query
     // finished before the flag was set (small store, fast machine) — both are
@@ -217,7 +212,6 @@ test "T5 cancel: mid-query cancellation from another thread aborts within the sc
     } else |err| {
         try testing.expectEqual(error.ReadQueryCancelled, err);
     }
-    t.join();
 }
 
 test "T5 cancel: flag clear -> queries run normally again (no sticky cancel)" {
