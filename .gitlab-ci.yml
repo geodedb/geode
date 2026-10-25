@@ -21,6 +21,7 @@ macos-memory-stack-diagnostic:
     GIT_CONFIG_VALUE_1: https://gitlab.com/
     GIT_CONFIG_KEY_2: url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf
     GIT_CONFIG_VALUE_2: git+https://gitlab.com/
+    GEODE_TEST_SERVER_STDIO: '1'
   before_script:
   - 'git config --global credential.helper ""
 
@@ -69,7 +70,8 @@ macos-memory-stack-diagnostic:
     \ true\n  [ \"$i\" -lt 5 ] && { echo \"retrying in 15s...\"; sleep 15; }\ndone\nif [ -z \"$fetched\"\
     \ ]; then\n  echo \"\u26A0 protoc pre-fetch failed after 5 attempts; zig build will retry on its own\"\
     \nfi\n"
-  - zig build test-sonny2778-admin-password-file -j2 --summary all
+  - zig build test-sonny2694-write-behind-aggregate -j2 --summary all
+  - zig build test-sonny2977-inline-map-set -j2 --summary all
   stage: test
   timeout: 45m
   interruptible: true
