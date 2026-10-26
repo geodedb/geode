@@ -246,6 +246,10 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     var backup_type: backup_types.BackupType = .full;
     // GAP-0137: TLS configuration options
     var tls_config = TlsConfig{};
+    // A local data-directory backup runs only when asked for with --local.
+    // It never stands in for a failed remote backup.
+    var local: bool = false;
+    var data_dir: ?[]const u8 = null;
 
     // Parse arguments
     var i: usize = start_idx;
@@ -262,6 +266,9 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "  --user <username>      Username for authentication\n" ++
                 "  --password <password>  Password for authentication\n" ++
                 "  --compress             Compress backup file\n" ++
+                "  --local                Back up a local data directory instead of a server\n" ++
+                "                         (no server is contacted)\n" ++
+                "  --data-dir <path>      Data directory for --local (default: $GEODE_DATA_DIR)\n" ++
                 "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
                 "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
                 "  --ca-cert <path>       CA certificate path for server verification\n" ++
@@ -278,6 +285,10 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "  geode backup create --output ./backup.gz --type full\n" ++
                 "  geode backup create --output ./backup.gz --insecure-tls-skip-verify\n" ++
                 "  geode backup create --output ./backup.gz --ca-cert /etc/ssl/ca.crt\n" ++
+                "  geode backup create --output ./backup.gz --local --data-dir /var/lib/geode\n" ++
+                "\n" ++
+                "If the server backup fails, the command exits non-zero; it does not\n" ++
+                "fall back to a local backup.\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--output")) {
@@ -310,6 +321,15 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             password = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--compress")) {
             compress = true;
+        } else if (std.mem.eql(u8, argv[i], "--local")) {
+            local = true;
+        } else if (std.mem.eql(u8, argv[i], "--data-dir")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --data-dir requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            i += 1;
+            data_dir = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--type")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --type requires a value\n", .{});
@@ -369,8 +389,30 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
 
     const backup_type_str: []const u8 = @tagName(backup_type);
 
-    // Execute backup
-    try executeBackup(allocator, output.?, backup_type_str, server, compress, tls_config, username, password);
+    if (local) {
+        // Never default the data directory (the storage layer would read /tmp).
+        const dir = data_dir orelse posixGetenv("GEODE_DATA_DIR") orelse {
+            std.debug.print("Error: --local requires --data-dir <path> or GEODE_DATA_DIR\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        if (dir.len == 0) {
+            std.debug.print("Error: --local requires a non-empty data directory\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        executeLocalDirectoryBackup(allocator, output.?, backup_type_str, compress, dir) catch |err| {
+            std.debug.print("Error: Local backup of {s} failed: {}\n", .{ dir, err });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    } else {
+        if (data_dir != null) {
+            std.debug.print("Error: --data-dir is only valid with --local\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        executeBackup(allocator, output.?, backup_type_str, server, compress, tls_config, username, password) catch |err| {
+            std.debug.print("Error: Backup from server {s} failed: {}. No backup was created.\n", .{ server, err });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    }
 
     std.debug.print("Backup created successfully: {s}\n", .{output.?});
     if (compress) {
@@ -1829,6 +1871,8 @@ fn executeRemoteBackup(
     // Create destination file
     const io_bf = std.Io.Threaded.global_single_threaded.io();
     const output_file = try std.Io.Dir.cwd().createFile(io_bf, dest, .{});
+    // Do not leave a truncated file behind under the requested backup name.
+    errdefer std.Io.Dir.cwd().deleteFile(io_bf, dest) catch {};
     defer output_file.close(io_bf);
 
     // Receive backup data chunks
@@ -1871,27 +1915,24 @@ fn executeBackup(
 ) !void {
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
 
-    // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=ServerConnection; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-10
-    // Always try to connect to server via QUIC first - this ensures we get real data
-    executeRemoteBackup(allocator, dest, mode, server, compress, tls_config, username, password) catch |err| {
-        std.debug.print("Warning: Could not connect to server {s}: {}\n", .{ server, err });
-        std.debug.print("Attempting local data directory backup...\n", .{});
-
-        // Try local data directory backup if server connection failed
-        executeLocalDirectoryBackup(allocator, dest, mode, compress) catch |local_err| {
-            std.debug.print("Error: Local backup also failed: {}\n", .{local_err});
-            return local_err;
-        };
-        return;
-    };
+    // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_backup_create_remote_failure.zig; OWNER=cli; UPDATED=2026-10-24
+    // A failed remote backup is an error. It used to fall back to a local
+    // data-directory backup and report success, which handed the caller a
+    // different backup (and, with GEODE_DATA_DIR unset, read all of /tmp).
+    return executeRemoteBackup(allocator, dest, mode, server, compress, tls_config, username, password);
 }
 
-// CANARY: REQ=REQ-BACKUP-LOCAL-001; FEATURE="Local Directory Backup"; ASPECT=DataExport; STATUS=TESTED; TEST=geodetestlab/specs/backup_operations_basic.yml; OWNER=cli; UPDATED=2026-01-10
-// Local directory backup - reads from Geode data directory when server not available
-fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, compress: bool) !void {
+// CANARY: REQ=REQ-BACKUP-LOCAL-001; FEATURE="Local Directory Backup"; ASPECT=DataExport; STATUS=TESTED; TEST=tests/test_backup_create_remote_failure.zig; OWNER=cli; UPDATED=2026-10-24
+// Local directory backup (`backup create --local`) - reads the given Geode data directory.
+fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, mode: []const u8, compress: bool, data_dir: []const u8) !void {
     if (!std.mem.eql(u8, mode, "full")) {
         return error.UnsupportedBackupMode;
     }
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = try std.Io.Dir.cwd().openDir(io, data_dir, .{});
+    dir.close(io);
+    graph_store.setDataDirOverride(allocator, data_dir);
 
     const config = backup_types.BackupConfig{
         // GAP-0880: gzip is the only compression codec with a real encoder;
