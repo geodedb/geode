@@ -170,6 +170,16 @@ cache: []
       policy: pull-push
 
 .zig-cache-writer:
+  before_script: &zig-cache-writer-before-script
+    - |
+      # The Ubuntu Zig images do not include Python. Check before the long
+      # build so cache maintenance cannot silently fail in after_script.
+      if ! command -v python3 >/dev/null 2>&1; then
+        command -v apt-get >/dev/null 2>&1 || { echo "Python 3 is required for Zig cache maintenance" >&2; exit 1; }
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
+      fi
+      python3 --version
   # Match the catalog's 2 GiB bound. Keep recent compiler outputs and package
   # downloads instead of spending minutes compressing an archive S3 rejects.
   # CANARY: REQ=REQ-CI-CACHE-001; FEATURE="BoundedZigCache"; ASPECT=CI; STATUS=TESTED; TEST=scripts/ci/test_prune_zig_cache.py; OWNER=ci; UPDATED=2026-10-24
@@ -1006,6 +1016,7 @@ test-macos-unit:
     GIT_CONFIG_KEY_2: "url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf"
     GIT_CONFIG_VALUE_2: "git+https://gitlab.com/"
   before_script:
+    - *zig-cache-writer-before-script
     # Configure git to use CI token for gitlab.com and disable credential storage
     - |
       git config --global credential.helper ""
@@ -1200,6 +1211,7 @@ test-zig-release-safe:
       - stuck_or_timeout_failure
       - script_failure
   before_script:
+    - *zig-cache-writer-before-script
     - *zig-vendor-cache
   script:
     - |
@@ -2086,6 +2098,7 @@ dev-image-build:
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
+    - *zig-cache-writer-before-script
     - *zig-vendor-cache
   script:
     - |
@@ -2295,6 +2308,7 @@ dev-image-build-fips:
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
+    - *zig-cache-writer-before-script
     - *zig-vendor-cache
   script:
     - |
