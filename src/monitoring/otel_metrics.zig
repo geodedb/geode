@@ -60,6 +60,28 @@ pub const InMemoryRecorder = otel.exporters.in_memory.Recorder;
 pub const SCOPE_NAME = "com.geodedb.geode";
 pub const SCHEMA_URL = "https://schemas.geodedb.com/otel/geode/metrics/1.0.0";
 
+/// Elapsed instrumentation time uses the monotonic clock, never Unix time.
+/// NTP adjustments must not panic in a query's metrics defer or distort latency.
+pub const DurationTimer = struct {
+    io: std.Io,
+    started_ns: i96,
+
+    pub fn start() DurationTimer {
+        return startWithIo(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    pub fn startWithIo(io: std.Io) DurationTimer {
+        return .{ .io = io, .started_ns = std.Io.Clock.awake.now(io).nanoseconds };
+    }
+
+    pub fn seconds(self: DurationTimer) f64 {
+        const now_ns = std.Io.Clock.awake.now(self.io).nanoseconds;
+        // An unavailable or faulty clock must not break the instrumented work.
+        const elapsed_ns = @max(now_ns -| self.started_ns, 0);
+        return @as(f64, @floatFromInt(elapsed_ns)) / std.time.ns_per_s;
+    }
+};
+
 // --- Module-level globals (one per process) ---
 
 var g_provider: ?*MeterProvider = null;
@@ -94,13 +116,7 @@ var g_tracer_flush_interval_ms: u64 = 5_000;
 // flush thread only runs in the server (never the CLI), and the std.os.linux
 // namespace still compiles for cross-target builds.
 fn tracerFlushSleep(ms: u64) void {
-    const ns = ms * std.time.ns_per_ms;
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 fn tracerFlushLoop() void {

@@ -34,18 +34,16 @@ const ThrottleError = registry_mod.ThrottleError;
 /// Monotonic ns timestamp — `std.time.nanoTimestamp` was removed in Zig 0.16
 /// and `std.Thread.sleep` is gone too, so we go straight to `clock_gettime`.
 fn nowMonoNs() i64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(i64, ts.sec) * std.time.ns_per_s + @as(i64, ts.nsec);
 }
 
 fn sleepNs(ns: i64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
-        .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 const WaiterCtx = struct {

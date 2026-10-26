@@ -389,28 +389,13 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                 a_rows[i] = &.{bv};
                 b_rows[i] = &.{if ((i % 5) == 0) .{ .Int = @intCast(i) } else .{ .Str = "t" }};
             }
-            const t0 = blk: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-                if (rc != 0) break :blk @as(i128, 0);
-                break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const t0 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
             const ud1 = try exec.unionDistinctRows(ally, a_rows, b_rows);
             defer ally.free(ud1);
-            const t1 = blk: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-                if (rc != 0) break :blk @as(i128, 0);
-                break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const t1 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
             const ud2 = try exec.unionDistinctRowsOptimized(ally, a_rows, b_rows, exec.SetOpsTuning.union_distinct_hash_threshold);
             defer ally.free(ud2);
-            const t2 = blk: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-                if (rc != 0) break :blk @as(i128, 0);
-                break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const t2 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
             const bs_io = std.Io.Threaded.global_single_threaded.io();
             var bs_wbuf: [4096]u8 = undefined;
             var bs_gfw = GqlFileWriter.init(getStdoutFile(), bs_io, &bs_wbuf);
@@ -429,24 +414,14 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
             const pats = [_][]const u8{ "^A.*$", "A[il]ice\\.", "^[^B].*$", "Z?$", "Al?ice\\." };
             const R: usize = 50_000;
             var cnt: usize = 0;
-            const t0 = blk: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-                if (rc != 0) break :blk @as(i128, 0);
-                break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const t0 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
             var i: usize = 0;
             while (i < R) : (i += 1) {
                 const s = samples[i % samples.len];
                 const p = pats[i % pats.len];
                 if (eval.matchSimplePattern(s, p)) cnt += 1;
             }
-            const t1 = blk: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-                if (rc != 0) break :blk @as(i128, 0);
-                break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const t1 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
             try w.print("bench-eval: regex =~ R={d} -> {d} matches in {d} ns\n", .{ R, cnt, t1 - t0 });
             // IN/NOT IN benchmark using evaluator
             const names = &.{ "a", "s" };
@@ -463,40 +438,20 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
             var t_nin: usize = 0;
             var j: usize = 0;
             // IN loop
-            const ta0 = blk: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-                if (rc != 0) break :blk @as(i128, 0);
-                break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const ta0 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
             while (j < R2) : (j += 1) {
                 const v: eval.Value = eval.evalExpr(ally, inx, env) catch eval.Value{ .Null = {} };
                 if (v == .Bool and v.Bool) t_in += 1;
             }
-            const ta1 = blk: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-                if (rc != 0) break :blk @as(i128, 0);
-                break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const ta1 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
             // NOT IN loop
             j = 0;
-            const tb0 = blk: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-                if (rc != 0) break :blk @as(i128, 0);
-                break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const tb0 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
             while (j < R2) : (j += 1) {
                 const v: eval.Value = eval.evalExpr(ally, ninx, env) catch eval.Value{ .Null = {} };
                 if (v == .Bool and v.Bool) t_nin += 1;
             }
-            const tb1 = blk: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-                if (rc != 0) break :blk @as(i128, 0);
-                break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const tb1 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
             try w.print("bench-eval: IN R={d} -> {d} trues in {d} ns; NOT IN -> {d} trues in {d} ns\n", .{ R2, t_in, ta1 - ta0, t_nin, tb1 - tb0 });
             try be_gfw.flush();
         } else if (demo_eval) {

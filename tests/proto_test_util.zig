@@ -51,33 +51,15 @@ pub fn progress(comptime fmt: []const u8, args: anytype) void {
 /// Get a random available port by binding to port 0 and reading the assigned port.
 /// This uses UDP to avoid leaving a connection in TIME_WAIT state.
 ///
-/// Zig 0.16 retired the `std.posix.socket` / `bind` / `getsockname`
-/// wrappers; the supported path here is to use `std.os.linux.*`
-/// directly (same pattern src/cli/cli_dispatcher.zig:1267 uses for
-/// UDP probe traffic).
+/// Use Zig's target-specific network backend for the ephemeral UDP bind.
 pub fn getRandomPort() !u16 {
-    const linux = std.os.linux;
-
-    const sock_rc = linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0);
-    if (@as(isize, @bitCast(sock_rc)) < 0) return error.SocketCreateFailed;
-    const sock_fd: i32 = @intCast(sock_rc);
-    defer _ = linux.close(sock_fd);
-
-    var addr = linux.sockaddr.in{
-        .family = linux.AF.INET,
-        .port = 0, // Let OS assign a port
-        .addr = 0, // INADDR_ANY
-    };
-    const bind_rc = linux.bind(sock_fd, @ptrCast(&addr), @sizeOf(linux.sockaddr.in));
-    if (@as(isize, @bitCast(bind_rc)) < 0) return error.BindFailed;
-
-    var bound_addr: linux.sockaddr.in = undefined;
-    var addr_len: linux.socklen_t = @sizeOf(linux.sockaddr.in);
-    const gsn_rc = linux.getsockname(sock_fd, @ptrCast(&bound_addr), &addr_len);
-    if (@as(isize, @bitCast(gsn_rc)) < 0) return error.GetsocknameFailed;
-
-    // Port is in network byte order, convert to host
-    return std.mem.bigToNative(u16, bound_addr.port);
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const addr = try std.Io.net.IpAddress.parse("0.0.0.0", 0);
+    const socket = try addr.bind(io, .{ .mode = .dgram, .protocol = .udp });
+    defer socket.close(io);
+    return socket.address.getPort();
 }
 
 /// Format an address string with the given port
@@ -173,27 +155,29 @@ pub const ServerHandle = struct {
 };
 
 // Zig 0.16: std.time.milliTimestamp / std.time.sleep were removed.
-// Same compat shim shape src/security/authn.zig uses — linux-only
-// clock_gettime + nanosleep through std.os.linux.
+// Use the target-specific clock and sleep backend on Linux and macOS.
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+    const rc = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.REALTIME, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
     if (rc != 0) return 0;
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 fn compat_monoNs() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    const rc = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    const rc = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     if (rc != 0) return 0;
     const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
     return sec * std.time.ns_per_s + nsec;
 }
 fn compat_sleep(ns: u64) void {
-    const sec: i64 = @intCast(ns / std.time.ns_per_s);
-    const nsec: i64 = @intCast(ns % std.time.ns_per_s);
-    var ts: std.posix.timespec = .{ .sec = sec, .nsec = nsec };
-    _ = std.os.linux.nanosleep(&ts, null);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 /// Wait for the gRPC server to be ready by attempting a raw TCP connection.
@@ -331,39 +315,11 @@ pub fn spawnServer(
     errdefer threaded.deinit();
     const io = threaded.io();
 
-    // Zig 0.16: build the child env map from /proc/self/environ
-    // (NUL-separated key=value entries from the parent process's
-    // address space).  std.posix.environ was retired in 0.16 and
-    // std.c.environ would require link_libc on every test target
-    // that pulls in proto_test_util.zig — too invasive.  Reading
-    // /proc/self/environ is stdlib-only, linux-specific (which the
-    // tests here are anyway: `quic-smoke-strict` and
-    // `transport-parity-smokes` only run on the linux CI image).
-    var map = std.process.Environ.Map.init(allocator);
+    // Use the startup environment on every host. /proc/self/environ is
+    // Linux-only; reading it on macOS silently gave child servers an empty
+    // environment, dropping HOME, PATH and the requested startup diagnostics.
+    var map = try std.Io.Threaded.global_single_threaded.environ.process_environ.createMap(allocator);
     errdefer map.deinit();
-
-    {
-        // Reuse the outer `io` rather than shadowing it.
-        var environ_file = std.Io.Dir.cwd().openFile(io, "/proc/self/environ", .{ .mode = .read_only }) catch null;
-        if (environ_file) |*f| {
-            defer f.close(io);
-            // Bounded read; this proc file is tiny in practice.
-            var buf: [64 * 1024]u8 = undefined;
-            const n = f.readPositionalAll(io, &buf, 0) catch 0;
-            const data = buf[0..n];
-            var start: usize = 0;
-            for (data, 0..) |c, i| {
-                if (c != 0) continue;
-                if (i > start) {
-                    const entry = data[start..i];
-                    if (std.mem.indexOfScalar(u8, entry, '=')) |eq| {
-                        try map.put(entry[0..eq], entry[eq + 1 ..]);
-                    }
-                }
-                start = i + 1;
-            }
-        }
-    }
 
     if (map.get("GEODE_ADMIN_USERNAME") == null) {
         map.put("GEODE_ADMIN_USERNAME", DefaultAuth.username) catch {};

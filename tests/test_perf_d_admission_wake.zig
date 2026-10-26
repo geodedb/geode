@@ -47,8 +47,11 @@ const transport_mod = @import("transport/quic");
 const QuicTransport = transport_mod.QuicTransport;
 
 fn nowMonoNs() i64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(i64, ts.sec) * std.time.ns_per_s + @as(i64, ts.nsec);
 }
 
@@ -68,6 +71,10 @@ fn nowMonoNs() i64 {
 /// blocks past its timeout, or misses a wake, is time spent ASLEEP, which
 /// `run_delay` does not count, and still fails the same bound.
 fn threadRunDelayNs() u64 {
+    // /proc and these raw syscall numbers are Linux-only. On macOS a
+    // Linux open syscall raises SIGSYS instead of returning a missing file.
+    // Keep the documented wall-clock fallback on every other platform.
+    if (comptime @import("builtin").os.tag != .linux) return 0;
     const linux = std.os.linux;
     const fd_rc = linux.open("/proc/thread-self/schedstat", .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
     if (linux.errno(fd_rc) != .SUCCESS) return 0;
@@ -88,12 +95,7 @@ fn awakeLatencyNs(wall_ns: i64, run_delay_ns: u64) i64 {
 }
 
 fn sleepNs(ns: i64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
-        .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 const WaiterCtx = struct {

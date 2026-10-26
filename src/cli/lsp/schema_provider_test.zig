@@ -80,8 +80,7 @@ fn sleepNs(ns: i64) void {
             .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
             .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
         };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     }
 }
 

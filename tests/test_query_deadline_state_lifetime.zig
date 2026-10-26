@@ -44,13 +44,7 @@ const testing = std.testing;
 const qd = @import("query_deadline");
 
 fn sleepMs(ms: u64) void {
-    const ns: i64 = @intCast(ms * std.time.ns_per_ms);
-    const req = std.os.linux.timespec{
-        .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
-        .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 test "QueryDeadlineState.finish joins the watchdog thread (regression #746)" {
