@@ -7,7 +7,7 @@ while true; do
   stamp=$(date -u +%Y%m%dT%H%M%SZ)
   snapshot="reports/macos-process-${stamp}.txt"
   # Restrict output to Zig test executables; omit unrelated process arguments.
-  ps -axo pid,etime,time,command | awk '/[.]zig-cache\/o\/[^ /]+\/test /' > "$snapshot"
+  ps -axo pid,etime,time,command | awk '/[.]zig-cache\/o\/[[:xdigit:]]+\/test /' > "$snapshot"
   if [ -s "$snapshot" ]; then
     echo "Native test processes at ${stamp}:"
     cat "$snapshot"
