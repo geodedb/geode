@@ -801,6 +801,42 @@ test "SONNY-3248 (round 4b-1 review): window values, LET chains and CALL bodies,
     try runCases("SONNY-3248 (4b-1b)", &r4b1b_3248_cases);
 }
 
+// A SKIP or LIMIT parameter windows a chained query (`... WITH n MATCH ...`)
+// and a UNION as a literal does. The Go client sends every `LIMIT ?` as
+// `LIMIT $_gqN` since v0.2; both executors read only the literals, so these
+// returned every row (divelife-pds holds the client at v0.1 for it).
+const chain_g = "MATCH (n:G) WITH n MATCH (m:G) WHERE m.i = n.i RETURN m.i AS i ORDER BY i";
+const union_g = "MATCH (n:G) WHERE n.i < 5 RETURN n.i AS i UNION MATCH (n:G) WHERE n.i >= 5 RETURN n.i AS i ORDER BY i";
+const union_all_g = "MATCH (n:G) WHERE n.i < 5 RETURN n.i AS i UNION ALL MATCH (n:G) WHERE n.i >= 5 RETURN n.i AS i ORDER BY i";
+const window_param_chain_union_cases = [_]Case{
+    // The literals, for reference.
+    .{ .write = chain_g ++ " LIMIT 2", .want = &.{ "0", "1" } },
+    .{ .write = union_g ++ " LIMIT 2", .want = &.{ "0", "1" } },
+    // A chained query.
+    .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = chain_g ++ " LIMIT $l", .want = &.{ "0", "1" } },
+    .{ .params = &.{.{ .name = "s", .expr = "8" }}, .write = chain_g ++ " SKIP $s", .want = &.{ "8", "9" } },
+    .{ .params = &.{.{ .name = "s", .expr = "8" }}, .write = chain_g ++ " OFFSET $s", .want = &.{ "8", "9" } },
+    .{ .params = &.{ .{ .name = "s", .expr = "1" }, .{ .name = "l", .expr = "2" } }, .write = chain_g ++ " SKIP $s LIMIT $l", .want = &.{ "1", "2" } },
+    .{ .params = &.{ .{ .name = "s", .expr = "1" }, .{ .name = "l", .expr = "2" } }, .write = chain_g ++ " LIMIT $l OFFSET $s", .want = &.{ "1", "2" } },
+    .{ .params = &.{.{ .name = "l", .expr = "0" }}, .write = chain_g ++ " LIMIT $l", .want = &.{} },
+    .{ .write = "LET $x = 3 " ++ chain_g ++ " LIMIT $x", .want = &.{ "0", "1", "2" } },
+    .{ .params = &.{.{ .name = "l", .expr = "-1" }}, .write = chain_g ++ " LIMIT $l", .refused = error.InvalidWindowParameter },
+    .{ .params = &.{.{ .name = "l", .expr = "'2'" }}, .write = chain_g ++ " LIMIT $l", .refused = error.InvalidWindowParameter },
+    // A UNION (and UNION ALL).
+    .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = union_g ++ " LIMIT $l", .want = &.{ "0", "1" } },
+    .{ .params = &.{.{ .name = "s", .expr = "8" }}, .write = union_g ++ " SKIP $s", .want = &.{ "8", "9" } },
+    .{ .params = &.{.{ .name = "s", .expr = "8" }}, .write = union_g ++ " OFFSET $s", .want = &.{ "8", "9" } },
+    .{ .params = &.{ .{ .name = "s", .expr = "1" }, .{ .name = "l", .expr = "2" } }, .write = union_g ++ " SKIP $s LIMIT $l", .want = &.{ "1", "2" } },
+    .{ .params = &.{ .{ .name = "s", .expr = "1" }, .{ .name = "l", .expr = "2" } }, .write = union_all_g ++ " SKIP $s LIMIT $l", .want = &.{ "1", "2" } },
+    .{ .params = &.{.{ .name = "l", .expr = "0" }}, .write = union_g ++ " LIMIT $l", .want = &.{} },
+    .{ .params = &.{.{ .name = "l", .expr = "-1" }}, .write = union_g ++ " LIMIT $l", .refused = error.InvalidWindowParameter },
+    .{ .params = &.{.{ .name = "s", .expr = "2.0" }}, .write = union_g ++ " SKIP $s", .refused = error.InvalidWindowParameter },
+};
+
+test "SKIP / LIMIT parameters window a chained query and a UNION, in every session" {
+    try runCases("window params (chain, UNION)", &window_param_chain_union_cases);
+}
+
 // SONNY-3319 (I-4): a label SET checks the vectors the node already holds.
 const i4_vec_cases = [_]Case{
     .{ .setup = &(vec_setup ++ [_][]const u8{"CREATE (:VO2 {id: 5, emb: vectorf32('[8.0, 8.0]')})"}), .write = "MATCH (n:VO2) SET n:VD", .refused = error.VectorDimensionMismatch, .checks = &.{

@@ -997,7 +997,7 @@ fn freeRowValues(allocator: std.mem.Allocator, result: *ExecutionResult, row: []
 /// statement runs (`.Query` in `executeStatementWithContext`), and both the
 /// window and the statement read those values. They were evaluated here and
 /// again by the statement, so a `LET $r = rand()` had two values.
-fn windowParam(name: ?[]const u8, context: ExecutionContext) !?usize {
+pub fn windowParam(name: ?[]const u8, context: ExecutionContext) !?usize {
     const n = name orelse return null;
     for (context.query_param_names, context.query_param_values) |pn, pv| {
         if (std.mem.eql(u8, pn, n)) return try windowValue(pv);
