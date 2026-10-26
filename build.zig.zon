@@ -197,7 +197,8 @@
             // 2026-07-13: v0.1.38 — pin-only release aligning quic's
             // thread_pool to v0.2.7 (popMany stalled-producer livelock fix)
             // in lockstep with geode + timeseries-storage.
-            // Portable entropy, clocks, sleep, and checked nonblocking POSIX sockets.
+            // Includes main's v0.1.47 lost-STREAM retransmission fix (3ca1e9f), plus
+            // portable entropy, clocks, sleep, and checked nonblocking POSIX sockets.
             // Native macOS transport and current-main paired UDP gate passed.
             .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=4c20fbabd7e1b756f6776a87af59f1e3fc8f239a#4c20fbabd7e1b756f6776a87af59f1e3fc8f239a",
             .hash = "quic-0.1.47-gBIqUb9-QAAkC9VxvIxRKD9mjRH1fSZY_Vj5Hc23QxA2",
@@ -396,6 +397,7 @@
             // 2026-10-20: main commit 8819899 (geode-client-zig !34), lockstep with
             // geode's quic v0.1.46 bump (client Finished retransmit until
             // HANDSHAKE_DONE). Still no client tag on this quic, hence ref=main.
+            // Includes main's be724ae transport/entropy pins, plus portable deadlines.
             .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=57240957a2b5e690b83829d5de3a827a3004d6c8#57240957a2b5e690b83829d5de3a827a3004d6c8",
             .hash = "geode_client_zig-0.3.8-8ysbV1WBCwDb9bKkda9TcgMGWmGNfxTxyumNnCQRyUyI",
         },

@@ -141,9 +141,14 @@ test "PERF-D: one release wakes exactly one of N waiters (signal not broadcast)"
     for (&ctxs, 0..) |*c, i| {
         c.* = WaiterCtx{
             .throttle = &throttle,
-            // 80 ms — long enough that we can release() once and still
-            // have time to observe that the OTHER waiters did not wake.
-            .timeout_ns = 80 * std.time.ns_per_ms,
+            // The timeout is a liveness cap, not a latency bound: the
+            // release() below must land while every waiter is still inside
+            // acquire(). It was 80 ms, and a loaded CI runner (test-zig-unit
+            // [4] on MR !46) descheduled this thread past that, so every
+            // waiter timed out before the release and none acquired
+            // (`expected 1, found 0`). 2 s still lets the other N-1 waiters
+            // re-park and time out, which is what the test checks.
+            .timeout_ns = 2 * std.time.ns_per_s,
             .ready = &ready,
         };
         threads[i] = try std.Thread.spawn(.{}, WaiterCtx.run, .{c});
@@ -157,6 +162,7 @@ test "PERF-D: one release wakes exactly one of N waiters (signal not broadcast)"
     // must wake exactly one waiter — and that waiter claims the slot. The
     // remaining N-1 waiters must observe that they no longer satisfy the
     // predicate (active == max == 1) and re-park until timeout.
+    const release_ns = nowMonoNs();
     throttle.release();
 
     for (threads) |t| t.join();
@@ -166,6 +172,18 @@ test "PERF-D: one release wakes exactly one of N waiters (signal not broadcast)"
     for (&ctxs) |*c| {
         if (c.acquired.load(.acquire)) ok_count += 1;
         if (c.err.load(.acquire) == 1) err_count += 1;
+    }
+    if (ok_count != 1) {
+        for (&ctxs, 0..) |*c, i| {
+            // Times relative to the release(): a waiter whose wake is
+            // negative timed out before the release reached it.
+            std.debug.print("waiter {d}: start={d} ns wake={d} ns acquired={}\n", .{
+                i,
+                c.start_ns.load(.acquire) - release_ns,
+                c.wake_ns.load(.acquire) - release_ns,
+                c.acquired.load(.acquire),
+            });
+        }
     }
 
     // Exactly one waiter succeeded; the rest timed out.
