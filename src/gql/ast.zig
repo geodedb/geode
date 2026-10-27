@@ -935,11 +935,27 @@ pub const ForStatement = struct {
     offset_var: ?[]const u8 = null, // WITH OFFSET variable name (0-based)
     return_clause: ?ReturnClause = null, // RETURN clause for each iteration (null when `body` is set)
     body: ?*Query = null, // Composed continuation executed once per element
+    // FOR headers that follow this one before the RETURN
+    // (`FOR x IN a FOR y IN x RETURN ...`): each extends every row of the
+    // one before it. Only with `return_clause`.
+    nested: []const ForLoop = &.{},
+    // GROUP BY of the RETURN. The RETURN aggregates over every row of the
+    // loops (ISO/IEC 39075 FOR extends the working table; RETURN projects it).
+    group_by: ?GroupBy = null,
     order_by: ?OrderBy = null,
     limit: ?usize = null,
     offset: ?usize = null,
     limit_param: ?[]const u8 = null,
     offset_param: ?[]const u8 = null,
+};
+
+/// One `FOR <variable> IN <collection> [WITH ORDINALITY v | WITH OFFSET v]`
+/// header nested after a ForStatement's own.
+pub const ForLoop = struct {
+    variable: []const u8,
+    collection: Expr,
+    ordinality_var: ?[]const u8 = null,
+    offset_var: ?[]const u8 = null,
 };
 
 pub const ValuesStatement = struct {

@@ -12621,6 +12621,16 @@ pub fn build(b: *std.Build) void {
     const for_write_body_step = b.step("test-for-write-body", "Run geode#876 FOR … IN write-body composition regressions");
     for_write_body_step.dependOn(&run_for_write_body_tests.step);
 
+    // FOR ... RETURN aggregates over the loop's rows and names a bare
+    // variable column after it. See tests/test_for_aggregation.zig.
+    const for_aggregation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_for_aggregation.zig"), .target = target, .optimize = optimize });
+    for_aggregation_test_mod.addImport("geode", root_mod);
+    const for_aggregation_tests = b.addTest(.{ .root_module = for_aggregation_test_mod });
+    const run_for_aggregation_tests = b.addRunArtifact(for_aggregation_tests);
+    shardDep(test_step, &run_for_aggregation_tests.step, 0, test_shard_loads, test_shard_index);
+    const for_aggregation_step = b.step("test-for-aggregation", "Run FOR ... RETURN aggregation and column-naming regressions");
+    for_aggregation_step.dependOn(&run_for_aggregation_tests.step);
+
     // geode#873 / #877 / ENG-3905 residual: vector_dot truncates to an integer,
     // the vector scalar functions panic on out-of-range magnitudes, and
     // vector_knn silently returns [] for an unrelated-label index, a LIST-typed
