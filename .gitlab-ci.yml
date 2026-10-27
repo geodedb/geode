@@ -2136,10 +2136,13 @@ dev-image-build:
 dev-image:
   stage: release
   # docker:dind only runs on Linux runners (see the snapshot job note above).
+  # Docker-in-Docker requires the privileged AWS runner pool.
   tags:
     - company
-    - lab
+    - dedicated
     - linux
+    - x86
+    - aws-spot
   image: docker:latest
   services:
     - docker:dind
@@ -2331,10 +2334,13 @@ dev-image-build-fips:
 # Tags: dev-fips, main-fips, main-<sha8>-fips.  NEVER 'latest' — releases own that.
 dev-image-fips:
   stage: release
+  # Docker-in-Docker requires the privileged AWS runner pool.
   tags:
     - company
-    - lab
+    - dedicated
     - linux
+    - x86
+    - aws-spot
   image: docker:latest
   services:
     - docker:dind
