@@ -236,7 +236,7 @@ test-macos-shard7-diagnostic:
     - reports/zig_test_macos_shard_*.log
     - reports/macos-process-*
   rules:
-  - if: $CI_COMMIT_BRANCH == "ci/macos-shard7-diagnostic-turn88"
+  - if: $CI_COMMIT_BRANCH == "ci/macos-shard7-fixed-turn89"
   allow_failure: false
 
 # Windows unit tests removed — intermittent TLS/network failures on SaaS runners
