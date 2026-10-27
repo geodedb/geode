@@ -1,7 +1,7 @@
 # Diagnostic branch only. Do not merge this CI configuration.
 workflow:
   rules:
-  - if: $CI_COMMIT_BRANCH == "ci/macos-shard7-fixed-turn89"
+  - if: $CI_COMMIT_BRANCH == "ci/macos-cluster-tls-turn89"
   auto_cancel:
     on_new_commit: interruptible
 stages:
@@ -72,12 +72,12 @@ default:
 
 # Cache only jobs that consume Zig outputs. Publishing and report jobs have
 # no compiler work and must not download or upload compiler archives.
-test-macos-shard7-diagnostic:
+test-macos-cluster-tls-diagnostic:
   stage: test
   # This job builds from source and fetches its own dependencies. Start native
   # portability validation without waiting for the Linux governance queue.
   needs: []
-  timeout: 70m
+  timeout: 30m
   tags:
   - saas-macos-medium-m1
   retry: 0
@@ -114,7 +114,7 @@ test-macos-shard7-diagnostic:
       url.https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/.insteadOf
     GIT_CONFIG_VALUE_2: git+https://gitlab.com/
     TEST_SHARD_INDEX: '7'
-    RUNNER_SCRIPT_TIMEOUT: 60m
+    RUNNER_SCRIPT_TIMEOUT: 25m
     RUNNER_AFTER_SCRIPT_TIMEOUT: 5m
   before_script:
   - - |
@@ -226,17 +226,17 @@ test-macos-shard7-diagnostic:
   - mkdir -p reports
   - "bash scripts/test/ci-macos-process-samples.sh &\nmonitor_pid=$!\ntrap 'kill \"\
     $monitor_pid\" 2>/dev/null || true' EXIT"
-  - zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL
-    -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee
-    reports/zig_test_macos_shard_${TEST_SHARD_INDEX}.log
+  - openssl version
+  - zig build -j${ZIG_BUILD_JOBS} test-cluster-3node-subprocess --summary all 2>&1 | tee reports/zig_test_macos_cluster.log
   artifacts:
     when: always
     expire_in: 7 days
     paths:
-    - reports/zig_test_macos_shard_*.log
+    - reports/zig_test_macos_cluster.log
+    - reports/cluster-node-*.log
     - reports/macos-process-*
   rules:
-  - if: $CI_COMMIT_BRANCH == "ci/macos-shard7-fixed-turn89"
+  - if: $CI_COMMIT_BRANCH == "ci/macos-cluster-tls-turn89"
   allow_failure: false
 
 # Windows unit tests removed — intermittent TLS/network failures on SaaS runners

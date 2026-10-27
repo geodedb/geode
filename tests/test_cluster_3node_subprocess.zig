@@ -417,6 +417,8 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
         try env_ptr.put("GEODE_CLUSTER_TOKEN", "test-subprocess-cluster");
         try env_ptr.put("GEODE_NODE_ID", node_id_str);
         try env_ptr.put("GEODE_CLUSTER_CA_CERT", certs.ca);
+        // Diagnostic branch only: synthetic loopback TLS, no inherited credentials.
+        try env_ptr.put("LOG_LEVEL", "debug");
         try env_ptr.put("GEODE_ADMIN_PASSWORD", "GeodeTestPassword123!");
         if (posixGetenv("PATH")) |p| try env_ptr.put("PATH", p);
         if (posixGetenv("HOME")) |p| try env_ptr.put("HOME", p);
@@ -512,6 +514,8 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
 
     if (!leader_seen) {
         for (captures, 0..) |cap, i| {
+            const path = try std.fmt.allocPrint(aa, "reports/cluster-node-{d}.log", .{i + 1});
+            try std.Io.Dir.cwd().writeFile(io_fs, .{ .sub_path = path, .data = cap.buf.items });
             // Trim very long output so the test runner stays readable; we
             // dump up to ~8KB per node, which is enough to see the last
             // few raft tick lines.
