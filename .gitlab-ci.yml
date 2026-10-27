@@ -583,7 +583,7 @@ governance-canary-lint:
 governance-canaryscan-verify:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
-  image: golang:1.27.2-alpine
+  image: golang:1.27.3-alpine
   variables:
     # 2026-07-13: alpine go images pin GOTOOLCHAIN=local, so any renovate bump
     # of tools/canaryscan/go.mod's `go` directive past the image's toolchain
