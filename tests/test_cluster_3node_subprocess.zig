@@ -102,8 +102,6 @@ fn runOpenssl(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !voi
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     if (result.term != .exited or result.term.exited != 0) return error.OpensslFailed;
-    if (argv.len == 2 and std.mem.eql(u8, argv[1], "version"))
-        std.debug.print("Fixture OpenSSL: {s}", .{result.stdout});
 }
 
 const Certs = struct { dir: []const u8, ca: []const u8, leaf: []const u8, key: []const u8 };
@@ -138,17 +136,13 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io, dir: []const u8) !Certs {
         .sub_path = ext,
         .data = "subjectAltName=IP:127.0.0.1,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
     });
+    // Pin SHA-256 below: system LibreSSL otherwise defaults to SHA-1,
+    // which the real peer certificate verifier correctly rejects.
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ca_key });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-subproc-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-sha256", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-subproc-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
-    // Diagnostic branch: retain public certificates only and independently
-    // check the generated chain before exercising the real TLS verifier.
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-in", ca, "-out", "reports/ca-cert.pem" });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-in", leaf, "-out", "reports/leaf-cert.pem" });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-in", leaf, "-text", "-noout", "-out", "reports/leaf-details.txt" });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "verify", "-CAfile", ca, leaf });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-sha256", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-sha256", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
     return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
 }
 
@@ -425,8 +419,6 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
         try env_ptr.put("GEODE_CLUSTER_TOKEN", "test-subprocess-cluster");
         try env_ptr.put("GEODE_NODE_ID", node_id_str);
         try env_ptr.put("GEODE_CLUSTER_CA_CERT", certs.ca);
-        // Diagnostic branch only: synthetic loopback TLS, no inherited credentials.
-        try env_ptr.put("LOG_LEVEL", "info");
         try env_ptr.put("GEODE_ADMIN_PASSWORD", "GeodeTestPassword123!");
         if (posixGetenv("PATH")) |p| try env_ptr.put("PATH", p);
         if (posixGetenv("HOME")) |p| try env_ptr.put("HOME", p);
@@ -522,8 +514,6 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
 
     if (!leader_seen) {
         for (captures, 0..) |cap, i| {
-            const path = try std.fmt.allocPrint(aa, "reports/cluster-node-{d}.log", .{i + 1});
-            try std.Io.Dir.cwd().writeFile(io_fs, .{ .sub_path = path, .data = cap.buf.items });
             // Trim very long output so the test runner stays readable; we
             // dump up to ~8KB per node, which is enough to see the last
             // few raft tick lines.
