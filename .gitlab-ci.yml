@@ -1043,23 +1043,19 @@ test-macos-unit:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
-    # Provision the validated OpenSSL FIPS provider for the geode-fips build
-    # (-Dopenssl_path=/usr/local/ssl): extract /usr/local/ssl (libs + headers +
-    # fips.so + openssl.cnf) from the ci-catalog zig-fips image into this build
-    # container. Cross-project pull uses the CI job token.
+    # Native macOS executables need Homebrew's keg-only OpenSSL libraries.
+    # Supply their prefix explicitly to Zig, including test-owned executables.
     - |
-      if command -v docker >/dev/null 2>&1; then for i in $(seq 1 20); do docker info >/dev/null 2>&1 && break; sleep 2; done; fi
-      if docker info >/dev/null 2>&1; then
-        echo "=== provisioning OpenSSL FIPS provider from ci-catalog zig-fips:${ZIG_VERSION} ==="
-        echo "${CI_JOB_TOKEN}" | docker login -u gitlab-ci-token --password-stdin registry.gitlab.com || true
-        docker rm -f "fipsprov-${CI_JOB_ID:-local}" 2>/dev/null || true
-        docker create --name "fipsprov-${CI_JOB_ID:-local}" "registry.gitlab.com/devnw/ci-catalog/zig-fips:${ZIG_VERSION}"
-        docker cp "fipsprov-${CI_JOB_ID:-local}":/usr/local/ssl /usr/local/ssl
-        docker rm "fipsprov-${CI_JOB_ID:-local}"
-        [ -x /usr/local/ssl/bin/openssl ] && echo "FIPS provider ready at /usr/local/ssl" || { echo "ERROR: FIPS provider extraction failed"; exit 1; }
-      else
-        echo "no docker daemon — skipping FIPS provider provisioning (non-GoReleaser job)"
+      command -v brew >/dev/null 2>&1 || { echo "Homebrew is required for native OpenSSL" >&2; exit 1; }
+      if ! brew list --versions openssl@3 >/dev/null 2>&1; then
+        HOMEBREW_NO_AUTO_UPDATE=1 brew install openssl@3
       fi
+      export GEODE_MACOS_OPENSSL_PREFIX="$(brew --prefix openssl@3)"
+      test -f "${GEODE_MACOS_OPENSSL_PREFIX}/include/openssl/ssl.h"
+      test -f "${GEODE_MACOS_OPENSSL_PREFIX}/lib/libssl.dylib"
+      test -f "${GEODE_MACOS_OPENSSL_PREFIX}/lib/libcrypto.dylib"
+      export PATH="${GEODE_MACOS_OPENSSL_PREFIX}/bin:$PATH"
+      export PKG_CONFIG_PATH="${GEODE_MACOS_OPENSSL_PREFIX}/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     # Use vendored cache if present, otherwise zig build fetches from network.
     # Check current (zig-pkg) and legacy (docker/zig-packages) vendor paths.
     - |
@@ -1114,9 +1110,9 @@ test-macos-unit:
       fi
     # Build all installed targets once; each test shard also builds its own
     # declared executable dependencies through build.zig.
-    - if [ "$TEST_SHARD_INDEX" = "0" ]; then zig build -j${ZIG_BUILD_JOBS} --summary all; fi
+    - if [ "$TEST_SHARD_INDEX" = "0" ]; then zig build --search-prefix "$GEODE_MACOS_OPENSSL_PREFIX" -j${ZIG_BUILD_JOBS} --summary all; fi
     - mkdir -p reports
-    - zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/zig_test_macos_shard_${TEST_SHARD_INDEX}.log
+    - zig build --search-prefix "$GEODE_MACOS_OPENSSL_PREFIX" -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/zig_test_macos_shard_${TEST_SHARD_INDEX}.log
   artifacts:
     when: always
     expire_in: 7 days
@@ -1874,11 +1870,7 @@ snapshot:
   # "Lab Devices / Servers with GPU support" runner (arm64, no docker:dind
   # daemon), where v0.8.23 build-release job 17091369970 failed with
   # "Cannot connect to the Docker daemon". `amd64` pins it to Lab Servers.
-  tags:
-    - company
-    - lab
-    - linux
-    - amd64
+  tags: [company, dedicated, docker, linux, amd64]
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
   services:
@@ -2140,12 +2132,7 @@ dev-image:
   stage: release
   # docker:dind only runs on Linux runners (see the snapshot job note above).
   # Docker-in-Docker requires the privileged AWS runner pool.
-  tags:
-    - company
-    - dedicated
-    - linux
-    - x86
-    - aws-spot
+  tags: [company, dedicated, docker, linux, x86]
   image: docker:latest
   services:
     - docker:dind
@@ -2338,12 +2325,7 @@ dev-image-build-fips:
 dev-image-fips:
   stage: release
   # Docker-in-Docker requires the privileged AWS runner pool.
-  tags:
-    - company
-    - dedicated
-    - linux
-    - x86
-    - aws-spot
+  tags: [company, dedicated, docker, linux, x86]
   image: docker:latest
   services:
     - docker:dind
@@ -2532,11 +2514,7 @@ build-release:
   # "Lab Devices / Servers with GPU support" runner (arm64, no docker:dind
   # daemon), where v0.8.23 build-release job 17091369970 failed with
   # "Cannot connect to the Docker daemon". `amd64` pins it to Lab Servers.
-  tags:
-    - company
-    - lab
-    - linux
-    - amd64
+  tags: [company, dedicated, docker, linux, amd64]
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
   services:
