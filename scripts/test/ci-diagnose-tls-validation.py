@@ -19,3 +19,23 @@ text = text.replace(needle, '''var parsed = x509.parseCert(alloc, anchor_der) ca
         };''')
 source.write_text(text)
 print("Instrumented the pinned TLS validator; all rejection paths remain unchanged")
+
+source = Path("zig-pkg") / package / "src/x509.zig"
+text = source.read_text()
+needle = "pub fn verifyCertSig(issuer_spki_der: []const u8, tbs: []const u8, algo_oid: []const u8, sig_der: []const u8, alloc: std.mem.Allocator) bool {"
+assert text.count(needle) == 1
+text = text.replace(needle, needle + '\n    std.debug.print("TLS signature algorithm: {x}; fips={any}\\n", .{ algo_oid, fips_cb.fips_enabled });')
+start = text.index("fn verifyEcdsaWith(")
+end = text.index("fn oidIsRsaPss(", start)
+helper = text[start:end]
+for operation, label in [
+    ("E.Signature.fromDer(sig_der)", "signature parse"),
+    ("E.PublicKey.fromSec1(sec1_uncompressed)", "public key parse"),
+    ("signature.verify(tbs, pubkey)", "verification"),
+]:
+    needle = operation + " catch return false;"
+    assert helper.count(needle) == 1
+    helper = helper.replace(needle, operation + ' catch |err| { std.debug.print("TLS ECDSA ' + label + ': {s}\\n", .{@errorName(err)}); return false; };')
+text = text[:start] + helper + text[end:]
+source.write_text(text)
+print("Instrumented certificate signature dispatch; all failures still reject")

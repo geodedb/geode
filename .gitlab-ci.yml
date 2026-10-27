@@ -238,6 +238,8 @@ test-macos-cluster-tls-diagnostic:
     paths:
     - reports/zig_test_macos_cluster.log
     - reports/cluster-node-*.log
+    - reports/*-cert.pem
+    - reports/leaf-details.txt
     - reports/macos-process-*
   rules:
   - if: $CI_COMMIT_BRANCH == "ci/macos-cluster-tls-turn89"

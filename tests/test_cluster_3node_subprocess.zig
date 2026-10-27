@@ -102,6 +102,8 @@ fn runOpenssl(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !voi
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
     if (result.term != .exited or result.term.exited != 0) return error.OpensslFailed;
+    if (argv.len == 2 and std.mem.eql(u8, argv[1], "version"))
+        std.debug.print("Fixture OpenSSL: {s}", .{result.stdout});
 }
 
 const Certs = struct { dir: []const u8, ca: []const u8, leaf: []const u8, key: []const u8 };
@@ -141,6 +143,12 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io, dir: []const u8) !Certs {
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
+    // Diagnostic branch: retain public certificates only and independently
+    // check the generated chain before exercising the real TLS verifier.
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-in", ca, "-out", "reports/ca-cert.pem" });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-in", leaf, "-out", "reports/leaf-cert.pem" });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-in", leaf, "-text", "-noout", "-out", "reports/leaf-details.txt" });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "verify", "-CAfile", ca, leaf });
     return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
 }
 
