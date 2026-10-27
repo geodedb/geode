@@ -1,7 +1,7 @@
 # Diagnostic branch only. Do not merge this CI configuration.
 workflow:
   rules:
-  - if: $CI_COMMIT_BRANCH == "ci/macos-shard7-diagnostic-turn88"
+  - if: $CI_COMMIT_BRANCH == "ci/macos-shard7-fixed-turn89"
   auto_cancel:
     on_new_commit: interruptible
 stages:
