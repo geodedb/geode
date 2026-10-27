@@ -1046,11 +1046,23 @@ test-macos-unit:
     # Native macOS executables need Homebrew's keg-only OpenSSL libraries.
     # Supply their prefix explicitly to Zig, including test-owned executables.
     - |
-      command -v brew >/dev/null 2>&1 || { echo "Homebrew is required for native OpenSSL" >&2; exit 1; }
-      if ! brew list --versions openssl@3 >/dev/null 2>&1; then
+      # Service accounts can read preinstalled libraries without acquiring
+      # Homebrew's administrator-owned metadata locks.
+      geode_openssl_prefix=""
+      for geode_openssl_candidate in "${GEODE_MACOS_OPENSSL_PREFIX:-}" /opt/homebrew/opt/openssl@3 /usr/local/opt/openssl@3; do
+        if [ -f "${geode_openssl_candidate}/include/openssl/ssl.h" ] &&
+           [ -f "${geode_openssl_candidate}/lib/libssl.dylib" ] &&
+           [ -f "${geode_openssl_candidate}/lib/libcrypto.dylib" ]; then
+          geode_openssl_prefix="$geode_openssl_candidate"
+          break
+        fi
+      done
+      if [ -z "$geode_openssl_prefix" ]; then
+        command -v brew >/dev/null 2>&1 || { echo "Homebrew is required to install native OpenSSL" >&2; exit 1; }
         HOMEBREW_NO_AUTO_UPDATE=1 brew install openssl@3
+        geode_openssl_prefix="$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix openssl@3)"
       fi
-      export GEODE_MACOS_OPENSSL_PREFIX="$(brew --prefix openssl@3)"
+      export GEODE_MACOS_OPENSSL_PREFIX="$geode_openssl_prefix"
       test -f "${GEODE_MACOS_OPENSSL_PREFIX}/include/openssl/ssl.h"
       test -f "${GEODE_MACOS_OPENSSL_PREFIX}/lib/libssl.dylib"
       test -f "${GEODE_MACOS_OPENSSL_PREFIX}/lib/libcrypto.dylib"
