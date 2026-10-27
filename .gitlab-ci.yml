@@ -228,10 +228,8 @@ test-macos-cluster-tls-diagnostic:
   - "bash scripts/test/ci-macos-process-samples.sh &\nmonitor_pid=$!\ntrap 'kill \"\
     $monitor_pid\" 2>/dev/null || true' EXIT"
   - openssl version
-  - zig build --fetch
-  - >-
-    zig fetch --global-cache-dir "$ZIG_GLOBAL_CACHE_DIR"
-    'git+https://gitlab.com/devnw/zig/tls.git?ref=v0.1.24#9518ef9fa5f2718c523ddccc04d4b68ff8bcb620'
+  # Zig 0.16 caches compressed packages globally and extracts sources locally.
+  - zig build -j${ZIG_BUILD_JOBS} --help > reports/build-help.txt
   - python3 scripts/test/ci-diagnose-tls-validation.py
   - zig build -j${ZIG_BUILD_JOBS} test-cluster-3node-subprocess --summary all 2>&1 | tee reports/zig_test_macos_cluster.log
   artifacts:

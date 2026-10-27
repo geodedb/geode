@@ -418,7 +418,7 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
         try env_ptr.put("GEODE_NODE_ID", node_id_str);
         try env_ptr.put("GEODE_CLUSTER_CA_CERT", certs.ca);
         // Diagnostic branch only: synthetic loopback TLS, no inherited credentials.
-        try env_ptr.put("LOG_LEVEL", "debug");
+        try env_ptr.put("LOG_LEVEL", "info");
         try env_ptr.put("GEODE_ADMIN_PASSWORD", "GeodeTestPassword123!");
         if (posixGetenv("PATH")) |p| try env_ptr.put("PATH", p);
         if (posixGetenv("HOME")) |p| try env_ptr.put("HOME", p);
