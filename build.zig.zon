@@ -200,8 +200,10 @@
             // Includes main's v0.1.47 lost-STREAM retransmission fix (3ca1e9f), plus
             // portable entropy, clocks, sleep, and checked nonblocking POSIX sockets.
             // Native macOS transport and current-main paired UDP gate passed.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=4c20fbabd7e1b756f6776a87af59f1e3fc8f239a#4c20fbabd7e1b756f6776a87af59f1e3fc8f239a",
-            .hash = "quic-0.1.47-gBIqUb9-QAAkC9VxvIxRKD9mjRH1fSZY_Vj5Hc23QxA2",
+            // 2026-10-26: serialize FIN, RESET_STREAM and STOP_SENDING with
+            // stream mutations. QUIC !51 and its main pipeline passed all checks.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=acda5aec8237051d1551dd523c694a500acea568#acda5aec8237051d1551dd523c694a500acea568",
+            .hash = "quic-0.1.47-gBIqUbCfQADygnvn39WCM54UTpNe-felK3pZHDOzAJHF",
         },
 
         // =======================================================================
