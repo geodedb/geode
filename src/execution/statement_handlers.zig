@@ -22,6 +22,7 @@ const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const admin_ddl = @import("admin_ddl.zig");
 const planned_read_runtime = @import("planned_read_runtime.zig");
+const result_utils = @import("result_utils.zig");
 
 // Import helper functions used by statement handlers
 const getCatalog = execution.getCatalog;
@@ -700,7 +701,14 @@ pub fn executeQueryPerElement(
 }
 
 pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, with_result: ExecutionResult, context: ExecutionContext) !ExecutionResult {
-    // We expect only one row from WITH clause, use it as the environment
+    // A FOR with a RETURN runs over every row of the WITH, and its RETURN
+    // projects (and aggregates over) all of the loop's rows at once.
+    const body = for_stmt.body orelse
+        return executeForReturn(allocator, for_stmt, with_result.columns, with_result.rows, context);
+
+    // geode#876: a composed body (CREATE / MERGE / MATCH ... SET) runs once per
+    // element with the WITH bindings still in scope. We expect only one row
+    // from the WITH clause, and use it as the environment.
     if (with_result.rows.len == 0) {
         return ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
@@ -719,107 +727,191 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
         .param_names = context.query_param_names,
         .param_values = context.query_param_values,
     };
-
     const collection_value = try eval.evalExpr(allocator, for_stmt.collection, env);
+    const items = try forElements(allocator, collection_value);
+    defer if (items.owned) allocator.free(items.values);
+    return executeForBody(allocator, for_stmt, body, items.values, with_result.columns, with_result.rows[0], context);
+}
 
-    // Extract list items from the collection
-    var items = std.ArrayList(Value).empty;
+/// The elements a FOR iterates for its list's value: a list's elements; none
+/// for a Null (e.g. an unbound/absent $param yields ZERO iterations, never one
+/// spurious null iteration); any other value alone.
+const ForElements = struct { values: []const Value, owned: bool };
 
-    switch (collection_value) {
-        .List => |list| {
-            for (list) |item| {
-                try items.append(allocator, item);
-            }
+fn forElements(allocator: std.mem.Allocator, collection_value: Value) !ForElements {
+    return switch (collection_value) {
+        .List => |list| .{ .values = list, .owned = false },
+        .Null => .{ .values = &.{}, .owned = false },
+        else => blk: {
+            const one = try allocator.alloc(Value, 1);
+            one[0] = collection_value;
+            break :blk .{ .values = one, .owned = true };
         },
-        .Null => {
-            // A Null collection (e.g. an unbound/absent $param) yields ZERO
-            // iterations — never one spurious null iteration.
-        },
-        else => {
-            // If it's not a list, treat it as a single-item list
-            try items.append(allocator, collection_value);
-        },
+    };
+}
+
+/// A binding table: column names and rows of values.
+const ForTable = struct {
+    columns: []const []const u8,
+    rows: []const []Value,
+};
+
+/// `table` extended by one FOR header, as ISO/IEC 39075 FOR extends the
+/// working table: every row once per element of the header's list
+/// (evaluated in that row), with the loop variable (and its ORDINALITY or
+/// OFFSET) bound. The loop's names come first, so they shadow an outer name.
+/// The new table's columns and rows are allocated; the values are borrowed.
+fn expandForTable(allocator: std.mem.Allocator, header: ast.ForLoop, table: ForTable, context: ExecutionContext) !ForTable {
+    const extra: usize = 1 + @as(usize, @intFromBool(header.ordinality_var != null)) + @as(usize, @intFromBool(header.offset_var != null));
+    const columns = try allocator.alloc([]const u8, extra + table.columns.len);
+    errdefer allocator.free(columns);
+    var c: usize = 0;
+    columns[c] = header.variable;
+    c += 1;
+    if (header.ordinality_var) |name| {
+        columns[c] = name;
+        c += 1;
     }
-
-    // geode#876: a composed body (CREATE / MERGE / MATCH ... SET) runs once per
-    // element with the WITH bindings still in scope.
-    if (for_stmt.body) |body| {
-        return executeForBody(allocator, for_stmt, body, items.items, with_result.columns, with_result.rows[0], context);
+    if (header.offset_var) |name| {
+        columns[c] = name;
+        c += 1;
     }
+    @memcpy(columns[extra..], table.columns);
 
-    const return_clause = for_stmt.return_clause orelse return error.InvalidForStatement;
-
-    // Build result rows by iterating over collection
-    var result_rows = std.ArrayList([]Value).empty;
-
-    // Build arrays for iteration environment
-    var env_names_list = std.ArrayList([]const u8).empty;
-    var env_values_list = std.ArrayList(Value).empty;
-
-    for (items.items, 0..) |item, idx| {
-        // Clear environment for this iteration
-        env_names_list.clearRetainingCapacity();
-        env_values_list.clearRetainingCapacity();
-
-        // First add WITH clause bindings
-        for (with_result.columns, with_result.rows[0]) |name, value| {
-            try env_names_list.append(allocator, name);
-            try env_values_list.append(allocator, value);
-        }
-
-        // Bind the iteration variable
-        try env_names_list.append(allocator, for_stmt.variable);
-        try env_values_list.append(allocator, item);
-
-        // Bind ordinality variable if present (1-based)
-        if (for_stmt.ordinality_var) |ord_var| {
-            try env_names_list.append(allocator, ord_var);
-            try env_values_list.append(allocator, Value{ .Int = @intCast(idx + 1) });
-        }
-
-        // Bind offset variable if present (0-based)
-        if (for_stmt.offset_var) |off_var| {
-            try env_names_list.append(allocator, off_var);
-            try env_values_list.append(allocator, Value{ .Int = @intCast(idx) });
-        }
-
-        // Create environment for this iteration. The request params ride along
-        // so a per-iteration RETURN item referencing `$param` resolves.
-        const iteration_env = Env{
-            .names = env_names_list.items,
-            .values = env_values_list.items,
+    var rows = std.ArrayList([]Value).empty;
+    errdefer {
+        for (rows.items) |row| allocator.free(row);
+        rows.deinit(allocator);
+    }
+    for (table.rows) |row| {
+        // The request params ride along so a `$param` list resolves.
+        const env = Env{
+            .names = table.columns,
+            .values = row,
             .allocator = allocator,
             .param_names = context.query_param_names,
             .param_values = context.query_param_values,
         };
-
-        // Evaluate RETURN items for this iteration
-        var row = std.ArrayList(Value).empty;
-
-        for (return_clause.items) |ret_item| {
-            const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
-            try row.append(allocator, value);
+        const collection_value = try eval.evalExpr(allocator, header.collection, env);
+        const items = try forElements(allocator, collection_value);
+        defer if (items.owned) allocator.free(items.values);
+        try rows.ensureUnusedCapacity(allocator, items.values.len);
+        for (items.values, 0..) |item, idx| {
+            const new_row = try allocator.alloc(Value, extra + row.len);
+            var v: usize = 0;
+            new_row[v] = item;
+            v += 1;
+            if (header.ordinality_var != null) {
+                new_row[v] = Value{ .Int = @intCast(idx + 1) };
+                v += 1;
+            }
+            if (header.offset_var != null) {
+                new_row[v] = Value{ .Int = @intCast(idx) };
+                v += 1;
+            }
+            @memcpy(new_row[extra..], row);
+            rows.appendAssumeCapacity(new_row);
         }
+    }
+    return .{ .columns = columns, .rows = try rows.toOwnedSlice(allocator) };
+}
 
-        try result_rows.append(allocator, try row.toOwnedSlice(allocator));
+fn freeForTable(allocator: std.mem.Allocator, table: ForTable) void {
+    for (table.rows) |row| allocator.free(row);
+    allocator.free(table.rows);
+    allocator.free(table.columns);
+}
+
+/// A FOR's SKIP or LIMIT: the literal, else the named parameter's value.
+fn forWindowValue(literal: ?usize, param: ?[]const u8, context: ExecutionContext) !?usize {
+    if (literal) |v| return v;
+    const name = param orelse return null;
+    for (context.query_param_names, context.query_param_values) |pn, pv| {
+        if (std.mem.eql(u8, pn, name)) return switch (pv) {
+            .Int => |i| if (i >= 0) @as(usize, @intCast(i)) else error.InvalidWindowParameter,
+            else => error.InvalidWindowParameter,
+        };
+    }
+    return null;
+}
+
+// CANARY: REQ=REQ-GQL-FOR-RETURN-AGGREGATION; FEATURE="ForStatement"; ASPECT=ReturnAggregation; STATUS=TESTED; TEST=tests/test_for_aggregation.zig; OWNER=engine; UPDATED=2026-10-11
+/// `FOR ... RETURN ...` over the rows `in_columns`/`in_rows` (one empty row
+/// for a FOR that starts a statement; the rows of a WITH or MATCH before it).
+/// Each FOR header extends the rows (`expandForTable`); the RETURN then
+/// projects the resulting table the way a RETURN after a MATCH does: an
+/// aggregate (sum, count, avg, min, max, collect) is computed over all of its
+/// rows (one row when nothing is grouped, even with no rows: sum NULL, count
+/// 0); a non-aggregated item next to one needs a GROUP BY (42803 otherwise);
+/// then DISTINCT, ORDER BY, SKIP and LIMIT. A bare variable names its
+/// column after itself (`generateUniqueColumnNames`).
+///
+/// Each element's RETURN was evaluated on its own, so `FOR x IN [1, 2, 3]
+/// RETURN sum(x)` returned three rows of NULL, ORDER BY, SKIP and LIMIT were
+/// ignored, and every unaliased column was named `?column?`.
+pub fn executeForReturn(
+    allocator: std.mem.Allocator,
+    for_stmt: ast.ForStatement,
+    in_columns: []const []const u8,
+    in_rows: []const []Value,
+    context: ExecutionContext,
+) !ExecutionResult {
+    const return_clause = for_stmt.return_clause orelse return error.InvalidForStatement;
+    try execution.validateGroupBy(return_clause, for_stmt.group_by);
+    try execution.validateNoNestedAggregate(return_clause);
+
+    // The loops, outermost first.
+    var table = ForTable{ .columns = in_columns, .rows = in_rows };
+    var owns_table = false;
+    defer if (owns_table) freeForTable(allocator, table);
+    const first = ast.ForLoop{
+        .variable = for_stmt.variable,
+        .collection = for_stmt.collection,
+        .ordinality_var = for_stmt.ordinality_var,
+        .offset_var = for_stmt.offset_var,
+    };
+    for (0..1 + for_stmt.nested.len) |i| {
+        const header = if (i == 0) first else for_stmt.nested[i - 1];
+        const next = try expandForTable(allocator, header, table, context);
+        if (owns_table) freeForTable(allocator, table);
+        table = next;
+        owns_table = true;
     }
 
-    // Build column names from RETURN clause
-    var columns = std.ArrayList([]const u8).empty;
-
-    for (return_clause.items) |ret_item| {
-        const col_name = if (ret_item.alias) |alias|
-            try allocator.dupe(u8, alias)
-        else
-            try allocator.dupe(u8, "?column?");
-        try columns.append(allocator, col_name);
-    }
-
-    return ExecutionResult{
-        .columns = try columns.toOwnedSlice(allocator),
-        .rows = try result_rows.toOwnedSlice(allocator),
+    // The projection: the WITH projection's, which aggregates and groups
+    // as a RETURN after a MATCH does (validated above).
+    const input = ExecutionResult{
+        .columns = @constCast(table.columns),
+        .rows = @constCast(table.rows),
         .flags = std.ArrayList([]const u8).empty,
     };
+    const projection = ast.WithClause{ .items = return_clause.items };
+    var result = try execution.executeWithClauseWithGroupByAndParams(
+        allocator,
+        input,
+        projection,
+        for_stmt.group_by,
+        null,
+        context.query_param_names,
+        context.query_param_values,
+    );
+    errdefer result.deinit(allocator);
+
+    // Column names as a RETURN after a MATCH names them.
+    const columns = try result_utils.generateUniqueColumnNames(allocator, return_clause.items);
+    for (result.columns) |col| allocator.free(col);
+    allocator.free(result.columns);
+    result.columns = columns;
+
+    if (return_clause.distinct) try result_utils.applyDistinct(allocator, &result);
+    if (for_stmt.order_by) |order| try execution.sortRowsEx(allocator, &result, order, return_clause.items);
+
+    const start = try forWindowValue(for_stmt.offset, for_stmt.offset_param, context) orelse 0;
+    const limit = try forWindowValue(for_stmt.limit, for_stmt.limit_param, context);
+    var end = result.rows.len;
+    if (limit) |l| end = @min(end, std.math.add(usize, start, l) catch std.math.maxInt(usize));
+    if (start != 0 or end != result.rows.len) try execution.applyRowWindow(allocator, &result, start, end);
+    return result;
 }
 
 // PERF: PHASE5_COLUMN_BATCH_ALLOC - Helper function for batch column allocation
@@ -858,122 +950,30 @@ fn allocateColumnStrings(allocator: std.mem.Allocator, strings: []const []const 
 }
 
 pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, context: ExecutionContext) !ExecutionResult {
-    // Evaluate the collection expression with the request params in scope so a
-    // `$param` collection (FOR..IN parameter-bound list) resolves to the bound
-    // value instead of Null.
-    const empty_env = Env{
-        .allocator = allocator,
-        .names = &.{},
-        .values = &.{},
-        .param_names = context.query_param_names,
-        .param_values = context.query_param_values,
-    };
-
-    const collection_value = try eval.evalExpr(allocator, for_stmt.collection, empty_env);
-
-    // Extract list items from the collection
-    var items = std.ArrayList(Value).empty;
-
-    switch (collection_value) {
-        .List => |list| {
-            for (list) |item| {
-                try items.append(allocator, item);
-            }
-        },
-        .Null => {
-            // A Null collection (e.g. an unbound/absent $param) yields ZERO
-            // iterations — never one spurious null iteration.
-        },
-        else => {
-            // If it's not a list, treat it as a single-item list
-            try items.append(allocator, collection_value);
-        },
-    }
-
     // geode#876: `FOR x IN <list> <data-modifying statement>` — run the body
     // once per element instead of projecting a RETURN. An empty collection
     // therefore writes nothing (zero iterations).
     if (for_stmt.body) |body| {
-        return executeForBody(allocator, for_stmt, body, items.items, &.{}, &.{}, context);
-    }
-
-    const return_clause = for_stmt.return_clause orelse return error.InvalidForStatement;
-
-    // Build result rows by iterating over collection (pre-sized to collection length)
-    var result_rows = try std.ArrayList([]Value).initCapacity(allocator, items.items.len);
-
-    // Build arrays for iteration environment (pre-sized for variable + optionals)
-    const env_capacity = 1 + (if (for_stmt.ordinality_var != null) @as(usize, 1) else 0) +
-        (if (for_stmt.offset_var != null) @as(usize, 1) else 0);
-    var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, env_capacity);
-    var env_values_list = try std.ArrayList(Value).initCapacity(allocator, env_capacity);
-
-    for (items.items, 0..) |item, idx| {
-        // Clear environment for this iteration
-        env_names_list.clearRetainingCapacity();
-        env_values_list.clearRetainingCapacity();
-
-        // Bind the iteration variable
-        try env_names_list.append(allocator, for_stmt.variable);
-        try env_values_list.append(allocator, item);
-
-        // Bind ordinality variable if present (1-based)
-        if (for_stmt.ordinality_var) |ord_var| {
-            try env_names_list.append(allocator, ord_var);
-            try env_values_list.append(allocator, Value{ .Int = @intCast(idx + 1) });
-        }
-
-        // Bind offset variable if present (0-based)
-        if (for_stmt.offset_var) |off_var| {
-            try env_names_list.append(allocator, off_var);
-            try env_values_list.append(allocator, Value{ .Int = @intCast(idx) });
-        }
-
-        // Create environment for this iteration. The request params ride along
-        // so a per-iteration RETURN item referencing `$param` resolves; the loop
-        // variable in `names` still shadows a same-named param (Env.get scans
-        // `names` first).
-        const iteration_env = Env{
-            .names = env_names_list.items,
-            .values = env_values_list.items,
+        // Evaluate the collection expression with the request params in scope
+        // so a `$param` collection (FOR..IN parameter-bound list) resolves to
+        // the bound value instead of Null.
+        const empty_env = Env{
             .allocator = allocator,
+            .names = &.{},
+            .values = &.{},
             .param_names = context.query_param_names,
             .param_values = context.query_param_values,
         };
-
-        // Evaluate RETURN items for this iteration (pre-sized to return clause length)
-        var row = try std.ArrayList(Value).initCapacity(allocator, return_clause.items.len);
-
-        for (return_clause.items) |ret_item| {
-            const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
-            try row.append(allocator, value);
-        }
-
-        try result_rows.append(allocator, try row.toOwnedSlice(allocator));
+        const collection_value = try eval.evalExpr(allocator, for_stmt.collection, empty_env);
+        const items = try forElements(allocator, collection_value);
+        defer if (items.owned) allocator.free(items.values);
+        return executeForBody(allocator, for_stmt, body, items.values, &.{}, &.{}, context);
     }
 
-    // Build column names from RETURN clause (Phase 5.1.1 optimization: batch allocation)
-    // First, collect column name strings (no allocation yet)
-    var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, return_clause.items.len);
-    defer col_name_strings.deinit(allocator);
-
-    for (return_clause.items) |ret_item| {
-        const col_name = if (ret_item.alias) |alias|
-            alias
-        else
-            "?column?";
-        try col_name_strings.append(allocator, col_name);
-    }
-
-    // Batch allocate all column strings in one buffer (reduces N allocations to 1)
-    const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
-
-    return ExecutionResult{
-        .columns = col_result.columns,
-        .rows = try result_rows.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        .column_buffer = col_result.buffer,
-    };
+    // One empty row in: the FOR's rows come from its list alone.
+    var empty_row = [_]Value{};
+    const input_rows = [_][]Value{&empty_row};
+    return executeForReturn(allocator, for_stmt, &.{}, &input_rows, context);
 }
 
 pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatement, context: ExecutionContext) !ExecutionResult {
