@@ -743,11 +743,8 @@ harness-rerun-selftest:
 # =============================================================================
 
 test-zig-unit:
-  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
-  # zig build cache (~9G for one shard's Debug build) and then building on
-  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
-  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
-  # build measured 9.2G locally, which fits.
+  # Keep the existing small protoc cache; moving runner pools must not
+  # introduce multi-gigabyte Zig build-cache downloads for every shard.
   cache:
     - *zig-protoc-cache
   stage: test
@@ -767,9 +764,8 @@ test-zig-unit:
   # (the i≡3 cluster splits across indices 3 and 7) with a 3h cap for
   # margin (shard [3] was killed at 2h so its true length is unknown).
   #
-  # Pinned to `company,k8s,linux`: `k8s` is exclusive to "Company
-  # Cluster Runner(s)" (fast for short jobs) and excludes "Lab Servers"
-  # (slow) and "OVH Dedicated Runners" (broken — 1h server_timeout).
+  # The original Kubernetes pin is superseded by the dedicated routing
+  # below. Keep the shard count, build parallelism and timeout unchanged.
   #
   # 2026-05-12: shard [7] hit the 3h cap (pipeline #2520265814) while
   # shards [0..6] finished in 2-30 min — the slow integration binaries
@@ -788,10 +784,11 @@ test-zig-unit:
   # shard-count/timeout history above — worst case concurrent k8s pods for
   # this job drops from 8 (this pipeline) + 8 (a second pipeline) to 8 total.
   resource_group: "test-zig-unit-shard-$TEST_SHARD_INDEX"
-  tags:
-    - company
-    - k8s
-    - linux
+  # Pipeline 2992258644 lost seven setup attempts (106 runner minutes) to
+  # "Insufficient cpu" on the three-node Kubernetes pool. Use the same
+  # autoscaled Docker lane as ReleaseSafe and cross-build jobs. This lane
+  # does not require the dedicated KVM/go-fast workers used by Sonny.
+  tags: &dedicated-test-tags [company, dedicated, linux, x86, aws-spot]
   timeout: 6h
   parallel:
     matrix:
@@ -1253,19 +1250,13 @@ test-zig-release-safe:
 # =============================================================================
 
 test-perf-gates-enforced:
-  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
-  # zig build cache (~9G for one shard's Debug build) and then building on
-  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
-  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
-  # build measured 9.2G locally, which fits.
+  # Keep the existing small protoc cache; moving runner pools must not
+  # introduce multi-gigabyte Zig build-cache downloads for every shard.
   cache:
     - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
-  tags:
-    - company
-    - k8s
-    - linux
+  tags: *dedicated-test-tags
   timeout: 3h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
@@ -1313,14 +1304,12 @@ test-perf-gates-enforced:
 # =============================================================================
 
 test-performance-benchmarks:
-  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
-  # zig build cache (~9G for one shard's Debug build) and then building on
-  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
-  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
-  # build measured 9.2G locally, which fits.
+  # Keep the existing small protoc cache; moving runner pools must not
+  # introduce multi-gigabyte Zig build-cache downloads for every shard.
   cache:
     - *zig-protoc-cache
   stage: test
+  tags: *dedicated-test-tags
   image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
@@ -1382,6 +1371,7 @@ test-performance-benchmarks:
 loadtest-regression:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: test
+  tags: *dedicated-test-tags
   image: python:3.15-slim
   before_script:
     # Bump UDP rmem so the quic-go client doesn't drop at high concurrency
@@ -1426,14 +1416,12 @@ loadtest-regression:
 # =============================================================================
 
 bench-timeseries:
-  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
-  # zig build cache (~9G for one shard's Debug build) and then building on
-  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
-  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
-  # build measured 9.2G locally, which fits.
+  # Keep the existing small protoc cache; moving runner pools must not
+  # introduce multi-gigabyte Zig build-cache downloads for every shard.
   cache:
     - *zig-protoc-cache
   stage: test
+  tags: *dedicated-test-tags
   image: $ZIG_IMAGE
   # Blocking gate that previously had no retry: a single transient protobuf
   # transitive-dep fetch flake (HttpConnectionClosing, when the shared cache
@@ -1473,14 +1461,12 @@ bench-timeseries:
 # =============================================================================
 
 bench-query-path:
-  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
-  # zig build cache (~9G for one shard's Debug build) and then building on
-  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
-  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
-  # build measured 9.2G locally, which fits.
+  # Keep the existing small protoc cache; moving runner pools must not
+  # introduce multi-gigabyte Zig build-cache downloads for every shard.
   cache:
     - *zig-protoc-cache
   stage: test
+  tags: *dedicated-test-tags
   image: $ZIG_IMAGE
   # 2026-05-11: was hitting the project-default 1h budget while building
   # four ReleaseFast bench binaries on the CPU-constrained k8s runner
@@ -1717,14 +1703,12 @@ test-code-coverage-report:
 # =============================================================================
 
 test-gql-compliance:
-  # Zig jobs on the k8s pool keep only the small protoc cache. Restoring the
-  # zig build cache (~9G for one shard's Debug build) and then building on
-  # top of it went over the pods' 20Gi ephemeral-storage limit (MR !48,
-  # test-zig-unit [5] 17268304791 and [7] 17268304725). A cold shard
-  # build measured 9.2G locally, which fits.
+  # Keep the existing small protoc cache; moving runner pools must not
+  # introduce multi-gigabyte Zig build-cache downloads for every shard.
   cache:
     - *zig-protoc-cache
   stage: test
+  tags: *dedicated-test-tags
   image: $ZIG_IMAGE
   # The single-node geode server under the compliance harness occasionally goes
   # unresponsive under CI load and queries hit their 30s timeout
