@@ -37,8 +37,7 @@ const LABEL = "Person";
 
 fn tmpDataDir(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
     while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], sub_path });
@@ -97,15 +96,16 @@ fn deleteAllNamed(allocator: std.mem.Allocator, data_dir: []const u8, name: []co
 }
 
 fn sleepMs(ms: u64) void {
-    const req = std.os.linux.timespec{ .sec = @intCast(ms / 1000), .nsec = @intCast((ms % 1000) * std.time.ns_per_ms) };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 // Zig 0.16: std.time.Timer was removed; read the monotonic clock directly.
 fn monoNanos() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
@@ -3738,6 +3738,7 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
 
     adapter_mod.resetExactReopenSpawnsForTesting();
     adapter_mod.resetExactHydrationBuildsForTesting();
+    adapter_mod.resetBuildGateWaitersForTesting();
     // Hold the background build "in flight" BEFORE the reopen spawns the worker,
     // so the worker blocks at the gate the moment it is spawned.
     adapter_mod.closeExactBuildGateForTesting();
@@ -3768,11 +3769,23 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
         graph_store.setDataDirOverride(allocator, data_dir);
         defer graph_store.setDataDirOverride(allocator, null);
         const store = graph_store.getGlobalStore(allocator);
+        defer {
+            // Release and join the worker before tmp.cleanup on every exit path.
+            adapter_mod.openExactBuildGateForTesting();
+            graph_store.deinitGlobalStore();
+        }
         const adapter = graph_store.getGlobalAdapter().?;
 
-        // Reopen: `.absent` → background rebuild spawned (and immediately gated).
+        // Reopen spawns the worker; spawning alone does not mean it owns the
+        // build mutex yet. Wait for the observed gate before racing the readers
+        // and checkpoint, or the checkpoint can legitimately build first.
         _ = try adapter.getOrCreateGraph(G);
         try testing.expect(adapter_mod.getExactReopenSpawnsForTesting() >= 1);
+        var gate_waited: usize = 0;
+        while (adapter_mod.getBuildGateWaitersForTesting() == 0 and gate_waited < 30_000) : (gate_waited += 1) {
+            sleepMs(1);
+        }
+        try testing.expect(adapter_mod.getBuildGateWaitersForTesting() >= 1);
 
         var errs = std.atomic.Value(u32).init(0);
         var ctx = RCtx{ .store = store, .graph = G, .label = LBL, .n = N, .errs = &errs };
@@ -3787,10 +3800,12 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
         }
 
         // Concurrent FULL checkpoint while the build is in flight — exercises the
-        // inflight-gated exact-index branch in checkpointOneGraph (must NOT run a
+        // build-mutex guard in checkpointOneGraph (must NOT run a
         // second rebuild and must NOT deadlock). Best-effort (a bounded checkpoint
         // may report the rwlock busy against the concurrent hydration persist).
+        const eager_before = adapter_mod.getExactEagerCheckpointBuildsForTesting();
         adapter.checkpointGraph(G) catch {};
+        try testing.expectEqual(eager_before, adapter_mod.getExactEagerCheckpointBuildsForTesting());
 
         for (threads[0..nspawned]) |t| t.join();
         nspawned = 0; // all joined — disarm the guard so it cannot double-join
@@ -3816,8 +3831,6 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
         const seek = try adapter.getCandidateNodesByLabelAndProperty(G, LBL, "source", .{ .String = sources[2] }, allocator);
         defer allocator.free(seek);
         try testing.expectEqual(@as(usize, N / sources.len), seek.len);
-
-        graph_store.deinitGlobalStore();
     }
 }
 

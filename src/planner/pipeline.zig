@@ -3,23 +3,30 @@ const std = @import("std");
 // Zig 0.16 compat helpers for test code
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.REALTIME, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 fn compat_microTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.REALTIME, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 fn compat_nanoTimestamp() i128 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.REALTIME, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
     return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
 }
 fn compat_sleep(ns: u64) void {
-    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 // NOTE: Use root planner module via relative import. This file is only compiled

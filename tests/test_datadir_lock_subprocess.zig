@@ -108,9 +108,7 @@ fn runningAsRoot() bool {
 }
 
 fn nowMillis() i64 {
-    var ts: posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (linux.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    return std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toMilliseconds();
 }
 
 fn sleepMs(ms: u64) void {
