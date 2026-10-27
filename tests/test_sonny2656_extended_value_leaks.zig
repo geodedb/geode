@@ -214,23 +214,20 @@ test "SONNY-2656: a projected extended value is freed with its row on the node-s
     try expectNoLeaks(&.{"projection"}, &leaks);
 }
 
-test "SONNY-2656: an extended value a WHERE reads is freed at every node-scan predicate site" {
-    harness.silenceEngineLogs();
-    var h = try harness.Harness.init(testing.allocator);
-    defer h.deinit();
-    try seedKinds(&h);
-    var qa = std.heap.ArenaAllocator.init(testing.allocator);
-    defer qa.deinit();
+const predicate_site_names = [_][]const u8{
+    "IS NOT NULL paging", "IS NOT NULL count", "IS NOT NULL ... LIMIT collection",
+    "comparison paging",  "comparison count",  "comparison ... LIMIT collection",
+};
+
+/// Filter on `n.v` at every node-scan predicate site, for every kind, and
+/// return what each (site, kind) leaked.
+fn predicateSiteLeaks(h: *harness.Harness, qa: *std.heap.ArenaAllocator) ![predicate_site_names.len][kinds.len]usize {
     const aa = qa.allocator();
 
     // Each predicate reads `n.v`: `IS NOT NULL` drops it in IS NULL, and
     // `<> 'zz'` drops it in the comparison.
     const predicates = [_][]const u8{ "n.v IS NOT NULL", "n.v <> 'zz'" };
-    const site_names = [_][]const u8{
-        "IS NOT NULL paging", "IS NOT NULL count", "IS NOT NULL ... LIMIT collection",
-        "comparison paging",  "comparison count",  "comparison ... LIMIT collection",
-    };
-    var leaks: [site_names.len][kinds.len]usize = undefined;
+    var leaks: [predicate_site_names.len][kinds.len]usize = undefined;
     for (kinds, 0..) |kind, k| {
         for (predicates, 0..) |pred, p| {
             // The executor decides how many nodes pass.
@@ -241,7 +238,7 @@ test "SONNY-2656: an extended value a WHERE reads is freed at every node-scan pr
             if (p == 0) try testing.expectEqual(per_kind, passing);
 
             // The paging loop.
-            const paged = try drain(&h, &qa, try std.fmt.allocPrint(aa, "{s} RETURN n.s", .{base}), {}, ignoreRow);
+            const paged = try drain(h, qa, try std.fmt.allocPrint(aa, "{s} RETURN n.s", .{base}), {}, ignoreRow);
             try testing.expectEqual(passing, paged.rows);
             leaks[p * 3][k] = paged.leaked;
 
@@ -249,7 +246,7 @@ test "SONNY-2656: an extended value a WHERE reads is freed at every node-scan pr
             var counting = std.testing.FailingAllocator.init(testing.allocator, .{});
             {
                 const a = counting.allocator();
-                var stream = try harness.openStream(&h, a, &qa, try std.fmt.allocPrint(aa, "{s} RETURN count(n)", .{base}));
+                var stream = try harness.openStream(h, a, qa, try std.fmt.allocPrint(aa, "{s} RETURN count(n)", .{base}));
                 defer stream.deinit();
                 var page = try stream.buildNextPage(a, 0);
                 defer page.result.deinit(a);
@@ -259,10 +256,47 @@ test "SONNY-2656: an extended value a WHERE reads is freed at every node-scan pr
             leaks[p * 3 + 1][k] = counting.allocations - counting.deallocations;
 
             // `WHERE ... LIMIT` collects its slots through the predicate.
-            const limited = try drain(&h, &qa, try std.fmt.allocPrint(aa, "{s} RETURN n.s LIMIT 2", .{base}), {}, ignoreRow);
+            const limited = try drain(h, qa, try std.fmt.allocPrint(aa, "{s} RETURN n.s LIMIT 2", .{base}), {}, ignoreRow);
             try testing.expectEqual(@min(passing, 2), limited.rows);
             leaks[p * 3 + 2][k] = limited.leaked;
         }
     }
-    try expectNoLeaks(&site_names, &leaks);
+    return leaks;
+}
+
+test "SONNY-2656: an extended value a WHERE reads is freed at every node-scan predicate site" {
+    harness.silenceEngineLogs();
+    var h = try harness.Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedKinds(&h);
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+
+    const leaks = try predicateSiteLeaks(&h, &qa);
+    try expectNoLeaks(&predicate_site_names, &leaks);
+}
+
+// The same, on a deployment with encrypted fields. The WHERE used to fall
+// back to the page allocator there, so that a decrypt creating the
+// process-wide FLE key manager would not create it on the reset scratch
+// arena, and every clone leaked again (494 allocations, as before the fix).
+// The FLE singletons are now created on their own process allocator, so the
+// WHERE runs on the scratch arena whatever the FLE state. This also keeps the
+// test independent of the host: a persisted FLE catalog left in
+// `$GEODE_DATA_DIR` (default `/tmp`) by another process turns the flag on.
+test "SONNY-2656: with encrypted fields configured, a WHERE still frees every extended value it reads" {
+    harness.silenceEngineLogs();
+    var h = try harness.Harness.init(testing.allocator);
+    defer h.deinit();
+    try seedKinds(&h);
+    var qa = std.heap.ArenaAllocator.init(testing.allocator);
+    defer qa.deinit();
+
+    const fle = geode.fle_integration;
+    fle.setHasEncryptedFields(true);
+    defer fle.setHasEncryptedFields(false);
+    try testing.expect(fle.hasEncryptedFields());
+
+    const leaks = try predicateSiteLeaks(&h, &qa);
+    try expectNoLeaks(&predicate_site_names, &leaks);
 }

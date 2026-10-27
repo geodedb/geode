@@ -24,9 +24,6 @@ const proto_util = @import("proto_util.zig");
 // "can I serve it?" answer is derived from the SAME resolution as the
 // executor's "what may it see?" answer.
 const tenancy = @import("../execution/tenancy.zig");
-// SONNY-2656: `hasEncryptedFields` decides whether a WHERE may run on the
-// per-node scratch arena (see `predicateAllocator`).
-const fle_integration = @import("../fle_integration.zig");
 
 const ExecutionContext = execution.ExecutionContext;
 const ExecutionResult = execution.ExecutionResult;
@@ -429,7 +426,7 @@ pub const NodeScanStream = struct {
             errdefer if (!node_tracked) destroyNode(allocator, node);
 
             if (self.where_expr) |where_expr| {
-                const passes = try self.evalPredicate(&scratch, allocator, where_expr, node);
+                const passes = try self.evalPredicate(&scratch, where_expr, node);
                 if (!passes) {
                     destroyNode(allocator, node);
                     continue;
@@ -707,7 +704,7 @@ pub const NodeScanStream = struct {
                             continue;
                         };
                     defer destroyNode(allocator, node);
-                    if (try self.evalPredicate(&scratch, allocator, where_expr, node)) matched += 1;
+                    if (try self.evalPredicate(&scratch, where_expr, node)) matched += 1;
                 }
                 // Released already if we bailed at a batch boundary on cancel.
                 if (count_lock_held) graph_store.releaseGraphLock(lock);
@@ -764,9 +761,9 @@ pub const NodeScanStream = struct {
     /// (SONNY-3251, round 15: 54001, 53200, 57014), which fails the read:
     /// this stream is served outside the statement chokepoint that fails a
     /// statement on a limit it swallowed.
-    fn evalPredicate(self: *NodeScanStream, scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator, where_expr: ast.Expr, node: *graph_store.Node) !bool {
+    fn evalPredicate(self: *NodeScanStream, scratch: *std.heap.ArenaAllocator, where_expr: ast.Expr, node: *graph_store.Node) !bool {
         defer _ = scratch.reset(.retain_capacity);
-        const eval_allocator = predicateAllocator(scratch, allocator);
+        const eval_allocator = predicateAllocator(scratch);
         const env = self.makeEnv(eval_allocator, node);
         const where_result = eval.evalExpr(eval_allocator, where_expr, env) catch |err| {
             if (eval.isResourceLimitError(err)) return err;
@@ -2123,7 +2120,7 @@ fn slotMatchesPredicate(
     // SONNY-2656: as in `evalPredicate`, the evaluation runs on `scratch`,
     // reset before this returns.
     defer _ = scratch.reset(.retain_capacity);
-    const eval_allocator = predicateAllocator(scratch, allocator);
+    const eval_allocator = predicateAllocator(scratch);
     var names = [_][]const u8{var_name};
     var values = [_]Value{.{ .Node = node }};
     const env = Env{
@@ -2155,18 +2152,17 @@ fn predicateHolds(where_result: Value) bool {
     };
 }
 
-// CANARY: REQ=REQ-SONNY-2656-EXTENDED-VALUE-LEAKS; FEATURE="EngineDirectExtendedValueOwnership"; ASPECT=PredicateScratchArena; STATUS=TESTED; TEST=tests/test_sonny2656_extended_value_leaks.zig; OWNER=engine; UPDATED=2026-09-25
+// CANARY: REQ=REQ-SONNY-2656-EXTENDED-VALUE-LEAKS; FEATURE="EngineDirectExtendedValueOwnership"; ASPECT=PredicateScratchArena; STATUS=TESTED; TEST=tests/test_sonny2656_extended_value_leaks.zig; OWNER=engine; UPDATED=2026-10-27
 /// The allocator a WHERE runs on for one node (SONNY-2656). A WHERE yields
 /// only a Bool, but what it reads along the way is allocated: `.Member`
 /// hands back a fresh clone of an extended value (Text, Json, Bytea, a list,
 /// ...), and `IS NULL` and the comparisons drop it unfreed. So the WHERE runs
 /// on `scratch`, which its caller resets after each node, and the clones go
-/// with it. The one exception is a deployment with encrypted fields:
-/// decrypting one can create the process-wide FLE key manager on the
-/// evaluation allocator, and that must never be an arena that is reset. There
-/// the WHERE runs on `allocator`, as it always did.
-fn predicateAllocator(scratch: *std.heap.ArenaAllocator, allocator: std.mem.Allocator) std.mem.Allocator {
-    if (fle_integration.hasEncryptedFields()) return allocator;
+/// with it. This holds on a deployment with encrypted fields too: a decrypt
+/// that creates the process-wide FLE key manager or blind index creates it on
+/// the process allocator (`fle_integration.singleton_allocator`), never on
+/// the evaluation allocator, so resetting `scratch` cannot free it.
+fn predicateAllocator(scratch: *std.heap.ArenaAllocator) std.mem.Allocator {
     return scratch.allocator();
 }
 

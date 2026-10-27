@@ -19,6 +19,14 @@ pub const fle_aead_mod = fle_aead;
 /// that integrate with the schema catalog, key manager, and blind index
 
 // Global singletons for key management and blind index
+//
+// SONNY-2656: both live for the process, so they are created on
+// `singleton_allocator`, never on the allocator of the call that happens to
+// create them. That call can be a WHERE evaluating on a per-node scratch arena
+// (node_scan_stream.zig `predicateAllocator`), or any other request-scoped
+// arena; a singleton created there would be freed by the arena's reset and
+// left dangling. The schema catalog (schema/fle_catalog.zig) does the same.
+pub const singleton_allocator = std.heap.smp_allocator;
 var global_key_manager_instance: ?*key_manager_mod.KeyManager = null;
 var global_blind_index_instance: ?*blind_index_mod.BlindIndex = null;
 var global_mutex: std.Io.Mutex = std.Io.Mutex.init;
@@ -266,8 +274,10 @@ pub const EncryptionContext = struct {
     current_user_role: ?[]const u8 = null, // User's current role for RBAC checks
 };
 
-/// Get or create global key manager
+/// Get or create global key manager. `allocator` is the caller's and is not
+/// used: the manager is created on `singleton_allocator` (SONNY-2656).
 fn getGlobalKeyManager(allocator: std.mem.Allocator) !*key_manager_mod.KeyManager {
+    _ = allocator;
     global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -275,13 +285,15 @@ fn getGlobalKeyManager(allocator: std.mem.Allocator) !*key_manager_mod.KeyManage
         return km;
     }
 
-    const km = try key_manager_mod.initFromEnv(allocator);
+    const km = try key_manager_mod.initFromEnv(singleton_allocator);
     global_key_manager_instance = km;
     return km;
 }
 
-/// Get or create global blind index
+/// Get or create global blind index. `allocator` is the caller's and is not
+/// used: the index is created on `singleton_allocator` (SONNY-2656).
 fn getGlobalBlindIndex(allocator: std.mem.Allocator) !*blind_index_mod.BlindIndex {
+    _ = allocator;
     global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -289,8 +301,8 @@ fn getGlobalBlindIndex(allocator: std.mem.Allocator) !*blind_index_mod.BlindInde
         return bi;
     }
 
-    const bi = try allocator.create(blind_index_mod.BlindIndex);
-    bi.* = blind_index_mod.BlindIndex.init(allocator);
+    const bi = try singleton_allocator.create(blind_index_mod.BlindIndex);
+    bi.* = blind_index_mod.BlindIndex.init(singleton_allocator);
     global_blind_index_instance = bi;
     return bi;
 }
@@ -868,6 +880,36 @@ test "FLE integration placeholder" {
 }
 
 // GAP-0285: Verify that clearCurrentThreadState removes stale per-thread role and tenant entries.
+// SONNY-2656: the process-wide FLE key manager and blind index outlive the
+// allocator of the call that creates them. A WHERE on the node scan evaluates
+// on a per-node scratch arena that is reset after each node; a decrypt there
+// can be the first FLE call in the process. Before this, both singletons were
+// created on that arena and left dangling by its reset.
+// CANARY: REQ=REQ-SONNY-2656-EXTENDED-VALUE-LEAKS; FEATURE="EngineDirectExtendedValueOwnership"; ASPECT=FleSingletonsProcessAllocator; STATUS=TESTED; TEST=src/fle_integration.zig; OWNER=security; UPDATED=2026-10-27
+test "SONNY-2656: FLE singletons are created on the process allocator, not the caller's arena" {
+    const testing = std.testing;
+    resetGlobalKeyStateForTesting();
+    defer resetGlobalKeyStateForTesting();
+    try testing.expectEqual(@as(c_int, 0), setenvForTest("GEODE_MASTER_KEY", "sonny2656-singleton-allocator-test-master-key"));
+    defer _ = unsetenvForTest("GEODE_MASTER_KEY");
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    const km = try getGlobalKeyManager(arena.allocator());
+    const bi = try getGlobalBlindIndex(arena.allocator());
+    arena.deinit();
+
+    try testing.expect(km.allocator.vtable == singleton_allocator.vtable);
+    try testing.expect(bi.allocator.vtable == singleton_allocator.vtable);
+    // Both still work after the caller's arena is gone.
+    const ids = key_types.KeyIds{ .tenant = "t", .schema = "s", .field = "f", .version = 1 };
+    const fek = try km.getFEK(ids);
+    try testing.expectEqual(fek, try (try getGlobalKeyManager(testing.allocator)).getFEK(ids));
+    try bi.put("s", "f", try km.getBIK(ids), "value", "rec_1");
+    const hits = (try bi.lookup("s", "f", try km.getBIK(ids), "value")).?;
+    try testing.expectEqual(@as(usize, 1), hits.len);
+    try testing.expectEqualStrings("rec_1", hits[0]);
+}
+
 test "clearCurrentThreadState removes per-thread role and tenant" {
     const testing = std.testing;
 
