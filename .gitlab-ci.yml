@@ -93,7 +93,8 @@ test-macos-cluster-tls-diagnostic:
     key:
       prefix: geode-zig-macos-aarch64-v4-${ZIG_VERSION}-${TEST_SHARD_INDEX}
       files: [build.zig.zon]
-    policy: pull-push
+    # Instrumented dependency sources must never be uploaded to shared caches.
+    policy: pull
     paths:
     - .zig-cache/
     - zig-cache/
@@ -227,6 +228,8 @@ test-macos-cluster-tls-diagnostic:
   - "bash scripts/test/ci-macos-process-samples.sh &\nmonitor_pid=$!\ntrap 'kill \"\
     $monitor_pid\" 2>/dev/null || true' EXIT"
   - openssl version
+  - zig build --fetch
+  - python3 scripts/test/ci-diagnose-tls-validation.py
   - zig build -j${ZIG_BUILD_JOBS} test-cluster-3node-subprocess --summary all 2>&1 | tee reports/zig_test_macos_cluster.log
   artifacts:
     when: always
