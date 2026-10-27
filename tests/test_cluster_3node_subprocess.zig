@@ -87,16 +87,14 @@ fn sleepMs(ms: u64) void {
 
 /// Mark a file descriptor non-blocking so we can scrape stderr from
 /// long-running child processes without blocking the test harness.
-/// Linux-only because that's the only platform we target the cluster on
-/// today (Task B1 of the plan tracks Windows / macOS bring-up).
+/// Use the host libc ABI: skipping this on macOS leaves an empty pipe read
+/// blocked forever, so the startup/election/teardown deadlines never run.
 fn setNonBlocking(file: std.Io.File) !void {
-    if (comptime builtin.os.tag != .linux) return;
     const fd = file.handle;
-    const flags = std.os.linux.fcntl(fd, std.posix.F.GETFL, 0);
-    if (@as(isize, @bitCast(flags)) < 0) return error.FcntlGetFailed;
-    const new_flags = flags | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
-    const rc = std.os.linux.fcntl(fd, std.posix.F.SETFL, new_flags);
-    if (@as(isize, @bitCast(rc)) < 0) return error.FcntlSetFailed;
+    const flags = std.c.fcntl(fd, std.posix.F.GETFL);
+    if (flags < 0) return error.FcntlGetFailed;
+    const new_flags = flags | @as(c_int, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    if (std.c.fcntl(fd, std.posix.F.SETFL, new_flags) < 0) return error.FcntlSetFailed;
 }
 
 fn runOpenssl(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
@@ -169,10 +167,9 @@ const ChildCapture = struct {
     }
 };
 
-fn tryReap(pid: i32, flags: u32) bool {
-    var status: u32 = undefined;
-    const rc = std.os.linux.waitpid(pid, &status, flags);
-    return @as(isize, @bitCast(rc)) > 0;
+fn tryReap(pid: std.c.pid_t, flags: c_int) bool {
+    var status: c_int = undefined;
+    return std.c.waitpid(pid, &status, flags) == pid;
 }
 
 fn teardownNodes(children: []std.process.Child, captures: []ChildCapture, spawned: usize, gpa: std.mem.Allocator, io: std.Io) void {
@@ -187,7 +184,7 @@ fn teardownNodes(children: []std.process.Child, captures: []ChildCapture, spawne
         var all_gone = true;
         for (children[0..spawned]) |*ch| {
             if (ch.id == null) continue;
-            if (tryReap(ch.id.?, std.os.linux.W.NOHANG)) {
+            if (tryReap(ch.id.?, std.c.W.NOHANG)) {
                 ch.id = null; // reaped
             } else {
                 all_gone = false;
@@ -233,6 +230,48 @@ fn drainAll(captures: []ChildCapture, children: []std.process.Child, gpa: std.me
         if (ch.stdout) |f| captures[i].drain(gpa, io, f);
         if (ch.stderr) |f| captures[i].drain(gpa, io, f);
     }
+}
+
+test "child capture drains data without blocking on a quiet pipe" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var fds: [2]std.c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.pipe(&fds));
+    const reader: std.Io.File = .{ .handle = fds[0], .flags = .{ .nonblocking = true } };
+    const writer: std.Io.File = .{ .handle = fds[1], .flags = .{ .nonblocking = false } };
+    defer reader.close(io);
+    defer writer.close(io);
+    try setNonBlocking(reader);
+    // Check the flag before attempting a read, so a regression fails promptly
+    // even while the writer remains open and has not produced any output.
+    const flags = std.c.fcntl(reader.handle, std.posix.F.GETFL);
+    try std.testing.expect(flags >= 0);
+    try std.testing.expect(flags & @as(c_int, @bitCast(std.posix.O{ .NONBLOCK = true })) != 0);
+    var capture: ChildCapture = .{};
+    defer capture.deinit(std.testing.allocator);
+    capture.drain(std.testing.allocator, io, reader);
+    try std.testing.expectEqual(@as(usize, 0), capture.buf.items.len);
+    try writer.writeStreamingAll(io, "cluster startup\n");
+    capture.drain(std.testing.allocator, io, reader);
+    try std.testing.expectEqualStrings("cluster startup\n", capture.buf.items);
+    capture.drain(std.testing.allocator, io, reader);
+    try std.testing.expectEqualStrings("cluster startup\n", capture.buf.items);
+}
+
+test "child teardown reaps an exited subprocess through the host ABI" {
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var child = try std.process.spawn(io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" } });
+    defer if (child.id != null) child.kill(io);
+    const deadline = nowMillis() + 3_000;
+    while (nowMillis() < deadline) {
+        if (tryReap(child.id.?, std.c.W.NOHANG)) {
+            child.id = null;
+            break;
+        }
+        sleepMs(10);
+    }
+    try std.testing.expect(child.id == null);
 }
 
 test "three geode subprocesses on loopback form a 3-node Raft cluster" {
