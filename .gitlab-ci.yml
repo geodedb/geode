@@ -107,9 +107,12 @@ stages:
 # Dedicated Runners" (currently BROKEN: every job hits 1h
 # server_timeout_running, see pipeline #2512528539). Pool tag map:
 #   - Company Cluster Runner(s) -> [company, k8s, linux, amd64, ubuntu, docker]
-#   - Lab Servers                -> [company, docker, lab, linux, amd64]
-#   - OVH Dedicated Runners      -> [company, dedicated, docker, linux, x86]
-# Jobs that need docker:dind override with `[company, lab, linux]`.
+#   - OVH Dedicated Runners      -> [company, dedicated, docker, linux, x86, amd64]
+#   - AWS dedicated runner       -> [company, dedicated, docker, linux, x86, amd64]
+# Jobs that need docker:dind override with `[company, dedicated, docker, linux]`.
+# 2026-10-27: moved off `lab`. The Lab Servers runner left the company pool
+# (it no longer carries `company`), so `[company, lab, ...]` matched no runner.
+# `docker` keeps dind jobs off the AWS Spot overflow runner, which lacks it.
 default:
   # SRE-173 follow-up (2026-10-14): runners now share an S3 cache, so the
   # pull-push zig cache below really round-trips. `.zig-cache/tmp` holds the
@@ -1851,9 +1854,12 @@ snapshot:
   # "Lab Devices / Servers with GPU support" runner (arm64, no docker:dind
   # daemon), where v0.8.23 build-release job 17091369970 failed with
   # "Cannot connect to the Docker daemon". `amd64` pins it to Lab Servers.
+  # 2026-10-27: `lab` -> `dedicated` (+ `docker`); the lab runners left the
+  # company pool. See the pool tag map at the top of this file.
   tags:
     - company
-    - lab
+    - dedicated
+    - docker
     - linux
     - amd64
   image: docker:latest
@@ -2111,7 +2117,8 @@ dev-image:
   # docker:dind only runs on Linux runners (see the snapshot job note above).
   tags:
     - company
-    - lab
+    - dedicated
+    - docker
     - linux
   image: docker:latest
   services:
@@ -2300,7 +2307,8 @@ dev-image-fips:
   stage: release
   tags:
     - company
-    - lab
+    - dedicated
+    - docker
     - linux
   image: docker:latest
   services:
@@ -2487,9 +2495,12 @@ build-release:
   # "Lab Devices / Servers with GPU support" runner (arm64, no docker:dind
   # daemon), where v0.8.23 build-release job 17091369970 failed with
   # "Cannot connect to the Docker daemon". `amd64` pins it to Lab Servers.
+  # 2026-10-27: `lab` -> `dedicated` (+ `docker`); the lab runners left the
+  # company pool. See the pool tag map at the top of this file.
   tags:
     - company
-    - lab
+    - dedicated
+    - docker
     - linux
     - amd64
   image: docker:latest
