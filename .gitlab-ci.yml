@@ -35,7 +35,7 @@ probe:flat-memory:
   - linux
   - x86
   - aws-spot
-  timeout: 20m
+  timeout: 10m
   variables:
     ZIG_BUILD_JOBS: '1'
     GIT_SUBMODULE_STRATEGY: recursive
@@ -103,3 +103,4 @@ probe:flat-memory:
     expire_in: 1 week
     paths:
     - reports/flat-memory-probe.log
+    - reports/ordered-test-progress.log
