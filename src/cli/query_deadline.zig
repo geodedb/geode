@@ -95,12 +95,7 @@ pub const QueryDeadlineState = struct {
     query_sent: std.atomic.Value(bool),
 
     pub fn init() QueryDeadlineState {
-        const now_ns: i128 = blk: {
-            var ts_tmp: std.os.linux.timespec = undefined;
-            const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-            if (rc != 0) break :blk @as(i128, 0);
-            break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-        };
+        const now_ns: i128 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
         return .{
             .last_progress_ns = std.atomic.Value(i64).init(@as(i64, @intCast(now_ns))),
             .done = std.atomic.Value(bool).init(false),
@@ -119,12 +114,7 @@ pub const QueryDeadlineState = struct {
     }
 
     pub fn touch(self: *QueryDeadlineState) void {
-        const now_ns: i128 = blk: {
-            var ts_tmp: std.os.linux.timespec = undefined;
-            const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-            if (rc != 0) break :blk @as(i128, 0);
-            break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-        };
+        const now_ns: i128 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
         self.last_progress_ns.store(@as(i64, @intCast(now_ns)), .release);
     }
 
@@ -214,8 +204,7 @@ pub fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
         {
             const ns: i64 = 100 * std.time.ns_per_ms;
             const req = std.os.linux.timespec{ .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)), .nsec = @intCast(@mod(ns, std.time.ns_per_s)) };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
         }
         // #746 test hook: bump after each wake-up so tests can observe
         // watchdog liveness post-finish().  This atomic is otherwise unused
@@ -223,12 +212,7 @@ pub fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
         _ = state.tick_count.fetchAdd(1, .monotonic);
         if (state.done.load(.acquire)) return;
 
-        const now_ns: i128 = blk: {
-            var ts_tmp: std.os.linux.timespec = undefined;
-            const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-            if (rc != 0) break :blk @as(i128, 0);
-            break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-        };
+        const now_ns: i128 = @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
         const last_progress_ns = state.last_progress_ns.load(.acquire);
         if (@as(i64, @intCast(now_ns)) - last_progress_ns < timeout_ns) continue;
 

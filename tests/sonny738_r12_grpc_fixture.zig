@@ -16,12 +16,7 @@ const user_mgmt = geode.user_management;
 const gps = geode.security.gps;
 
 pub fn sleepMs(ms: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ms / std.time.ms_per_s),
-        .nsec = @intCast((ms % std.time.ms_per_s) * std.time.ns_per_ms),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 pub fn encodeProto(allocator: std.mem.Allocator, msg: anytype) ![]u8 {

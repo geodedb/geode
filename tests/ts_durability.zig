@@ -75,14 +75,16 @@ const graph_store = geode.graph_store;
 
 fn uniqueNanos() i128 {
     var t: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &t);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &t)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &t);
     return @as(i128, t.sec) * 1_000_000_000 + @as(i128, t.nsec);
 }
 
 fn cwdAbsAlloc(allocator: std.mem.Allocator) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
     while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
     return allocator.dupe(u8, cwd_buf[0..actual_len]);

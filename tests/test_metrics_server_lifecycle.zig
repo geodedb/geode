@@ -48,7 +48,7 @@
 // backed budget (1000 ms for positive checks, 500 ms for the "listener
 // went away" check).  `std.Io.net` in 0.16 panics with "TODO implement
 // netConnectIpPosix with timeout" when `ConnectOptions.timeout != .none`,
-// so we go straight to `std.os.linux.connect` + `std.posix.poll`.  Even
+// so we go straight to `std.c.connect` + `std.posix.poll`.  Even
 // if the fix regresses into an infinite accept loop, CI sees a red test
 // in <3 seconds rather than hanging forever.
 //
@@ -66,14 +66,27 @@ const metrics_server = @import("metrics_server");
 /// retry signal.  Base 39090 is well clear of geode's serve/quic (3141),
 /// grpc (3142), metrics spec (9091), and Prometheus defaults (9090, 9100).
 fn pickTestPort() u16 {
-    const linux = std.os.linux;
-    const pid: u32 = @intCast(linux.getpid());
+    const pid: u32 = @intCast(std.c.getpid());
     const offset: u16 = @intCast(pid % 500);
     return 39090 + offset;
 }
 
+fn tcpSocket(nonblocking: bool) !std.posix.fd_t {
+    const fd = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP);
+    if (fd < 0) return error.SocketCreateFailed;
+    errdefer _ = std.c.close(fd);
+    if (std.c.fcntl(fd, std.posix.F.SETFD, @as(c_int, std.posix.FD_CLOEXEC)) < 0) return error.FcntlFailed;
+    if (nonblocking) {
+        const flags = std.c.fcntl(fd, std.posix.F.GETFL);
+        if (flags < 0) return error.FcntlFailed;
+        const nonblock = @as(c_int, @bitCast(std.posix.O{ .NONBLOCK = true }));
+        if (std.c.fcntl(fd, std.posix.F.SETFL, flags | nonblock) < 0) return error.FcntlFailed;
+    }
+    return fd;
+}
+
 /// Attempt a non-blocking TCP connect to 127.0.0.1:port with a hard
-/// `timeout_ms` budget.  Uses raw linux syscalls — Zig 0.16's
+/// `timeout_ms` budget.  Uses POSIX libc calls — Zig 0.16's
 /// `std.Io.net.IpAddress.connect` panics with "TODO implement
 /// netConnectIpPosix with timeout" whenever `timeout != .none`, and we
 /// need a real timeout here so CI reports red instead of hanging.
@@ -83,24 +96,19 @@ fn pickTestPort() u16 {
 /// `error.ConnectionRefused`; the deadline expiring returns
 /// `error.Timeout`.
 fn tryConnect(port: u16, timeout_ms: i32) !void {
-    const linux = std.os.linux;
-
-    const fd_raw = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.NONBLOCK | linux.SOCK.CLOEXEC, linux.IPPROTO.TCP);
-    const fd_err = linux.errno(fd_raw);
-    if (fd_err != .SUCCESS) return error.SocketCreateFailed;
-    const fd: i32 = @intCast(fd_raw);
-    defer _ = linux.close(fd);
+    const fd = try tcpSocket(true);
+    defer _ = std.c.close(fd);
 
     // Little-endian port → network byte order.
-    const sa = linux.sockaddr.in{
-        .family = linux.AF.INET,
+    const sa = std.posix.sockaddr.in{
+        .family = std.posix.AF.INET,
         .port = std.mem.nativeToBig(u16, port),
         .addr = std.mem.nativeToBig(u32, 0x7F000001), // 127.0.0.1
         .zero = .{0} ** 8,
     };
 
-    const conn_raw = linux.connect(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
-    const conn_err = linux.errno(conn_raw);
+    const conn_raw = std.c.connect(fd, @ptrCast(&sa), @sizeOf(std.posix.sockaddr.in));
+    const conn_err = std.posix.errno(conn_raw);
     switch (conn_err) {
         .SUCCESS => return, // immediate success (shouldn't happen non-blocking, but handle it)
         .INPROGRESS, .AGAIN => {}, // fall through to poll
@@ -115,12 +123,12 @@ fn tryConnect(port: u16, timeout_ms: i32) !void {
 
     // Check SO_ERROR to distinguish success vs. refused.
     var so_err: i32 = 0;
-    var so_len: linux.socklen_t = @sizeOf(i32);
-    const gso_raw = linux.getsockopt(fd, linux.SOL.SOCKET, linux.SO.ERROR, @ptrCast(&so_err), &so_len);
-    const gso_err = linux.errno(gso_raw);
+    var so_len: std.posix.socklen_t = @sizeOf(i32);
+    const gso_raw = std.c.getsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.ERROR, @ptrCast(&so_err), &so_len);
+    const gso_err = std.posix.errno(gso_raw);
     if (gso_err != .SUCCESS) return error.GetSockOptFailed;
 
-    const e: linux.E = @enumFromInt(so_err);
+    const e: std.posix.E = @enumFromInt(so_err);
     switch (e) {
         .SUCCESS => return,
         .CONNREFUSED => return error.ConnectionRefused,
@@ -129,20 +137,14 @@ fn tryConnect(port: u16, timeout_ms: i32) !void {
 }
 
 fn sleepMs(ms: u64) void {
-    const req = std.posix.timespec{
-        .sec = @intCast(ms / 1000),
-        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
-    };
-    var rem: std.posix.timespec = undefined;
-    _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
-fn linuxWriteAll(fd: i32, bytes: []const u8) !void {
-    const linux = std.os.linux;
+fn writeAll(fd: i32, bytes: []const u8) !void {
     var offset: usize = 0;
     while (offset < bytes.len) {
-        const rc = linux.write(fd, bytes[offset..].ptr, bytes.len - offset);
-        const signed: isize = @bitCast(rc);
+        const rc = std.c.write(fd, bytes[offset..].ptr, bytes.len - offset);
+        const signed = rc;
         if (signed < 0) return error.WriteFailed;
         if (signed == 0) return error.WriteFailed;
         offset += @intCast(signed);
@@ -199,36 +201,31 @@ fn httpSendRaw(allocator: std.mem.Allocator, port: u16, request: []const u8) ![]
 /// Same as `httpSendRaw`, but writes `head` and `tail` as two separate
 /// segments with a short gap so the server observes a partial request first.
 fn httpSendRawSplit(allocator: std.mem.Allocator, port: u16, head: []const u8, tail: []const u8) ![]u8 {
-    const linux = std.os.linux;
+    const fd = try tcpSocket(false);
+    defer _ = std.c.close(fd);
 
-    const fd_raw = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, linux.IPPROTO.TCP);
-    const fd_err = linux.errno(fd_raw);
-    if (fd_err != .SUCCESS) return error.SocketCreateFailed;
-    const fd: i32 = @intCast(fd_raw);
-    defer _ = linux.close(fd);
-
-    const sa = linux.sockaddr.in{
-        .family = linux.AF.INET,
+    const sa = std.posix.sockaddr.in{
+        .family = std.posix.AF.INET,
         .port = std.mem.nativeToBig(u16, port),
         .addr = std.mem.nativeToBig(u32, 0x7F000001),
         .zero = .{0} ** 8,
     };
-    const conn_raw = linux.connect(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
-    const conn_signed: isize = @bitCast(conn_raw);
+    const conn_raw = std.c.connect(fd, @ptrCast(&sa), @sizeOf(std.posix.sockaddr.in));
+    const conn_signed = conn_raw;
     if (conn_signed < 0) return error.ConnectFailed;
 
-    try linuxWriteAll(fd, head);
+    try writeAll(fd, head);
     if (tail.len > 0) {
         sleepMs(10);
-        try linuxWriteAll(fd, tail);
+        try writeAll(fd, tail);
     }
 
     var response: std.ArrayList(u8) = .empty;
     errdefer response.deinit(allocator);
     var chunk: [4096]u8 = undefined;
     while (response.items.len < 1024 * 1024) {
-        const n_rc = linux.read(fd, &chunk, chunk.len);
-        const n_signed: isize = @bitCast(n_rc);
+        const n_rc = std.c.read(fd, &chunk, chunk.len);
+        const n_signed = n_rc;
         if (n_signed < 0) return error.ReadFailed;
         if (n_signed == 0) break;
         try response.appendSlice(allocator, chunk[0..@intCast(n_signed)]);

@@ -313,12 +313,7 @@ test "exact node-property index: full checkpoint on a deferred graph persists a 
 // session-3 lookup re-pays the rebuild (rebuild-runs == 1, not 0).
 
 fn sleepMsDeferred(ms: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ms / 1000),
-        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 test "exact node-property index: lazy build persists immediately (crash before any checkpoint does not re-pay the rebuild)" {

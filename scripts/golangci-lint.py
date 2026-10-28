@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-GO_VERSION = "1.27.2"
+GO_VERSION = "1.27.3"
 GOLANGCI_LINT_VERSION = "v2.15.0"
 
 

@@ -217,16 +217,18 @@ pub fn reaperLoop(args: *ReaperArgs) void {
             .sec = @intCast(args.interval_ns / std.time.ns_per_s),
             .nsec = @intCast(args.interval_ns % std.time.ns_per_s),
         };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     }
     // Final pass on shutdown.
     _ = args.registry.reapOnce(args.gpa);
 }
 
 fn monoNs() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
     return sec * std.time.ns_per_s + nsec;

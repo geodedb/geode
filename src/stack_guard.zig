@@ -3,9 +3,9 @@
 //! recurse one level deeper, so input that nests past what the thread can
 //! hold gets an error instead of a stack overflow.
 //!
-//! The bounds are read once per thread with `pthread_getattr_np` (glibc and
-//! musl). Without libc, off Linux, or on a stack that is not the thread's
-//! own (a fiber's), nothing is known and every check passes.
+//! The bounds are read once per thread using the native pthread APIs on
+//! Linux and Darwin. Without libc, on other platforms, or on a stack that
+//! is not the thread's own (a fiber's), nothing is known and checks pass.
 //
 // CANARY: REQ=REQ-SONNY-3181-EVAL-STACK-GUARD; FEATURE="ExpressionEvaluator"; ASPECT=StackGuard; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=eval; UPDATED=2026-09-27
 
@@ -37,6 +37,8 @@ threadlocal var t_thread_stack: ThreadStack = .{};
 const pthread_stack = struct {
     extern "c" fn pthread_getattr_np(thread: std.c.pthread_t, attr: *std.c.pthread_attr_t) c_int;
     extern "c" fn pthread_attr_getstack(attr: *const std.c.pthread_attr_t, stackaddr: *?*anyopaque, stacksize: *usize) c_int;
+    extern "c" fn pthread_get_stackaddr_np(thread: std.c.pthread_t) ?*anyopaque;
+    extern "c" fn pthread_get_stacksize_np(thread: std.c.pthread_t) usize;
 };
 
 fn threadStack() ThreadStack {
@@ -51,6 +53,15 @@ fn threadStack() ThreadStack {
         if (pthread_stack.pthread_attr_getstack(&attr, &addr, &size) != 0) return t_thread_stack;
         const low = @intFromPtr(addr orelse return t_thread_stack);
         t_thread_stack = .{ .low = low, .high = low + size, .known = true, .looked = true };
+    } else if (comptime builtin.link_libc and builtin.os.tag.isDarwin()) {
+        // Darwin reports the high address of the stack, unlike Linux's
+        // pthread_attr_getstack. Its size includes the caller-owned stack
+        // supplied by pthread_attr_setstack, which the nesting probes use.
+        const thread = std.c.pthread_self();
+        const high = @intFromPtr(pthread_stack.pthread_get_stackaddr_np(thread) orelse return t_thread_stack);
+        const size = pthread_stack.pthread_get_stacksize_np(thread);
+        if (size == 0 or size > high) return t_thread_stack;
+        t_thread_stack = .{ .low = high - size, .high = high, .known = true, .looked = true };
     }
     return t_thread_stack;
 }
@@ -80,7 +91,39 @@ pub fn remaining(frame: usize) ?usize {
 
 test "hasRoom: true on the test thread with a small reserve, false with one past the stack" {
     try std.testing.expect(hasRoom(1024));
+    if (comptime builtin.link_libc and (builtin.os.tag == .linux or builtin.os.tag.isDarwin())) {
+        try std.testing.expect(remaining(@frameAddress()) != null);
+    }
     if (remaining(@frameAddress())) |left| {
         try std.testing.expect(!hasRoom(left + 1024 * 1024));
+    }
+}
+
+test "stack bounds are known on both request thread stack sizes" {
+    if (comptime builtin.link_libc and (builtin.os.tag == .linux or builtin.os.tag.isDarwin())) {
+        const Probe = struct {
+            left: ?usize = null,
+            actual_size: usize = 0,
+            refuses_excess: bool = false,
+
+            fn run(self: *@This()) void {
+                self.left = remaining(@frameAddress());
+                const bounds = threadStack();
+                self.actual_size = bounds.high - bounds.low;
+                if (self.left) |left| self.refuses_excess = !hasRoomBelow(@frameAddress(), left + 1);
+            }
+        };
+        for ([_]usize{ 8 << 20, 16 << 20 }) |size| {
+            var probe: Probe = .{};
+            const thread = try std.Thread.spawn(.{ .stack_size = size }, Probe.run, .{&probe});
+            thread.join();
+            try std.testing.expect(probe.left != null);
+            try std.testing.expect(probe.left.? > 1 << 20);
+            // pthread stack sizes are minimums. Darwin reserves additional
+            // space at the top for pthread metadata (PTHREAD_T_OFFSET).
+            try std.testing.expect(probe.actual_size >= size);
+            try std.testing.expect(probe.left.? <= probe.actual_size);
+            try std.testing.expect(probe.refuses_excess);
+        }
     }
 }

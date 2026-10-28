@@ -1387,12 +1387,7 @@ const TestUserDef = struct {
 };
 
 fn testSleepNs(ns: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 const TestResolverState = struct {
