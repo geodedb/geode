@@ -140,7 +140,7 @@ default:
   # retry, so the rest died permanently on a brief control-plane hiccup. This
   # default retries EVERY job on transient/system failure classes ONLY (never
   # script_failure -- a real test failure must not be masked). Jobs that declare
-  # their own `retry:` override this and keep their `script_failure` coverage.
+  # their own `retry:` override this; required gates do not retry script failures.
   retry:
     max: 2
     when:
@@ -477,7 +477,6 @@ governance-match-ops-campaign:
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
-      - script_failure
   script:
     - |
       echo "=== Running MATCH staged parity campaign ==="
@@ -888,16 +887,13 @@ test-cross-build:
           - aarch64-linux-musl
           - riscv64-linux-gnu
   timeout: 2h
-  # Retry on transient network failures (DNS, GitHub 502, HttpConnectionClosing)
-  # during dependency fetch for cross-compilation targets whose packages aren't
-  # in the CI cache. max: 2 matches the macOS job precedent for the same
-  # protobuf transitive-dep fetch flake.
+  # Retry runner failures only. Compilation failures stop the pipeline;
+  # transient dependency downloads are retried by the fetch helper.
   retry:
     max: 2
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
-      - script_failure
   # Pull-only cache (matches test-macos-unit): a ReleaseSafe build across every
   # release target produces ~10K cache files whose pull-push archival overruns
   # the job timeout AND leaves the shared `zig-cache-main-protected` cache
@@ -1438,15 +1434,12 @@ bench-timeseries:
   stage: test
   tags: *dedicated-test-tags
   image: $ZIG_IMAGE
-  # Blocking gate that previously had no retry: a single transient protobuf
-  # transitive-dep fetch flake (HttpConnectionClosing, when the shared cache
-  # fails to extract) reds main. max: 2 matches the other dep-fetching jobs.
+  # Retry runner failures only; a failed benchmark is a required failure.
   retry:
     max: 2
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
-      - script_failure
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
@@ -1725,18 +1718,13 @@ test-gql-compliance:
   stage: test
   tags: *dedicated-test-tags
   image: $ZIG_IMAGE
-  # The single-node geode server under the compliance harness occasionally goes
-  # unresponsive under CI load and queries hit their 30s timeout
-  # (`verify-complete-cleanup: timeout` cascading to many specs). It passed in
-  # pipeline #1218 and fails intermittently — a load/timing flake, not a logic
-  # regression. Retry like the other test jobs; also covers a transient
-  # dep-fetch hiccup.
+  # Preserve runner retries. A failed compliance test must stop the pipeline
+  # immediately, including timeouts that need a runtime or capacity repair.
   retry:
     max: 2
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
-      - script_failure
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
@@ -1831,10 +1819,7 @@ security-trivy:
   # its 20Gi ephemeral-storage limit: the scan passed and the job still
   # failed as a system failure (MR !48, jobs 17264887635 and 17265588251).
   cache: []
-  retry:
-    max: 2
-    when:
-      - script_failure
+  retry: 0
   script:
     - trivy fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --no-progress --db-repository public.ecr.aws/aquasecurity/trivy-db --db-repository ghcr.io/aquasecurity/trivy-db --java-db-repository public.ecr.aws/aquasecurity/trivy-java-db --java-db-repository ghcr.io/aquasecurity/trivy-java-db --skip-dirs .zig-cache --skip-dirs zig-cache --skip-dirs docker/zig-packages --skip-dirs test_logs --skip-files certs/server.key --skip-files data/server.key .
   rules:
