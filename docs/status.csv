@@ -102,8 +102,8 @@ REQ-0006,Distributed Query Federation,UnitTests,TESTED,,,distributed,2026-04-01,
 REQ-0006,Distributed RPC,NetworkTransport,TESTED,,,dist,2026-01-16,src/dist/rpc.zig,4
 REQ-0006,DistributedQuery,Federation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_testing.zig,14
 REQ-0007,Tooling & Governance Requirements,Tooling,TESTED,,,tools,2026-01-15,tools/canary_main.zig,22
-REQ-0008,Platform Build Requirements,ReleaseSafe,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,1153
-REQ-0009,Performance Budget Enforcement,CI,TESTED,,,ci,2026-01-30,.gitlab-ci.yml,1315
+REQ-0008,Platform Build Requirements,ReleaseSafe,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,1148
+REQ-0009,Performance Budget Enforcement,CI,TESTED,,,ci,2026-01-30,.gitlab-ci.yml,1312
 REQ-0009,Performance Targets,Benchmark,BENCHED,,,ops-team,2026-01-15,benchmarks/benchmark_monitoring_metrics_variance_unified.zig,6
 REQ-2PC-001,2PC,PreparePhase,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_final_batch.zig,482
 REQ-2PC-002,2PC,CommitPhase,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_final_batch.zig,489
@@ -556,9 +556,9 @@ REQ-CI-CACHE-001,BoundedZigCache,CI,TESTED,,,ci,2026-10-24,.gitlab-ci.yml,193
 REQ-CI-CANARY-LINT-001,CI CANARY Linting,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,573
 REQ-CI-CANARY-LINT-TEST-001,CANARY Lint Unit Tests,UnitTesting,TESTED,,,governance,2026-01-17,tools/test_canary_lint.py,4
 REQ-CI-CANARYSCAN-001,CI Canaryscan Verify,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,595
-REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1715
+REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1709
 REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-25,.gitlab-ci.yml,665
-REQ-CI-COVERAGE-001,CodeCoverageCI,Core,IMPL,,,ci,2026-10-13,.gitlab-ci.yml,1583
+REQ-CI-COVERAGE-001,CodeCoverageCI,Core,IMPL,,,ci,2026-10-13,.gitlab-ci.yml,1577
 REQ-CI-GOV-001,CI Governance Checks,Core,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,356
 REQ-CI-REQ-DOC-REPORT-001,CI REQ-DOC Reports,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,630
 REQ-CI-REQ-DOC-REPORT-001,Requirement ID Report Generator,Governance,TESTED,,,governance,2026-01-17,tools/req_doc_report.py,4
@@ -1795,7 +1795,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,909
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,13179
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,13195
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,196
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2102
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1497
@@ -1946,7 +1946,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,114
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,13188
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,13204
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1680
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1922
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1034
@@ -1959,7 +1959,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,202
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7582
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,167
 REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,179
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,13200
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,13216
 REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,395
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecutePlan,IMPL,,,security,2026-05-21,src/distributed/enhanced_query_coordinator.zig,250
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,141
@@ -2818,7 +2818,7 @@ REQ-GQL-CHAIN-MATCH-001,ChainMatchExecution,AggregationPath,TESTED,,,execution,2
 REQ-GQL-CHAIN-ORDERBY-001,ChainOrderBy,FinalSorting,TESTED,,,execution,2025-12-26,src/execution/query_execution.zig,830
 REQ-GQL-CHAIN-WITH-AGG-001,ChainedWithAggregation,IntermediateWithAgg,TESTED,,,execution,2025-12-26,src/execution/query_execution.zig,175
 REQ-GQL-CHAIN-WITH-AGG-001,GQLChainedAggregation,WithAgg,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig,28
-REQ-GQL-CI-001,GQL Compliance CI,TestEnforcement,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1768
+REQ-GQL-CI-001,GQL Compliance CI,TestEnforcement,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1757
 REQ-GQL-COLNAME-001,UniqueColumnNames,DEDUP,TESTED,,,execution,2025-12-22,src/execution/result_utils.zig,23
 REQ-GQL-COMMA-MATCH,CommaSepar atedMatches,MultipleChains,TESTED,,,engine,2025-10-12,src/execution/pattern_helpers.zig,110
 REQ-GQL-COMMA-MATCH,CommaSeparatedMatches,CartesianProduct,TESTED,,,engine,2025-10-12,src/execution/match_operations.zig,4676
