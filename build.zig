@@ -244,6 +244,13 @@ fn shardDep(
             .{ what, @tagName(dep.id) },
         );
     };
+    // Include the test source even when a process aborts before reporting a
+    // test name; a generic "run test" otherwise hides the failing artifact.
+    if (run.producer) |artifact| {
+        if (artifact.root_module.root_source_file) |source| {
+            dep.name = dep.owner.fmt("run {s}", .{source.getDisplayName()});
+        }
+    }
     if (g_test_compile_step) |compile_all| {
         if (run.producer) |artifact| compile_all.dependOn(&artifact.step);
     }
@@ -3553,6 +3560,7 @@ pub fn build(b: *std.Build) void {
     e2e_ts_tests.root_module.addImport("gql_functions", ts_gql_mod);
     e2e_ts_tests.root_module.addImport("timeseries_wrapper", timeseries_wrapper_mod);
     const run_e2e_ts_tests = b.addRunArtifact(e2e_ts_tests);
+    b.step("test-e2e-timeseries", "Run time-series storage and query integration tests").dependOn(&run_e2e_ts_tests.step);
 
     // GAP-0279: ts_store_integration test (Store API surface)
     const ts_store_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/ts_store_integration.zig"), .target = target, .optimize = optimize }) });
@@ -10247,6 +10255,22 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         const step = b.step("test-sonny-write-allowlist-r4b", "Run the Task W round 4b-1 regression (SONNY-3318, 3319, 3320, 3322, 3248, 3244): a comma pattern binds every chain for reads and writes, and aggregates; a label SET beside a vector SET checks the new label's index; chained MERGE actions fire on the last MERGE clause; a relationship variable is read by id after 150 and 600 more edge inserts; SKIP / LIMIT parameters window every read; one SET clause assigns a property once (22G03); a LET is scoped to its query; in the in-memory, plain persisted, tenant-scoped and RLS-policy sessions");
         step.dependOn(&run_tests.step);
+
+        // Resource assertions need a fresh process, without the persisted
+        // suite's allocator history or inherited lifetime resident peak.
+        // The original named target still runs all 22 cases; the aggregate
+        // schedules each executable once and test-compile covers both.
+        const memory_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny_write_allowlist_r4b_memory.zig"), .target = target, .optimize = optimize });
+        memory_mod.link_libc = true;
+        memory_mod.addImport("geode", root_mod);
+        memory_mod.addImport("logging", logging_mod);
+        memory_mod.addImport("rls_types", rls_types_mod);
+        const memory_tests = b.addTest(.{ .root_module = memory_mod });
+        const run_memory_tests = b.addRunArtifact(memory_tests);
+        shardDep(test_step, &run_memory_tests.step, 1, test_shard_loads, test_shard_index);
+        const memory_step = b.step("test-sonny-write-allowlist-r4b-memory", "Run the SONNY-3368 resident-memory guard, flat-memory join and cancellation regressions in a fresh process");
+        memory_step.dependOn(&run_memory_tests.step);
+        step.dependOn(&run_memory_tests.step);
     }
 
     // SONNY-2977: MATCH (x {k: v}) [WHERE ...] SET changes every node holding

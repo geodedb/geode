@@ -257,37 +257,16 @@ pub fn rebuildFulltextIndex(
     try snapshot_set.ensureTotalCapacity(allocator, @intCast(snapshot.len));
     for (snapshot) |nid| snapshot_set.putAssumeCapacity(nid, {});
 
-    // Two accepted drain-phase residuals (final-review fix wave, 2026-08-29;
-    // same accepted-residual class as the front-edge TOCTOU documented on
-    // `maintainFulltextOnWrite` above and on `fts_storage_adapter.zig`'s
-    // `rebuilds` field):
+    // Clearing the rebuild flag allows live writes to resume while this drain
+    // processes its snapshot. Both the drain and live create hooks append
+    // only if the engine has not indexed the id, under the same writer lock,
+    // so a delayed notification cannot double the document's postings.
     //
-    //   (a) BACK EDGE — `endRebuild` below clears the per-index rebuilding
-    //       flag and returns `pending` in one call, but THIS loop keeps
-    //       reindexing from that snapshot afterward. A write on a still-
-    //       pending id that lands AFTER `endRebuild` returns but BEFORE this
-    //       loop reaches that id no longer sees the flag set, so
-    //       `maintainFulltextOnWrite` takes its normal (non-queued) path and
-    //       indexes it immediately (SET -> delete leg no-ops on the
-    //       not-yet-drained doc, create leg appends a fresh posting). This
-    //       loop then ALSO reindexes the same id from `pending` (it is not
-    //       in `snapshot_set`), appending a SECOND posting — a double-append
-    //       that persists until the next `CALL geode.fts.rebuild`.
-    //   (b) IN-SNAPSHOT DELETE — a node backfill already indexed (its id IS
-    //       in `snapshot_set`) that is deleted mid-window is queued into
-    //       `pending` by `noteWriteDuringRebuild` like any other write, but
-    //       the `snapshot_set.contains(nid)` skip below discards it
-    //       unconditionally — no tombstone is ever written for it. The
-    //       index keeps a stale posting for a now-gone node until the next
-    //       rebuild.
-    //
-    // Neither residual corrupts query results: search-hit resolution
-    // (`filterAuthorizedHits` in `fts_dispatch.zig`) resolves every hit's
-    // node id against the live store and drops a hit whose node cannot be
-    // found (or hydrated), so a stale/duplicate posting for a gone node
-    // never reaches a caller — it only wastes index space until the next
-    // rebuild reconciles it. Accepted per the same "verify with a canary
-    // query after ingestion" posture as the front-edge TOCTOU window.
+    // An in-snapshot delete still leaves a stale posting until a later
+    // rebuild: the snapshot exclusion below skips that queued id. Search-hit
+    // resolution drops ids absent from the live store, so the stale posting
+    // is not returned to a caller. Mid-backfill updates retain the documented
+    // snapshot-staleness behavior above.
     const pending = try fa.endRebuild(index_name, allocator);
     drained = true;
     defer allocator.free(pending);
@@ -298,7 +277,7 @@ pub fn rebuildFulltextIndex(
     var drain_count: usize = 0;
     for (pending) |nid| {
         if (snapshot_set.contains(nid)) continue; // backfill already indexed current state
-        const indexed = indexNodeDocument(allocator, store, fa, index_name, nid, properties) catch |err| blk: {
+        const indexed = indexNodeDocument(allocator, store, fa, index_name, nid, properties, true) catch |err| blk: {
             log.warn("rebuild drain reindex failed for node {}: {}", .{ nid, err });
             break :blk false;
         };
@@ -437,8 +416,8 @@ fn backfillExistingNodes(
 
         if (doc_terms.items.len == 0) continue; // nothing indexable on this node
 
-        if (fa.indexNode(index_name, node_id, doc_terms.items)) |_| {
-            indexed_count += 1;
+        if (fa.indexNodeIfAbsent(index_name, node_id, doc_terms.items)) |indexed| {
+            if (indexed) indexed_count += 1;
         } else |err| {
             log.warn("fulltext backfill indexNode failed (node {d}): {}", .{ node_id, err });
         }
@@ -489,7 +468,7 @@ pub fn dropFulltextIndex(
 }
 
 /// A4b: the kind of node write that triggered maintenance.
-pub const FtsWriteOp = enum { create, update, delete };
+pub const FtsWriteOp = enum { create, upsert, update, delete };
 
 /// A4b: keep fulltext indexes current after a single-node write. CHEAP-EXITS
 /// when no fulltext index covers any of `labels` (the dominant case → near-zero
@@ -504,7 +483,8 @@ pub const FtsWriteOp = enum { create, update, delete };
 /// Behavior per covering index (de-duplicated by index name across labels):
 ///   * `.delete` / `.update`: `deleteNode(name, node_id)` to drop stale postings
 ///     (the engine is append-only — re-indexing without deleting duplicates).
-///   * `.create` / re-index tail of `.update`: read each `spec.properties` from
+///   * `.create`: index the document only if its id has not been indexed.
+///   * `.upsert` / re-index tail of `.update`: read each `spec.properties` from
 ///     the store (`.String` only), tokenize with the property name as the field
 ///     tag, concatenate into ONE document, and `indexNode(name, node_id, doc)`.
 ///
@@ -583,7 +563,7 @@ pub fn maintainFulltextOnWrite(
                 };
             }
 
-            if (op == .create or op == .update) {
+            if (op == .create or op == .upsert or op == .update) {
                 // Tolerate a missing engine (IndexNotFound) here too: the
                 // `noteWriteDuringRebuild` pre-check above has a documented
                 // TOCTOU window against `beginRebuild`+`dropIndex` (see
@@ -597,7 +577,7 @@ pub fn maintainFulltextOnWrite(
                 // other error still propagates. The returned bool (whether it
                 // actually indexed) is not needed here — this is a per-write
                 // maintenance hook, not a bulk count — so discard it.
-                _ = indexNodeDocument(scratch, store, fa, spec.name, node_id, spec.properties) catch |err| switch (err) {
+                _ = indexNodeDocument(scratch, store, fa, spec.name, node_id, spec.properties, op == .create) catch |err| switch (err) {
                     adapter_mod.Error.IndexNotFound => blk: {
                         log.debug("fulltext maintain create/update: index '{s}' not found for node {d} (rebuild race) — skipping, drain will reindex", .{ spec.name, node_id });
                         break :blk false;
@@ -666,8 +646,8 @@ pub fn maintainFulltextOnWrite(
 /// Returns `true` when `node_id` was ACTUALLY submitted to `fa.indexNode`
 /// (mirrors `backfillExistingNodes`' counting rule — Task 4,
 /// geode-vectorization-and-reranking); `false` when the node had already
-/// vanished by the time this ran or carried no indexable text, in either case
-/// without touching the engine. Callers that need a drain/backfill-style
+/// vanished by the time this ran, carried no indexable text, or an if-absent
+/// create found the document already indexed. Callers that need a drain/backfill-style
 /// count (`rebuildFulltextIndex`) use this; `maintainFulltextOnWrite` (a
 /// per-write hook, not a bulk count) discards it.
 fn indexNodeDocument(
@@ -677,6 +657,7 @@ fn indexNodeDocument(
     index_name: []const u8,
     node_id: u64,
     properties: []const []const u8,
+    if_absent: bool,
 ) !bool {
     var doc_terms: std.ArrayListUnmanaged(tokenizer.TermPosting) = .empty;
     defer {
@@ -760,6 +741,7 @@ fn indexNodeDocument(
 
     if (doc_terms.items.len == 0) return false; // nothing indexable on this node
 
+    if (if_absent) return fa.indexNodeIfAbsent(index_name, node_id, doc_terms.items);
     try fa.indexNode(index_name, node_id, doc_terms.items);
     return true;
 }
@@ -795,7 +777,7 @@ pub fn registerFtsApplyHook() void {
 }
 
 /// Apply-path wrapper: resolve the node's labels from the store and run the
-/// SAME maintenance the executor runs (`.upsert` ↔ executor `.create`,
+/// SAME maintenance the executor runs (`.create` / `.upsert` map directly,
 /// `.delete` ↔ executor `.delete` — see the op-semantics note in
 /// cluster_replication.zig). Never fails the apply: errors are logged.
 fn ftsApplyMaintenanceHook(
@@ -818,7 +800,8 @@ fn ftsApplyMaintenanceHook(
     defer arena.deinit();
 
     const write_op: FtsWriteOp = switch (op) {
-        .upsert => .create,
+        .create => .create,
+        .upsert => .upsert,
         .delete => .delete,
     };
     maintainFulltextOnWrite(arena.allocator(), graph_name, node_id, node_ptr.labels, write_op) catch |err| {

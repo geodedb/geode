@@ -361,19 +361,19 @@ fn wakeAcceptLoop(port: u16) void {
     // interrupt a blocking accept4 on Linux after the endpoint has handled a
     // real scrape. A best-effort self-connect wakes acceptLoop so it observes
     // running=false and exits before stop() joins the thread.
-    const linux = std.os.linux;
-    const fd_raw = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, linux.IPPROTO.TCP);
-    if (linux.errno(fd_raw) != .SUCCESS) return;
-    const fd: i32 = @intCast(fd_raw);
-    defer _ = linux.close(fd);
+    // Use the target's socket ABI. Raw Linux syscalls raise SIGSYS on macOS.
+    const fd = std.c.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, std.posix.IPPROTO.TCP);
+    if (fd < 0) return;
+    defer _ = std.c.close(fd);
+    if (std.c.fcntl(fd, std.posix.F.SETFD, @as(c_int, std.posix.FD_CLOEXEC)) < 0) return;
 
-    const sa = linux.sockaddr.in{
-        .family = linux.AF.INET,
+    const sa = std.posix.sockaddr.in{
+        .family = std.posix.AF.INET,
         .port = std.mem.nativeToBig(u16, port),
         .addr = std.mem.nativeToBig(u32, 0x7F000001),
         .zero = .{0} ** 8,
     };
-    _ = linux.connect(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
+    _ = std.c.connect(fd, @ptrCast(&sa), @sizeOf(std.posix.sockaddr.in));
 }
 
 /// Resolve the metrics bind address from GEODE_METRICS_BIND env var,

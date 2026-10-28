@@ -47,12 +47,7 @@ fn monoNanos() u64 {
 
 // Zig 0.16 compat: std.Thread.sleep was removed (see src/transport/quic.zig:3-11).
 fn sleepNs(ns: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 fn waitForFlag(flag: *std.atomic.Value(u32)) void {

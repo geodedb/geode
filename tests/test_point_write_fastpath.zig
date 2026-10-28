@@ -38,8 +38,7 @@ var suite_mutex: std.Io.Mutex = .init;
 // Zig 0.16 compat: build an absolute tmp path by joining cwd with the tmp sub_path.
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
     while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
@@ -48,7 +47,10 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 // Zig 0.16: std.time.Timer removed; read the monotonic clock directly.
 fn monoNanos() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 

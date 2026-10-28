@@ -13,14 +13,16 @@
 // Here: `formatPeerIp` on IPv4, IPv6 and IPv4-mapped addresses; and the real
 // Handshake handler serving real accepted TCP sockets from two peer
 // addresses (127.0.0.2 and 127.0.0.3, both loopback on Linux, bound as the
-// clients' source addresses; and ::1 when the host has IPv6): at the cap,
+// clients' source addresses; macOS uses 127.0.0.1 and ::1, its configured
+// loopback addresses): at the cap,
 // one peer's Handshake is refused while the other's is served.
 //
 // CANARY: REQ=REQ-SONNY-3313-GRPC-PEER-IP; FEATURE="GrpcSessionLifetime"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3313_grpc_peer_ip.zig; OWNER=transport; UPDATED=2026-09-28
 
 const std = @import("std");
 const testing = std.testing;
-const linux = std.os.linux;
+const libc = std.c;
+const ipv6_peer_b = @import("builtin").os.tag == .macos;
 const posix = std.posix;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -62,8 +64,8 @@ test "SONNY-3313: formatPeerIp formats IPv4, IPv6 and IPv4-mapped addresses (not
     try testing.expectEqualStrings("unknown", grpc.formatPeerIp(&buf, &a, 4));
 }
 
-fn check(rc: usize) !usize {
-    const e = linux.errno(rc);
+fn check(rc: c_int) !c_int {
+    const e = libc.errno(rc);
     if (e != .SUCCESS) {
         std.debug.print("syscall failed: {s}\n", .{@tagName(e)});
         return error.Syscall;
@@ -71,27 +73,37 @@ fn check(rc: usize) !usize {
     return rc;
 }
 
+fn openSocket(family: u32) !i32 {
+    // Darwin has no SOCK_CLOEXEC flag; set the descriptor flag portably.
+    const fd = try check(libc.socket(family, libc.SOCK.STREAM, 0));
+    errdefer _ = libc.close(fd);
+    _ = try check(libc.fcntl(fd, libc.F.SETFD, @as(c_int, libc.FD_CLOEXEC)));
+    return fd;
+}
+
 /// A listening TCP socket on `addr` (port 0: the kernel picks), and its port.
 fn listenOn(family: u32, addr: *posix.sockaddr.storage, len: posix.socklen_t) !struct { fd: i32, addr: posix.sockaddr.storage } {
-    const fd: i32 = @intCast(try check(linux.socket(family, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0)));
-    errdefer _ = linux.close(fd);
-    _ = try check(linux.bind(fd, @ptrCast(addr), len));
-    _ = try check(linux.listen(fd, 16));
+    const fd = try openSocket(family);
+    errdefer _ = libc.close(fd);
+    _ = try check(libc.bind(fd, @ptrCast(addr), len));
+    _ = try check(libc.listen(fd, 16));
     var bound: posix.sockaddr.storage = undefined;
     var blen: posix.socklen_t = @sizeOf(posix.sockaddr.storage);
-    _ = try check(linux.getsockname(fd, @ptrCast(&bound), &blen));
+    _ = try check(libc.getsockname(fd, @ptrCast(&bound), &blen));
     return .{ .fd = fd, .addr = bound };
 }
 
 /// Connect from source address `src` (bound first) to `dst`, and accept on
 /// `listen_fd`: the server side of the connection.
 fn connectFrom(family: u32, src: *posix.sockaddr.storage, dst: *posix.sockaddr.storage, len: posix.socklen_t, listen_fd: i32) !struct { client: i32, server: i32 } {
-    const c: i32 = @intCast(try check(linux.socket(family, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0)));
-    errdefer _ = linux.close(c);
-    _ = try check(linux.bind(c, @ptrCast(src), len));
-    _ = try check(linux.connect(c, @ptrCast(dst), len));
-    const s: i32 = @intCast(try check(linux.accept(listen_fd, null, null)));
-    return .{ .client = c, .server = s };
+    const client = try openSocket(family);
+    errdefer _ = libc.close(client);
+    _ = try check(libc.bind(client, @ptrCast(src), len));
+    _ = try check(libc.connect(client, @ptrCast(dst), len));
+    const server = try check(libc.accept(listen_fd, null, null));
+    errdefer _ = libc.close(server);
+    _ = try check(libc.fcntl(server, libc.F.SETFD, @as(c_int, libc.FD_CLOEXEC)));
+    return .{ .client = client, .server = server };
 }
 
 fn peerText(fd: i32) ![]const u8 {
@@ -124,65 +136,79 @@ test "SONNY-3313: over real sockets, anonymous Handshakes from two peer addresse
     }
 
     var any = v4(127, 0, 0, 1, 0);
-    const l = try listenOn(linux.AF.INET, &any, @sizeOf(posix.sockaddr.in));
-    defer _ = linux.close(l.fd);
+    const l = try listenOn(libc.AF.INET, &any, @sizeOf(posix.sockaddr.in));
+    defer _ = libc.close(l.fd);
     var dst = l.addr;
     var fds: std.ArrayList(i32) = .empty;
     defer {
-        for (fds.items) |fd| _ = linux.close(fd);
+        for (fds.items) |fd| _ = libc.close(fd);
         fds.deinit(testing.allocator);
     }
 
-    // Peer A (127.0.0.2): two sessions, each in an open transaction.
-    var src_a = v4(127, 0, 0, 2, 0);
+    // Peer A: two sessions, each in an open transaction.
+    const peer_a = if (ipv6_peer_b) "127.0.0.1" else "127.0.0.2";
+    const principal_a = "anonymous@" ++ peer_a;
+    var src_a = v4(127, 0, 0, if (ipv6_peer_b) 1 else 2, 0);
     var a_sessions: [2][]const u8 = undefined;
     for (&a_sessions) |*sess| {
-        const conn = try connectFrom(linux.AF.INET, &src_a, &dst, @sizeOf(posix.sockaddr.in), l.fd);
+        const conn = try connectFrom(libc.AF.INET, &src_a, &dst, @sizeOf(posix.sockaddr.in), l.fd);
         try fds.appendSlice(testing.allocator, &.{ conn.client, conn.server });
         const peer = try peerText(conn.server);
         defer testing.allocator.free(peer);
-        try testing.expectEqualStrings("127.0.0.2", peer);
+        try testing.expectEqualStrings(peer_a, peer);
         const hello = try handshake(ga, conn.server);
         if (!hello.success) std.debug.print("A: {s}\n", .{hello.error_message});
         try testing.expect(hello.success);
         sess.* = hello.session_id;
         try fx.begin(ga, sess.*);
     }
-    try testing.expectEqual(@as(usize, 2), store.principalSessionCount("anonymous@127.0.0.2"));
+    try testing.expectEqual(@as(usize, 2), store.principalSessionCount(principal_a));
     try testing.expectEqual(@as(usize, 0), store.principalSessionCount("anonymous@unknown"));
 
     // A third from A: refused (its sessions are in transactions).
     {
-        const conn = try connectFrom(linux.AF.INET, &src_a, &dst, @sizeOf(posix.sockaddr.in), l.fd);
+        const conn = try connectFrom(libc.AF.INET, &src_a, &dst, @sizeOf(posix.sockaddr.in), l.fd);
         try fds.appendSlice(testing.allocator, &.{ conn.client, conn.server });
         const hello = try handshake(ga, conn.server);
         try testing.expect(!hello.success);
         try testing.expect(std.mem.startsWith(u8, hello.error_message, "RESOURCE_EXHAUSTED"));
     }
-    // Peer B (127.0.0.3): served; A's cap is A's alone.
-    var src_b = v4(127, 0, 0, 3, 0);
+    // Peer B: served; A's cap is A's alone. macOS configures only one
+    // IPv4 loopback address, so require a second real peer over IPv6 there.
+    const peer_b = if (ipv6_peer_b) "0000:0000:0000:0000:0000:0000:0000:0001" else "127.0.0.3";
+    var src_b = if (ipv6_peer_b)
+        v6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 0)
+    else
+        v4(127, 0, 0, 3, 0);
     {
-        const conn = try connectFrom(linux.AF.INET, &src_b, &dst, @sizeOf(posix.sockaddr.in), l.fd);
+        const family = if (ipv6_peer_b) libc.AF.INET6 else libc.AF.INET;
+        const len = if (ipv6_peer_b) @sizeOf(posix.sockaddr.in6) else @sizeOf(posix.sockaddr.in);
+        const listener = if (ipv6_peer_b) try listenOn(family, &src_b, len) else l;
+        defer if (ipv6_peer_b) {
+            _ = libc.close(listener.fd);
+        };
+        var destination = listener.addr;
+        const conn = try connectFrom(family, &src_b, &destination, len, listener.fd);
         try fds.appendSlice(testing.allocator, &.{ conn.client, conn.server });
         const peer = try peerText(conn.server);
         defer testing.allocator.free(peer);
-        try testing.expectEqualStrings("127.0.0.3", peer);
+        try testing.expectEqualStrings(peer_b, peer);
         const hello = try handshake(ga, conn.server);
         if (!hello.success) std.debug.print("B: {s}\n", .{hello.error_message});
         try testing.expect(hello.success);
-        try testing.expectEqual(@as(usize, 1), store.principalSessionCount("anonymous@127.0.0.3"));
+        try testing.expectEqual(@as(usize, 1), store.principalSessionCount("anonymous@" ++ peer_b));
     }
-    // And over IPv6 loopback, when the host has it.
-    blk: {
+    // Linux also checks IPv6 when available; macOS already required it above.
+    if (!ipv6_peer_b) blk: {
         var any6 = v6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 0);
-        const l6 = listenOn(linux.AF.INET6, &any6, @sizeOf(posix.sockaddr.in6)) catch {
+        const l6 = listenOn(libc.AF.INET6, &any6, @sizeOf(posix.sockaddr.in6)) catch {
             std.debug.print("SONNY-3313: no IPv6 loopback here; the IPv6 case is skipped\n", .{});
             break :blk;
         };
-        defer _ = linux.close(l6.fd);
+        defer _ = libc.close(l6.fd);
         var dst6 = l6.addr;
         var src6 = v6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 0);
-        const conn = try connectFrom(linux.AF.INET6, &src6, &dst6, @sizeOf(posix.sockaddr.in6), l6.fd);
+        const conn = try connectFrom(libc.AF.INET6, &src6, &dst6, @sizeOf(posix.sockaddr.in6), l6.fd);
         try fds.appendSlice(testing.allocator, &.{ conn.client, conn.server });
         const peer = try peerText(conn.server);
         defer testing.allocator.free(peer);
