@@ -997,7 +997,7 @@ fn freeRowValues(allocator: std.mem.Allocator, result: *ExecutionResult, row: []
 /// statement runs (`.Query` in `executeStatementWithContext`), and both the
 /// window and the statement read those values. They were evaluated here and
 /// again by the statement, so a `LET $r = rand()` had two values.
-fn windowParam(name: ?[]const u8, context: ExecutionContext) !?usize {
+pub fn windowParam(name: ?[]const u8, context: ExecutionContext) !?usize {
     const n = name orelse return null;
     for (context.query_param_names, context.query_param_values) |pn, pv| {
         if (std.mem.eql(u8, pn, n)) return try windowValue(pv);
@@ -1204,13 +1204,15 @@ pub fn checkPermission(context: ExecutionContext, permission: @import("security/
     };
 
     // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-003; FEATURE="GQL Auth DDL Persistence"; ASPECT=Enforcement; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
-    // Graph-grant widening now lives inside decide() (Task 2-5). The semantics
-    // are unchanged: a GRANT on the active graph widens access beyond the
-    // user's global role. Phase 4 will promote grants to first-class Policy rows.
+    // A GRANT on the active graph widens access beyond the user's global role
+    // there (gps.decide reads the live grant table). REQ-SEC-PER-GRAPH-GRANTS:
+    // the request names the active graph, so a grant or a graph-scoped policy
+    // counts on that graph only; with no active graph it is database-wide and
+    // only a global permission (or a `*` policy) allows it.
     const req = gps.DecisionRequest{
         .principal = principal_ptr,
         .action = action,
-        .resource = .{ .database = {} },
+        .resource = if (principal_ptr.active_graph) |g| .{ .graph = g } else .{ .database = {} },
     };
     // smp_allocator is the governance-approved global allocator for src/ (page_allocator is banned).
     const decision = try gps.decide(std.heap.smp_allocator, &req);
@@ -1232,11 +1234,10 @@ fn requirePolicyDdlAdmin(allocator: std.mem.Allocator, action: []const u8, conte
     const user_mgmt = @import("security/user_management.zig");
     if (!user_mgmt.isAuthEnabled()) return;
     const om = @import("otel_metrics");
-    const otel_lib = @import("otel");
     const audit_mod = @import("security/audit.zig");
-    const t0 = otel_lib.internal.clock.unixNanoNow();
+    const duration = om.DurationTimer.start();
     if (context.role == null) {
-        const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+        const d = duration.seconds();
         om.recordAuthzCheck(.deny, .rbac, d);
         // GAP-0919: denied escalation attempts are audited (they were a
         // blind spot — denials returned before any audit path ran).
@@ -1250,7 +1251,7 @@ fn requirePolicyDdlAdmin(allocator: std.mem.Allocator, action: []const u8, conte
         return error.Unauthenticated;
     }
     if (context.role.? != .Admin) {
-        const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+        const d = duration.seconds();
         om.recordAuthzCheck(.deny, .rbac, d);
         audit_mod.logSecurityGraphEvent(allocator, .{
             .event_type = .access_denied,
@@ -1262,7 +1263,7 @@ fn requirePolicyDdlAdmin(allocator: std.mem.Allocator, action: []const u8, conte
         });
         return error.Unauthorized;
     }
-    const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+    const d = duration.seconds();
     om.recordAuthzCheck(.allow, .rbac, d);
 }
 
@@ -1699,11 +1700,10 @@ pub fn endStatementSucceeded(owns: bool) (statement_proposals.Error || Statement
 
 fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     const om = @import("otel_metrics");
-    const otel_lib = @import("otel");
     const qt: om.QueryType = .read; // simplified — Task 10 follow-up: classify from stmt
     om.incQueryActive(qt);
     defer om.decQueryActive(qt);
-    const t0_exec = otel_lib.internal.clock.unixNanoNow();
+    const duration = om.DurationTimer.start();
     var exec_outcome: om.Outcome = .success;
     // NOTE: the concrete error VALUE is not capturable here — `errdefer |err|`
     // does not compile against this function's large inferred error set, and
@@ -1755,7 +1755,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
     var rows_returned: ?u64 = null;
 
     defer {
-        const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0_exec)) / 1_000_000_000.0;
+        const dur_s = duration.seconds();
         om.recordQueryExecution(op_name, op_name, qt, dur_s, exec_outcome, null);
         if (rows_returned) |rc| om.recordQueryRowsReturned(op_name, op_name, rc);
         if (exec_outcome == .error_) qspan.setErrorName("execution_error") else qspan.setOk();

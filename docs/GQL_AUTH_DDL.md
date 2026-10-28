@@ -121,12 +121,11 @@ role edge. Explicitly assigned roles resolve exactly as before.
 
 Write grants are not capped at read for these users. Grants are additive
 over the global role and a `WRITE` grant allows writes on its graph "even if
-the global role wouldn't" (Persistence, below); capping them for one role
-would break that contract. A grant-only user's grants are read from the live
-grant table, so a `GRANT` or `REVOKE` takes effect at once.
+the global role wouldn't" ([Per-graph grant semantics](#per-graph-grant-semantics));
+capping them for one role would break that contract.
 
 Implementation: `role_resolver.authRoleFromRecord` (the fallback),
-`user_management.Role.None`, `gps.isGrantOnly` and the grant-only branch of
+`user_management.Role.None`, `gps.isGrantOnly`, the per-graph grant step of
 `gps.decide`, `gps.writePermittedOn`, `gps.graphReadPermitted` and
 `session_graph.programReadPermitted` (the QUIC and gRPC handler gates).
 Regression: `tests/test_default_role_fail_closed.zig`
@@ -165,18 +164,58 @@ All auth DDL mutations persist to the HMAC-chained `__geode_security` graph via
 - **`GRANT READ|WRITE|SCHEMA|ALL ON GRAPH <g> TO <u>`** / **`REVOKE …`** → a
   `GraphGrant` node `(user_id, graph_name, action)` is created/removed in
   `__geode_security`, and the in-memory `GraphRBACPolicy` is updated immediately.
-  Grants are **additive** over the user's global role — they widen access, never
-  restrict it. Enforcement occurs at BIND time (a READ grant allows `u` to bind
-  graph `g`) and at query time (a WRITE/SCHEMA grant allows `u` to perform that
-  op on `g` even if the global role wouldn't). For a user with no stored role
-  (see [Users with no stored role](#users-with-no-stored-role-fail-closed-default))
-  the grants are the only access, and they are also required to read a graph.
+  See [Per-graph grant semantics](#per-graph-grant-semantics).
 
 On startup, `server_init` hydrates the security state from `__geode_security`:
 users are loaded via the existing `PersistentUserResolver`; custom roles are
 loaded via `auth_dispatch.hydrateCustomRolesFromGraph`; per-graph grants are
 loaded via `GraphRBACPolicy.loadGraphGrants(agm.listGraphGrants(...))`. All
 hydration is best-effort — a failure logs a warning and does not crash startup.
+
+### Per-graph grant semantics
+
+**Security fix (2026-10, REQ-SEC-PER-GRAPH-GRANTS).** For every role:
+
+| | Effect |
+|---|---|
+| Global role permission (`readwrite` writes, `admin` everything, ...) | Allows the operation on **every** graph. Unchanged. |
+| `GRANT READ ON GRAPH g TO u` | `u` may bind `g` (`USE GRAPH g`, a HELLO graph) and read it. |
+| `GRANT WRITE ON GRAPH g TO u` | `u` may change data on `g`, and on no other graph. |
+| `GRANT SCHEMA ON GRAPH g TO u` | `u` may create, replace or drop graph `g` (`CREATE GRAPH g`, `DROP GRAPH g`). Graph DDL also passes the write and bind gates, so a role without global write needs `WRITE` on `g` too (and `READ`, if it cannot bind `g` otherwise). Index and constraint DDL apply to every graph and still need the global schema permission (or a `FOR SCHEMA` policy on `*`). |
+| `GRANT ALL ON GRAPH g TO u` | All three, on `g`. |
+| `REVOKE ... ON GRAPH g FROM u` | Takes the privilege away. |
+| A deny policy covering `g` | Overrides a grant on `g`. |
+
+- **Additive.** A grant widens access beyond the global role, on its graph
+  only; it never restricts what the global role allows.
+- **Immediate.** `GRANT` and `REVOKE` take effect for the next statement on
+  every session, with no restart and no reconnect: `gps.decide` reads the
+  live grant table, and a change invalidates cached authorization decisions.
+- **Scoped.** A grant counts only for a request on its graph. A database-wide
+  request (a procedure, a self-locking `CALL`, index or constraint DDL) is
+  never allowed by a grant.
+- **Durable.** Grants survive a restart with the same scope: they are
+  reloaded from their `GraphGrant` nodes.
+- **Bind.** Binding a graph needs `READ` on it (or `admin`, or `readwrite` in
+  a single-tenant deployment). A user that should write `g` and does not
+  bind graphs through its role needs `READ` and `WRITE` on `g`.
+
+Until 2026-10, for a user with an explicit role, a runtime `GRANT` took
+effect only after a restart (grants reached authorization only as Policy
+rows migrated from them at startup), and after that restart a `WRITE` grant
+on one graph allowed writes on **every** graph (the database-wide write check
+matched any graph-scoped allow policy). A `REVOKE` never removed the migrated
+row, so a migrated grant could not be revoked. Startup now drops the
+`auto_migrated_grant_*` policies earlier versions created (a policy an
+operator named with that prefix is dropped too). The same scoping applies to
+`CREATE POLICY ... ON GRAPH g`: an allow policy scoped to one graph allows
+on that graph only; use `ON GRAPH *` for every graph.
+
+Implementation: the per-graph grant step of `gps.decide`,
+`gps.allowPolicyCovers`, `gps.writePermittedOn` (the QUIC and gRPC write
+gate), `session_graph.maySchema`, and
+`grant_migration.retireMigratedGrantPolicies`. Regression:
+`tests/test_per_graph_grants.zig` (`zig build test-per-graph-grants`).
 
 The write-through path is implemented as injectable callbacks to avoid Zig module
 diamond issues: `PersistentUserWriter` (user create/delete/password/role/active),
@@ -213,7 +252,7 @@ create/revoke) are wired at startup in `server_init`.
    see the RLS notes in [`../CLAUDE.md`](../CLAUDE.md) Known Limitations.
 
 4. **The BIND-time per-graph grant check is additive (permissive in default
-   config).** In the default single-tenant configuration every authenticated user
+   config).** In the default single-tenant configuration a `readwrite` user
    can bind any graph, so a `GRANT READ ON GRAPH g TO u` only becomes
    load-bearing under stricter multi-tenant modes where graph-level access is
    restricted by default, for `readonly`/`user` principals, and for users with

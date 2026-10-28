@@ -23,8 +23,8 @@
 //     frame and can observe state fields across the `finish()` boundary).
 //   * Spawns the real watchdog via the real `startDeadlineWatchdogTask`
 //     entry point (same path `cmdQuery` uses).
-//   * Waits long enough for the watchdog to complete at least two 100 ms
-//     ticks (so `tick_count >= 2`).
+//   * Waits (polling, capped at 5 s) until the watchdog has completed at
+//     least two 100 ms ticks (so `tick_count >= 2`).
 //   * Calls `state.finish()`.
 //   * Observes `tick_count` for 250 ms after `finish()` returns.  Post-fix:
 //     the counter MUST be stable — the watchdog has exited.  Pre-fix: the
@@ -44,13 +44,7 @@ const testing = std.testing;
 const qd = @import("query_deadline");
 
 fn sleepMs(ms: u64) void {
-    const ns: i64 = @intCast(ms * std.time.ns_per_ms);
-    const req = std.os.linux.timespec{
-        .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
-        .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 test "QueryDeadlineState.finish joins the watchdog thread (regression #746)" {
@@ -89,8 +83,17 @@ test "QueryDeadlineState.finish joins the watchdog thread (regression #746)" {
     const timeout_secs: u32 = 10;
     qd.startDeadlineWatchdogTask(allocator, timeout_secs, state_ptr);
 
-    // Let the watchdog run for ~250 ms — enough for at least 2 ticks.
-    sleepMs(250);
+    // Wait until the watchdog has completed at least 2 ticks (~200 ms when
+    // the thread gets a CPU). This is a liveness wait, not a latency bound:
+    // on a CPU-starved CI runner a fixed 250 ms sleep saw fewer than 2 ticks
+    // (job 17443763241) although the watchdog was alive. Poll with a 5 s
+    // cap, well below the 10 s watchdog timeout, so a watchdog that never
+    // starts still fails here.
+    const liveness_cap_ms: u64 = 5000;
+    var waited_ms: u64 = 0;
+    while (state_ptr.tick_count.load(.acquire) < 2 and waited_ms < liveness_cap_ms) : (waited_ms += 10) {
+        sleepMs(10);
+    }
 
     const ticks_before_finish = state_ptr.tick_count.load(.acquire);
     try testing.expect(ticks_before_finish >= 2); // watchdog is confirmed alive

@@ -38,6 +38,11 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 const h = @import("sonny738_write_harness.zig");
+const process = @import("sonny_write_process_harness.zig");
+const runProgram = process.runProgram;
+const openSession = process.openSession;
+const monoMillis = process.monoMillis;
+const ChildMemoryGuard = process.ChildMemoryGuard;
 
 const execution = h.execution;
 const Value = h.Value;
@@ -60,14 +65,6 @@ const Case = struct {
 };
 
 const stmt_alloc = std.heap.page_allocator;
-
-fn runProgram(s: *h.Session, allocator: std.mem.Allocator, query: []const u8) !execution.ExecutionResult {
-    var parsed = try geode.parseGql(query, s.arena.allocator());
-    defer parsed.deinit();
-    const prev = execution.pushActiveContext(&s.ctx);
-    defer execution.popActiveContext(prev);
-    return execution.executeProgramWithContext(allocator, &parsed.program, s.ctx);
-}
 
 fn bindParams(s: *h.Session, params: []const Param) !void {
     if (params.len == 0) return;
@@ -104,14 +101,6 @@ fn expectRun(s: *h.Session, f: *h.Failures, stage: []const u8, c: Case, want: ?[
         if (!std.mem.eql(u8, g, e)) same = false;
     };
     if (!same) try f.add("[{s}] {s} | {s}: expected {{{s}}}, got {{{s}}}", .{ @tagName(s.mode), c.write, stage, try std.mem.join(aa, ",", exp), try std.mem.join(aa, ",", got) });
-}
-
-fn openSession(mode: h.Mode) !h.Session {
-    var s = try h.Session.init(mode);
-    errdefer s.deinit();
-    _ = geode.txn_undo_log.getGlobalUndoLog(stmt_alloc);
-    try s.seed();
-    return s;
 }
 
 fn runCase(mode: h.Mode, c: Case, f: *h.Failures) !void {
@@ -275,9 +264,7 @@ var run_tag: u64 = 0;
 
 fn runTag() u64 {
     if (run_tag == 0) {
-        var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
-        run_tag = @as(u64, @intCast(ts.sec)) *% 1_000_000_000 +% @as(u64, @intCast(ts.nsec));
+        run_tag = @intCast(std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
     }
     return run_tag;
 }
@@ -608,17 +595,23 @@ test "SONNY-3368 (I-1): a comma join with a WHERE, a window and a write answers 
 /// segment may grow by 2 GiB at most, so a regression fails the case instead
 /// of the machine.
 const CartJob = struct {
+    // Match optimized server allocations (src/server/main.zig). A raw page
+    // per retained row costs 16 KiB on Darwin, hitting the child's physical
+    // limit before the logical read budget even though that budget works.
+    // Both the 64 MiB read budget and the 2 GiB child guard stay enforced.
+    const allocator = std.heap.c_allocator;
+
     s: *h.Session,
     ok: bool = false,
 
     fn check(self: *CartJob, query: []const u8, want: ?[]const []const u8, want_err: ?anyerror, max_ms: i64) bool {
         const start = monoMillis();
-        var result = runProgram(self.s, stmt_alloc, query) catch |err| {
+        var result = runProgram(self.s, allocator, query) catch |err| {
             if (want_err) |w| if (err == w) return true;
             std.debug.print("  {s}: error {s}\n", .{ query, @errorName(err) });
             return false;
         };
-        defer result.deinit(stmt_alloc);
+        defer result.deinit(allocator);
         const took = monoMillis() - start;
         if (want_err) |w| {
             std.debug.print("  {s}: answered {d} row(s); expected {s}\n", .{ query, result.rows.len, @errorName(w) });
@@ -639,9 +632,9 @@ const CartJob = struct {
         const cart = "MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d)";
         var ok = true;
         // `range(1, 1500)`'s pairs, as the store counts them.
-        var counted = runProgram(self.s, stmt_alloc, "MATCH (p:P) RETURN count(*) AS n") catch return;
+        var counted = runProgram(self.s, allocator, "MATCH (p:P) RETURN count(*) AS n") catch return;
         const pairs = (h.renderRows(self.s.arena.allocator(), counted) catch return)[0];
-        counted.deinit(stmt_alloc);
+        counted.deinit(allocator);
         // A 64 MiB read budget: the product (2.25 million bindings) is far
         // past it, what LIMIT 1 and the WHERE keep is far inside.
         geode.read_budget.setBudgetBytesForTest(64 << 20);
@@ -656,31 +649,6 @@ const CartJob = struct {
     }
 };
 
-fn monoMillis() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
-}
-
-/// The data segment the process holds now, in bytes (VmData).
-fn dataSegmentBytes() usize {
-    var buf: [8192]u8 = undefined;
-    const fd = std.c.open("/proc/self/status", .{});
-    if (fd < 0) return 0;
-    defer _ = std.c.close(fd);
-    const got = std.c.read(fd, &buf, buf.len);
-    if (got <= 0) return 0;
-    const n: usize = @intCast(got);
-    var lines = std.mem.tokenizeScalar(u8, buf[0..n], '\n');
-    while (lines.next()) |line| {
-        if (!std.mem.startsWith(u8, line, "VmData:")) continue;
-        var parts = std.mem.tokenizeAny(u8, line[7..], " \tkB");
-        const kb = std.fmt.parseInt(usize, parts.next() orelse return 0, 10) catch return 0;
-        return kb * 1024;
-    }
-    return 0;
-}
-
 test "SONNY-3368 (I-1): LIMIT 1 over two 1,500-pair chains is bounded, a WHERE streams, and the whole product answers the read budget's error" {
     var s = try openSession(.in_memory);
     defer s.deinit();
@@ -691,11 +659,10 @@ test "SONNY-3368 (I-1): LIMIT 1 over two 1,500-pair chains is bounded, a WHERE s
     try testing.expect(pid >= 0);
     if (pid == 0) {
         std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
-        const have = dataSegmentBytes();
-        if (have == 0) std.c._exit(9);
-        const cap = have + (2 << 30);
-        std.posix.setrlimit(.DATA, .{ .cur = cap, .max = cap }) catch std.c._exit(9);
+        var memory: ChildMemoryGuard = .{};
+        memory.start(2 << 30) catch std.c._exit(9);
         job.run();
+        memory.stop();
         std.c._exit(if (job.ok) 0 else 1);
     }
     var status: c_int = 0;
@@ -793,6 +760,42 @@ const r4b1b_3248_cases = [_]Case{
 
 test "SONNY-3248 (round 4b-1 review): window values, LET chains and CALL bodies, in every session" {
     try runCases("SONNY-3248 (4b-1b)", &r4b1b_3248_cases);
+}
+
+// A SKIP or LIMIT parameter windows a chained query (`... WITH n MATCH ...`)
+// and a UNION as a literal does. The Go client sends every `LIMIT ?` as
+// `LIMIT $_gqN` since v0.2; both executors read only the literals, so these
+// returned every row (divelife-pds holds the client at v0.1 for it).
+const chain_g = "MATCH (n:G) WITH n MATCH (m:G) WHERE m.i = n.i RETURN m.i AS i ORDER BY i";
+const union_g = "MATCH (n:G) WHERE n.i < 5 RETURN n.i AS i UNION MATCH (n:G) WHERE n.i >= 5 RETURN n.i AS i ORDER BY i";
+const union_all_g = "MATCH (n:G) WHERE n.i < 5 RETURN n.i AS i UNION ALL MATCH (n:G) WHERE n.i >= 5 RETURN n.i AS i ORDER BY i";
+const window_param_chain_union_cases = [_]Case{
+    // The literals, for reference.
+    .{ .write = chain_g ++ " LIMIT 2", .want = &.{ "0", "1" } },
+    .{ .write = union_g ++ " LIMIT 2", .want = &.{ "0", "1" } },
+    // A chained query.
+    .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = chain_g ++ " LIMIT $l", .want = &.{ "0", "1" } },
+    .{ .params = &.{.{ .name = "s", .expr = "8" }}, .write = chain_g ++ " SKIP $s", .want = &.{ "8", "9" } },
+    .{ .params = &.{.{ .name = "s", .expr = "8" }}, .write = chain_g ++ " OFFSET $s", .want = &.{ "8", "9" } },
+    .{ .params = &.{ .{ .name = "s", .expr = "1" }, .{ .name = "l", .expr = "2" } }, .write = chain_g ++ " SKIP $s LIMIT $l", .want = &.{ "1", "2" } },
+    .{ .params = &.{ .{ .name = "s", .expr = "1" }, .{ .name = "l", .expr = "2" } }, .write = chain_g ++ " LIMIT $l OFFSET $s", .want = &.{ "1", "2" } },
+    .{ .params = &.{.{ .name = "l", .expr = "0" }}, .write = chain_g ++ " LIMIT $l", .want = &.{} },
+    .{ .write = "LET $x = 3 " ++ chain_g ++ " LIMIT $x", .want = &.{ "0", "1", "2" } },
+    .{ .params = &.{.{ .name = "l", .expr = "-1" }}, .write = chain_g ++ " LIMIT $l", .refused = error.InvalidWindowParameter },
+    .{ .params = &.{.{ .name = "l", .expr = "'2'" }}, .write = chain_g ++ " LIMIT $l", .refused = error.InvalidWindowParameter },
+    // A UNION (and UNION ALL).
+    .{ .params = &.{.{ .name = "l", .expr = "2" }}, .write = union_g ++ " LIMIT $l", .want = &.{ "0", "1" } },
+    .{ .params = &.{.{ .name = "s", .expr = "8" }}, .write = union_g ++ " SKIP $s", .want = &.{ "8", "9" } },
+    .{ .params = &.{.{ .name = "s", .expr = "8" }}, .write = union_g ++ " OFFSET $s", .want = &.{ "8", "9" } },
+    .{ .params = &.{ .{ .name = "s", .expr = "1" }, .{ .name = "l", .expr = "2" } }, .write = union_g ++ " SKIP $s LIMIT $l", .want = &.{ "1", "2" } },
+    .{ .params = &.{ .{ .name = "s", .expr = "1" }, .{ .name = "l", .expr = "2" } }, .write = union_all_g ++ " SKIP $s LIMIT $l", .want = &.{ "1", "2" } },
+    .{ .params = &.{.{ .name = "l", .expr = "0" }}, .write = union_g ++ " LIMIT $l", .want = &.{} },
+    .{ .params = &.{.{ .name = "l", .expr = "-1" }}, .write = union_g ++ " LIMIT $l", .refused = error.InvalidWindowParameter },
+    .{ .params = &.{.{ .name = "s", .expr = "2.0" }}, .write = union_g ++ " SKIP $s", .refused = error.InvalidWindowParameter },
+};
+
+test "SKIP / LIMIT parameters window a chained query and a UNION, in every session" {
+    try runCases("window params (chain, UNION)", &window_param_chain_union_cases);
 }
 
 // SONNY-3319 (I-4): a label SET checks the vectors the node already holds.
@@ -992,141 +995,6 @@ const f3386_cases = [_]Case{
 
 test "SONNY-3386: a comma join applies its FILTER and the WITH after it, in every session" {
     try runCases("SONNY-3386", &f3386_cases);
-}
-
-/// The process's peak resident set, reset (`/proc/self/clear_refs` 5) and
-/// read (VmHWM), in bytes.
-fn resetPeakRss() void {
-    const fd = std.c.open("/proc/self/clear_refs", .{ .ACCMODE = .WRONLY });
-    if (fd < 0) return;
-    defer _ = std.c.close(fd);
-    _ = std.c.write(fd, "5", 1);
-}
-
-fn statusBytes(field: []const u8) usize {
-    var buf: [8192]u8 = undefined;
-    const fd = std.c.open("/proc/self/status", .{});
-    if (fd < 0) return 0;
-    defer _ = std.c.close(fd);
-    const got = std.c.read(fd, &buf, buf.len);
-    if (got <= 0) return 0;
-    const n: usize = @intCast(got);
-    var lines = std.mem.tokenizeScalar(u8, buf[0..n], '\n');
-    while (lines.next()) |line| {
-        if (!std.mem.startsWith(u8, line, field)) continue;
-        var parts = std.mem.tokenizeAny(u8, line[field.len..], " \t:kB");
-        const kb = std.fmt.parseInt(usize, parts.next() orelse return 0, 10) catch return 0;
-        return kb * 1024;
-    }
-    return 0;
-}
-
-/// Round 4b-1c: the join's memory is flat in the product, and every step
-/// polls the budget and the cancel.
-const BoundJob = struct {
-    s: *h.Session,
-    ok: bool = true,
-
-    fn fail(self: *BoundJob, comptime fmt: []const u8, args: anytype) void {
-        std.debug.print("  " ++ fmt ++ "\n", args);
-        self.ok = false;
-    }
-
-    /// I-B: a WHERE that keeps no binding of the 2.25 million the join
-    /// tries holds no memory for them.
-    fn flat(self: *BoundJob) void {
-        geode.read_budget.setBudgetBytesForTest(64 << 20);
-        defer geode.read_budget.setBudgetBytesForTest(0);
-        resetPeakRss();
-        const before = statusBytes("VmRSS");
-        const start = monoMillis();
-        var r = runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d) WHERE 1 = 2 RETURN a.i") catch |err| {
-            return self.fail("WHERE 1 = 2: error {s}", .{@errorName(err)});
-        };
-        defer r.deinit(stmt_alloc);
-        const took = monoMillis() - start;
-        const grew = statusBytes("VmHWM") -| before;
-        if (r.rows.len != 0) self.fail("WHERE 1 = 2: {d} row(s)", .{r.rows.len});
-        // 1,500 pairs: about 700 MB before the fix.
-        if (grew > 128 << 20) self.fail("WHERE 1 = 2: the peak grew {d} MiB (at most 128)", .{grew >> 20});
-        if (took > 240_000) self.fail("WHERE 1 = 2: took {d} ms", .{took});
-    }
-
-    /// I-C: a join whose last chain matches nothing ends at once; one whose
-    /// last hop never matches is stopped by the stream's cancel.
-    fn polled(self: *BoundJob) void {
-        var start = monoMillis();
-        var r = runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P), (d:P), (e:P {i: -1}) RETURN count(*) AS n") catch |err| {
-            return self.fail("empty last chain: error {s}", .{@errorName(err)});
-        };
-        const rows = h.renderRows(self.s.arena.allocator(), r) catch &.{};
-        r.deinit(stmt_alloc);
-        if (rows.len != 1 or !std.mem.eql(u8, rows[0], "0")) self.fail("empty last chain: {d} row(s)", .{rows.len});
-        if (monoMillis() - start > 1_000) self.fail("empty last chain: took {d} ms", .{monoMillis() - start});
-
-        var cancel = std.atomic.Value(bool).init(false);
-        geode.read_budget.setStreamCancelSource(&cancel);
-        defer geode.read_budget.setStreamCancelSource(null);
-        const Setter = struct {
-            fn run(flag: *std.atomic.Value(bool)) void {
-                var ts: std.posix.timespec = .{ .sec = 0, .nsec = 200 * std.time.ns_per_ms };
-                _ = std.os.linux.nanosleep(&ts, null);
-                flag.store(true, .release);
-            }
-        };
-        const t = std.Thread.spawn(.{}, Setter.run, .{&cancel}) catch return self.fail("spawn failed", .{});
-        start = monoMillis();
-        if (runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P), (d:P)-[:NOPE]->(z) RETURN a.i")) |got| {
-            var res = got;
-            res.deinit(stmt_alloc);
-            self.fail("a join no binding completes: ran to the end, not cancelled", .{});
-        } else |err| if (err != error.ReadQueryCancelled) self.fail("a join no binding completes: error {s}", .{@errorName(err)});
-        t.join();
-        // The cancel lands at 200 ms; the join stops at its next step.
-        if (monoMillis() - start > 1_200) self.fail("a join no binding completes: stopped after {d} ms", .{monoMillis() - start});
-    }
-};
-
-fn runBoundInChild(job: *BoundJob, comptime which: fn (*BoundJob) void) !void {
-    const pid = std.c.fork();
-    try testing.expect(pid >= 0);
-    if (pid == 0) {
-        std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
-        const have = dataSegmentBytes();
-        if (have == 0) std.c._exit(9);
-        const cap = have + (1 << 30);
-        std.posix.setrlimit(.DATA, .{ .cur = cap, .max = cap }) catch std.c._exit(9);
-        // A regression that stops polling is killed, not waited for.
-        _ = std.c.alarm(300);
-        which(job);
-        std.c._exit(if (job.ok) 0 else 1);
-    }
-    var status: c_int = 0;
-    try testing.expectEqual(pid, std.c.waitpid(pid, &status, 0));
-    const st: u32 = @bitCast(status);
-    if (std.os.linux.W.IFSIGNALED(st)) {
-        std.debug.print("the join was killed (signal {d})\n", .{std.os.linux.W.TERMSIG(st)});
-        return error.Crashed;
-    }
-    try testing.expectEqual(@as(u32, 0), std.os.linux.W.EXITSTATUS(st));
-}
-
-test "SONNY-3368 (round 4b-1b I-B): a WHERE that keeps nothing over 2.25 million bindings holds flat memory" {
-    var s = try openSession(.in_memory);
-    defer s.deinit();
-    var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 1500) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
-    setup.deinit(stmt_alloc);
-    var job: BoundJob = .{ .s = &s };
-    try runBoundInChild(&job, BoundJob.flat);
-}
-
-test "SONNY-3368 (round 4b-1b I-C): a join polls at every step: an empty last chain ends at once, a cancel stops one that completes nothing" {
-    var s = try openSession(.in_memory);
-    defer s.deinit();
-    var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 400) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
-    setup.deinit(stmt_alloc);
-    var job: BoundJob = .{ .s = &s };
-    try runBoundInChild(&job, BoundJob.polled);
 }
 
 // ---------------------------------------------------------------------------

@@ -96,10 +96,16 @@ DROP INDEX IF EXISTS person_age_idx;
 > parse. The **implemented and supported** backup/restore surface is the CLI:
 >
 > ```bash
-> geode backup create --output ./full.backup [--compress]   # engine-backed full backup
+> geode backup create --output ./full.backup [--compress]   # full backup from the server (--server)
+> geode backup create --output ./full.backup --local --data-dir /var/lib/geode  # from a local data directory
 > geode restore ./full.backup --yes                          # restore from a backup file
 > geode backup list [--dir ./backups]                        # list local backups
 > ```
+>
+> If the server backup fails (unreachable, timeout, stalled transfer, server
+> error), `backup create` exits 1, leaves no output file and does not fall
+> back to a local backup. A local data-directory backup runs only with
+> `--local`, which needs `--data-dir` or `GEODE_DATA_DIR`.
 >
 > The CLI is engine-backed by `BackupManager` (`src/storage/backup.zig`):
 > full backup of the per-graph storage tree with CRC32 integrity verification

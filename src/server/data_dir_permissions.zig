@@ -31,53 +31,11 @@ pub const DataDirPermissionResult = enum {
     unknown,
 };
 
-// libc bindings: Zig 0.16's std.Io.Dir.setPermissions calls fchmod on the
-// open-dir fd, which panics with BADF on Linux when the dir was opened
-// via standard path lookup (the fd lacks the rights fchmod needs).  We
-// therefore use POSIX path-based chmod / stat directly, which is what
-// `chmod`/`stat` would do anyway.  Avoids the stdlib bug while remaining
-// cross-platform.
-extern "c" fn chmod(path: [*:0]const u8, mode: c_uint) c_int;
-
-/// Look up the POSIX permission bits for `path`.  Returns null on any
-/// stat failure (treated as `.unknown` by the caller).
-///
-/// On Linux we go through the raw `fstatat` syscall via std.os.linux
-/// because libc symbols are versioned (`__xstat`/`fstatat64`) and the
-/// plain `stat` libc shim is missing from the Zig 0.16 stdlib on Linux.
-/// On other POSIX targets we use the libc `stat()` via std.c.
+/// Look up POSIX permission bits with the host's filesystem implementation.
+/// This follows symlinks, matching the subsequent permission update.
 fn statMode(path: []const u8) ?u32 {
-    var buf: [std.fs.max_path_bytes + 1]u8 = undefined;
-    if (path.len >= buf.len) return null;
-    @memcpy(buf[0..path.len], path);
-    buf[path.len] = 0;
-    const path_z: [*:0]const u8 = @ptrCast(&buf[0]);
-
-    if (comptime builtin.os.tag == .linux) {
-        var sx: std.os.linux.Statx = undefined;
-        const mask: std.os.linux.STATX = .{ .TYPE = true, .MODE = true };
-        const rc = std.os.linux.statx(
-            std.os.linux.AT.FDCWD,
-            path_z,
-            0, // flags: follow symlinks
-            mask,
-            &sx,
-        );
-        if (std.os.linux.errno(rc) != .SUCCESS) return null;
-        return @as(u32, @intCast(sx.mode & 0o777));
-    } else {
-        // Non-Linux (macOS / BSD): std.c.stat is unwired in Zig 0.16 —
-        // the symbol resolves to `private.stat` which is undefined on
-        // these targets, breaking aarch64-macos cross-compile (release
-        // pipeline #2530555362 build-release stage). Geode's production
-        // deployment target is Linux and the security model (chmod 0o700
-        // data_dir) is a Linux-only concern, so non-Linux falls through
-        // to `.unknown` and the operator notices via the structured log.
-        // ensureSecureDataDirPermissions already returns `.not_applicable`
-        // for Windows; non-Linux Unix lands here without blocking
-        // bootstrap.
-        return null;
-    }
+    const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .follow_symlinks = true }) catch return null;
+    return @intCast(stat.permissions.toMode() & 0o777);
 }
 
 /// Stat `data_dir_opt` (or `"."` if null) and ensure it is mode 0o700 or
@@ -102,13 +60,12 @@ pub fn ensureSecureDataDirPermissions(data_dir_opt: ?[]const u8) DataDirPermissi
     // Tighten in place to 0o700.  On failure (e.g. NFS, read-only mount,
     // foreign uid) we refuse to write the secret and let the operator
     // resolve the permission state out-of-band.
-    var buf: [std.fs.max_path_bytes + 1]u8 = undefined;
-    if (data_dir.len >= buf.len) return .refuse;
-    @memcpy(buf[0..data_dir.len], data_dir);
-    buf[data_dir.len] = 0;
-    const path_z: [*:0]const u8 = @ptrCast(&buf[0]);
-
-    if (chmod(path_z, 0o700) != 0) return .refuse;
+    std.Io.Dir.cwd().setFilePermissions(
+        std.Io.Threaded.global_single_threaded.io(),
+        data_dir,
+        std.Io.File.Permissions.fromMode(0o700),
+        .{},
+    ) catch return .refuse;
     return .tightened;
 }
 

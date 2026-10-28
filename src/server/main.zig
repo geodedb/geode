@@ -743,12 +743,11 @@ var g_shutdown_flush_done = std.atomic.Value(bool).init(false);
 
 fn compat_sleepMs(ms: u64) void {
     if (comptime @import("builtin").os.tag == .linux) {
-        var req = std.os.linux.timespec{
+        const req = std.os.linux.timespec{
             .sec = @intCast(ms / 1000),
             .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
         };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     } else {
         var req = std.c.timespec{
             .sec = @intCast(ms / 1000),
@@ -3195,11 +3194,12 @@ pub fn main() !void {
                     // the process-wide watchdog above owns the error-level
                     // "restart pod" signal for the all-frozen case.
                     const reg = quic_connection_handler.getProtoReaderRegistry();
-                    var ts: std.os.linux.timespec = undefined;
-                    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-                    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
-                    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
-                    const now_ns: u64 = sec * std.time.ns_per_s + nsec;
+                    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+                    _ = if (comptime builtin.os.tag == .linux)
+                        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+                    else
+                        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+                    const now_ns: u64 = @as(u64, @intCast(@max(ts.sec, 0))) * std.time.ns_per_s + @as(u64, @intCast(@max(ts.nsec, 0)));
                     if (reg.connectionLevelStall(now_ns, stall_threshold_ns)) |snap| {
                         // GAP-ENT-0045: the whole connection is wedged (every
                         // stream idle past threshold — client likely gone).
@@ -3236,9 +3236,8 @@ pub fn main() !void {
                                 // k8s restartPolicy restarts the pod. (This path
                                 // is linux-only — readListenerRxQueue returns
                                 // null elsewhere.)
-                                var flush_req = std.os.linux.timespec{ .sec = 0, .nsec = 200 * std.time.ns_per_ms };
-                                var flush_rem: std.os.linux.timespec = undefined;
-                                _ = std.os.linux.nanosleep(&flush_req, &flush_rem);
+                                const flush_req = std.os.linux.timespec{ .sec = 0, .nsec = 200 * std.time.ns_per_ms };
+                                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, flush_req.sec) * std.time.ns_per_s + flush_req.nsec), .awake) catch {};
                                 std.process.exit(70); // EX_SOFTWARE
                             }
                         }

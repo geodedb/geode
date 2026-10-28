@@ -470,12 +470,12 @@ pub fn setNodePropertyFromValue(
     // executor/connection thread — the same thread that owns the fts engine
     // (verified: setNodePropertyFromValue is never called from bulkMergeNode or
     // any worker thread).
-    // `.create` (append-only) — NOT `.update`. The fts-storage engine adds a
+    // `.upsert` (append-only) — NOT `.update`. The fts-storage engine adds a
     // doc_id to `all_tombstones` on deleteDocument and NEVER removes it on a
     // later indexDocument (the set is only rebuilt from segments on reopen/
     // compaction). So `.update` (deleteNode-then-reindex on the SAME node_id)
     // left the re-indexed document filtered out by search → the 2026-06-07
-    // "zero results" bug for live CREATE/SET. `.create` skips the tombstone so
+    // "zero results" bug for live CREATE/SET. `.upsert` skips the tombstone so
     // the document is immediately searchable.
     //
     // KNOWN RESIDUAL (tracked, not self-healing): a TRUE value change via SET on
@@ -485,7 +485,7 @@ pub fn setNodePropertyFromValue(
     // reclaiming stale postings needs an engine-level un-tombstone-on-reindex
     // (or a compaction trigger) — see
     // docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md.
-    fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, labels, .create) catch |err| {
+    fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, labels, .upsert) catch |err| {
         log.warn("fts maintain (SET) failed for node {d} prop '{s}': {}", .{ node_id, key, err });
     };
 }

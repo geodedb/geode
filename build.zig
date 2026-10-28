@@ -244,6 +244,13 @@ fn shardDep(
             .{ what, @tagName(dep.id) },
         );
     };
+    // Include the test source even when a process aborts before reporting a
+    // test name; a generic "run test" otherwise hides the failing artifact.
+    if (run.producer) |artifact| {
+        if (artifact.root_module.root_source_file) |source| {
+            dep.name = dep.owner.fmt("run {s}", .{source.getDisplayName()});
+        }
+    }
     if (g_test_compile_step) |compile_all| {
         if (run.producer) |artifact| compile_all.dependOn(&artifact.step);
     }
@@ -3553,6 +3560,7 @@ pub fn build(b: *std.Build) void {
     e2e_ts_tests.root_module.addImport("gql_functions", ts_gql_mod);
     e2e_ts_tests.root_module.addImport("timeseries_wrapper", timeseries_wrapper_mod);
     const run_e2e_ts_tests = b.addRunArtifact(e2e_ts_tests);
+    b.step("test-e2e-timeseries", "Run time-series storage and query integration tests").dependOn(&run_e2e_ts_tests.step);
 
     // GAP-0279: ts_store_integration test (Store API surface)
     const ts_store_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/ts_store_integration.zig"), .target = target, .optimize = optimize }) });
@@ -8827,6 +8835,24 @@ pub fn build(b: *std.Build) void {
     const default_role_step = b.step("test-default-role-fail-closed", "Run the fail-closed default role regression (a user with no stored role gets no global read/write/admin; per-graph grants work as granted; explicit roles and the bootstrap admin unchanged)");
     default_role_step.dependOn(&run_default_role_tests.step);
 
+    // REQ-SEC-PER-GRAPH-GRANTS: a per-graph GRANT/REVOKE takes effect at once
+    // and only on its graph, for every role; grants survive a restart scoped.
+    const per_graph_grants_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_per_graph_grants.zig"), .target = target, .optimize = optimize });
+    per_graph_grants_test_mod.link_libc = true;
+    per_graph_grants_test_mod.addImport("geode", root_mod);
+    per_graph_grants_test_mod.addImport("schema", schema_mod);
+    per_graph_grants_test_mod.addImport("protobuf", protobuf_mod);
+    per_graph_grants_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    per_graph_grants_test_mod.addImport("logging", logging_mod);
+    per_graph_grants_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    per_graph_grants_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    per_graph_grants_test_mod.addImport("grant_migration", grant_migration_mod);
+    const per_graph_grants_tests = b.addTest(.{ .root_module = per_graph_grants_test_mod });
+    const run_per_graph_grants_tests = b.addRunArtifact(per_graph_grants_tests);
+    shardDep(test_step, &run_per_graph_grants_tests.step, 1, test_shard_loads, test_shard_index);
+    const per_graph_grants_step = b.step("test-per-graph-grants", "Run the per-graph grants regression (GRANT/REVOKE READ|WRITE|SCHEMA ON GRAPH take effect at once and only on that graph, for every role; global roles unchanged; grants survive a restart scoped)");
+    per_graph_grants_step.dependOn(&run_per_graph_grants_tests.step);
+
     // SONNY-2749: a program's writes run under the write lock of the graph they
     // write (query_traits.statementPlan.lock_graph), not the session graph's; a
     // program that changes data on several graphs is refused. Races MERGEs of
@@ -9020,6 +9046,20 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2824_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2824_step = b.step("test-sonny2824-hello-graph-gate", "Run SONNY-2824 regression (spawns a server: a QUIC or gRPC HELLO naming a missing graph creates it only for a principal with the schema permission on it; a ReadWrite user is refused and nothing is created; a GPS FOR SCHEMA policy grants it)");
     sonny2824_step.dependOn(&run_sonny2824_tests.step);
+
+    // `geode backup create` reports a failed remote backup as a failure
+    // (exit 1, no output file) instead of silently writing a local
+    // data-directory backup and printing success; the local path runs only
+    // with --local and an explicit data directory. Spawns the installed CLI
+    // against a closed loopback port; no server.
+    const backup_remote_failure_mod = b.createModule(.{ .root_source_file = b.path("tests/test_backup_create_remote_failure.zig"), .target = target, .optimize = optimize });
+    backup_remote_failure_mod.link_libc = true;
+    const backup_remote_failure_tests = b.addTest(.{ .root_module = backup_remote_failure_mod });
+    const run_backup_remote_failure_tests = b.addRunArtifact(backup_remote_failure_tests);
+    run_backup_remote_failure_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_backup_remote_failure_tests.step, 1, test_shard_loads, test_shard_index);
+    const backup_remote_failure_step = b.step("test-backup-create-remote-failure", "Run backup-create regression (a failed remote backup exits non-zero with no output file instead of falling back to a local backup; --local needs an explicit data directory)");
+    backup_remote_failure_step.dependOn(&run_backup_remote_failure_tests.step);
 
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
@@ -10215,6 +10255,22 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         const step = b.step("test-sonny-write-allowlist-r4b", "Run the Task W round 4b-1 regression (SONNY-3318, 3319, 3320, 3322, 3248, 3244): a comma pattern binds every chain for reads and writes, and aggregates; a label SET beside a vector SET checks the new label's index; chained MERGE actions fire on the last MERGE clause; a relationship variable is read by id after 150 and 600 more edge inserts; SKIP / LIMIT parameters window every read; one SET clause assigns a property once (22G03); a LET is scoped to its query; in the in-memory, plain persisted, tenant-scoped and RLS-policy sessions");
         step.dependOn(&run_tests.step);
+
+        // Resource assertions need a fresh process, without the persisted
+        // suite's allocator history or inherited lifetime resident peak.
+        // The original named target still runs all 22 cases; the aggregate
+        // schedules each executable once and test-compile covers both.
+        const memory_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny_write_allowlist_r4b_memory.zig"), .target = target, .optimize = optimize });
+        memory_mod.link_libc = true;
+        memory_mod.addImport("geode", root_mod);
+        memory_mod.addImport("logging", logging_mod);
+        memory_mod.addImport("rls_types", rls_types_mod);
+        const memory_tests = b.addTest(.{ .root_module = memory_mod });
+        const run_memory_tests = b.addRunArtifact(memory_tests);
+        shardDep(test_step, &run_memory_tests.step, 1, test_shard_loads, test_shard_index);
+        const memory_step = b.step("test-sonny-write-allowlist-r4b-memory", "Run the SONNY-3368 resident-memory guard, flat-memory join and cancellation regressions in a fresh process");
+        memory_step.dependOn(&run_memory_tests.step);
+        step.dependOn(&run_memory_tests.step);
     }
 
     // SONNY-2977: MATCH (x {k: v}) [WHERE ...] SET changes every node holding
@@ -12588,6 +12644,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_for_write_body_tests.step, 0, test_shard_loads, test_shard_index);
     const for_write_body_step = b.step("test-for-write-body", "Run geode#876 FOR … IN write-body composition regressions");
     for_write_body_step.dependOn(&run_for_write_body_tests.step);
+
+    // FOR ... RETURN aggregates over the loop's rows and names a bare
+    // variable column after it. See tests/test_for_aggregation.zig.
+    const for_aggregation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_for_aggregation.zig"), .target = target, .optimize = optimize });
+    for_aggregation_test_mod.addImport("geode", root_mod);
+    const for_aggregation_tests = b.addTest(.{ .root_module = for_aggregation_test_mod });
+    const run_for_aggregation_tests = b.addRunArtifact(for_aggregation_tests);
+    shardDep(test_step, &run_for_aggregation_tests.step, 0, test_shard_loads, test_shard_index);
+    const for_aggregation_step = b.step("test-for-aggregation", "Run FOR ... RETURN aggregation and column-naming regressions");
+    for_aggregation_step.dependOn(&run_for_aggregation_tests.step);
 
     // geode#873 / #877 / ENG-3905 residual: vector_dot truncates to an integer,
     // the vector scalar functions panic on out-of-range magnitudes, and

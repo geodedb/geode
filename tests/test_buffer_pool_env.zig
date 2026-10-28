@@ -29,10 +29,7 @@ extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 /// initGlobalAdapter (which needs a real filesystem path) can use it.
 fn tmpDirPath(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const raw = @as(isize, @bitCast(rc));
-    if (raw < 0) return error.GetCwdFailed;
-    const cwd_len = @as(usize, @intCast(raw));
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual = cwd_len;
     while (actual > 0 and cwd_buf[actual - 1] == 0) : (actual -= 1) {}
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual], &tmp.sub_path });
