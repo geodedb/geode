@@ -65,16 +65,6 @@ fn sleepMs(ms: u64) void {
     }
 }
 
-fn setNonBlocking(file: std.Io.File) !void {
-    if (comptime builtin.os.tag != .linux) return;
-    const fd = file.handle;
-    const flags = std.os.linux.fcntl(fd, std.posix.F.GETFL, 0);
-    if (@as(isize, @bitCast(flags)) < 0) return error.FcntlGetFailed;
-    const new_flags = flags | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
-    const rc = std.os.linux.fcntl(fd, std.posix.F.SETFL, new_flags);
-    if (@as(isize, @bitCast(rc)) < 0) return error.FcntlSetFailed;
-}
-
 fn binaryPresent() bool {
     const io = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io, BINARY_PATH, .{}) catch return false;
@@ -160,15 +150,30 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
     return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
 }
 
+/// Regular files let the nodes keep logging while the test waits for a query.
+/// Polling a pipe only between synchronous queries can fill it and stall Raft.
+/// Positional reads leave the shared stdout/stderr write offset untouched.
 const Capture = struct {
+    file: ?std.Io.File = null,
     buf: std.ArrayList(u8) = .empty,
-    fn drain(self: *Capture, gpa: std.mem.Allocator, io: std.Io, file: std.Io.File) void {
+
+    fn deinit(self: *Capture, gpa: std.mem.Allocator, io: std.Io) void {
+        if (self.file) |file| file.close(io);
+        self.buf.deinit(gpa);
+    }
+
+    fn drain(self: *Capture, gpa: std.mem.Allocator, io: std.Io) void {
+        const file = self.file orelse return;
+        const end = (file.stat(io) catch return).size;
         var tmp: [8192]u8 = undefined;
-        const n = file.readStreaming(io, &.{&tmp}) catch |err| switch (err) {
-            error.WouldBlock => return,
-            else => return,
-        };
-        if (n > 0) self.buf.appendSlice(gpa, tmp[0..n]) catch {};
+        // Bound each observation to the size at entry; a busy logger must not
+        // prevent the test from checking its deadlines.
+        while (self.buf.items.len < end) {
+            const remaining: usize = @intCast(@min(tmp.len, end - self.buf.items.len));
+            const n = file.readPositional(io, &.{tmp[0..remaining]}, self.buf.items.len) catch return;
+            if (n == 0) return;
+            self.buf.appendSlice(gpa, tmp[0..n]) catch return;
+        }
     }
 };
 
@@ -223,12 +228,8 @@ fn stateLinesSince(buf: []const u8, off: usize, id: usize) struct { lines: usize
     return .{ .lines = lines, .leader = leader };
 }
 
-/// Robust teardown: SIGTERM each node, then keep draining its stdout+stderr
-/// pipe while polling for exit, with a SIGKILL fallback after a deadline.  This
-/// avoids the teardown deadlock where `Child.kill` (SIGTERM + a BLOCKING wait4,
-/// no SIGKILL fallback in Zig 0.16) hangs forever because the node can't finish
-/// its graceful shutdown while a logging thread is blocked on a full pipe that
-/// nobody is draining.  Reaps each child so no zombie is left.
+/// Bounded teardown: SIGTERM every node, poll for exit, then SIGKILL and reap
+/// any node that did not finish shutdown. Log capture never blocks a writer.
 /// Non-blocking reap. Returns true once `pid` has been collected.  The raw
 /// linux `waitpid` returns the child pid on a successful reap, 0 when the child
 /// is still alive (WNOHANG), or a negative errno otherwise.
@@ -239,14 +240,13 @@ fn tryReap(pid: i32, flags: u32) bool {
 }
 
 fn teardownNodes(children: []std.process.Child, captures: []Capture, spawned: usize, gpa: std.mem.Allocator, io: std.Io) void {
-    // Phase 1: SIGTERM and keep draining pipes so a node's graceful-shutdown
-    // logging never blocks on a full pipe.  Poll (non-blocking) for exit.
+    // Phase 1: SIGTERM and poll for exit, retaining the final log records.
     for (children[0..spawned]) |*ch| {
         if (ch.id) |pid| std.posix.kill(pid, std.posix.SIG.TERM) catch {};
     }
     const term_deadline = nowMillis() + 5_000;
     while (nowMillis() < term_deadline) {
-        drainAll(captures, children, gpa, io);
+        drainAll(captures, gpa, io);
         var all_gone = true;
         for (children[0..spawned]) |*ch| {
             if (ch.id == null) continue;
@@ -284,18 +284,10 @@ fn teardownNodes(children: []std.process.Child, captures: []Capture, spawned: us
     }
 }
 
-/// Continuously drain every node's stdout+stderr pipe.  CRITICAL: the three
-/// `--log-level info` nodes keep logging throughout the replication phases; if
-/// the harness ever stops reading, a node's pipe buffer (64 KiB) fills, its
-/// logging thread blocks in `pipe_write`, and the whole node stalls — which both
-/// spuriously fails replication AND wedges teardown (`ch.kill` → `do_wait` while
-/// the node can't exit on a blocked pipe).  Call this inside every sleep in the
-/// replication/hold loops, not just startup.
-fn drainAll(captures: []Capture, children: []std.process.Child, gpa: std.mem.Allocator, io: std.Io) void {
-    for (children, 0..) |*ch, i| {
-        if (ch.stdout) |f| captures[i].drain(gpa, io, f);
-        if (ch.stderr) |f| captures[i].drain(gpa, io, f);
-    }
+/// Refresh each node's log snapshot. Writers run independently of these reads,
+/// including during synchronous client queries and teardown.
+fn drainAll(captures: []Capture, gpa: std.mem.Allocator, io: std.Io) void {
+    for (captures) |*capture| capture.drain(gpa, io);
 }
 
 /// Index of the node whose last observed raft state is "leader", or null.
@@ -330,7 +322,6 @@ fn assertReplicatesToHealthyFollowers(
     io: std.Io,
     aa: std.mem.Allocator,
     captures: []Capture,
-    children: []std.process.Child,
     label: []const u8,
     create_q: []const u8,
 ) !void {
@@ -343,7 +334,7 @@ fn assertReplicatesToHealthyFollowers(
     var sent: usize = 0;
     var attempt: usize = 0;
     const li: usize = while (attempt < 12) : (attempt += 1) {
-        drainAll(captures, children, gpa, io);
+        drainAll(captures, gpa, io);
         const idx = currentLeaderIdx(captures) orelse {
             sleepMs(500);
             continue;
@@ -385,7 +376,7 @@ fn assertReplicatesToHealthyFollowers(
     while (nowMillis() < deadline) {
         sleepMs(1000);
         polls += 1;
-        drainAll(captures, children, gpa, io);
+        drainAll(captures, gpa, io);
         var agreed: ?u64 = null;
         var all_agree = true;
         for (0..3) |ni| {
@@ -460,12 +451,18 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     var spawned: usize = 0;
     var captures: [3]Capture = .{ .{}, .{}, .{} };
     // Free the capture buffers LAST (registered first → runs last, LIFO).
-    defer for (&captures) |*c| c.buf.deinit(gpa);
-    // Robust teardown (drains pipes while terminating, SIGKILL fallback) so a
-    // node blocked on a full log pipe can't wedge `Child.kill`'s blocking wait.
+    defer for (&captures) |*c| c.deinit(gpa, io);
+    // Bound graceful shutdown with a SIGKILL fallback.
     // Registered last → runs FIRST, so it can still drain into the (not-yet-
     // freed) capture buffers.
     defer teardownNodes(&children, &captures, spawned, gpa, io);
+    errdefer {
+        drainAll(&captures, gpa, io);
+        for (captures[0..spawned], 0..) |capture, i| {
+            const start = capture.buf.items.len - @min(capture.buf.items.len, 1500);
+            std.debug.print("\n--- node {d} final log tail ---\n{s}\n", .{ i + 1, capture.buf.items[start..] });
+        }
+    }
 
     for (0..3) |i| {
         const ip = NODE_IPS[i];
@@ -494,23 +491,21 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
         if (posixGetenv("HOME")) |p| try env.put("HOME", p);
         if (posixGetenv("LD_LIBRARY_PATH")) |p| try env.put("LD_LIBRARY_PATH", p);
 
-        children[i] = std.process.spawn(io, .{ .argv = &args, .environ_map = env, .stdout = .pipe, .stderr = .pipe }) catch |err| {
+        const log_path = try std.fmt.allocPrint(aa, "{s}/node{d}.log", .{ certs.dir, i + 1 });
+        captures[i].file = try std.Io.Dir.cwd().createFile(io, log_path, .{ .read = true });
+        const log_file = captures[i].file.?;
+        children[i] = std.process.spawn(io, .{ .argv = &args, .environ_map = env, .stdout = .{ .file = log_file }, .stderr = .{ .file = log_file } }) catch |err| {
             std.debug.print("spawn node {d} failed: {s}\n", .{ i + 1, @errorName(err) });
             return error.SkipZigTest;
         };
         spawned += 1;
-        try setNonBlocking(children[i].stdout.?);
-        try setNonBlocking(children[i].stderr.?);
     }
 
     // Phase 1: wait for a single leader + two followers at a common term.
     const startup_deadline = nowMillis() + STARTUP_DEADLINE_MS;
     var have_quorum = false;
     while (nowMillis() < startup_deadline) {
-        for (0..3) |i| {
-            captures[i].drain(gpa, io, children[i].stdout.?);
-            captures[i].drain(gpa, io, children[i].stderr.?);
-        }
+        drainAll(&captures, gpa, io);
         var leaders: usize = 0;
         var followers: usize = 0;
         var leader_term: i64 = -1;
@@ -548,10 +543,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     var no_leader_windows: usize = 0;
     while (nowMillis() < hold_deadline) {
         sleepMs(1000);
-        for (0..3) |i| {
-            captures[i].drain(gpa, io, children[i].stdout.?);
-            captures[i].drain(gpa, io, children[i].stderr.?);
-        }
+        drainAll(&captures, gpa, io);
         var leaders: usize = 0;
         for (0..3) |i| {
             const s = lastState(captures[i].buf.items, i + 1);
@@ -600,7 +592,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     // catches the re-open's "leader-only" divergence. The write is sent to the
     // CURRENT leader (re-resolved, retry on a leadership move) so the assertion
     // measures replication, not a leadership race.
-    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, &children, "ReplTest", "CREATE (:ReplTest {v:1})");
+    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, "ReplTest", "CREATE (:ReplTest {v:1})");
 
     // Phase 4 — REPLICATION OF A `CREATE ... RETURN` (re-open regression).
     // A `CREATE (...) RETURN ...` reaches the executor via the query path, which
@@ -610,7 +602,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     // (crud_operations.zig::clusterReplicateNodeCreate) now replicates a
     // RETURN-create through Raft and evaluates the constant RETURN. Assert it
     // lands on every healthy follower.
-    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, &children, "ReplRet", "CREATE (:ReplRet {v:2}) RETURN 1");
+    try assertReplicatesToHealthyFollowers(gpa, io, aa, &captures, "ReplRet", "CREATE (:ReplRet {v:2}) RETURN 1");
 
     // Phase 5 — FOLLOWER WRITES MUST FAIL CLOSED (re-open regression). A write
     // sent to a FOLLOWER previously fell through to that follower's local store
@@ -626,7 +618,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     // a node that stayed a follower throughout fails the test.
     var attempt: usize = 0;
     while (attempt < 5) : (attempt += 1) {
-        drainAll(&captures, &children, gpa, io);
+        drainAll(&captures, gpa, io);
         const cur_leader = currentLeaderIdx(&captures) orelse {
             // The strict hold window above has already passed. Replication
             // permits leadership moves; acquire a current follower within the
@@ -666,7 +658,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
         const settle_deadline = nowMillis() + 10_000;
         while (nowMillis() < settle_deadline) {
             sleepMs(250);
-            drainAll(&captures, &children, gpa, io);
+            drainAll(&captures, gpa, io);
             if (stateLinesSince(captures[fidx].buf.items, log_off, fidx + 1).lines >= 2) break;
         }
         const fr_read = runQuery(gpa, io, aa, follower_ip, read_q) catch return error.FollowerWriteProbeFailed;
@@ -723,4 +715,31 @@ test "raft state capture counts only complete lines across a probe offset" {
     const after_leader = stateLinesSince(stream, before.len + leader.len, 2);
     try std.testing.expectEqual(@as(usize, 1), after_leader.lines);
     try std.testing.expect(!after_leader.leader);
+}
+
+test "file capture drains beyond pipe capacity and preserves the writer offset" {
+    const gpa = std.testing.allocator;
+    var threaded = std.Io.Threaded.init(gpa, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var capture: Capture = .{ .file = try tmp.dir.createFile(io, "node.log", .{ .read = true }) };
+    defer capture.deinit(gpa, io);
+    const file = capture.file.?;
+    const chunk = [_]u8{'x'} ** 8192;
+    // No reader runs until a full MiB has been written. A pipe would block.
+    for (0..128) |_| try file.writeStreamingAll(io, &chunk);
+    const initial = "\n[raft] node 1 state=leader term=5\n";
+    try file.writeStreamingAll(io, initial);
+    capture.drain(gpa, io);
+    try std.testing.expectEqual(128 * chunk.len + initial.len, capture.buf.items.len);
+    try std.testing.expectEqualStrings("leader", lastState(capture.buf.items, 1).role.?);
+    const offset = capture.buf.items.len;
+    const update = "[raft] node 1 state=follower term=6\n";
+    try file.writeStreamingAll(io, update);
+    capture.drain(gpa, io);
+    try std.testing.expectEqual(offset + update.len, capture.buf.items.len);
+    try std.testing.expectEqualStrings(update, capture.buf.items[offset..]);
+    try std.testing.expectEqualStrings("follower", lastState(capture.buf.items, 1).role.?);
 }
