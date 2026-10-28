@@ -327,15 +327,21 @@ test "real discovery refuses the actual engine floor" {
     var rows: [59]gate.CapabilityRow = undefined;
     try testing.expectEqual(rows.len, caps.rows.len);
     for (caps.rows, 0..) |row, i| rows[i] = .{ .name = row[0].Str, .value = row[1].Str };
-    try testing.expectError(error.InvalidEngineVersion, gate.validateProfile(testing.allocator, bytes, &rows, @import("build_options").version));
-    // The running build's refusal reason is version-relative: below the engine
-    // floor the gate stops at the version check, at or above it the still-false
-    // mandatory rows decide. Both are refusals; only the reason moves.
-    const running_label = gate.engineVersionFromBuildLabel(@import("build_options").version);
-    const running = try std.SemanticVersion.parse(running_label);
+    // Shallow checkouts can have only a commit hash, while tagged builds can
+    // supply a version with or without the producer's lowercase v prefix.
+    // Every form must still refuse the real unsupported discovery rows.
     const floor: std.SemanticVersion = .{ .major = 0, .minor = 8, .patch = 14 };
-    const expected_running: anyerror = if (running.order(floor) == .lt) error.IncompatibleEngineVersion else error.MandatoryCapabilityUnsupported;
-    try testing.expectError(expected_running, gate.validateProfile(testing.allocator, bytes, &rows, running_label));
+    const build_label = @import("build_options").version;
+    for ([_][]const u8{ build_label, gate.engineVersionFromBuildLabel(build_label) }) |label| {
+        const expected: anyerror = if (std.SemanticVersion.parse(label)) |version|
+            (if (version.order(floor) == .lt) error.IncompatibleEngineVersion else error.MandatoryCapabilityUnsupported)
+        else |_|
+            error.InvalidEngineVersion;
+        try testing.expectError(expected, gate.validateProfile(testing.allocator, bytes, &rows, label));
+    }
+    for ([_][]const u8{ "unknown", "080f1737", "v0.8.14" }) |label| {
+        try testing.expectError(error.InvalidEngineVersion, gate.validateProfile(testing.allocator, bytes, &rows, label));
+    }
     // Floor refusal stays covered deterministically, independent of the build.
     try testing.expectError(error.IncompatibleEngineVersion, gate.validateProfile(testing.allocator, bytes, &rows, "0.8.13"));
     try testing.expectError(error.IncompatibleEngineVersion, gate.validateProfile(testing.allocator, bytes, &rows, "0.8.14-2-g080f1737"));
