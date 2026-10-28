@@ -116,11 +116,8 @@ probe:cluster-log-capture:
   - mkdir -p reports
   - python3 scripts/ci/zig_fail_fast.py --log reports/cluster-build.log -- zig build -j1 --summary all --error-style
     verbose
-  - "test -x zig-out/bin/geode\ngit show 9f758f03d08c45db72c57dc39d8e755dd7c879a6:tests/test_cluster_3node_steady_state.zig\
-    \ > reports/cluster-baseline.zig\ncp tests/test_cluster_3node_steady_state.zig reports/cluster-fixed.zig\nset\
-    \ +e\ntimeout --kill-after=10s 6m zig test -lc reports/cluster-baseline.zig > reports/cluster-baseline.log 2>&1\n\
-    baseline_rc=$?\nset -e\nprintf 'baseline_exit=%s\n' \"$baseline_rc\"\ntail -60 reports/cluster-baseline.log\n\
-    for round in 1 2 3; do\n  echo \"fixed_round=$round\"\n  timeout --kill-after=10s 6m zig test -lc reports/cluster-fixed.zig\
+  - "test -x zig-out/bin/geode\ncp tests/test_cluster_3node_steady_state.zig reports/cluster-fixed.zig\nfor round\
+    \ in 1 2 3; do\n  echo \"fixed_round=$round\"\n  timeout --kill-after=10s 6m zig test -lc reports/cluster-fixed.zig\
     \ > \"reports/cluster-fixed-$round.log\" 2>&1 || { cat \"reports/cluster-fixed-$round.log\"; exit 1; }\n  cat\
     \ \"reports/cluster-fixed-$round.log\"\n  grep -q 'All 4 tests passed.' \"reports/cluster-fixed-$round.log\"\
     \ndone"
@@ -130,4 +127,5 @@ probe:cluster-log-capture:
     when: always
     paths:
     - reports/cluster-*.log
+    - zig-out/bin/geode
     expire_in: 1 day
