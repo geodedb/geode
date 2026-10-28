@@ -321,14 +321,14 @@ variables:
         # Leg 1: same-network mirror -> place the blob directly. gzip -t
         # sanity-rejects truncated bodies / HTML error pages before the mv.
         if [ -n "${CI_API_V4_URL:-}" ] && [ -n "${CI_JOB_TOKEN:-}" ]; then
-          if zig_protoc_dl "${ZIG_PROTOC_MIRROR_TGZ}" /tmp/zig-protoc.pkg.tar.gz; then
-            if gzip -t /tmp/zig-protoc.pkg.tar.gz 2>/dev/null; then
-              mv /tmp/zig-protoc.pkg.tar.gz "${ZIG_PROTOC_BLOB}"
+          if zig_protoc_dl "${ZIG_PROTOC_MIRROR_TGZ}" "${TMPDIR:-/tmp}/zig-protoc.pkg.tar.gz"; then
+            if gzip -t "${TMPDIR:-/tmp}/zig-protoc.pkg.tar.gz" 2>/dev/null; then
+              mv "${TMPDIR:-/tmp}/zig-protoc.pkg.tar.gz" "${ZIG_PROTOC_BLOB}"
               echo "✓ pre-fetched protoc blob from package-registry mirror (attempt ${attempt})"
               protoc_ok=1
             else
               echo "⚠ protoc mirror body failed gzip sanity check (attempt ${attempt})"
-              rm -f /tmp/zig-protoc.pkg.tar.gz
+              rm -f "${TMPDIR:-/tmp}/zig-protoc.pkg.tar.gz"
             fi
           else
             echo "⚠ protoc mirror DOWNLOAD failed (attempt ${attempt})"
@@ -336,11 +336,11 @@ variables:
         fi
         # Leg 2: zig fetch from GitHub — zig writes the blob itself.
         if [ "${protoc_ok}" != "1" ] && command -v zig >/dev/null 2>&1 && [ -f build.zig ]; then
-          if zig fetch "${ZIG_PROTOC_URL}" >/tmp/zig-fetch-protoc.log 2>&1; then
-            echo "✓ pre-fetched protoc via zig fetch (attempt ${attempt}, hash=$(cat /tmp/zig-fetch-protoc.log))"
+          if zig fetch "${ZIG_PROTOC_URL}" >"${TMPDIR:-/tmp}/zig-fetch-protoc.log" 2>&1; then
+            echo "✓ pre-fetched protoc via zig fetch (attempt ${attempt}, hash=$(cat "${TMPDIR:-/tmp}/zig-fetch-protoc.log"))"
             protoc_ok=1
           else
-            echo "⚠ zig fetch of protoc failed (attempt ${attempt}): $(tail -1 /tmp/zig-fetch-protoc.log)"
+            echo "⚠ zig fetch of protoc failed (attempt ${attempt}): $(tail -1 "${TMPDIR:-/tmp}/zig-fetch-protoc.log")"
           fi
         fi
         if [ "${protoc_ok}" = "1" ]; then break; fi
@@ -1105,13 +1105,13 @@ test-macos-unit:
       echo "Pre-fetching protoc-osx-aarch_64 via zig fetch with retries (TMPDIR=$TMPDIR)..."
       fetched=""
       for i in 1 2 3 4 5; do
-        if zig fetch "$PROTOC_URL" >/tmp/zig-fetch-protoc.log 2>&1; then
-          echo "✓ protoc pre-fetch succeeded on attempt $i (hash=$(cat /tmp/zig-fetch-protoc.log))"
+        if zig fetch "$PROTOC_URL" >"${TMPDIR:-/tmp}/zig-fetch-protoc.log" 2>&1; then
+          echo "✓ protoc pre-fetch succeeded on attempt $i (hash=$(cat "${TMPDIR:-/tmp}/zig-fetch-protoc.log"))"
           fetched=1
           break
         fi
         echo "attempt $i failed:"
-        cat /tmp/zig-fetch-protoc.log || true
+        cat "${TMPDIR:-/tmp}/zig-fetch-protoc.log" || true
         [ "$i" -lt 5 ] && { echo "retrying in 15s..."; sleep 15; }
       done
       if [ -z "$fetched" ]; then
