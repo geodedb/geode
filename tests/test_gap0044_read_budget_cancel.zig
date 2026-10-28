@@ -31,8 +31,7 @@ const read_budget = geode.read_budget;
 
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
     while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
@@ -192,13 +191,7 @@ test "T5 cancel: mid-query cancellation from another thread aborts within the sc
 
     const Setter = struct {
         fn compatSleepNs(ns: u64) void {
-            // Zig 0.16: std.Thread.sleep was removed; nanosleep directly.
-            const req = std.os.linux.timespec{
-                .sec = @intCast(ns / std.time.ns_per_s),
-                .nsec = @intCast(ns % std.time.ns_per_s),
-            };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@intCast(ns)), .awake) catch {};
         }
         fn run(flag: *std.atomic.Value(bool)) void {
             // Fire quickly — the poll sites must observe it at the next
@@ -208,6 +201,7 @@ test "T5 cancel: mid-query cancellation from another thread aborts within the sc
         }
     };
     const t = try std.Thread.spawn(.{}, Setter.run, .{&cancel_flag});
+    defer t.join();
 
     // Either the cancel lands mid-scan (ReadQueryCancelled) or the query
     // finished before the flag was set (small store, fast machine) — both are
@@ -218,7 +212,6 @@ test "T5 cancel: mid-query cancellation from another thread aborts within the sc
     } else |err| {
         try testing.expectEqual(error.ReadQueryCancelled, err);
     }
-    t.join();
 }
 
 test "T5 cancel: flag clear -> queries run normally again (no sticky cancel)" {

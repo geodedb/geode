@@ -69,8 +69,11 @@ const high_fanout_cooperative_first_stream_worker_cap = if (builtin.mode == .Deb
 const high_concurrency_worker_stack_size = 1024 * 1024;
 
 fn monoNs() u64 {
-    var ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 0 };
-    const rc = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    const rc = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     if (rc != 0) return 0;
     const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
@@ -78,12 +81,7 @@ fn monoNs() u64 {
 }
 
 fn sleepNs(ns: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 fn envU32(name: [*:0]const u8, default_value: u32) u32 {

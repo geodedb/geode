@@ -1010,9 +1010,7 @@ test "GAP-0886: hasEncryptedFields reflects catalog state (flag self-heal + sett
     // `.zig-cache/tmp`, so reconstruct the absolute path from getcwd (same
     // pattern as tests/test_gap0854_fle_chain.zig).
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd_rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    if (@as(isize, @bitCast(cwd_rc)) < 0) return error.GetCwdFailed;
-    var cwd_len: usize = cwd_rc;
+    var cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     while (cwd_len > 0 and cwd_buf[cwd_len - 1] == 0) : (cwd_len -= 1) {}
     const data_dir = try std.fmt.allocPrint(
         testing.allocator,
@@ -1153,9 +1151,7 @@ fn configureAndEncrypt(
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd_rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    if (@as(isize, @bitCast(cwd_rc)) < 0) return error.GetCwdFailed;
-    var cwd_len: usize = cwd_rc;
+    var cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     while (cwd_len > 0 and cwd_buf[cwd_len - 1] == 0) : (cwd_len -= 1) {}
     const data_dir = try std.fmt.allocPrint(
         allocator,

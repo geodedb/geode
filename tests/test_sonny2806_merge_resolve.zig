@@ -235,9 +235,7 @@ fn deleteAllNamed(allocator: std.mem.Allocator, data_dir: []const u8, name: []co
 }
 
 fn sleepMs(ms: u64) void {
-    const req = std.os.linux.timespec{ .sec = @intCast(ms / 1000), .nsec = @intCast((ms % 1000) * std.time.ns_per_ms) };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 const Lookup = struct {

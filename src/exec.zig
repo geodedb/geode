@@ -459,12 +459,7 @@ pub fn runGroupedQuery(
         }
     }
 
-    const t_build_start = if (timings) |_| blk: {
-        var ts_tmp: std.os.linux.timespec = undefined;
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-        if (rc != 0) break :blk @as(i128, 0);
-        break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-    } else 0;
+    const t_build_start = if (timings) |_| @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds()) else 0;
     for (input_rows) |vals| {
         // Make eval env for this row
         const env: eval.Env = .{ .names = input_names, .values = vals, .param_names = param_names, .param_values = param_values, .allocator = allocator, .timeseries_store = timeseries_store };
@@ -608,17 +603,10 @@ pub fn runGroupedQuery(
     // 5) Project RETURN items for each kept row
     // Build maps for projection reuse (as above): key_map and agg_map already exist.
     if (timings) |tp| {
-        var ts_tmp: std.os.linux.timespec = undefined;
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-        const now_ns: i128 = if (rc != 0) 0 else @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
+        const now_ns: i128 = std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds();
         tp.build_ns = now_ns - t_build_start;
     }
-    const t_emit_start = if (timings) |_| blk: {
-        var ts_tmp: std.os.linux.timespec = undefined;
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-        if (rc != 0) break :blk @as(i128, 0);
-        break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-    } else 0;
+    const t_emit_start = if (timings) |_| @as(i128, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds()) else 0;
     var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     for (kept.items) |gr| {
@@ -751,9 +739,7 @@ pub fn runGroupedQuery(
         }
     }
     if (timings) |tp2| {
-        var ts_tmp: std.os.linux.timespec = undefined;
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-        const now_ns: i128 = if (rc != 0) 0 else @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
+        const now_ns: i128 = std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds();
         tp2.emit_ns = now_ns - t_emit_start;
     }
     return out.toOwnedSlice(allocator);

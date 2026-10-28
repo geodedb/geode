@@ -10,14 +10,20 @@ const ast = geode.ast;
 // Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
 fn nowNs() i128 {
     var tsval: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &tsval);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &tsval)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &tsval);
     return @as(i128, tsval.sec) * 1_000_000_000 + @as(i128, tsval.nsec);
 }
 
 // Zig 0.16 compat: std.time.timestamp removed; use clock_gettime(REALTIME).
 fn nowUnixS() i64 {
     var tsval: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.REALTIME, &tsval);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.REALTIME, &tsval)
+    else
+        std.c.clock_gettime(std.c.CLOCK.REALTIME, &tsval);
     return @intCast(tsval.sec);
 }
 

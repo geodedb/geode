@@ -64,8 +64,7 @@ const GRAPH = "hsg";
 
 fn tmpDataDir(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
     while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], sub_path });
@@ -73,19 +72,17 @@ fn tmpDataDir(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
 
 fn monoNanos() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
 /// Poll-loop sleep (std.Thread.sleep is gone in 0.16; same nanosleep idiom
 /// as the canary tests / the in-tree bounded-acquire spins).
 fn sleepMs(ms: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ms / 1000),
-        .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 /// Delete every loop2-product snapshot file under the data dir (leaves
@@ -1300,8 +1297,7 @@ test "loadFromFile during an in-flight pipelined stream-scan merge serializes (n
             err: ?anyerror = null,
             fn run(p: *@This()) void {
                 const req = std.os.linux.timespec{ .sec = 0, .nsec = 120 * std.time.ns_per_ms };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
                 p.store.loadFromFile() catch |e| {
                     p.err = e;
                 };
@@ -1565,8 +1561,7 @@ test "light checkpoint during an in-flight merge skips cache reclaim (no use-aft
             err: ?anyerror = null,
             fn run(p: *@This()) void {
                 const req = std.os.linux.timespec{ .sec = 0, .nsec = 150 * std.time.ns_per_ms };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
                 p.store.saveToFileEx(true) catch |e| {
                     p.err = e;
                 };

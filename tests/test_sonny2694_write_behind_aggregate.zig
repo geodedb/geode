@@ -44,7 +44,6 @@
 
 const std = @import("std");
 const testing = std.testing;
-const linux = std.os.linux;
 const geode = @import("geode");
 const rls_types = @import("rls_types");
 const harness = @import("node_scan_stream_harness.zig");
@@ -651,23 +650,8 @@ test "SONNY-2694: a DELETE's RETURN of a typed string frees its copy" {
 // The guard itself: one structural check, every read fast path.
 
 fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var pathz: [4096]u8 = undefined;
-    @memcpy(pathz[0..path.len], path);
-    pathz[path.len] = 0;
-    const rc = linux.open(@ptrCast(&pathz), .{ .ACCMODE = .RDONLY }, 0);
-    if (@as(isize, @bitCast(rc)) < 0) return error.FileNotFound;
-    const fd: i32 = @intCast(rc);
-    defer _ = linux.close(fd);
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
-    var chunk: [8192]u8 = undefined;
-    while (true) {
-        const n_signed: isize = @bitCast(linux.read(fd, &chunk, chunk.len));
-        if (n_signed < 0) return error.ReadFailed;
-        if (n_signed == 0) break;
-        try buf.appendSlice(allocator, chunk[0..@intCast(n_signed)]);
-    }
-    return buf.toOwnedSlice(allocator);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited);
 }
 
 test "SONNY-2694: the read fast paths decline every statement that writes, through one structural guard" {

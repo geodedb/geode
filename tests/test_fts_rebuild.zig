@@ -26,8 +26,7 @@ const adapter_mod = geode.graph_storage_adapter;
 
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
     while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
@@ -472,6 +471,18 @@ test "write during rebuild window is queued, indexed exactly once" {
     }
 
     _ = try ctx.result; // propagate any rebuild failure as a test failure
+
+    // Also force the late-hook ordering deterministically: backfill has
+    // already indexed this id and flushed it, but its create notification can
+    // still arrive afterward. Replaying that notification must not append a
+    // second posting or change its BM25 score relative to the reference.
+    try execution.fts_index_ops.maintainFulltextOnWrite(
+        h.allocator,
+        graph_store.DEFAULT_GRAPH_NAME,
+        racer_id,
+        &.{"RbwFull"},
+        .create,
+    );
 
     {
         var res = try h.runQuery("CALL geode.fts.search('rbw_full_idx', 'canaryparity', 10)");

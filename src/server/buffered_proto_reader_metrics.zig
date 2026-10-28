@@ -85,8 +85,11 @@ pub fn registerAll(registry: anytype) !void {
 }
 
 fn monoNs() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
     return sec * std.time.ns_per_s + nsec;
@@ -110,8 +113,7 @@ test "recordActivity advances last_activity_ns" {
     // A short sleep, then another tick, must strictly advance the
     // timestamp.  Using 1ms is well above the monotonic clock granularity.
     const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
 
     recordActivity();
     const after_second = last_activity_ns.load(.acquire);
@@ -126,8 +128,7 @@ test "getIdleNs grows when no activity is recorded" {
     recordActivity();
 
     const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
 
     const idle = getIdleNs();
     // At least 5 ms must have elapsed since recordActivity().
