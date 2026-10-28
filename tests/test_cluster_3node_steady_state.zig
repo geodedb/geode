@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-DIST-CLUSTER-STEADY-STATE-TLS; FEATURE="DistributedCluster"; ASPECT=SteadyStateLeaderHoldDistinctIpTls; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-06-04
+// CANARY: REQ=REQ-DIST-CLUSTER-STEADY-STATE-TLS; FEATURE="DistributedCluster"; ASPECT=SteadyStateLeaderHoldDistinctIpTls; STATUS=TESTED; TEST=tests/test_cluster_3node_steady_state.zig; OWNER=distributed; UPDATED=2026-10-27
 //
 // Regression for docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md
 //
@@ -57,8 +57,7 @@ fn nowMillis() i64 {
 fn sleepMs(ms: u64) void {
     if (comptime builtin.os.tag == .linux) {
         const req = std.os.linux.timespec{ .sec = @intCast(ms / 1000), .nsec = @intCast((ms % 1000) * std.time.ns_per_ms) };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     } else {
         const req = std.c.timespec{ .sec = @intCast(ms / 1000), .nsec = @intCast((ms % 1000) * std.time.ns_per_ms) };
         var rem: std.c.timespec = undefined;
@@ -150,11 +149,13 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
         .sub_path = ext,
         .data = "subjectAltName=IP:127.0.0.11,IP:127.0.0.12,IP:127.0.0.13,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
     });
+    // Pin SHA-256 below: system LibreSSL otherwise defaults to SHA-1,
+    // which the real peer certificate verifier correctly rejects.
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ca_key });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-ss-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-sha256", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-ss-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-sha256", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-sha256", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
     query_ca_path = ca;
     return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
 }
@@ -171,46 +172,53 @@ const Capture = struct {
     }
 };
 
-/// Returns the last observed raft state of node `id` ("leader"/"follower"/
-/// "candidate"/null) and its term, scanned from the captured log buffer.
-fn lastState(buf: []const u8, id: usize) struct { role: ?[]const u8, term: i64 } {
+const RaftState = struct { role: []const u8, term: i64 };
+
+fn stateInLine(line: []const u8, id: usize) ?RaftState {
     var prefix_buf: [48]u8 = undefined;
-    const prefix = std.fmt.bufPrint(&prefix_buf, "node {d} state=", .{id}) catch return .{ .role = null, .term = 0 };
+    const prefix = std.fmt.bufPrint(&prefix_buf, "node {d} state=", .{id}) catch return null;
+    const pos = std.mem.indexOf(u8, line, prefix) orelse return null;
+    var fields = std.mem.tokenizeAny(u8, line[pos + prefix.len ..], " \t\r");
+    const role = fields.next() orelse return null;
+    const term_field = fields.next() orelse return null;
+    if (!std.mem.startsWith(u8, term_field, "term=")) return null;
+    const term = std.fmt.parseInt(i64, term_field[5..], 10) catch return null;
+    return .{ .role = role, .term = term };
+}
+
+/// Only complete log records update the observation. A nonblocking pipe read
+/// can split anywhere, including inside "leader" or its term; a partial suffix
+/// must not erase the last complete state or invent a different term.
+fn lastState(buf: []const u8, id: usize) struct { role: ?[]const u8, term: i64 } {
     var role: ?[]const u8 = null;
     var term: i64 = 0;
-    var search: usize = 0;
-    while (std.mem.indexOfPos(u8, buf, search, prefix)) |pos| {
-        const after = pos + prefix.len;
-        // role token
-        var e = after;
-        while (e < buf.len and buf[e] != ' ') e += 1;
-        role = buf[after..e];
-        // term=
-        if (std.mem.indexOfPos(u8, buf, e, "term=")) |tp| {
-            if (tp < e + 8) {
-                var te = tp + 5;
-                var t: i64 = 0;
-                while (te < buf.len and buf[te] >= '0' and buf[te] <= '9') : (te += 1) t = t * 10 + (buf[te] - '0');
-                term = t;
-            }
+    var start: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, buf, start, '\n')) |end| {
+        if (stateInLine(buf[start..end], id)) |state| {
+            role = state.role;
+            term = state.term;
         }
-        search = after;
+        start = end + 1;
     }
     return .{ .role = role, .term = term };
 }
 
-/// State lines node `id` logged in `buf[off..]`: how many, and whether any
-/// reported `state=leader`.
+/// Count records completed after the probe offset, including a record whose
+/// prefix arrived before the offset and whose remainder arrived afterwards.
+/// Otherwise a real leader transition split across reads could be missed.
 fn stateLinesSince(buf: []const u8, off: usize, id: usize) struct { lines: usize, leader: bool } {
-    var prefix_buf: [48]u8 = undefined;
-    const prefix = std.fmt.bufPrint(&prefix_buf, "node {d} state=", .{id}) catch return .{ .lines = 0, .leader = false };
     var lines: usize = 0;
     var leader = false;
-    var search: usize = @min(off, buf.len);
-    while (std.mem.indexOfPos(u8, buf, search, prefix)) |pos| {
-        lines += 1;
-        if (std.mem.startsWith(u8, buf[pos + prefix.len ..], "leader")) leader = true;
-        search = pos + prefix.len;
+    var start = @min(off, buf.len);
+    if (start > 0 and buf[start - 1] != '\n') {
+        start = if (std.mem.lastIndexOfScalar(u8, buf[0..start], '\n')) |end| end + 1 else 0;
+    }
+    while (std.mem.indexOfScalarPos(u8, buf, start, '\n')) |end| {
+        if (stateInLine(buf[start..end], id)) |state| {
+            lines += 1;
+            if (std.mem.eql(u8, state.role, "leader")) leader = true;
+        }
+        start = end + 1;
     }
     return .{ .lines = lines, .leader = leader };
 }
@@ -619,7 +627,14 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     var attempt: usize = 0;
     while (attempt < 5) : (attempt += 1) {
         drainAll(&captures, &children, gpa, io);
-        const cur_leader = currentLeaderIdx(&captures) orelse return error.LeaderDidNotHold;
+        const cur_leader = currentLeaderIdx(&captures) orelse {
+            // The strict hold window above has already passed. Replication
+            // permits leadership moves; acquire a current follower within the
+            // existing five-attempt budget before testing follower rejection.
+            // Absence of a leader never counts as a successful write probe.
+            sleepMs(1000);
+            continue;
+        };
         // Pick a HEALTHY node whose latest state line says follower; never
         // probe a node that failed to start (its :3141 would be answered by an
         // unrelated process).
@@ -669,6 +684,43 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
         }
         std.debug.print("[repl] node {d} became leader around the follower-write probe (attempt {d}); retrying\n", .{ fidx + 1, attempt });
     }
+    for (captures, 0..) |capture, i| {
+        const tail_start = capture.buf.items.len - @min(capture.buf.items.len, 1500);
+        std.debug.print("\n--- node {d} log tail (no conclusive follower-write probe) ---\n{s}\n", .{ i + 1, capture.buf.items[tail_start..] });
+    }
     std.debug.print("[repl] no follower-write probe reached a node that stayed a follower in 5 attempts\n", .{});
     return error.FollowerWriteProbeInconclusive;
+}
+
+test "raft state capture ignores every incomplete state-line suffix" {
+    const before = "[raft] node 1 state=leader term=5\n";
+    const update = "[raft] node 1 state=follower term=12\n";
+    const stream = before ++ update;
+    for (0..update.len) |n| {
+        const state = lastState(stream[0 .. before.len + n], 1);
+        try std.testing.expectEqualStrings("leader", state.role.?);
+        try std.testing.expectEqual(@as(i64, 5), state.term);
+    }
+    const state = lastState(stream, 1);
+    try std.testing.expectEqualStrings("follower", state.role.?);
+    try std.testing.expectEqual(@as(i64, 12), state.term);
+}
+
+test "raft state capture counts only complete lines across a probe offset" {
+    const before = "[raft] node 2 state=follower term=5\n";
+    const leader = "[raft] node 2 state=leader term=6\n";
+    const follower = "[raft] node 2 state=follower term=7\n";
+    const stream = before ++ leader ++ follower;
+    for (0..leader.len) |n| {
+        const off = before.len + n;
+        const partial = stateLinesSince(stream[0..off], before.len, 2);
+        try std.testing.expectEqual(@as(usize, 0), partial.lines);
+        try std.testing.expect(!partial.leader);
+        const complete = stateLinesSince(stream, off, 2);
+        try std.testing.expectEqual(@as(usize, 2), complete.lines);
+        try std.testing.expect(complete.leader);
+    }
+    const after_leader = stateLinesSince(stream, before.len + leader.len, 2);
+    try std.testing.expectEqual(@as(usize, 1), after_leader.lines);
+    try std.testing.expect(!after_leader.leader);
 }

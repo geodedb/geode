@@ -57,8 +57,7 @@ const Damage = enum {
 // Zig 0.16 has no std.Io.Dir realpath: rebuild the absolute tmp-dir path.
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
-    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
     while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
@@ -368,6 +367,9 @@ test "TestCANARY_REQ_GQL_028_ZeroedPagesFailHydrationRebuild" {
 
 fn monotonicNs() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }

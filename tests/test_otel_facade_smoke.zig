@@ -523,3 +523,62 @@ test "OTLP env detection: init succeeds without OTEL_METRICS_EXPORTER set" {
     // We just confirm no crash here; specific metric content is tested above.
     // `body` is already consumed by the `defer gpa.free(body)` above.
 }
+
+// The clock seam is deterministic; the database and telemetry provider remain real.
+const DurationTestClock = struct {
+    wall_ns: i96 = 100 * std.time.ns_per_s,
+    awake_ns: i96 = 10 * std.time.ns_per_s,
+    wall_reads: usize = 0,
+    awake_reads: usize = 0,
+
+    const vtable = blk: {
+        var value = std.Io.failing.vtable.*;
+        value.now = now;
+        break :blk value;
+    };
+
+    fn io(self: *DurationTestClock) std.Io {
+        return .{ .userdata = self, .vtable = &vtable };
+    }
+
+    fn now(userdata: ?*anyopaque, clock: std.Io.Clock) std.Io.Timestamp {
+        const self: *DurationTestClock = @ptrCast(@alignCast(userdata.?));
+        return .{ .nanoseconds = switch (clock) {
+            .real => blk: {
+                self.wall_reads += 1;
+                break :blk self.wall_ns;
+            },
+            .awake => blk: {
+                self.awake_reads += 1;
+                break :blk self.awake_ns;
+            },
+            else => unreachable,
+        } };
+    }
+};
+
+test "duration timer ignores backward and forward wall clock adjustments" {
+    var clock: DurationTestClock = .{};
+    const duration = otel_metrics.DurationTimer.startWithIo(clock.io());
+    clock.wall_ns -= 20 * std.time.ns_per_s;
+    clock.awake_ns += 250 * std.time.ns_per_ms;
+    try std.testing.expectEqual(@as(f64, 0.25), duration.seconds());
+    clock.wall_ns += 3600 * std.time.ns_per_s;
+    clock.awake_ns += 500 * std.time.ns_per_ms;
+    try std.testing.expectEqual(@as(f64, 0.75), duration.seconds());
+    try std.testing.expectEqual(@as(usize, 0), clock.wall_reads);
+    try std.testing.expectEqual(@as(usize, 3), clock.awake_reads);
+}
+
+test "duration timer tolerates unchanged and unavailable clocks" {
+    var clock: DurationTestClock = .{};
+    const duration = otel_metrics.DurationTimer.startWithIo(clock.io());
+    try std.testing.expectEqual(@as(f64, 0), duration.seconds());
+    clock.awake_ns = 0;
+    try std.testing.expectEqual(@as(f64, 0), duration.seconds());
+}
+
+test "duration timer uses the native monotonic clock" {
+    const duration = otel_metrics.DurationTimer.start();
+    try std.testing.expect(duration.seconds() >= 0);
+}

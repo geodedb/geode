@@ -739,8 +739,7 @@ test "acquireLock increments lock_steal_count on expired lock" {
     var h = try acquireLock(1);
     {
         const req = std.os.linux.timespec{ .sec = 0, .nsec = 2 * std.time.ns_per_ms };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     }
 
     // Second acquire should steal the expired lock.

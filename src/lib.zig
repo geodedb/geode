@@ -86,7 +86,7 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOpt
     _ = options;
     const om = @import("otel_metrics");
     const gql_obs = @import("gql_lib").observability;
-    const t0 = @import("otel").internal.clock.unixNanoNow();
+    const duration = om.DurationTimer.start();
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
@@ -100,12 +100,12 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOpt
     var parser = Parser{ .lx = &lexer, .arena = &arena, .cur = lexer.next() };
 
     const program = parser.parseProgram() catch |err| {
-        const dur_s = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+        const dur_s = duration.seconds();
         om.recordQueryParse(dur_s, .error_, @errorName(err));
         om.recordQueryParseError(@errorName(err));
         return err;
     };
-    const dur_s_ok = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+    const dur_s_ok = duration.seconds();
     om.recordQueryParse(dur_s_ok, .success, null);
 
     // ISO/IEC 39075:2024 RQ-0012: reject programs containing visually

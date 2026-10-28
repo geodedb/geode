@@ -32,15 +32,16 @@ fn testIo() std.Io {
 
 // Zig 0.16 compat: std.Thread.sleep removed; nanosleep directly.
 fn compat_sleep(ns: u64) void {
-    var req: std.posix.timespec = .{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) };
-    var rem: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.nanosleep(@ptrCast(&req), @ptrCast(&rem));
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 // Zig 0.16 compat: std.time.nanoTimestamp removed; clock_gettime(MONOTONIC).
 fn compat_nanoNow() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 

@@ -49,8 +49,11 @@ const per_op_timeout_secs: u32 = 8;
 const overall_deadline_secs: u64 = 180;
 
 fn monoNs() u64 {
-    var ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 0 };
-    const rc = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    const rc = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     if (rc != 0) return 0;
     const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);

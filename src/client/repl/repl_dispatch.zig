@@ -7,11 +7,7 @@ fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
 
 // Zig 0.16 compat: std.Thread.sleep was removed; use raw nanosleep syscall.
 fn sleepNs(ns: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    _ = std.os.linux.nanosleep(&req, null);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 // Zig 0.16 compat helper to obtain the default single-threaded I/O handle.
@@ -23,14 +19,10 @@ fn replIo() std.Io {
 const CompatTimer = struct {
     start_ns: i128,
     pub fn start() !CompatTimer {
-        var ts: std.os.linux.timespec = undefined;
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-        return .{ .start_ns = @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec) };
+        return .{ .start_ns = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds() };
     }
     pub fn read(self: *CompatTimer) u64 {
-        var ts: std.os.linux.timespec = undefined;
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-        const now_ns = @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+        const now_ns = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds();
         return @intCast(now_ns - self.start_ns);
     }
 };

@@ -56,12 +56,7 @@ fn indexOf(entries: []const GraphStore.EdgeTagBackfillEntry, edge_id: u64) ?usiz
 }
 
 fn sleepMs(ms: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ms / std.time.ms_per_s),
-        .nsec = @intCast((ms % std.time.ms_per_s) * std.time.ns_per_ms),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
 }
 
 /// One backfill run on its own thread.
