@@ -455,6 +455,7 @@ governance-ci-yaml-lint:
       python3 scripts/lint_ci_yaml_runner_tags.py
       python3 scripts/lint_ci_yaml_docker_names.py
       python3 -m unittest discover -s scripts/ci -p test_prune_zig_cache.py
+      python3 -m unittest discover -s scripts/ci -p test_zig_fail_fast.py
       echo "✓ CI YAML lints passed"
 
 governance-zig-package-cache:
@@ -809,15 +810,14 @@ test-zig-unit:
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
-      - script_failure
   before_script:
+    - *zig-cache-writer-before-script
     - *zig-vendor-cache
   script:
-    - mkdir -p reports
-    # 2>&1: zig writes test failures/panics to STDERR — a stdout-only tee
-    # produced 0-byte shard-log artifacts on every failed job (verified on
-    # job 15304587101), making post-mortems impossible.
-    - zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/zig_test_shard_${TEST_SHARD_INDEX}.log
+    # Zig keeps running independent steps after a test fails. Stop those
+    # processes, preserve both output streams, and let workflow cancellation
+    # release the other shards. Real failures are not automatically retried.
+    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_shard_${TEST_SHARD_INDEX}.log -- zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
   rules:
     # SRE-187 (MR admission): merge_request_event pipelines have no
     # CI_COMMIT_BRANCH, so before this rule the MR pipeline -- the one that
@@ -1126,8 +1126,7 @@ test-macos-unit:
     # Build all installed targets once; each test shard also builds its own
     # declared executable dependencies through build.zig.
     - if [ "$TEST_SHARD_INDEX" = "0" ]; then zig build --search-prefix "$GEODE_MACOS_OPENSSL_PREFIX" -j${ZIG_BUILD_JOBS} --summary all; fi
-    - mkdir -p reports
-    - zig build --search-prefix "$GEODE_MACOS_OPENSSL_PREFIX" -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee reports/zig_test_macos_shard_${TEST_SHARD_INDEX}.log
+    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_macos_shard_${TEST_SHARD_INDEX}.log -- zig build --search-prefix "$GEODE_MACOS_OPENSSL_PREFIX" -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
   artifacts:
     when: always
     expire_in: 7 days
@@ -1217,14 +1216,11 @@ test-zig-release-safe:
     GIT_SUBMODULE_STRATEGY: recursive
     TEST_SHARD_TOTAL: "12"
   retry:
-    # max: 2 covers the transient protobuf transitive-dep fetch flake
-    # (HttpConnectionClosing) when the shared cache fails to extract — same
-    # root and remedy as the macOS job and test-cross-build.
+    # Retry runner failures only. A test failure must release the other shards.
     max: 2
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
-      - script_failure
   before_script:
     - *zig-cache-writer-before-script
     - *zig-vendor-cache
@@ -1239,7 +1235,12 @@ test-zig-release-safe:
       fi
 
       echo "=== Running ReleaseSafe tests, shard ${TEST_SHARD_INDEX}/${TEST_SHARD_TOTAL} ==="
-      zig build -j${ZIG_BUILD_JOBS} test -Doptimize=ReleaseSafe -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all
+      python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_release_safe_shard_${TEST_SHARD_INDEX}.log -- zig build -j${ZIG_BUILD_JOBS} test -Doptimize=ReleaseSafe -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - reports/zig_test_release_safe_shard_*.log
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
       allow_failure: false
