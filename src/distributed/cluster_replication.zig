@@ -52,14 +52,13 @@ pub const MAGIC = [4]u8{ 'G', 'N', 'C', '1' };
 // (those don't exercise FTS).
 //
 // Op semantics MIRROR the executor's maintainFulltextOnWrite call sites:
-//   * `.upsert` ↔ executor `.create` (append-only index of current props) —
-//     fired AFTER the store mutation for GNC1/GNC2 create, GMRG on-match-set,
-//     and GUPD set/remove. The executor deliberately uses `.create` (NOT
-//     delete-then-reindex) for SET too — the fts-storage engine's tombstones
-//     are permanent for a doc_id, so delete+reindex would hide the node (see
-//     property_mutation.zig and docs/bugs/2026-06-07-fts-search-returns-zero-
-//     results-at-runtime.md). Mirroring keeps leader and follower IDENTICAL,
-//     including the documented stale-posting residual.
+//   * `.create` indexes a newly created GNC1/GNC2 node once, even when its
+//     notification races an FTS rebuild's backfill.
+//   * `.upsert` appends current properties after GMRG on-match-set or GUPD
+//     set/remove, matching the executor's SET hook. It must not tombstone the
+//     id: the pinned engine's tombstones are permanent, so delete+reindex
+//     would hide the node. The documented stale-posting residual remains
+//     identical on leader and follower (see property_mutation.zig).
 //   * `.delete` ↔ executor `.delete` — fired BEFORE the store node delete
 //     (mirroring crud_operations.zig:4161) so labels are still resolvable.
 // Edges carry no FTS content (the executor maintains FTS only on node paths),
@@ -73,7 +72,7 @@ pub const MAGIC = [4]u8{ 'G', 'N', 'C', '1' };
 // CANARY: REQ=REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY; FEATURE="DistributedCluster"; ASPECT=FtsApplyHook; STATUS=TESTED; TEST=tests/test_fts_apply_symmetry.zig; OWNER=distributed; UPDATED=2026-06-10
 
 /// FTS live-maintenance op fired by the raft apply path.
-pub const FtsApplyOp = enum { upsert, delete };
+pub const FtsApplyOp = enum { create, upsert, delete };
 
 /// Registered hook. `store` is the store the apply mutated (the wrapper
 /// no-ops unless it is the process-global store — only that store has FTS
@@ -277,7 +276,7 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
     // tolerated above) must NOT re-fire — the engine is append-only with no
     // doc dedup, so a second upsert would duplicate postings and inflate the
     // restarted follower's search counts vs non-restarted nodes.
-    if (newly_created) fireFtsApplyHook(store, graph, node_id, .upsert);
+    if (newly_created) fireFtsApplyHook(store, graph, node_id, .create);
 
     return node_id;
 }
@@ -553,7 +552,7 @@ fn applyMultiCreatePayloadAt(
         // Only for NEWLY created nodes: restart re-apply (NodeAlreadyExists
         // tolerated above) must not re-fire — the engine is append-only with
         // no doc dedup, so duplicate postings would inflate search counts.
-        if (newly_created) fireFtsApplyHook(store, graph, node_id, .upsert);
+        if (newly_created) fireFtsApplyHook(store, graph, node_id, .create);
     }
 
     const edge_count = try r.readU16();

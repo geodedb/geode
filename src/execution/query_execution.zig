@@ -101,6 +101,36 @@ fn refuseChainedWrites(q: ast.Query) error{WriteClauseNotApplied}!void {
     }
 }
 
+// CANARY: REQ=REQ-GQL-FOR-RETURN-AGGREGATION; FEATURE="ForStatement"; ASPECT=ChainedFor; STATUS=TESTED; TEST=tests/test_for_aggregation.zig; OWNER=engine; UPDATED=2026-10-11
+/// `... WITH ... FOR x IN <list> RETURN ...` (and `MATCH ... FOR`, which
+/// the parser makes `MATCH ... WITH * FOR`): the FOR runs over every row of
+/// the part before it, `prev`, and its RETURN projects all of the loop's rows
+/// at once (`statement_handlers.executeForReturn`). Null when `next` is not
+/// the last part, or is not a FOR with a RETURN. The chain ran the FOR's
+/// RETURN once per row of `prev`, binding nothing from its list (`MATCH (n)
+/// WITH n FOR x IN n.list RETURN x` returned one NULL per node), or, with an
+/// aggregate, over `prev`'s rows instead of the loop's.
+fn forAfterPart(allocator: std.mem.Allocator, next: ast.Query, prev: ExecutionResult, context: ExecutionContext) !?ExecutionResult {
+    const fr = next.for_statement orelse return null;
+    if (fr.body != null or next.next_query != null) return null;
+    var result = try statement_handlers.executeForReturn(allocator, fr.*, prev.columns, prev.rows, context);
+    // The rows may hold `prev`'s values: its graph entities go with them,
+    // and values it owns stay allocated (as the chain's other paths leave
+    // them). Its columns and row slices are freed.
+    if (prev.owned_graph_entities) |entities| {
+        if (result.owned_graph_entities == null) result.owned_graph_entities = entities;
+    }
+    if (prev.column_buffer) |buffer| {
+        allocator.free(buffer);
+    } else {
+        for (prev.columns) |col| allocator.free(col);
+    }
+    allocator.free(prev.columns);
+    for (prev.rows) |row| allocator.free(row);
+    allocator.free(prev.rows);
+    return result;
+}
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-011; FEATURE="FileModularization"; ASPECT=QueryExecution; STATUS=EXEMPT; OWNER=refactoring; UPDATED=2025-10-17
 // CANARY: REQ=REQ-0003; FEATURE="Engine Contract Requirements"; ASPECT=Execution; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=execution; UPDATED=2026-01-15
 pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query, next_query_ptr: *ast.Query, context: ExecutionContext) anyerror!ExecutionResult {
@@ -114,6 +144,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
     current_query_standalone.next_query = null;
 
     const current_result = try executeQueryWithContext(allocator, current_query_standalone, context);
+    if (try forAfterPart(allocator, next_query_ptr.*, current_result, context)) |result| return result;
 
     // CANARY(memory-safety): Validate current_result structure before accessing
     // Prevent corrupted column length from causing OutOfMemory errors
@@ -807,17 +838,13 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         try sortRows(allocator, &result, order);
     }
 
-    // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-    // Apply SKIP and LIMIT from the final query in the chain after ORDER BY
-    const start = final_query.offset orelse 0;
-    var end = result.rows.len;
-    if (final_query.limit) |limit_count| {
-        const end_limit = std.math.add(usize, start, limit_count) catch std.math.maxInt(usize);
-        end = @min(end, end_limit);
-    }
-    if (start != 0 or end != result.rows.len) {
-        try execution.applyRowWindow(allocator, &result, start, end);
-    }
+    // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2026-10-10
+    // Apply SKIP and LIMIT from the final query in the chain after ORDER BY.
+    // A SKIP or LIMIT given as a parameter (`LIMIT $n`, which the Go client
+    // sends for every `LIMIT ?` since v0.2) windows the chain as a literal
+    // does: only the literals were read here, so
+    // `MATCH (n) WITH n MATCH (m) ... RETURN m.i LIMIT $n` returned every row.
+    try execution.applyQueryWindow(allocator, &result, try execution.queryWindow(final_query, context));
 
     return result;
 }
@@ -833,6 +860,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
 
         qe_log.debug("executing chained query standalone", &.{});
         const current_result = try executeQueryWithBindingsImpl(allocator, current_query_standalone, context, binding_names, binding_values);
+        if (try forAfterPart(allocator, next_query_ptr.*, current_result, context)) |result| return result;
         qe_log.debug("chained query result", &.{
             Attr.int("columns", @intCast(current_result.columns.len)),
             Attr.int("rows", @intCast(current_result.rows.len)),
@@ -1719,7 +1747,10 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // Skip validateGroupBy when ret.items is the same as with_clause.items (query chaining mode).
     // In this case, the WITH clause handles aggregation, and ret is just an artifact of chaining.
     const is_chaining_return = if (q.with_clause) |wc| q.ret.items.ptr == wc.items.ptr and q.ret.items.len == wc.items.len else false;
-    if (!is_chaining_return) {
+    // A FOR's RETURN (`ret` here is a copy of it) is validated with the FOR's
+    // own GROUP BY when it runs (`executeForReturn`).
+    const is_for_return = q.for_statement != null and q.match.chains.len == 0;
+    if (!is_chaining_return and !is_for_return) {
         try validateGroupBy(q.ret, q.group_by);
         // GAP-0914: reject GROUP BY keys that resolve to nothing instead of
         // silently collapsing every row into one null group.

@@ -34,18 +34,16 @@ const ThrottleError = registry_mod.ThrottleError;
 /// Monotonic ns timestamp — `std.time.nanoTimestamp` was removed in Zig 0.16
 /// and `std.Thread.sleep` is gone too, so we go straight to `clock_gettime`.
 fn nowMonoNs() i64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(i64, ts.sec) * std.time.ns_per_s + @as(i64, ts.nsec);
 }
 
 fn sleepNs(ns: i64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
-        .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 const WaiterCtx = struct {
@@ -125,8 +123,15 @@ test "PERF-D: acquire times out when no release happens, within timeout slop" {
     try testing.expectError(ThrottleError.GlobalStreamLimitExceeded, result);
     // Must wait at least most of the timeout (no premature wakeup).
     try testing.expect(elapsed_ns >= timeout_ns - 5 * std.time.ns_per_ms);
-    // Must NOT wait substantially longer than the timeout (no busy-wait).
-    try testing.expect(elapsed_ns < timeout_ns + 50 * std.time.ns_per_ms);
+    // Must give up rather than wait indefinitely. This is a liveness bound,
+    // not a latency bound: a loaded CI runner can deschedule the waiter well
+    // past 50 ms after the futex timeout fires (MR !67, test-zig-unit [4]),
+    // so a tight cap flakes. 5 s still catches a waiter that never wakes.
+    const liveness_cap_ns: u64 = 5 * std.time.ns_per_s;
+    if (elapsed_ns >= timeout_ns + liveness_cap_ns) {
+        std.debug.print("acquire({d} ns) returned after {d} ns\n", .{ timeout_ns, elapsed_ns });
+    }
+    try testing.expect(elapsed_ns < timeout_ns + liveness_cap_ns);
 
     throttle.release();
 }
@@ -143,9 +148,14 @@ test "PERF-D: one release wakes exactly one of N waiters (signal not broadcast)"
     for (&ctxs, 0..) |*c, i| {
         c.* = WaiterCtx{
             .throttle = &throttle,
-            // 80 ms — long enough that we can release() once and still
-            // have time to observe that the OTHER waiters did not wake.
-            .timeout_ns = 80 * std.time.ns_per_ms,
+            // The timeout is a liveness cap, not a latency bound: the
+            // release() below must land while every waiter is still inside
+            // acquire(). It was 80 ms, and a loaded CI runner (test-zig-unit
+            // [4] on MR !46) descheduled this thread past that, so every
+            // waiter timed out before the release and none acquired
+            // (`expected 1, found 0`). 2 s still lets the other N-1 waiters
+            // re-park and time out, which is what the test checks.
+            .timeout_ns = 2 * std.time.ns_per_s,
             .ready = &ready,
         };
         threads[i] = try std.Thread.spawn(.{}, WaiterCtx.run, .{c});
@@ -159,6 +169,7 @@ test "PERF-D: one release wakes exactly one of N waiters (signal not broadcast)"
     // must wake exactly one waiter — and that waiter claims the slot. The
     // remaining N-1 waiters must observe that they no longer satisfy the
     // predicate (active == max == 1) and re-park until timeout.
+    const release_ns = nowMonoNs();
     throttle.release();
 
     for (threads) |t| t.join();
@@ -168,6 +179,18 @@ test "PERF-D: one release wakes exactly one of N waiters (signal not broadcast)"
     for (&ctxs) |*c| {
         if (c.acquired.load(.acquire)) ok_count += 1;
         if (c.err.load(.acquire) == 1) err_count += 1;
+    }
+    if (ok_count != 1) {
+        for (&ctxs, 0..) |*c, i| {
+            // Times relative to the release(): a waiter whose wake is
+            // negative timed out before the release reached it.
+            std.debug.print("waiter {d}: start={d} ns wake={d} ns acquired={}\n", .{
+                i,
+                c.start_ns.load(.acquire) - release_ns,
+                c.wake_ns.load(.acquire) - release_ns,
+                c.acquired.load(.acquire),
+            });
+        }
     }
 
     // Exactly one waiter succeeded; the rest timed out.

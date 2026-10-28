@@ -3731,8 +3731,11 @@ fn nextOpIndex(ops: []const RuntimeOp, kind: OpKind, occurrence: *usize) ?usize 
 }
 
 fn nowNs() i128 {
-    var ts_tmp: std.os.linux.timespec = undefined;
-    const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
+    var ts_tmp: std.posix.timespec = undefined;
+    const rc = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.REALTIME, &ts_tmp)
+    else
+        std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts_tmp);
     if (rc != 0) return 0;
     return @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
 }

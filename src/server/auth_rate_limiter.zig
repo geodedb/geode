@@ -15,8 +15,11 @@ const std = @import("std");
 
 // Zig 0.16 compat: std.time.nanoTimestamp removed.
 fn compat_nanoTimestamp() i128 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.REALTIME, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
     return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
 }
 
@@ -596,11 +599,7 @@ test "auth_rate_limiter: different IPs are independent" {
 // Zig 0.16: std.Thread.sleep was removed — linux nanosleep compat shim
 // (test-only; mirrors the shape used by repl_dispatch.zig / proto_test_util.zig).
 fn testSleepNs(ns: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    _ = std.os.linux.nanosleep(&req, null);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 test "auth_rate_limiter: lockout expires after duration" {

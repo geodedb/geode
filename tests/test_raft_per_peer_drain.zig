@@ -33,7 +33,10 @@ const FAST_DEADLINE_MS: u64 = 150;
 /// Zig 0.16 dropped `std.time.Timer`; read the monotonic clock directly.
 fn monotonicNs() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
@@ -73,8 +76,7 @@ const Recorder = struct {
         // peer 3's own thread.
         if (peer.id == SLOW_PEER_ID) {
             const req = std.os.linux.timespec{ .sec = 1, .nsec = 0 };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
         }
     }
 
@@ -135,8 +137,7 @@ test "raft per-peer drain: a slow peer's blocking send does not delay other peer
     while (waited_ns < FAST_DEADLINE_MS * std.time.ns_per_ms) {
         if (rec.firedWithin(1, FAST_DEADLINE_MS) and rec.firedWithin(2, FAST_DEADLINE_MS)) break;
         const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(poll_ns) };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
         waited_ns += poll_ns;
     }
 

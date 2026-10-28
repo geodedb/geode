@@ -114,25 +114,80 @@ returns `.None` ("none"), a role with no builtin permission. In `decide()`:
 
 - `.None` grants nothing in the builtin-role step, and is neither `Admin`
   (no admin shortcuts) nor `ReadWrite` (no permissive single-tenant bind).
-- `isGrantOnly(principal)` is true for it. After the builtin-role step, on a
-  `.graph` resource, a grant-only principal is allowed an action its live
-  per-graph grant covers (`graph_grant_check_fn`: READ for `read`/`match_`,
-  WRITE for `write`/`create`/`update`/`delete`, SCHEMA for `schema`),
-  `reason_code = "graph_grant"`. Policies still apply after that, as for
-  every principal.
+- Its graph access is its per-graph grants, which `decide()` reads for
+  every principal (see "Per-graph grants" below).
 
-The handlers add two gates that apply only to grant-only principals:
-`gps.writePermittedOn(principal, lock_graph)` (write on the graph the
-program changes, in place of the database-wide `writePermitted`) and
-`session_graph.programReadPermitted` (read on every graph the program
-touches, the `default` graph included, which `mayBind` lets every
-authenticated user bind). Every other principal gets the gates it had.
+The handlers' read gate, `session_graph.programReadPermitted` (read on every
+graph the program touches, the `default` graph included, which `mayBind`
+lets every authenticated user bind), applies to principals without global
+Read, which is `.None`. Every other principal reads as before.
 
 Write grants are not capped at read for `.None`: per-graph grants are
 documented as additive over the global role (docs/GQL_AUTH_DDL.md), so a
 WRITE grant works as granted. See
 [GQL_AUTH_DDL.md](../GQL_AUTH_DDL.md#users-with-no-stored-role-fail-closed-default).
 Regression: `tests/test_default_role_fail_closed.zig`.
+
+### Per-graph grants (REQ-SEC-PER-GRAPH-GRANTS, 2026-10, security fix)
+
+`GRANT READ|WRITE|SCHEMA ON GRAPH g TO u` allows that action on `g` only, for
+every role, from the moment the GRANT returns; `REVOKE` takes it away just
+as fast.
+
+**What was wrong.** For a user with an explicit role:
+
+- `decide()` read grants only through the `(:Policy)` rows
+  `grant_migration.zig` wrote at startup (Phase 6/7). A runtime GRANT
+  updated the live `GraphRBACPolicy`, which `decide()` consulted only for
+  `bind_graph` (and, since the fail-closed default role, for users with no
+  stored role), so a GRANT
+  took effect only after a restart.
+- The migrated row was scoped to the grant's graph, but the handlers' write
+  gate was `writePermitted`, `decide(write, database)`, and a graph-scoped
+  allow policy matched every non-graph resource. After a restart a WRITE
+  grant on one graph allowed writes on every graph. Any `CREATE POLICY ...
+  ON GRAPH g FOR WRITE` did the same.
+- REVOKE removed the `(:GraphGrant)` but never the migrated row, so a grant
+  a restart had migrated stayed in force.
+
+**What `decide()` does now.**
+
+1. After the builtin-role step, for an action a grant covers (READ:
+   `read`/`match_`; WRITE: `write`/`create`/`update`/`delete`; SCHEMA:
+   `schema`) on a resource in one graph (`.graph`, `.node`, `.edge`; not
+   `*`), it asks the live grant table (`execution.graph_grant_check_fn`,
+   `server_init.graphGrantCheck`) for that user, graph and action.
+   `reason_code = "graph_grant"`. A builtin role still allows the action on
+   every graph. A request on no graph in particular (the database, a
+   tenant, a procedure, metadata, `*`) is never allowed by a grant.
+2. Allow policies match resources by `allowPolicyCovers`: a policy scoped
+   to `*` covers everything; one scoped to graph `g` covers `g` and its
+   nodes and edges, and nothing else. Deny policies keep the broad
+   `policyMatchesResource` match, so a deny on `g` still refuses a request
+   on the whole database.
+3. A deny policy is evaluated before both, so it overrides a grant.
+
+GRANT and REVOKE update the live table at once (`server_init.grantApply`,
+`grantRevoke`) and bump the policy version, so no cached decision outlives
+them. The table is guarded by a mutex: every request reads it now.
+
+**Handler gates.** QUIC and gRPC gate a program that changes data with
+`gps.writePermittedOn(principal, lock_graph)`, `decide(write, graph)`, for
+every principal, and a self-locking CALL (which takes each graph's lock
+itself) with the database-wide `writePermitted`. Schema DDL goes through
+`session_graph.maySchema` (`decide(schema, graph)`), so a SCHEMA grant
+counts there at once; `maySchemaDatabase` (index and constraint DDL) asks
+for schema on `*`, which no grant gives. `execution.checkPermission` asks
+on the active graph when there is one.
+
+**Restart.** Grants are hydrated from the `(:GraphGrant)` nodes into the
+live table (`wireAuthDDLCallbacks`). They are no longer migrated to
+Policy rows; `grant_migration.retireMigratedGrantPolicies` drops the
+`auto_migrated_grant_*` rows earlier versions wrote, from the catalog and
+from `__geode_security`, at every startup.
+
+Regression: `tests/test_per_graph_grants.zig`
+(`zig build test-per-graph-grants`) and `tests/test_gps_grant_migration.zig`.
 
 ## How to call `decide()` in new code (Phase 2+)
 
@@ -243,9 +298,11 @@ decrypt_field and unwrap_key, and `decide()` evaluates a deny for any of them.
 But a deny only takes effect where enforcement calls `decide()`, and it calls
 it for few actions:
 
-- **DENY WRITE** refuses every request that changes data. The QUIC and gRPC
-  write gate (`gps.writePermitted`, `decide(write, database)`) runs for every
-  program that `isMutatingProgram` counts as a change. That is all DML
+- **DENY WRITE** refuses every request that changes data on the graphs it
+  covers. The QUIC and gRPC write gate (`gps.writePermittedOn`,
+  `decide(write, graph)` on the graph the program changes; for a
+  self-locking CALL `gps.writePermitted`, `decide(write, database)`) runs
+  for every program that `isMutatingProgram` counts as a change. That is all DML
   (CREATE, MERGE, SET, REMOVE, DELETE, INSERT), the graph, graph type,
   schema, index and constraint DDL, BACKUP and RESTORE, and CALLs of
   procedures that change data.
@@ -270,11 +327,13 @@ SONNY-2781 tracks wiring the rest (v0.8.24). bind_graph, admin_tenant,
 execute_procedure and show_metadata have no policy analogue, so no policy
 names them.
 
-Resources match as they do for allow policies. `*` matches everything. A
-graph-scoped policy matches that graph and every non-graph resource
-(database, tenant, node, edge, procedure, metadata). So a deny scoped to one
-graph also refuses the handlers' database-level write check, and, for DENY
-READ, every read-only procedure (SONNY-2753).
+Resources match more broadly than for allow policies. `*` matches
+everything. A graph-scoped deny matches that graph and every non-graph
+resource (database, tenant, node, edge, procedure, metadata). So a deny
+scoped to one graph refuses writes to that graph, the database-level write
+check (self-locking CALLs), and, for DENY READ, every read-only procedure
+(SONNY-2753). A graph-scoped allow covers only its graph
+(REQ-SEC-PER-GRAPH-GRANTS).
 
 A deny whose USING expression does not compile (a record loaded fail-closed)
 keeps denying until it is rewritten, and so does a deny when the principal's

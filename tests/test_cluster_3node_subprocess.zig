@@ -74,8 +74,7 @@ fn sleepMs(ms: u64) void {
             .sec = @intCast(ms / 1000),
             .nsec = @intCast((ms % 1000) * std.time.ns_per_ms),
         };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     } else {
         const req = std.c.timespec{
             .sec = @intCast(ms / 1000),
@@ -88,16 +87,14 @@ fn sleepMs(ms: u64) void {
 
 /// Mark a file descriptor non-blocking so we can scrape stderr from
 /// long-running child processes without blocking the test harness.
-/// Linux-only because that's the only platform we target the cluster on
-/// today (Task B1 of the plan tracks Windows / macOS bring-up).
+/// Use the host libc ABI: skipping this on macOS leaves an empty pipe read
+/// blocked forever, so the startup/election/teardown deadlines never run.
 fn setNonBlocking(file: std.Io.File) !void {
-    if (comptime builtin.os.tag != .linux) return;
     const fd = file.handle;
-    const flags = std.os.linux.fcntl(fd, std.posix.F.GETFL, 0);
-    if (@as(isize, @bitCast(flags)) < 0) return error.FcntlGetFailed;
-    const new_flags = flags | @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }));
-    const rc = std.os.linux.fcntl(fd, std.posix.F.SETFL, new_flags);
-    if (@as(isize, @bitCast(rc)) < 0) return error.FcntlSetFailed;
+    const flags = std.c.fcntl(fd, std.posix.F.GETFL);
+    if (flags < 0) return error.FcntlGetFailed;
+    const new_flags = flags | @as(c_int, @bitCast(std.posix.O{ .NONBLOCK = true }));
+    if (std.c.fcntl(fd, std.posix.F.SETFL, new_flags) < 0) return error.FcntlSetFailed;
 }
 
 fn runOpenssl(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
@@ -139,11 +136,13 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io, dir: []const u8) !Certs {
         .sub_path = ext,
         .data = "subjectAltName=IP:127.0.0.1,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
     });
+    // Pin SHA-256 below: system LibreSSL otherwise defaults to SHA-1,
+    // which the real peer certificate verifier correctly rejects.
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ca_key });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-subproc-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-sha256", "-x509", "-new", "-key", ca_key, "-days", "1", "-subj", "/CN=geode-subproc-ca", "-addext", "basicConstraints=critical,CA:TRUE", "-out", ca });
     try runOpenssl(spawn_gpa, sio, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
-    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "req", "-sha256", "-new", "-key", leaf_key, "-subj", "/CN=geode-node", "-out", leaf_csr });
+    try runOpenssl(spawn_gpa, sio, &.{ "openssl", "x509", "-sha256", "-req", "-in", leaf_csr, "-CA", ca, "-CAkey", ca_key, "-CAcreateserial", "-days", "1", "-extfile", ext, "-out", leaf });
     return .{ .dir = dir, .ca = ca, .leaf = leaf, .key = leaf_key };
 }
 
@@ -159,10 +158,123 @@ const ChildCapture = struct {
         try self.buf.appendSlice(allocator, chunk);
     }
 
+    fn drain(self: *ChildCapture, allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) void {
+        var buf: [8192]u8 = undefined;
+        const n = file.readStreaming(io, &.{&buf}) catch return;
+        self.appendChunk(allocator, buf[0..n]) catch {};
+    }
+
     fn deinit(self: *ChildCapture, allocator: std.mem.Allocator) void {
         self.buf.deinit(allocator);
     }
 };
+
+fn tryReap(pid: std.c.pid_t, flags: c_int) bool {
+    var status: c_int = undefined;
+    return std.c.waitpid(pid, &status, flags) == pid;
+}
+
+fn teardownNodes(children: []std.process.Child, captures: []ChildCapture, spawned: usize, gpa: std.mem.Allocator, io: std.Io) void {
+    // Phase 1: SIGTERM and keep draining pipes so a node's graceful-shutdown
+    // logging never blocks on a full pipe.  Poll (non-blocking) for exit.
+    for (children[0..spawned]) |*ch| {
+        if (ch.id) |pid| std.posix.kill(pid, std.posix.SIG.TERM) catch {};
+    }
+    const term_deadline = nowMillis() + 5_000;
+    while (nowMillis() < term_deadline) {
+        drainAll(captures[0..spawned], children[0..spawned], gpa, io);
+        var all_gone = true;
+        for (children[0..spawned]) |*ch| {
+            if (ch.id == null) continue;
+            if (tryReap(ch.id.?, std.c.W.NOHANG)) {
+                ch.id = null; // reaped
+            } else {
+                all_gone = false;
+            }
+        }
+        if (all_gone) break;
+        sleepMs(100);
+    }
+    // Phase 2: SIGKILL + blocking reap anything that ignored SIGTERM.
+    for (children[0..spawned]) |*ch| {
+        if (ch.id) |pid| {
+            std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+            _ = tryReap(pid, 0);
+            ch.id = null;
+        }
+    }
+    // Close the inherited pipe FDs so the test process leaks none.
+    for (children[0..spawned]) |*ch| {
+        if (ch.stdout) |f| {
+            f.close(io);
+            ch.stdout = null;
+        }
+        if (ch.stderr) |f| {
+            f.close(io);
+            ch.stderr = null;
+        }
+        if (ch.stdin) |f| {
+            f.close(io);
+            ch.stdin = null;
+        }
+    }
+}
+
+/// Continuously drain every node's stdout+stderr pipe.  CRITICAL: the three
+/// `--log-level info` nodes keep logging throughout the replication phases; if
+/// the harness ever stops reading, a node's pipe buffer (64 KiB) fills, its
+/// logging thread blocks in `pipe_write`, and the whole node stalls — which both
+/// spuriously fails replication AND wedges teardown (`ch.kill` → `do_wait` while
+/// the node can't exit on a blocked pipe).  Call this inside every sleep in the
+/// replication/hold loops, not just startup.
+fn drainAll(captures: []ChildCapture, children: []std.process.Child, gpa: std.mem.Allocator, io: std.Io) void {
+    for (children, 0..) |*ch, i| {
+        if (ch.stdout) |f| captures[i].drain(gpa, io, f);
+        if (ch.stderr) |f| captures[i].drain(gpa, io, f);
+    }
+}
+
+test "child capture drains data without blocking on a quiet pipe" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var fds: [2]std.c.fd_t = undefined;
+    try std.testing.expectEqual(@as(c_int, 0), std.c.pipe(&fds));
+    const reader: std.Io.File = .{ .handle = fds[0], .flags = .{ .nonblocking = true } };
+    const writer: std.Io.File = .{ .handle = fds[1], .flags = .{ .nonblocking = false } };
+    defer reader.close(io);
+    defer writer.close(io);
+    try setNonBlocking(reader);
+    // Check the flag before attempting a read, so a regression fails promptly
+    // even while the writer remains open and has not produced any output.
+    const flags = std.c.fcntl(reader.handle, std.posix.F.GETFL);
+    try std.testing.expect(flags >= 0);
+    try std.testing.expect(flags & @as(c_int, @bitCast(std.posix.O{ .NONBLOCK = true })) != 0);
+    var capture: ChildCapture = .{};
+    defer capture.deinit(std.testing.allocator);
+    capture.drain(std.testing.allocator, io, reader);
+    try std.testing.expectEqual(@as(usize, 0), capture.buf.items.len);
+    try writer.writeStreamingAll(io, "cluster startup\n");
+    capture.drain(std.testing.allocator, io, reader);
+    try std.testing.expectEqualStrings("cluster startup\n", capture.buf.items);
+    capture.drain(std.testing.allocator, io, reader);
+    try std.testing.expectEqualStrings("cluster startup\n", capture.buf.items);
+}
+
+test "child teardown reaps an exited subprocess through the host ABI" {
+    var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var child = try std.process.spawn(io, .{ .argv = &.{ "/bin/sh", "-c", "exit 0" } });
+    defer if (child.id != null) child.kill(io);
+    const deadline = nowMillis() + 3_000;
+    while (nowMillis() < deadline) {
+        if (tryReap(child.id.?, std.c.W.NOHANG)) {
+            child.id = null;
+            break;
+        }
+        sleepMs(10);
+    }
+    try std.testing.expect(child.id == null);
+}
 
 test "three geode subprocesses on loopback form a 3-node Raft cluster" {
     const a = std.testing.allocator;
@@ -266,19 +378,13 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
     var spawn_threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
     defer spawn_threaded.deinit();
     const io_proc = spawn_threaded.io();
+
     var children: [3]std.process.Child = undefined;
     var spawned: usize = 0;
-    defer {
-        // Best-effort: SIGTERM, then wait for clean exit.  If kill itself
-        // fails (process already gone), Child.wait surfaces NoSuchProcess
-        // which we discard.
-        for (children[0..spawned]) |*ch| {
-            ch.kill(io_proc);
-        }
-    }
-
     var captures: [3]ChildCapture = .{ .{}, .{}, .{} };
+    // Teardown must drain pipes before their capture buffers are freed.
     defer for (&captures) |*cap| cap.deinit(a);
+    defer teardownNodes(&children, &captures, spawned, a, io_proc);
 
     for (0..3) |i| {
         const cluster_port_str = try std.fmt.allocPrint(aa, "{d}", .{cluster_ports[i]});
@@ -395,7 +501,8 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
             if (n > 0) {
                 try captures[i].appendChunk(a, buf[0..n]);
             }
-            // Scan captured stderr for any "state=leader" marker.
+            captures[i].drain(a, io_check, ch.stdout.?);
+            // Scan captured logs for any "state=leader" marker.
             if (std.mem.indexOf(u8, captures[i].buf.items, "state=leader") != null) {
                 captures[i].leader_seen = true;
                 leader_seen = true;
@@ -423,12 +530,5 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
         return error.LeaderNeverElected;
     }
 
-    // Phase 3: graceful shutdown — kill all three children and wait for
-    // them to exit.  We don't assert on exit code because SIGTERM-driven
-    // shutdown emits memory-leak diagnostics under DebugAllocator that
-    // are tracked separately (the leak in cluster.zig:548 — `ep` string
-    // — is benign at shutdown and queued for a separate cleanup pass).
-    for (children[0..spawned]) |*ch| {
-        ch.kill(io_proc);
-    }
+    // The deferred teardown drains output and bounds graceful shutdown.
 }

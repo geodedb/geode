@@ -226,8 +226,7 @@ fn throttleInvalidSessionProbe() void {
         .sec = @intCast(ns / std.time.ns_per_s),
         .nsec = @intCast(ns % std.time.ns_per_s),
     };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
 }
 
 fn rebuildPendingIndexes(
@@ -745,8 +744,7 @@ pub const SessionStore = struct {
             var waited: u64 = 0;
             while (waited < interval and !self.reaper_stop.load(.acquire) and self.pending_teardown_count.load(.acquire) == 0) : (waited += 25) {
                 const req = std.os.linux.timespec{ .sec = 0, .nsec = 25 * std.time.ns_per_ms };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             }
             if (self.reaper_stop.load(.acquire)) break;
             // A pass counts as a handler for the shutdown drain
@@ -831,8 +829,7 @@ pub fn waitForGrpcInflightZero(timeout_ms: u64) u32 {
         // builds never linked libc so never saw it. Mirrors quic.zig
         // compat_sleepNs. std.Thread.sleep is unavailable in Zig 0.16.
         const req = std.os.linux.timespec{ .sec = 0, .nsec = 25 * std.time.ns_per_ms };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     }
 }
 
@@ -3381,23 +3378,32 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // Phase 2: delegated to gps.decide() so the PDP is uniform across all transports.
             // principal_for_request is derived above (line ~1964) and is in scope here.
             // SONNY-2743: `gps.writePermitted`, the same gate QUIC runs.
-            // Fail-closed default role (REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED): a
-            // user with no stored role needs write on the graph the program
-            // changes; see the QUIC handler.
+            // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GrpcWriteGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
+            // REQ-SEC-PER-GRAPH-GRANTS: write on the graph the program
+            // changes, for every principal; a self-locking CALL needs
+            // database-wide write. See the QUIC handler.
             if (is_mutation) {
-                if (!geode.security.gps.writePermittedOn(std.heap.smp_allocator, &principal_for_request, lock_graph)) {
+                const write_ok = if (stmt_plan.self_locking)
+                    geode.security.gps.writePermitted(std.heap.smp_allocator, &principal_for_request)
+                else
+                    geode.security.gps.writePermittedOn(std.heap.smp_allocator, &principal_for_request, lock_graph);
+                if (!write_ok) {
                     var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
                 }
             }
             // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrpcReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
-            // A user with no stored role reads only graphs it holds a READ
-            // grant on, the default graph included.
-            if (!try execution.session_graph.programReadPermitted(allocator, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
-                var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
-                defer resp.deinit(allocator);
-                return encodeMessage(allocator, resp);
+            // A principal with no global Read (a user with no stored role)
+            // reads only graphs it holds a READ grant on, the default graph
+            // included. A session with no role (auth disabled) is not gated,
+            // as on QUIC: it has no principal for `gps.decide` to allow.
+            if (role != null) {
+                if (!try execution.session_graph.programReadPermitted(allocator, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
+                    var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                }
             }
 
             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26

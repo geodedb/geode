@@ -27,7 +27,6 @@
 
 const std = @import("std");
 const testing = std.testing;
-const linux = std.os.linux;
 
 /// File paths relative to the repo root that must not contain sub-ms waits.
 /// The vendored quic dep lives at `zig-pkg/quic-<version>-<hash>/…`; the
@@ -52,37 +51,13 @@ const forbidden_patterns = [_][]const u8{
     "nanosleep(100 * std.time.ns_per_us)",
 };
 
-/// Read a file via raw Linux syscalls — avoids the Io.Dir/allocator churn
-/// between Zig versions and keeps this self-contained.
+/// Read source through the native filesystem backend on every test host.
 fn readFile(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
-    // Null-terminate the path for syscall.
-    var pathz: [4096]u8 = undefined;
-    if (path.len + 1 > pathz.len) return error.PathTooLong;
-    @memcpy(pathz[0..path.len], path);
-    pathz[path.len] = 0;
-
-    const open_flags: linux.O = .{ .ACCMODE = .RDONLY };
-    const rc = linux.open(@ptrCast(&pathz), open_flags, 0);
-    if (@as(isize, @bitCast(rc)) < 0) {
-        // ENOENT etc. → treat as missing.
-        return null;
-    }
-    const fd: i32 = @intCast(rc);
-    defer _ = linux.close(fd);
-
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
-
-    var chunk: [8192]u8 = undefined;
-    while (true) {
-        const n_rc = linux.read(fd, &chunk, chunk.len);
-        const n_signed: isize = @bitCast(n_rc);
-        if (n_signed < 0) return error.ReadFailed;
-        const n: usize = @intCast(n_signed);
-        if (n == 0) break;
-        try buf.appendSlice(allocator, chunk[0..n]);
-    }
-    return try buf.toOwnedSlice(allocator);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .unlimited) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => null,
+        else => return err,
+    };
 }
 
 fn fileContains(allocator: std.mem.Allocator, path: []const u8, needle: []const u8) !bool {

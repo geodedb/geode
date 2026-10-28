@@ -119,10 +119,12 @@ test "e2e_timeseries: basic store operations" {
 test "e2e_timeseries: chunk storage with compression" {
     const allocator = std.testing.allocator;
 
-    const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
-    var dir_buf: [128]u8 = undefined;
-    const test_dir = std.fmt.bufPrint(&dir_buf, "/tmp/test_timeseries_chunks_{d}", .{pid}) catch unreachable;
-    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp.dir.realPath(std.Io.Threaded.global_single_threaded.io(), &dir_buf);
+    // ChunkStorage rejects symlink components; /tmp is a symlink on macOS.
+    const test_dir = dir_buf[0..dir_len];
 
     var storage = try chunk_storage.ChunkStorage.init(allocator, test_dir, .{
         .max_points_per_chunk = 1000,
@@ -180,10 +182,11 @@ test "e2e_timeseries: chunk storage with compression" {
 test "e2e_timeseries: retention policy" {
     const allocator = std.testing.allocator;
 
-    const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
-    var dir_buf: [128]u8 = undefined;
-    const test_dir = std.fmt.bufPrint(&dir_buf, "/tmp/test_retention_policy_{d}", .{pid}) catch unreachable;
-    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dir_len = try tmp.dir.realPath(std.Io.Threaded.global_single_threaded.io(), &dir_buf);
+    const test_dir = dir_buf[0..dir_len];
 
     var storage = try chunk_storage.ChunkStorage.init(allocator, test_dir, .{
         .retention_days = 1, // 1 day retention for testing

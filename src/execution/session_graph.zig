@@ -83,14 +83,17 @@ pub fn mayBind(principal: ?*const principal_mod.Principal, graph: []const u8) bo
 }
 
 // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=ProgramGraphGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
-/// The QUIC and gRPC handlers' read gate for a user with no stored role
-/// (`gps.isGrantOnly`). May `principal` run a program whose statements touch
-/// the data of the graphs `programDataGraphList` names (from `start_graph`,
-/// the session's graph, with `home_graph` its home)? Every graph must pass
-/// `gps.graphReadPermitted`: a READ grant on it (or a policy). Any other
-/// principal: yes, unchanged; its graph access is `bind_graph`'s.
+// CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=ProgramReadGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
+/// The QUIC and gRPC handlers' read gate. May `principal` run a program
+/// whose statements touch the data of the graphs `programDataGraphList`
+/// names (from `start_graph`, the session's graph, with `home_graph` its
+/// home)? A principal whose builtin role holds Read reads every graph, as
+/// before; its graph access is `bind_graph`'s. Any other principal (a user
+/// with no stored role) needs `gps.graphReadPermitted` on every graph: a
+/// READ grant on it, read from the live grant table so a GRANT or REVOKE
+/// counts at once, or an allow policy on it.
 ///
-/// `bind_graph` alone cannot hold a grant-only user: every session starts on
+/// `bind_graph` alone cannot hold such a user: every session starts on
 /// the default graph, which any authenticated user may bind
 /// (`mayBind`), so without this gate the user read the default graph with
 /// no grant on it. A program that reads no store (`RETURN 1`, analysed as
@@ -105,7 +108,7 @@ pub fn programReadPermitted(
     start_graph: []const u8,
     home_graph: []const u8,
 ) !bool {
-    if (!gps.isGrantOnly(principal)) return true;
+    if (gps.holdsGlobalPermission(principal, .Read)) return true;
     if (analysis.kind == .rows and analysis.is_store_free and query_traits.restOfProgramIsNoop(analysis, start_graph)) return true;
     const graphs = try query_traits.programDataGraphList(allocator, program, start_graph, home_graph);
     defer allocator.free(graphs);

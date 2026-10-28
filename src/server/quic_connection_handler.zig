@@ -46,12 +46,7 @@ fn compat_microTimestamp() i64 {
 }
 
 fn compat_sleepNs(ns: u64) void {
-    const req = std.os.linux.timespec{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 
 // Zig 0.16 compat: std.process.getEnvVarOwned was removed.
@@ -268,8 +263,11 @@ var g_first_stream_detach_gate = FirstStreamDetachGate{};
 /// to avoid widening the metric module's API surface for what is
 /// really a handler-internal concern.
 fn monoNsFromHandler() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
     const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
     return sec * std.time.ns_per_s + nsec;
@@ -3803,11 +3801,10 @@ fn runStreamQueryLoopWithReader(
             // OTel transport request instrumentation. op_name is "QUERY" for
             // all requests at this layer; Task 10 will refine per parsed type.
             const om = @import("otel_metrics");
-            const otel_lib = @import("otel");
             const op_name: []const u8 = "QUERY";
             om.incTransportInflight(op_name);
             defer om.decTransportInflight(op_name); // ALWAYS runs, including the catch-return path
-            const t0_ns = otel_lib.internal.clock.unixNanoNow();
+            const duration = om.DurationTimer.start();
 
             // The `geode.transport.request` parent trace span was rolled
             // back here pending a coordinated otel pin bump to 0c34ce9b+.
@@ -3823,15 +3820,13 @@ fn runStreamQueryLoopWithReader(
             // tests/test_bsp_race_regression.zig.
 
             handleClientMessage(gpa, state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
-                const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
-                const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+                const dur_s = duration.seconds();
                 om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
                 log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
                 sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {}; // best-effort; don't leak inflight, defer handles it
                 continue;
             };
-            const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
-            const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+            const dur_s = duration.seconds();
             om.recordTransportRequest(op_name, dur_s, .success, null);
         }
 
@@ -4486,22 +4481,19 @@ fn processFirstStreamPacket(
 
     {
         const om = @import("otel_metrics");
-        const otel_lib = @import("otel");
         const op_name: []const u8 = "QUERY";
         om.incTransportInflight(op_name);
         defer om.decTransportInflight(op_name);
-        const t0_ns = otel_lib.internal.clock.unixNanoNow();
+        const duration = om.DurationTimer.start();
 
         handleClientMessage(gpa, state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
-            const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
-            const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+            const dur_s = duration.seconds();
             om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
             log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
             sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {};
             return true;
         };
-        const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
-        const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+        const dur_s = duration.seconds();
         om.recordTransportRequest(op_name, dur_s, .success, null);
     }
 
@@ -7770,19 +7762,27 @@ fn handleClientMessage(
             // the same function gRPC runs. A builtin role with WRITE passes
             // there as it did in the role check this replaces. A session with
             // no role (auth disabled) is not gated, as before.
-            // Fail-closed default role (REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED): for
-            // a user with no stored role, `writePermittedOn` asks for write on
-            // the graph the program changes (a WRITE grant there), not on the
-            // whole database; every other principal gets `writePermitted`.
+            // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=QuicWriteGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
+            // REQ-SEC-PER-GRAPH-GRANTS: for every principal, write on the
+            // graph the program changes (`lock_graph`), not on the whole
+            // database: a builtin role with Write passes on every graph, a
+            // WRITE grant or a graph-scoped policy on that graph only. A
+            // self-locking CALL writes no one graph and needs database-wide
+            // write (`writePermitted`).
             if (is_mutation and state.authenticated_role != null) {
-                if (!geode.security.gps.writePermittedOn(gpa, &principal_for_request, lock_graph)) {
+                const write_ok = if (self_locking)
+                    geode.security.gps.writePermitted(gpa, &principal_for_request)
+                else
+                    geode.security.gps.writePermittedOn(gpa, &principal_for_request, lock_graph);
+                if (!write_ok) {
                     try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     return;
                 }
             }
             // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=QuicReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
-            // A user with no stored role reads only graphs it holds a READ
-            // grant on, the default graph included.
+            // A principal with no global Read (a user with no stored role)
+            // reads only graphs it holds a READ grant on, the default graph
+            // included.
             if (state.authenticated_role != null) {
                 if (!try execution.session_graph.programReadPermitted(gpa, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
                     try sendExecuteError(gpa, stream, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
@@ -8999,8 +8999,7 @@ fn handleClientMessage(
                         if (found_result or found_stream) break;
                         {
                             const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
-                            var rem: std.os.linux.timespec = undefined;
-                            _ = std.os.linux.nanosleep(&req, &rem);
+                            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
                         }
                     }
                 }
@@ -9809,8 +9808,7 @@ test "SharedConnState: waitForStreamSlot wakes when active stream releases" {
     const thread = try std.Thread.spawn(.{}, struct {
         fn run(s: *SharedConnState) void {
             const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             s.releaseActiveStream();
         }
     }.run, .{&state});
@@ -9830,8 +9828,7 @@ test "SharedConnState: waitForAllStreamsDrained parks until release" {
     const thread = try std.Thread.spawn(.{}, struct {
         fn run(s: *SharedConnState) void {
             const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             s.releaseActiveStream();
         }
     }.run, .{&state});
@@ -9981,8 +9978,7 @@ test "StreamAcceptorContext: waitUntilDone wakes on markDone" {
     const thread = try std.Thread.spawn(.{}, struct {
         fn run(c: *StreamAcceptorContext) void {
             const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             c.markDone();
         }
     }.run, .{ctx});
@@ -10063,8 +10059,7 @@ test "StreamAcceptorContext: owner-bails-then-acceptor-finishes does not UAF or 
             var spins: usize = 0;
             while (!c.shutdown.load(.acquire)) {
                 const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
                 spins += 1;
                 if (spins > 10_000) {
                     // Safety: bail if shutdown never arrives (test bug).
@@ -10469,33 +10464,12 @@ test "accept reactor: a wedged OOM teardown still leaves register answering on t
 // already uses for guards no type system can express.
 // =============================================================================
 
-/// Read a file via raw Linux syscalls — same reason as the cadence audit: no
-/// Io.Dir/allocator churn between Zig versions, self-contained.
+/// Read source guards on every supported test host.
 fn preHelloReadSource(allocator: std.mem.Allocator, path: []const u8) !?[]u8 {
-    const linux = std.os.linux;
-    var pathz: [4096]u8 = undefined;
-    if (path.len + 1 > pathz.len) return error.PathTooLong;
-    @memcpy(pathz[0..path.len], path);
-    pathz[path.len] = 0;
-
-    const open_flags: linux.O = .{ .ACCMODE = .RDONLY };
-    const rc = linux.open(@ptrCast(&pathz), open_flags, 0);
-    if (@as(isize, @bitCast(rc)) < 0) return null;
-    const fd: i32 = @intCast(rc);
-    defer _ = linux.close(fd);
-
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
-    var chunk: [16384]u8 = undefined;
-    while (true) {
-        const n_rc = linux.read(fd, &chunk, chunk.len);
-        const n_signed: isize = @bitCast(n_rc);
-        if (n_signed < 0) return error.ReadFailed;
-        const n: usize = @intCast(n_signed);
-        if (n == 0) break;
-        try buf.appendSlice(allocator, chunk[0..n]);
-    }
-    return try buf.toOwnedSlice(allocator);
+    return std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), path, allocator, .unlimited) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => null,
+        else => return err,
+    };
 }
 
 const pre_hello_handler_source_path = "src/server/quic_connection_handler.zig";

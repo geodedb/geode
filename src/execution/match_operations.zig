@@ -619,8 +619,7 @@ fn rowPoliciesAllow(
     // "allow").
     // GAP-0524: Fail closed on evaluation errors.
     const om = @import("otel_metrics");
-    const otel_lib = @import("otel");
-    const t0 = otel_lib.internal.clock.unixNanoNow();
+    const duration = om.DurationTimer.start();
     const allowed = for (tables) |table| {
         const seed = labelSeed(filter_engine, graph_name, table, tables_are_labels, username);
         const table_allows = expr_engine.checkRowAccessByUsernameSeeded(
@@ -633,7 +632,7 @@ fn rowPoliciesAllow(
         ) catch false;
         if (!table_allows) break false;
     } else true;
-    const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+    const dur_s = duration.seconds();
     om.recordRlsEvaluation(if (allowed) .allow else .deny, .rls, dur_s);
     return allowed;
 }

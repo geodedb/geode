@@ -38,6 +38,14 @@
 
 ### Grant Migration (`src/security/grant_migration.zig`)
 
+> **Superseded (2026-10, REQ-SEC-PER-GRAPH-GRANTS).** The migrated rows made
+> a runtime GRANT wait for a restart, outlived REVOKE, and, scoped to one
+> graph, matched database-wide write checks, so a WRITE grant on one graph
+> allowed writes on every graph. Grants are no longer migrated: `gps.decide`
+> reads them from the live grant table, and `grant_migration.zig` now retires
+> the `auto_migrated_grant_*` rows at startup. See
+> [gps-decide.md](gps-decide.md#per-graph-grants-req-sec-per-graph-grants-2026-10-security-fix).
+
 - One-shot startup migration that converts every existing `(:GraphGrant)` record in
   the `__geode_security` graph to a `(:Policy)` row with a
   `current_user() = '<user>'` predicate.

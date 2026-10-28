@@ -22,7 +22,8 @@
 // no read fast path answers a REMOVE. A CREATE, MERGE or procedure CALL
 // with such a RETURN is refused with error.UnsupportedGroupedReturn
 // (SQLSTATE 0A000) before anything is written. A FOR's RETURN refuses a
-// GROUP BY, HAVING or WHERE at parse time.
+// HAVING or WHERE at parse time; its GROUP BY groups the loop's rows
+// (tests/test_for_aggregation.zig).
 //
 // Every check runs in the three legacy sessions and on a persisted
 // deployment with no policy or tenant scope. Writes are legacy everywhere.
@@ -291,9 +292,11 @@ fn checkMode(mode: Mode) !void {
     try expectFail(&s, &f, "MATCH (n:G) CALL db.labels() YIELD label RETURN label, count(*) AS c GROUP BY label", error.UnsupportedGroupedReturn);
     try expectFail(&s, &f, "MATCH (n:G) CALL db.labels() YIELD label RETURN label WHERE label = 'G'", error.UnsupportedGroupedReturn);
 
-    // FOR: its RETURN neither groups nor filters; a loop body does, per
-    // element (two here).
+    // FOR: its RETURN does not filter, and its GROUP BY groups the loop's
+    // rows (each of the 25 G rows once per element), not the WITH's; a loop body
+    // groups and filters per element (two here).
     try expectFail(&s, &f, "MATCH (n:G) WITH n FOR x IN [1, 2] RETURN x, count(*) AS c GROUP BY x HAVING c > 100", error.UnexpectedToken);
+    try expectSet(&s, &f, .any, "MATCH (n:G) WITH n FOR x IN [1, 2] RETURN x, count(*) AS c GROUP BY x", &.{ "1|25", "2|25" });
     try expectFail(&s, &f, "MATCH (n:G) WITH n FOR x IN [1, 2] RETURN x WHERE x > 1", error.UnexpectedToken);
     try expectSet(&s, &f, .any, "FOR x IN [1, 2] MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING c > 7", &.{ "a|10", "a|10", "b|10", "b|10" });
 

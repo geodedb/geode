@@ -25,6 +25,22 @@
 - **Per-graph `GRANT` and `REVOKE` take effect at once:** they now
   invalidate cached authorization decisions, so a revoked `READ` grant stops
   working without a restart.
+- **Per-graph grants are scoped to their graph and take effect at once, for
+  every role (REQ-SEC-PER-GRAPH-GRANTS).** For a user with an explicit role,
+  a runtime `GRANT WRITE ON GRAPH g TO u` only took effect after a server
+  restart, and from then on it allowed writes on **every** graph: grants
+  reached authorization only as Policy rows migrated from them at startup,
+  and the handlers' database-wide write check matched any graph-scoped allow
+  policy. `REVOKE` never removed the migrated row, so a migrated grant could
+  not be revoked. Now `gps.decide` reads `READ`, `WRITE` and `SCHEMA` grants
+  from the live grant table for every role, on the request's graph only;
+  the write gate asks for write on the graph the program changes; an allow
+  policy scoped to one graph (`CREATE POLICY ... ON GRAPH g`) covers only
+  that graph; and startup drops the `auto_migrated_grant_*` policies earlier
+  versions created. Global role permissions are unchanged. A `FOR WRITE`
+  policy that relied on a single-graph scope to allow writes everywhere must
+  be re-created `ON GRAPH *`. See docs/GQL_AUTH_DDL.md, "Per-graph grant
+  semantics". Regression: `zig build test-per-graph-grants`.
 
 ### Added
 
@@ -38,6 +54,23 @@
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)
 - **Step/Nearest Interpolation:** Added tests for step and nearest interpolation methods (GAP-0286)
+- **`FOR ... RETURN` aggregates over the loop's rows:** `FOR x IN [1, 2, 3]
+  RETURN sum(x)` returned three rows of NULL instead of one row of 6, and
+  `count`, `avg`, `min`, `max` and `collect` failed with UnknownFunction. The
+  RETURN after a FOR now projects all of the rows the FOR produces, as a
+  RETURN after a MATCH does: aggregates run over every row, a non-aggregated
+  item beside one needs a `GROUP BY` (now accepted after a FOR's RETURN;
+  42803 without it), and an empty list gives one row with `sum` NULL and
+  `count` 0. Its `DISTINCT`, `ORDER BY`, `SKIP` and `LIMIT`, which were
+  ignored, now apply.
+- **`FOR ... RETURN x` names its column `x`:** an unaliased FOR column was
+  named `?column?`. Columns are now named as after a MATCH: a variable after
+  itself, `m.prop` after `prop`, an aggregate after its function.
+- **FOR after MATCH, after WITH, and nested:** `MATCH (n) WITH n FOR x IN
+  n.list RETURN x` returned one NULL per node, and its aggregates ran over
+  the matched rows rather than the loop's. The FOR now runs over every row of
+  the part before it. `MATCH (n) FOR x IN n.list RETURN ...` and nested
+  `FOR x IN a FOR y IN x RETURN ...`, which were syntax errors, are accepted.
 
 ---
 

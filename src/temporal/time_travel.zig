@@ -24,9 +24,7 @@ fn compat_timestamp() i64 {
     return @as(i64, ts.sec);
 }
 fn compat_sleep(ns: u64) void {
-    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
-    var rem: std.os.linux.timespec = undefined;
-    _ = std.os.linux.nanosleep(&req, &rem);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(ns), .awake) catch {};
 }
 fn compat_microTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };

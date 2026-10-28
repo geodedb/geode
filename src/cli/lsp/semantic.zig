@@ -386,6 +386,12 @@ pub const SemanticAnalyzer = struct {
                 try self.scope.define(f.variable, .variable);
                 if (f.ordinality_var) |ov| try self.scope.define(ov, .variable);
                 if (f.offset_var) |ov| try self.scope.define(ov, .variable);
+                for (f.nested) |loop| {
+                    try self.analyzeExpr(loop.collection);
+                    try self.scope.define(loop.variable, .variable);
+                    if (loop.ordinality_var) |ov| try self.scope.define(ov, .variable);
+                    if (loop.offset_var) |ov| try self.scope.define(ov, .variable);
+                }
                 if (f.return_clause) |rc| {
                     for (rc.items) |item| {
                         try self.analyzeExpr(item.expr);

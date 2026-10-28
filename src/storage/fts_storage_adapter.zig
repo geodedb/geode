@@ -618,6 +618,30 @@ pub const FtsStorageAdapter = struct {
         node_id: u64,
         terms: []const fts.TermPosting,
     ) !void {
+        _ = try self.indexNodeImpl(name, node_id, terms, false);
+    }
+
+    /// Append a complete document only if this engine has not indexed its id.
+    /// Rebuild backfill and delayed create hooks can reach the same fresh
+    /// engine after the rebuild flag has changed. Serialize the presence check
+    /// with the append so either writer can win without duplicating postings.
+    // CANARY: REQ=REQ-FTS-REBUILD-WINDOW-001; FEATURE="CALL geode.fts.rebuild"; ASPECT=CreateIdempotency; STATUS=TESTED; TEST=tests/test_fts_rebuild.zig; OWNER=fts; UPDATED=2026-10-25
+    pub fn indexNodeIfAbsent(
+        self: *FtsStorageAdapter,
+        name: []const u8,
+        node_id: u64,
+        terms: []const fts.TermPosting,
+    ) !bool {
+        return self.indexNodeImpl(name, node_id, terms, true);
+    }
+
+    fn indexNodeImpl(
+        self: *FtsStorageAdapter,
+        name: []const u8,
+        node_id: u64,
+        terms: []const fts.TermPosting,
+        if_absent: bool,
+    ) !bool {
         const ie = try self.requireIndex(name);
         defer self.releaseIndex(ie);
         ie.write_mu.lockUncancelable(self.io);
@@ -628,9 +652,15 @@ pub const FtsStorageAdapter = struct {
         // (dropIndex drains refs before teardown); this check is the semantic
         // refusal — don't apply a write to an index being dropped.
         if (ie.dropped.load(.acquire)) return Error.IndexNotFound;
+        // Reuse the memtable's document set and persisted segment norms; no
+        // second per-document set is needed. A delayed create must not
+        // resurrect an id that has subsequently been tombstoned.
+        if (if_absent and (ie.engine.memtable.seen_docs.contains(node_id) or
+            ie.engine.all_norms.contains(node_id) or ie.engine.all_tombstones.contains(node_id))) return false;
         try guardPostingOrder(ie, node_id);
         try ie.engine.indexDocument(node_id, terms);
         if (node_id > ie.max_doc_id_since_flush) ie.max_doc_id_since_flush = node_id;
+        return true;
     }
 
     /// Bulk index a batch of documents (one fsync per batch) into `name`.

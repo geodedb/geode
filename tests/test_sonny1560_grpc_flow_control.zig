@@ -74,8 +74,11 @@ const io = std.Io.Threaded.global_single_threaded.io();
 // tests/canary_planner_enumerator.zig:31). MONOTONIC is used deliberately so a
 // wall-clock step cannot corrupt an elapsed-time assertion.
 fn nowNs() i128 {
-    var ts: std.os.linux.timespec = undefined;
-    if (std.os.linux.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    var ts: std.posix.timespec = undefined;
+    if ((if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts)) != 0) return 0;
     return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
 }
 
