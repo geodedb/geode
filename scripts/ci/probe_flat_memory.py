@@ -25,8 +25,13 @@ assert len(names) == 22 and "nested statements" in names[-1]
 # Only the final, unrelated parser-depth stress test is outside this probe.
 names = names[:-1]
 print(json.dumps({"ordered_tests": names}), flush=True)
+# Avoid apostrophes in full test names: Zig's response-file tokenizer treats
+# those as quotes. These stable prefixes select exactly the same 21 tests.
+filters = sorted({name.split(":", 1)[0].split(" (", 1)[0] for name in names})
+assert all(any(value in name for value in filters) for name in names)
+assert not any(value in "SONNY-3244 (I-4): nested statements and expressions are refused, never crash an 8 MiB or a 16 MiB thread" for value in filters)
 new = ('const tests = b.addTest(.{ .root_module = mod, .filters = &.{'
-       + ','.join(json.dumps(name) for name in names) + '} });')
+       + ','.join(json.dumps(value) for value in filters) + '} });')
 probe = Path("build.failure-probe.zig")
 assert not probe.exists()
 probe.write_text(source[:at] + source[at:].replace(old, new, 1))
