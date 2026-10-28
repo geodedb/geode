@@ -426,11 +426,10 @@ pub fn execute(
             // decision (allow/deny) + policy_type (rbac) + measured latency.
             // Only reached when auth is enabled (a genuine decision is made).
             const om = @import("otel_metrics");
-            const otel_lib = @import("otel");
             const audit_mod = @import("../security/audit.zig");
-            const t0 = otel_lib.internal.clock.unixNanoNow();
+            const duration = om.DurationTimer.start();
             if (context.role == null) {
-                const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+                const d = duration.seconds();
                 om.recordAuthzCheck(.deny, .rbac, d);
                 // CANARY: REQ=REQ-GAP-0919-DENIED-DDL-AUDIT; FEATURE="AuditDenials"; ASPECT=UnauthenticatedAuthDDL; STATUS=TESTED; TEST=tests/test_gap0919_denied_ddl_audit.zig; OWNER=security; UPDATED=2026-07-10
                 // GAP-0919: denied escalation attempts were an audit blind
@@ -446,7 +445,7 @@ pub fn execute(
             }
             const is_read_only = read_only_set.has(proc_name);
             if (!is_read_only and context.role.? != .Admin) {
-                const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+                const d = duration.seconds();
                 om.recordAuthzCheck(.deny, .rbac, d);
                 // GAP-0919: audit the denial (see above).
                 audit_mod.logSecurityGraphEvent(allocator, .{
@@ -459,7 +458,7 @@ pub fn execute(
                 });
                 return error.Unauthorized;
             }
-            const d = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+            const d = duration.seconds();
             om.recordAuthzCheck(.allow, .rbac, d);
         }
 

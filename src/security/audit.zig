@@ -1225,11 +1225,7 @@ pub const AuditLogger = struct {
 
         // Performance test - write as many events as possible in 1 second
         while (compat_milliTimestamp() - start_time < test_duration_ms) {
-            const event_start = blk_ns: {
-                var ts_tmp: std.os.linux.timespec = undefined;
-                _ = std.os.linux.clock_gettime(.MONOTONIC, &ts_tmp);
-                break :blk_ns @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-            };
+            const event_start = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds();
 
             // Create varied test events for realistic performance measurement
             const test_event = AuditEvent{
@@ -1252,11 +1248,7 @@ pub const AuditLogger = struct {
 
             try self.logEvent(test_event);
 
-            const event_end = blk_ns2: {
-                var ts_tmp2: std.os.linux.timespec = undefined;
-                _ = std.os.linux.clock_gettime(.MONOTONIC, &ts_tmp2);
-                break :blk_ns2 @as(i128, ts_tmp2.sec) * std.time.ns_per_s + @as(i128, ts_tmp2.nsec);
-            };
+            const event_end = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds();
             const latency_ns = @as(u64, @intCast(event_end - event_start));
             const latency_ms = latency_ns / 1_000_000;
 
@@ -1459,8 +1451,7 @@ pub const AuditLogger = struct {
                     // Add some contention
                     {
                         const req = std.os.linux.timespec{ .sec = 0, .nsec = 1_000_000 };
-                        var rem: std.os.linux.timespec = undefined;
-                        _ = std.os.linux.nanosleep(&req, &rem);
+                        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
                     }
                 }
             }

@@ -304,8 +304,11 @@ const Race2 = struct {
 };
 
 fn monoNs() u64 {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 

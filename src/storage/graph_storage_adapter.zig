@@ -2738,10 +2738,8 @@ fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph
         if (comptime @import("builtin").is_test) {
             if (g_test_exact_build_gate.load(.acquire) != 0) {
                 _ = g_test_build_gate_waiters.fetchAdd(1, .acq_rel);
-                const gate_req = std.os.linux.timespec{ .sec = 0, .nsec = std.time.ns_per_ms };
-                var gate_rem: std.os.linux.timespec = undefined;
                 while (g_test_exact_build_gate.load(.acquire) != 0) {
-                    _ = std.os.linux.nanosleep(&gate_req, &gate_rem);
+                    std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(1), .awake) catch {};
                 }
                 _ = g_test_build_gate_waiters.fetchSub(1, .acq_rel);
             }
@@ -8756,8 +8754,7 @@ pub const StorageAdapter = struct {
                     .sec = @intCast(sleep_ns / std.time.ns_per_s),
                     .nsec = @intCast(sleep_ns % std.time.ns_per_s),
                 };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
                 if (mg.rwlock.tryLock(io_cp)) {
                     acquired = true;
                     break;
@@ -9207,10 +9204,8 @@ pub const StorageAdapter = struct {
         if (comptime @import("builtin").is_test) {
             if (is_background_worker and g_test_exact_build_gate.load(.acquire) != 0) {
                 _ = g_test_build_gate_waiters.fetchAdd(1, .acq_rel);
-                const gate_req = std.os.linux.timespec{ .sec = 0, .nsec = std.time.ns_per_ms };
-                var gate_rem: std.os.linux.timespec = undefined;
                 while (g_test_exact_build_gate.load(.acquire) != 0) {
-                    _ = std.os.linux.nanosleep(&gate_req, &gate_rem);
+                    std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(1), .awake) catch {};
                 }
                 _ = g_test_build_gate_waiters.fetchSub(1, .acq_rel);
             }
@@ -10788,8 +10783,7 @@ pub const StorageAdapter = struct {
                 .sec = @intCast(sleep_ns / std.time.ns_per_s),
                 .nsec = @intCast(sleep_ns % std.time.ns_per_s),
             };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             if (mg.rwlock.tryLock(io)) {
                 _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
                 return lockedUnlessDropped(mg);
@@ -10847,8 +10841,7 @@ pub const StorageAdapter = struct {
             .sec = @intCast(ns / std.time.ns_per_s),
             .nsec = @intCast(ns % std.time.ns_per_s),
         };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
     }
 
     /// SONNY-3028: `mg`, whose write lock this thread just took, or
@@ -10991,8 +10984,7 @@ pub const StorageAdapter = struct {
                     .sec = @intCast(nap_ns / std.time.ns_per_s),
                     .nsec = @intCast(nap_ns % std.time.ns_per_s),
                 };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
+                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             }
             if (mg.rwlock.tryLock(io)) {
                 _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
@@ -11906,8 +11898,7 @@ fn exclusiveWaitingBackoff(mg: *ManagedGraph) void {
             .sec = @intCast(sleep_ns / std.time.ns_per_s),
             .nsec = @intCast(sleep_ns % std.time.ns_per_s),
         };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
         sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
     }
 }
@@ -11978,8 +11969,7 @@ pub fn acquireShardWriteLockCancelable(
             .sec = @intCast(nap_ns / std.time.ns_per_s),
             .nsec = @intCast(nap_ns % std.time.ns_per_s),
         };
-        var rem: std.os.linux.timespec = undefined;
-        _ = std.os.linux.nanosleep(&req, &rem);
+        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
         if (mg.shard_locks[idx].tryLock(io)) return;
         sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
     }
@@ -12016,8 +12006,7 @@ pub fn acquireWholeGraphExclusive(mg: *ManagedGraph) void {
                 .sec = @intCast(sleep_ns / std.time.ns_per_s),
                 .nsec = @intCast(sleep_ns % std.time.ns_per_s),
             };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
+            std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
             if (mg.rwlock.tryLock(io)) break;
             sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
         }

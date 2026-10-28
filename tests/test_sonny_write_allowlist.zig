@@ -854,7 +854,10 @@ test "SONNY-3190: a 50,000-clause statement is refused quickly, with bounded mem
 // Zig 0.16: std.time.Timer is gone; clock_gettime(MONOTONIC).
 fn nowNs() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
