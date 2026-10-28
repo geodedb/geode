@@ -331,10 +331,15 @@ test "real discovery refuses the actual engine floor" {
     // The running build's refusal reason is version-relative: below the engine
     // floor the gate stops at the version check, at or above it the still-false
     // mandatory rows decide. Both are refusals; only the reason moves.
+    // A checkout without reachable tags (a shallow CI clone) labels the build
+    // with `git describe --always`'s bare commit, or "unknown"; that label has
+    // no engine version, so the gate refuses it before any other check.
     const running_label = gate.engineVersionFromBuildLabel(@import("build_options").version);
-    const running = try std.SemanticVersion.parse(running_label);
     const floor: std.SemanticVersion = .{ .major = 0, .minor = 8, .patch = 14 };
-    const expected_running: anyerror = if (running.order(floor) == .lt) error.IncompatibleEngineVersion else error.MandatoryCapabilityUnsupported;
+    const expected_running: anyerror = if (std.SemanticVersion.parse(running_label)) |running|
+        (if (running.order(floor) == .lt) error.IncompatibleEngineVersion else error.MandatoryCapabilityUnsupported)
+    else |_|
+        error.InvalidEngineVersion;
     try testing.expectError(expected_running, gate.validateProfile(testing.allocator, bytes, &rows, running_label));
     // Floor refusal stays covered deterministically, independent of the build.
     try testing.expectError(error.IncompatibleEngineVersion, gate.validateProfile(testing.allocator, bytes, &rows, "0.8.13"));

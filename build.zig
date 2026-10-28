@@ -10255,6 +10255,22 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         const step = b.step("test-sonny-write-allowlist-r4b", "Run the Task W round 4b-1 regression (SONNY-3318, 3319, 3320, 3322, 3248, 3244): a comma pattern binds every chain for reads and writes, and aggregates; a label SET beside a vector SET checks the new label's index; chained MERGE actions fire on the last MERGE clause; a relationship variable is read by id after 150 and 600 more edge inserts; SKIP / LIMIT parameters window every read; one SET clause assigns a property once (22G03); a LET is scoped to its query; in the in-memory, plain persisted, tenant-scoped and RLS-policy sessions");
         step.dependOn(&run_tests.step);
+
+        // Resource assertions need a fresh process, without the persisted
+        // suite's allocator history or inherited lifetime resident peak.
+        // The original named target still runs all 22 cases; the aggregate
+        // schedules each executable once and test-compile covers both.
+        const memory_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny_write_allowlist_r4b_memory.zig"), .target = target, .optimize = optimize });
+        memory_mod.link_libc = true;
+        memory_mod.addImport("geode", root_mod);
+        memory_mod.addImport("logging", logging_mod);
+        memory_mod.addImport("rls_types", rls_types_mod);
+        const memory_tests = b.addTest(.{ .root_module = memory_mod });
+        const run_memory_tests = b.addRunArtifact(memory_tests);
+        shardDep(test_step, &run_memory_tests.step, 1, test_shard_loads, test_shard_index);
+        const memory_step = b.step("test-sonny-write-allowlist-r4b-memory", "Run the SONNY-3368 resident-memory guard, flat-memory join and cancellation regressions in a fresh process");
+        memory_step.dependOn(&run_memory_tests.step);
+        step.dependOn(&run_memory_tests.step);
     }
 
     // SONNY-2977: MATCH (x {k: v}) [WHERE ...] SET changes every node holding

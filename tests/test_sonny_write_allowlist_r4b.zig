@@ -38,6 +38,11 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 const h = @import("sonny738_write_harness.zig");
+const process = @import("sonny_write_process_harness.zig");
+const runProgram = process.runProgram;
+const openSession = process.openSession;
+const monoMillis = process.monoMillis;
+const ChildMemoryGuard = process.ChildMemoryGuard;
 
 const execution = h.execution;
 const Value = h.Value;
@@ -60,14 +65,6 @@ const Case = struct {
 };
 
 const stmt_alloc = std.heap.page_allocator;
-
-fn runProgram(s: *h.Session, allocator: std.mem.Allocator, query: []const u8) !execution.ExecutionResult {
-    var parsed = try geode.parseGql(query, s.arena.allocator());
-    defer parsed.deinit();
-    const prev = execution.pushActiveContext(&s.ctx);
-    defer execution.popActiveContext(prev);
-    return execution.executeProgramWithContext(allocator, &parsed.program, s.ctx);
-}
 
 fn bindParams(s: *h.Session, params: []const Param) !void {
     if (params.len == 0) return;
@@ -104,14 +101,6 @@ fn expectRun(s: *h.Session, f: *h.Failures, stage: []const u8, c: Case, want: ?[
         if (!std.mem.eql(u8, g, e)) same = false;
     };
     if (!same) try f.add("[{s}] {s} | {s}: expected {{{s}}}, got {{{s}}}", .{ @tagName(s.mode), c.write, stage, try std.mem.join(aa, ",", exp), try std.mem.join(aa, ",", got) });
-}
-
-fn openSession(mode: h.Mode) !h.Session {
-    var s = try h.Session.init(mode);
-    errdefer s.deinit();
-    _ = geode.txn_undo_log.getGlobalUndoLog(stmt_alloc);
-    try s.seed();
-    return s;
 }
 
 fn runCase(mode: h.Mode, c: Case, f: *h.Failures) !void {
@@ -660,34 +649,6 @@ const CartJob = struct {
     }
 };
 
-fn monoMillis() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = if (comptime @import("builtin").os.tag == .linux)
-        std.os.linux.clock_gettime(.MONOTONIC, &ts)
-    else
-        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
-    return @as(i64, @intCast(ts.sec)) * 1000 + @divTrunc(@as(i64, @intCast(ts.nsec)), 1_000_000);
-}
-
-/// The data segment the process holds now, in bytes (VmData).
-fn dataSegmentBytes() usize {
-    var buf: [8192]u8 = undefined;
-    const fd = std.c.open("/proc/self/status", .{});
-    if (fd < 0) return 0;
-    defer _ = std.c.close(fd);
-    const got = std.c.read(fd, &buf, buf.len);
-    if (got <= 0) return 0;
-    const n: usize = @intCast(got);
-    var lines = std.mem.tokenizeScalar(u8, buf[0..n], '\n');
-    while (lines.next()) |line| {
-        if (!std.mem.startsWith(u8, line, "VmData:")) continue;
-        var parts = std.mem.tokenizeAny(u8, line[7..], " \tkB");
-        const kb = std.fmt.parseInt(usize, parts.next() orelse return 0, 10) catch return 0;
-        return kb * 1024;
-    }
-    return 0;
-}
-
 test "SONNY-3368 (I-1): LIMIT 1 over two 1,500-pair chains is bounded, a WHERE streams, and the whole product answers the read budget's error" {
     var s = try openSession(.in_memory);
     defer s.deinit();
@@ -1034,236 +995,6 @@ const f3386_cases = [_]Case{
 
 test "SONNY-3386: a comma join applies its FILTER and the WITH after it, in every session" {
     try runCases("SONNY-3386", &f3386_cases);
-}
-
-/// Linux can reset VmHWM. Darwin's kernel peak is lifetime-wide, so retaining
-/// it is conservative: an earlier peak can fail the bound, never hide growth.
-fn resetPeakRss() void {
-    if (comptime @import("builtin").os.tag.isDarwin()) return;
-    const fd = std.c.open("/proc/self/clear_refs", .{ .ACCMODE = .WRONLY });
-    if (fd < 0) return;
-    defer _ = std.c.close(fd);
-    _ = std.c.write(fd, "5", 1);
-}
-
-fn statusBytes(field: []const u8) usize {
-    if (comptime @import("builtin").os.tag.isDarwin()) {
-        const memory = darwinMemory() catch @panic("could not measure Darwin process memory");
-        if (std.mem.eql(u8, field, "VmRSS")) return memory.resident;
-        if (std.mem.eql(u8, field, "VmHWM")) return memory.peak;
-        @panic("unsupported Darwin process memory field");
-    }
-    var buf: [8192]u8 = undefined;
-    const fd = std.c.open("/proc/self/status", .{});
-    if (fd < 0) return 0;
-    defer _ = std.c.close(fd);
-    const got = std.c.read(fd, &buf, buf.len);
-    if (got <= 0) return 0;
-    const n: usize = @intCast(got);
-    var lines = std.mem.tokenizeScalar(u8, buf[0..n], '\n');
-    while (lines.next()) |line| {
-        if (!std.mem.startsWith(u8, line, field)) continue;
-        var parts = std.mem.tokenizeAny(u8, line[field.len..], " \t:kB");
-        const kb = std.fmt.parseInt(usize, parts.next() orelse return 0, 10) catch return 0;
-        return kb * 1024;
-    }
-    return 0;
-}
-
-const ResidentMemory = struct { resident: usize, peak: usize };
-
-fn darwinMemory() !ResidentMemory {
-    var info: std.c.task_vm_info_data_t = std.mem.zeroes(std.c.task_vm_info_data_t);
-    var count: std.c.mach_msg_type_number_t = std.c.TASK.VM.INFO_COUNT;
-    if (std.c.task_info(std.c.mach_task_self(), std.c.TASK.VM.INFO, @ptrCast(&info), &count) != 0)
-        return error.MemoryMeasurementFailed;
-    const required = (@offsetOf(std.c.task_vm_info_data_t, "resident_size_peak") + @sizeOf(u64)) / @sizeOf(std.c.natural_t);
-    if (count < required or info.resident_size == 0 or info.resident_size_peak < info.resident_size)
-        return error.MemoryMeasurementFailed;
-    return .{ .resident = @intCast(info.resident_size), .peak = @intCast(info.resident_size_peak) };
-}
-
-/// Keep runaway regressions inside the forked child's memory allowance.
-/// Linux bounds anonymous allocations with RLIMIT_DATA. Darwin does not have
-/// Linux's VmData accounting: monitor the real kernel resident peak instead,
-/// including a final check so an allocation freed between samples is caught.
-const ChildMemoryGuard = struct {
-    done: std.atomic.Value(bool) = .init(false),
-    thread: ?std.Thread = null,
-    limit: usize = 0,
-
-    fn start(self: *@This(), allowance: usize) !void {
-        if (comptime @import("builtin").os.tag == .linux) {
-            const have = dataSegmentBytes();
-            if (have == 0) return error.MemoryMeasurementFailed;
-            const cap = try std.math.add(usize, have, allowance);
-            try std.posix.setrlimit(.DATA, .{ .cur = cap, .max = cap });
-        } else if (comptime @import("builtin").os.tag.isDarwin()) {
-            self.limit = try std.math.add(usize, (try darwinMemory()).resident, allowance);
-            self.thread = try std.Thread.spawn(.{}, watch, .{self});
-        } else return error.UnsupportedMemoryGuardPlatform;
-    }
-
-    fn check(self: *@This()) void {
-        const memory = darwinMemory() catch std.c._exit(8);
-        if (memory.peak > self.limit) {
-            std.debug.print("child resident peak {d} exceeds memory limit {d}\n", .{ memory.peak, self.limit });
-            std.c._exit(9);
-        }
-    }
-
-    fn watch(self: *@This()) void {
-        while (!self.done.load(.acquire)) {
-            self.check();
-            std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(1), .awake) catch {};
-        }
-    }
-
-    fn stop(self: *@This()) void {
-        if (comptime @import("builtin").os.tag.isDarwin()) {
-            self.done.store(true, .release);
-            self.thread.?.join();
-            self.check();
-        }
-    }
-};
-
-test "child memory guard measures real memory and rejects an oversized allocation" {
-    const resident = statusBytes("VmRSS");
-    try testing.expect(resident > 0);
-    try testing.expect(statusBytes("VmHWM") >= resident);
-    const pid = std.c.fork();
-    try testing.expect(pid >= 0);
-    if (pid == 0) {
-        var memory: ChildMemoryGuard = .{};
-        // A setup error has its own exit code; it must not satisfy the
-        // expected memory-limit refusal below.
-        memory.start(32 << 20) catch std.c._exit(8);
-        _ = std.c.alarm(10);
-        const size = 128 << 20;
-        const raw = std.c.mmap(null, size, .{ .READ = true, .WRITE = true }, .{ .TYPE = .PRIVATE, .ANONYMOUS = true }, -1, 0);
-        if (raw == std.c.MAP_FAILED) std.c._exit(9);
-        const bytes: [*]volatile u8 = @ptrCast(raw);
-        // Fault in every page: a virtual reservation alone is not RSS.
-        var offset: usize = 0;
-        while (offset < size) : (offset += std.heap.page_size_min) bytes[offset] = 1;
-        memory.stop();
-        std.c._exit(0);
-    }
-    var status: c_int = 0;
-    try testing.expectEqual(pid, std.c.waitpid(pid, &status, 0));
-    const st: u32 = @bitCast(status);
-    try testing.expect(!std.os.linux.W.IFSIGNALED(st));
-    try testing.expectEqual(@as(u32, 9), std.os.linux.W.EXITSTATUS(st));
-}
-
-/// Round 4b-1c: the join's memory is flat in the product, and every step
-/// polls the budget and the cancel.
-const BoundJob = struct {
-    s: *h.Session,
-    ok: bool = true,
-
-    fn fail(self: *BoundJob, comptime fmt: []const u8, args: anytype) void {
-        std.debug.print("  " ++ fmt ++ "\n", args);
-        self.ok = false;
-    }
-
-    /// I-B: a WHERE that keeps no binding of the 2.25 million the join
-    /// tries holds no memory for them.
-    fn flat(self: *BoundJob) void {
-        geode.read_budget.setBudgetBytesForTest(64 << 20);
-        defer geode.read_budget.setBudgetBytesForTest(0);
-        resetPeakRss();
-        const before = statusBytes("VmRSS");
-        if (before == 0) return self.fail("resident memory measurement unavailable", .{});
-        const start = monoMillis();
-        var r = runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d) WHERE 1 = 2 RETURN a.i") catch |err| {
-            return self.fail("WHERE 1 = 2: error {s}", .{@errorName(err)});
-        };
-        defer r.deinit(stmt_alloc);
-        const took = monoMillis() - start;
-        const peak = statusBytes("VmHWM");
-        if (peak < before) return self.fail("peak memory measurement unavailable", .{});
-        const grew = peak - before;
-        if (r.rows.len != 0) self.fail("WHERE 1 = 2: {d} row(s)", .{r.rows.len});
-        // 1,500 pairs: about 700 MB before the fix.
-        if (grew > 128 << 20) self.fail("WHERE 1 = 2: the peak grew {d} MiB (at most 128)", .{grew >> 20});
-        if (took > 240_000) self.fail("WHERE 1 = 2: took {d} ms", .{took});
-    }
-
-    /// I-C: a join whose last chain matches nothing ends at once; one whose
-    /// last hop never matches is stopped by the stream's cancel.
-    fn polled(self: *BoundJob) void {
-        var start = monoMillis();
-        var r = runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P), (d:P), (e:P {i: -1}) RETURN count(*) AS n") catch |err| {
-            return self.fail("empty last chain: error {s}", .{@errorName(err)});
-        };
-        const rows = h.renderRows(self.s.arena.allocator(), r) catch &.{};
-        r.deinit(stmt_alloc);
-        if (rows.len != 1 or !std.mem.eql(u8, rows[0], "0")) self.fail("empty last chain: {d} row(s)", .{rows.len});
-        if (monoMillis() - start > 1_000) self.fail("empty last chain: took {d} ms", .{monoMillis() - start});
-
-        var cancel = std.atomic.Value(bool).init(false);
-        geode.read_budget.setStreamCancelSource(&cancel);
-        defer geode.read_budget.setStreamCancelSource(null);
-        const Setter = struct {
-            fn run(flag: *std.atomic.Value(bool)) void {
-                std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(200), .awake) catch {};
-                flag.store(true, .release);
-            }
-        };
-        const t = std.Thread.spawn(.{}, Setter.run, .{&cancel}) catch return self.fail("spawn failed", .{});
-        start = monoMillis();
-        if (runProgram(self.s, stmt_alloc, "MATCH (a:P)-[:E]->(b), (c:P), (d:P)-[:NOPE]->(z) RETURN a.i")) |got| {
-            var res = got;
-            res.deinit(stmt_alloc);
-            self.fail("a join no binding completes: ran to the end, not cancelled", .{});
-        } else |err| if (err != error.ReadQueryCancelled) self.fail("a join no binding completes: error {s}", .{@errorName(err)});
-        t.join();
-        // The cancel lands at 200 ms; the join stops at its next step.
-        if (monoMillis() - start > 1_200) self.fail("a join no binding completes: stopped after {d} ms", .{monoMillis() - start});
-    }
-};
-
-fn runBoundInChild(job: *BoundJob, comptime which: fn (*BoundJob) void) !void {
-    const pid = std.c.fork();
-    try testing.expect(pid >= 0);
-    if (pid == 0) {
-        std.posix.setrlimit(.CORE, .{ .cur = 0, .max = 0 }) catch {};
-        var memory: ChildMemoryGuard = .{};
-        memory.start(1 << 30) catch std.c._exit(9);
-        // A regression that stops polling is killed, not waited for.
-        _ = std.c.alarm(300);
-        which(job);
-        memory.stop();
-        std.c._exit(if (job.ok) 0 else 1);
-    }
-    var status: c_int = 0;
-    try testing.expectEqual(pid, std.c.waitpid(pid, &status, 0));
-    const st: u32 = @bitCast(status);
-    if (std.os.linux.W.IFSIGNALED(st)) {
-        std.debug.print("the join was killed (signal {d})\n", .{std.os.linux.W.TERMSIG(st)});
-        return error.Crashed;
-    }
-    try testing.expectEqual(@as(u32, 0), std.os.linux.W.EXITSTATUS(st));
-}
-
-test "SONNY-3368 (round 4b-1b I-B): a WHERE that keeps nothing over 2.25 million bindings holds flat memory" {
-    var s = try openSession(.in_memory);
-    defer s.deinit();
-    var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 1500) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
-    setup.deinit(stmt_alloc);
-    var job: BoundJob = .{ .s = &s };
-    try runBoundInChild(&job, BoundJob.flat);
-}
-
-test "SONNY-3368 (round 4b-1b I-C): a join polls at every step: an empty last chain ends at once, a cancel stops one that completes nothing" {
-    var s = try openSession(.in_memory);
-    defer s.deinit();
-    var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 400) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
-    setup.deinit(stmt_alloc);
-    var job: BoundJob = .{ .s = &s };
-    try runBoundInChild(&job, BoundJob.polled);
 }
 
 // ---------------------------------------------------------------------------
