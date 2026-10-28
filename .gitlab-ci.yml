@@ -1105,13 +1105,13 @@ test-macos-unit:
       echo "Pre-fetching protoc-osx-aarch_64 via zig fetch with retries (TMPDIR=$TMPDIR)..."
       fetched=""
       for i in 1 2 3 4 5; do
-        if zig fetch "$PROTOC_URL" >/tmp/zig-fetch-protoc.log 2>&1; then
-          echo "✓ protoc pre-fetch succeeded on attempt $i (hash=$(cat /tmp/zig-fetch-protoc.log))"
+        if zig fetch "$PROTOC_URL" >"$TMPDIR/zig-fetch-protoc.log" 2>&1; then
+          echo "✓ protoc pre-fetch succeeded on attempt $i (hash=$(cat "$TMPDIR/zig-fetch-protoc.log"))"
           fetched=1
           break
         fi
         echo "attempt $i failed:"
-        cat /tmp/zig-fetch-protoc.log || true
+        cat "$TMPDIR/zig-fetch-protoc.log" || true
         [ "$i" -lt 5 ] && { echo "retrying in 15s..."; sleep 15; }
       done
       if [ -z "$fetched" ]; then
