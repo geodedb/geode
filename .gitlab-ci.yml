@@ -768,8 +768,8 @@ test-zig-unit:
   # (the i≡3 cluster splits across indices 3 and 7) with a 3h cap for
   # margin (shard [3] was killed at 2h so its true length is unknown).
   #
-  # The original Kubernetes pin is superseded by the dedicated routing
-  # below. Keep the shard count, build parallelism and timeout unchanged.
+  # Unit shards stay on the Kubernetes pool (see the routing note below).
+  # Keep the shard count and timeout unchanged.
   #
   # 2026-05-12: shard [7] hit the 3h cap (pipeline #2520265814) while
   # shards [0..6] finished in 2-30 min — the slow integration binaries
@@ -788,20 +788,18 @@ test-zig-unit:
   # shard-count/timeout history above — worst case concurrent k8s pods for
   # this job drops from 8 (this pipeline) + 8 (a second pipeline) to 8 total.
   resource_group: "test-zig-unit-shard-$TEST_SHARD_INDEX"
-  # Pipeline 2992258644 lost seven setup attempts (106 runner minutes) to
-  # "Insufficient cpu" on the three-node Kubernetes pool. Use the same
-  # autoscaled Docker lane as ReleaseSafe and cross-build jobs. This lane
-  # does not require the dedicated KVM/go-fast workers used by Sonny.
-  tags: &dedicated-test-tags [company, dedicated, linux, x86, aws-spot]
+  # 2026-10-28: unit shards stay on the Kubernetes pool, as on main. On
+  # the two-CPU AWS-spot lane with ZIG_BUILD_JOBS=1 (MR !64, pipeline
+  # 2998104013), the spawned-server and cluster timing tests flaked:
+  # cluster steady-state twice, SONNY-3032 gRPC and SONNY-2823 QUIC. These
+  # tests need CPU headroom. Kubernetes "Insufficient cpu" pod-scheduling
+  # failures are runner_system_failure and are retried below.
+  tags: [company, k8s, linux]
   timeout: 6h
   parallel:
     matrix:
       - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
   variables:
-    # These Linux workers have two CPUs. Run one build step at a time so
-    # test executables do not compete with compiler processes for the quota.
-    # This also bounds peak memory; timing assertions remain unchanged.
-    ZIG_BUILD_JOBS: "1"
     GIT_SUBMODULE_STRATEGY: recursive
     TEST_SHARD_TOTAL: "8"
   retry:
@@ -816,7 +814,7 @@ test-zig-unit:
     # Zig keeps running independent steps after a test fails. Stop those
     # processes, preserve both output streams, and let workflow cancellation
     # release the other shards. Real failures are not automatically retried.
-    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_shard_${TEST_SHARD_INDEX}.log -- zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
+    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_shard_${TEST_SHARD_INDEX}.log -- zig build test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
   rules:
     # SRE-187 (MR admission): merge_request_event pipelines have no
     # CI_COMMIT_BRANCH, so before this rule the MR pipeline -- the one that
@@ -1191,7 +1189,7 @@ test-zig-release-safe:
   # attempts each (pipelines #2934710451, #2935445607). Run on the AWS-spot
   # docker-autoscaler pool, which has no per-pod memory cap (see the
   # test-cross-build note).
-  tags: [company, dedicated, linux, x86, aws-spot]
+  tags: &dedicated-test-tags [company, dedicated, linux, x86, aws-spot]
   timeout: 6h
   # 2026-10-19: 8 -> 12 shards. On the AWS-spot pool the 8 shards ran 2-6h
   # each (shard [2]: 213, 310 and 324 min on earlier pipelines), and with a
