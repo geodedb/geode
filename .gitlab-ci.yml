@@ -475,7 +475,7 @@ test-macos-unit:
   stage: test
   timeout: 2h
   tags:
-    - saas-macos-medium-m1
+    [dedicated, macos, arm]
   retry:
     # macOS runners frequently see HttpConnectionClosing when fetching lazy
     # protoc binaries from GitHub; two retries on script_failure cover the
