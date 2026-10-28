@@ -340,11 +340,13 @@ fn assertReplicatesToHealthyFollowers(
             continue;
         };
         sent += 1;
-        const out = runQuery(gpa, io, aa, NODE_IPS[idx], create_q) catch {
+        const out = runQuery(gpa, io, aa, NODE_IPS[idx], create_q) catch |err| {
+            std.debug.print("[repl] '{s}' create attempt {d} on node {d} failed: {s}\n", .{ label, attempt + 1, idx + 1, @errorName(err) });
             sleepMs(500);
             continue;
         };
         defer gpa.free(out);
+        std.debug.print("[repl] '{s}' create attempt {d} on node {d}: {s}\n", .{ label, attempt + 1, idx + 1, out[0..@min(out.len, 600)] });
         // Leadership moved between resolve and send — retry against the new leader.
         if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) {
             sleepMs(700);
