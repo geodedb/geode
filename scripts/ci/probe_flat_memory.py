@@ -1,8 +1,9 @@
-"""Diagnose one unchanged regression on the native Linux worker."""
+"""Diagnose the ordered regression prefix on the native Linux worker."""
 
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -18,8 +19,14 @@ anchor = '.root_source_file = b.path("tests/test_sonny_write_allowlist_r4b.zig")
 start = source.index(anchor)
 old = 'const tests = b.addTest(.{ .root_module = mod });'
 at = source.index(old, start)
+names = re.findall(r'^test "([^"]+)"', Path("tests/test_sonny_write_allowlist_r4b.zig").read_text(), re.M)
+assert len(names) == 22 and "nested statements" in names[-1]
+# Preserve all preceding tests and their order, including both bounded joins.
+# Only the final, unrelated parser-depth stress test is outside this probe.
+names = names[:-1]
+print(json.dumps({"ordered_tests": names}), flush=True)
 new = ('const tests = b.addTest(.{ .root_module = mod, .filters = &.{'
-       '"a WHERE that keeps nothing over 2.25 million bindings holds flat memory"} });')
+       + ','.join(json.dumps(name) for name in names) + '} });')
 probe = Path("build.failure-probe.zig")
 assert not probe.exists()
 probe.write_text(source[:at] + source[at:].replace(old, new, 1))
