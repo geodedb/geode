@@ -260,15 +260,38 @@ fn shardDep(
         test_step.dependOn(dep);
         return;
     }
-    var min_idx: usize = 0;
-    for (loads, 0..) |l, i| {
-        if (l < loads[min_idx]) min_idx = i;
-    }
-    loads[min_idx] += weight;
-    if (min_idx == index) {
+    if (nextTestShard(loads, weight) == index) {
         coverageWrap(run);
         test_step.dependOn(dep);
     }
+}
+
+fn nextTestShard(loads: []usize, weight: usize) usize {
+    var min_idx: usize = 0;
+    for (loads, 0..) |load, i| {
+        if (load < loads[min_idx]) min_idx = i;
+    }
+    // Even a sub-second test must compile its own binary. Zero runtime
+    // estimates used to pile consecutive registrations onto one shard.
+    loads[min_idx] += @max(weight, 1);
+    return min_idx;
+}
+
+test "zero runtime estimates still spread compiler work across shards" {
+    var loads = [_]usize{0} ** 3;
+    for (0..12) |i| {
+        try std.testing.expectEqual(i % 3, nextTestShard(&loads, 0));
+    }
+    try std.testing.expectEqualSlices(usize, &.{ 4, 4, 4 }, &loads);
+}
+
+test "shard balance retains heavy runtime costs and deterministic ties" {
+    var loads = [_]usize{0} ** 3;
+    try std.testing.expectEqual(0, nextTestShard(&loads, 10));
+    try std.testing.expectEqual(1, nextTestShard(&loads, 0));
+    try std.testing.expectEqual(2, nextTestShard(&loads, 1));
+    try std.testing.expectEqual(1, nextTestShard(&loads, 5));
+    try std.testing.expectEqualSlices(usize, &.{ 10, 6, 1 }, &loads);
 }
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -3898,6 +3921,15 @@ pub fn build(b: *std.Build) void {
     g_test_compile_step = b.step("test-compile", "Compile every artifact the aggregate `test` step runs, in all shards, and every executable target, without running any of them (SONNY-2394, SONNY-2746)");
     // SONNY-2746: deferred so it runs once every step of build() exists.
     defer addExecutablesToTestCompile(b, target);
+    const shard_balance_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("build.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const run_shard_balance_tests = b.addRunArtifact(shard_balance_tests);
+    const shard_balance_step = b.step("test-shard-balance", "Run test-shard scheduling regressions");
+    shard_balance_step.dependOn(&run_shard_balance_tests.step);
+    shardDep(test_step, &run_shard_balance_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_show_capabilities_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_sonny_capability_profile_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_capability_gate_tests.step, 1, test_shard_loads, test_shard_index);

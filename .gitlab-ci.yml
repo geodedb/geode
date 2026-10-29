@@ -1144,8 +1144,8 @@ test-macos-unit:
 # =============================================================================
 
 test-zig-release-safe:
-  # Each shard keeps its own bounded outputs across branches. Twelve writers
-  # to one branch key previously replaced one another's disjoint binaries.
+  # Each shard keeps its own bounded outputs across branches. Concurrent
+  # writers to one branch key previously replaced disjoint binaries.
   cache:
     - <<: *zig-build-cache
       key:
@@ -1156,30 +1156,9 @@ test-zig-release-safe:
   after_script: *zig-cache-writer-after-script
   stage: test
   image: $ZIG_IMAGE
-  # Timeout walk for the ReleaseSafe suite: 1h → 2h → 4h → 6h. Pipeline
-  # #2510271779 hit 6h; #2512695029 hit 6h again on "Company Cluster
-  # Runner(s)" — same root cause as test-zig-unit (kubernetes executor
-  # CPU-throttled for the ~176-binary build).
-  #
-  # 2026-05-11: sharded like test-zig-unit via build.zig's
-  # `-Dtest-shard-total` / `-Dtest-shard-index` (8 shards, 3h cap —
-  # see the test-zig-unit comment for why 4 wasn't enough). Shard 0 also
-  # does the standalone ReleaseSafe binary build + symbol check for
-  # REQ-0008 (no need to repeat it on every shard).
-  #
-  # Pinned to `company,k8s,linux` (see test-zig-unit comment): `k8s`
-  # excludes the slow "Lab Servers" and the broken "OVH Dedicated".
-  #
-  # 2026-05-12: shard [7] hit the 3h cap (pipeline #2520265814) — bumped
-  # 3h → 6h (see test-zig-unit) and added the stuck_or_timeout_failure
-  # retry that test-zig-unit already has.
-  #
-  # SONNY-1798: same company-k8s cluster capacity fix as test-zig-unit above
-  # — serialize a shard index against its own twin in a concurrently-running
-  # pipeline (tag vs main) instead of letting both pipelines' 8-way matrices
-  # compete for the 3-node pool at once. See test-zig-unit's comment for the
-  # full rationale.
-  resource_group: "test-zig-release-safe-shard-$TEST_SHARD_INDEX"
+  # Keep the original twelve resource-group names so smaller shards share
+  # capacity with older pipelines as well. Queue before allocating workers.
+  resource_group: "test-zig-release-safe-shard-$TEST_SLOT"
   # 2026-10-11: every shard dies OOMKilled (exit 137, runner_system_failure)
   # on the k8s pool since 2026-10-10, on main, tags and MRs alike, three
   # attempts each (pipelines #2934710451, #2935445607). Run on the AWS-spot
@@ -1187,24 +1166,42 @@ test-zig-release-safe:
   # test-cross-build note).
   tags: &dedicated-test-tags [company, dedicated, linux, x86, aws-spot]
   timeout: 6h
-  # 2026-10-19: 8 -> 12 shards. On the AWS-spot pool the 8 shards ran 2-6h
-  # each (shard [2]: 213, 310 and 324 min on earlier pipelines), and with a
-  # cold `zig-cache-v2-*` branch cache shard [2] hit the 6h cap (MR !48,
-  # job 17268963137). It was not hung: the log shows test binaries finishing
-  # steadily until the timeout killed the compile of the next one
-  # ("compile test ReleaseSafe native failure ... signal TERM"). Compiling
-  # the ReleaseSafe test binaries dominates, so 12 shards cut each shard's
-  # work by about a third.
+  # SONNY-5074: MR !50 job 17559697769 was still compiling after six
+  # hours. Split the full aggregate into 24 smaller jobs while retaining
+  # twelve shared slots, the six-hour bound and one compiler step per job.
   parallel:
     matrix:
-      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]
+      - TEST_SHARD_INDEX: ["0", "12"]
+        TEST_SLOT: "0"
+      - TEST_SHARD_INDEX: ["1", "13"]
+        TEST_SLOT: "1"
+      - TEST_SHARD_INDEX: ["2", "14"]
+        TEST_SLOT: "2"
+      - TEST_SHARD_INDEX: ["3", "15"]
+        TEST_SLOT: "3"
+      - TEST_SHARD_INDEX: ["4", "16"]
+        TEST_SLOT: "4"
+      - TEST_SHARD_INDEX: ["5", "17"]
+        TEST_SLOT: "5"
+      - TEST_SHARD_INDEX: ["6", "18"]
+        TEST_SLOT: "6"
+      - TEST_SHARD_INDEX: ["7", "19"]
+        TEST_SLOT: "7"
+      - TEST_SHARD_INDEX: ["8", "20"]
+        TEST_SLOT: "8"
+      - TEST_SHARD_INDEX: ["9", "21"]
+        TEST_SLOT: "9"
+      - TEST_SHARD_INDEX: ["10", "22"]
+        TEST_SLOT: "10"
+      - TEST_SHARD_INDEX: ["11", "23"]
+        TEST_SLOT: "11"
   variables:
     # These Linux workers have two CPUs. Run one build step at a time so
     # test executables do not compete with compiler processes for the quota.
     # This also bounds peak memory; timing assertions remain unchanged.
     ZIG_BUILD_JOBS: "1"
     GIT_SUBMODULE_STRATEGY: recursive
-    TEST_SHARD_TOTAL: "12"
+    TEST_SHARD_TOTAL: "24"
   retry:
     # Retry runner failures only. A test failure must release the other shards.
     max: 2
