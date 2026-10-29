@@ -102,8 +102,8 @@ REQ-0006,Distributed Query Federation,UnitTests,TESTED,,,distributed,2026-04-01,
 REQ-0006,Distributed RPC,NetworkTransport,TESTED,,,dist,2026-01-16,src/dist/rpc.zig,4
 REQ-0006,DistributedQuery,Federation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_testing.zig,14
 REQ-0007,Tooling & Governance Requirements,Tooling,TESTED,,,tools,2026-01-15,tools/canary_main.zig,22
-REQ-0008,Platform Build Requirements,ReleaseSafe,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,1167
-REQ-0009,Performance Budget Enforcement,CI,TESTED,,,ci,2026-01-30,.gitlab-ci.yml,1332
+REQ-0008,Platform Build Requirements,ReleaseSafe,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,1163
+REQ-0009,Performance Budget Enforcement,CI,TESTED,,,ci,2026-01-30,.gitlab-ci.yml,1328
 REQ-0009,Performance Targets,Benchmark,BENCHED,,,ops-team,2026-01-15,benchmarks/benchmark_monitoring_metrics_variance_unified.zig,6
 REQ-2PC-001,2PC,PreparePhase,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_final_batch.zig,482
 REQ-2PC-002,2PC,CommitPhase,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_final_batch.zig,489
@@ -392,10 +392,10 @@ REQ-AUTH-POLICY-009,Password Update Policy Validation,Security,TESTED,,,security
 REQ-AUTH-RATE-ENV-001,AuthRateLimiterEnvConfig,LockoutOverride,TESTED,,,security,2026-05-22,src/server/auth_rate_limiter.zig,93
 REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,SECURITY,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig,1009
 REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,TEST,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig,2112
-REQ-AUTH-ROLE-001,RoleAssignment,ErrorHandling,TESTED,,,security,2026-05-11,src/security/user_management.zig,1835
-REQ-AUTH-ROLE-001,RoleAssignment,Idempotent,TESTED,,,security,2026-05-11,src/security/user_management.zig,1817
+REQ-AUTH-ROLE-001,RoleAssignment,ErrorHandling,TESTED,,,security,2026-05-11,src/security/user_management.zig,1866
+REQ-AUTH-ROLE-001,RoleAssignment,Idempotent,TESTED,,,security,2026-05-11,src/security/user_management.zig,1848
 REQ-AUTH-ROLE-001,RoleAssignment,Mutation,TESTED,,,security,2026-05-11,src/security/user_management.zig,1012
-REQ-AUTH-ROLE-001,RoleAssignment,Mutation,TESTED,,,security,2026-05-11,src/security/user_management.zig,1796
+REQ-AUTH-ROLE-001,RoleAssignment,Mutation,TESTED,,,security,2026-05-11,src/security/user_management.zig,1827
 REQ-AUTH-ROLE-002,BuiltinRoleHardening,Validation,TESTED,,,security,2026-05-11,src/execution/auth_dispatch.zig,1817
 REQ-AUTH-SALT-001,SecurePasswordSalt,Security,EXEMPT,,,security,2026-02-24,src/security/user_management.zig,512
 REQ-AUTH-SESSION-001,LocalSessionStorage,SECURITY,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,1
@@ -553,14 +553,14 @@ REQ-CENT-PAGERANK-001,Centrality,PageRank,TESTED,,,algo,2026-01-16,tests/test_ga
 REQ-CENTRALITY-001,Centrality,PageRank,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig,496
 REQ-CENTRALITY-002,Centrality,Betweenness,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig,503
 REQ-CI-CACHE-001,BoundedZigCache,CI,TESTED,,,ci,2026-10-24,.gitlab-ci.yml,193
-REQ-CI-CANARY-LINT-001,CI CANARY Linting,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,593
+REQ-CI-CANARY-LINT-001,CI CANARY Linting,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,594
 REQ-CI-CANARY-LINT-TEST-001,CANARY Lint Unit Tests,UnitTesting,TESTED,,,governance,2026-01-17,tools/test_canary_lint.py,4
-REQ-CI-CANARYSCAN-001,CI Canaryscan Verify,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,615
-REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1730
-REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-25,.gitlab-ci.yml,685
-REQ-CI-COVERAGE-001,CodeCoverageCI,Core,IMPL,,,ci,2026-10-13,.gitlab-ci.yml,1600
+REQ-CI-CANARYSCAN-001,CI Canaryscan Verify,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,616
+REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1726
+REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-25,.gitlab-ci.yml,686
+REQ-CI-COVERAGE-001,CodeCoverageCI,Core,IMPL,,,ci,2026-10-13,.gitlab-ci.yml,1596
 REQ-CI-GOV-001,CI Governance Checks,Core,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,378
-REQ-CI-REQ-DOC-REPORT-001,CI REQ-DOC Reports,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,650
+REQ-CI-REQ-DOC-REPORT-001,CI REQ-DOC Reports,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,651
 REQ-CI-REQ-DOC-REPORT-001,Requirement ID Report Generator,Governance,TESTED,,,governance,2026-01-17,tools/req_doc_report.py,4
 REQ-CI-REQ-DOC-TEST-001,REQ-DOC Report Unit Tests,UnitTesting,TESTED,,,governance,2026-01-17,tools/test_req_doc_report.py,4
 REQ-CI-STATUS-GEN-TEST-001,StatusGenerateUnitTests,UnitTesting,TESTED,,,governance,2026-04-16,tools/test_status_generate.py,4
@@ -2818,7 +2818,7 @@ REQ-GQL-CHAIN-MATCH-001,ChainMatchExecution,AggregationPath,TESTED,,,execution,2
 REQ-GQL-CHAIN-ORDERBY-001,ChainOrderBy,FinalSorting,TESTED,,,execution,2025-12-26,src/execution/query_execution.zig,830
 REQ-GQL-CHAIN-WITH-AGG-001,ChainedWithAggregation,IntermediateWithAgg,TESTED,,,execution,2025-12-26,src/execution/query_execution.zig,175
 REQ-GQL-CHAIN-WITH-AGG-001,GQLChainedAggregation,WithAgg,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig,28
-REQ-GQL-CI-001,GQL Compliance CI,TestEnforcement,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1781
+REQ-GQL-CI-001,GQL Compliance CI,TestEnforcement,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1777
 REQ-GQL-COLNAME-001,UniqueColumnNames,DEDUP,TESTED,,,execution,2025-12-22,src/execution/result_utils.zig,23
 REQ-GQL-COMMA-MATCH,CommaSepar atedMatches,MultipleChains,TESTED,,,engine,2025-10-12,src/execution/pattern_helpers.zig,110
 REQ-GQL-COMMA-MATCH,CommaSeparatedMatches,CartesianProduct,TESTED,,,engine,2025-10-12,src/execution/match_operations.zig,4676
@@ -4913,7 +4913,7 @@ REQ-SEC-AUTH-UNAVAILABLE-002,AuthOutcomeClassification,StorageLookup,TESTED,,,se
 REQ-SEC-AUTH-UNAVAILABLE-002,AuthOutcomeClassification,StorageLookupResidual,TESTED,,,security,2026-08-29,tests/test_auth_unavailable_classification.zig,257
 REQ-SEC-AUTH-UNAVAILABLE-003,AuthOutcomeClassification,PersistentResolver,TESTED,,,security,2026-08-30,src/server/persistent_auth_resolver.zig,100
 REQ-SEC-AUTH-UNAVAILABLE-004,AuthOutcomeClassification,PersistentResolverModule,TESTED,,,security,2026-08-30,src/server/persistent_auth_resolver.zig,9
-REQ-SEC-AUTH-UNAVAILABLE-004,AuthOutcomeClassification,SingleFlightLeak,TESTED,,,security,2026-08-29,src/security/user_management.zig,1898
+REQ-SEC-AUTH-UNAVAILABLE-004,AuthOutcomeClassification,SingleFlightLeak,TESTED,,,security,2026-08-29,src/security/user_management.zig,1929
 REQ-SEC-AUTH-UNAVAILABLE-005,AuthOutcomeClassification,StoreLockReentrancy,TESTED,,,security,2026-08-30,tests/test_auth_unavailable_classification.zig,495
 REQ-SEC-AUTH-VALIDATION-001,Security,AuthValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,14
 REQ-SEC-CLI-INSECURE-TLS-GATE-001,InsecureTlsFlagGate,Policy,TESTED,,,security,2026-06-10,src/cli/insecure_tls_gate.zig,15
