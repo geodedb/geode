@@ -91,11 +91,16 @@ const ResidentMemory = struct { resident: usize, peak: usize };
 fn darwinMemory() !ResidentMemory {
     var info: std.c.task_vm_info_data_t = std.mem.zeroes(std.c.task_vm_info_data_t);
     var count: std.c.mach_msg_type_number_t = std.c.TASK.VM.INFO_COUNT;
-    if (std.c.task_info(std.c.mach_task_self(), std.c.TASK.VM.INFO, @ptrCast(&info), &count) != 0)
+    const result = std.c.task_info(std.c.mach_task_self(), std.c.TASK.VM.INFO, @ptrCast(&info), &count);
+    if (result != 0) {
+        std.debug.print("Darwin memory measurement: task_info returned {d}\n", .{result});
         return error.MemoryMeasurementFailed;
+    }
     const required = (@offsetOf(std.c.task_vm_info_data_t, "resident_size_peak") + @sizeOf(u64)) / @sizeOf(std.c.natural_t);
-    if (count < required or info.resident_size == 0 or info.resident_size_peak < info.resident_size)
+    if (count < required or info.resident_size == 0 or info.resident_size_peak < info.resident_size) {
+        std.debug.print("Darwin memory measurement: count={d} required={d} resident={d} peak={d}\n", .{ count, required, info.resident_size, info.resident_size_peak });
         return error.MemoryMeasurementFailed;
+    }
     return .{ .resident = @intCast(info.resident_size), .peak = @intCast(info.resident_size_peak) };
 }
 
