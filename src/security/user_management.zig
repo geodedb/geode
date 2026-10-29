@@ -1469,7 +1469,7 @@ const ConcurrentRefreshResolverState = struct {
     users: []const TestUserDef,
     lookup_calls: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
     auth_version_calls: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-    delay_ns: u64 = 0,
+    release_refresh: std.atomic.Value(bool) = std.atomic.Value(bool).init(true),
 
     fn lookup(ctx: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?User {
         const self: *ConcurrentRefreshResolverState = @ptrCast(@alignCast(ctx orelse return null));
@@ -1500,7 +1500,7 @@ const ConcurrentRefreshResolverState = struct {
     fn authVersion(ctx: ?*anyopaque, username: []const u8) anyerror!?u64 {
         const self: *ConcurrentRefreshResolverState = @ptrCast(@alignCast(ctx orelse return null));
         _ = self.auth_version_calls.fetchAdd(1, .acq_rel);
-        if (self.delay_ns != 0) testSleepNs(self.delay_ns);
+        while (!self.release_refresh.load(.acquire)) testSleepNs(std.time.ns_per_ms);
         for (self.users) |entry| {
             if (std.mem.eql(u8, entry.username, username)) {
                 return entry.auth_version;
@@ -1553,7 +1553,6 @@ test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
     };
     var state = ConcurrentRefreshResolverState{
         .users = users[0..],
-        .delay_ns = 25 * std.time.ns_per_ms,
     };
     setPersistentUserResolver(.{
         .ctx = &state,
@@ -1590,17 +1589,49 @@ test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
     };
 
     const worker_count = 8;
+    const refresh_key = try refreshFlightKey("alice");
     var start = std.atomic.Value(bool).init(false);
     var ok = std.atomic.Value(u32).init(0);
     var failed = std.atomic.Value(u32).init(0);
     var contexts: [worker_count]Worker = undefined;
     var threads: [worker_count]std.Thread = undefined;
-    for (&contexts, 0..) |*ctx, i| {
-        ctx.* = .{ .start = &start, .ok = &ok, .failed = &failed };
-        threads[i] = try std.Thread.spawn(.{}, Worker.run, .{ctx});
+    {
+        state.release_refresh.store(false, .release);
+        var spawned: usize = 0;
+        defer {
+            // Release and join even if spawning or the overlap assertion
+            // fails; no worker may outlive the resolver or user store.
+            start.store(true, .release);
+            state.release_refresh.store(true, .release);
+            for (threads[0..spawned]) |thread| thread.join();
+        }
+        for (&contexts, 0..) |*ctx, i| {
+            ctx.* = .{ .start = &start, .ok = &ok, .failed = &failed };
+            threads[i] = try std.Thread.spawn(.{}, Worker.run, .{ctx});
+            spawned += 1;
+        }
+        start.store(true, .release);
+
+        // A fixed resolver sleep does not prove overlap: a worker scheduled
+        // after that sleep legitimately starts a second refresh. Hold the
+        // owner until all callers have joined the actual production flight.
+        // Bound the wait so a regression fails instead of hanging the shard.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const deadline = compat_monotonicNs() +| 30 * std.time.ns_per_s;
+        var all_joined = false;
+        while (compat_monotonicNs() < deadline) {
+            refresh_flight_mutex.lockUncancelable(io);
+            if (refresh_flights) |flights| {
+                if (flights.get(refresh_key)) |flight| {
+                    all_joined = !flight.done and flight.refs == worker_count;
+                }
+            }
+            refresh_flight_mutex.unlock(io);
+            if (all_joined) break;
+            testSleepNs(std.time.ns_per_ms);
+        }
+        try testing.expect(all_joined);
     }
-    start.store(true, .release);
-    for (&threads) |*thread| thread.join();
 
     try testing.expectEqual(@as(u32, worker_count), ok.load(.acquire));
     try testing.expectEqual(@as(u32, 0), failed.load(.acquire));
