@@ -798,6 +798,11 @@ test-zig-unit:
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
     TEST_SHARD_TOTAL: "8"
+    # The Kubernetes runner gives each pod two CPUs. Run one build/test step
+    # at a time so concurrent Zig compiles and other test binaries cannot
+    # starve the spawned servers and 16-client KMS regression in this shard.
+    # This matches the existing two-CPU ReleaseSafe lane's scheduling bound.
+    ZIG_BUILD_JOBS: "1"
   retry:
     max: 1
     when:
@@ -810,7 +815,7 @@ test-zig-unit:
     # Zig keeps running independent steps after a test fails. Stop those
     # processes, preserve both output streams, and let workflow cancellation
     # release the other shards. Real failures are not automatically retried.
-    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_shard_${TEST_SHARD_INDEX}.log -- zig build test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
+    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_shard_${TEST_SHARD_INDEX}.log -- zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
   rules:
     # SRE-187 (MR admission): merge_request_event pipelines have no
     # CI_COMMIT_BRANCH, so before this rule the MR pipeline -- the one that
