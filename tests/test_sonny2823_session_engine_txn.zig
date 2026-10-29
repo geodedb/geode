@@ -528,6 +528,10 @@ const QuicServer = struct {
     fn connect(self: *QuicServer, allocator: std.mem.Allocator) !util.QuicProtoClient {
         var client = try util.QuicProtoClient.connect(allocator, self.addr);
         errdefer client.deinit();
+        // This checks transaction isolation and crash recovery, not reply
+        // latency. A loaded Debug server may need more than five seconds to
+        // commit the batch; retain the harness's exit check and 60 s hard cap.
+        client.watchServerLiveness(self.handle.child.id.?);
         var h = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
         defer h.deinit(allocator);
         if (!h.success) return error.HelloFailed;
