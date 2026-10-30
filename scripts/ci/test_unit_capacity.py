@@ -32,6 +32,8 @@ class UnitCapacityTests(unittest.TestCase):
         self.assertEqual(len(slots), 2)
         self.assertEqual(sorted(map(len, slots.values())), [4, 4])
         self.assertRegex(job, r'(?m)^    TEST_SHARD_TOTAL: "8"$')
+        self.assertRegex(job, r'(?m)^    ZIG_BUILD_JOBS: "1"$')
+        self.assertIn("-- zig build -j${ZIG_BUILD_JOBS} test ", job)
         # A pipeline/ref/shard suffix here would defeat the shared capacity cap.
         self.assertRegex(job, r'(?m)^  resource_group: "test-zig-unit-slot-\$TEST_SLOT"$')
         self.assertRegex(job, r'(?m)^  tags: \[company, k8s, linux\]$')
