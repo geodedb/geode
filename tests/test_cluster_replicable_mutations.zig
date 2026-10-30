@@ -328,6 +328,35 @@ const Cluster = struct {
         const idx = currentLeaderIdx(&self.captures) orelse return null;
         return NODE_IPS[idx];
     }
+
+    /// Keep draining the three servers while the client waits. Leaving their
+    /// log pipes unread during a query can block a server's writer and prevent
+    /// the very Raft progress that the query is waiting for.
+    // CANARY: REQ=REQ-SONNY-3044-CLUSTER-DELETE-RETURN; FEATURE="DistributedCluster"; ASPECT=DrainLogsDuringQuery; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-10-30
+    fn query(self: *Cluster, ip: []const u8, text: []const u8) ![]u8 {
+        const Query = struct {
+            cluster: *Cluster,
+            ip: []const u8,
+            text: []const u8,
+            done: std.atomic.Value(bool) = .init(false),
+            result: anyerror![]u8 = error.QueryNotCompleted,
+
+            fn run(request: *@This()) void {
+                const c = request.cluster;
+                request.result = runQuery(c.gpa, c.io, c.aa, request.ip, request.text);
+                request.done.store(true, .release);
+            }
+        };
+        var request = Query{ .cluster = self, .ip = ip, .text = text };
+        const thread = try std.Thread.spawn(.{}, Query.run, .{&request});
+        defer thread.join();
+        while (!request.done.load(.acquire)) {
+            drainAll(&self.captures, &self.children, self.gpa, self.io);
+            sleepMs(10);
+        }
+        drainAll(&self.captures, &self.children, self.gpa, self.io);
+        return request.result;
+    }
 };
 
 /// Bring up the 3-node cluster and block until a single leader + >=1 follower is
@@ -449,7 +478,6 @@ fn assertMutationReplicates(
     expect_substr: []const u8,
 ) !void {
     const gpa = cluster.gpa;
-    const aa = cluster.aa;
     const io = cluster.io;
 
     // Send the mutation to the current leader. Retry on a leadership move
@@ -463,7 +491,7 @@ fn assertMutationReplicates(
             sleepMs(500);
             continue;
         };
-        const out = runQuery(gpa, io, aa, leader_ip, mutate_q) catch {
+        const out = cluster.query(leader_ip, mutate_q) catch {
             sleepMs(500);
             continue;
         };
@@ -503,7 +531,7 @@ fn assertMutationReplicates(
         var got: usize = 0;
         for (0..3) |fi| {
             if (fi == li or !isNodeHealthy(&cluster.captures, fi)) continue;
-            const read_out = runQuery(gpa, io, aa, NODE_IPS[fi], read_q) catch continue;
+            const read_out = cluster.query(NODE_IPS[fi], read_q) catch continue;
             defer gpa.free(read_out);
             if (std.mem.indexOf(u8, read_out, expect_substr) != null) got += 1;
         }
@@ -618,19 +646,21 @@ test "cluster: DETACH DELETE replicates to followers" {
     );
 }
 
-/// Run `q` against the current leader, retrying on a leadership move, and
-/// return its output (the caller frees it with `cluster.gpa`).
+/// Run `q` against the current leader, retrying only an explicit leadership
+/// refusal. A client error may follow a committed mutation and must propagate
+/// instead of replaying it. The caller frees the output with `cluster.gpa`.
 fn runOnLeader(cluster: *Cluster, q: []const u8) ![]u8 {
+    return runOnLeaderWith(cluster, q, Cluster.query);
+}
+
+fn runOnLeaderWith(cluster: *Cluster, q: []const u8, comptime query: anytype) ![]u8 {
     var attempt: usize = 0;
     while (attempt < 12) : (attempt += 1) {
         const leader_ip = cluster.leaderIp() orelse {
             sleepMs(500);
             continue;
         };
-        const out = runQuery(cluster.gpa, cluster.io, cluster.aa, leader_ip, q) catch {
-            sleepMs(500);
-            continue;
-        };
+        const out = try query(cluster, leader_ip, q);
         if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) {
             cluster.gpa.free(out);
             sleepMs(700);
@@ -673,6 +703,50 @@ test "cluster: a DELETE's RETURN is computed over the rows it deletes, as a stan
     }
     // And the delete replicated.
     try assertMutationReplicates(&cluster, "DelRet-deleted", "RETURN 1", "MATCH (n:DelRet) RETURN count(n) AS c", "\"c\":0");
+}
+
+// CANARY: REQ=REQ-SONNY-3044-CLUSTER-DELETE-RETURN; FEATURE="DistributedCluster"; ASPECT=LostResponseNoReplay; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-10-30
+test "cluster: a lost DELETE response does not replay a committed mutation" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var cluster = try startCluster(gpa, aa, io);
+    defer cluster.deinit();
+    try seedReplicableNode(&cluster, "LostDelRet", "CREATE (:LostDelRet {i: 3})");
+
+    const LostResponse = struct {
+        var calls: usize = 0;
+
+        fn query(c: *Cluster, ip: []const u8, text: []const u8) ![]u8 {
+            const out = try c.query(ip, text);
+            if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) return out;
+            calls += 1;
+            // Execute against the real cluster, then lose its first successful
+            // response at the client boundary. No database reply is fabricated.
+            if (calls == 1) {
+                defer c.gpa.free(out);
+                try std.testing.expect(std.mem.indexOf(u8, out, "\"s\":3") != null);
+                return error.TestLostResponse;
+            }
+            return out;
+        }
+    };
+    LostResponse.calls = 0;
+    if (runOnLeaderWith(&cluster, "MATCH (n:LostDelRet) DELETE n RETURN sum(n.i) AS s", LostResponse.query)) |out| {
+        defer gpa.free(out);
+        std.debug.print("[repl] an ambiguous DELETE was replayed {d} time(s): {s}\n", .{ LostResponse.calls - 1, out });
+        return error.AmbiguousMutationReplayed;
+    } else |err| {
+        try std.testing.expectEqual(error.TestLostResponse, err);
+    }
+    try std.testing.expectEqual(@as(usize, 1), LostResponse.calls);
+    try assertMutationReplicates(&cluster, "LostDelRet-deleted", "RETURN 1", "MATCH (n:LostDelRet) RETURN count(n) AS c", "\"c\":0");
 }
 
 // ---------------------------------------------------------------------------
@@ -864,7 +938,7 @@ test "cluster: MATCH…CREATE edge sent to a follower fails closed" {
     // (00000 success), applies the edge to its LOCAL store only, and never
     // forwards/rejects -> a follower holds data the rest of the cluster does
     // not. It must instead be rejected with error.ClusterNotLeader.
-    const rej_out = runQuery(gpa, io, aa, follower_ip, "MATCH (a:McFSrc {id:1}), (b:McFDst {id:2}) CREATE (a)-[:FOLLOWERMCL]->(b)") catch |err| {
+    const rej_out = cluster.query(follower_ip, "MATCH (a:McFSrc {id:1}), (b:McFDst {id:2}) CREATE (a)-[:FOLLOWERMCL]->(b)") catch |err| {
         std.debug.print("[repl] follower MATCH…CREATE probe {s} failed: {s}\n", .{ follower_ip, @errorName(err) });
         return error.FollowerWriteProbeFailed;
     };
@@ -880,7 +954,7 @@ test "cluster: MATCH…CREATE edge sent to a follower fails closed" {
     // And nothing may have landed in the follower's local store (divergence).
     sleepMs(1500);
     drainAll(&cluster.captures, &cluster.children, gpa, io);
-    const fr_read = runQuery(gpa, io, aa, follower_ip, "MATCH (:McFSrc)-[r:FOLLOWERMCL]->(:McFDst) RETURN count(r) AS c") catch return error.FollowerWriteProbeFailed;
+    const fr_read = cluster.query(follower_ip, "MATCH (:McFSrc)-[r:FOLLOWERMCL]->(:McFDst) RETURN count(r) AS c") catch return error.FollowerWriteProbeFailed;
     defer gpa.free(fr_read);
     if (std.mem.indexOf(u8, fr_read, "\"c\":0") == null) {
         std.debug.print("[repl] FOLLOWER SILENTLY APPLIED MATCH…CREATE (divergence): {s}\n", .{fr_read});
@@ -964,7 +1038,7 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
                 sleepMs(500);
                 continue;
             };
-            const out = runQuery(gpa, io, aa, leader_ip, s.query) catch {
+            const out = cluster.query(leader_ip, s.query) catch {
                 sleepMs(500);
                 continue;
             };
@@ -1010,7 +1084,7 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
             try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (no healthy follower to probe)", .{s.name}));
             continue;
         };
-        const f_out = runQuery(gpa, io, aa, NODE_IPS[fidx], s.query) catch |err| {
+        const f_out = cluster.query(NODE_IPS[fidx], s.query) catch |err| {
             std.debug.print("[failclosed] follower probe for '{s}' failed: {s}\n", .{ s.name, @errorName(err) });
             try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (follower probe failed)", .{s.name}));
             continue;
