@@ -351,6 +351,23 @@ variables:
       fi
     fi
 
+  # Fetch once before executing build/test steps. Dependency fetching can fail
+  # at smart-HTTP capability discovery (bench-timeseries job 17623544387); retry
+  # only dependency fetching, never compiler errors or benchmark assertions.
+  # This also supplies GoReleaser's offline cross-build dependency cache.
+  - |
+    for i in 1 2 3 4 5; do
+      if zig build --fetch; then
+        echo "✓ pre-fetched the Zig dependency closure on attempt $i"
+        break
+      fi
+      if [ "$i" = "5" ]; then
+        echo "✗ zig build --fetch failed after 5 attempts"; exit 1
+      fi
+      echo "zig build --fetch attempt $i failed; retrying in $((i * 5))s..."
+      sleep $((i * 5))
+    done
+
 # =============================================================================
 # Governance Stage - Status and Feature Flag Checks
 # CANARY: REQ=REQ-CI-GOV-001; FEATURE="CI Governance Checks"; ASPECT=Core; STATUS=TESTED; TEST=GAP-0219-CI-Tests-Block-Merge; OWNER=ci; UPDATED=2026-01-16
@@ -1946,26 +1963,10 @@ snapshot:
     # only p/<hash>.tar.gz blobs are read) from a .gitignored zig-pkg/ that is
     # absent in CI anyway. Replaced with the shared *zig-vendor-cache anchor,
     # which pre-seeds the protoc BLOB from the project package-registry
-    # mirror (with a `zig fetch` GitHub fallback) so the closure pre-fetch
-    # below never depends on flaky GitHub egress for protoc. zig is on PATH
+    # mirror (with a `zig fetch` GitHub fallback), then fetches the dependency
+    # closure with bounded retries before offline cross-builds. zig is on PATH
     # here (zvm install runs earlier in this before_script).
     - *zig-vendor-cache
-    # 2026-06-16: pre-fetch the dependency closure in this DNS-capable job
-    # container so GoReleaser's offline docker:dind cross-builds never hit the
-    # network (NameServerFailure on git+https deps). See the build-release job
-    # for the full rationale (v0.7.0 pipeline #2602783385).
-    - |
-      for i in 1 2 3 4 5; do
-        if zig build --fetch; then
-          echo "✓ pre-fetched the Zig dependency closure on attempt $i"
-          break
-        fi
-        if [ "$i" = "5" ]; then
-          echo "✗ zig build --fetch failed after 5 attempts"; exit 1
-        fi
-        echo "zig build --fetch attempt $i failed; retrying in $((i * 5))s..."
-        sleep $((i * 5))
-      done
   script:
     - |
       echo "=== Running GoReleaser Snapshot ==="
@@ -2607,30 +2608,10 @@ build-release:
     # only p/<hash>.tar.gz blobs are read) from a .gitignored zig-pkg/ that is
     # absent in CI anyway. Replaced with the shared *zig-vendor-cache anchor,
     # which pre-seeds the protoc BLOB from the project package-registry
-    # mirror (with a `zig fetch` GitHub fallback) so the closure pre-fetch
-    # below never depends on flaky GitHub egress for protoc. zig is on PATH
+    # mirror (with a `zig fetch` GitHub fallback), then fetches the dependency
+    # closure with bounded retries before offline cross-builds. zig is on PATH
     # here (zvm install runs earlier in this before_script).
     - *zig-vendor-cache
-    # 2026-06-16: The vendored zig-pkg/ is .gitignored and absent in release
-    # checkouts, and the per-ref CI cache (zig-cache/) can fail to extract on a
-    # cold TAG pipeline, leaving the global cache empty. GoReleaser then runs
-    # `zig build` for each cross target inside a docker:dind context that cannot
-    # resolve DNS — NameServerFailure on git+https://gitlab.com/devnw/zig/* (the
-    # v0.7.0 build-release, pipeline #2602783385). THIS job container has working
-    # DNS + the gitlab-ci-token git rewrite, so pre-fetch the full dependency
-    # closure HERE so the offline cross-builds resolve everything from the cache.
-    - |
-      for i in 1 2 3 4 5; do
-        if zig build --fetch; then
-          echo "✓ pre-fetched the Zig dependency closure on attempt $i"
-          break
-        fi
-        if [ "$i" = "5" ]; then
-          echo "✗ zig build --fetch failed after 5 attempts"; exit 1
-        fi
-        echo "zig build --fetch attempt $i failed; retrying in $((i * 5))s..."
-        sleep $((i * 5))
-      done
   script:
     - |
       echo "=== Building Release: ${CI_COMMIT_TAG} ==="
