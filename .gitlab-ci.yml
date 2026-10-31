@@ -875,20 +875,12 @@ test-zig-unit:
 test-cross-build:
   stage: test
   image: $ZIG_IMAGE
-  # 2026-09-16 (v0.8.17 pipeline #1721): both aarch64 shards died OOMKilled
-  # (exit 137) inside `zig build` on the k8s cluster runner, repeatably, after
-  # the 0.8.16 cascade grew build.zig by 22 artifact declarations. A local
-  # ReleaseSafe aarch64-linux-gnu build peaks at ~7.1 GiB RSS summed across
-  # the zig process tree at -j4 (largest single compile step 724 MiB, up from
-  # 606 MiB at v0.8.15). Two mitigations, both needed: run the shards on the
-  # dedicated (docker-executor) fleet, which has no per-pod memory cap, and
-  # bound zig's compile parallelism so peak memory stays predictable.
-  # 2026-10-11: the OVH Dedicated runner (the only one tagged `docker` +
-  # `dedicated`) has been wedged since 2026-10-10 13:42 UTC (its jobs never
-  # finish), so these shards sat pending for 13h+. Select the AWS-spot pool
-  # explicitly; it is a docker-autoscaler fleet with whole-VM memory, which
-  # is what the OOM note above needs. Same tag set as mentats' heavy jobs.
-  tags: [company, dedicated, linux, x86, aws-spot]
+  # ARM-musl received SIGKILL on an 8 GiB Spot worker (job 17623966028).
+  # The exact CI image/source also OOM-killed its compiler at -j1 with a
+  # 6 GiB/no-swap local limit. Concurrency alone cannot fit that limit.
+  # Route only this target to the existing 64 GiB dedicated Docker hosts;
+  # keep the other four targets on Spot and all release gates required.
+  tags: [company, dedicated, linux, x86, "$CROSS_RUNNER_TAG"]
   # One shard per release target: the sequential all-targets loop outgrew the
   # 2h job timeout as the dep tree grew (pipeline #1508 timed out mid
   # riscv64-linux-gnu after 4 targets). Shards run in parallel, each finishes
@@ -902,8 +894,12 @@ test-cross-build:
           - x86_64-linux-gnu
           - x86_64-linux-musl
           - aarch64-linux-gnu
-          - aarch64-linux-musl
           - riscv64-linux-gnu
+        CROSS_RUNNER_TAG: aws-spot
+        ZIG_BUILD_JOBS: "2"
+      - ZIG_TARGET: aarch64-linux-musl
+        CROSS_RUNNER_TAG: docker
+        ZIG_BUILD_JOBS: "1"
   timeout: 2h
   # Retry runner failures only. Compilation failures stop the pipeline;
   # transient dependency downloads are retried by the fetch helper.
@@ -948,7 +944,7 @@ test-cross-build:
       while IFS= read -r TARGET; do
         [ -z "$TARGET" ] && continue
         # macOS targets skipped here until wal/quic upstream 0.16 fixes land.
-        # Native macOS builds are covered by test-macos-unit on SaaS M1 runners.
+        # Native macOS builds use the dedicated,macos,arm runner tags.
         case "$TARGET" in
           *-macos) continue ;;
         esac
@@ -969,7 +965,7 @@ test-cross-build:
         *) scripts/ci/fetch-openssl-prefix.sh "${ZIG_TARGET}" "dist/openssl/${ZIG_TARGET}" ;;
       esac
       echo "--- zig build target=${ZIG_TARGET} ---"
-      zig build -j2 -Doptimize=ReleaseSafe -Dtarget="${ZIG_TARGET}" -Dopenssl-sysroot=dist/openssl --summary all
+      zig build -j${ZIG_BUILD_JOBS} -Doptimize=ReleaseSafe -Dtarget="${ZIG_TARGET}" -Dopenssl-sysroot=dist/openssl --summary all
       # Prove the shipped configuration: gRPC-TLS targets MUST link libssl.
       case "${ZIG_TARGET}" in
         riscv64-*|*-macos) ;;
@@ -986,6 +982,16 @@ test-cross-build:
           ;;
       esac
       echo "✓ release target ${ZIG_TARGET} built (macOS covered by test-macos-unit)"
+  after_script:
+    - |
+      # Preserve cgroup evidence even when the compiler fails. Missing v2
+      # counters on older hosts do not replace the actual build result.
+      for COUNTER in memory.peak memory.events; do
+        if [ -r "/sys/fs/cgroup/${COUNTER}" ]; then
+          echo "--- cross-build ${ZIG_TARGET}: ${COUNTER} ---"
+          cat "/sys/fs/cgroup/${COUNTER}"
+        fi
+      done
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
