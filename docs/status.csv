@@ -102,8 +102,8 @@ REQ-0006,Distributed Query Federation,UnitTests,TESTED,,,distributed,2026-04-01,
 REQ-0006,Distributed RPC,NetworkTransport,TESTED,,,dist,2026-01-16,src/dist/rpc.zig,4
 REQ-0006,DistributedQuery,Federation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch2_testing.zig,14
 REQ-0007,Tooling & Governance Requirements,Tooling,TESTED,,,tools,2026-01-15,tools/canary_main.zig,22
-REQ-0008,Platform Build Requirements,ReleaseSafe,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,1172
-REQ-0009,Performance Budget Enforcement,CI,TESTED,,,ci,2026-01-30,.gitlab-ci.yml,1336
+REQ-0008,Platform Build Requirements,ReleaseSafe,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,1170
+REQ-0009,Performance Budget Enforcement,CI,TESTED,,,ci,2026-01-30,.gitlab-ci.yml,1334
 REQ-0009,Performance Targets,Benchmark,BENCHED,,,ops-team,2026-01-15,benchmarks/benchmark_monitoring_metrics_variance_unified.zig,6
 REQ-2PC-001,2PC,PreparePhase,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_final_batch.zig,482
 REQ-2PC-002,2PC,CommitPhase,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_final_batch.zig,489
@@ -556,9 +556,9 @@ REQ-CI-CACHE-001,BoundedZigCache,CI,TESTED,,,ci,2026-10-24,.gitlab-ci.yml,193
 REQ-CI-CANARY-LINT-001,CI CANARY Linting,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,593
 REQ-CI-CANARY-LINT-TEST-001,CANARY Lint Unit Tests,UnitTesting,TESTED,,,governance,2026-01-17,tools/test_canary_lint.py,4
 REQ-CI-CANARYSCAN-001,CI Canaryscan Verify,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,615
-REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1733
+REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1731
 REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-25,.gitlab-ci.yml,685
-REQ-CI-COVERAGE-001,CodeCoverageCI,Core,IMPL,,,ci,2026-10-13,.gitlab-ci.yml,1601
+REQ-CI-COVERAGE-001,CodeCoverageCI,Core,IMPL,,,ci,2026-10-13,.gitlab-ci.yml,1599
 REQ-CI-GOV-001,CI Governance Checks,Core,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,373
 REQ-CI-REQ-DOC-REPORT-001,CI REQ-DOC Reports,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,650
 REQ-CI-REQ-DOC-REPORT-001,Requirement ID Report Generator,Governance,TESTED,,,governance,2026-01-17,tools/req_doc_report.py,4
@@ -819,7 +819,7 @@ REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommitAwarePostProposeWait
 REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommittedIndexAccessor,TESTED,,,distributed,2026-06-12,src/distributed/cluster.zig,2635
 REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommittedIndexAccessor,TESTED,,,distributed,2026-06-12,src/distributed/raft_consensus.zig,3387
 REQ-DIST-CLUSTER-CONFIG-001,DistributedClusterCoordinator,ConfigBootstrap,TESTED,,,distributed,2026-05-25,tests/test_cluster_coordinator_config.zig,1
-REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,E2EFailClosed,TESTED,,,distributed,2026-08-28,tests/test_cluster_replicable_mutations.zig,982
+REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,E2EFailClosed,TESTED,,,distributed,2026-08-28,tests/test_cluster_replicable_mutations.zig,996
 REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateAuthDDL,TESTED,,,distributed,2026-06-10,src/execution/admin_ddl.zig,66
 REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateAuthProcedures,TESTED,,,distributed,2026-06-10,src/execution/auth_dispatch.zig,472
 REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateConstraintDDL,TESTED,,,distributed,2026-06-10,src/execution.zig,2297
@@ -877,8 +877,8 @@ REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ApplyAbsoluteIdEdge,T
 REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,DispatchRouteMatchCreate,TESTED,,,distributed,2026-06-10,src/execution/query_execution.zig,2080
 REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ExecutorRouteMatchCreate,TESTED,,,distributed,2026-06-10,src/execution/crud_operations.zig,4657
 REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,LeaderProposeMatchCreate,TESTED,,,distributed,2026-06-10,src/execution/crud_operations.zig,4451
-REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,MatchCreateFollowerFailClosed,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,901
-REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ReplicateMatchCreateEdge,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,853
+REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,MatchCreateFollowerFailClosed,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,915
+REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ReplicateMatchCreateEdge,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,867
 REQ-DIST-CLUSTER-REPLICATE-MATCH-SET,DistributedCluster,ApplyUpdate,TESTED,,,distributed,2026-06-09,src/distributed/raft_apply.zig,594
 REQ-DIST-CLUSTER-REPLICATE-MATCH-SET,DistributedCluster,DispatchRouteUpdate,TESTED,,,distributed,2026-06-09,src/execution/query_execution.zig,2262
 REQ-DIST-CLUSTER-REPLICATE-MATCH-SET,DistributedCluster,ExecutorRouteUpdate,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,4407
@@ -889,11 +889,12 @@ REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,ApplyMergeIntegration,TESTED
 REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,ExecutorProposeMerge,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,3808
 REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,LeaderProposeMerge,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,3260
 REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,MergeCodec,TESTED,,,distributed,2026-06-09,src/distributed/cluster_replication.zig,735
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateDelete,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,616
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateEdgeCreate,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,572
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,LostAcknowledgement,TESTED,,,distributed,2026-10-30,tests/test_cluster_replicable_mutations.zig,1147
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateDelete,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,617
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateEdgeCreate,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,573
 REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateEdgeDeleteMergeSet,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,1
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMatchSet,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,797
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMerge,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,755
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMatchSet,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,811
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMerge,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,769
 REQ-DIST-CLUSTER-ROLE,ClusterCoordinator Public Propose,Role,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig,2681
 REQ-DIST-CLUSTER-STEADY-STATE-TLS,DistributedCluster,SteadyStateLeaderHoldDistinctIpTls,TESTED,,,distributed,2026-10-27,tests/test_cluster_3node_steady_state.zig,1
 REQ-DIST-CLUSTER-TERM,ClusterCoordinator Public Propose,CurrentTerm,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig,2689
@@ -2818,7 +2819,7 @@ REQ-GQL-CHAIN-MATCH-001,ChainMatchExecution,AggregationPath,TESTED,,,execution,2
 REQ-GQL-CHAIN-ORDERBY-001,ChainOrderBy,FinalSorting,TESTED,,,execution,2025-12-26,src/execution/query_execution.zig,830
 REQ-GQL-CHAIN-WITH-AGG-001,ChainedWithAggregation,IntermediateWithAgg,TESTED,,,execution,2025-12-26,src/execution/query_execution.zig,175
 REQ-GQL-CHAIN-WITH-AGG-001,GQLChainedAggregation,WithAgg,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig,28
-REQ-GQL-CI-001,GQL Compliance CI,TestEnforcement,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1781
+REQ-GQL-CI-001,GQL Compliance CI,TestEnforcement,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1779
 REQ-GQL-COLNAME-001,UniqueColumnNames,DEDUP,TESTED,,,execution,2025-12-22,src/execution/result_utils.zig,23
 REQ-GQL-COMMA-MATCH,CommaSepar atedMatches,MultipleChains,TESTED,,,engine,2025-10-12,src/execution/pattern_helpers.zig,110
 REQ-GQL-COMMA-MATCH,CommaSeparatedMatches,CartesianProduct,TESTED,,,engine,2025-10-12,src/execution/match_operations.zig,4676
@@ -2984,12 +2985,12 @@ REQ-GQL-KEYS-003,KeysFunction,NodeEdgeMapKeys,TESTED,,,eval,2025-12-28,src/eval.
 REQ-GQL-KEYWORD-001,GQL Keyword Handling,Parser,TESTED,,,parser,2025-01-03,tests/gql_keyword_regression_test.zig,6
 REQ-GQL-KMS-BACKEND-001,KMS Backend Safety Check,SECURITY,TESTED,,,security,2026-01-15,src/security/external_kms_client.zig,74
 REQ-GQL-KMS-CONFIG-001,KMS Configuration,SECURITY,TESTED,,,security,2026-01-15,src/security/external_kms_client.zig,91
-REQ-GQL-KMS-LOCALDEV-001,AES-GCM Local KMS,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,179
-REQ-GQL-KMS-LOCALDEV-002,AES-GCM Local KMS Unwrap,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,206
+REQ-GQL-KMS-LOCALDEV-001,AES-GCM Local KMS,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,182
+REQ-GQL-KMS-LOCALDEV-002,AES-GCM Local KMS Unwrap,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,209
 REQ-GQL-KMS-LOCALSIM-001,LocalSimulated KMS Client,SECURITY,TESTED,,,security,2026-01-15,src/security/external_kms_client.zig,854
 REQ-GQL-KMS-PRODSAFE-001,LocalSimulated KMS Production Block,SECURITY,TESTED,,,security,2026-01-16,src/security/external_kms_client.zig,855
 REQ-GQL-KMS-PRODSAFE-001,Production KMS Safety Check,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,46
-REQ-GQL-KMS-PRODSAFE-002,KMS Provider Init Safety,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,85
+REQ-GQL-KMS-PRODSAFE-002,KMS Provider Init Safety,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,88
 REQ-GQL-KSHELL-001,KShellDecomposition,Community,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig,2665
 REQ-GQL-LARGE-DATASET,LargeDataset,Scalability,TESTED,,,team,2025-10-02,tests/integration/test_large_social_network.zig,525
 REQ-GQL-LAST-001,ListFunctions,LastElement,TESTED,,,eval,2025-12-24,src/eval.zig,4851
@@ -3521,6 +3522,8 @@ REQ-KEY-ROTATION-002,SecureKeyRotation,Security,TESTED,,,security,2026-06-10,src
 REQ-KEY-ROTATION-003,SecureKmsKeyRotation,Security,EXEMPT,,,security,2026-01-10,src/security/key_rotation.zig,327
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,ClosedConnectionFailFast,TESTED,,,security,2026-09-23,tests/test_sonny2394_kms_client_deadline.zig,20
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,DeadlineConfigRoute,TESTED,,,security,2026-09-24,tests/test_sonny2394_kms_client_deadline.zig,24
+REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,HandshakeBusyServer,TESTED,,,security,2026-10-29,tests/test_sonny2394_kms_client_deadline.zig,25
+REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,HandshakeDeadlineBounded,TESTED,,,security,2026-10-29,tests/test_sonny2394_kms_client_deadline.zig,26
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,NETWORK,TESTED,,,security,2026-01-09,src/security/kms_remote.zig,631
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,ResponseDeadline,TESTED,,,security,2026-09-23,tests/test_sonny2394_kms_client_deadline.zig,18
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,ResponseDeadlineWallClock,TESTED,,,security,2026-09-23,tests/test_sonny2394_kms_client_deadline.zig,19
@@ -5477,8 +5480,8 @@ REQ-SONNY-3042-REFUSE-BEFORE-WRITE,WriteStep,Regression,TESTED,,,engine,2026-09-
 REQ-SONNY-3043-MIXED-WRITE-CLAUSES,WriteStep,Regression,TESTED,,,engine,2026-09-27,tests/test_sonny3043_mixed_write_clauses.zig,23
 REQ-SONNY-3044-CLUSTER-DELETE-RETURN,DistributedCluster,DeleteReturnBeforePropose,TESTED,,,distributed,2026-09-27,src/execution/crud_operations.zig,4077
 REQ-SONNY-3044-CLUSTER-DELETE-RETURN,DistributedCluster,DrainLogsDuringQuery,TESTED,,,distributed,2026-10-30,tests/test_cluster_replicable_mutations.zig,335
-REQ-SONNY-3044-CLUSTER-DELETE-RETURN,DistributedCluster,LostResponseNoReplay,TESTED,,,distributed,2026-10-30,tests/test_cluster_replicable_mutations.zig,708
-REQ-SONNY-3044-CLUSTER-DELETE-RETURN,DistributedCluster,Regression,TESTED,,,distributed,2026-09-27,tests/test_cluster_replicable_mutations.zig,677
+REQ-SONNY-3044-CLUSTER-DELETE-RETURN,DistributedCluster,LostResponseNoReplay,TESTED,,,distributed,2026-10-30,tests/test_cluster_replicable_mutations.zig,718
+REQ-SONNY-3044-CLUSTER-DELETE-RETURN,DistributedCluster,Regression,TESTED,,,distributed,2026-09-27,tests/test_cluster_replicable_mutations.zig,686
 REQ-SONNY-3045-AUDIT-TEXT-ESCAPING,AuditDurability,ExporterEscaping,TESTED,,,security,2026-09-27,src/security/audit_formatter.zig,15
 REQ-SONNY-3045-AUDIT-TEXT-ESCAPING,AuditDurability,JoinAuditTextUnambiguous,TESTED,,,security,2026-09-27,src/execution/crud_operations.zig,216
 REQ-SONNY-3045-AUDIT-TEXT-ESCAPING,AuditDurability,Regression,TESTED,,,security,2026-09-27,tests/test_sonny3045_audit_text_escaping.zig,20

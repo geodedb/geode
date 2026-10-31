@@ -637,6 +637,9 @@ pub const RemoteKmsClient = struct {
     /// Wall-clock bound, in milliseconds, on waiting for the response to one
     /// request (SONNY-2394; see `sendRequest`).
     response_timeout_ms: u32 = default_response_timeout_ms,
+    /// Wall-clock bound on establishing the QUIC/TLS connection. The server
+    /// handles concurrent handshakes serially, before it can serve requests.
+    handshake_timeout_secs: u32 = default_handshake_timeout_secs,
 
     /// Generous on purpose: a live server answers as soon as its serving loop
     /// reaches the request, and that loop can legitimately be busy for
@@ -644,6 +647,7 @@ pub const RemoteKmsClient = struct {
     /// its endpoint poll processes one after another (~120 ms each on a
     /// starved CPU). A closed connection is detected separately and fails fast.
     pub const default_response_timeout_ms: u32 = 30_000;
+    pub const default_handshake_timeout_secs: u32 = 30;
 
     pub fn init(allocator: std.mem.Allocator) RemoteKmsClient {
         return .{ .allocator = allocator, .quic_client = null, .connected = false };
@@ -652,6 +656,8 @@ pub const RemoteKmsClient = struct {
     pub const Options = struct {
         /// See `response_timeout_ms`.
         response_timeout_ms: u32 = default_response_timeout_ms,
+        /// See `handshake_timeout_secs`.
+        handshake_timeout_secs: u32 = default_handshake_timeout_secs,
     };
 
     /// `init` with explicit options (SONNY-2394 review: the configuration
@@ -660,6 +666,7 @@ pub const RemoteKmsClient = struct {
     pub fn initWithOptions(allocator: std.mem.Allocator, options: Options) RemoteKmsClient {
         var client = init(allocator);
         client.response_timeout_ms = options.response_timeout_ms;
+        client.handshake_timeout_secs = options.handshake_timeout_secs;
         return client;
     }
 
@@ -675,7 +682,7 @@ pub const RemoteKmsClient = struct {
         // Initialize QUIC client and connect to KMS server
         self.quic_client = quic.QuicClient.init(self.allocator);
         try self.quic_client.?.connectInsecure(host, port, true);
-        try self.quic_client.?.waitForHandshake(10);
+        try self.quic_client.?.waitForHandshake(self.handshake_timeout_secs);
         self.connected = true;
     }
 

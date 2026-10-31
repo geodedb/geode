@@ -528,6 +528,10 @@ const QuicServer = struct {
     fn connect(self: *QuicServer, allocator: std.mem.Allocator) !util.QuicProtoClient {
         var client = try util.QuicProtoClient.connect(allocator, self.addr);
         errdefer client.deinit();
+        // This checks transaction durability, not a five-second latency SLA.
+        // Keep waiting for the owned server's COMMIT work within the harness's
+        // existing hard cap, and fail immediately if that process exits.
+        client.watchServerLiveness(self.handle.child.id orelse return error.NoServerPid);
         var h = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
         defer h.deinit(allocator);
         if (!h.success) return error.HelloFailed;
@@ -559,6 +563,14 @@ fn quicCount(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query:
 }
 
 test "SONNY-2823: over QUIC with one worker thread, a rolled-back transaction takes no other connection's writes with it, and a COMMIT statement's transaction survives a kill" {
+    quicCrashRecovery() catch |err| {
+        // ReleaseSafe omits error traces; preserve the cause in CI's artifact.
+        std.debug.print("SONNY-2823 QUIC crash recovery failed: {s}\n", .{@errorName(err)});
+        return err;
+    };
+}
+
+fn quicCrashRecovery() !void {
     const allocator = testing.allocator;
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     var dir_buf: [96]u8 = undefined;

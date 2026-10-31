@@ -22,6 +22,8 @@
 // CANARY: REQ=REQ-REMOTE-KMS-SERVER-001; FEATURE="Remote KMS Server"; ASPECT=PerConnectionRequestAssembly; STATUS=TESTED; TEST=TestSONNY2394_KmsServerAssemblesPartialRequestPerConnection; OWNER=security; UPDATED=2026-09-24
 // CANARY: REQ=REQ-REMOTE-KMS-SERVER-001; FEATURE="Remote KMS Server"; ASPECT=ServingLoopNoSpin; STATUS=TESTED; TEST=TestSONNY2394_KmsServeUntilStoppedDoesNotSpin; OWNER=security; UPDATED=2026-09-24
 // CANARY: REQ=REQ-KMS-REMOTE-CLIENT-001; FEATURE="RemoteKMSClient"; ASPECT=DeadlineConfigRoute; STATUS=TESTED; TEST=TestSONNY2394_KmsClientOptionsCarryDeadline; OWNER=security; UPDATED=2026-09-24
+// CANARY: REQ=REQ-KMS-REMOTE-CLIENT-001; FEATURE="RemoteKMSClient"; ASPECT=HandshakeBusyServer; STATUS=TESTED; TEST=TestSONNY2394_KmsClientHandshakeWaitsOutBusyServer; OWNER=security; UPDATED=2026-10-29
+// CANARY: REQ=REQ-KMS-REMOTE-CLIENT-001; FEATURE="RemoteKMSClient"; ASPECT=HandshakeDeadlineBounded; STATUS=TESTED; TEST=TestSONNY2394_KmsClientHandshakeDeadlineIsBounded; OWNER=security; UPDATED=2026-10-29
 
 const std = @import("std");
 const kms = @import("security/kms_remote"); // module provided by build.zig
@@ -111,6 +113,46 @@ fn connectClient(port: u16, auth: []const u8) !kms.RemoteKmsClient {
     try client.connect("127.0.0.1", port);
     client.setAuthToken(auth);
     return client;
+}
+
+// The serving loop also handles TLS handshakes. A burst of concurrent
+// clients can keep it busy beyond the old, hard-coded ten-second connect
+// timeout, before the response deadline can help any of those clients.
+test "TestSONNY2394_KmsClientHandshakeWaitsOutBusyServer" {
+    const port: u16 = 13181;
+    var ps: PausableServer = undefined;
+    try ps.start(port, "handshake-token");
+    defer ps.deinit();
+
+    ps.pause();
+    const busy_ms: u64 = 11_000;
+    const t0 = monoMs();
+    const resumer = try std.Thread.spawn(.{}, unpauseAfter, .{ &ps, busy_ms });
+    defer resumer.join();
+    var client = try connectClient(port, "handshake-token");
+    defer client.deinit();
+    try std.testing.expect(monoMs() - t0 >= busy_ms);
+    const env = try client.generate();
+    _ = try client.unwrap(env);
+}
+
+// A server that never resumes must still fail at the configured handshake
+// deadline without marking the client connected.
+test "TestSONNY2394_KmsClientHandshakeDeadlineIsBounded" {
+    const port: u16 = 13182;
+    var ps: PausableServer = undefined;
+    try ps.start(port, "handshake-token");
+    defer ps.deinit();
+    ps.pause();
+
+    var client = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .handshake_timeout_secs = 1 });
+    defer client.deinit();
+    const t0 = monoMs();
+    try std.testing.expectError(error.HandshakeError, client.connect("127.0.0.1", port));
+    const waited = monoMs() - t0;
+    try std.testing.expect(waited >= 1_000);
+    try std.testing.expect(waited < 5_000);
+    try std.testing.expect(!client.connected);
 }
 
 // A live server that is busy (not polling at all) for longer than the old retry
@@ -337,8 +379,10 @@ test "TestSONNY2394_KmsServeUntilStoppedDoesNotSpin" {
 test "TestSONNY2394_KmsClientOptionsCarryDeadline" {
     const default_client = kms.RemoteKmsClient.init(std.heap.page_allocator);
     try std.testing.expectEqual(kms.RemoteKmsClient.default_response_timeout_ms, default_client.response_timeout_ms);
-    const configured = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .response_timeout_ms = 1234 });
+    try std.testing.expectEqual(kms.RemoteKmsClient.default_handshake_timeout_secs, default_client.handshake_timeout_secs);
+    const configured = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .response_timeout_ms = 1234, .handshake_timeout_secs = 2 });
     try std.testing.expectEqual(@as(u32, 1234), configured.response_timeout_ms);
+    try std.testing.expectEqual(@as(u32, 2), configured.handshake_timeout_secs);
     try std.testing.expect(!configured.connected);
 }
 
