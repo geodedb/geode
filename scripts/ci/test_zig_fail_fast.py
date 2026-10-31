@@ -1,3 +1,5 @@
+from contextlib import redirect_stderr
+import io
 import os
 from pathlib import Path
 import signal
@@ -6,8 +8,9 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch, Mock
 
-from zig_fail_fast import failed_step
+from zig_fail_fast import failed_step, run
 
 
 WRAPPER = Path(__file__).with_name("zig_fail_fast.py")
@@ -52,6 +55,30 @@ class ZigFailFastTests(unittest.TestCase):
 
     def test_nonzero_exit_is_preserved_without_a_zig_summary(self):
         self.assertEqual(self.invoke("import sys;sys.exit(17)").returncode, 17)
+
+    def test_cleanup_permission_error_preserves_exited_build_result(self):
+        for status in (0, 17):
+            with self.subTest(status=status), patch(
+                "zig_fail_fast.os.killpg", side_effect=PermissionError(1, "denied")
+            ), redirect_stderr(io.StringIO()) as diagnostic:
+                actual = run([sys.executable, "-c", f"raise SystemExit({status})"])
+            self.assertEqual(actual, status)
+            self.assertIn("OS denied final process-group cleanup", diagnostic.getvalue())
+
+    def test_permission_error_stopping_live_build_is_not_hidden(self):
+        handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGINT)}
+        child = Mock()
+        child.poll.return_value = None
+        child.stdout = io.StringIO(
+            "+- run test 0 pass, 1 fail (1 total)\nfailed command: test\n"
+        )
+        with patch("zig_fail_fast.subprocess.Popen", return_value=child), patch(
+            "zig_fail_fast.os.killpg", side_effect=PermissionError(1, "denied")
+        ), self.assertRaises(PermissionError):
+            run(["test"])
+        self.assertTrue(child.stdout.closed)
+        for sig, handler in handlers.items():
+            self.assertEqual(signal.getsignal(sig), handler)
 
     def test_external_cancellation_reaches_children(self):
         code = "import time;print('started',flush=True);time.sleep(30)"
