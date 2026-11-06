@@ -22,6 +22,42 @@ const geode_binary = "./zig-out/bin/geode";
 // Nothing listens on UDP port 1 on loopback.
 const dead_server = "127.0.0.1:1";
 
+// CANARY: REQ=REQ-BACKUP-CLI-5077; FEATURE="CLI Backup"; ASPECT=PrivateCATrust; STATUS=TESTED; TEST=tests/test_backup_create_remote_failure.zig; OWNER=cli; UPDATED=2026-11-06
+test "verified remote backup succeeds only with the actual server CA" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var threaded = std.Io.Threaded.init(testing.allocator, .{});
+    defer threaded.deinit();
+    var env = std.process.Environ.Map.init(testing.allocator);
+    defer env.deinit();
+    inline for (.{ "PATH", "HOME" }) |name| {
+        if (std.c.getenv(name)) |value| try env.put(name, std.mem.span(value));
+    }
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(testing.allocator);
+    try argv.appendSlice(testing.allocator, &.{ "python3", "tests/qualify_backup_ca.py", "--binary", geode_binary });
+    if (std.c.getenv("GEODE_CA_QUALIFICATION_PRIVATE_LOGS")) |path| {
+        try argv.appendSlice(testing.allocator, &.{ "--private-logs", std.mem.span(path) });
+    }
+    const result = try std.process.run(testing.allocator, threaded.io(), .{
+        .argv = argv.items,
+        .environ_map = &env,
+        .stdout_limit = .limited(1 << 20),
+        .stderr_limit = .limited(1 << 20),
+        .timeout = .{ .duration = .{ .raw = std.Io.Duration.fromSeconds(150), .clock = .awake } },
+    });
+    defer testing.allocator.free(result.stdout);
+    defer testing.allocator.free(result.stderr);
+    const passed = switch (result.term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!passed) std.debug.print("private CA backup qualification:\n{s}\n{s}\n", .{ result.stdout, result.stderr });
+    try testing.expect(passed);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "correct-ca") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "wrong-ca") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "missing-ca") != null);
+}
+
 const Run = struct {
     code: ?u8,
     stdout: []u8,
