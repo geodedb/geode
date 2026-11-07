@@ -8,9 +8,9 @@
 // and leaves no output file; the local path runs only with --local and a
 // data directory given by --data-dir or GEODE_DATA_DIR.
 //
-// Spawns ./zig-out/bin/geode (the build step installs it first). No server is
-// started: the remote side is a closed loopback port. Every child is capped
-// at 60 s.
+// Spawns ./zig-out/bin/geode (the build step installs it first). The private-CA
+// qualification starts real owned servers; remote-failure cases use a closed
+// loopback port. Every remote-failure child is capped at 60 s.
 //
 // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=RemoteFailureIsAnError; STATUS=TESTED; TEST=tests/test_backup_create_remote_failure.zig; OWNER=cli; UPDATED=2026-10-24
 
@@ -54,8 +54,13 @@ test "verified remote backup succeeds only with the actual server CA" {
     if (!passed) std.debug.print("private CA backup qualification:\n{s}\n{s}\n", .{ result.stdout, result.stderr });
     try testing.expect(passed);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "correct-ca") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "correct-ca-hostname") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "correct-ca-service-hostname") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "wrong-peer-name") != null);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "wrong-ca") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "wrong-ca-hostname") != null);
     try testing.expect(std.mem.indexOf(u8, result.stdout, "missing-ca") != null);
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "missing-ca-hostname") != null);
 }
 
 const Run = struct {
