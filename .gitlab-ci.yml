@@ -76,6 +76,13 @@ include:
 
 # Auto-cancel redundant pipelines on push (non-tag builds only).
 # Stop remaining jobs after a required failure for every pipeline source.
+#
+# A pipeline starts for a tag, a merge request (created or updated), and a
+# push to the default branch. A push to any other branch starts nothing,
+# with or without an open merge request: the merge request pipeline tests
+# that commit. Schedules and manual web/API runs are not pushes and still
+# start (the coverage and enforced-perf-gate lanes depend on them).
+# Contract: scripts/ci/test_workflow_rules.py.
 workflow:
   auto_cancel:
     on_job_failure: all
@@ -84,14 +91,11 @@ workflow:
     - if: '$CI_COMMIT_TAG'
       auto_cancel:
         on_new_commit: none
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
-      when: never
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       auto_cancel:
         on_job_failure: all
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH'
-      auto_cancel:
-        on_job_failure: all
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH'
+      when: never
     - when: always
 
 stages:
@@ -457,6 +461,7 @@ governance-ci-yaml-lint:
       python3 -m unittest discover -s scripts/ci -p test_prune_zig_cache.py
       python3 -m unittest discover -s scripts/ci -p test_zig_fail_fast.py
       python3 -m unittest discover -s scripts/ci -p test_unit_capacity.py
+      python3 -m unittest discover -s scripts/ci -p test_workflow_rules.py
       echo "✓ CI YAML lints passed"
 
 governance-zig-package-cache:
@@ -824,14 +829,11 @@ test-zig-unit:
     # shards itself.
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
       allow_failure: false
-    # ...and the branch push pipeline for the same SHA skips them while an MR
-    # is open, so the work is not doubled (and the per-shard resource_group
-    # does not serialize the push twin against the MR twin). Default-branch,
-    # MR-less branch, schedule and tag pipelines are unaffected.
-    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH && $CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH && $CI_OPEN_MERGE_REQUESTS'
-      when: never
+    # A push to a non-default branch starts no pipeline at all (workflow
+    # rules above), so there is no push twin of the MR pipeline to skip.
+    # Default-branch, schedule and tag pipelines are unaffected.
     - if: '$CI_COMMIT_BRANCH'
-      allow_failure: false  # GAP-0219: unit tests still block merge on branch/MR pipelines
+      allow_failure: false  # GAP-0219: unit tests still block on default-branch pipelines
     - if: '$CI_COMMIT_TAG'
       # 2026-05-13: shard [7] hangs (pipeline #2520643956 hit the 6h cap on
       # both test-zig-unit:[7] and test-zig-release-safe:[7]; local 1h

@@ -207,9 +207,11 @@ governance-status-check:
     - diff docs/status.csv /tmp/status_check.csv
 ```
 
-`test-zig-unit` (8 Debug shards) is the blocking unit gate on MR, branch and
-default-branch pipelines; a branch push pipeline skips it while an MR is open
-because the MR pipeline for the same commit runs it.
+`test-zig-unit` (8 Debug shards) is the blocking unit gate on MR and
+default-branch pipelines. A push to any other branch starts no pipeline: a
+pipeline runs only for a merge request (created or updated), a push to the
+default branch, a tag, a schedule, or a manual web/API run
+(`scripts/ci/test_workflow_rules.py` pins this).
 
 ### Code coverage (kcov lane)
 
