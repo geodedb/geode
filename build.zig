@@ -9358,6 +9358,21 @@ pub fn build(b: *std.Build) void {
     const sonny3135_step = b.step("test-sonny3135-profile-allowlist-failed-txn", "Run SONNY-3135 (N7a, N7b) regression (EXPLAIN and PROFILE take only a query, a data change, FOR or a read-only CALL, 0A000 otherwise; PROFILE of the self-locking backfill is refused at once; a failed request's session engine transaction is aborted, not committed)");
     sonny3135_step.dependOn(&run_sonny3135_tests.step);
 
+    // SONNY-1335: a PROFILE payload reports the access path the executor
+    // took and names only a real catalog index; never "heuristic_index".
+    const sonny1335_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1335_profile_access_path.zig"), .target = target, .optimize = optimize });
+    sonny1335_test_mod.link_libc = true;
+    sonny1335_test_mod.addImport("geode", root_mod);
+    sonny1335_test_mod.addImport("schema", schema_mod);
+    sonny1335_test_mod.addImport("protobuf", protobuf_mod);
+    sonny1335_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny1335_test_mod.addImport("logging", logging_mod);
+    const sonny1335_tests = b.addTest(.{ .root_module = sonny1335_test_mod });
+    const run_sonny1335_tests = b.addRunArtifact(sonny1335_tests);
+    shardDep(test_step, &run_sonny1335_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny1335_step = b.step("test-sonny1335-profile-access-path", "Run SONNY-1335 regression (PROFILE names an index only when the executor seeked a real catalog btree/hash index, and that name is listed by SHOW INDEXES; an unindexed property, an index on another label or property, a fulltext index, a dropped index, an AND the executor scans, and a tenant-bound version-1 profile all report a scan, never \"heuristic_index\"; gRPC in process)");
+    sonny1335_step.dependOn(&run_sonny1335_tests.step);
+
     // SONNY-3181, SONNY-3189: an operator chain longer than the parser's cap
     // (max_expr_links) is refused with 42000; up to it, the query analysis,
     // the printer and the evaluator walk chains with loops. gRPC in process
