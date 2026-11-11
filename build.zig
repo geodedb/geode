@@ -13292,6 +13292,18 @@ pub fn build(b: *std.Build) void {
     const sonny6273_step = b.step("test-sonny6273-drop-policy-atomic", "Run the SONNY-6273 regression (DROP POLICY with any AuthGraphManager allocation failing, the seal's retry included, fails with records and HMAC chain as before or succeeds sealed; a failed DENY drop keeps denying; the next start verifies)");
     sonny6273_step.dependOn(&run_sonny6273_tests.step);
 
+    // SONNY-6278: the custom-role store owns its role names, descriptions
+    // and member names; a request's memory ending does not corrupt it.
+    const sonny6278_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6278_custom_role_lifetime.zig"), .target = target, .optimize = optimize });
+    sonny6278_test_mod.link_libc = true;
+    sonny6278_test_mod.addImport("geode", root_mod);
+    sonny6278_test_mod.addImport("logging", logging_mod);
+    const sonny6278_tests = b.addTest(.{ .root_module = sonny6278_test_mod });
+    const run_sonny6278_tests = b.addRunArtifact(sonny6278_tests);
+    shardDep(test_step, &run_sonny6278_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6278_step = b.step("test-sonny6278-custom-role-lifetime", "Run the SONNY-6278 regression (custom roles created, assigned or hydrated in a request stay intact after the request's memory is gone; DROP ROLE frees them)");
+    sonny6278_step.dependOn(&run_sonny6278_tests.step);
+
     // GPS Phase 7 Task 7-1: bounded LRU decision cache tests.
     const gps_decision_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decision_cache.zig"), .target = target, .optimize = optimize });
     gps_decision_cache_test_mod.addImport("geode", root_mod);
