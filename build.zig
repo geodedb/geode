@@ -8539,6 +8539,26 @@ pub fn build(b: *std.Build) void {
     const sonny1330_step = b.step("test-sonny1330-parallel-union", "Run SONNY-1330 regression (parallel UNION arms never mutate the shared bounded caches; a UNION with non-resident arms falls back to the serial path and returns the serial path's rows)");
     sonny1330_step.dependOn(&run_sonny1330_tests.step);
 
+    // SONNY-1562: COUNT {} / EXISTS {} / pattern comprehensions found their
+    // uncorrelated start nodes by walking the RESIDENT node cache, so on a
+    // persisted store reopened cold they answered 0 / false / [] while the
+    // equivalent MATCH returned every row. The regression reopens a real data
+    // dir with the caches pinned to 64 entries (same wiring as SONNY-1330) and
+    // pins the expression path's answers to the MATCH path's.
+    const sonny1562_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1562_cold_subquery_scan.zig"), .target = target, .optimize = optimize });
+    sonny1562_test_mod.addImport("geode", root_mod);
+    sonny1562_test_mod.addImport("logging", logging_mod);
+    const sonny1562_tests = b.addTest(.{ .root_module = sonny1562_test_mod });
+    const run_sonny1562_tests = b.addRunArtifact(sonny1562_tests);
+    run_sonny1562_tests.setEnvironmentVariable("GEODE_NODE_CACHE_ENTRIES", "64");
+    run_sonny1562_tests.setEnvironmentVariable("GEODE_EDGE_CACHE_ENTRIES", "64");
+    run_sonny1562_tests.setEnvironmentVariable("GEODE_ADJ_CACHE_ENTRIES", "64");
+    // Intentionally red TDD reproduction until the fix lands: kept out of the
+    // aggregate, compiled by `test-compile`.
+    if (g_test_compile_step) |c| c.dependOn(&sonny1562_tests.step);
+    const sonny1562_step = b.step("test-sonny1562-cold-subquery-scan", "Run SONNY-1562 regression (COUNT{}, EXISTS{} and pattern comprehensions see every node of a cold, persisted store, not just the resident cache)");
+    sonny1562_step.dependOn(&run_sonny1562_tests.step);
+
     // SONNY-1560: a pushed gRPC result must never pin the session.
     //
     // `handleExecuteStreaming` used to hold the session mutex for the ENTIRE
