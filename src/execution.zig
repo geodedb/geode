@@ -64,7 +64,7 @@ const aggregation_evaluation = @import("execution/aggregation_evaluation.zig");
 pub const distinct_set = @import("execution/distinct_set.zig");
 pub const grouped_having = @import("execution/grouped_having.zig");
 const return_and_sorting = @import("execution/return_and_sorting.zig");
-const statement_dispatcher = @import("execution/statement_dispatcher.zig");
+pub const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // A4a: fulltext CREATE/DROP INDEX glue (named adapter index + backfill).
 // pub: server startup + apply-symmetry tests reach registerFtsApplyHook()
 // through geode.execution.fts_index_ops.

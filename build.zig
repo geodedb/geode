@@ -12750,6 +12750,14 @@ pub fn build(b: *std.Build) void {
     const sonny1319_step = b.step("test-sonny1319-graph-scoped-catalog", "Run SONNY-1319 regression (index and constraint catalogs are graph-scoped: IF NOT EXISTS, DROP INDEX, SHOW, CREATE CONSTRAINT across two graphs; restart; legacy engine-global catalog loads losslessly)");
     sonny1319_step.dependOn(&run_sonny1319_tests.step);
 
+    const sonny2795_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2795_drop_index_catalog.zig"), .target = target, .optimize = optimize });
+    sonny2795_test_mod.addImport("geode", root_mod);
+    const sonny2795_tests = b.addTest(.{ .root_module = sonny2795_test_mod });
+    const run_sonny2795_tests = b.addRunArtifact(sonny2795_tests);
+    shardDep(test_step, &run_sonny2795_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny2795_step = b.step("test-sonny2795-drop-index-catalog", "Run SONNY-2795 regression (DROP INDEX is saved and refused when the save fails; DROP INDEX and the vector-index catalog readers take the catalog lock; the global index manager does not adopt a request allocator; a session with no data directory keeps its catalog in memory)");
+    sonny2795_step.dependOn(&run_sonny2795_tests.step);
+
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once
     // per candidate row (RC-6, O(N^2) query), and the backfill reports no indexed
