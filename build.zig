@@ -12738,6 +12738,18 @@ pub fn build(b: *std.Build) void {
     const advanced_index_restart_step = b.step("test-advanced-index-restart", "Run advanced (HNSW) index rebuild-after-restart regressions");
     advanced_index_restart_step.dependOn(&run_advanced_index_restart_tests.step);
 
+    // SONNY-1319: the index and constraint catalogs were engine-global (keyed
+    // label:name, no graph): IF NOT EXISTS silently no-op'd across graphs,
+    // DROP INDEX in one graph removed another graph's index, and SHOW listed
+    // every graph's rows. Rows now carry their graph, persisted and reloaded.
+    const sonny1319_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1319_graph_scoped_catalog.zig"), .target = target, .optimize = optimize });
+    sonny1319_test_mod.addImport("geode", root_mod);
+    const sonny1319_tests = b.addTest(.{ .root_module = sonny1319_test_mod });
+    const run_sonny1319_tests = b.addRunArtifact(sonny1319_tests);
+    shardDep(test_step, &run_sonny1319_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny1319_step = b.step("test-sonny1319-graph-scoped-catalog", "Run SONNY-1319 regression (index and constraint catalogs are graph-scoped: IF NOT EXISTS, DROP INDEX, SHOW, CREATE CONSTRAINT across two graphs; restart; legacy engine-global catalog loads losslessly)");
+    sonny1319_step.dependOn(&run_sonny1319_tests.step);
+
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once
     // per candidate row (RC-6, O(N^2) query), and the backfill reports no indexed
