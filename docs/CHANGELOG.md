@@ -102,6 +102,25 @@
   hops through the MATCH executors' own path iterator (one match per path).
   Every node and edge is still filtered by graph, tenant and RLS. A
   self-loop matches an undirected pattern once.
+- **PROFILE reports the access path that ran and names only real indexes
+  (SONNY-1335):** the version-1 profile payload (sent for every tenant-bound
+  or RLS-evaluating session, and for a PROFILE'd data change) put a
+  `NodeIndexScan` operator first whenever the query had a WHERE or FILTER
+  equality and named it `"heuristic_index"`, with no catalog lookup, while
+  the legacy executor behind it scanned the label. It now has no index
+  operator (`NodeScan` is the scan it reports). The version-2 payload
+  (planned reads) copied the plan's `IndexSeek` whether or not the executor
+  then seeked, and never named the index. Its scan operator is now set from
+  what the executor did: `IndexSeek`, with `index_name` the catalog index
+  (the name SHOW INDEXES lists), only when the start nodes came from an
+  index seek on a label and property a btree or hash catalog index covers;
+  `LabelScan` or `AllNodesScan` otherwise, including an index on another
+  label or property, a fulltext or vector index, a dropped index, and a
+  WHERE whose equality sits under an AND (the executor seeks only on a WHERE
+  that is a single equality). No field is renamed or removed and the
+  version numbers are unchanged; see docs/EXPLAIN_PROFILE.md, "Index names
+  in the profile payload". Regression:
+  `zig build test-sonny1335-profile-access-path`.
 
 ---
 

@@ -223,6 +223,38 @@ The QUIC wire protocol additionally emits a richer per-operator profile
 payload (`profile_version`, per-op `time_ns`, `rows`, memory totals) for
 profiled queries — see `src/server/profile_payload.zig`.
 
+### Index names in the profile payload
+
+The wire payload names an index only when the executor used it, and the name
+is always a catalog index (one SHOW INDEXES lists). There is no placeholder
+name (SONNY-1335).
+
+- **`profile_version` 2** (planned reads, from the runtime trace): the scan
+  operator is set from how the executor collected the start nodes. It is
+  `IndexSeek`, with `index_name` the catalog index, only when they came from
+  an index seek on a label and property that a `btree` or `hash` catalog
+  index covers (the first indexed property; when several such indexes exist,
+  the smallest name). Otherwise it is `LabelScan` or `AllNodesScan`: no
+  catalog index on that label and property, an index on another label or
+  property, a `fulltext`, vector or spatial index (they do not serve an
+  equality), a dropped index, or a WHERE whose equality is not the whole
+  WHERE (the executor seeks on `WHERE n.p = v` and on an inline property
+  map, and scans for `WHERE n.q > 1 AND n.p = v`). An equality the engine's
+  internal exact-property lookup answers without a declared index reports
+  a scan, as EXPLAIN does. `selectivity_est` is 0 (not estimated).
+- **`profile_version` 1** (tenant-bound and RLS-evaluating sessions, data
+  changes, statement targets the planned runtime declines): the payload
+  comes from the legacy executor, which never consults the index catalog
+  and scans, so it has no index operator. Before SONNY-1335 it put a
+  `NodeIndexScan` named `"heuristic_index"` first for any WHERE or FILTER
+  equality. Its per-operator timings and memory figures remain the
+  synthetic model described under Current Limitations, so a version-1
+  payload is not evidence of an access path; a client that needs that
+  evidence should require version 2.
+
+Catalog index rows carry no graph: the name reported is the catalog's row
+for the label and property, whichever graph the session is on.
+
 ### Examples by Query Type
 
 **Profile with Aggregation:**

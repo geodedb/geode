@@ -34,6 +34,13 @@ const Access = struct {
     /// Operators that say they scanned (`LabelScan`, `AllNodesScan`,
     /// `NodeScan`).
     scan_ops: usize,
+    query: []const u8,
+
+    fn dump(a: Access) void {
+        std.debug.print("{s}\n  -> v{d} index_ops={d} scan_ops={d} names=", .{ a.query, a.version, a.index_ops, a.scan_ops });
+        for (a.names) |n| std.debug.print("\"{s}\" ", .{n});
+        std.debug.print("\n", .{});
+    }
 };
 
 fn profile(ga: std.mem.Allocator, session: []const u8, query: []const u8) !Access {
@@ -59,11 +66,7 @@ fn profile(ga: std.mem.Allocator, session: []const u8, query: []const u8) !Acces
             std.mem.eql(u8, op.op, "AllNodesScan") or
             std.mem.eql(u8, op.op, "NodeScan")) scan_ops += 1;
     }
-    const a = Access{ .version = p.profile_version, .index_ops = index_ops, .names = names.items, .scan_ops = scan_ops };
-    std.debug.print("{s}\n  -> v{d} index_ops={d} scan_ops={d} names=", .{ query, a.version, a.index_ops, a.scan_ops });
-    for (a.names) |n| std.debug.print("\"{s}\" ", .{n});
-    std.debug.print("\n", .{});
-    return a;
+    return .{ .version = p.profile_version, .index_ops = index_ops, .names = names.items, .scan_ops = scan_ops, .query = query };
 }
 
 /// Index names SHOW INDEXES lists, read through Execute + Pull as a client
@@ -103,6 +106,7 @@ fn contains(list: []const []const u8, name: []const u8) bool {
 
 /// No profile ever names an index the catalog does not have.
 fn expectNamesAreCatalogIndexes(ga: std.mem.Allocator, session: []const u8, a: Access) !void {
+    errdefer a.dump();
     const catalog_names = try showIndexNames(ga, session);
     for (a.names) |n| {
         if (!contains(catalog_names, n)) std.debug.print("index_name \"{s}\" is not in SHOW INDEXES\n", .{n});
@@ -111,6 +115,7 @@ fn expectNamesAreCatalogIndexes(ga: std.mem.Allocator, session: []const u8, a: A
 }
 
 fn expectScan(ga: std.mem.Allocator, session: []const u8, a: Access) !void {
+    errdefer a.dump();
     try testing.expectEqual(@as(usize, 0), a.index_ops);
     try testing.expectEqual(@as(usize, 0), a.names.len);
     try testing.expect(a.scan_ops >= 1);
@@ -118,6 +123,7 @@ fn expectScan(ga: std.mem.Allocator, session: []const u8, a: Access) !void {
 }
 
 fn expectIndex(ga: std.mem.Allocator, session: []const u8, a: Access, name: []const u8) !void {
+    errdefer a.dump();
     try testing.expectEqual(@as(usize, 1), a.index_ops);
     try testing.expectEqual(@as(usize, 1), a.names.len);
     try testing.expectEqualStrings(name, a.names[0]);
@@ -164,6 +170,7 @@ test "SONNY-1335: a planned PROFILE names exactly the catalog index the executor
     // that index, a name SHOW INDEXES lists.
     try fx.expectRuns(ga, s, "CREATE INDEX pp_note FOR (n:PlanProbe) ON (n.note)");
     const seek_where = try profile(ga, s, eq_where);
+    if (seek_where.version < 2) seek_where.dump();
     try testing.expect(seek_where.version >= 2);
     try expectIndex(ga, s, seek_where, "pp_note");
     try expectIndex(ga, s, try profile(ga, s, eq_inline), "pp_note");
@@ -196,6 +203,7 @@ test "SONNY-1335: a tenant-bound PROFILE (version 1, the legacy executor) never 
     // The ticket's reproduction: an UNINDEXED property profiled as
     // NodeIndexScan index_name="heuristic_index".
     const unindexed = try profile(ga, t, eq_where);
+    if (unindexed.version != 1) unindexed.dump();
     try testing.expectEqual(@as(u32, 1), unindexed.version);
     try expectScan(ga, t, unindexed);
     try expectScan(ga, t, try profile(ga, t, "PROFILE MATCH (n) WHERE n.note = 'n1' RETURN n.k"));

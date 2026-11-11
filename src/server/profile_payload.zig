@@ -16,6 +16,9 @@ pub const ProfileOptions = struct {
     flagger_findings: []const []const u8 = &.{},
     union_part_count: usize = 0,
     // CANARY: REQ=REQ-AUTO-INDEX-PROFILE-001; FEATURE="AutoIdIndex"; ASPECT=ProfileIndexName; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+    // SONNY-1335: the catalog index the executor seeked, set only by a caller
+    // that knows it did. Null (every caller today: the version-1 payload
+    // comes from the legacy executor, which scans) means no index operator.
     index_name: ?[]const u8 = null,
 };
 
@@ -35,8 +38,13 @@ pub fn buildProfilePayload(
     var ops = std.ArrayList(OpSpec).initCapacity(allocator, 10) catch return error.OutOfMemory;
     defer ops.deinit(allocator);
 
-    if (traits.has_where_eq or traits.has_filter_eq) {
-        try ops.append(allocator, .{ .name = "NodeIndexScan", .phase = "SCAN", .has_index_meta = true, .index_name = opts.index_name });
+    // CANARY: REQ=REQ-SONNY-1335-PROFILE-ACCESS-PATH; FEATURE="PROFILE"; ASPECT=NoFabricatedIndexScan; STATUS=TESTED; TEST=tests/test_sonny1335_profile_access_path.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-1335: an index operator only for an index the executor used.
+    // It was added for any WHERE or FILTER equality and named
+    // "heuristic_index", with no catalog lookup, while the legacy executor
+    // behind this payload scanned the label.
+    if (opts.index_name) |name| {
+        try ops.append(allocator, .{ .name = "NodeIndexScan", .phase = "SCAN", .has_index_meta = true, .index_name = name });
     }
     try ops.append(allocator, .{ .name = "NodeScan", .phase = "SCAN" });
     try ops.append(allocator, .{ .name = "Expand", .phase = "EXPAND" });
@@ -191,14 +199,8 @@ pub fn buildProfilePayload(
             .net_after_op = net_after_op[op_idx],
             .error_bytes = 0,
             .error_abs_pct = 0,
-            .index_name = if (spec.has_index_meta)
-                try allocator.dupe(u8, spec.index_name orelse opts.index_name orelse "heuristic_index")
-            else
-                "",
-            .selectivity_est = if (spec.has_index_meta)
-                if (spec.index_name != null or opts.index_name != null) 0.10 else 0.50
-            else
-                0,
+            .index_name = if (spec.index_name) |name| try allocator.dupe(u8, name) else "",
+            .selectivity_est = if (spec.index_name != null) 0.10 else 0,
         };
         try op_list.append(allocator, op_entry);
     }
@@ -356,6 +358,10 @@ pub fn buildProfilePayloadFromTrace(
     var cumulative_time: u64 = 0;
     for (trace.ops, 0..) |op, idx| {
         cumulative_time += op.time_ns;
+        // SONNY-1335: the catalog index the executor seeked (set on an
+        // IndexSeek by `planned_read_runtime.recordStartAccess`), else none.
+        const index_name: []const u8 = if (op.index_name) |name| try allocator.dupe(u8, name) else "";
+        errdefer if (index_name.len > 0) allocator.free(index_name);
         try op_list.append(allocator, .{
             .op = try allocator.dupe(u8, plannedOpName(op.kind)),
             .phase = try allocator.dupe(u8, plannedOpPhase(op.kind)),
@@ -376,7 +382,7 @@ pub fn buildProfilePayloadFromTrace(
             .net_after_op = 0,
             .error_bytes = 0,
             .error_abs_pct = 0,
-            .index_name = "",
+            .index_name = index_name,
             .selectivity_est = 0,
         });
     }
