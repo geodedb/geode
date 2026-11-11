@@ -4555,6 +4555,20 @@ pub fn build(b: *std.Build) void {
     const sonny2697_step = b.step("test-sonny2697-spawned-geode-fresh", "Run SONNY-2697 regression (a test that spawns geode runs this build's executable, by absolute path, reporting this build's version; not whatever ./zig-out/bin/geode holds)");
     sonny2697_step.dependOn(&run_sonny2697_tests.step);
 
+    // SONNY-2413: a test process removes every scratch dir it creates under
+    // the temp root, including the default data dir of the servers it spawns.
+    const sonny2413_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2413_scratch_cleanup.zig"), .target = target, .optimize = optimize }) });
+    sonny2413_tests.root_module.addImport("protobuf", protobuf_mod);
+    sonny2413_tests.root_module.addImport("schema", schema_mod);
+    sonny2413_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    sonny2413_tests.root_module.addImport("grpc_client", grpc_client_mod);
+    sonny2413_tests.root_module.addImport("geode", root_mod);
+    const run_sonny2413_tests = b.addRunArtifact(sonny2413_tests);
+    spawnsBuiltGeode(sonny2413_tests);
+    shardDep(test_step, &run_sonny2413_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2413_step = b.step("test-sonny2413-scratch-cleanup", "Run SONNY-2413 regression (a test process leaves none of its scratch dirs under the temp root: the default data dir of a server spawned without --data-dir is gone once the process exits, even when it is killed; a scratch dir is removed on the success and the error path, after the server holding it stops)");
+    sonny2413_step.dependOn(&run_sonny2413_tests.step);
+
     // CLI integration tests
     const cli_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/cli_test.zig"), .target = target, .optimize = optimize }) });
     cli_tests.root_module.addImport("geode", root_mod);
