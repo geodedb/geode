@@ -159,6 +159,8 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
     // race on a shared cert/serial file.
     const dir = try std.fmt.allocPrint(aa, "/tmp/geode-repl-mut-{d}-{d}", .{ std.os.linux.getpid(), nowMillis() });
     std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    // SONNY-2413: the caller removes it on success; a failed openssl step must too.
+    errdefer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
     const j = struct {
         fn p(al: std.mem.Allocator, d: []const u8, f: []const u8) []const u8 {
             return std.fmt.allocPrint(al, "{s}/{s}", .{ d, f }) catch unreachable;

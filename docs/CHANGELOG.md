@@ -118,6 +118,22 @@
   does not depend on zig-out, the install prefix or the working directory,
   and a spawning test that is not registered fails to compile.
   Regression: `zig build test-sonny2697-spawned-geode-fresh`.
+- **Test runs remove their scratch dirs from `/tmp` (SONNY-2413):** a test
+  process that spawned a server without `--data-dir` gave it
+  `/tmp/geode-test-<pid>`, and nothing removed it (one task's runs left 62).
+  `test-gql-conformance` left one `/tmp/geode-gqlconf-<pid>-<n>` per query,
+  20 per run. Scratch dirs now come from `tests/test_scratch.zig`. Each test
+  process gets one root, `/tmp/geode-test-<pid>-<random>`, created fresh
+  (nothing already there is reused or deleted). A small `/bin/sh` reaper
+  removes the root when the process exits, even when the process is killed
+  with SIGKILL. The default server data dir is `<root>/data`.
+  `ScratchDir.create` makes a dir under the root for a single test, and
+  `remove()`, deferred before the server is spawned, deletes it once the
+  server has stopped. If the dir survives, `remove()` fails the test.
+  `gql_conformance.zig` uses it. The cert dirs that
+  `test-cert-provided` and `test-cluster-replicable-mutations` create are now
+  removed when an `openssl` step fails, too.
+  Regression: `zig build test-sonny2413-scratch-cleanup`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

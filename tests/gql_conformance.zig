@@ -2,6 +2,7 @@ const std = @import("std");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
+const test_scratch = @import("test_scratch.zig");
 const schema = @import("schema");
 
 // Zig 0.16 compat: std.Thread.sleep removed; nanosleep directly.
@@ -32,8 +33,8 @@ fn deinitExpectedValue(allocator: std.mem.Allocator, val: ExpectedValue) void {
 
 // ENG-3921 follow-up: each test spawns its own server. Give every spawn its
 // own data dir; these tests are single-server and need no cross-spawn
-// durability.
-var run_query_serial = std.atomic.Value(u32).init(0);
+// durability. SONNY-2413: each dir is removed once its server stops (it used
+// to be left behind as /tmp/geode-gqlconf-<pid>-<n>, one per query).
 
 // SONNY-2775: `SESSION SET PROPERTY GRAPH G1` used to create the test graphs G1
 // and G2 in the server itself. The tests that switch to them now create them,
@@ -58,14 +59,10 @@ fn runQuery(allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
 /// the same connection, each required to succeed).
 fn runQuerySeeded(allocator: std.mem.Allocator, seeds: []const []const u8, query: []const u8) !util.ExecResult {
     const addr = "127.0.0.1:3181";
-    const serial = run_query_serial.fetchAdd(1, .monotonic);
-    const pid = if (comptime @import("builtin").os.tag == .linux)
-        @as(i64, std.os.linux.getpid())
-    else
-        @as(i64, std.c.getpid());
-    var dir_buf: [96]u8 = undefined;
-    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-gqlconf-{d}-{d}", .{ pid, serial });
-    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, null);
+    // Removed after the server below stops (defers run in reverse).
+    var data_dir = try test_scratch.ScratchDir.create("gqlconf");
+    defer data_dir.remove();
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir.path() }, null);
     defer server.deinit();
 
     // Wait for server to be ready with retries
@@ -108,14 +105,10 @@ fn runQuerySeeded(allocator: std.mem.Allocator, seeds: []const []const u8, query
 /// bound list, not Null.
 fn runQueryParams(allocator: std.mem.Allocator, query: []const u8, params: std.ArrayList(schema.Param)) !util.ExecResult {
     const addr = "127.0.0.1:3181";
-    const serial = run_query_serial.fetchAdd(1, .monotonic);
-    const pid = if (comptime @import("builtin").os.tag == .linux)
-        @as(i64, std.os.linux.getpid())
-    else
-        @as(i64, std.c.getpid());
-    var dir_buf: [96]u8 = undefined;
-    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-gqlconf-{d}-{d}", .{ pid, serial });
-    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, null);
+    // Removed after the server below stops (defers run in reverse).
+    var data_dir = try test_scratch.ScratchDir.create("gqlconf");
+    defer data_dir.remove();
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir.path() }, null);
     defer server.deinit();
 
     var attempts: u32 = 0;
