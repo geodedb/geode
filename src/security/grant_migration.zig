@@ -55,12 +55,21 @@ pub const migrated_policy_prefix = "auto_migrated_grant_";
 ///
 /// `hmac_key` must be the key that seals the __geode_security chain
 /// (agm.hmac_key at the server).
+///
+/// SONNY-4877: fails closed. Every migrated allow is disabled in `cat` (and
+/// cached decisions invalidated) before anything that can fail, so when this
+/// returns an error — which the server logs and starts anyway — no migrated
+/// allow can keep a revoked grant in force. Migrated denies stay in force
+/// until they are dropped. Rows not yet dropped stay disabled in the catalog
+/// and in the store; the next run (the next startup) drops them.
 pub fn retireMigratedGrantPolicies(
     allocator: std.mem.Allocator,
     agm: *AuthGraphManager,
     hmac_key: *const [32]u8,
     cat: *PolicyCatalog,
 ) !u32 {
+    _ = cat.disableAllowPoliciesWithPrefix(migrated_policy_prefix);
+
     // Collect first: removePolicy reorders the catalog's list.
     var names: std.ArrayList([]u8) = .empty;
     defer {
@@ -69,16 +78,21 @@ pub fn retireMigratedGrantPolicies(
     }
     for (cat.listPolicies()) |p| {
         if (!std.mem.startsWith(u8, p.name, migrated_policy_prefix)) continue;
-        try names.append(allocator, try allocator.dupe(u8, p.name));
+        const name = try allocator.dupe(u8, p.name);
+        names.append(allocator, name) catch |err| {
+            allocator.free(name);
+            return err;
+        };
     }
 
     var retired: u32 = 0;
+    var missing_from_store = false;
     for (names.items) |name| {
         // The stored record first: a row left in the store would come back at
         // the next restart. A row missing from the store (only ever in the
         // catalog) is still dropped from the catalog.
         policy_persistence.dropPolicy(agm, hmac_key, name) catch |err| switch (err) {
-            error.PolicyNotFound => {},
+            error.PolicyNotFound => missing_from_store = true,
             else => return err,
         };
         // PolicyNotFound is removePolicy's only error, and cannot happen:
@@ -86,5 +100,10 @@ pub fn retireMigratedGrantPolicies(
         cat.removePolicy(name) catch {};
         retired += 1;
     }
+    // SONNY-4877: dropPolicy removes the record, then reseals. When an
+    // earlier run failed between the two, the record is gone but the chain
+    // still counts it; this run finds no record to drop, so nothing would
+    // reseal. Reseal once so the chain verifies again.
+    if (missing_from_store) try agm.sealChain(hmac_key);
     return retired;
 }

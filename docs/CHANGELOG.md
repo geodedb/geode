@@ -41,6 +41,17 @@
   policy that relied on a single-graph scope to allow writes everywhere must
   be re-created `ON GRAPH *`. See docs/GQL_AUTH_DDL.md, "Per-graph grant
   semantics". Regression: `zig build test-per-graph-grants`.
+- **Retiring the `auto_migrated_grant_*` policies fails closed
+  (SONNY-4877).** Startup collected the policy names and deleted the stored
+  rows before touching the live catalog; if either step failed (out of
+  memory, a failed `__geode_security` write), startup logged the error and
+  carried on with the migrated allow policies still enabled, so a revoked
+  grant kept authorizing. Every migrated allow policy is now disabled in the
+  live catalog, and cached decisions invalidated, before any step that can
+  fail; migrated deny policies stay in force until dropped; the next startup
+  drops the rows left. A retry that finds a row already removed by a failed
+  run reseals the auth chain, so it verifies again.
+  Regression: `zig build test-sonny4877-grant-retire-fail-closed`.
 
 ### Added
 

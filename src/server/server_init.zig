@@ -1150,9 +1150,13 @@ pub fn wireGpsPolicyHooks(
     // wireAuthDDLCallbacks). Drop the rows earlier versions migrated: a
     // stale one kept a revoked grant alive and, scoped to one graph, allowed
     // database-wide writes. Runs after hydrateCatalog, which loaded them.
+    // SONNY-4877: retirement disables every migrated allow in the live
+    // catalog before any step that can fail, so continuing startup after an
+    // error is safe: no migrated allow is in force, and the rows still
+    // stored are dropped at the next startup.
     const grant_migration = @import("grant_migration");
     const retired = grant_migration.retireMigratedGrantPolicies(allocator, agm, &agm.hmac_key, catalog) catch |err| blk: {
-        log.warn("GPS: retiring grant-migrated Policy rows failed; a stale row may keep a revoked grant in force until the next restart", &.{
+        log.warn("GPS: retiring grant-migrated Policy rows did not complete; the migrated allow policies are disabled, and the rows left are dropped at the next startup", &.{
             Attr.string("error", @errorName(err)),
         });
         break :blk 0;

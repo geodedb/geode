@@ -13211,9 +13211,7 @@ pub fn build(b: *std.Build) void {
     sonny4877_test_mod.addImport("grant_migration", grant_migration_mod);
     const sonny4877_tests = b.addTest(.{ .root_module = sonny4877_test_mod });
     const run_sonny4877_tests = b.addRunArtifact(sonny4877_tests);
-    // Intentionally red TDD reproduction (KNOWN_TEST_ISSUES.md): kept out of
-    // shardDep until the fix lands.
-    if (g_test_compile_step) |c| c.dependOn(&sonny4877_tests.step);
+    shardDep(test_step, &run_sonny4877_tests.step, 0, test_shard_loads, test_shard_index);
     const sonny4877_step = b.step("test-sonny4877-grant-retire-fail-closed", "Run the SONNY-4877 regression (legacy grant-policy retirement fails closed on allocation/persistence failure; retry completes with a valid HMAC chain)");
     sonny4877_step.dependOn(&run_sonny4877_tests.step);
 

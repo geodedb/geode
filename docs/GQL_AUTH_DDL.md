@@ -207,7 +207,9 @@ on one graph allowed writes on **every** graph (the database-wide write check
 matched any graph-scoped allow policy). A `REVOKE` never removed the migrated
 row, so a migrated grant could not be revoked. Startup now drops the
 `auto_migrated_grant_*` policies earlier versions created (a policy an
-operator named with that prefix is dropped too). The same scoping applies to
+operator named with that prefix is dropped too). If the drop cannot complete,
+the migrated allow policies are disabled first and stay disabled, and the next
+startup drops the rest (SONNY-4877). The same scoping applies to
 `CREATE POLICY ... ON GRAPH g`: an allow policy scoped to one graph allows
 on that graph only; use `ON GRAPH *` for every graph.
 

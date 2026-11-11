@@ -239,6 +239,28 @@ pub const PolicyCatalog = struct {
         return error.PolicyNotFound;
     }
 
+    // CANARY: REQ=REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED; FEATURE="PerGraphGrants"; ASPECT=DisableAllowsByPrefix; STATUS=TESTED; TEST=tests/test_sonny4877_grant_retire_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-4877: disable every enabled allow-effect policy whose name starts
+    /// with `prefix`, in place. Deny policies are left as they are. Cannot
+    /// fail and allocates nothing, so a caller can take allows out of force
+    /// before any step that can fail. Bumps the policy version and
+    /// invalidates the decision cache when anything changed. Returns how many
+    /// policies were disabled.
+    pub fn disableAllowPoliciesWithPrefix(self: *PolicyCatalog, prefix: []const u8) usize {
+        var n: usize = 0;
+        for (self.policies.items) |*p| {
+            if (p.effect != .allow or !p.enabled) continue;
+            if (!std.mem.startsWith(u8, p.name, prefix)) continue;
+            p.enabled = false;
+            n += 1;
+        }
+        if (n > 0) {
+            _ = policy_version.incrementPolicyVersion();
+            if (decision_cache.getGlobalCache()) |c| c.invalidateAll();
+        }
+        return n;
+    }
+
     // CANARY: REQ=REQ-SONNY-2732-RLS-STRICT-POLICIES; FEATURE="GPS Policy DDL"; ASPECT=InvalidPolicyListing; STATUS=TESTED; TEST=tests/test_rls_policy_ddl.zig; OWNER=security; UPDATED=2026-09-25
     /// SONNY-2732: can `p` ever grant access? Not when its non-trivial USING
     /// expression failed to compile as it was loaded (`retain_fail_closed`):
