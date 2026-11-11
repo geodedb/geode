@@ -13258,6 +13258,22 @@ pub fn build(b: *std.Build) void {
     const sonny3038b_step = b.step("test-sonny3038-auth-rls-low-findings", "Run the SONNY-3038 (v0.8.24 part) regression (auth write-throughs answer 58030 on a failed save and store all or nothing, security-reducing ones failing closed; atomic policy write-through; DROP POLICY removes duplicates; label deny in both RLS engines or neither; algorithm post-filter reads evicted nodes; federation filter frees removed rows; RLS QueryRewriter removed)");
     sonny3038b_step.dependOn(&run_sonny3038b_tests.step);
 
+    // SONNY-6269: SHOW PERMISSIONS FOR <user> / geode.auth.user_permissions
+    // list another user's permissions for Admin only (42501, audited), as
+    // SHOW GRANTS does; a user's own for any authenticated user.
+    const sonny6269_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6269_permissions_admin_gate.zig"), .target = target, .optimize = optimize });
+    sonny6269_test_mod.link_libc = true;
+    sonny6269_test_mod.addImport("geode", root_mod);
+    sonny6269_test_mod.addImport("schema", schema_mod);
+    sonny6269_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6269_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6269_test_mod.addImport("logging", logging_mod);
+    const sonny6269_tests = b.addTest(.{ .root_module = sonny6269_test_mod });
+    const run_sonny6269_tests = b.addRunArtifact(sonny6269_tests);
+    shardDep(test_step, &run_sonny6269_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6269_step = b.step("test-sonny6269-permissions-admin-gate", "Run the SONNY-6269 regression (SHOW PERMISSIONS FOR / geode.auth.user_permissions: another user's permissions need Admin, 42501 and audited; own permissions for any authenticated user)");
+    sonny6269_step.dependOn(&run_sonny6269_tests.step);
+
     // GPS Phase 7 Task 7-1: bounded LRU decision cache tests.
     const gps_decision_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decision_cache.zig"), .target = target, .optimize = optimize });
     gps_decision_cache_test_mod.addImport("geode", root_mod);
