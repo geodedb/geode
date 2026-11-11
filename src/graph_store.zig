@@ -8751,8 +8751,20 @@ pub const GraphStore = struct {
     /// `getEdgePtrHydrated`): a node body evicted from the bounded resident
     /// cache is rebuilt from the durable engine, so callers that must
     /// distinguish "node truly absent from the store" from "node body
-    /// evicted from the resident cache" never confuse the two. Returns null
-    /// only when the id exists in neither the cache nor the engine.
+    /// evicted from the resident cache" never confuse the two.
+    ///
+    /// Returns null when the id exists in neither the cache nor the engine,
+    /// AND (SONNY-2772) when the node's graph has not been hydrated yet: after
+    /// a no-snapshot (crash) reopen a graph's IdMap stays empty until its
+    /// first access, so the engine slot cannot be resolved and an EXISTING
+    /// node reads as null. A failed engine read also returns null. Null means
+    /// "absent" only once the node's graph is hydrated, so take the id from a
+    /// hydration chokepoint first: `getNodesByLabel(graph, ..)`
+    /// (`ensureGraphHydrated`), `getAllNodes` (`ensureAllGraphsHydrated`), or
+    /// `ensureNodeGraphHydrated` for a bare id (as `nodeExistsForUndo` does).
+    /// Every caller does. This function cannot hydrate the graph itself: its
+    /// callers hold store/graph locks, and the hydration build must run before
+    /// any of them.
     ///
     /// Gap 0034: the periodic HMAC verifier's chain-root read used the raw
     /// `getNodePtr`; a bulk ingest evicting the bootstrap-era AuthChainRoot

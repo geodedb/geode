@@ -308,6 +308,14 @@ the aggregate is green, run `zig build test-compile`: it compiles every
 aggregate artifact in all shards, including those with no named step, which a
 sweep of named steps cannot see.
 
+A named `test-*` step that stays out of the aggregate (that red reproduction,
+a TSan companion, a subprocess cluster, GPU, an e2e or benchmark lane) must be
+listed, with its reason, in `not_in_aggregate_steps` in `build.zig`. Every
+build, `zig build -l` included, fails at configure time when a named step runs
+in no aggregate shard and is not listed, or when a listed name matches no step
+or a step that is in the aggregate (SONNY-2772). That list is the one place
+that records which named steps the aggregate does not run.
+
 Shell-based regression scripts go in the `tests/` directory:
 
 ```bash
