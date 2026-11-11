@@ -58,28 +58,25 @@
 //   separate, pre-existing concern this ticket does not claim to close, and
 //   it is why the row says "H1" and not an unqualified "yes".)
 //
-// CALL SITES ADDED BY SONNY-1326 (`src/execution/graph_algorithms.zig`):
+// CALL SITES ADDED BY SONNY-1326 (`src/execution/graph_algorithms.zig`;
+// SONNY-2707 moved COUNT {}, EXISTS {} and pattern comprehensions onto one
+// walk, `PatternWalk`, which `countPatternMatches` and
+// `executePatternComprehension` share):
 //
 //   | site                                             | predicate               |
 //   |--------------------------------------------------|-------------------------|
 //   | findFirstMatchingNode (start/end node scan)      | passesTenantFilter      |
 //   | findEdgeBetween (path edge lookup)               | edgeTraversable         |
-//   | countVariableLengthPathMatches (frontier edge)   | edgeTraversable         |
-//   | countVariableLengthPathMatches (counted target)  | passesTenantFilter      |
-//   | countSingleHopMatches (hop edge)                 | edgeTraversable         |
-//   | countSingleHopMatches (counted target)           | passesTenantFilter      |
-//   | countPatternMatches (correlated outer binding)   | passesTenantFilter      |
-//   | countPatternMatches (bare node loop)             | passesTenantFilter      |
-//   | countPatternMatches (relationship arm)           | edgeTraversable         |
+//   | PatternWalk.walkChain (correlated start)         | passesTenantFilter      |
+//   | PatternWalk.walkChain (scanned start)            | passesTenantFilter      |
+//   | PatternWalk.walkSingleHop (hop edge)             | edgeTraversable         |
+//   | PatternWalk.walkSingleHop (far node)             | passesTenantFilter      |
+//   | PatternWalk.walkVariableLengthHop (every step)   | edgeTraversable         |
+//   | PatternWalk.walkVariableLengthHop (path end)     | passesTenantFilter      |
 //   | findShortestPath (env-bound start/end)           | passesTenantFilter      |
 //   | findShortestPath (start/end id gate)             | nodeIdVisible           |
 //   | findShortestPath (BFS out/in frontier)           | edgeTraversable         |
 //   | materializePath (every path node)                | passesTenantFilter      |
-//   | executePatternComprehension (node-only scan)     | passesTenantFilter      |
-//   | executePatternComprehension (env source node)    | passesTenantFilter      |
-//   | executePatternComprehension (scanned source)     | passesTenantFilter      |
-//   | executePatternComprehension (out/in edge)        | edgeTraversable         |
-//   | executePatternComprehension (target node)        | passesTenantFilter      |
 //
 // The scope itself is resolved once per evaluation by
 // `graph_algorithms.sessionScope()` -> `resolveScope` (below).

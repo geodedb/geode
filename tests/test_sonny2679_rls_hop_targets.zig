@@ -469,6 +469,14 @@ const cases = [_]Case{
     .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[:R]->(h) } AS c", .secure = &.{"1"}, .open = &.{"2"} },
     .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[:R*1..3]->(h) } AS c", .secure = &.{"2"}, .open = &.{"5"} },
     .{ .q = "MATCH (g:G) RETURN EXISTS { (g)-[:R]->(h {s: 'leak'}) } AS e", .secure = &.{"false"}, .open = &.{"true"} },
+    // SONNY-2707: the subqueries walk incoming and undirected relationships
+    // (they walked outgoing ones only), through the same scope: `leak` and
+    // the SECRET edge break every path through them in those directions too.
+    .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[:R*1..3]-(h) } AS c", .secure = &.{"2"}, .open = &.{"5"} },
+    .{ .q = "MATCH (f:Doc) WHERE f.s = 'far' RETURN COUNT { (f)<-[:R*1..2]-(x) } AS c", .secure = &.{"0"}, .open = &.{"2"} },
+    .{ .q = "MATCH (f:Doc) WHERE f.s = 'far' RETURN EXISTS { (f)<-[:R]-() } AS e", .secure = &.{"false"}, .open = &.{"true"} },
+    .{ .q = "MATCH (v:Doc) WHERE v.s = 'viaSecret' RETURN COUNT { (v)-[]-() } AS c", .secure = &.{"1"}, .open = &.{"2"} },
+    .{ .q = "MATCH (f:Doc) WHERE f.s = 'far2' RETURN size([(f)<-[:R*1..3]-(x) | x.s]) AS n", .secure = &.{"1"}, .open = &.{"3"} },
     .{ .q = "RETURN [(h {s: 'leak'}) | h.s] AS xs", .secure = &.{"[]"}, .open = &.{"[leak]"} },
     .{ .q = "RETURN shortestPath((a:G {s: 'g1'})-[*]-(b {s: 'far'})) AS p", .secure = &.{"null"}, .open = &.{"p(g1>leak>far)"} },
     // shortestPath with endpoints bound by the MATCH, and assigned to a path.

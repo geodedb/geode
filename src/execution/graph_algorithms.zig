@@ -183,6 +183,17 @@ const ExprScope = struct {
         defer self.rls.row.clearRetainingCapacity();
         return self.nodeVisible(node);
     }
+
+    /// SONNY-2707: `stepVisible` as the gate of a `PathIterator` walk, so a
+    /// variable-length subquery steps through exactly what a single hop may.
+    fn pathStepFilter(self: *ExprScope) execution.PathStepFilter {
+        return .{ .ctx = self, .allowFn = allowPathStep };
+    }
+
+    fn allowPathStep(ctx: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool {
+        const self: *ExprScope = @ptrCast(@alignCast(ctx));
+        return self.stepVisible(store, edge.*, next_node_id);
+    }
 };
 
 // CANARY: REQ=REQ-SONNY-1562-COLD-SUBQUERY-SCAN; FEATURE="ExpressionPathColdScan"; ASPECT=ScanSource; STATUS=TESTED; TEST=tests/test_sonny1562_cold_subquery_scan.zig; OWNER=execution; UPDATED=2026-11-11
@@ -236,16 +247,6 @@ const ScanSource = struct {
         return null;
     }
 };
-
-/// Does a relationship of type `label` match the pattern's types (`[:A|B]`;
-/// none means any type)?
-fn relTypeMatches(types: []const []const u8, label: []const u8) bool {
-    if (types.len == 0) return true;
-    for (types) |t| {
-        if (std.mem.eql(u8, t, label)) return true;
-    }
-    return false;
-}
 
 /// Check if a node has all the required labels
 pub fn nodeHasAllLabels(node_labels: []const []const u8, required_labels: []const []const u8) bool {
@@ -424,57 +425,6 @@ fn nodeMatchesPattern(
     return true;
 }
 
-/// Evaluate a WHERE filter against an extended environment
-fn evaluateWhereFilter(
-    where_filter: *ast.Expr,
-    base_env: Env,
-    target_name: ?[]const u8,
-    target_node_ptr: ?*graph_store.Node,
-    allocator: std.mem.Allocator,
-) bool {
-    // CANARY: REQ=REQ-SONNY-3248-EXISTS-WHERE; FEATURE="ExistsSubquery"; ASPECT=WhereEnvLifetime; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=execution; UPDATED=2026-09-29
-    // SONNY-3248 (round 4b-1b review I-E): the extended environment's arrays
-    // are freed after the WHERE is evaluated. They were freed at the end of
-    // the block that built them, before it, so the WHERE of every `EXISTS {
-    // ... WHERE ... }` read freed names (null, or garbage) and matched
-    // nothing: `EXISTS { (n)-[:R]->(k:X) WHERE k.j = 2 }` was always false,
-    // with a literal or a parameter alike.
-    var ext_env = base_env;
-    var new_names: []([]const u8) = &.{};
-    var new_values: []Value = &.{};
-    defer if (new_names.len > 0) {
-        allocator.free(new_names);
-        allocator.free(new_values);
-    };
-
-    if (target_name != null and target_node_ptr != null) {
-        new_names = allocator.alloc([]const u8, base_env.names.len + 1) catch return false;
-        new_values = allocator.alloc(Value, base_env.values.len + 1) catch {
-            allocator.free(new_names);
-            new_names = &.{};
-            return false;
-        };
-        @memcpy(new_names[0..base_env.names.len], base_env.names);
-        @memcpy(new_values[0..base_env.values.len], base_env.values);
-        new_names[base_env.names.len] = target_name.?;
-        new_values[base_env.values.len] = Value{ .Node = target_node_ptr.? };
-        ext_env = .{
-            .names = new_names,
-            .values = new_values,
-            .allocator = allocator,
-            .param_names = base_env.param_names,
-            .param_values = base_env.param_values,
-            .exec_context = base_env.exec_context,
-        };
-    }
-
-    const where_result = eval.evalExpr(allocator, where_filter.*, ext_env) catch return false;
-    return switch (where_result) {
-        .Bool => |b| b,
-        else => false,
-    };
-}
-
 /// Whether a relationship of type `label` fits `[:A|B]` (`types`; empty:
 /// any type).
 fn typeAllowed(types: []const []const u8, label: []const u8) bool {
@@ -483,176 +433,290 @@ fn typeAllowed(types: []const []const u8, label: []const u8) bool {
     return false;
 }
 
-/// CANARY: REQ=REQ-NESTING-REFACTOR-003; FEATURE="NestingReduction"; ASPECT=VariableLengthPath; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-/// Count matches for variable-length path patterns using BFS
-fn countVariableLengthPathMatches(
+// CANARY: REQ=REQ-SONNY-2707-COUNT-DIRECTION; FEATURE="PatternSubquery"; ASPECT=PatternWalk; STATUS=TESTED; TEST=tests/test_sonny2707_count_direction.zig; OWNER=execution; UPDATED=2026-11-11
+/// SONNY-2707 parts (2) and (3): every match of the pattern of a `COUNT { }`,
+/// an `EXISTS { }` or a pattern comprehension, each handed to a sink as the
+/// environment that binds it.
+///
+/// These subqueries answered a different question from the MATCH they spell.
+/// A single hop walked the start node's OUTGOING edges whatever the pattern's
+/// direction (`(a)<-[r]-(b)` and `(a)-[r]-(b)` counted `(a)-[r]->(b)`),
+/// ignored a property map on the relationship and never bound the
+/// relationship variable for the WHERE; a variable-length hop walked outgoing
+/// edges too, and counted the DISTINCT nodes its BFS reached instead of the
+/// paths (a comprehension took `-[*1..2]-` for one hop); and only `hops[0]`
+/// of a chain, and only the first chain of a comma pattern, was evaluated.
+///
+/// The walk follows the MATCH executors' rules, hop by hop and chain by
+/// chain, so the count is the number of rows the MATCH binds:
+/// - a single hop reads the outgoing edges for `->`, the incoming ones for
+///   `<-` and both for an undirected pattern (`executeSingleHopEdgeTraversal`
+///   and `MultiChainJoin.choicesFor`), with the relationship's types and
+///   property map. A self-loop matches an undirected hop once: its two
+///   orientations bind the same path (ISO/IEC 39075 matches are path
+///   bindings);
+/// - a variable-length hop walks `execution.PathIterator`, the MATCH
+///   executors' own BFS (direction, the chain's path mode, `*0..`, an open
+///   upper bound), one match per path, with every edge of the path checked for
+///   the pattern's types and property map (`expandVarLengthHop`);
+/// - a variable bound outside the subquery, or earlier in the pattern,
+///   constrains the element it names (a correlated subquery) instead of being
+///   bound again; one bound to a value of another kind (or to null) matches
+///   nothing;
+/// - every node the walk starts from, steps onto or binds, and every edge it
+///   takes, passes the session's scope (`ExprScope`: graph, tenant and RLS),
+///   as before; a variable-length step through `ExprScope.pathStepFilter`.
+const PatternWalk = struct {
     allocator: std.mem.Allocator,
-    bound_node: *const graph_store.Node,
-    hop: ast.Hop,
-    rel_types: []const []const u8,
-    where_filter: ?*ast.Expr,
-    env: Env,
     store: *graph_store.GraphStore,
     scope: *ExprScope,
-) !i64 {
-    var count: i64 = 0;
-    const min_len: usize = if (hop.rel.min_len) |m| @intCast(m) else 1;
-    const max_len: usize = if (hop.rel.max_len) |m| @intCast(m) else 10;
-    const target_pattern = hop.right;
+    chains: []const ast.Chain,
+    /// A comprehension's shorthand `[(a)-->()]` returns the last node: bind it
+    /// as `__pattern_target__` when the pattern leaves it unnamed (the parser
+    /// writes that name into the map expression).
+    bind_pattern_target: bool = false,
+    /// Each node the walk reads, by id: one detached copy per node per
+    /// evaluation (`getNodePtrForScan` never mutates the bounded cache, so a
+    /// pointer bound earlier in the pattern stays valid; see
+    /// `match_operations.NodeCache`).
+    nodes: std.AutoHashMapUnmanaged(u64, *graph_store.Node) = .empty,
 
-    // Check if the target node is bound in the environment
-    const target_bound_id: ?u64 = if (target_pattern.name) |tn| findBoundNodeId(tn, env) else null;
+    const pattern_target_name = "__pattern_target__";
 
-    // BFS to find all reachable nodes within depth range
-    var visited = std.AutoHashMap(u64, usize).init(allocator);
-    defer visited.deinit();
+    fn deinit(self: *PatternWalk) void {
+        self.nodes.deinit(self.allocator);
+    }
 
-    const QueueItem = struct { node_id: u64, depth: usize };
-    var queue = try std.ArrayList(QueueItem).initCapacity(allocator, 16);
-    defer queue.deinit(allocator);
+    /// Hand every match to `sink.accept(env)`, which returns false to stop.
+    fn run(self: *PatternWalk, env: Env, sink: anytype) !void {
+        if (self.chains.len == 0) return;
+        _ = try self.walkChain(0, env, sink);
+    }
 
-    // Start from bound node at depth 0
-    try queue.append(allocator, QueueItem{ .node_id = bound_node.id, .depth = 0 });
-    try visited.put(bound_node.id, 0);
+    fn node(self: *PatternWalk, id: u64) !?*graph_store.Node {
+        if (self.nodes.get(id)) |n| return n;
+        const n = self.store.getNodePtrForScan(id) orelse return null;
+        try self.nodes.put(self.allocator, id, n);
+        return n;
+    }
 
-    var front: usize = 0;
-    while (front < queue.items.len) {
-        const current = queue.items[front];
-        front += 1;
-        if (current.depth >= max_len) continue;
+    /// What `name` is bound to in the environment's variables (not its
+    /// parameters).
+    fn bound(env: Env, name: ?[]const u8) ?Value {
+        const n = name orelse return null;
+        for (env.names, 0..) |env_name, i| {
+            if (std.mem.eql(u8, env_name, n)) return env.values[i];
+        }
+        return null;
+    }
 
-        // Find outgoing edges from current node using adjacency index (O(degree) instead of O(E))
-        if (store.getOutgoingEdgeIds(current.node_id)) |out_edge_ids| {
-            for (out_edge_ids) |edge_id| {
-                const edge = store.getEdgeHydrated(edge_id) orelse continue;
+    fn bindIfNamed(self: *PatternWalk, env: Env, name: ?[]const u8, value: Value) !Env {
+        const n = name orelse return env;
+        return env.withBinding(self.allocator, n, value);
+    }
 
-                // Filter by relationship type if specified
-                if (!typeAllowed(rel_types, edge.label)) continue;
+    fn startOf(chain: ast.Chain) ?ast.NodePattern {
+        if (chain.hops.len > 0) return chain.hops[0].left;
+        return chain.head;
+    }
 
-                const next_depth = current.depth + 1;
-                const next_node_id = edge.to_id;
+    fn walkChain(self: *PatternWalk, ci: usize, env: Env, sink: anytype) anyerror!bool {
+        if (ci == self.chains.len) return sink.accept(env);
+        const chain = self.chains[ci];
+        const start = startOf(chain) orelse return self.walkChain(ci + 1, env, sink);
+        if (bound(env, start.name)) |value| {
+            // Correlated: the outer (or earlier) binding is the start. One the
+            // session cannot see contributes nothing, never an error that
+            // would confirm it exists (SONNY-1326).
+            if (value != .Node) return true;
+            const n = value.Node;
+            if (!self.scope.nodeVisible(n)) return true;
+            if (!nodeMatchesPattern(n.*, start, env, self.allocator)) return true;
+            return self.walkHop(ci, 0, n, env, sink);
+        }
+        // SONNY-1562: every node of the graph, not just the resident ones.
+        var source = try ScanSource.init(self.allocator, self.store, self.scope, start.labels);
+        defer source.deinit();
+        while (source.next()) |n| {
+            // SONNY-1326 / SONNY-2679 / SONNY-2687: only rows the session
+            // scope admits (graph, tenant and RLS).
+            if (!self.scope.nodeVisible(n)) continue;
+            if (!nodeMatchesPattern(n.*, start, env, self.allocator)) continue;
+            const next_env = try self.bindIfNamed(env, start.name, .{ .Node = n });
+            defer freeExtendedEnv(self.allocator, next_env, env);
+            if (!try self.walkHop(ci, 0, n, next_env, sink)) return false;
+        }
+        return true;
+    }
 
-                // SONNY-1326 / SONNY-2679 / SONNY-2687: the frontier gate. The
-                // edge must be in the session's graph with BOTH endpoints
-                // visible to the tenant scope (so a bridge edge carrying the
-                // READER's own tenant tag cannot walk into another tenant's
-                // subgraph), and the node it leads to must not be denied by
-                // RLS, so a hidden node is neither counted nor walked through.
-                if (!scope.stepVisible(store, edge, next_node_id)) continue;
+    fn walkHop(self: *PatternWalk, ci: usize, hi: usize, current: *const graph_store.Node, env: Env, sink: anytype) anyerror!bool {
+        const chain = self.chains[ci];
+        if (hi == chain.hops.len) return self.walkChain(ci + 1, env, sink);
+        const hop = chain.hops[hi];
+        if (hi > 0 and !nodeMatchesPattern(current.*, hop.left, env, self.allocator)) return true;
+        const last = ci + 1 == self.chains.len and hi + 1 == chain.hops.len;
+        const target_name: ?[]const u8 = if (hop.right.name) |n| n else if (last and self.bind_pattern_target) pattern_target_name else null;
+        if (hop.rel.min_len != null or hop.rel.max_len != null) {
+            return self.walkVariableLengthHop(ci, hi, chain, hop, target_name, current, env, sink);
+        }
+        return self.walkSingleHop(ci, hi, hop, target_name, current, env, sink);
+    }
 
-                // Skip if already visited at same or lower depth
-                if (visited.get(next_node_id)) |prev_depth| {
-                    if (prev_depth <= next_depth) continue;
+    /// The edges of `hop` from `current`: outgoing for `->`, incoming for
+    /// `<-`, both for an undirected pattern.
+    fn walkSingleHop(self: *PatternWalk, ci: usize, hi: usize, hop: ast.Hop, target_name: ?[]const u8, current: *const graph_store.Node, env: Env, sink: anytype) anyerror!bool {
+        const bound_rel = bound(env, hop.rel.name);
+        if (bound_rel) |v| if (v != .Edge) return true;
+        const bound_right = bound(env, hop.right.name);
+        if (bound_right) |v| if (v != .Node) return true;
+
+        const empty = [_]u64{};
+        const outgoing: []const u64 = if (hop.rel.dir != .left) (self.store.getOutgoingEdgeIds(current.id) orelse &empty) else &empty;
+        const incoming: []const u64 = if (hop.rel.dir != .right) (self.store.getIncomingEdgeIds(current.id) orelse &empty) else &empty;
+        for ([_][]const u64{ outgoing, incoming }, 0..) |edge_ids, side| {
+            for (edge_ids) |edge_id| {
+                // SONNY-1326: read the edge BY VALUE for every decision; the
+                // raw `*Edge` is taken only for the binding below.
+                const edge = self.store.getEdgeHydrated(edge_id) orelse continue;
+                // An undirected self-loop was read from both lists; it is one
+                // match.
+                if (side == 1 and hop.rel.dir == .undirected and edge.from_id == edge.to_id) continue;
+                if (!typeAllowed(hop.rel.types, edge.label)) continue;
+                // SONNY-1326 / SONNY-2687 / SONNY-2693: the edge (in the
+                // session's graph, its own tag) and BOTH its endpoints are
+                // visible, and its type's RLS policies allow it (SONNY-2679).
+                if (!self.scope.edgeWalkable(self.store, edge)) continue;
+                if (hop.rel.props) |props| {
+                    if (!nodeMatchesProperties(edge.properties, props, env, self.allocator)) continue;
                 }
-                try visited.put(next_node_id, next_depth);
+                if (bound_rel) |v| if (v.Edge.id != edge.id) continue;
+                const far_id = if (side == 0) edge.to_id else edge.from_id;
+                if (bound_right) |v| if (v.Node.id != far_id) continue;
+                const far = try self.node(far_id) orelse continue;
+                // SONNY-1326 / SONNY-2679 / SONNY-2687: only a node the scope
+                // may see.
+                if (!self.scope.nodeVisible(far)) continue;
+                if (!nodeMatchesPattern(far.*, hop.right, env, self.allocator)) continue;
 
-                // Add to queue for further exploration
-                if (next_depth < max_len) {
-                    try queue.append(allocator, QueueItem{ .node_id = next_node_id, .depth = next_depth });
-                }
-
-                // Check if this node is within valid depth range and matches target pattern
-                if (next_depth >= min_len and next_depth <= max_len) {
-                    // If target is bound, only match that specific node
-                    if (target_bound_id) |tid| {
-                        if (next_node_id != tid) continue;
-                    }
-
-                    // Hydrate-on-miss so variable-length traversal crosses
-                    // evicted-but-live nodes correctly under the bounded cache.
-                    if (store.nodes.getOrHydratePtr(next_node_id) catch null) |target_node_ptr| {
-                        // SONNY-1326 / SONNY-2679 / SONNY-2687: only a COUNTED
-                        // match the scope may see.
-                        if (!scope.nodeVisible(target_node_ptr)) continue;
-                        // Check label constraints on target using helper
-                        if (!nodeHasAllLabels(target_node_ptr.labels, target_pattern.labels)) continue;
-
-                        // Check WHERE filter if present
-                        if (where_filter) |wf| {
-                            if (evaluateWhereFilter(wf, env, target_pattern.name, target_node_ptr, allocator)) {
-                                count += 1;
-                            }
-                        } else {
-                            count += 1;
-                        }
-                    }
-                }
+                const right_env = if (bound_right == null) try self.bindIfNamed(env, target_name, .{ .Node = far }) else env;
+                defer freeExtendedEnv(self.allocator, right_env, env);
+                var next_env = right_env;
+                if (bound_rel == null) if (hop.rel.name) |rn| {
+                    const edge_ptr = self.store.getEdgePtrHydrated(edge_id) orelse continue;
+                    next_env = try right_env.withBinding(self.allocator, rn, .{ .Edge = edge_ptr });
+                };
+                defer freeExtendedEnv(self.allocator, next_env, right_env);
+                if (!try self.walkHop(ci, hi + 1, far, next_env, sink)) return false;
             }
         }
+        return true;
     }
-    return count;
-}
 
-/// CANARY: REQ=REQ-NESTING-REFACTOR-004; FEATURE="NestingReduction"; ASPECT=SingleHopMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-/// Count matches for single-hop relationship patterns
-fn countSingleHopMatches(
+    /// The paths of a quantified hop from `current`, through the MATCH
+    /// executors' `PathIterator`.
+    fn walkVariableLengthHop(self: *PatternWalk, ci: usize, hi: usize, chain: ast.Chain, hop: ast.Hop, target_name: ?[]const u8, current: *const graph_store.Node, env: Env, sink: anytype) anyerror!bool {
+        // A quantified relationship variable binds a list of edges; one bound
+        // outside the subquery joins nothing (the MATCH join refuses it too,
+        // SONNY-3367).
+        if (bound(env, hop.rel.name) != null) return true;
+        const bound_right = bound(env, hop.right.name);
+        if (bound_right) |v| if (v != .Node) return true;
+
+        // SONNY-3318: `[:A|B*1..2]` walks any type, and each edge is checked
+        // below.
+        const rel_type: ?[]const u8 = if (hop.rel.types.len == 1) hop.rel.types[0] else null;
+        const rel_direction: u8 = switch (hop.rel.dir) {
+            .right => 'r',
+            .left => 'l',
+            .undirected => 'u',
+        };
+        // GAP-0514 P3: an explicit path mode is honoured; a bare pattern keeps
+        // the engine's ACYCLIC default (`match_operations.effectivePathMode`).
+        const path_mode: ast.PathMode = if (chain.path_mode_explicit) chain.path_mode else .acyclic;
+        var path_iter = try execution.PathIterator.init(self.allocator, self.store, current.id, hop.rel.min_len orelse 0, hop.rel.max_len, rel_type, rel_direction, path_mode, self.scope.pathStepFilter());
+        defer path_iter.deinit();
+
+        while (try path_iter.next()) |raw_path| {
+            var path = raw_path;
+            defer path.deinit(self.allocator);
+            if (path.nodes.items.len == 0) continue;
+            const end_id = path.nodes.items[path.nodes.items.len - 1];
+            // GAP-0912: a variable bound at both ends constrains start == end.
+            if (bound_right) |v| if (v.Node.id != end_id) continue;
+            const end = try self.node(end_id) orelse continue;
+            // Every earlier step passed the scope in the PathIterator.
+            if (!self.scope.nodeVisible(end)) continue;
+            if (!nodeMatchesPattern(end.*, hop.right, env, self.allocator)) continue;
+
+            var edges_ok = true;
+            for (path.edges.items) |eid| {
+                const e = self.store.getEdgeHydrated(eid) orelse {
+                    edges_ok = false;
+                    break;
+                };
+                if (!typeAllowed(hop.rel.types, e.label)) edges_ok = false;
+                if (edges_ok) if (hop.rel.props) |props| {
+                    if (!nodeMatchesProperties(e.properties, props, env, self.allocator)) edges_ok = false;
+                };
+                if (!edges_ok) break;
+            }
+            if (!edges_ok) continue;
+
+            const right_env = if (bound_right == null) try self.bindIfNamed(env, target_name, .{ .Node = end }) else env;
+            defer freeExtendedEnv(self.allocator, right_env, env);
+            var next_env = right_env;
+            var edge_values: []Value = &.{};
+            defer if (edge_values.len > 0) self.allocator.free(edge_values);
+            if (hop.rel.name) |rn| {
+                // The ISO GQL binding of a quantified relationship variable:
+                // the list of its edges.
+                edge_values = try self.allocator.alloc(Value, path.edges.items.len);
+                var resolved: usize = 0;
+                for (path.edges.items, edge_values) |eid, *slot| {
+                    const ep = self.store.getEdgePtrHydrated(eid) orelse break;
+                    slot.* = .{ .Edge = ep };
+                    resolved += 1;
+                }
+                if (resolved != edge_values.len) continue;
+                next_env = try right_env.withBinding(self.allocator, rn, .{ .List = edge_values });
+            }
+            defer freeExtendedEnv(self.allocator, next_env, right_env);
+            if (!try self.walkHop(ci, hi + 1, end, next_env, sink)) return false;
+        }
+        return true;
+    }
+};
+
+/// The matches of a `COUNT { }` / `EXISTS { }` pattern: those its WHERE
+/// admits.
+const CountSink = struct {
     allocator: std.mem.Allocator,
-    bound_node: *const graph_store.Node,
-    hop: ast.Hop,
-    rel_types: []const []const u8,
     where_filter: ?*ast.Expr,
-    env: Env,
-    store: *graph_store.GraphStore,
-    scope: *ExprScope,
-) !i64 {
-    var count: i64 = 0;
-    const target_pattern = hop.right;
+    count: i64 = 0,
 
-    // Check if the target node is also bound in the environment
-    const target_bound_id: ?u64 = if (target_pattern.name) |tn| findBoundNodeId(tn, env) else null;
-
-    // Use adjacency index for O(degree) lookup instead of full edge scan O(E)
-    if (store.getOutgoingEdgeIds(bound_node.id)) |out_edge_ids| {
-        for (out_edge_ids) |edge_id| {
-            const edge = store.getEdgeHydrated(edge_id) orelse continue;
-
-            // SONNY-1326: BOTH endpoints must be visible. `a2`'s only outgoing
-            // `:L` edge in the regression fixture is the tenant-A-tagged bridge
-            // to `b1`; without this gate a tenant-A `COUNT { (a2)-[:L]->(x) }`
-            // reports 1 and discloses that `b1` exists. SONNY-2687: and the
-            // edge must be in the session's graph.
-            if (!scope.edgeWalkable(store, edge)) continue;
-
-            // Filter by relationship type if specified
-            if (!typeAllowed(rel_types, edge.label)) continue;
-
-            // If target node is bound, only match edges to that specific node
-            if (target_bound_id) |tid| {
-                if (edge.to_id != tid) continue;
-            }
-
-            // Check target node pattern (right side of the hop). Hydrate-on-miss
-            // so the hop crosses evicted-but-live nodes under the bounded cache.
-            if (store.nodes.getOrHydratePtr(edge.to_id) catch null) |target_node| {
-                // SONNY-1326 / SONNY-2679 / SONNY-2687: only a COUNTED match
-                // the scope may see.
-                if (!scope.nodeVisible(target_node)) continue;
-                // Check label constraints on target using helper
-                if (!nodeHasAllLabels(target_node.labels, target_pattern.labels)) continue;
-
-                // Check property constraints on target using helper
-                if (target_pattern.props) |props| {
-                    if (!nodeMatchesProperties(target_node.properties, props, env, allocator)) continue;
-                }
-
-                // Check WHERE filter if present
-                if (where_filter) |wf| {
-                    if (evaluateWhereFilter(wf, env, target_pattern.name, target_node, allocator)) {
-                        count += 1;
-                    }
-                } else {
-                    count += 1;
-                }
-            }
+    fn accept(self: *CountSink, env: Env) !bool {
+        // CANARY: REQ=REQ-SONNY-3248-EXISTS-WHERE; FEATURE="ExistsSubquery"; ASPECT=WhereEnvLifetime; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=execution; UPDATED=2026-09-29
+        // SONNY-3248: the WHERE reads the environment that binds the match
+        // (every node and relationship variable of the pattern), which the
+        // walk frees only after this returns. An evaluation error reads as
+        // false, as it always has here.
+        if (self.where_filter) |wf| {
+            const result = eval.evalExpr(self.allocator, wf.*, env) catch return true;
+            if (result != .Bool or !result.Bool) return true;
         }
+        self.count += 1;
+        return true;
     }
-    return count;
-}
+};
 
 /// Count the number of matches for a given graph pattern
 /// CANARY: REQ=REQ-GQL-PATTERN-COUNT; FEATURE="PatternMatching"; ASPECT=COUNT; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-27
 /// Now accepts env parameter for correlated subqueries (EXISTS with outer variable references)
 /// Also accepts optional WHERE filter for EXISTS { MATCH ... WHERE ... } patterns
+// CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="CorrelatedExists"; ASPECT=OuterVariableBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
+// CANARY: REQ=REQ-GQL-VAR-LEN-SUBQUERY-001; FEATURE="VariableLengthSubquery"; ASPECT=CountMatches; STATUS=TESTED; TEST=tests/test_sonny2707_count_direction.zig; OWNER=execution; UPDATED=2026-11-11
+/// SONNY-2707: every match `PatternWalk` finds (a variable the outer query
+/// binds constrains it: a correlated subquery), that the WHERE admits.
 pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, env: Env) !i64 {
     // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read. Under
     // strict tenancy an unscoped session is refused here (42501) rather than
@@ -660,307 +724,11 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
     // SONNY-2679 / SONNY-2687: with the session's graph and RLS policies.
     var scope = try ExprScope.init(allocator);
     defer scope.deinit();
-    const store = graph_store.getGlobalStore(allocator);
-    var count: i64 = 0;
-
-    // Handle simple node patterns
-    if (pattern.chains.len > 0) {
-        const chain = pattern.chains[0];
-
-        // For relationship patterns like (x)-[:REL]->(y), the left node is in hops[0].left, not head
-        const node_pattern_opt: ?ast.NodePattern = if (chain.head) |h| h else if (chain.hops.len > 0) chain.hops[0].left else null;
-
-        if (node_pattern_opt) |node_pattern| {
-            // CANARY: REQ=REQ-GQL-EXISTS-002; FEATURE="CorrelatedExists"; ASPECT=OuterVariableBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
-            // Check if the node pattern has a variable that's bound in the outer environment
-            // CANARY: REQ=REQ-NESTING-REFACTOR-002; FEATURE="NestingReduction"; ASPECT=LabelCheck; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-            const maybe_bound_node: ?*const graph_store.Node = if (node_pattern.name) |var_name| findBoundNode(var_name, env) else null;
-
-            if (maybe_bound_node) |bound_node| {
-                // SONNY-1326: a correlated outer binding the session cannot see
-                // contributes ZERO, never an error that discloses existence.
-                if (!scope.nodeVisible(bound_node)) return 0;
-                // Check if this bound node matches the remaining pattern (labels, properties)
-                if (!nodeHasAllLabels(bound_node.labels, node_pattern.labels)) {
-                    return 0; // Bound node doesn't match required labels
-                }
-
-                // Check properties on the bound node using helper
-                if (node_pattern.props) |props| {
-                    if (!nodeMatchesProperties(bound_node.properties, props, env, allocator)) {
-                        return 0; // Bound node doesn't match required properties
-                    }
-                }
-
-                // If bound node matches, now check if the relationship pattern also matches
-                if (chain.hops.len > 0) {
-                    const hop = chain.hops[0];
-                    // SONNY-3318 (round 4b-1b review I-D): every type of
-                    // `[:A|B]`; the first only was read.
-                    const rel_types = hop.rel.types;
-
-                    // CANARY: REQ=REQ-GQL-VAR-LEN-SUBQUERY-001; FEATURE="VariableLengthSubquery"; ASPECT=CountMatches; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
-                    // C01/C02 Fix: Handle variable-length paths (*1..3)
-                    const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
-                    if (is_var_length) {
-                        return countVariableLengthPathMatches(allocator, bound_node, hop, rel_types, where_filter, env, store, &scope);
-                    }
-
-                    // Original single-hop handling for non-variable-length patterns
-                    return countSingleHopMatches(allocator, bound_node, hop, rel_types, where_filter, env, store, &scope);
-                }
-
-                // No relationship pattern, just count the bound node if it matched
-                return 1;
-            }
-
-            // No outer variable binding - fall through to regular node counting
-            // Count nodes matching the pattern
-            // SONNY-1562: every node of the graph, not just the resident ones.
-            var source = try ScanSource.init(allocator, store, &scope, node_pattern.labels);
-            defer source.deinit();
-            while (source.next()) |node_ptr| {
-                const node = node_ptr.*;
-                // SONNY-1326 / SONNY-2679 / SONNY-2687: count only rows the
-                // session scope admits (graph, tenant and RLS).
-                if (!scope.nodeVisible(node_ptr)) continue;
-                var matches = true;
-
-                // Check labels
-                for (node_pattern.labels) |required_label| {
-                    var has_label = false;
-                    for (node.labels) |node_label| {
-                        if (std.mem.eql(u8, required_label, node_label)) {
-                            has_label = true;
-                            break;
-                        }
-                    }
-                    if (!has_label) {
-                        matches = false;
-                        break;
-                    }
-                }
-
-                // Check properties
-                if (matches and node_pattern.props != null) {
-                    for (node_pattern.props.?) |prop| {
-                        // For pattern counting, we evaluate the property value using the environment
-                        const expected = try eval.evalExpr(allocator, prop.value.*, env);
-
-                        // Check if node has this property with matching value
-                        if (node.properties.get(prop.key)) |node_prop_val| {
-                            // GAP-0120 FIX: Proper type coverage for property values
-                            // CANARY: REQ=REQ-EXPR-TYPE-001; FEATURE="ExprTypeCoverage"; ASPECT=Types; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system.yml; OWNER=exec; UPDATED=2026-01-25
-                            const node_val = property_codec.propertyValueToValue(node_prop_val);
-                            if (!valuesEqual(node_val, expected)) {
-                                matches = false;
-                                break;
-                            }
-                        } else {
-                            matches = false;
-                            break;
-                        }
-                    }
-                }
-
-                if (matches and chain.hops.len > 0) {
-                    // SONNY-1562: an uncorrelated relationship pattern counts
-                    // the HOP's matches from this start node, as the correlated
-                    // branch above does. It counted the start node itself, so
-                    // `COUNT { (a:A)-[:R]->(:B) }` was the number of `:A` nodes
-                    // and `EXISTS { … }` was true whenever one existed. The
-                    // start node is bound for the WHERE filter.
-                    const hop = chain.hops[0];
-                    const start_env = if (node_pattern.name) |name| try env.withBinding(allocator, name, Value{ .Node = node_ptr }) else env;
-                    defer freeExtendedEnv(allocator, start_env, env);
-                    const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
-                    count += if (is_var_length)
-                        try countVariableLengthPathMatches(allocator, node_ptr, hop, hop.rel.types, where_filter, start_env, store, &scope)
-                    else
-                        try countSingleHopMatches(allocator, node_ptr, hop, hop.rel.types, where_filter, start_env, store, &scope);
-                } else if (matches) {
-                    // Check WHERE filter if present
-                    if (where_filter) |wf| {
-                        // Build environment with this node bound (if pattern
-                        // has a name). SONNY-3248 (round 4b-1b review I-E):
-                        // `evaluateWhereFilter` does it, and frees the
-                        // arrays after the WHERE is evaluated (they were
-                        // freed before it, so `EXISTS { MATCH (k:G) WHERE
-                        // k.i = 2 }` read freed names and matched nothing).
-                        if (evaluateWhereFilter(wf, env, node_pattern.name, node_ptr, allocator)) count += 1;
-                    } else {
-                        count += 1;
-                    }
-                }
-            }
-        } else if (chain.hops.len > 0) {
-            // Count relationship patterns - optimized to avoid O(N² × E) complexity
-            const hop = chain.hops[0];
-            const rel_types = hop.rel.types;
-
-            // PHASE 1 (edge-engine-direct): enumerate the COMPLETE edge id set
-            // (bounded-cache-safe) and hydrate each body on miss, instead of
-            // iterating the resident `store.edges` map (which under a bounded
-            // edge cache would undercount by skipping evicted edges).
-            const all_edge_ids = try store.allEdgeIds(allocator);
-            defer allocator.free(all_edge_ids);
-            for (all_edge_ids) |__eid| {
-                // SONNY-1326 / review R1 discipline: read the edge BY VALUE.
-                // `getEdgePtrHydrated` hands back a raw `*Edge` into the bounded
-                // edge-body cache which a concurrent shard-locked writer can
-                // resize under the reader (`graph_store.zig` ~:3156-3175);
-                // `getEdgeHydrated` copies under the per-shard map lock SHARED.
-                const edge = store.getEdgeHydrated(__eid) orelse continue;
-
-                // SONNY-1326 / SONNY-2687: the edge (in the session's graph)
-                // and BOTH its endpoints must be visible.
-                if (!scope.edgeWalkable(store, edge)) continue;
-
-                // Filter by relationship type if specified
-                if (!typeAllowed(rel_types, edge.label)) {
-                    continue;
-                }
-
-                // Get the nodes connected by this edge (hydrate-on-miss so the
-                // hop sees evicted-but-live endpoints under the bounded cache).
-                const from_node_ptr = (store.nodes.getOrHydratePtr(edge.from_id) catch null) orelse continue;
-                const to_node_ptr = (store.nodes.getOrHydratePtr(edge.to_id) catch null) orelse continue;
-                // SONNY-2679 / SONNY-2687: both endpoints are visible.
-                if (!scope.nodeVisible(from_node_ptr) or !scope.nodeVisible(to_node_ptr)) continue;
-                const from_node = from_node_ptr.*;
-                const to_node = to_node_ptr.*;
-
-                // Determine which node should match left/right based on direction
-                const matches_direction = blk: {
-                    var left_node: graph_store.Node = undefined;
-                    var right_node: graph_store.Node = undefined;
-
-                    switch (hop.rel.dir) {
-                        .right => {
-                            left_node = from_node;
-                            right_node = to_node;
-                        },
-                        .left => {
-                            left_node = to_node;
-                            right_node = from_node;
-                        },
-                        .undirected => {
-                            // For undirected, try both directions
-                            // First try: from->to
-                            var try1 = true;
-                            for (hop.left.labels) |required_label| {
-                                var has_label = false;
-                                for (from_node.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        has_label = true;
-                                        break;
-                                    }
-                                }
-                                if (!has_label) {
-                                    try1 = false;
-                                    break;
-                                }
-                            }
-                            if (try1) {
-                                for (hop.right.labels) |required_label| {
-                                    var has_label = false;
-                                    for (to_node.labels) |node_label| {
-                                        if (std.mem.eql(u8, required_label, node_label)) {
-                                            has_label = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!has_label) {
-                                        try1 = false;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            // Second try: to->from
-                            var try2 = true;
-                            for (hop.left.labels) |required_label| {
-                                var has_label = false;
-                                for (to_node.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        has_label = true;
-                                        break;
-                                    }
-                                }
-                                if (!has_label) {
-                                    try2 = false;
-                                    break;
-                                }
-                            }
-                            if (try2) {
-                                for (hop.right.labels) |required_label| {
-                                    var has_label = false;
-                                    for (from_node.labels) |node_label| {
-                                        if (std.mem.eql(u8, required_label, node_label)) {
-                                            has_label = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!has_label) {
-                                        try2 = false;
-                                        break;
-                                    }
-                                }
-                            }
-
-                            break :blk (try1 or try2);
-                        },
-                    }
-
-                    // Check left node matches pattern
-                    for (hop.left.labels) |required_label| {
-                        var has_label = false;
-                        for (left_node.labels) |node_label| {
-                            if (std.mem.eql(u8, required_label, node_label)) {
-                                has_label = true;
-                                break;
-                            }
-                        }
-                        if (!has_label) {
-                            break :blk false;
-                        }
-                    }
-
-                    // Check right node matches pattern
-                    for (hop.right.labels) |required_label| {
-                        var has_label = false;
-                        for (right_node.labels) |node_label| {
-                            if (std.mem.eql(u8, required_label, node_label)) {
-                                has_label = true;
-                                break;
-                            }
-                        }
-                        if (!has_label) {
-                            break :blk false;
-                        }
-                    }
-
-                    break :blk true;
-                };
-
-                if (matches_direction) {
-                    // Check WHERE filter if present
-                    if (where_filter) |wf| {
-                        const where_result = eval.evalExpr(allocator, wf.*, env) catch continue;
-                        const passes = switch (where_result) {
-                            .Bool => |b| b,
-                            else => false,
-                        };
-                        if (passes) count += 1;
-                    } else {
-                        count += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    return count;
+    var walk: PatternWalk = .{ .allocator = allocator, .store = graph_store.getGlobalStore(allocator), .scope = &scope, .chains = pattern.chains };
+    defer walk.deinit();
+    var sink: CountSink = .{ .allocator = allocator, .where_filter = where_filter };
+    try walk.run(env, &sink);
+    return sink.count;
 }
 
 /// Find shortest path between nodes using BFS
@@ -1225,7 +993,6 @@ fn materializePath(
     } };
 }
 
-/// Execute a pattern comprehension: [(pattern) WHERE filter | map_expr]
 /// Release the binding arrays an extended `Env` owns, but only when it is a
 /// genuine extension of `base` (i.e. `withBinding` allocated fresh arrays).
 /// When `extended == base` (no binding was added) the arrays belong to the
@@ -1242,226 +1009,41 @@ fn freeExtendedEnv(allocator: std.mem.Allocator, extended: Env, base: Env) void 
     }
 }
 
+/// The matches of a pattern comprehension: the map expression's value for
+/// each one its WHERE admits.
+const ComprehensionSink = struct {
+    allocator: std.mem.Allocator,
+    where_filter: ?*ast.Expr,
+    map_expr: ast.Expr,
+    results: std.ArrayList(Value) = .empty,
+
+    fn accept(self: *ComprehensionSink, env: Env) !bool {
+        if (self.where_filter) |filter| {
+            const filter_result = try eval.evalExpr(self.allocator, filter.*, env);
+            if (filter_result != .Bool or !filter_result.Bool) return true;
+        }
+        try self.results.append(self.allocator, try eval.evalExpr(self.allocator, self.map_expr, env));
+        return true;
+    }
+};
+
+/// Execute a pattern comprehension: [(pattern) WHERE filter | map_expr]
 /// Returns a list of values generated by evaluating map_expr for each pattern match
 /// CANARY: REQ=REQ-GQL-166; FEATURE="Pattern Comprehension Execution"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
+/// SONNY-2707: over every match `PatternWalk` finds, as `COUNT { }` counts
+/// them: a variable-length relationship is walked as one (it was taken for a
+/// single hop), every hop of a chain is matched, and a node or relationship
+/// property map is applied.
 pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.GraphPattern, where_filter: ?*ast.Expr, map_expr: ast.Expr, env: Env) !Value {
     // SONNY-1326: resolve the session scope ONCE, BEFORE any graph read, with
     // its graph (SONNY-2687) and RLS policies (SONNY-2679), for every node the
     // comprehension starts from or yields.
     var scope = try ExprScope.init(allocator);
     defer scope.deinit();
-    const store = graph_store.getGlobalStore(allocator);
-
-    // Collect all results in a list
-    var results = std.ArrayList(Value).empty;
-
-    // Handle simple patterns like (a)--() or (a)-[r]->(b)
-    if (pattern.chains.len == 0) {
-        return Value{ .List = try results.toOwnedSlice(allocator) };
-    }
-
-    const chain = pattern.chains[0];
-
-    // CANARY: REQ=REQ-NESTING-REFACTOR-008; FEATURE="NestingReduction"; ASPECT=PatternComprehension; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-    // If pattern has no hops, it's just a node pattern
-    if (chain.hops.len == 0) {
-        if (chain.head) |node_pattern| {
-            // Iterate over all nodes matching the pattern using helper
-            // SONNY-1562: every node of the graph, not just the resident ones.
-            var source = try ScanSource.init(allocator, store, &scope, node_pattern.labels);
-            defer source.deinit();
-            while (source.next()) |node_ptr| {
-                const node = node_ptr.*;
-
-                // SONNY-1326 / SONNY-2679 / SONNY-2687: yield only elements
-                // the session scope admits.
-                if (!scope.nodeVisible(node_ptr)) continue;
-
-                // Use helper for pattern matching
-                if (!nodeMatchesPattern(node, node_pattern, env, allocator)) continue;
-
-                // Create environment with node binding
-                var new_env = env;
-                if (node_pattern.name) |name| {
-                    new_env = try env.withBinding(allocator, name, Value{ .Node = node_ptr });
-                }
-                defer freeExtendedEnv(allocator, new_env, env);
-
-                // Apply WHERE filter if present
-                if (where_filter) |filter| {
-                    const filter_result = try eval.evalExpr(allocator, filter.*, new_env);
-                    if (filter_result != .Bool or !filter_result.Bool) continue;
-                }
-
-                // Evaluate map expression
-                const map_result = try eval.evalExpr(allocator, map_expr, new_env);
-                try results.append(allocator, map_result);
-            }
-        }
-    } else {
-        // Pattern with edges like (a)--() or (a)-[r]->(b)
-        const hop = chain.hops[0];
-
-        // Get source node from environment or find all matching nodes
-        var source_nodes = std.ArrayList(*const graph_store.Node).empty;
-        defer source_nodes.deinit(allocator);
-
-        // If left node has a name that's bound in env, use that node
-        if (hop.left.name) |left_name| {
-            if (env.get(left_name)) |left_val| {
-                if (left_val == .Node) {
-                    // SONNY-1326: a correlated outer binding the session cannot
-                    // see contributes no source node (empty list, not an error).
-                    if (scope.nodeVisible(left_val.Node)) {
-                        try source_nodes.append(allocator, left_val.Node);
-                    }
-                }
-            }
-        }
-
-        // CANARY: REQ=REQ-NESTING-REFACTOR-009; FEATURE="NestingReduction"; ASPECT=SourceNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-        // If no source nodes from env, find all matching the left pattern using helper
-        if (source_nodes.items.len == 0) {
-            // SONNY-1562: every node of the graph, not just the resident ones.
-            var source = try ScanSource.init(allocator, store, &scope, hop.left.labels);
-            defer source.deinit();
-            while (source.next()) |node_ptr| {
-                const node = node_ptr.*;
-                // SONNY-1326 / SONNY-2679 / SONNY-2687: never start a
-                // comprehension walk from a row the session scope cannot see.
-                if (!scope.nodeVisible(node_ptr)) continue;
-                if (nodeMatchesPattern(node, hop.left, env, allocator)) {
-                    try source_nodes.append(allocator, node_ptr);
-                }
-            }
-        }
-
-        // For each source node, find connected nodes using adjacency indexes (O(degree) instead of O(E))
-        for (source_nodes.items) |source_node| {
-            // Check outgoing edges (for .right and .undirected directions)
-            if (hop.rel.dir == .right or hop.rel.dir == .undirected) {
-                if (store.getOutgoingEdgeIds(source_node.id)) |out_edge_ids| {
-                    for (out_edge_ids) |edge_id| {
-                        // SONNY-1326: read the edge BY VALUE for every DECISION
-                        // (`getEdgeHydrated` copies under the per-shard map lock
-                        // SHARED); the raw `*Edge` below is taken only for the
-                        // `Value.Edge` binding the map expression may reference,
-                        // never dereferenced to decide anything.
-                        const edge = store.getEdgeHydrated(edge_id) orelse continue;
-                        // SONNY-2679: only the pattern's relationship types.
-                        if (!relTypeMatches(hop.rel.types, edge.label)) continue;
-                        // The edge (in the session's graph) AND both endpoints
-                        // must be visible.
-                        if (!scope.edgeWalkable(store, edge)) continue;
-                        const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        const target_id = edge.to_id;
-
-                        const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
-                        const target_node = target_node_ptr.*;
-                        // SONNY-1326 / SONNY-2679 / SONNY-2687: the target
-                        // passes the session scope.
-                        if (!scope.nodeVisible(target_node_ptr)) continue;
-
-                        // CANARY: REQ=REQ-NESTING-REFACTOR-010; FEATURE="NestingReduction"; ASPECT=TargetNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
-                        // Check if target node matches the right pattern using helper
-                        if (!nodeHasAllLabels(target_node.labels, hop.right.labels)) continue;
-
-                        // Create environment with bindings.
-                        // OWNERSHIP (REQ-EVAL-ENV-OWNERSHIP-004): `withBinding`
-                        // no longer frees the env it extends, so free every
-                        // intermediate as the chain rebuilds `new_env`, and free
-                        // the final one via `defer`. `freeExtendedEnv` frees only
-                        // genuine extensions, never the caller's base `env`.
-                        var new_env = env;
-                        if (hop.left.name) |left_name| {
-                            new_env = try env.withBinding(allocator, left_name, Value{ .Node = source_node });
-                        }
-                        {
-                            const prev = new_env;
-                            if (hop.right.name) |right_name| {
-                                new_env = try new_env.withBinding(allocator, right_name, Value{ .Node = target_node_ptr });
-                            } else {
-                                new_env = try new_env.withBinding(allocator, "__pattern_target__", Value{ .Node = target_node_ptr });
-                            }
-                            freeExtendedEnv(allocator, prev, env);
-                        }
-                        if (hop.rel.name) |rel_name| {
-                            const prev = new_env;
-                            new_env = try new_env.withBinding(allocator, rel_name, Value{ .Edge = edge_ptr });
-                            freeExtendedEnv(allocator, prev, env);
-                        }
-                        defer freeExtendedEnv(allocator, new_env, env);
-
-                        if (where_filter) |filter| {
-                            const filter_result = try eval.evalExpr(allocator, filter.*, new_env);
-                            if (filter_result != .Bool or !filter_result.Bool) continue;
-                        }
-
-                        const map_result = try eval.evalExpr(allocator, map_expr, new_env);
-                        try results.append(allocator, map_result);
-                    }
-                }
-            }
-
-            // Check incoming edges (for .left and .undirected directions)
-            if (hop.rel.dir == .left or hop.rel.dir == .undirected) {
-                if (store.getIncomingEdgeIds(source_node.id)) |in_edge_ids| {
-                    for (in_edge_ids) |edge_id| {
-                        // SONNY-1326: by-value read for every decision; the raw
-                        // pointer is only the `Value.Edge` binding (see above).
-                        const edge = store.getEdgeHydrated(edge_id) orelse continue;
-                        if (!relTypeMatches(hop.rel.types, edge.label)) continue;
-                        if (!scope.edgeWalkable(store, edge)) continue;
-                        const edge_ptr = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        const target_id = edge.from_id;
-
-                        const target_node_ptr = (store.nodes.getOrHydratePtr(target_id) catch null) orelse continue;
-                        const target_node = target_node_ptr.*;
-                        // SONNY-1326 / SONNY-2679 / SONNY-2687: the target
-                        // passes the session scope.
-                        if (!scope.nodeVisible(target_node_ptr)) continue;
-
-                        // Check if target node matches the right pattern using helper
-                        if (!nodeHasAllLabels(target_node.labels, hop.right.labels)) continue;
-
-                        // Create environment with bindings.
-                        // OWNERSHIP (REQ-EVAL-ENV-OWNERSHIP-004): `withBinding`
-                        // no longer frees the env it extends, so free every
-                        // intermediate as the chain rebuilds `new_env`, and free
-                        // the final one via `defer`. `freeExtendedEnv` frees only
-                        // genuine extensions, never the caller's base `env`.
-                        var new_env = env;
-                        if (hop.left.name) |left_name| {
-                            new_env = try env.withBinding(allocator, left_name, Value{ .Node = source_node });
-                        }
-                        {
-                            const prev = new_env;
-                            if (hop.right.name) |right_name| {
-                                new_env = try new_env.withBinding(allocator, right_name, Value{ .Node = target_node_ptr });
-                            } else {
-                                new_env = try new_env.withBinding(allocator, "__pattern_target__", Value{ .Node = target_node_ptr });
-                            }
-                            freeExtendedEnv(allocator, prev, env);
-                        }
-                        if (hop.rel.name) |rel_name| {
-                            const prev = new_env;
-                            new_env = try new_env.withBinding(allocator, rel_name, Value{ .Edge = edge_ptr });
-                            freeExtendedEnv(allocator, prev, env);
-                        }
-                        defer freeExtendedEnv(allocator, new_env, env);
-
-                        if (where_filter) |filter| {
-                            const filter_result = try eval.evalExpr(allocator, filter.*, new_env);
-                            if (filter_result != .Bool or !filter_result.Bool) continue;
-                        }
-
-                        const map_result = try eval.evalExpr(allocator, map_expr, new_env);
-                        try results.append(allocator, map_result);
-                    }
-                }
-            }
-        }
-    }
-
-    return Value{ .List = try results.toOwnedSlice(allocator) };
+    var walk: PatternWalk = .{ .allocator = allocator, .store = graph_store.getGlobalStore(allocator), .scope = &scope, .chains = pattern.chains, .bind_pattern_target = true };
+    defer walk.deinit();
+    var sink: ComprehensionSink = .{ .allocator = allocator, .where_filter = where_filter, .map_expr = map_expr };
+    errdefer sink.results.deinit(allocator);
+    try walk.run(env, &sink);
+    return Value{ .List = try sink.results.toOwnedSlice(allocator) };
 }

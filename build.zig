@@ -10239,9 +10239,7 @@ pub fn build(b: *std.Build) void {
     sonny2707_count_test_mod.addImport("rls_types", rls_types_mod);
     const sonny2707_count_tests = b.addTest(.{ .root_module = sonny2707_count_test_mod });
     const run_sonny2707_count_tests = b.addRunArtifact(sonny2707_count_tests);
-    // Intentionally red TDD reproduction until the fix lands: kept out of the
-    // aggregate, compiled by `test-compile`.
-    if (g_test_compile_step) |c| c.dependOn(&sonny2707_count_tests.step);
+    shardDep(test_step, &run_sonny2707_count_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2707_count_step = b.step("test-sonny2707-count-direction", "Run SONNY-2707 parts (2) and (3) regression (COUNT {}, EXISTS {} and pattern comprehensions over an unbound relationship, a variable-length relationship in every direction, and a multi-hop chain agree with the equivalent MATCH and a walk of the seeded edges: in-memory, persisted, tenant-scoped and RLS-policy sessions, warm and reloaded)");
     sonny2707_count_step.dependOn(&run_sonny2707_count_tests.step);
 

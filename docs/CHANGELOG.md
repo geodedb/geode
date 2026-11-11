@@ -83,6 +83,25 @@
   `COUNT { (a:A)-[:R]->(:B) }` was the number of `:A` nodes and
   `EXISTS { (a:A)-[:R]->(:B {k: 1}) }` was true whenever an `:A` existed; it
   now counts the relationship's matches.
+- **`COUNT { }`, `EXISTS { }` and pattern comprehensions match the pattern
+  the way MATCH does (SONNY-2707 parts 2 and 3):** a relationship in one of
+  them was walked along the start node's outgoing edges whatever its
+  direction, so `COUNT { (a)<-[r]-(b) }` and `COUNT { (a)-[r]-(b) }` counted
+  `(a)-[r]->(b)` and `EXISTS { (a:B)<-[:S]-(:A) }` was false when such an
+  edge existed. A relationship property map (`-[:R {w: 1}]->`) was ignored,
+  and a WHERE inside the subquery could not read the relationship variable.
+  A variable-length relationship (`<-[*1..2]-`, `-[*1..2]-`) followed
+  outgoing edges only and counted the distinct nodes it reached instead of
+  the paths, and a pattern comprehension took it for a single hop. Only the
+  first hop of a multi-hop pattern (`COUNT { (a)-[:R]->(m)-[:R]->(b) }`
+  counted `(a)-[:R]->(m)`), and only the first part of a comma pattern, was
+  matched. The three now share one walk that follows the MATCH executors'
+  rules: the pattern's direction for every hop, the relationship's types and
+  property map, every hop and every comma part, variables bound outside the
+  subquery or earlier in the pattern as constraints, and variable-length
+  hops through the MATCH executors' own path iterator (one match per path).
+  Every node and edge is still filtered by graph, tenant and RLS. A
+  self-loop matches an undirected pattern once.
 
 ---
 
