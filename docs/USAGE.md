@@ -70,8 +70,10 @@ geode backup --dest s3://my-bucket/backups --mode incremental --parent 12345
 # List backups
 geode backup --dest s3://my-bucket/backups --list
 
-# Restore from backup
-geode restore --source s3://my-bucket/backups --backup-id 12345 --target /data
+# Restore from backup: download the backup file, then restore it offline
+# into a new or empty data directory (restoring straight from s3:// is not
+# supported)
+geode restore ./full.backup --data-dir /data --yes
 ```
 
 ### CDC Webhook Configuration

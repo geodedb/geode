@@ -493,8 +493,9 @@ silently ignored and not a moving target:
   with the named error `GqlBackupRestoreUnsupported`, surfaced on the wire as
   SQLSTATE **`0A000`** ("feature not supported") with a message naming the
   supported alternative. **The supported surface is the engine-backed CLI:**
-  `geode backup create --output <file>` and `geode restore <file>` (S3 /
-  DigitalOcean Spaces targets included). Regression:
+  `geode backup create --output <file>` (S3 / DigitalOcean Spaces upload
+  targets included) and `geode restore <file> --data-dir <dir>` (a local
+  backup file, restored offline into a new or empty directory). Regression:
   `tests/test_gap0871_gql_backup_refusal.zig` (`zig build test-gap0871`).
 - **Recursive CTE `SEARCH` / `CYCLE` clauses are not implemented.**
   `WITH RECURSIVE` follows the working-set list-value model documented under

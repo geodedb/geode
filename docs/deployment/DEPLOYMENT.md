@@ -302,8 +302,10 @@ docker-compose exec minio mc ls local/geode-backups
 # Stop Geode
 docker-compose stop geode
 
-# Restore data
-docker-compose exec geode geode restore --source s3://geode-backups/backup-20231215
+# Restore data: copy the backup file into the volume first (restoring
+# straight from s3:// is not supported), then restore it offline into a new
+# or empty data directory and point Geode at that directory
+docker-compose run --rm geode geode restore /data/backups/full.backup --data-dir /data/restored --yes
 
 # Start Geode
 docker-compose start geode

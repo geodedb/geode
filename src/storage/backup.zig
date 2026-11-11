@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
@@ -369,35 +370,8 @@ pub const BackupManager = struct {
         const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
         defer self.allocator.free(backup_path);
 
-        const io_rb = std.Io.Threaded.global_single_threaded.io();
-        var file = try std.Io.Dir.cwd().openFile(io_rb, backup_path, .{ .mode = .read_only });
-        defer file.close(io_rb);
-
-        var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
-        const hdr_n = try file.readPositionalAll(io_rb, &header_buf, 0);
-        if (hdr_n != header_buf.len) return error.InvalidBackupFile;
-        const header: BackupHeader = @bitCast(header_buf);
-        if (header.magic != BACKUP_MAGIC or header.version != BACKUP_VERSION) return error.InvalidBackupFile;
-        if (header.backup_type != .full) return error.InvalidBackupFile;
-
-        const payload_len: usize = @intCast(header.payload_len);
-        const payload = try self.allocator.alloc(u8, payload_len);
-        defer self.allocator.free(payload);
-        const pl_n = try file.readPositionalAll(io_rb, payload, header_buf.len);
-        if (pl_n != payload_len) return error.InvalidBackupFile;
-
-        if (header.checksum != computeChecksum(payload)) return error.BackupChecksumMismatch;
-
-        var decrypted: []u8 = payload;
-        var decrypted_owned = false;
-        if (header.encrypted) {
-            decrypted = try decryptData(payload, self.enc_key, self.allocator);
-            decrypted_owned = true;
-        }
-        defer if (decrypted_owned) self.allocator.free(decrypted);
-
-        const decompressed = try decompressData(decrypted, header.compression, self.allocator);
-        defer self.allocator.free(decompressed);
+        var decoded = try readBackupFile(self.allocator, backup_path, self.enc_key);
+        defer decoded.deinit(self.allocator);
 
         // Write snapshot to restore directory and load store.
         const prev_override = graph_store.getDataDirOverride();
@@ -416,11 +390,7 @@ pub const BackupManager = struct {
 
         graph_store.setDataDirOverride(self.allocator, restore_dir);
 
-        if (decompressed.len >= 8 and std.mem.eql(u8, decompressed[0..8], "GEODBAK1")) {
-            try restorePerGraphPayload(self.allocator, restore_dir, decompressed);
-        } else {
-            return error.UnsupportedBackupFormat;
-        }
+        try restorePerGraphPayload(self.allocator, restore_dir, decoded.archive);
 
         if (reload_live_store) {
             // Reopen the adapter on the restored directory before rebuilding the
@@ -654,47 +624,177 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
     return buffer.toOwnedSlice(allocator);
 }
 
-/// Restore a per-graph archive payload into restore_dir, recreating
-/// `graph_registry.dat` and the recursive `graphs/<uuid>/...` tree.
-// CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-16
-fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8) !void {
-    if (payload.len < 16) return error.InvalidBackupFile;
+/// A backup file read from disk and verified: its header, and the GEODBAK1
+/// archive it carries (decrypted and decompressed, structure and entry names
+/// checked). `archive` is owned.
+pub const DecodedBackup = struct {
+    header: BackupHeader,
+    archive: []u8,
+    stats: ArchiveStats,
 
-    var offset: usize = 0;
+    pub fn deinit(self: *DecodedBackup, allocator: std.mem.Allocator) void {
+        allocator.free(self.archive);
+        self.* = undefined;
+    }
+};
 
-    // Validate magic.
-    if (!std.mem.eql(u8, payload[0..8], "GEODBAK1")) return error.InvalidBackupFile;
-    offset += 8;
+/// Number of files and data bytes in a GEODBAK1 archive.
+pub const ArchiveStats = struct {
+    files: u32 = 0,
+    bytes: u64 = 0,
+};
 
-    // version (u32) — currently ignored.
-    offset += 4;
+/// Read and verify the backup file at `path`: header magic, version and
+/// type, payload length, CRC32, decryption, decompression, and the archive
+/// structure and entry names. Nothing is written. `enc_key` decrypts an
+/// encrypted payload; when null, the key comes from GEODE_TDE_KEY (never
+/// logged). The one decode path for the server restore and `geode restore`.
+// CANARY: REQ=REQ-BACKUP-RESTORE-002; FEATURE="Backup Restore"; ASPECT=SharedBackupDecode; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=storage; UPDATED=2026-11-11
+pub fn readBackupFile(allocator: std.mem.Allocator, path: []const u8, enc_key: ?[32]u8) !DecodedBackup {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_only }) catch |err| switch (err) {
+        error.FileNotFound => return error.BackupFileNotFound,
+        else => return err,
+    };
+    defer file.close(io);
 
-    const file_count = std.mem.readInt(u32, payload[offset..][0..4], .little);
-    offset += 4;
+    var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
+    const hdr_n = try file.readPositionalAll(io, &header_buf, 0);
+    if (hdr_n != header_buf.len) return error.InvalidBackupFile;
+    // A damaged header must not reach an enum or bool field with a value
+    // outside its range (safety-checked illegal behaviour).
+    if (header_buf[@offsetOf(BackupHeader, "encrypted")] > 1) return error.InvalidBackupFile;
+    const raw_compression = std.mem.readInt(u32, header_buf[@offsetOf(BackupHeader, "compression")..][0..4], builtin.cpu.arch.endian());
+    if (std.enums.fromInt(CompressionType, raw_compression) == null) return error.InvalidBackupFile;
+    const header: BackupHeader = @bitCast(header_buf);
+    if (header.magic != BACKUP_MAGIC or header.version != BACKUP_VERSION) return error.InvalidBackupFile;
+    if (@intFromEnum(header.backup_type) != @intFromEnum(BackupType.full)) return error.InvalidBackupFile;
 
-    for (0..file_count) |_| {
-        if (offset + 4 > payload.len) return error.InvalidBackupFile;
-        const name_len = std.mem.readInt(u32, payload[offset..][0..4], .little);
-        offset += 4;
+    const file_len = (try file.stat(io)).size;
+    if (header.payload_len > file_len -| header_buf.len) return error.InvalidBackupFile;
+    const payload_len: usize = @intCast(header.payload_len);
+    const payload = try allocator.alloc(u8, payload_len);
+    defer allocator.free(payload);
+    const pl_n = try file.readPositionalAll(io, payload, header_buf.len);
+    if (pl_n != payload_len) return error.InvalidBackupFile;
 
-        if (offset + name_len > payload.len) return error.InvalidBackupFile;
-        const name = payload[offset .. offset + name_len];
-        offset += name_len;
+    if (header.checksum != computeChecksum(payload)) return error.BackupChecksumMismatch;
 
-        if (offset + 8 > payload.len) return error.InvalidBackupFile;
-        const data_len = std.mem.readInt(u64, payload[offset..][0..8], .little);
-        offset += 8;
+    var decrypted: []u8 = payload;
+    var decrypted_owned = false;
+    if (header.encrypted) {
+        const key = enc_key orelse blk: {
+            const raw = getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch return error.MissingEncryptionKey;
+            defer allocator.free(raw);
+            break :blk try parseHexKey(raw);
+        };
+        decrypted = try decryptData(payload, key, allocator);
+        decrypted_owned = true;
+    }
+    defer if (decrypted_owned) allocator.free(decrypted);
 
+    const archive = try decompressData(decrypted, header.compression, allocator);
+    errdefer allocator.free(archive);
+    if (archive.len < 8 or !std.mem.eql(u8, archive[0..8], "GEODBAK1")) return error.UnsupportedBackupFormat;
+    const stats = try validateArchive(allocator, archive);
+
+    return .{ .header = header, .archive = archive, .stats = stats };
+}
+
+/// An archive entry name is a relative path under the restore directory:
+/// not empty, not absolute, no `.`/`..`/empty components, no backslash or
+/// NUL. Anything else could write outside the target (SONNY-6280).
+fn isSafeArchiveEntryName(name: []const u8) bool {
+    if (name.len == 0 or name[0] == '/') return false;
+    if (std.mem.indexOfAny(u8, name, "\\\x00") != null) return false;
+    var it = std.mem.splitScalar(u8, name, '/');
+    while (it.next()) |component| {
+        if (component.len == 0) return false;
+        if (std.mem.eql(u8, component, ".") or std.mem.eql(u8, component, "..")) return false;
+    }
+    return true;
+}
+
+const ArchiveEntry = struct {
+    name: []const u8,
+    data: []const u8,
+};
+
+const ArchiveIterator = struct {
+    payload: []const u8,
+    offset: usize = 16,
+    remaining: u32,
+
+    fn init(payload: []const u8) !ArchiveIterator {
+        if (payload.len < 16) return error.InvalidBackupFile;
+        if (!std.mem.eql(u8, payload[0..8], "GEODBAK1")) return error.InvalidBackupFile;
+        // version (u32) at offset 8 — currently ignored.
+        return .{ .payload = payload, .remaining = std.mem.readInt(u32, payload[12..16], .little) };
+    }
+
+    fn next(self: *ArchiveIterator) !?ArchiveEntry {
+        if (self.remaining == 0) {
+            if (self.offset != self.payload.len) return error.InvalidBackupFile;
+            return null;
+        }
+        self.remaining -= 1;
+        const p = self.payload;
+        if (p.len - self.offset < 4) return error.InvalidBackupFile;
+        const name_len = std.mem.readInt(u32, p[self.offset..][0..4], .little);
+        self.offset += 4;
+        if (p.len - self.offset < name_len) return error.InvalidBackupFile;
+        const name = p[self.offset .. self.offset + name_len];
+        self.offset += name_len;
+        if (p.len - self.offset < 8) return error.InvalidBackupFile;
+        const data_len = std.mem.readInt(u64, p[self.offset..][0..8], .little);
+        self.offset += 8;
+        if (data_len > p.len - self.offset) return error.InvalidBackupFile;
         const data_size: usize = @intCast(data_len);
-        if (offset + data_size > payload.len) return error.InvalidBackupFile;
-        const data = payload[offset .. offset + data_size];
-        offset += data_size;
+        const data = p[self.offset .. self.offset + data_size];
+        self.offset += data_size;
+        return .{ .name = name, .data = data };
+    }
+};
 
+/// Check a whole archive before anything is written: well-formed, no
+/// trailing bytes, every entry name safe and unique.
+fn validateArchive(allocator: std.mem.Allocator, payload: []const u8) !ArchiveStats {
+    var seen = std.StringHashMap(void).init(allocator);
+    defer seen.deinit();
+    var stats: ArchiveStats = .{};
+    var it = try ArchiveIterator.init(payload);
+    while (try it.next()) |entry| {
+        if (!isSafeArchiveEntryName(entry.name)) {
+            log.err("backup archive entry name is not a safe relative path; restore refused", &.{
+                Attr.uint("name_len", @intCast(entry.name.len)),
+            });
+            return error.UnsafeArchiveEntryName;
+        }
+        const gop = try seen.getOrPut(entry.name);
+        if (gop.found_existing) return error.InvalidBackupFile;
+        stats.files += 1;
+        stats.bytes += entry.data.len;
+    }
+    return stats;
+}
+
+/// Restore a per-graph archive payload into restore_dir, recreating
+/// `graph_registry.dat` and every per-graph directory. The whole archive is
+/// validated first (names cannot escape restore_dir). Files are created
+/// 0600 — the archive keeps no modes and holds key material (server.key,
+/// .geode_hmac_key) — and synced before the restore reports success.
+// CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=storage; UPDATED=2026-11-11
+fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8) !void {
+    _ = try validateArchive(allocator, payload);
+
+    const io_ef = std.Io.Threaded.global_single_threaded.io();
+    const file_perms: std.Io.File.Permissions = if (comptime builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600);
+    var it = try ArchiveIterator.init(payload);
+    while (try it.next()) |entry| {
         // Build the destination path and ensure parent directories exist.
-        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ restore_dir, name });
+        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ restore_dir, entry.name });
         defer allocator.free(full_path);
 
-        const io_ef = std.Io.Threaded.global_single_threaded.io();
         if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
             // error-policy: A — ensure-parent-dirs is best-effort (the dir may
             // already exist); a real failure surfaces as a proper error on the
@@ -702,10 +802,109 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
             std.Io.Dir.cwd().createDirPath(io_ef, full_path[0..last_slash]) catch {};
         }
 
-        const out = try std.Io.Dir.cwd().createFile(io_ef, full_path, .{});
+        const out = try std.Io.Dir.cwd().createFile(io_ef, full_path, .{ .permissions = file_perms });
         defer out.close(io_ef);
-        try out.writeStreamingAll(io_ef, data);
+        try out.writeStreamingAll(io_ef, entry.data);
+        try out.sync(io_ef);
     }
+}
+
+/// Re-read every file the archive names under `dir` and compare it byte for
+/// byte with the archive.
+fn verifyRestoredArchive(allocator: std.mem.Allocator, dir: []const u8, payload: []const u8) !ArchiveStats {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var stats: ArchiveStats = .{};
+    var it = try ArchiveIterator.init(payload);
+    var buf: [64 * 1024]u8 = undefined;
+    while (try it.next()) |entry| {
+        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, entry.name });
+        defer allocator.free(full_path);
+        const f = try std.Io.Dir.cwd().openFile(io, full_path, .{ .mode = .read_only });
+        defer f.close(io);
+        if ((try f.stat(io)).size != entry.data.len) return error.RestoreVerificationFailed;
+        var off: usize = 0;
+        while (off < entry.data.len) {
+            const want = @min(buf.len, entry.data.len - off);
+            const n = try f.readPositionalAll(io, buf[0..want], off);
+            if (n != want or !std.mem.eql(u8, buf[0..want], entry.data[off .. off + want])) return error.RestoreVerificationFailed;
+            off += want;
+        }
+        stats.files += 1;
+        stats.bytes += entry.data.len;
+    }
+    return stats;
+}
+
+/// A restore written into a private staging directory next to the target,
+/// verified file by file against the archive. `commit` renames it onto the
+/// target (absent or empty); `discard` deletes it. Nothing appears at the
+/// target path until `commit`, so a failed restore leaves no store there.
+pub const StagedRestore = struct {
+    allocator: std.mem.Allocator,
+    staging_dir: []u8,
+    target_dir: []u8,
+    stats: ArchiveStats,
+    committed: bool = false,
+
+    pub fn commit(self: *StagedRestore) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        std.Io.Dir.cwd().rename(self.staging_dir, std.Io.Dir.cwd(), self.target_dir, io) catch |err| switch (err) {
+            error.DirNotEmpty => return error.RestoreTargetNotEmpty,
+            else => return err,
+        };
+        self.committed = true;
+    }
+
+    /// Deletes the staging directory unless committed, and frees.
+    pub fn deinit(self: *StagedRestore) void {
+        if (!self.committed) {
+            // error-policy: A — best-effort removal of our own staging dir;
+            // the caller already reports the restore as failed.
+            std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), self.staging_dir) catch {};
+        }
+        self.allocator.free(self.staging_dir);
+        self.allocator.free(self.target_dir);
+        self.* = undefined;
+    }
+};
+
+/// Write `archive` (from `readBackupFile`) into a fresh mode-0700 staging
+/// directory beside `target_dir` and verify it. `target_dir` must not exist
+/// or be an empty directory (error.RestoreTargetNotEmpty otherwise); its
+/// parent must exist. Never merges into or overwrites an existing store.
+// CANARY: REQ=REQ-BACKUP-RESTORE-002; FEATURE="Backup Restore"; ASPECT=StagedRestoreIntoEmptyTarget; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=storage; UPDATED=2026-11-11
+pub fn stageRestore(allocator: std.mem.Allocator, archive: []const u8, target_dir: []const u8) !StagedRestore {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const target = std.mem.trimEnd(u8, target_dir, "/");
+    if (target.len == 0) return error.InvalidRestoreTarget;
+
+    if (std.Io.Dir.cwd().openDir(io, target, .{ .iterate = true })) |dir_const| {
+        var dir = dir_const;
+        defer dir.close(io);
+        var dir_it = dir.iterate();
+        if (try dir_it.next(io) != null) return error.RestoreTargetNotEmpty;
+    } else |err| switch (err) {
+        error.FileNotFound => {},
+        error.NotDir => return error.RestoreTargetNotEmpty,
+        else => return err,
+    }
+
+    var rnd: [8]u8 = undefined;
+    compat_fillRandom(&rnd);
+    const staging = try std.fmt.allocPrint(allocator, "{s}.restore-{x}", .{ target, std.mem.readInt(u64, &rnd, .little) });
+    errdefer allocator.free(staging);
+    const target_owned = try allocator.dupe(u8, target);
+    errdefer allocator.free(target_owned);
+
+    const dir_perms: std.Io.File.Permissions = if (comptime builtin.os.tag == .windows) .default_dir else std.Io.File.Permissions.fromMode(0o700);
+    try std.Io.Dir.cwd().createDir(io, staging, dir_perms);
+    // error-policy: A — best-effort removal of our own staging dir on failure.
+    errdefer std.Io.Dir.cwd().deleteTree(io, staging) catch {};
+
+    try restorePerGraphPayload(allocator, staging, archive);
+    const stats = try verifyRestoredArchive(allocator, staging, archive);
+
+    return .{ .allocator = allocator, .staging_dir = staging, .target_dir = target_owned, .stats = stats };
 }
 
 /// Result of compressData: the compressed payload plus the compression type
@@ -818,10 +1017,9 @@ fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
     const plaintext = try allocator.alloc(u8, ciphertext.len);
     errdefer allocator.free(plaintext);
 
-    cb.Aead.open(.aes_256_gcm, &key, &nonce, "", ciphertext, &tag, plaintext) catch {
-        allocator.free(plaintext);
-        return error.DecryptionFailed;
-    };
+    // The errdefer above frees `plaintext`; freeing it here too was a double
+    // free that crashed every restore with the wrong key (SONNY-6280).
+    cb.Aead.open(.aes_256_gcm, &key, &nonce, "", ciphertext, &tag, plaintext) catch return error.DecryptionFailed;
 
     return plaintext;
 }
