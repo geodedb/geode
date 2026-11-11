@@ -13200,6 +13200,23 @@ pub fn build(b: *std.Build) void {
     const gps_grant_migration_step = b.step("test-gps-grant-migration", "Run GPS grant migration tests (Phase 6 Task 6-4)");
     gps_grant_migration_step.dependOn(&run_gps_grant_migration_tests.step);
 
+    // SONNY-4877: retiring the legacy auto_migrated_grant_* rows fails closed —
+    // after an allocation or persistence-delete failure no legacy allow
+    // authorizes anything (gps.decide, incl. cached decisions), legacy denies
+    // keep refusing, and a retry completes with the HMAC chain valid.
+    const sonny4877_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny4877_grant_retire_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny4877_test_mod.addImport("geode", root_mod);
+    sonny4877_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny4877_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    sonny4877_test_mod.addImport("grant_migration", grant_migration_mod);
+    const sonny4877_tests = b.addTest(.{ .root_module = sonny4877_test_mod });
+    const run_sonny4877_tests = b.addRunArtifact(sonny4877_tests);
+    // Intentionally red TDD reproduction (KNOWN_TEST_ISSUES.md): kept out of
+    // shardDep until the fix lands.
+    if (g_test_compile_step) |c| c.dependOn(&sonny4877_tests.step);
+    const sonny4877_step = b.step("test-sonny4877-grant-retire-fail-closed", "Run the SONNY-4877 regression (legacy grant-policy retirement fails closed on allocation/persistence failure; retry completes with a valid HMAC chain)");
+    sonny4877_step.dependOn(&run_sonny4877_tests.step);
+
     // GPS Phase 7 Task 7-1: bounded LRU decision cache tests.
     const gps_decision_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decision_cache.zig"), .target = target, .optimize = optimize });
     gps_decision_cache_test_mod.addImport("geode", root_mod);
