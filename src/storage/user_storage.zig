@@ -1487,6 +1487,14 @@ pub const UserStorageBackend = struct {
         try self.upsertPolicyNode(record);
     }
 
+    /// SONNY-3038: put a policy record back as it was (its cached record and
+    /// node) after a change that failed part way. The caller recomputes its
+    /// HMAC and seals the chain.
+    pub fn restorePolicyRecord(self: *Self, record: PolicyRecord) !void {
+        try self.policy_cache.put(record.id, record);
+        try self.upsertPolicyNode(record);
+    }
+
     pub fn removePolicy(self: *Self, policy_id: u64) !void {
         _ = self.policy_cache.remove(policy_id);
         if (self.policy_nodes.fetchRemove(policy_id)) |kv| {

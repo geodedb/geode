@@ -154,7 +154,6 @@ pub const RLSEngine = struct {
     policies_lock: std.Io.RwLock = std.Io.RwLock.init,
     policy_cache: PolicyCache,
     context_evaluator: ContextEvaluator,
-    query_rewriter: QueryRewriter,
     hierarchy_manager: HierarchyManager,
     attribute_controller: AttributeBasedAccessControl,
     audit_logger: AuditLogger,
@@ -402,7 +401,6 @@ pub const RLSEngine = struct {
             .policies = std.HashMap(PolicyKey, std.ArrayList(Policy), PolicyKey.HashContext, 80).init(allocator),
             .policy_cache = try PolicyCache.init(allocator),
             .context_evaluator = try ContextEvaluator.init(allocator),
-            .query_rewriter = try QueryRewriter.init(allocator),
             .hierarchy_manager = try HierarchyManager.init(allocator),
             .attribute_controller = try AttributeBasedAccessControl.init(allocator),
             .audit_logger = try AuditLogger.init(allocator, .{ .custom = dummyLogWriter }),
@@ -418,7 +416,6 @@ pub const RLSEngine = struct {
         self.policies.deinit();
         self.policy_cache.deinit();
         self.context_evaluator.deinit();
-        self.query_rewriter.deinit();
         self.hierarchy_manager.deinit();
         self.attribute_controller.deinit();
         self.audit_logger.deinit();
@@ -684,30 +681,6 @@ pub const RLSEngine = struct {
     fn freePolicyKey(self: *Self, key: PolicyKey) void {
         self.allocator.free(key.graph);
         self.allocator.free(key.table);
-    }
-
-    // Query Rewriting
-    pub fn rewriteQuery(
-        self: *Self,
-        query: []const u8,
-        context: *auth.SecurityContext,
-        graph: []const u8,
-    ) ![]const u8 {
-
-        // Find applicable policies
-        const policies = try self.findApplicablePolicies(
-            graph,
-            context.user.id,
-            context.roles,
-        );
-
-        if (policies.items.len == 0) {
-            // No policies, allow full access or deny based on configuration
-            return query;
-        }
-
-        // Rewrite the query with security predicates
-        return try self.query_rewriter.rewrite(query, policies, context);
     }
 
     pub fn checkRowAccess(
@@ -2646,104 +2619,6 @@ pub const ContextEvaluator = struct {
     }
 };
 
-// Query Rewriter for applying RLS policies
-pub const QueryRewriter = struct {
-    allocator: Allocator,
-
-    pub fn init(allocator: Allocator) !QueryRewriter {
-        return QueryRewriter{ .allocator = allocator };
-    }
-
-    pub fn deinit(self: *QueryRewriter) void {
-        _ = self;
-    }
-
-    /// Returns true if c is a GQL/SQL identifier character (alphanumeric or underscore).
-    inline fn isIdentChar(c: u8) bool {
-        return std.ascii.isAlphanumeric(c) or c == '_';
-    }
-
-    /// Validate a policy expression string for injection safety before it is
-    /// interpolated into a GQL predicate.  GAP-0496 (CWE-943): raw policy
-    /// expressions must not contain statement terminators, comment sequences,
-    /// or set operators that could escape the predicate context.
-    fn validatePolicyExpression(expr: []const u8) error{InvalidPolicyExpression}!void {
-        // Reject statement terminator
-        if (std.mem.indexOfScalar(u8, expr, ';') != null)
-            return error.InvalidPolicyExpression;
-        // Reject SQL/GQL line comments
-        if (std.mem.indexOf(u8, expr, "--") != null)
-            return error.InvalidPolicyExpression;
-        // Reject block comments
-        if (std.mem.indexOf(u8, expr, "/*") != null)
-            return error.InvalidPolicyExpression;
-        // Reject set operators (case-insensitive, whole-word only).
-        // A keyword is a whole word when not preceded or followed by an identifier char.
-        var i: usize = 0;
-        while (i < expr.len) : (i += 1) {
-            const rest = expr[i..];
-            // Check for identifier char immediately before this position
-            const prev_ident = i > 0 and isIdentChar(expr[i - 1]);
-            if (prev_ident) continue;
-            if (std.ascii.startsWithIgnoreCase(rest, "UNION")) {
-                const after_ident = rest.len > 5 and isIdentChar(rest[5]);
-                if (!after_ident) return error.InvalidPolicyExpression;
-            } else if (std.ascii.startsWithIgnoreCase(rest, "INTERSECT")) {
-                const after_ident = rest.len > 9 and isIdentChar(rest[9]);
-                if (!after_ident) return error.InvalidPolicyExpression;
-            } else if (std.ascii.startsWithIgnoreCase(rest, "EXCEPT")) {
-                const after_ident = rest.len > 6 and isIdentChar(rest[6]);
-                if (!after_ident) return error.InvalidPolicyExpression;
-            }
-        }
-    }
-
-    pub fn rewrite(
-        self: *QueryRewriter,
-        query: []const u8,
-        policies: std.ArrayList(RLSEngine.Policy),
-        context: *auth.SecurityContext,
-    ) ![]const u8 {
-        _ = query;
-        _ = context;
-
-        // CANARY: REQ=REQ-GAP-0496-RLS-INJECTION-GUARD; FEATURE="RLSSecurity"; ASPECT=InjectionPrevention; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
-        var result = std.ArrayList(u8).empty;
-        errdefer result.deinit(self.allocator);
-
-        // Build security predicate from policies
-        try result.appendSlice(self.allocator, "(");
-
-        var first = true;
-        for (policies.items) |policy| {
-            if (!policy.enabled) continue;
-
-            if (policy.using_expr) |expr| {
-                // GAP-0496: validate before interpolation to prevent GQL injection
-                try validatePolicyExpression(expr.raw);
-
-                if (!first) {
-                    if (policy.permissive) {
-                        try result.appendSlice(self.allocator, " OR ");
-                    } else {
-                        try result.appendSlice(self.allocator, " AND ");
-                    }
-                }
-
-                try result.appendSlice(self.allocator, "(");
-                try result.appendSlice(self.allocator, expr.raw);
-                try result.appendSlice(self.allocator, ")");
-
-                first = false;
-            }
-        }
-
-        try result.appendSlice(self.allocator, ")");
-
-        return try result.toOwnedSlice(self.allocator);
-    }
-};
-
 // Hierarchical access control for multi-tenant scenarios.
 //
 // GAP-0838: re-keyed on the STRING `tenant_id` (`[]const u8`) to match the rest
@@ -3955,7 +3830,6 @@ test "TestCANARY_REQ_RLS_TEMPORAL_001_TimeRangeConstraint" {
         .policies = std.HashMap(RLSEngine.PolicyKey, std.ArrayList(RLSEngine.Policy), RLSEngine.PolicyKey.HashContext, 80).init(allocator),
         .policy_cache = try PolicyCache.init(allocator),
         .context_evaluator = try ContextEvaluator.init(allocator),
-        .query_rewriter = try QueryRewriter.init(allocator),
         .hierarchy_manager = try HierarchyManager.init(allocator),
         .attribute_controller = try AttributeBasedAccessControl.init(allocator),
         .audit_logger = try AuditLogger.init(allocator, .{ .custom = RLSEngine.dummyLogWriter }),
@@ -3964,7 +3838,6 @@ test "TestCANARY_REQ_RLS_TEMPORAL_001_TimeRangeConstraint" {
         engine.policies.deinit();
         engine.policy_cache.deinit();
         engine.context_evaluator.deinit();
-        engine.query_rewriter.deinit();
         engine.hierarchy_manager.deinit();
         engine.attribute_controller.deinit();
         engine.audit_logger.deinit();

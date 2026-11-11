@@ -87,6 +87,55 @@
   refused for a non-admin, and an unauthenticated one (auth on) answers
   28000 like the other auth `SHOW` statements.
   Regression: `zig build test-sonny1333-grant-persist-show-grants`.
+- **The other auth write-throughs answer an error when the save fails, and
+  fail closed (SONNY-3038).** `DROP USER`, `ALTER USER ... SET PASSWORD`,
+  `... SET ROLE`, `... ENABLE` / `DISABLE` (and their `geode.auth.*`
+  procedures), `CREATE ROLE`, `DROP ROLE` and `geode.auth.user_import`
+  logged a failed write to `__geode_security` and reported success. The
+  in-memory user is reloaded from the store whenever its auth version
+  differs, so a dropped user could still log in, the old password worked
+  again, a disabled user was active again and a downgraded role came back,
+  right away; a role or imported user lived in memory only until the
+  restart. Each is now saved first and answers 58030
+  (`UserNotPersisted`, `RoleNotPersisted`) when it cannot be, with the
+  stored user or role as it was. A delete, a disable, a password change or
+  a role downgrade that could not be saved locks the user out instead
+  (no login, sessions no longer current) until a later change to the user
+  is saved or the next start, as a failed `REVOKE` takes the privilege away
+  at once; `DROP ROLE` removes the role from memory and fails, and the
+  retry removes the stored record. Inside the auth manager, a password,
+  active-flag, role (a role change is several edge writes), role-record or
+  policy change that failed part way, the chain seal included, is undone,
+  so the stored record and the chain agree and the next start verifies;
+  `CREATE POLICY` and `ALTER POLICY` no longer leave a stored change behind
+  the catalog they put back. `CREATE USER` keeps its status-row error
+  (SONNY-1333). Also, `DROP USER` of a user not in the in-memory cache
+  (users are loaded at their first login after a start, and evicted)
+  answered `deleted` and deleted nothing; it now loads and deletes the
+  stored user. See docs/GQL_AUTH_DDL.md, "When a save fails".
+  Regression: `zig build test-sonny3038-auth-rls-low-findings`.
+- **A dropped policy no longer comes back at the next start (SONNY-3038):**
+  `DROP POLICY` removed the first stored GPS record of the name; a second
+  one (written before names were unique, or by another writer) was loaded
+  at the next start. It removes every one.
+- **A label deny is in both RLS engines or in neither (SONNY-3038):**
+  `geode.rls.add_deny` added the deny to the post-filter and, when the
+  executor's engine could not add it, logged that and reported success, so
+  aggregates and projected properties still counted the denied rows. The
+  call now fails and the post-filter entry is taken out again.
+- **The algorithm post-filter checks evicted nodes (SONNY-3038):** a node id
+  in a `CALL algo.*` row was looked up in the bounded resident node cache
+  only, and a node evicted from it was taken for a deleted one, so the row
+  of a denied node was returned. It is read from the storage engine.
+- **Federation post-merge filter and cache (SONNY-3038):** the rows the
+  filter removed were not freed, and the shortened row list was freed with
+  the wrong length; the federation query cache was keyed on the query text
+  only, so one user's RLS-filtered results could be served to another. The
+  filter frees what it removes; the cache key includes the user, graph and
+  tenant. (The federation manager is not wired into the server.)
+- **Removed the unused RLS `QueryRewriter` (SONNY-3038):**
+  `rls_core.QueryRewriter` and `RLSEngine.rewriteQuery` built query text
+  from policy text and combined policies the old way; nothing called them.
 
 ### Added
 

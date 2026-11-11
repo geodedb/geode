@@ -875,6 +875,9 @@ fn writerCreateUser(ctx: ?*anyopaque, username: []const u8, email: []const u8, p
     _ = try agm.createUserWithRole(&agm.hmac_key, username, email, password_hash, role == .Admin, if (role == .Admin) null else role.toString());
 }
 
+// SONNY-3038: each write-through is stored or fails with the stored record
+// as it was (AuthGraphManager.*WriteThrough); user_management reports the
+// failure and enforces a security-reducing change in memory.
 fn writerDeleteUser(ctx: ?*anyopaque, username: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
     try agm.deleteUserWriteThrough(&agm.hmac_key, username);

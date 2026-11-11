@@ -3023,11 +3023,12 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             }
 
             user_mgmt.updateUserPassword(allocator, parsed.username, parsed.new_password) catch |err| {
-                const msg = switch (err) {
+                // SONNY-3038: not saved (58030); the user is locked out.
+                const info: proto_util.ErrorInfo = if (err == error.UserNotPersisted) proto_util.mapError(err) else .{ .code = "28P01", .message = switch (err) {
                     error.PasswordReuse => "New password must not match the current password",
                     else => "Failed to update password",
-                };
-                var resp = try buildErrorResponse(allocator, "28P01", msg, &.{}, &.{});
+                } };
+                var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                 defer resp.deinit(allocator);
                 return encodeMessage(allocator, resp);
             };

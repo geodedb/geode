@@ -6490,11 +6490,12 @@ fn handleAlterUserSetPassword(
     }
 
     user_mgmt.updateUserPassword(gpa, username, new_password) catch |err| {
-        const msg = switch (err) {
+        // SONNY-3038: not saved (58030); the user is locked out.
+        const info: proto_util.ErrorInfo = if (err == error.UserNotPersisted) proto_util.mapError(err) else .{ .code = "28P01", .message = switch (err) {
             error.PasswordReuse => "New password must not match the current password",
             else => "Failed to update password",
-        };
-        try sendExecuteError(gpa, stream, "28P01", msg, &.{}, &.{});
+        } };
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
         return;
     };
 

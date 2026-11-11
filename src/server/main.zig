@@ -2078,6 +2078,7 @@ pub fn main() !void {
             username: []const u8,
         ) anyerror!void {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
+            // SONNY-3038: both engines or neither.
             try rls_filter_mod.addDenyToEngines(ctx.label_engine, ctx.types_engine, graph, label, username);
         }
         fn removeDeny(

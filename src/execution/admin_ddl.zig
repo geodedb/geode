@@ -89,12 +89,11 @@ pub fn executeAlterUser(allocator: std.mem.Allocator, s: ast.AlterUserStatement,
 }
 
 pub fn executeDropUser(allocator: std.mem.Allocator, s: ast.DropUserStatement, ctx: ExecutionContext) !ExecutionResult {
-    // Step 1 finding: handleUserDelete in auth_dispatch.zig swallows all errors internally
-    // (logs via log.warn then continues) and always returns a result row with status="deleted <name>".
-    // It never propagates a Zig error. Therefore IF EXISTS is structurally a no-op at the Zig
-    // error level — there is no error to catch. We pass through the result in both cases.
-    // This means DROP USER IF EXISTS on a non-existent user still returns status="deleted <name>",
-    // which is safe and idempotent — the handler already degrades gracefully.
+    // handleUserDelete answers status="deleted <name>" for a user that does
+    // not exist, so IF EXISTS changes nothing: DROP USER IF EXISTS on a
+    // missing user returns status="deleted <name>". The one error it
+    // propagates is a delete that could not be saved (SONNY-3038,
+    // UserNotPersisted, 58030), with or without IF EXISTS.
     _ = s.if_exists;
     try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_delete", &.{s.name});
@@ -109,9 +108,9 @@ pub fn executeCreateRole(allocator: std.mem.Allocator, s: ast.CreateRoleStatemen
 }
 
 pub fn executeDropRole(allocator: std.mem.Allocator, s: ast.DropRoleStatement, ctx: ExecutionContext) !ExecutionResult {
-    // Step 1 finding: handleRoleDelete also never propagates a Zig error — it uses
-    // fetchRemove (which is a no-op on missing keys) and always returns status="deleted <name>".
-    // IF EXISTS is structurally a no-op; pass through.
+    // handleRoleDelete answers status="deleted <name>" for a missing role
+    // (fetchRemove is a no-op), so IF EXISTS changes nothing. It propagates a
+    // removal that could not be saved (SONNY-3038, RoleNotPersisted, 58030).
     _ = s.if_exists;
     try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.role_delete", &.{s.name});

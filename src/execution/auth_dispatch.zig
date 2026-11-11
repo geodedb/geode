@@ -658,6 +658,8 @@ fn handleUserImport(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     const role = user_mgmt.Role.fromString(role_str) orelse .User;
     user_mgmt.createUserWithHash(allocator, username, hash, email, role, false) catch |err| {
         log.warn("geode.auth.user_import failed", &.{Attr.string("error", @errorName(err))});
+        // SONNY-3038: not saved, so not imported.
+        if (err == error.UserNotPersisted) return err;
         return failure.render(allocator, username, algorithm, @errorName(err));
     };
 
@@ -703,6 +705,9 @@ fn handleUserDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     }
     user_mgmt.deleteUser(username) catch |err| {
         log.warn("geode.auth.user_delete failed", &.{Attr.string("error", @errorName(err))});
+        // SONNY-3038: the delete could not be saved; the user is locked out
+        // (user_management.UnsavedRestriction). It was reported deleted.
+        if (err == error.UserNotPersisted) return err;
     };
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "status");
@@ -770,6 +775,15 @@ fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, 
         // in-memory store; treat that as a no-op success (the user may live only in a separate
         // storage path, e.g. the standalone CLI's direct-to-graph backend).
         error.Unauthenticated => {},
+        // SONNY-3038: the change could not be saved (a disable is enforced
+        // by locking the user out).
+        error.UserNotPersisted => {
+            for (columns) |c| allocator.free(c);
+            allocator.free(columns);
+            allocator.free(row);
+            allocator.free(rows);
+            return err;
+        },
         else => {
             log.warn("geode.auth.user_enable/disable failed", &.{
                 Attr.string("username", username),
@@ -812,6 +826,15 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
     // Try built-in roles first.
     if (user_mgmt.Role.fromString(role_name)) |builtin_role| {
         user_mgmt.assignRole(allocator, username, builtin_role) catch |err| {
+            // SONNY-3038: the change could not be saved (a downgrade is
+            // enforced by locking the user out).
+            if (err == error.UserNotPersisted) {
+                allocator.free(columns[0]);
+                allocator.free(columns);
+                allocator.free(row);
+                allocator.free(rows);
+                return err;
+            }
             row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
             return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
         };
@@ -1204,9 +1227,20 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     errdefer allocator.free(desc_copy);
     try g_custom_roles.put(role_key, desc_copy);
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-021; FEATURE="AuthDDLPersistence"; ASPECT=RoleCreatePersist; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=CreateRoleFailureReported; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-3038: a role that could not be saved is not created (as CREATE
+    // USER, SONNY-1333). It was logged and reported created, and was gone at
+    // the next start.
     if (g_role_persist.create_fn) |f| {
-        _ = f(g_role_persist.ctx, role_name, desc) catch |e|
-            log.warn("role_create graph persist failed", &.{ Attr.string("role", role_name), Attr.string("error", @errorName(e)) });
+        _ = f(g_role_persist.ctx, role_name, desc) catch |e| {
+            log.warn("role_create graph persist failed; the role was not created", &.{ Attr.string("role", role_name), Attr.string("error", @errorName(e)) });
+            _ = g_custom_roles.fetchRemove(role_name);
+            allocator.free(columns[0]);
+            allocator.free(columns);
+            allocator.free(row);
+            allocator.free(rows);
+            return error.RoleNotPersisted;
+        };
     }
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "created {s}", .{role_name}) };
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
@@ -1223,12 +1257,23 @@ fn handleRoleDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     ensureRolesInit(allocator);
     _ = g_custom_roles.fetchRemove(role_name);
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-022; FEATURE="AuthDDLPersistence"; ASPECT=RoleDeletePersist; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=DropRoleFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-3038: the role goes from memory first (fail closed, as REVOKE);
+    // a stored record that could not be removed fails the call
+    // (`RoleNotPersisted`): it is loaded again at the next start unless DROP
+    // ROLE is retried. It was logged and reported deleted.
     if (!isBuiltinRoleName(role_name)) {
         if (g_role_persist.find_id_fn) |find_f| {
-            if (find_f(g_role_persist.ctx, role_name) catch null) |rid| {
+            const rid_opt = find_f(g_role_persist.ctx, role_name) catch |e| {
+                log.warn("role_delete graph lookup failed", &.{ Attr.string("role", role_name), Attr.string("error", @errorName(e)) });
+                return error.RoleNotPersisted;
+            };
+            if (rid_opt) |rid| {
                 if (g_role_persist.remove_fn) |rem_f| {
-                    rem_f(g_role_persist.ctx, rid) catch |e|
-                        log.warn("role_delete graph persist failed", &.{ Attr.string("role", role_name), Attr.string("error", @errorName(e)) });
+                    rem_f(g_role_persist.ctx, rid) catch |e| {
+                        log.warn("role_delete graph persist failed; the stored role remains", &.{ Attr.string("role", role_name), Attr.string("error", @errorName(e)) });
+                        return error.RoleNotPersisted;
+                    };
                 }
             }
         }

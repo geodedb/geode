@@ -122,13 +122,14 @@ pub const RLSFilterEngine = struct {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        const policy = LabelPolicy{
-            .graph = try self.allocator.dupe(u8, graph),
-            .label = try self.allocator.dupe(u8, label),
-            .deny = true,
-            .username = if (username.len > 0) try self.allocator.dupe(u8, username) else "",
-        };
-        try self.policies.append(self.allocator, policy);
+        // SONNY-3038: nothing kept (or leaked) when an allocation fails.
+        const g = try self.allocator.dupe(u8, graph);
+        errdefer self.allocator.free(g);
+        const l = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(l);
+        const u: []const u8 = if (username.len > 0) try self.allocator.dupe(u8, username) else "";
+        errdefer if (u.len > 0) self.allocator.free(u);
+        try self.policies.append(self.allocator, .{ .graph = g, .label = l, .deny = true, .username = u });
     }
 
     /// SONNY-2710: register an allow entry: a permissive policy on `label`

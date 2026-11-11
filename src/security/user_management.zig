@@ -175,8 +175,11 @@ pub const PersistentUserResolver = struct {
 
 // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-002; FEATURE="GQL Auth DDL Persistence"; ASPECT=WriteThrough; STATUS=TESTED; TEST=tests/test_auth_persistence.zig; OWNER=security; UPDATED=2026-05-12
 /// Write-through callback set for persisting auth DDL mutations to the __geode_security graph.
-/// All callbacks are optional and best-effort: a writer error is logged but never propagates
-/// to the caller — the in-memory mutation is always committed first.
+/// All callbacks are optional. SONNY-1333 / SONNY-3038: a writer error fails the mutation
+/// (`error.UserNotPersisted`) and the in-memory user stays as stored; a security-reducing
+/// change that could not be saved (a delete, a disable, a password change, a role
+/// downgrade) is enforced in memory instead (`UnsavedRestriction`). Each callback stores
+/// all of its change or none of it.
 pub const PersistentUserWriter = struct {
     ctx: ?*anyopaque = null,
     create_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, email: []const u8, password_hash: []const u8, role: Role) anyerror!void = null,
@@ -382,6 +385,96 @@ var auth_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var auth_invalidation_epoch: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
 var persistent_resolver: ?PersistentUserResolver = null;
 var persistent_writer: ?PersistentUserWriter = null;
+
+// CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=UnsavedRestrictions; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-3038: a security-reducing change to a user that could not be saved
+/// to `__geode_security`. The statement fails, the stored user is as it was,
+/// and the change is enforced here instead (fail closed, as a REVOKE whose
+/// save failed takes the privilege away in memory): the user cannot
+/// authenticate and its sessions are no longer current. The in-memory user
+/// record cannot carry the change itself: it is reloaded from the store
+/// whenever its auth_version differs, and on a cache miss. The restriction
+/// lasts until a later change to the user is saved (see `clearUnsaved`) or
+/// the process restarts, when the stored user is what applies.
+pub const UnsavedRestriction = enum(u8) {
+    deleted = 1,
+    disabled = 2,
+    password = 4,
+    role = 8,
+};
+
+/// Users with unsaved restrictions: username (owned, c_allocator) -> mask of
+/// `UnsavedRestriction`. Guarded by `user_store_mutex`.
+var unsaved_restrictions: ?std.StringHashMap(u8) = null;
+
+/// Record an unsaved restriction for `username`. Caller holds
+/// `user_store_mutex`. If even this cannot be recorded (no memory), the
+/// failure is logged; the statement still fails.
+fn recordUnsavedLocked(username: []const u8, what: UnsavedRestriction) void {
+    if (unsaved_restrictions == null) unsaved_restrictions = std.StringHashMap(u8).init(std.heap.c_allocator);
+    const map = &unsaved_restrictions.?;
+    if (map.getPtr(username)) |mask| {
+        mask.* |= @intFromEnum(what);
+    } else {
+        const key = std.heap.c_allocator.dupe(u8, username) catch {
+            log.err("SONNY-3038: an unsaved security-reducing user change could not be enforced in memory", &.{Attr.string("user", username)});
+            return;
+        };
+        map.put(key, @intFromEnum(what)) catch {
+            std.heap.c_allocator.free(key);
+            log.err("SONNY-3038: an unsaved security-reducing user change could not be enforced in memory", &.{Attr.string("user", username)});
+            return;
+        };
+    }
+    bumpAuthInvalidationEpoch();
+}
+
+/// Drop the unsaved restrictions in `mask` for `username` (a later change
+/// that was saved supersedes them). Caller holds `user_store_mutex`.
+fn clearUnsavedLocked(username: []const u8, mask: u8) void {
+    const map = &(unsaved_restrictions orelse return);
+    const entry = map.getEntry(username) orelse return;
+    entry.value_ptr.* &= ~mask;
+    if (entry.value_ptr.* != 0) return;
+    const key = entry.key_ptr.*;
+    _ = map.remove(username);
+    std.heap.c_allocator.free(key);
+}
+
+/// Every unsaved restriction: a saved delete, create, enable or disable
+/// leaves the stored user as the one that applies.
+const all_unsaved: u8 = 0xff;
+
+fn hasUnsavedLocked(username: []const u8) bool {
+    const map = &(unsaved_restrictions orelse return false);
+    return map.contains(username);
+}
+
+/// SONNY-3038: whether `username` has a security-reducing change that could
+/// not be saved and is enforced in memory (`UnsavedRestriction`).
+pub fn hasUnsavedRestriction(username: []const u8) bool {
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    return hasUnsavedLocked(username);
+}
+
+fn deinitUnsavedLocked() void {
+    const map = &(unsaved_restrictions orelse return);
+    var it = map.keyIterator();
+    while (it.next()) |key| std.heap.c_allocator.free(key.*);
+    map.deinit();
+    unsaved_restrictions = null;
+}
+
+/// How much a built-in role allows, for telling a downgrade (SONNY-3038).
+fn roleRank(role: Role) u8 {
+    return switch (role) {
+        .Admin => 3,
+        .ReadWrite => 2,
+        .User, .ReadOnly => 1,
+        .None => 0,
+    };
+}
 var auth_flight_mutex = std.Io.Mutex.init;
 var auth_flights: ?std.AutoHashMap(AuthFlightKey, *AuthFlight) = null;
 var auth_flight_lane: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
@@ -467,6 +560,7 @@ pub fn deinitUserStore() void {
     }
     persistent_resolver = null;
     persistent_writer = null;
+    deinitUnsavedLocked();
     publishPasswordPersistenceOwnership();
     auth_invalidation_epoch.store(1, .release);
     auth_flight_lane.store(0, .release);
@@ -781,6 +875,8 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
             };
         }
     }
+    // SONNY-3038: a new user, stored: nothing unsaved applies to it.
+    clearUnsavedLocked(username, all_unsaved);
 }
 
 /// Create a user with a pre-hashed password (for syncing from auth graph store).
@@ -822,11 +918,19 @@ pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, pa
     bumpAuthInvalidationEpoch();
     if (persistent_writer) |w| {
         if (w.create_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserImportFailureReported; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: as createUser (SONNY-1333): a user that could not
+            // be saved is not imported. It was kept in memory and reported
+            // imported (geode.auth.user_import), and was gone at the restart.
             f(w.ctx, username, email, inserted2.user.password_hash, role) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
+                log.warn("persistent user writer failed; the user was not imported", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
+                _ = store.remove(username);
+                bumpAuthInvalidationEpoch();
+                return error.UserNotPersisted;
             };
         }
     }
+    clearUnsavedLocked(username, all_unsaved);
 }
 
 /// Authenticate user with username and password.
@@ -945,20 +1049,35 @@ pub fn listUsers() ![]const User {
 
 /// GAP-0270: Delete a user from the in-memory store
 pub fn deleteUser(username: []const u8) !void {
+    // SONNY-3038: a stored user need not be cached (users are loaded at
+    // their first login after a start, and evicted). An uncached user
+    // answered Unauthenticated, which DROP USER reported as deleted, and the
+    // stored user stayed.
+    if (!try ensureUserCached(username)) return error.Unauthenticated;
+
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) return error.Unauthenticated;
-    if (!user_store.?.remove(username)) return error.Unauthenticated;
-    bumpAuthInvalidationEpoch();
+    if (!user_store.?.entries.contains(username)) return error.Unauthenticated;
 
     if (persistent_writer) |w| {
         if (w.delete_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=DropUserFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: a delete that could not be saved fails, and the
+            // user stays stored; it is locked out now (fail closed). It was
+            // logged and reported deleted, and the next lookup reloaded the
+            // stored user, so it could still log in.
             f(w.ctx, username) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "delete_fn"), Attr.string("error", @errorName(err)) });
+                log.warn("persistent user writer failed; the user was not deleted and is locked out until a change to it is saved or the restart", &.{ Attr.string("op", "delete_fn"), Attr.string("error", @errorName(err)) });
+                recordUnsavedLocked(username, .deleted);
+                return error.UserNotPersisted;
             };
         }
     }
+    _ = user_store.?.remove(username);
+    clearUnsavedLocked(username, all_unsaved);
+    bumpAuthInvalidationEpoch();
 }
 
 /// Check if any users exist
@@ -995,20 +1114,31 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
         return error.PasswordReuse;
     }
 
-    // Free the old password hash before replacing
-    store_allocator.free(user_ptr.user.password_hash);
-    user_ptr.user.password_hash = try hashPassword(store_allocator, new_password);
-    user_ptr.user.password_reset_required = false;
-    user_ptr.user.auth_version += 1;
-    bumpAuthInvalidationEpoch();
-
+    const new_hash = try hashPassword(store_allocator, new_password);
     if (persistent_writer) |w| {
         if (w.update_password_fn) |f| {
-            f(w.ctx, username, user_ptr.user.password_hash) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "update_password_fn"), Attr.string("error", @errorName(err)) });
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=PasswordChangeFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: saved first. A change that could not be saved fails,
+            // the stored password stays, and the user is locked out (fail
+            // closed: a password is often changed because the old one leaked).
+            // It was logged and reported changed; the next lookup reloaded the
+            // stored record, so the old password worked again.
+            f(w.ctx, username, new_hash) catch |err| {
+                store_allocator.free(new_hash);
+                log.warn("persistent user writer failed; the password was not changed and the user is locked out until a change to it is saved or the restart", &.{ Attr.string("op", "update_password_fn"), Attr.string("error", @errorName(err)) });
+                recordUnsavedLocked(username, .password);
+                return error.UserNotPersisted;
             };
         }
     }
+
+    // Free the old password hash before replacing
+    store_allocator.free(user_ptr.user.password_hash);
+    user_ptr.user.password_hash = new_hash;
+    user_ptr.user.password_reset_required = false;
+    user_ptr.user.auth_version += 1;
+    clearUnsavedLocked(username, @intFromEnum(UnsavedRestriction.password));
+    bumpAuthInvalidationEpoch();
 }
 
 /// Change a user's role. Idempotent: re-assigning the current role is a no-op
@@ -1027,17 +1157,24 @@ pub fn assignRole(allocator: std.mem.Allocator, username: []const u8, role: Role
     if (user_store == null) return error.Unauthenticated;
     const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
     if (user_ptr.user.role == role) return; // no-op, no version bump
-    user_ptr.user.role = role;
-    user_ptr.user.auth_version += 1;
-    bumpAuthInvalidationEpoch();
 
     if (persistent_writer) |w| {
         if (w.set_role_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=RoleChangeFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: saved first. A change that could not be saved fails
+            // and the stored role stays; a downgrade is enforced by locking
+            // the user out (fail closed). It was logged and reported assigned.
             f(w.ctx, username, role) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "set_role_fn"), Attr.string("error", @errorName(err)) });
+                log.warn("persistent user writer failed; the role was not changed", &.{ Attr.string("op", "set_role_fn"), Attr.string("error", @errorName(err)) });
+                if (roleRank(role) < roleRank(user_ptr.user.role)) recordUnsavedLocked(username, .role);
+                return error.UserNotPersisted;
             };
         }
     }
+    user_ptr.user.role = role;
+    user_ptr.user.auth_version += 1;
+    clearUnsavedLocked(username, @intFromEnum(UnsavedRestriction.role));
+    bumpAuthInvalidationEpoch();
 }
 
 /// Enable or disable a user account. Idempotent: re-setting the same active state is a no-op.
@@ -1054,17 +1191,25 @@ pub fn setUserActive(allocator: std.mem.Allocator, username: []const u8, active:
     if (user_store == null) return error.Unauthenticated;
     const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
     if (user_ptr.user.active == active) return; // no-op
-    user_ptr.user.active = active;
-    user_ptr.user.auth_version += 1;
-    bumpAuthInvalidationEpoch();
 
     if (persistent_writer) |w| {
         if (w.set_active_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=DisableFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: saved first. A change that could not be saved fails
+            // and the stored flag stays; a disable is enforced by locking the
+            // user out (fail closed). It was logged and reported disabled, and
+            // the next lookup reloaded the stored, active, user.
             f(w.ctx, username, active) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "set_active_fn"), Attr.string("error", @errorName(err)) });
+                log.warn("persistent user writer failed; the active flag was not changed", &.{ Attr.string("op", "set_active_fn"), Attr.string("error", @errorName(err)) });
+                if (!active) recordUnsavedLocked(username, .disabled);
+                return error.UserNotPersisted;
             };
         }
     }
+    user_ptr.user.active = active;
+    user_ptr.user.auth_version += 1;
+    clearUnsavedLocked(username, all_unsaved);
+    bumpAuthInvalidationEpoch();
 }
 
 pub fn invalidateCachedUser(username: []const u8) void {
@@ -1311,6 +1456,8 @@ pub fn currentAuthVersion(username: []const u8) !?u64 {
 }
 
 pub fn isSessionAuthCurrent(username: []const u8, session_auth_version: u64) !bool {
+    // SONNY-3038: a security-reducing change that could not be saved.
+    if (hasUnsavedRestriction(username)) return false;
     const current_version = try currentAuthVersion(username) orelse return false;
     return current_version == session_auth_version;
 }
@@ -1328,6 +1475,10 @@ pub fn isSessionAuthCurrentCached(username: []const u8, session_auth_version: u6
 
     const current_epoch = authInvalidationEpoch();
     if (observed_epoch.* == current_epoch) return true;
+
+    // SONNY-3038: a security-reducing change that could not be saved
+    // (recording it moved the epoch, so every session comes here).
+    if (hasUnsavedRestriction(username)) return false;
 
     // Local user-management mutations update the in-memory auth_version before
     // their persistent write-through completes, so check the cache first and
@@ -1366,7 +1517,8 @@ fn getAuthSnapshot(username: []const u8) !?AuthSnapshot {
         .password_hash = try std.heap.c_allocator.dupe(u8, cached.user.password_hash),
         .role = cached.user.role,
         .password_reset_required = cached.user.password_reset_required,
-        .active = cached.user.active,
+        // SONNY-3038: an unsaved security-reducing change locks the user out.
+        .active = cached.user.active and !hasUnsavedLocked(username),
         .auth_version = cached.user.auth_version,
     };
 }

@@ -1217,10 +1217,13 @@ pub const AuthGraphManager = struct {
     }
 
     pub fn assignUserRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role_id: u64) !u64 {
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
         const changed = try self.storage.assignUserRole(user_id, role_id);
-        if (!changed) {
-            const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
-            return record.auth_version;
+        if (!changed) return old.auth_version;
+        // SONNY-3038: the edge and the record, or neither.
+        errdefer {
+            _ = self.storage.revokeUserRole(user_id, role_id) catch |err| logRestoreFailure("HAS_ROLE edge", err);
+            self.restoreUserRecord(hmac_key, old);
         }
         const version = try self.storage.bumpUserAuthVersion(user_id);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
@@ -1231,10 +1234,13 @@ pub const AuthGraphManager = struct {
     }
 
     pub fn revokeUserRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role_id: u64) !u64 {
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
         const changed = try self.storage.revokeUserRole(user_id, role_id);
-        if (!changed) {
-            const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
-            return record.auth_version;
+        if (!changed) return old.auth_version;
+        // SONNY-3038: the edge and the record, or neither.
+        errdefer {
+            _ = self.storage.assignUserRole(user_id, role_id) catch |err| logRestoreFailure("HAS_ROLE edge", err);
+            self.restoreUserRecord(hmac_key, old);
         }
         const version = try self.storage.bumpUserAuthVersion(user_id);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
@@ -1277,7 +1283,10 @@ pub const AuthGraphManager = struct {
     /// so the reseal below is mandatory: a bare property write would fail
     /// `verifyChain` and brick the next startup.
     pub fn updateUserPassword(self: *Self, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) !u64 {
-        var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        const old = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        // SONNY-3038: all of it or none of it.
+        errdefer self.restoreUserRecord(hmac_key, old);
+        var record = old;
         record.password_hash_len = UserStorageBackend.copyIntoField(&record.password_hash, new_password_hash);
         record.password_reset_required = false;
         record.password_changed_at = compat_milliTimestamp();
@@ -1298,14 +1307,40 @@ pub const AuthGraphManager = struct {
     pub fn removeUser(self: *Self, hmac_key: *const [32]u8, user_id: u64) !void {
         try self.storage.removeUser(user_id);
         // next_user_id is monotonically increasing; no need to decrement.
-        try self.sealChain(hmac_key);
+        // SONNY-3038: the record is gone; a seal that failed is tried again
+        // (as a revoke's is), so a saved removal is not reported as failed.
+        self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
         self.logSecurityGraphMutation(.configuration_change, "REMOVE_USER", user_id, "", null);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserRecordUndo; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-3038: put a user record back as it was before a change that
+    /// failed part way (its cached record, its node, its HMAC) and seal the
+    /// chain again. A password, active-flag or role change used to leave
+    /// whatever it had written: a record whose node or chain no longer
+    /// matched (the next start's verification failed), or a change that was
+    /// in force after the restart although the statement failed.
+    fn restoreUserRecord(self: *Self, hmac_key: *const [32]u8, old: UserStorageBackend.UserRecord) void {
+        self.storage.user_cache.put(old.id, old) catch |err| logRestoreFailure("user record", err);
+        self.storage.upsertUserNode(old) catch |err| logRestoreFailure("user node", err);
+        self.recomputeAndStoreUserHmac(old.id, hmac_key) catch |err| logRestoreFailure("user HMAC", err);
+        self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+    }
+
+    fn logRestoreFailure(what: []const u8, err: anyerror) void {
+        log.err("SONNY-3038: a security-graph change that failed could not be undone; the next start may load it or fail chain verification", &.{
+            Attr.string("part", what),
+            Attr.string("error", @errorName(err)),
+        });
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-011; FEATURE="AuthDDLPersistence"; ASPECT=SetUserActive; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Set a user's active state. Bumps auth_version so existing sessions are
     /// invalidated when a user is disabled. Reseals the chain.
     pub fn setUserActive(self: *Self, hmac_key: *const [32]u8, user_id: u64, active: bool) !u64 {
+        const old = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        // SONNY-3038: all of it or none of it.
+        errdefer self.restoreUserRecord(hmac_key, old);
         try self.storage.updateUser(user_id, null, null, active, null, null);
         const v = try self.storage.bumpUserAuthVersion(user_id);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
@@ -1372,6 +1407,13 @@ pub const AuthGraphManager = struct {
         }
         const role_id = max_id + 1;
 
+        // SONNY-3038: a role whose save failed part way is taken out again
+        // (as a user is, SONNY-1333): CREATE ROLE reports the failure, and a
+        // role left stored would come back at the next start.
+        errdefer {
+            self.storage.removeRole(role_id) catch |err| logRestoreFailure("role record", err);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
         try self.storage.persistRole(role_id, name, description, 0, 0, false);
         try self.recomputeAndStoreRoleHmac(role_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1383,7 +1425,8 @@ pub const AuthGraphManager = struct {
     /// Remove a role from the security graph and reseal the chain.
     pub fn removeRole(self: *Self, hmac_key: *const [32]u8, role_id: u64) !void {
         try self.storage.removeRole(role_id);
-        try self.sealChain(hmac_key);
+        // SONNY-3038: as removeUser.
+        self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
         self.logSecurityGraphMutation(.configuration_change, "REMOVE_ROLE", role_id, "", null);
     }
 
@@ -1424,6 +1467,13 @@ pub const AuthGraphManager = struct {
 
         // SONNY-2777: the policy id sequence every policy writer shares.
         const policy_id = self.storage.nextPolicyId();
+        // SONNY-3038: a policy whose save failed part way is taken out again.
+        // CREATE POLICY took it out of the catalog and failed, and the stored
+        // record came back at the next start.
+        errdefer {
+            self.storage.removePolicy(policy_id) catch |err| logRestoreFailure("policy record", err);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
 
         try self.storage.persistPolicy(.{
             .policy_id = policy_id,
@@ -1450,11 +1500,19 @@ pub const AuthGraphManager = struct {
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
     /// Remove a policy by name from the security graph and reseal the chain.
     /// Returns error.PolicyNotFound if no matching policy exists.
+    ///
+    /// SONNY-3038: every GPS record of that name goes. Two could be stored
+    /// (a store written before names were unique, or by another writer); the
+    /// drop removed the first only, and the other was loaded at the next
+    /// start, so the dropped policy came back. A seal that fails after the
+    /// records went is tried again, as a revoke's is.
     pub fn dropPolicy(self: *Self, hmac_key: *const [32]u8, name: []const u8) !void {
-        const policy_id = self.findPolicyIdByName(name) orelse return error.PolicyNotFound;
-        try self.storage.removePolicy(policy_id);
-        try self.sealChain(hmac_key);
-        self.logSecurityGraphMutation(.configuration_change, "DROP_POLICY", policy_id, name, null);
+        if (self.findPolicyIdByName(name) == null) return error.PolicyNotFound;
+        while (self.findPolicyIdByName(name)) |policy_id| {
+            try self.storage.removePolicy(policy_id);
+            self.logSecurityGraphMutation(.configuration_change, "DROP_POLICY", policy_id, name, null);
+        }
+        self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
     }
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterPolicy; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
@@ -1493,6 +1551,15 @@ pub const AuthGraphManager = struct {
         // record's current values so an unspecified mutation is preserved.
         const new_enabled = set_enabled orelse existing.enabled;
         const new_name = rename_to orelse existing.getName();
+
+        // SONNY-3038: all of it or none of it. A change that failed part way
+        // was left stored (or stored with a stale HMAC or seal), while ALTER
+        // POLICY put the catalog back and failed.
+        errdefer {
+            self.storage.restorePolicyRecord(existing) catch |err| logRestoreFailure("policy record", err);
+            self.recomputeAndStorePolicyHmac(policy_id, hmac_key) catch |err| logRestoreFailure("policy HMAC", err);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
 
         // Re-persist under the SAME id so upsertPolicyNode reuses the existing
         // node (in-place rename/toggle — no duplicate, no stale old-name node).
@@ -1704,39 +1771,87 @@ pub const AuthGraphManager = struct {
         return uid;
     }
 
-    /// DROP USER's write-through (`server_init.writerDeleteUser`).
+    // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserWriteThroughs; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-3038: DROP USER's write-through (`server_init.writerDeleteUser`).
+    /// An error means the user is still stored. No such stored user: nothing
+    /// to do.
     pub fn deleteUserWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8) !void {
-        const uid = (try self.findUserIdByName(username)) orelse return;
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        // Not stored: a removal whose seals failed may have left the chain
+        // unsealed (removeUser); seal it, so the retry that reports success
+        // leaves a chain that verifies.
+        const uid = (try self.findUserIdByName(username)) orelse return self.sealChain(hmac_key);
         try self.removeUser(hmac_key, uid);
     }
 
-    /// A password change's write-through (`server_init.writerUpdatePassword`).
+    /// SONNY-3038: a password change's write-through
+    /// (`server_init.writerUpdatePassword`): stored, or an error and the
+    /// stored record as it was.
     pub fn updatePasswordWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, new_password_hash: []const u8) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
         const uid = (try self.findUserIdByName(username)) orelse return;
         _ = try self.updateUserPassword(hmac_key, uid, new_password_hash);
     }
 
-    /// ALTER USER ... ENABLE / DISABLE's write-through (`server_init.writerSetActive`).
+    /// SONNY-3038: ALTER USER ... ENABLE / DISABLE's write-through
+    /// (`server_init.writerSetActive`): stored, or an error and the stored
+    /// record as it was.
     pub fn setActiveWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, active: bool) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
         const uid = (try self.findUserIdByName(username)) orelse return;
         _ = try self.setUserActive(hmac_key, uid, active);
     }
 
-    /// A built-in role change's write-through (`server_init.writerSetRole`):
-    /// revoke the user's HAS_ROLE edges to the other built-in roles, then
-    /// assign one to `role_name` (its role node created if missing).
+    /// SONNY-3038: a built-in role change's write-through
+    /// (`server_init.writerSetRole`): the user's HAS_ROLE edges to the other
+    /// built-in roles (`builtin_names`) are revoked and one to `role_name`
+    /// assigned (its role node created if missing), all of it or none of it.
+    /// Done step by step, a failure part way left the user stored with no
+    /// built-in role, or with two. Custom-role edges are not touched.
     pub fn setBuiltinRoleWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, role_name: []const u8, builtin_names: []const []const u8) !void {
+        const max_roles = 8;
+        if (builtin_names.len > max_roles) return error.TooManyBuiltinRoles;
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
         const uid = (try self.findUserIdByName(username)) orelse return;
+        const old = self.storage.getUser(uid) orelse return error.UserNotFound;
+
+        var revoked: [max_roles]u64 = undefined;
+        var revoked_count: usize = 0;
+        var created_role: ?u64 = null;
+        var assigned_role: ?u64 = null;
+        errdefer {
+            if (assigned_role) |rid| _ = self.storage.revokeUserRole(uid, rid) catch |err| logRestoreFailure("HAS_ROLE edge", err);
+            for (revoked[0..revoked_count]) |rid| _ = self.storage.assignUserRole(uid, rid) catch |err| logRestoreFailure("HAS_ROLE edge", err);
+            if (created_role) |rid| self.storage.removeRole(rid) catch |err| logRestoreFailure("role record", err);
+            self.restoreUserRecord(hmac_key, old);
+        }
+
+        // A user has exactly one built-in role at a time (see writerSetRole).
         for (builtin_names) |other| {
             if (std.mem.eql(u8, other, role_name)) continue;
-            if (try self.findRoleIdByName(other)) |old_rid| {
-                _ = try self.revokeUserRole(hmac_key, uid, old_rid);
+            const rid = (try self.findRoleIdByName(other)) orelse continue;
+            const before = self.authVersionOf(uid);
+            // The version moves only when an edge was removed.
+            if (try self.revokeUserRole(hmac_key, uid, rid) != before) {
+                revoked[revoked_count] = rid;
+                revoked_count += 1;
             }
         }
-        _ = try self.createRole(hmac_key, role_name, "");
-        if (try self.findRoleIdByName(role_name)) |rid| {
-            _ = try self.assignUserRole(hmac_key, uid, rid);
-        }
+
+        const existed = (try self.findRoleIdByName(role_name)) != null;
+        const rid = try self.createRole(hmac_key, role_name, "");
+        if (!existed) created_role = rid;
+        const before = self.authVersionOf(uid);
+        if (try self.assignUserRole(hmac_key, uid, rid) != before) assigned_role = rid;
+    }
+
+    fn authVersionOf(self: *Self, user_id: u64) u64 {
+        const record = self.storage.getUser(user_id) orelse return 0;
+        return record.auth_version;
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11

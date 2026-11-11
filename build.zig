@@ -5594,7 +5594,8 @@ pub fn build(b: *std.Build) void {
     // main.zig can initialize the global expression RLS engine at startup.
     geode_exe.root_module.addImport("rls", rls_mod);
 
-    // GAP-0496: Security test — RLS QueryRewriter must validate policy expressions to prevent GQL injection
+    // rls_core.zig's inline tests (the GAP-0496 QueryRewriter tests went with
+    // the dead QueryRewriter, SONNY-3038).
     const rls_injection_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/security/test_rls_injection.zig"),
@@ -5609,7 +5610,7 @@ pub fn build(b: *std.Build) void {
     rls_injection_tests.root_module.addImport("user_attr_store", user_attr_store_mod);
     const run_rls_injection_tests = b.addRunArtifact(rls_injection_tests);
     shardDep(test_step, &run_rls_injection_tests.step, 1, test_shard_loads, test_shard_index);
-    const rls_injection_step = b.step("test-rls-injection", "Run the GAP-0496 RLS injection-guard tests (src/security/test_rls_injection.zig, with rls_core.zig's inline tests)");
+    const rls_injection_step = b.step("test-rls-injection", "Run rls_core.zig's inline tests (root: src/security/test_rls_injection.zig)");
     rls_injection_step.dependOn(&run_rls_injection_tests.step);
 
     // S1: RLS filter engine unit tests (label-based post-execution row filtering)

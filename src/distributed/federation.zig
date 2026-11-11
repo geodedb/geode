@@ -529,6 +529,13 @@ pub const QueryResults = struct {
     order_keys: []const []const u8 = &.{},
     order_dirs: []const bool = &.{},
     nulls_first: bool = true,
+
+    /// SONNY-3038: free one row, for `rls_filter.applyRLSToFederatedResults`,
+    /// which frees the rows it removes.
+    pub fn freeRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
+        freeBindingRow(allocator, row);
+    }
+
     pub fn deinit(self: *QueryResults, allocator: std.mem.Allocator) void {
         if (self.rows.len > 0) {
             for (self.rows) |row| freeBindingRow(allocator, row);
@@ -1252,6 +1259,18 @@ pub const QueryCache = struct {
         hasher.update(query.query_text);
         // Mix in parameter count as a separator to reduce collisions
         hasher.update(std.mem.asBytes(&query.parameters.len));
+        // CANARY: REQ=REQ-SONNY-3038-FEDERATION-FILTER; FEATURE="RLS Federation Filter"; ASPECT=CacheKeyPerPrincipal; STATUS=IMPL; OWNER=security; UPDATED=2026-11-11
+        // SONNY-3038: the cached results are the ones RLS-filtered for the
+        // user, graph and tenant that ran the query; another user's same
+        // query text must not be served them. Each part is length-prefixed
+        // so that two splits of one string do not collide.
+        for ([_]?[]const u8{ query.username, query.target_graph, query.tenant_id }) |part| {
+            const p = part orelse "";
+            const present: u8 = @intFromBool(part != null);
+            hasher.update(std.mem.asBytes(&present));
+            hasher.update(std.mem.asBytes(&p.len));
+            hasher.update(p);
+        }
         return hasher.final();
     }
 };

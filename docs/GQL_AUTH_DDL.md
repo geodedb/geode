@@ -192,17 +192,42 @@ its success text, and leaves nothing usable that is not stored:
 | `GRANT <priv> ON GRAPH g TO u` | 58030 (`GrantNotPersisted`): nothing is granted. Every privilege of the statement (all three for `ALL`) is stored and added to the live grant table, or none is: what one statement added is taken out again, as `CREATE POLICY` takes out a policy whose save failed. A grant held before the statement is kept. Retry the statement. |
 | `REVOKE <priv> ON GRAPH g FROM u` | 58030 (`RevokeNotPersisted`): the privilege is taken away in memory first, so it stops at once, but its stored record remains and is loaded at the next start. Retry the statement to remove it. (A record removed whose chain seal failed is sealed again in the same statement; if that holds, the revoke succeeds.) Every action of `ALL` is attempted. This is fail-closed, unlike `DROP POLICY`, which on a failed save keeps the policy in memory and in the store. |
 | `CREATE USER` | Status `error: UserNotPersisted`: the user is not created (in memory or in the store). A user stored without its role edge is removed again, so the retry succeeds. |
+| `geode.auth.user_import` | 58030 (`UserNotPersisted`, SONNY-3038): the user is not imported (in memory or in the store). |
+| `DROP USER` | 58030 (`UserNotPersisted`): the user stays stored, and is **locked out** now (see below). Retry the statement. |
+| `ALTER USER u SET PASSWORD` | 58030: the stored password stays, and the user is locked out: neither the old password (it may be why it was changed) nor the new one works. |
+| `ALTER USER u DISABLE` | 58030: the user stays stored as active, and is locked out. |
+| `ALTER USER u ENABLE` | 58030: the user stays disabled. |
+| `ALTER USER u SET ROLE r` | 58030: the stored role stays. A downgrade (to a role that allows less) locks the user out; an upgrade does not. The role change (revoke the other built-in role edges, assign the new one) is stored whole or not at all. |
+| `CREATE ROLE` | 58030 (`RoleNotPersisted`): the role is not created. |
+| `DROP ROLE` | 58030 (`RoleNotPersisted`): the role is removed in memory first, so it stops at once, but its stored record remains and is loaded at the next start. Retry the statement. |
+
+**Locked out (SONNY-3038).** The in-memory user record cannot carry a
+change the store does not have: it is reloaded from `__geode_security`
+whenever its auth version differs, or when it is not cached. So a
+security-reducing change that could not be saved (a delete, a disable, a
+password change, a role downgrade) is enforced by locking the user out: it
+cannot authenticate and its sessions are no longer current. The lock lasts
+until a later change to that user is saved (a saved delete, create, enable
+or disable clears every lock; a saved password change clears a password
+lock, a saved role change a role lock) or the server restarts, when the
+stored user applies. This is fail-closed, like `REVOKE`. Inside the auth
+manager, a change that fails part way (the chain seal included) is undone,
+so the stored record, its HMAC and the chain agree and the next start
+verifies; the same holds for `CREATE` and `ALTER POLICY`, and `DROP POLICY`
+removes every stored policy of the name.
 
 `SHOW GRANTS` reads the stored records, so it shows what the next start
 will load. These write-throughs undo themselves and run outside the
-statement undo (SONNY-3348), so a `GRANT`, `REVOKE` or `CREATE USER` inside
-an explicit transaction is not undone by `ROLLBACK`. Residuals: the other write-throughs (`DROP USER`, `ALTER USER`,
-`CREATE` / `DROP ROLE`, `geode.auth.user_import`) still log a failed save and
-report success (SONNY-3038); if the undo of a failed `GRANT` itself
-fails (a second failure), the error is logged and the stored record remains
-until revoked; and a failure inside the graph store's own node create or
-delete can leave a half-written node behind, which these undos do not
-repair.
+statement undo (SONNY-3348), so a `GRANT`, `REVOKE`, `CREATE USER` or any
+of the statements above inside an explicit transaction is not undone by
+`ROLLBACK`. Residuals: if the undo of a failed change itself fails (a
+second failure), the error is logged and what the first one wrote remains;
+a removal (`DROP USER`, `DROP ROLE`, `DROP POLICY`, `REVOKE`) whose chain
+seal fails twice is reported failed with the record already gone, and the
+chain does not verify until the next saved change reseals it; a lock that
+could not be recorded (no memory) is logged and not enforced; and a failure
+inside the graph store's own node create or delete can leave a
+half-written node behind, which these undos do not repair.
 
 On startup, `server_init` hydrates the security state from `__geode_security`:
 users are loaded via the existing `PersistentUserResolver`; custom roles are
