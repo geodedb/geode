@@ -12758,6 +12758,14 @@ pub fn build(b: *std.Build) void {
     const sonny2795_step = b.step("test-sonny2795-drop-index-catalog", "Run SONNY-2795 regression (DROP INDEX is saved and refused when the save fails; DROP INDEX and the vector-index catalog readers take the catalog lock; the global index manager does not adopt a request allocator; a session with no data directory keeps its catalog in memory)");
     sonny2795_step.dependOn(&run_sonny2795_tests.step);
 
+    const sonny2846_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2846_unique_constraint_enforcement.zig"), .target = target, .optimize = optimize });
+    sonny2846_test_mod.addImport("geode", root_mod);
+    const sonny2846_tests = b.addTest(.{ .root_module = sonny2846_test_mod });
+    const run_sonny2846_tests = b.addRunArtifact(sonny2846_tests);
+    shardDep(test_step, &run_sonny2846_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny2846_step = b.step("test-sonny2846-unique-constraint-enforcement", "Run SONNY-2846 / SONNY-3358 regression (UNIQUE constraints are enforced on CREATE, MERGE and SET at statement end, per graph and tenant, on in-memory, persisted, reopened and lean stores; CREATE CONSTRAINT over duplicates is refused; N concurrent writers of one value: one wins; the bulk fast-path helpers refuse a constrained graph)");
+    sonny2846_step.dependOn(&run_sonny2846_tests.step);
+
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once
     // per candidate row (RC-6, O(N^2) query), and the backfill reports no indexed
