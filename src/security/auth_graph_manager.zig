@@ -781,7 +781,30 @@ pub const AuthGraphManager = struct {
         self.seal_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.seal_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        try self.refuseUnsignedLegacy(hmac_key, decisions);
+        const seal = try self.computeSealLocked(hmac_key, decisions, &.{});
+        try self.persistSealLocked(seal);
+    }
+
+    /// A chain seal computed but not yet stored (SONNY-6273).
+    const ChainSeal = struct {
+        chain_hash: [32]u8,
+        record_count: u64,
+    };
+
+    /// Everything of a seal that can fail with this manager's memory: the
+    /// legacy-record check, each record's HMAC (stored on its node) and the
+    /// chain hash. `leaving`: policy records about to be removed, which the
+    /// seal leaves out (SONNY-6273, `dropPolicy`); they are not refused as
+    /// unsigned legacy records either, as the drop used to remove them
+    /// before sealing. Caller holds `seal_mutex`.
+    fn computeSealLocked(self: *Self, hmac_key: *const [32]u8, decisions: LegacyPolicyDecisions, leaving: []const u64) !ChainSeal {
+        if (leaving.len == 0) {
+            try self.refuseUnsignedLegacy(hmac_key, decisions);
+        } else {
+            // Only dropPolicy passes `leaving`, with no decisions of its own.
+            std.debug.assert(decisions.accept.len == 0 and decisions.drop.len == 0);
+            try self.refuseUnsignedLegacy(hmac_key, .{ .drop = leaving });
+        }
 
         var hmac_list: std.ArrayList([32]u8) = .empty;
         defer hmac_list.deinit(self.allocator);
@@ -796,7 +819,7 @@ pub const AuthGraphManager = struct {
         try self.sealPermissionRecords(hmac_key, &hmac_list);
 
         // Seal policy records
-        try self.sealPolicyRecords(hmac_key, &hmac_list);
+        try self.sealPolicyRecords(hmac_key, &hmac_list, leaving);
 
         // Seal graph grant records
         try self.sealGraphGrantRecords(hmac_key, &hmac_list);
@@ -804,11 +827,16 @@ pub const AuthGraphManager = struct {
         // Sort HMACs for deterministic chain hash
         sortHmacs(hmac_list.items);
 
-        const total_records = self.countAuthRecords();
-        const chain_hash = computeChainHashChecked(hmac_key, hmac_list.items, total_records);
-        const chain_hash_hex = auth_hmac.hmacToHex(&chain_hash);
+        const total_records = self.countAuthRecords() - leaving.len;
+        return .{
+            .chain_hash = computeChainHashChecked(hmac_key, hmac_list.items, total_records),
+            .record_count = total_records,
+        };
+    }
 
-        try self.storage.persistChainRoot(&chain_hash_hex, total_records, "sealed");
+    fn persistSealLocked(self: *Self, seal: ChainSeal) !void {
+        const chain_hash_hex = auth_hmac.hmacToHex(&seal.chain_hash);
+        try self.storage.persistChainRoot(&chain_hash_hex, seal.record_count, "sealed");
     }
 
     fn sealUserRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
@@ -879,12 +907,13 @@ pub const AuthGraphManager = struct {
         }
     }
 
-    fn sealPolicyRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+    fn sealPolicyRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8), leaving: []const u64) !void {
         var ids: std.ArrayList(u64) = .empty;
         defer ids.deinit(self.allocator);
         {
             var it = self.storage.policy_cache.keyIterator();
             while (it.next()) |key| {
+                if (std.mem.indexOfScalar(u64, leaving, key.*) != null) continue;
                 try ids.append(self.allocator, key.*);
             }
         }
@@ -1498,21 +1527,60 @@ pub const AuthGraphManager = struct {
     }
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-SONNY-6273-DROP-POLICY-ATOMIC; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicySealBeforeRemove; STATUS=TESTED; TEST=tests/test_sonny6273_drop_policy_atomic.zig; OWNER=security; UPDATED=2026-11-11
     /// Remove a policy by name from the security graph and reseal the chain.
     /// Returns error.PolicyNotFound if no matching policy exists.
     ///
     /// SONNY-3038: every GPS record of that name goes. Two could be stored
     /// (a store written before names were unique, or by another writer); the
     /// drop removed the first only, and the other was loaded at the next
-    /// start, so the dropped policy came back. A seal that fails after the
-    /// records went is tried again, as a revoke's is.
+    /// start, so the dropped policy came back.
+    ///
+    /// SONNY-6273: removal and seal are one step. The records were removed
+    /// first and the chain sealed after; a seal that failed twice left them
+    /// gone with the chain still counting them (RecordCountMismatch: the next
+    /// start refused to load the security graph) while DROP POLICY failed and
+    /// the catalog kept the policy. Now the ids and the new seal (every
+    /// allocation of it) are computed while the records are still there; a
+    /// failure there changes nothing. Then the records go and the computed
+    /// seal is stored, which allocates nothing of this manager's. Only if
+    /// the graph store fails that write is the chain sealed again (twice),
+    /// as before.
     pub fn dropPolicy(self: *Self, hmac_key: *const [32]u8, name: []const u8) !void {
-        if (self.findPolicyIdByName(name) == null) return error.PolicyNotFound;
-        while (self.findPolicyIdByName(name)) |policy_id| {
-            try self.storage.removePolicy(policy_id);
-            self.logSecurityGraphMutation(.configuration_change, "DROP_POLICY", policy_id, name, null);
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.policyIterator();
+            while (it.next()) |record| {
+                if (record.effectiveKind() == .gps and std.mem.eql(u8, record.getName(), name)) try ids.append(self.allocator, record.id);
+            }
         }
-        self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
+        if (ids.items.len == 0) return error.PolicyNotFound;
+
+        var removal_failure: ?anyerror = null;
+        var sealed = false;
+        {
+            self.seal_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.seal_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            const seal = try self.computeSealLocked(hmac_key, .{}, ids.items);
+            for (ids.items) |policy_id| {
+                self.storage.removePolicy(policy_id) catch |err| {
+                    removal_failure = err;
+                    break;
+                };
+            }
+            if (removal_failure == null) {
+                if (self.persistSealLocked(seal)) |_| {
+                    sealed = true;
+                } else |err| log.warn("DROP POLICY: the graph store did not take the chain seal; sealing again", &.{Attr.string("error", @errorName(err))});
+            }
+        }
+        // A removal that stopped part way, or a seal the graph store did not
+        // take: seal what is there now (a retry, as a revoke's), so the
+        // chain matches the records whatever is answered.
+        if (!sealed) self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
+        if (removal_failure) |err| return err;
+        for (ids.items) |policy_id| self.logSecurityGraphMutation(.configuration_change, "DROP_POLICY", policy_id, name, null);
     }
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterPolicy; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09

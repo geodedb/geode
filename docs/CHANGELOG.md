@@ -148,6 +148,21 @@
   instead of an unnamed user's. Behaviour change: a non-admin's
   `SHOW PERMISSIONS FOR <other user>` is refused.
   Regression: `zig build test-sonny6269-permissions-admin-gate`.
+- **A failed `DROP POLICY` no longer leaves the auth chain stale
+  (SONNY-6273).** The auth manager removed the policy's records and then
+  sealed the `__geode_security` HMAC chain; a seal that failed twice (no
+  memory, say) left the records gone and the chain still counting them,
+  while the statement failed and the policy stayed in force in memory. The
+  chain did not verify (`RecordCountMismatch`), so a restart before the next
+  auth change refused to start (`AuthChainTampered`), and after a reseal the
+  policy the failed statement had kept was gone at the next start. Now the
+  new seal is computed, every allocation of it, while the records are still
+  stored, and only then are the records removed and the seal stored: a
+  failure answers an error with the records, the catalog entry and the
+  chain as they were (a deny keeps denying, an allow keeps allowing, after a
+  restart too), and the retry drops it. A failure of the graph store's own
+  seal write is sealed again, as before.
+  Regression: `zig build test-sonny6273-drop-policy-atomic`.
 
 ### Added
 

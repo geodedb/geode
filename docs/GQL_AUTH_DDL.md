@@ -220,15 +220,25 @@ so the stored record, its HMAC and the chain agree and the next start
 verifies; the same holds for `CREATE` and `ALTER POLICY`, and `DROP POLICY`
 removes every stored policy of the name.
 
+**`DROP POLICY` is one step (SONNY-6273).** It computes the new chain seal
+(every allocation of it) while the policy's records are still stored, then
+removes them and stores that seal. A failure before the removal answers an
+error with the records, the catalog entry and the chain as they were: a
+deny policy keeps denying, an allow policy keeps allowing, now and after a
+restart, and the retry drops it. Once the records are gone the drop
+succeeds sealed; only if the graph store refuses the seal write is the
+chain sealed again (twice).
+
 `SHOW GRANTS` reads the stored records, so it shows what the next start
 will load. These write-throughs undo themselves and run outside the
 statement undo (SONNY-3348), so a `GRANT`, `REVOKE`, `CREATE USER` or any
 of the statements above inside an explicit transaction is not undone by
 `ROLLBACK`. Residuals: if the undo of a failed change itself fails (a
 second failure), the error is logged and what the first one wrote remains;
-a removal (`DROP USER`, `DROP ROLE`, `DROP POLICY`, `REVOKE`) whose chain
-seal fails twice is reported failed with the record already gone, and the
-chain does not verify until the next saved change reseals it; a lock that
+a removal (`DROP USER`, `DROP ROLE`, `REVOKE`) whose chain seal fails
+twice is reported failed with the record already gone, and the chain does
+not verify until the next saved change reseals it (for `DROP POLICY`, only
+when the graph store refuses the seal write twice, SONNY-6273); a lock that
 could not be recorded (no memory) is logged and not enforced; and a failure
 inside the graph store's own node create or delete can leave a
 half-written node behind, which these undos do not repair.
