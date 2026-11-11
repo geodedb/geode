@@ -41,6 +41,15 @@
   policy that relied on a single-graph scope to allow writes everywhere must
   be re-created `ON GRAPH *`. See docs/GQL_AUTH_DDL.md, "Per-graph grant
   semantics". Regression: `zig build test-per-graph-grants`.
+- **Restore rejects archive entries that escape the restore directory
+  (SONNY-6280):** the per-graph restore joined each archive entry name onto
+  the restore directory unchecked, so an uploaded backup (`upload_backup`,
+  admin) with a `../` or absolute entry name wrote outside it. The server
+  and CLI restore now check the whole archive before writing anything:
+  entry names must be relative, without `.`, `..` or empty components,
+  backslashes or NUL, and unique (`UnsafeArchiveEntryName`). Restored files
+  are created mode 0600 and synced; they used to get the umask default,
+  which left `server.key` and `.geode_hmac_key` from a backup world-readable.
 
 ### Added
 
@@ -50,6 +59,37 @@
 
 ### Fixed
 
+- **BREAKING: `geode restore <file>` restores the backup (SONNY-6280).**
+  From 2026-03-28 (`16833164`, which removed the legacy `graph_store.dat`
+  restore) the local CLI restore wrote nothing to disk: it checked and
+  decoded the backup, created an empty `./data/restore` in its working
+  directory, and printed "Full backup restore completed" and "Restore
+  completed successfully" with exit 0. It now writes the backup into the
+  directory given by `--data-dir <path>` (or `GEODE_DATA_DIR`), offline,
+  through the same decode and per-graph restore as the server path. The
+  restore is written into a mode-0700 staging directory beside the target,
+  every file is compared with the archive, the restored store is opened
+  cold, and only then is it renamed onto the target and success printed,
+  with each graph's node and edge counts. The target must not exist or be
+  empty; a non-empty target is refused (`RestoreTargetNotEmpty`), never
+  merged into. A restore with no target is a usage error (exit 2). A
+  failed restore exits 1 with `error: <Name>` and leaves nothing at the
+  target and no staging directory. `--target-time` takes epoch
+  milliseconds or `YYYY-MM-DDTHH:MM:SS[Z]` (UTC, real calendar arithmetic);
+  an unparsable value is a usage error instead of "restore the latest".
+  `--server` with a backup file is a usage error. Restoring from an
+  `s3://` or `http(s)://` source fails closed (the server ignored the URI
+  and restored its own newest backup over its live data); download the file
+  first. `geode restore --server <addr>` with no file asks the server to
+  restore its own newest backup, as before. Regression:
+  `zig build test-sonny6280-cli-restore-writes-data`.
+- **A restore with the wrong decryption key no longer crashes:**
+  `decryptData` freed its buffer twice on an authentication failure (the CLI
+  segfaulted; the server path shared the pattern). It now returns
+  `DecryptionFailed`.
+- **`geode backup create --local` fails when it cannot write `--output`:**
+  a failed copy to the requested path printed a warning and then "Backup
+  created successfully".
 - **Backup/restore regressions count the restored store the way the engine
   does (SONNY-6277):** `test-gap0862` (1 of 3) and `test-gap0880` (2 of 5)
   reported 0 nodes in a restored store (`expected 5, found 0`;

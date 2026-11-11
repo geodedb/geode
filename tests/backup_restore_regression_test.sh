@@ -101,12 +101,13 @@ else
     bad "Backup file present" "no .backup file under $BACKUP_DIR"
 fi
 
-# Test 3: CLI restore
-RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1)
-assert_match "CLI restore" "$RESTORE_OUT" "Restore completed successfully|RESTORE: (Restore initiated successfully|Point-in-time restore completed|Full backup restore completed)"
+# Test 3: CLI restore of the backup file into a fresh directory (offline;
+# SONNY-6280: it used to write nothing and still report success)
+RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --data-dir "$WORK_DIR/restored" --yes 2>&1)
+assert_match "CLI restore" "$RESTORE_OUT" "RESTORE: Restored and verified [0-9]+ files"
 
 # Test 4: CLI restore of a non-existent file fails (negative)
-MISSING_OUT=$($BIN restore "$BACKUP_DIR/does-not-exist.backup" --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1 || true)
+MISSING_OUT=$($BIN restore "$BACKUP_DIR/does-not-exist.backup" --data-dir "$WORK_DIR/restored-missing" --yes 2>&1 || true)
 assert_match "CLI restore of missing file fails" "$MISSING_OUT" "[Ee]rror|not found|FileNotFound|failed|No backup"
 
 echo -e "\n${YELLOW}UNSUPPORTED: GQL statement surface (must reject)${NC}"

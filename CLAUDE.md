@@ -81,7 +81,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### ✅ ALL MAJOR FEATURES COMPLETED (October 2025)
 
-1. **Backup/Restore** - Engine-backed `geode backup create` / `geode restore` CLI with full graph-data round-trip (S3 / Digital Ocean Spaces target supported). GQL `BACKUP`/`RESTORE` statements are NOT implemented (CLI only). Payload compression: `.gzip` has a real encoder (stdlib DEFLATE, GAP-0880); zstd/lz4/snappy are NOT wired — protocol upload-ingestion residuals remain tracked in GAP-0880. See Known Limitations.
+1. **Backup/Restore** - Engine-backed `geode backup create` / `geode restore` CLI with full graph-data round-trip (S3 / Digital Ocean Spaces target supported for backup upload). `geode restore <file> --data-dir <dir>` restores offline into a new or empty directory, verified before it reports success; from 2026-03-28 until SONNY-6280 the local CLI restore wrote nothing while reporting success (`zig build test-sonny6280-cli-restore-writes-data`). Restoring straight from an `s3://`/`http(s)://` URI is NOT supported (download the file first). GQL `BACKUP`/`RESTORE` statements are NOT implemented (CLI only). Payload compression: `.gzip` has a real encoder (stdlib DEFLATE, GAP-0880); zstd/lz4/snappy are NOT wired — protocol upload-ingestion residuals remain tracked in GAP-0880. See Known Limitations.
 2. **REPL QUIC Integration** - Real-time interactive shell with comprehensive features
 3. **Vector Operations** - HNSW indexing with 6 distance metrics and SIMD acceleration
 4. **Performance Optimization** - 13.18x I/O improvement, memory-mapped operations

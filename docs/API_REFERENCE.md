@@ -98,9 +98,20 @@ DROP INDEX IF EXISTS person_age_idx;
 > ```bash
 > geode backup create --output ./full.backup [--compress]   # full backup from the server (--server)
 > geode backup create --output ./full.backup --local --data-dir /var/lib/geode  # from a local data directory
-> geode restore ./full.backup --yes                          # restore from a backup file
+> geode restore ./full.backup --data-dir /var/lib/geode-restored --yes  # restore a backup file, offline
 > geode backup list [--dir ./backups]                        # list local backups
 > ```
+>
+> `geode restore <file>` writes the backup into `--data-dir` (or
+> `GEODE_DATA_DIR`), which must not exist or be empty; no server is
+> contacted. It verifies the whole backup first, writes into a staging
+> directory beside the target, compares every restored file with the
+> backup, opens the restored store, and only then moves it onto the target
+> and prints `Restore completed successfully` with each graph's node and
+> edge counts. Any failure exits non-zero with `error: <Name>` and leaves
+> nothing at the target. Restoring from an `s3://` or `http(s)://` URI is
+> not supported; download the file first. (From 2026-03-28 until
+> SONNY-6280 this command wrote nothing and still reported success.)
 >
 > If the server backup fails (unreachable, timeout, stalled transfer, server
 > error), `backup create` exits 1, leaves no output file and does not fall

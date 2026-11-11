@@ -1,5 +1,4 @@
 const std = @import("std");
-const cb = @import("crypto_backend");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -13,17 +12,6 @@ fn compat_milliTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
-fn compat_timestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec);
-}
 fn compat_microTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
@@ -34,14 +22,6 @@ fn compat_microTimestamp() i64 {
         if (rc != 0) return 0;
     }
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
-}
-
-// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
-fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
-    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
-    defer allocator.free(name_z);
-    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
-    return allocator.dupe(u8, std.mem.span(ptr));
 }
 
 // Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
@@ -787,6 +767,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     var source: ?[]const u8 = null;
     var target_time: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
+    var server_given: bool = false;
+    var data_dir: ?[]const u8 = null;
     var skip_confirmation: bool = false;
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
@@ -799,16 +781,28 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
             std.debug.print("geode restore - Restore database from backup\n" ++
                 "\n" ++
-                "Usage: geode restore [backup_file] [options]\n" ++
-                "       geode restore --source <URI> [options]\n" ++
+                "Usage: geode restore <backup_file> --data-dir <path> [options]\n" ++
+                "       geode restore --server <addr:port> [--target-time <ms>] [options]\n" ++
                 "\n" ++
                 "Arguments:\n" ++
-                "  backup_file            Path to backup file (positional argument)\n" ++
+                "  backup_file            Path to a local backup file (positional argument)\n" ++
+                "\n" ++
+                "A backup file is restored offline into --data-dir (default: $GEODE_DATA_DIR),\n" ++
+                "which must not exist or be empty; no server is contacted. The restore is\n" ++
+                "written beside the target, verified, opened cold, and only then moved into\n" ++
+                "place. Start a server on that directory afterwards.\n" ++
+                "With --server and no backup file, the server restores its own newest\n" ++
+                "server-managed backup (taken with geode backup create) into its data directory.\n" ++
+                "Restoring directly from s3:// or http(s):// URIs is not supported: download\n" ++
+                "the backup file first.\n" ++
                 "\n" ++
                 "Options:\n" ++
-                "  --source <URI>         Backup source (alternative to positional)\n" ++
-                "  --target-time <time>   Restore to specific timestamp\n" ++
-                "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
+                "  --source <path>        Backup file (alternative to positional)\n" ++
+                "  --data-dir <path>      Directory to restore into (default: $GEODE_DATA_DIR)\n" ++
+                "  --target-time <time>   Restore the newest backup taken at or before <time>\n" ++
+                "                         (epoch ms or YYYY-MM-DDTHH:MM:SS[Z] UTC; a file\n" ++
+                "                         restore picks it from metadata.json beside the file)\n" ++
+                "  --server <addr:port>   Ask this server to restore its own backup\n" ++
                 "  --user <username>      Username for authentication\n" ++
                 "  --password <password>  Password for authentication\n" ++
                 "  --yes                  Skip confirmation prompts\n" ++
@@ -825,10 +819,9 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
                 "\n" ++
                 "Examples:\n" ++
-                "  geode restore ./backup.gql --confirm\n" ++
-                "  geode restore --source s3://bucket/backup.gql --yes\n" ++
-                "  geode restore ./backup.gql --yes --insecure-tls-skip-verify\n" ++
-                "  geode restore ./backup.gql --yes --ca-cert /etc/ssl/ca.crt\n" ++
+                "  geode restore ./full.backup --data-dir /var/lib/geode-restored --yes\n" ++
+                "  GEODE_DATA_DIR=/var/lib/geode geode restore ./full.backup --confirm\n" ++
+                "  geode restore --server 127.0.0.1:3141 --yes --ca-cert /etc/ssl/ca.crt\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--source")) {
@@ -852,6 +845,14 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             }
             i += 1;
             server = argv[i];
+            server_given = true;
+        } else if (std.mem.eql(u8, argv[i], "--data-dir")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --data-dir requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            i += 1;
+            data_dir = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--user") or std.mem.eql(u8, argv[i], "-U")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --user requires a value\n", .{});
@@ -902,10 +903,29 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         }
     }
 
-    if (source == null) {
+    if (source == null and !server_given) {
         std.debug.print("Error: --source is required\n", .{});
         std.debug.print("Use 'geode restore --help' for usage information\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+    if (source) |src| {
+        // SONNY-6280: a remote URI used to go to the server, which ignored it
+        // and restored its own newest backup over its live data. Refused.
+        if (std.mem.startsWith(u8, src, "s3://") or
+            std.mem.startsWith(u8, src, "https://") or
+            std.mem.startsWith(u8, src, "http://"))
+        {
+            std.debug.print("Error: restoring from a remote URI ({s}) is not supported: download the backup file and run geode restore <file> --data-dir <path>\n", .{src});
+            std.debug.print("error: RemoteRestoreSourceNotSupported\nRestore failed; nothing was restored.\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+        if (server_given) {
+            std.debug.print("Error: --server cannot restore a local backup file; geode restore <file> writes it offline into --data-dir (stop the server, restore into an empty directory, start the server on it)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+    } else if (data_dir != null) {
+        std.debug.print("Error: --data-dir applies to a backup file; a --server restore writes into the server's own data directory\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
     // S-7: Use consolidated password resolution
@@ -920,7 +940,9 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     // Confirmation prompt unless --yes is specified
     if (!skip_confirmation) {
         std.debug.print("WARNING: This will restore the database from backup.\n", .{});
-        std.debug.print("All current data will be replaced with backup data.\n", .{});
+        if (source == null) {
+            std.debug.print("All of the server's current data will be replaced with backup data.\n", .{});
+        }
         std.debug.print("Use --yes to skip this confirmation prompt.\n", .{});
 
         // Read confirmation from stdin
@@ -958,8 +980,18 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         std.debug.print("Proceeding with restore...\n", .{});
     }
 
-    // Execute restore (GAP-0137: pass TLS config)
-    try executeRestore(allocator, source.?, target_time, server, tls_config, username, password);
+    if (source) |src| {
+        executeLocalRestore(allocator, src, target_time, data_dir) catch |err| {
+            std.debug.print("error: {s}\nRestore failed; nothing was restored.\n", .{@errorName(err)});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    } else {
+        // GAP-0137: pass TLS config
+        executeRemoteRestore(allocator, "", target_time, server, tls_config, username, password) catch |err| {
+            std.debug.print("error: {s}\nServer restore failed.\n", .{@errorName(err)});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    }
 
     std.debug.print("Restore completed successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
@@ -1952,72 +1984,12 @@ fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, m
 
     if (!std.mem.eql(u8, created_path, dest)) {
         std.Io.Dir.cwd().copyFile(created_path, std.Io.Dir.cwd(), dest, std.Io.Threaded.global_single_threaded.io(), .{}) catch |err| {
-            std.debug.print("Warning: Failed to copy backup to requested output ({s}): {}\n", .{ dest, err });
+            std.debug.print("Error: Failed to copy backup to requested output ({s}): {}\n", .{ dest, err });
+            return err;
         };
     }
 
     std.debug.print("Local backup completed: {s}\n", .{dest});
-}
-
-fn parseHexKey(hex_str: []const u8) ![32]u8 {
-    if (hex_str.len != 64) return error.InvalidTdeKeyLength;
-    var key: [32]u8 = undefined;
-    var i: usize = 0;
-    while (i < 32) : (i += 1) {
-        const hi = std.fmt.charToDigit(hex_str[i * 2], 16) catch return error.InvalidTdeKeyHex;
-        const lo = std.fmt.charToDigit(hex_str[i * 2 + 1], 16) catch return error.InvalidTdeKeyHex;
-        key[i] = @as(u8, @intCast(hi * 16 + lo));
-    }
-    return key;
-}
-
-fn decryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u8 {
-    const NonceSize = 12;
-    const TagSize = 16;
-    const Overhead = NonceSize + TagSize;
-    if (data.len < Overhead) return error.InvalidEncryptedData;
-
-    var nonce: [NonceSize]u8 = undefined;
-    @memcpy(&nonce, data[0..NonceSize]);
-    var tag: [TagSize]u8 = undefined;
-    @memcpy(&tag, data[NonceSize .. NonceSize + TagSize]);
-    const ciphertext = data[Overhead..];
-
-    const plaintext = try allocator.alloc(u8, ciphertext.len);
-    errdefer allocator.free(plaintext);
-    cb.Aead.open(.aes_256_gcm, &key, &nonce, "", ciphertext, &tag, plaintext) catch {
-        allocator.free(plaintext);
-        return error.DecryptionFailed;
-    };
-    return plaintext;
-}
-
-fn decompressData(data: []const u8, compression: backup_types.CompressionType, allocator: std.mem.Allocator) ![]u8 {
-    if (compression == .none) return allocator.dupe(u8, data);
-    if (compression == .gzip) {
-        // GAP-0880: gzip backups are produced by the real DEFLATE encoder.
-        var out: std.Io.Writer.Allocating = .init(allocator);
-        defer out.deinit();
-        var in: std.Io.Reader = .fixed(data);
-        var flate_stream: std.compress.flate.Decompress = .init(&in, .gzip, &.{});
-        _ = flate_stream.reader.streamRemaining(&out.writer) catch |err| return err;
-        return try out.toOwnedSlice();
-    }
-    if (compression == .zstd) {
-        // Decompress-only: no zstd encoder exists, but old artifacts whose
-        // header records .zstd must still restore.
-        var out: std.Io.Writer.Allocating = .init(allocator);
-        defer out.deinit();
-        var in: std.Io.Reader = .fixed(data);
-        var zstd_stream: std.compress.zstd.Decompress = .init(&in, &.{}, .{});
-        _ = zstd_stream.reader.streamRemaining(&out.writer) catch |err| return err;
-        return try out.toOwnedSlice();
-    }
-    return error.UnsupportedCompression;
-}
-
-fn computeChecksum(data: []const u8) u64 {
-    return std.hash.crc.Crc32.hash(data);
 }
 
 // CANARY: REQ=REQ-BACKUP-RESTORE-001; FEATURE="Backup Restore"; ASPECT=RemoteRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
@@ -2138,275 +2110,193 @@ fn executeRemoteRestore(
     }
 }
 
-// CANARY: REQ=REQ-BACKUP-RESTORE-002; FEATURE="Backup Restore"; ASPECT=LocalRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
-// GAP-0137: Updated to support TLS certificate verification
-// Local restore execution - handles local file restoration
-fn executeRestore(
+// CANARY: REQ=REQ-BACKUP-RESTORE-002; FEATURE="Backup Restore"; ASPECT=LocalRestore; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=cli; UPDATED=2026-11-11
+// Local restore: writes a backup file into a data directory, offline.
+//
+// SONNY-6280: this used to check the archive, write nothing, and print
+// "Full backup restore completed" (since 16833164, 2026-03-28, which removed
+// the monolithic restore and never wired the per-graph one). It now reuses
+// the server path's decode and per-graph restore (storage/backup.zig),
+// writes into a staging directory beside the target, verifies every file
+// against the archive and opens the restored store cold, and only then
+// renames it onto the target and reports success.
+fn executeLocalRestore(
     allocator: std.mem.Allocator,
     source: []const u8,
     target_time: ?[]const u8,
-    server: []const u8,
-    tls_config: TlsConfig,
-    username: ?[]const u8,
-    password: ?[]const u8,
+    data_dir_arg: ?[]const u8,
 ) !void {
     std.debug.print("RESTORE: Initiating restore from '{s}'\n", .{source});
 
-    // Check if source is a remote URI (s3://, https://, etc.)
-    if (std.mem.startsWith(u8, source, "s3://") or
-        std.mem.startsWith(u8, source, "https://") or
-        std.mem.startsWith(u8, source, "http://"))
-    {
-        // Remote restore via server (GAP-0137: pass TLS config)
-        return executeRemoteRestore(allocator, source, target_time, server, tls_config, username, password);
-    }
-
-    // Local restore
-    const restore_dir = "data/restore";
-    std.debug.print("RESTORE: Target directory: {s}\n", .{restore_dir});
-
-    // Parse target time if specified
-    var target_timestamp: ?i64 = null;
+    var backup_path: []const u8 = source;
+    var selected_owned: ?[]u8 = null;
+    defer if (selected_owned) |sel| allocator.free(sel);
     if (target_time) |ts| {
-        std.debug.print("RESTORE: Target timestamp: {s}\n", .{ts});
-        // Parse ISO 8601 timestamp to epoch milliseconds
-        target_timestamp = parseTimestampToEpoch(ts);
-        if (target_timestamp == null) {
-            std.debug.print("Warning: Could not parse timestamp, using latest backup\n", .{});
-        }
+        const target_ms = parseTimestampToEpoch(ts) orelse {
+            std.debug.print("Error: --target-time '{s}' is not epoch milliseconds or YYYY-MM-DDTHH:MM:SS[Z] (UTC)\n", .{ts});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        const backup_dir = std.fs.path.dirname(source) orelse ".";
+        selected_owned = try selectPointInTimeBackup(allocator, backup_dir, target_ms);
+        backup_path = selected_owned.?;
+        std.debug.print("RESTORE: Target time (ms): {d}; selected backup {s}\n", .{ target_ms, backup_path });
     }
 
-    // Determine backup directory from source
-    const backup_dir = if (std.mem.lastIndexOf(u8, source, "/")) |idx|
-        source[0..idx]
-    else
-        ".";
+    // Verify the whole backup before looking at the target, so a bad file
+    // reports its own error whatever the target.
+    var decoded = try backup_types.readBackupFile(allocator, backup_path, null);
+    defer decoded.deinit(allocator);
+    std.debug.print("RESTORE: Backup verified: version {d}, type {s}, compression {s}, encrypted {}, {d} files, {d} bytes\n", .{
+        decoded.header.version,
+        @tagName(decoded.header.backup_type),
+        @tagName(decoded.header.compression),
+        decoded.header.encrypted,
+        decoded.stats.files,
+        decoded.stats.bytes,
+    });
 
-    // Initialize restore manager
-    var restore_manager = SimplifiedRestoreManager{
-        .allocator = allocator,
-        .backup_dir = backup_dir,
-        .restore_dir = restore_dir,
+    const target = data_dir_arg orelse posixGetenv("GEODE_DATA_DIR") orelse {
+        std.debug.print("Error: geode restore needs a target directory: --data-dir <path> or GEODE_DATA_DIR\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    };
+    if (target.len == 0) {
+        std.debug.print("Error: --data-dir must not be empty\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    std.debug.print("RESTORE: Target directory: {s}\n", .{target});
+
+    var staged = backup_types.stageRestore(allocator, decoded.archive, target) catch |err| {
+        if (err == error.RestoreTargetNotEmpty) {
+            std.debug.print("RESTORE: target directory '{s}' is not empty; restore writes only into a new or empty directory\n", .{target});
+        }
+        return err;
+    };
+    defer staged.deinit();
+
+    const graphs = try verifyRestoredStore(allocator, staged.staging_dir);
+    defer {
+        for (graphs) |g| allocator.free(g.name);
+        allocator.free(graphs);
+    }
+
+    staged.commit() catch |err| {
+        if (err == error.RestoreTargetNotEmpty) {
+            std.debug.print("RESTORE: target directory '{s}' is not empty; restore writes only into a new or empty directory\n", .{target});
+        }
+        return err;
     };
 
-    // Perform restore
-    if (target_timestamp) |ts| {
-        const metadata = try restore_manager.restoreToPointInTime(source, ts);
-        std.debug.print("RESTORE: Point-in-time restore completed\n", .{});
-        std.debug.print("  Backup ID: {x}\n", .{metadata.source_backup_id});
-        std.debug.print("  Backup type: {s}\n", .{@tagName(metadata.backup_type)});
-        std.debug.print("  Data size: {d} bytes\n", .{metadata.data_size_bytes});
-        std.debug.print("  Checksum verified: {}\n", .{metadata.checksum_verified});
-        if (metadata.target_time) |t| {
-            std.debug.print("  Target time (ms): {d}\n", .{t});
-        }
-    } else {
-        const metadata = try restore_manager.restoreFromBackup(source);
-        std.debug.print("RESTORE: Full backup restore completed\n", .{});
-        std.debug.print("  Backup ID: {x}\n", .{metadata.source_backup_id});
-        std.debug.print("  Backup type: {s}\n", .{@tagName(metadata.backup_type)});
-        std.debug.print("  Data size: {d} bytes\n", .{metadata.data_size_bytes});
-        std.debug.print("  Checksum verified: {}\n", .{metadata.checksum_verified});
+    std.debug.print("RESTORE: Restored and verified {d} files ({d} bytes) into {s}\n", .{ staged.stats.files, staged.stats.bytes, target });
+    for (graphs) |g| {
+        std.debug.print("  graph '{s}': {d} nodes, {d} edges\n", .{ g.name, g.nodes, g.edges });
     }
 }
 
-/// Parse ISO 8601 timestamp string to epoch milliseconds
+const RestoredGraph = struct {
+    name: []u8,
+    nodes: u64,
+    edges: u64,
+};
+
+/// Open the restored directory cold, as a server would, and count every
+/// graph's nodes and edges from its storage engine. Fails if any graph in
+/// the restored registry cannot be opened.
+fn verifyRestoredStore(allocator: std.mem.Allocator, dir: []const u8) ![]RestoredGraph {
+    _ = try graph_store.initGlobalStore(allocator, dir);
+    defer {
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    const adapter = graph_store.getGlobalAdapter() orelse return error.StorageAdapterUnavailable;
+
+    const names = try adapter.listGraphNames(allocator);
+    defer {
+        for (names) |n| allocator.free(n);
+        allocator.free(names);
+    }
+
+    var out: std.ArrayList(RestoredGraph) = .empty;
+    errdefer {
+        for (out.items) |g| allocator.free(g.name);
+        out.deinit(allocator);
+    }
+    for (names) |name| {
+        const nodes = try adapter.nodeCount(name);
+        const edges = try adapter.edgeCount(name);
+        const name_owned = try allocator.dupe(u8, name);
+        errdefer allocator.free(name_owned);
+        try out.append(allocator, .{ .name = name_owned, .nodes = nodes, .edges = edges });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// Parse --target-time to epoch milliseconds: either an integer (epoch ms,
+/// as the server restore takes it) or `YYYY-MM-DDTHH:MM:SS` with an optional
+/// trailing `Z`, read as UTC. Returns null for anything else.
 fn parseTimestampToEpoch(ts: []const u8) ?i64 {
-    // Simple parsing for YYYY-MM-DDTHH:MM:SS format
-    // Returns epoch seconds (not milliseconds for simplicity)
-    if (ts.len < 19) return null;
+    if (std.fmt.parseInt(i64, ts, 10)) |ms| {
+        return ms;
+    } else |_| {}
 
-    // Extract components
-    const year = std.fmt.parseInt(i32, ts[0..4], 10) catch return null;
-    const month = std.fmt.parseInt(u8, ts[5..7], 10) catch return null;
-    const day = std.fmt.parseInt(u8, ts[8..10], 10) catch return null;
-    const hour = std.fmt.parseInt(u8, ts[11..13], 10) catch return null;
-    const minute = std.fmt.parseInt(u8, ts[14..16], 10) catch return null;
-    const second = std.fmt.parseInt(u8, ts[17..19], 10) catch return null;
+    const s = if (std.mem.endsWith(u8, ts, "Z")) ts[0 .. ts.len - 1] else ts;
+    if (s.len != 19 or s[4] != '-' or s[7] != '-' or (s[10] != 'T' and s[10] != ' ') or s[13] != ':' or s[16] != ':') return null;
+    const year = std.fmt.parseInt(i64, s[0..4], 10) catch return null;
+    const month = std.fmt.parseInt(u8, s[5..7], 10) catch return null;
+    const day = std.fmt.parseInt(u8, s[8..10], 10) catch return null;
+    const hour = std.fmt.parseInt(u8, s[11..13], 10) catch return null;
+    const minute = std.fmt.parseInt(u8, s[14..16], 10) catch return null;
+    const second = std.fmt.parseInt(u8, s[17..19], 10) catch return null;
+    if (month < 1 or month > 12 or hour > 23 or minute > 59 or second > 59) return null;
+    const leap = (@mod(year, 4) == 0 and @mod(year, 100) != 0) or @mod(year, 400) == 0;
+    const month_days = [_]u8{ 31, if (leap) 29 else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    if (day < 1 or day > month_days[month - 1]) return null;
 
-    // Convert to epoch (simplified - doesn't account for leap years properly)
-    const days_since_epoch: i64 = @as(i64, year - 1970) * 365 +
-        @as(i64, @divFloor((year - 1969), 4)) + // leap years
-        @as(i64, month - 1) * 30 + // approximate months
-        @as(i64, day - 1);
+    // Days from 1970-01-01 to the civil date (proleptic Gregorian).
+    const y = if (month <= 2) year - 1 else year;
+    const era = @divFloor(y, 400);
+    const yoe = y - era * 400;
+    const m: i64 = month;
+    const doy = @divFloor(153 * (if (m > 2) m - 3 else m + 9) + 2, 5) + day - 1;
+    const doe = yoe * 365 + @divFloor(yoe, 4) - @divFloor(yoe, 100) + doy;
+    const days = era * 146097 + doe - 719468;
 
-    const seconds: i64 = days_since_epoch * 86400 +
-        @as(i64, hour) * 3600 +
-        @as(i64, minute) * 60 +
-        @as(i64, second);
-
-    return seconds * 1000; // Return milliseconds
+    return (days * 86400 + @as(i64, hour) * 3600 + @as(i64, minute) * 60 + second) * 1000;
 }
 
-// CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore Manager"; ASPECT=LocalRestoreImpl; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
-const SimplifiedRestoreManager = struct {
-    allocator: std.mem.Allocator,
-    backup_dir: []const u8,
-    restore_dir: []const u8,
+// CANARY: REQ=REQ-PITR-GS-001; FEATURE="Point-in-Time Recovery"; ASPECT=SnapshotSelection; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=backup; UPDATED=2026-11-11
+/// The newest full backup in `backup_dir/metadata.json` taken at or before
+/// `target_time` (epoch ms). Caller owns the returned path.
+fn selectPointInTimeBackup(allocator: std.mem.Allocator, backup_dir: []const u8, target_time: i64) ![]u8 {
+    const metadata_path = try std.fmt.allocPrint(allocator, "{s}/metadata.json", .{backup_dir});
+    defer allocator.free(metadata_path);
 
-    /// Restore from a backup file to the restore directory
-    fn restoreFromBackup(self: SimplifiedRestoreManager, backup_path: []const u8) !RestoreMetadata {
-        // Open backup file
-        const io_rb = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(io_rb, backup_path, .{}) catch |err| {
-            std.debug.print("RESTORE: Failed to open backup file '{s}': {}\n", .{ backup_path, err });
-            return error.BackupFileNotFound;
-        };
-        defer file.close(io_rb);
+    const io_pt = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io_pt, metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
+        error.FileNotFound => return error.BackupMetadataNotFound,
+        else => return err,
+    };
+    defer file.close(io_pt);
 
-        // Read entire file into memory for processing
-        const stat = file.stat(io_rb) catch return error.ReadError;
-        // Cast to usize (safely truncates on 32-bit platforms; backup files should not exceed addressable memory)
-        const file_size: usize = @intCast(stat.size);
-        const file_data = self.allocator.alloc(u8, file_size) catch return error.OutOfMemory;
-        defer self.allocator.free(file_data);
-        const bytes_read = file.readPositionalAll(io_rb, file_data, 0) catch return error.ReadError;
-        if (bytes_read != file_size) return error.ReadError;
+    const file_len = try file.length(io_pt);
+    if (file_len > 2 * 1024 * 1024) return error.OutOfMemory;
+    const data = try allocator.alloc(u8, @intCast(file_len));
+    defer allocator.free(data);
+    _ = try file.readPositionalAll(io_pt, data, 0);
 
-        // Use a fixed buffer reader
-        var reader = std.Io.Reader.fixed(file_data);
+    const parsed = try std.json.parseFromSlice([]backup_types.BackupMetadata, allocator, data, .{});
+    defer parsed.deinit();
 
-        // Read and verify header
-        var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
-        reader.readSliceAll(&header_buf) catch |err| {
-            std.debug.print("RESTORE: Failed to read backup header: {}\n", .{err});
-            return error.InvalidBackupFile;
-        };
-        const header: BackupHeader = std.mem.bytesToValue(BackupHeader, &header_buf);
-
-        if (header.magic != BACKUP_MAGIC) {
-            std.debug.print("RESTORE: Invalid backup file magic (expected 0x{x}, got 0x{x})\n", .{ BACKUP_MAGIC, header.magic });
-            return error.InvalidBackupFile;
+    var chosen: ?backup_types.BackupMetadata = null;
+    for (parsed.value) |entry| {
+        if (entry.timestamp > target_time) continue;
+        if (chosen == null or entry.timestamp > chosen.?.timestamp) {
+            chosen = entry;
         }
-
-        std.debug.print("RESTORE: Backup file version: {d}\n", .{header.version});
-        std.debug.print("RESTORE: Backup type: {s}\n", .{@tagName(header.backup_type)});
-        std.debug.print("RESTORE: Compression: {s}\n", .{@tagName(header.compression)});
-        std.debug.print("RESTORE: Encrypted: {}\n", .{header.encrypted});
-
-        const payload_offset = @sizeOf(BackupHeader);
-        const payload_len: usize = @intCast(header.payload_len);
-        if (file_data.len < payload_offset + payload_len) return error.InvalidBackupFile;
-        const payload = file_data[payload_offset .. payload_offset + payload_len];
-
-        const checksum_ok = computeChecksum(payload) == header.checksum;
-        if (!checksum_ok) return error.BackupChecksumMismatch;
-
-        var decoded: []u8 = payload;
-        var decoded_owned = false;
-        if (header.encrypted) {
-            const key_raw = getEnvVarOwned(self.allocator, "GEODE_TDE_KEY") catch return error.MissingEncryptionKey;
-            defer self.allocator.free(key_raw);
-            const key = try parseHexKey(key_raw);
-            decoded = try decryptData(payload, key, self.allocator);
-            decoded_owned = true;
-        }
-        defer if (decoded_owned) self.allocator.free(decoded);
-
-        const decompressed = try decompressData(decoded, header.compression, self.allocator);
-        defer self.allocator.free(decompressed);
-
-        // Ensure restore directory exists
-        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), self.restore_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => {
-                std.debug.print("RESTORE: Failed to create restore directory: {}\n", .{err});
-                return err;
-            },
-        };
-
-        const prev_override = graph_store.getDataDirOverride();
-        var prev_owned: ?[]u8 = null;
-        if (prev_override) |ov| {
-            prev_owned = try self.allocator.dupe(u8, ov);
-        }
-        defer {
-            if (prev_owned) |ov| {
-                graph_store.setDataDirOverride(self.allocator, ov);
-                self.allocator.free(ov);
-            } else {
-                graph_store.setDataDirOverride(self.allocator, null);
-            }
-        }
-
-        graph_store.setDataDirOverride(self.allocator, self.restore_dir);
-        // Legacy monolithic restore removed — per-graph restore via adapter.
-
-        const backup_id = blk: {
-            const base = std.fs.path.basename(backup_path);
-            if (std.mem.startsWith(u8, base, "full_") and std.mem.endsWith(u8, base, ".backup")) {
-                const hex = base["full_".len .. base.len - ".backup".len];
-                break :blk std.fmt.parseInt(u64, hex, 16) catch 0;
-            }
-            break :blk 0;
-        };
-
-        return RestoreMetadata{
-            .source_backup_id = backup_id,
-            .restore_timestamp = compat_timestamp(),
-            .backup_type = header.backup_type,
-            .data_size_bytes = decompressed.len,
-            .checksum_verified = checksum_ok,
-            .target_time = null,
-        };
     }
 
-    // CANARY: REQ=REQ-PITR-GS-001; FEATURE="Point-in-Time Recovery"; ASPECT=SnapshotSelection; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-02-04
-    /// Restore to a specific point in time by selecting the latest snapshot before target_time.
-    fn restoreToPointInTime(self: SimplifiedRestoreManager, _: []const u8, target_time: i64) !RestoreMetadata {
-        const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{self.backup_dir});
-        defer self.allocator.free(metadata_path);
-
-        const io_pt = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(io_pt, metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
-            error.FileNotFound => return error.BackupMetadataNotFound,
-            else => return err,
-        };
-        defer file.close(io_pt);
-
-        const file_len = try file.length(io_pt);
-        if (file_len > 2 * 1024 * 1024) return error.OutOfMemory;
-        const data = try self.allocator.alloc(u8, @intCast(file_len));
-        errdefer self.allocator.free(data);
-        _ = try file.readPositionalAll(io_pt, data, 0);
-        defer self.allocator.free(data);
-
-        const parsed = try std.json.parseFromSlice([]backup_types.BackupMetadata, self.allocator, data, .{});
-        defer parsed.deinit();
-
-        var chosen: ?backup_types.BackupMetadata = null;
-        for (parsed.value) |entry| {
-            if (entry.timestamp > target_time) continue;
-            if (chosen == null or entry.timestamp > chosen.?.timestamp) {
-                chosen = entry;
-            }
-        }
-
-        if (chosen == null) return error.BackupNotFound;
-        const selected = chosen.?;
-        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, selected.backup_id });
-        defer self.allocator.free(backup_path);
-
-        const metadata = try self.restoreFromBackup(backup_path);
-        return RestoreMetadata{
-            .source_backup_id = selected.backup_id,
-            .restore_timestamp = metadata.restore_timestamp,
-            .backup_type = metadata.backup_type,
-            .data_size_bytes = metadata.data_size_bytes,
-            .checksum_verified = metadata.checksum_verified,
-            .target_time = target_time,
-        };
-    }
-};
-
-const RestoreMetadata = struct {
-    source_backup_id: u64,
-    restore_timestamp: i64,
-    backup_type: backup_types.BackupType,
-    data_size_bytes: usize,
-    checksum_verified: bool,
-    target_time: ?i64,
-};
+    const selected = chosen orelse return error.BackupNotFound;
+    return std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, selected.backup_id });
+}
 
 // ============================================================================
 // Unit Tests
