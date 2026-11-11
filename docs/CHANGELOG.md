@@ -84,6 +84,25 @@
   Regression: `tests/test_sonny4911_cross_gate_status.py`
   (`make cross-gate-status-test`, a `cross-gate-status-regression` pre-commit
   hook, and the `governance-cross-gate-status` CI job).
+- **The `zig-test` pre-push shards share one CPU budget (SONNY-4920):** the
+  hook started all four `zig build test` shards at once with no `-j`, and each
+  Zig build runner sized its job pool to every visible CPU, so the box ran
+  about four times as many jobs as it had CPUs (50 processes / 509 threads on
+  12 CPUs). The budget is now `nproc`, which honours CPU affinity, or
+  `GEODE_PREPUSH_ZIG_JOBS` when set. Up to four shards run at once, each with
+  an explicit `zig build -j<budget / shards running>` (at least 1); budgets
+  below four run the shards in waves. Every shard still runs exactly once, a
+  failed wave does not stop later ones, and the hook still fails on any shard
+  failure or 40-minute timeout and keeps every shard log. An invalid budget
+  stops the hook before any shard runs.
+  Regression: `tests/test_sonny4920_prepush_shard_budget.py` (in
+  `make cross-gate-status-test`, a `zig-test-budget-regression` pre-commit
+  hook, and the `governance-cross-gate-status` CI job).
+- **Concurrent-login test reports each caller's outcome (SONNY-4920):**
+  `authenticate_concurrent_cached_user_singleflights_persistent_refresh`
+  counted failed callers but dropped their errors. When it fails it now prints,
+  per caller, the error name or returned role and the elapsed time. Bounds,
+  caller count and assertions are unchanged.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

@@ -470,6 +470,10 @@ governance-cross-gate-status:
       # and the configured cross-compile-check hook command with a stub make.
       python3 tests/test_sonny4911_cross_gate_status.py
       echo "✓ Cross-build gates propagate compiler and make failures"
+      echo "=== zig-test pre-push shards fit one CPU budget (SONNY-4920) ==="
+      # Hermetic: runs the configured zig-test hook command with stub zig/nproc.
+      python3 tests/test_sonny4920_prepush_shard_budget.py
+      echo "✓ zig-test shards fit the CPU budget and propagate failures"
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

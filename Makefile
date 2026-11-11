@@ -83,7 +83,7 @@ help:
 	@echo "  make release-target-manifest-check - Ensure CI/GoReleaser target manifest is in sync"
 	@echo "  make docker-release-check - Ensure release Dockerfiles match generated manifest"
 	@echo "  make docker-healthcheck-test - Verify the shipped Docker HEALTHCHECK probe contract"
-	@echo "  make cross-gate-status-test - Verify required cross-build gates propagate failures"
+	@echo "  make cross-gate-status-test - Verify cross-build and zig-test pre-push gates (status, CPU budget)"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test        - Run all tests (Zig + QUIC)"
@@ -471,10 +471,13 @@ docker-healthcheck-test:
 	@python3 tests/test_dockerfile_health_check.py
 
 ## cross-gate-status-test: required cross-build gates propagate failures (SONNY-4911)
-# Hermetic: runs the cross-* targets with a stub zig and the cross-compile-check
-# hook command with a stub make — no real cross-compile.
+# and the zig-test pre-push shards fit one CPU budget (SONNY-4920).
+# Hermetic: runs the cross-* targets with a stub zig, the cross-compile-check
+# hook command with a stub make, and the zig-test hook command with stub zig
+# and nproc — no real cross-compile or Zig build.
 cross-gate-status-test:
 	@python3 tests/test_sonny4911_cross_gate_status.py
+	@python3 tests/test_sonny4920_prepush_shard_budget.py
 
 # Run Zig unit tests (fast, used by pre-push hooks)
 test:
