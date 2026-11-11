@@ -151,7 +151,6 @@ on every write (SONNY-2846):
 
 Not enforced: `NOT NULL`, `EXISTS`, and the existence half of `NODE KEY`
 (the rows are recorded only). `CREATE UNIQUE INDEX` creates no constraint.
-`DROP CONSTRAINT` does not remove a constraint yet (SONNY-6270).
 
 #### Example
 
@@ -159,6 +158,47 @@ Not enforced: `NOT NULL`, `EXISTS`, and the existence half of `NODE KEY`
 CREATE CONSTRAINT person_email FOR (p:Person) REQUIRE p.email IS UNIQUE;
 CREATE (:Person {email: 'a@example.com'});
 CREATE (:Person {email: 'a@example.com'});  -- 23505, nothing written
+```
+
+### DROP CONSTRAINT
+
+Removes a constraint from the session graph's catalog (SONNY-6270).
+
+#### Syntax
+
+```gql
+DROP CONSTRAINT [IF EXISTS] name
+```
+
+#### Behaviour
+
+- **Resolution:** the session graph's constraint of that name, else an
+  engine-wide one (written by an older, engine-global catalog). A
+  constraint of another graph is not found. Constraints of one name on
+  several labels of the graph are all dropped.
+- **Missing name:** refused with `ConstraintNotFound`, as DROP INDEX
+  refuses a missing index with `IndexNotFound`; with `IF EXISTS` the
+  statement does nothing and succeeds.
+- **Engine-wide row:** dropped from any graph, it is gone for every graph.
+- **Enforcement:** a UNIQUE or NODE KEY constraint stops being enforced as
+  soon as the statement succeeds. When no UNIQUE constraint applies in the
+  graph any more, the server's bulk write fast paths serve it again.
+- **Durability:** the catalog is saved before the statement succeeds; a
+  dropped constraint stays dropped after a restart. If the save fails the
+  statement fails and the constraint stays, enforced.
+- **Permissions:** as CREATE CONSTRAINT: schema on the session's graph and
+  on the database; an engine-wide constraint also needs schema on
+  `default`. Checked before the name is looked up.
+- **Transactions:** DDL is not transactional. A ROLLBACK does not bring
+  back a constraint dropped in the transaction; DROP CONSTRAINT is refused
+  inside a `START TRANSACTION { ... }` body.
+- **Cluster mode:** refused, as all constraint DDL is.
+
+#### Example
+
+```gql
+DROP CONSTRAINT person_email;
+DROP CONSTRAINT IF EXISTS person_email;  -- no error
 ```
 
 ## Backup and Restore

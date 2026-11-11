@@ -377,9 +377,33 @@ fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !Ex
 
 fn executeDbConstraints(allocator: std.mem.Allocator, context: ExecutionContext) !ExecutionResult {
     const catalog = context.catalog;
+    // CANARY: REQ=REQ-SHOW-CONSTRAINTS-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=CatalogList; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=catalog; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-SONNY-6270-DROP-CONSTRAINT; FEATURE="SchemaCatalog"; ASPECT=DbConstraintsLocked; STATUS=TESTED; TEST=tests/test_sonny6270_drop_constraint.zig; OWNER=catalog; UPDATED=2026-11-11
     // SONNY-1319: the session's graph's catalog, as SHOW CONSTRAINTS lists it.
-    const constraints = try catalog.listConstraintsForGraph(allocator, session_graph.current(context));
-    defer allocator.free(constraints);
+    // SONNY-6270: each row's strings are copied under the catalog lock, as
+    // SHOW CONSTRAINTS does (and db.indexes(), SONNY-2795). The rows were
+    // borrowed from the catalog and read after the lock was released, which
+    // DROP CONSTRAINT, now that it frees them, would have made a
+    // use-after-free.
+    var catalog_rows = std.ArrayList([]Value).empty;
+    defer catalog_rows.deinit(allocator);
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const graph = session_graph.current(context);
+        catalog.rwlock.lockSharedUncancelable(io);
+        defer catalog.rwlock.unlockShared(io);
+        var it = catalog.constraints.valueIterator();
+        while (it.next()) |c| {
+            if (!catalog_mod.rowInGraph(c.graph, graph)) continue;
+            const row = try allocator.alloc(Value, 5);
+            row[0] = .{ .Str = try allocator.dupe(u8, c.name) };
+            row[1] = .{ .Str = try allocator.dupe(u8, constraintTypeName(c.constraint_type)) };
+            row[2] = .{ .Str = try allocator.dupe(u8, c.label) };
+            row[3] = .{ .Str = try joinStrings(allocator, c.properties, ", ") };
+            row[4] = .{ .Bool = c.is_enforced };
+            try catalog_rows.append(allocator, row);
+        }
+    }
 
     const columns = try allocator.alloc([]const u8, 5);
     columns[0] = try allocator.dupe(u8, "name");
@@ -388,16 +412,7 @@ fn executeDbConstraints(allocator: std.mem.Allocator, context: ExecutionContext)
     columns[3] = try allocator.dupe(u8, "properties");
     columns[4] = try allocator.dupe(u8, "enforced");
 
-    const rows = try allocator.alloc([]Value, constraints.len);
-    for (constraints, 0..) |c, i| {
-        const row = try allocator.alloc(Value, 5);
-        row[0] = .{ .Str = try allocator.dupe(u8, c.name) };
-        row[1] = .{ .Str = try allocator.dupe(u8, constraintTypeName(c.constraint_type)) };
-        row[2] = .{ .Str = try allocator.dupe(u8, c.label) };
-        row[3] = .{ .Str = try joinStrings(allocator, c.properties, ", ") };
-        row[4] = .{ .Bool = c.is_enforced };
-        rows[i] = row;
-    }
+    const rows = try catalog_rows.toOwnedSlice(allocator);
 
     return ExecutionResult{
         .columns = columns,

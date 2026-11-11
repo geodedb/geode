@@ -267,6 +267,15 @@ fn exerciseCore(h: *Harness) !void {
     try h.run("DROP CONSTRAINT k_nn");
     try h.run("DROP CONSTRAINT k_ex");
     try testing.expectEqual(@as(usize, 0), try h.showCount());
+
+    // One name on two labels of the graph is one name to DROP: both go,
+    // with both fence counts.
+    try h.run("CREATE CONSTRAINT twin_u FOR (n:T1) REQUIRE n.id IS UNIQUE");
+    try h.run("CREATE CONSTRAINT twin_u FOR (n:T2) REQUIRE n.id IS UNIQUE");
+    try testing.expectEqual(@as(usize, 2), try h.rowsNamed("SHOW CONSTRAINTS", "twin_u"));
+    try h.run("DROP CONSTRAINT twin_u");
+    try testing.expectEqual(@as(usize, 0), try h.showCount());
+    try testing.expect(!graph_store.uniqueFenced("default"));
     try testing.expectEqual(@as(u32, 0), h.ctx.catalog.constraints.count());
 }
 

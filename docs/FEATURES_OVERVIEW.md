@@ -97,7 +97,9 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 - **NOT NULL Constraints**: Recorded only; not enforced
 - **NODE KEY Constraints**: The uniqueness half is enforced; the existence
   half is not
-- **Catalog Persistence**: Constraints stored across restarts
+- **Catalog Persistence**: Constraints stored across restarts; `DROP
+  CONSTRAINT [IF EXISTS]` removes one from the session graph's catalog,
+  durably (SONNY-6270)
 - **Implementation**: `src/schema/catalog.zig`, `src/execution/unique_constraints.zig`
 
 ### **Point-in-Time Recovery** ✅ January 2026

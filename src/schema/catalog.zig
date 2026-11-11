@@ -144,6 +144,14 @@ fn isZeroUuid(uuid: [16]u8) bool {
     return true;
 }
 
+/// SONNY-2846: is `row` an enforced UNIQUE or NODE KEY constraint? Each such
+/// row holds one count of its graph's bulk fast-path fence
+/// (`graph_store.addUniqueFence`) for as long as it is in the catalog;
+/// SONNY-6270: DROP CONSTRAINT gives that count back.
+pub fn enforcesUnique(row: ConstraintInfo) bool {
+    return row.is_enforced and (row.constraint_type == .unique or row.constraint_type == .node_key);
+}
+
 /// SONNY-1319: may rows of `a` and `b` name the same object? An engine-wide
 /// row is in every graph.
 fn graphsOverlap(a: []const u8, b: []const u8) bool {
@@ -770,34 +778,37 @@ pub const Catalog = struct {
         };
     }
 
-    /// Remove a constraint of the default graph's catalog (its own, or an
-    /// engine-wide one) by label and name.
-    pub fn removeConstraint(self: *Catalog, label: []const u8, name: []const u8) !void {
-        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        const entry = blk: {
-            for ([_][]const u8{ graph_store.DEFAULT_GRAPH_NAME, ENGINE_WIDE_GRAPH }) |graph| {
-                const scoped_key = try graphScopedKey(self.allocator, graph, label, name);
-                defer self.allocator.free(scoped_key);
-                if (self.constraints.fetchRemove(scoped_key)) |e| break :blk e;
-            }
-            return error.ConstraintNotFound;
+    // CANARY: REQ=REQ-SONNY-6270-DROP-CONSTRAINT; FEATURE="SchemaCatalog"; ASPECT=DropConstraintPersisted; STATUS=TESTED; TEST=tests/test_sonny6270_drop_constraint.zig; OWNER=catalog; UPDATED=2026-11-11
+    /// SONNY-6270: remove the constraint rows at `keys` and persist, as
+    /// `addConstraint` persists an added one (`takeIndexLocked`'s twin). If
+    /// the save fails every row is put back, so memory matches disk, and the
+    /// error is returned. Every key must name a row (the caller found them
+    /// under the same lock hold).
+    ///
+    /// Caller holds the rwlock EXCLUSIVE, and owns the rows written to
+    /// `out` (`out.len == keys.len`): `allocator.free(kv.key)` and
+    /// `freeConstraintInfo(kv.value)`.
+    pub fn takeConstraintsLocked(self: *Catalog, keys: []const []const u8, out: []std.StringHashMap(ConstraintInfo).KV) !void {
+        std.debug.assert(out.len == keys.len);
+        for (keys, out) |key, *slot| slot.* = self.constraints.fetchRemove(key).?;
+        self.save() catch |err| {
+            // The removals freed the slots these take back: no allocation.
+            for (out) |kv| self.constraints.putAssumeCapacityNoClobber(kv.key, kv.value);
+            return err;
         };
-
-        self.allocator.free(entry.key);
-        self.freeConstraintInfo(entry.value);
-
-        try self.save();
     }
 
     /// Get a constraint of the default graph's catalog by label and name.
+    /// The row borrows the catalog's memory, which DROP CONSTRAINT frees:
+    /// test it for null, do not read it.
     pub fn getConstraint(self: *Catalog, label: []const u8, name: []const u8) !?ConstraintInfo {
         return self.getConstraintInGraph(graph_store.DEFAULT_GRAPH_NAME, label, name);
     }
 
     /// SONNY-1319: get a constraint of `graph`'s catalog (its own row, else an
-    /// engine-wide one) by label and name.
+    /// engine-wide one) by label and name. The row borrows the catalog's
+    /// memory and the lock is released on return (SONNY-6270): test it for
+    /// null, do not read it.
     pub fn getConstraintInGraph(self: *Catalog, graph: []const u8, label: []const u8, name: []const u8) !?ConstraintInfo {
         self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
@@ -818,8 +829,7 @@ pub const Catalog = struct {
         var result = std.ArrayList(ConstraintInfo).empty;
         var iter = self.constraints.valueIterator();
         while (iter.next()) |row| {
-            if (!row.is_enforced) continue;
-            if (row.constraint_type != .unique and row.constraint_type != .node_key) continue;
+            if (!enforcesUnique(row.*)) continue;
             const props = try allocator.alloc([]const u8, row.properties.len);
             for (row.properties, props) |p, *out| out.* = try allocator.dupe(u8, p);
             try result.append(allocator, .{
@@ -1162,25 +1172,6 @@ pub const Catalog = struct {
         return result.toOwnedSlice(allocator);
     }
 
-    // GAP-0139: SHOW CONSTRAINTS implementation
-    // CANARY: REQ=REQ-SHOW-CONSTRAINTS-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=CatalogList; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=catalog; UPDATED=2026-01-13
-    /// List all constraints in the catalog
-    /// Returns a dynamically allocated slice of ConstraintInfo. Caller owns the returned slice.
-    pub fn listAllConstraints(self: *Catalog, allocator: std.mem.Allocator) ![]ConstraintInfo {
-        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-
-        var result = std.ArrayList(ConstraintInfo).empty;
-        errdefer result.deinit(allocator);
-
-        var iter = self.constraints.iterator();
-        while (iter.next()) |entry| {
-            try result.append(allocator, entry.value_ptr.*);
-        }
-
-        return result.toOwnedSlice(allocator);
-    }
-
     /// SONNY-1319: the indexes of `graph`'s catalog (its own rows and the
     /// engine-wide ones). Caller owns the returned slice, not its rows.
     pub fn listIndexesForGraph(self: *Catalog, allocator: std.mem.Allocator, graph: []const u8) ![]IndexInfo {
@@ -1190,21 +1181,6 @@ pub const Catalog = struct {
         var result = std.ArrayList(IndexInfo).empty;
         errdefer result.deinit(allocator);
         var iter = self.indexes.valueIterator();
-        while (iter.next()) |info| {
-            if (rowInGraph(info.graph, graph)) try result.append(allocator, info.*);
-        }
-        return result.toOwnedSlice(allocator);
-    }
-
-    /// SONNY-1319: the constraints of `graph`'s catalog (its own rows and the
-    /// engine-wide ones). Caller owns the returned slice, not its rows.
-    pub fn listConstraintsForGraph(self: *Catalog, allocator: std.mem.Allocator, graph: []const u8) ![]ConstraintInfo {
-        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-
-        var result = std.ArrayList(ConstraintInfo).empty;
-        errdefer result.deinit(allocator);
-        var iter = self.constraints.valueIterator();
         while (iter.next()) |info| {
             if (rowInGraph(info.graph, graph)) try result.append(allocator, info.*);
         }

@@ -121,6 +121,26 @@
   creates no constraint (documented). Regressions:
   `zig build test-sonny2846-unique-constraint-enforcement` and
   `zig build test-sonny2846-unique-fast-paths-wire`.
+- **DROP CONSTRAINT drops the constraint (SONNY-6270):** it answered
+  success and removed nothing, so the constraint stayed in `SHOW
+  CONSTRAINTS`, kept being enforced and survived restarts. It now works as
+  DROP INDEX does: the name resolves in the session's graph (its own rows,
+  else an engine-wide row from an older catalog; a constraint of another
+  graph is not found), all rows of that name there are removed and the
+  catalog saved under the catalog lock, and a failed save fails the
+  statement with the constraint still in place and enforced. A missing name
+  is refused (`ConstraintNotFound`) unless `IF EXISTS` is given. Dropping
+  an engine-wide row from any graph removes it for every graph. A UNIQUE or
+  NODE KEY constraint stops being enforced at once, and once no UNIQUE row
+  applies in a graph the server's bulk write fast paths serve it again. The
+  permission checks are CREATE CONSTRAINT's (an engine-wide row also needs
+  schema on `default`, as for DROP INDEX); cluster mode refuses it. DDL is
+  not transactional: a ROLLBACK does not bring a dropped constraint back.
+  `db.constraints()` read catalog rows after releasing the catalog lock; it
+  now copies them under the lock, as SHOW CONSTRAINTS does. The unused
+  `Catalog.removeConstraint`, `listAllConstraints` and
+  `listConstraintsForGraph` are removed. Regression:
+  `zig build test-sonny6270-drop-constraint`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

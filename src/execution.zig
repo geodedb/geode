@@ -2563,20 +2563,100 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         },
         .DropConstraint => |dc| {
             // Cluster fail-closed: see .CreateConstraint (GateConstraintDDL).
-            // (Currently a stub no-op, but the surface claims to mutate — keep
-            // the fail-closed contract so a future real implementation stays gated.)
             try cluster_mod.gateUnreplicatedWrite();
-            // SONNY-2803, SONNY-3030: as CREATE CONSTRAINT.
-            try session_graph.authorizeCatalogSchemaChange(context, session_graph.current(context));
-            // DROP CONSTRAINT implementation
-            _ = dc;
+            // SONNY-2803, SONNY-3030: as CREATE CONSTRAINT, before the name
+            // is looked up.
+            const drop_graph = session_graph.current(context);
+            try session_graph.authorizeCatalogSchemaChange(context, drop_graph);
+            const cat = context.catalog;
+
+            // CANARY: REQ=REQ-SONNY-6270-DROP-CONSTRAINT; FEATURE="SchemaCatalog"; ASPECT=DropConstraintLockedAndSaved; STATUS=TESTED; TEST=tests/test_sonny6270_drop_constraint.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-6270: DROP CONSTRAINT was a no-op that answered success.
+            // It is DROP INDEX's mirror image (SONNY-1319, SONNY-2795): the
+            // name resolves in the session's graph's catalog, its own rows
+            // first, else the engine-wide ones (a row of another graph is not
+            // found); the rows are found, removed and saved under the catalog
+            // lock held EXCLUSIVE, and a failed save refuses the statement
+            // with the rows still in place. Rows of one name on several
+            // labels are one constraint name to DROP: all of them go. Nothing
+            // else is done under the lock: the default-graph authorization
+            // can read the security graph (a graph lock, a lower tier).
+            const io_dc = std.Io.Threaded.global_single_threaded.io();
+            const Resolve = struct {
+                keys: std.ArrayList([]const u8) = .empty,
+                engine_wide: bool = false,
+
+                /// The rows DROP CONSTRAINT drops. Caller holds the catalog
+                /// lock; the keys borrow the catalog's memory.
+                fn find(self: *@This(), a: std.mem.Allocator, c: *catalog_mod.Catalog, name: []const u8, graph: []const u8) !void {
+                    self.keys.clearRetainingCapacity();
+                    self.engine_wide = false;
+                    for ([_]bool{ false, true }) |engine_wide| {
+                        const scope = if (engine_wide) catalog_mod.ENGINE_WIDE_GRAPH else graph;
+                        var iter = c.constraints.iterator();
+                        while (iter.next()) |entry| {
+                            const info = entry.value_ptr.*;
+                            if (!std.mem.eql(u8, info.name, name) or !std.mem.eql(u8, info.graph, scope)) continue;
+                            try self.keys.append(a, entry.key_ptr.*);
+                        }
+                        if (self.keys.items.len > 0) {
+                            self.engine_wide = engine_wide;
+                            return;
+                        }
+                    }
+                }
+            };
+
+            var found: Resolve = .{};
+            defer found.keys.deinit(allocator);
+            cat.rwlock.lockUncancelable(io_dc);
+            var cat_locked = true;
+            defer if (cat_locked) cat.rwlock.unlock(io_dc);
+            try found.find(allocator, cat, dc.name, drop_graph);
+
+            // An engine-wide row is the default graph's as much as this
+            // one's, and binds every graph: schema on the default graph as
+            // well, as DROP INDEX asks for one. Asked with the lock released,
+            // then the rows are resolved again (the catalog may have changed).
+            if (found.engine_wide and !std.mem.eql(u8, drop_graph, graph_store.DEFAULT_GRAPH_NAME)) {
+                cat.rwlock.unlock(io_dc);
+                cat_locked = false;
+                try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
+                cat.rwlock.lockUncancelable(io_dc);
+                cat_locked = true;
+                try found.find(allocator, cat, dc.name, drop_graph);
+            }
+
+            if (found.keys.items.len == 0) {
+                if (!dc.if_exists) return error.ConstraintNotFound;
+            } else {
+                const removed = try allocator.alloc(std.StringHashMap(catalog_mod.ConstraintInfo).KV, found.keys.items.len);
+                defer allocator.free(removed);
+                try cat.takeConstraintsLocked(found.keys.items, removed);
+                cat.rwlock.unlock(io_dc);
+                cat_locked = false;
+                for (removed) |kv| {
+                    // CANARY: REQ=REQ-SONNY-6270-DROP-CONSTRAINT; FEATURE="SchemaCatalog"; ASPECT=DropLowersFence; STATUS=TESTED; TEST=tests/test_sonny6270_drop_constraint.zig; OWNER=catalog; UPDATED=2026-11-11
+                    // SONNY-2846's fence is a count per graph: one per enforced
+                    // UNIQUE / NODE KEY row (raised by CREATE CONSTRAINT and
+                    // the catalog load) and one per CREATE CONSTRAINT still
+                    // validating. The row is gone from the catalog (saved)
+                    // before its count is given back, so the fence is never
+                    // down while the row is enforced, stays up while another
+                    // row or a concurrent CREATE holds a count on the graph
+                    // (an engine-wide row's count is under "", which fences
+                    // every graph), and comes down with the last.
+                    if (catalog_mod.enforcesUnique(kv.value)) graph_store.removeUniqueFence(kv.value.graph);
+                    // No reader holds the row: they copy under the lock.
+                    cat.allocator.free(kv.key);
+                    cat.freeConstraintInfo(kv.value);
+                }
+            }
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = blk: {
-                    const list = std.ArrayList([]const u8).empty;
-                    break :blk list;
-                },
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .Call => |call_stmt| {
