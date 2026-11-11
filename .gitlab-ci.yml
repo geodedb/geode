@@ -459,6 +459,22 @@ governance-ci-yaml-lint:
       python3 -m unittest discover -s scripts/ci -p test_unit_capacity.py
       echo "✓ CI YAML lints passed"
 
+governance-cross-gate-status:
+  extends: .governance-python
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends make
+  script:
+    - |
+      echo "=== Required cross-build gates propagate failures (SONNY-4911) ==="
+      # Hermetic: runs the committed cross-* Makefile targets with a stub zig
+      # and the configured cross-compile-check hook command with a stub make.
+      python3 tests/test_sonny4911_cross_gate_status.py
+      echo "✓ Cross-build gates propagate compiler and make failures"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
 governance-zig-package-cache:
   extends: .governance-python
   script:

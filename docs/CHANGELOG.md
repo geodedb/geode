@@ -73,6 +73,17 @@
   `openssl_provider_tree`, and `tools/release_dockerfile_manifest.py` now
   checks manual Dockerfiles too. Ordinary release images stay on bookworm.
   Regression: `tests/test_sonny4885_fips_release_runtime_compat.py`.
+- **Required cross-build gates fail when a build fails (SONNY-4911):** the
+  pre-push `cross-compile-check` hook ran
+  `make cross-compile-required 2>&1 | tail -20` without `pipefail`, so it took
+  `tail`'s exit status and passed when make failed. It now sets `pipefail` and
+  still shows the last 20 lines. `cross-macos-x86_64` and `cross-macos-arm64`
+  ran Zig inside an `if` and then echoed success unconditionally, so a compiler
+  failure exited 0 and printed success. The success line is now chained with
+  `&&`, so the recipe exits non-zero. Native-macOS skips are unchanged.
+  Regression: `tests/test_sonny4911_cross_gate_status.py`
+  (`make cross-gate-status-test`, a `cross-gate-status-regression` pre-commit
+  hook, and the `governance-cross-gate-status` CI job).
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

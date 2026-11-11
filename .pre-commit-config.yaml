@@ -326,7 +326,7 @@ repos:
     entry: bash scripts/hook-env.sh bash
     args:
     - -c
-    - make cross-compile-required 2>&1 | tail -20
+    - set -o pipefail; make cross-compile-required 2>&1 | tail -20
     language: system
     files: \.(zig|zon)$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
@@ -567,6 +567,13 @@ repos:
     entry: bash scripts/hook-env.sh python3 scripts/test_hook_env.py
     language: system
     files: ^(scripts/(hook-env\.sh|test_hook_env\.py)|\.pre-commit-config\.yaml)$
+    pass_filenames: false
+    stages: [pre-commit, pre-push]
+  - id: cross-gate-status-regression
+    name: required cross-build gates propagate failures (SONNY-4911)
+    entry: bash scripts/hook-env.sh python3 tests/test_sonny4911_cross_gate_status.py
+    language: system
+    files: ^(Makefile|\.pre-commit-config\.yaml|tests/test_sonny4911_cross_gate_status\.py)$
     pass_filenames: false
     stages: [pre-commit, pre-push]
   - id: check-version-tag
