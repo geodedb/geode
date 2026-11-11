@@ -50,6 +50,18 @@
 
 ### Fixed
 
+- **GPU release image can start the release binary (SONNY-4884):**
+  `Dockerfile.release.gpu` was based on
+  `nvidia/cuda:13.4.2-runtime-ubuntu22.04`, whose glibc 2.35 is older than the
+  GLIBC_2.36 the `x86_64-linux-gnu` release binary needs, so the published GPU
+  image exited 1 before `main`. It now uses
+  `nvidia/cuda:13.4.2-runtime-ubuntu24.04` and installs `libssl3t64`, the name
+  Ubuntu 24.04 gives OpenSSL 3. Every release Dockerfile now runs
+  `geode --version` as the non-root runtime user while the image builds, so a
+  loader or glibc mismatch fails the build instead of shipping.
+  `tools/release_dockerfile_manifest.py` now refuses a glibc base that is older
+  than `release_binary.glibc_required`, or whose glibc it does not know.
+  Regression: `tests/test_sonny4884_release_image_runtime_compat.py`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

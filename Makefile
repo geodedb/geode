@@ -456,6 +456,7 @@ docker-release-sync:
 
 docker-release-check:
 	@python3 tools/release_dockerfile_manifest.py check --manifest release/dockerfile_manifest.json --repo-root .
+	@python3 tests/test_sonny4884_release_image_runtime_compat.py
 
 docker-release-signoff:
 	@python3 tools/release_dockerfile_manifest.py signoff --manifest release/dockerfile_manifest.json --repo-root . --output /tmp/release-dockerfile-signoff.txt

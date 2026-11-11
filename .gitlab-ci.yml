@@ -529,6 +529,9 @@ governance-release-manifests:
       python3 tools/release_dockerfile_manifest.py check \
         --manifest release/dockerfile_manifest.json \
         --repo-root .
+      # SONNY-4884: glibc release bases must load the release binary, and
+      # every release image must execute it as the runtime user at build time.
+      python3 tests/test_sonny4884_release_image_runtime_compat.py
       echo "✓ Release manifests are in sync"
   rules:
     - if: '$CI_MERGE_REQUEST_ID'

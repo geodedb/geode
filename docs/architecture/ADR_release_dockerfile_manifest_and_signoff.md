@@ -33,3 +33,23 @@ Release container definitions were split across `Dockerfile.release`, `Dockerfil
   - `python3 tools/release_dockerfile_manifest.py check --manifest release/dockerfile_manifest.json --repo-root .`
 - Emit release sign-off report:
   - `python3 tools/release_dockerfile_manifest.py signoff --manifest release/dockerfile_manifest.json --repo-root . --output /tmp/release-dockerfile-signoff.txt`
+
+## Amendment: runtime compatibility gate (SONNY-4884)
+
+The GPU release image shipped on a CUDA Ubuntu 22.04 base (glibc 2.35) that
+could not load the `x86_64-linux-gnu` release binary (GLIBC_2.36), and nothing
+in the image build ran the binary. Two guards now apply:
+
+- `release_binary.glibc_required` in the manifest records the release
+  binary's glibc requirement. `tools/release_dockerfile_manifest.py` refuses
+  (`sync`, `check`, `signoff`) any apt release base whose glibc is lower, or
+  whose distro release is not in `BASE_IMAGE_PROFILES`. It also requires the
+  OpenSSL 3 package name that distro uses (`libssl3t64` on Ubuntu 24.04 and
+  Debian trixie).
+- Every generated release Dockerfile runs `RUN ["/usr/local/bin/geode",
+  "--version"]` after `USER`. If the loader rejects the copied binary, the
+  image build fails. This check is authoritative: if it trips, raise
+  `glibc_required` or move the base. The manual `Dockerfile.release.fips`
+  carries the same step by hand.
+- Regression: `tests/test_sonny4884_release_image_runtime_compat.py` (run in
+  `governance-release-manifests` and `make docker-release-check`).

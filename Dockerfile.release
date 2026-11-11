@@ -31,6 +31,10 @@ RUN chmod +x /usr/local/bin/geode /usr/local/bin/health-check.sh
 USER 10000
 WORKDIR /home/geode
 
+# Execute the copied binary as the runtime user so a loader/glibc
+# incompatibility fails the image build instead of shipping (SONNY-4884)
+RUN ["/usr/local/bin/geode", "--version"]
+
 # Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
 # GET http://127.0.0.1:$GEODE_METRICS_PORT/health (bound to loopback unless
 # GEODE_METRICS_BIND says otherwise). The server only starts that listener when

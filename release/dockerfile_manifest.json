@@ -1,4 +1,16 @@
 {
+  "release_binary": {
+    "glibc_required": "2.36",
+    "notes": [
+      "SONNY-4884: highest GLIBC_x.y symbol version the x86_64-linux-gnu ReleaseSafe",
+      "release binary (built with -Dopenssl-sysroot) was measured to need. Every apt",
+      "(glibc) release base must ship at least this glibc; tools/release_dockerfile_manifest.py",
+      "refuses a lower or unknown base. build.zig links that binary against a glibc 2.38",
+      "floor, so a future build could need more: the generated in-build",
+      "`geode --version` smoke step is the authoritative gate, and this value must be",
+      "raised when it trips."
+    ]
+  },
   "dockerfiles": [
     {
       "path": "Dockerfile.release",
@@ -88,11 +100,11 @@
         "The binary is copied from the GoReleaser build context.",
         "Requires NVIDIA Container Toolkit on the host system."
       ],
-      "base_image": "nvidia/cuda:13.4.2-runtime-ubuntu22.04",
+      "base_image": "nvidia/cuda:13.4.2-runtime-ubuntu24.04",
       "package_manager": "apt",
       "runtime_packages": [
         "ca-certificates",
-        "libssl3",
+        "libssl3t64",
         "libvulkan1"
       ],
       "user_setup": "useradd -m -u 10000 geode",
