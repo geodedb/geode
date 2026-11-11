@@ -10233,6 +10233,18 @@ pub fn build(b: *std.Build) void {
     const sonny2707_step = b.step("test-sonny2707-varlen-set", "Run SONNY-2707 part (1) regression (a SET or REMOVE through a variable-length pattern writes every node an oracle over the seeded edges reaches, through and at nodes the session may read, behind no RETURN, an aggregate or DISTINCT; a write on the relationship list or the path is refused; a program writing two graphs is refused: in-memory, RLS-policy and tenant-scoped sessions)");
     sonny2707_step.dependOn(&run_sonny2707_tests.step);
 
+    const sonny2707_count_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2707_count_direction.zig"), .target = target, .optimize = optimize });
+    sonny2707_count_test_mod.addImport("geode", root_mod);
+    sonny2707_count_test_mod.addImport("logging", logging_mod);
+    sonny2707_count_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2707_count_tests = b.addTest(.{ .root_module = sonny2707_count_test_mod });
+    const run_sonny2707_count_tests = b.addRunArtifact(sonny2707_count_tests);
+    // Intentionally red TDD reproduction until the fix lands: kept out of the
+    // aggregate, compiled by `test-compile`.
+    if (g_test_compile_step) |c| c.dependOn(&sonny2707_count_tests.step);
+    const sonny2707_count_step = b.step("test-sonny2707-count-direction", "Run SONNY-2707 parts (2) and (3) regression (COUNT {}, EXISTS {} and pattern comprehensions over an unbound relationship, a variable-length relationship in every direction, and a multi-hop chain agree with the equivalent MATCH and a walk of the seeded edges: in-memory, persisted, tenant-scoped and RLS-policy sessions, warm and reloaded)");
+    sonny2707_count_step.dependOn(&run_sonny2707_count_tests.step);
+
     // SONNY-738 Task W fix round: the one write step (a SET, REMOVE, CREATE,
     // MERGE or DELETE applied over the rows the pattern binds, after the WITH
     // and its WHERE) and the structural guard that refuses a write clause an
