@@ -155,6 +155,9 @@ const Q_MATCH_ANY = "MATCH (n) RETURN count(*) AS c";
 const Q_EXISTS_NODE = "RETURN EXISTS { (b:S1562B {k: 7}) } AS e";
 const Q_EXISTS_HOP = "RETURN EXISTS { (a:S1562A)-[:S1562R]->(:S1562B {k: 7}) } AS e";
 const Q_EXISTS_ABSENT = "RETURN EXISTS { (b:S1562B {k: 100000}) } AS e";
+const Q_EXISTS_HOP_ABSENT = "RETURN EXISTS { (a:S1562A)-[:S1562R]->(:S1562B {k: 100000}) } AS e";
+const Q_COUNT_VAR = "RETURN COUNT { (a:S1562A)-[:S1562R*1..2]->(:S1562B) } AS c";
+const Q_COUNT_WHERE = "RETURN COUNT { MATCH (a:S1562A)-[:S1562R]->(b:S1562B) WHERE a.k < 10 } AS c";
 const Q_COMP_HOP = "RETURN size([(a:S1562A)-[:S1562R]->(b:S1562B) | b.k]) AS n";
 const Q_COMP_NODE = "RETURN size([(b:S1562B) | b.k]) AS n";
 
@@ -186,6 +189,9 @@ test "SONNY-1562: COUNT {}, EXISTS {} and pattern comprehensions see every node 
         const exists_node = try s.boolean(Q_EXISTS_NODE);
         const exists_hop = try s.boolean(Q_EXISTS_HOP);
         const exists_absent = try s.boolean(Q_EXISTS_ABSENT);
+        const exists_hop_absent = try s.boolean(Q_EXISTS_HOP_ABSENT);
+        const count_var = try s.int(Q_COUNT_VAR);
+        const count_where = try s.int(Q_COUNT_WHERE);
         const comp_hop = try s.int(Q_COMP_HOP);
         const comp_node = try s.int(Q_COMP_NODE);
 
@@ -200,11 +206,13 @@ test "SONNY-1562: COUNT {}, EXISTS {} and pattern comprehensions see every node 
         // On any mismatch, report every observation at once (a green run
         // prints nothing, so the build runner shows no stderr banner).
         const agree = count_hop == match_hop and count_node == match_node and count_any == match_any and
-            exists_node and exists_hop and !exists_absent and comp_hop == PAIRS and comp_node == PAIRS;
+            exists_node and exists_hop and !exists_absent and !exists_hop_absent and count_var == PAIRS and
+            count_where == 10 and comp_hop == PAIRS and comp_node == PAIRS;
         if (!agree) std.debug.print(
             "SONNY-1562 cold store: COUNT hop={d} (MATCH {d}), COUNT node={d} (MATCH {d}), COUNT any={d} (MATCH {d}), " ++
-                "EXISTS node={}, EXISTS hop={}, EXISTS absent={}, comprehension hop={d}, comprehension node={d}\n",
-            .{ count_hop, match_hop, count_node, match_node, count_any, match_any, exists_node, exists_hop, exists_absent, comp_hop, comp_node },
+                "EXISTS node={}, EXISTS hop={}, EXISTS absent={}, EXISTS hop absent={}, COUNT var-length={d}, COUNT where={d}, " ++
+                "comprehension hop={d}, comprehension node={d}\n",
+            .{ count_hop, match_hop, count_node, match_node, count_any, match_any, exists_node, exists_hop, exists_absent, exists_hop_absent, count_var, count_where, comp_hop, comp_node },
         );
 
         // The oracles answer from the full store.
@@ -219,6 +227,11 @@ test "SONNY-1562: COUNT {}, EXISTS {} and pattern comprehensions see every node 
         try testing.expect(exists_node);
         try testing.expect(exists_hop);
         try testing.expect(!exists_absent);
+        // A relationship pattern counts its hops, not its start nodes: the
+        // LONE `:S1562A` nodes have no `:S1562R` and must not be counted.
+        try testing.expect(!exists_hop_absent);
+        try testing.expectEqual(@as(i64, PAIRS), count_var);
+        try testing.expectEqual(@as(i64, 10), count_where);
         try testing.expectEqual(@as(i64, PAIRS), comp_hop);
         try testing.expectEqual(@as(i64, PAIRS), comp_node);
     }

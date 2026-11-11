@@ -203,13 +203,15 @@
 //          path). The non-resident case is exactly what
 //          `tenantTagFallbackAllowed` now refuses on an arm.
 //
-//     SEPARATE PRE-EXISTING BUG found while pinning this ticket, NOT a race and
-//     NOT fixed here — recorded for SONNY-1562 (NOT 1332; 1332 tracks the
-//     threadlocal-propagation residual above): `countPatternMatches` scans
-//     `store.nodes.iterator()`, which is RESIDENT-ONLY. Over a cold store a
-//     bare `RETURN COUNT { (a:A)-[:R]->(b:B) }` answers 0 on the SERIAL path
-//     too, because it never sees a node to expand from. `COUNT {}` / `EXISTS {}`
-//     results are therefore residency-dependent, independent of threading.
+//     SEPARATE PRE-EXISTING BUG found while pinning this ticket, NOT a race:
+//     `countPatternMatches` scanned `store.nodes.iterator()`, which is
+//     RESIDENT-ONLY, so over a cold store a bare
+//     `RETURN COUNT { (a:A)-[:R]->(b:B) }` answered 0 on the SERIAL path too.
+//     FIXED by SONNY-1562: the expression path's uncorrelated scans read the
+//     authoritative id sets through `graph_algorithms.ScanSource` (label index
+//     or per-graph node-id index, bodies via the detached
+//     `getNodePtrForScan`), with every node still gated by the predicates
+//     above (`tests/test_sonny1562_cold_subquery_scan.zig`).
 //
 // Every OTHER caller (`recursion_handler.zig`, the serial centrality loops, and
 // `match_operations.zig` when it is NOT running under a parallel UNION arm)

@@ -71,6 +71,18 @@
   the matched rows rather than the loop's. The FOR now runs over every row of
   the part before it. `MATCH (n) FOR x IN n.list RETURN ...` and nested
   `FOR x IN a FOR y IN x RETURN ...`, which were syntax errors, are accepted.
+- **`COUNT { }`, `EXISTS { }` and pattern comprehensions see a cold store
+  (SONNY-1562):** a subquery whose start node was not bound by the outer
+  query looked only at the nodes resident in the node cache, so after a
+  restart (or eviction) `RETURN COUNT { (a:A)-[:R]->(:B) }` answered 0,
+  `EXISTS { … }` false and `[(a:A)-[:R]->(b) | b.k]` an empty list while the
+  same `MATCH` returned every row. Their scans, and a `shortestPath()` start
+  node's, now read every node of the session's graph the way MATCH does,
+  still filtered by graph, tenant and RLS. Such a relationship pattern also
+  counted its start nodes rather than its matches, so
+  `COUNT { (a:A)-[:R]->(:B) }` was the number of `:A` nodes and
+  `EXISTS { (a:A)-[:R]->(:B {k: 1}) }` was true whenever an `:A` existed; it
+  now counts the relationship's matches.
 
 ---
 

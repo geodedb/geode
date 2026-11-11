@@ -185,6 +185,58 @@ const ExprScope = struct {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-1562-COLD-SUBQUERY-SCAN; FEATURE="ExpressionPathColdScan"; ASPECT=ScanSource; STATUS=TESTED; TEST=tests/test_sonny1562_cold_subquery_scan.zig; OWNER=execution; UPDATED=2026-11-11
+/// SONNY-1562: the start nodes of an uncorrelated expression-path scan
+/// (`COUNT { (a:L) … }`, `EXISTS { … }`, `[(a:L) … | …]`, a shortestPath()
+/// endpoint), in the session's graph.
+///
+/// These scans walked `store.nodes.iterator()`, which yields only the bounded
+/// cache's RESIDENT nodes, so on a cold store (reopened after a restart, or
+/// evicted) they counted 0 and found nothing while the equivalent MATCH
+/// returned every row. The source is now the one the MATCH scans use: the
+/// AUTHORITATIVE id sets — the label index for a labelled pattern
+/// (`getNodesByLabels`), the per-graph node-id index otherwise
+/// (`iterateNodesInGraph`) — with each body read through `getNodePtrForScan`,
+/// which serves a resident node or a detached engine rebuild and never mutates
+/// the cache (callers keep the pointers in bindings and result lists).
+///
+/// It is graph-scoped only. Callers still apply `ExprScope.nodeVisible` to
+/// every node (graph, tenant and RLS), exactly as before.
+const ScanSource = struct {
+    store: *graph_store.GraphStore,
+    allocator: std.mem.Allocator,
+    /// Labelled pattern: the candidate ids from the label index.
+    ids: ?std.ArrayList(u64) = null,
+    pos: usize = 0,
+    /// Unlabelled pattern: every node of the graph.
+    graph_iter: ?graph_store.GraphStore.NodesByGraphIterator = null,
+
+    fn init(allocator: std.mem.Allocator, store: *graph_store.GraphStore, scope: *const ExprScope, labels: []const []const u8) !ScanSource {
+        if (labels.len == 0) {
+            return .{ .store = store, .allocator = allocator, .graph_iter = store.iterateNodesInGraph(scope.graph) };
+        }
+        // No tenant pre-filter here: `getNodesByLabels` filters by EXACT tenant
+        // tag, and the caller's `nodeVisible` applies the hierarchy-aware one.
+        return .{ .store = store, .allocator = allocator, .ids = try store.getNodesByLabels(allocator, scope.graph, labels, null) };
+    }
+
+    fn deinit(self: *ScanSource) void {
+        if (self.ids) |*ids| ids.deinit(self.allocator);
+    }
+
+    fn next(self: *ScanSource) ?*graph_store.Node {
+        if (self.graph_iter) |*it| return it.next();
+        const ids = self.ids orelse return null;
+        while (self.pos < ids.items.len) {
+            const id = ids.items[self.pos];
+            self.pos += 1;
+            // A stale index entry (deleted node) reads as absent.
+            if (self.store.getNodePtrForScan(id)) |node| return node;
+        }
+        return null;
+    }
+};
+
 /// Does a relationship of type `label` match the pattern's types (`[:A|B]`;
 /// none means any type)?
 fn relTypeMatches(types: []const []const u8, label: []const u8) bool {
@@ -331,14 +383,16 @@ fn findFirstMatchingNode(
     env: Env,
     allocator: std.mem.Allocator,
     scope: *ExprScope,
-) ?u64 {
-    var node_iter = store.nodes.iterator();
-    while (node_iter.next()) |entry| {
-        const node = entry.value_ptr.*;
+) !?u64 {
+    // SONNY-1562: every node of the graph, not just the resident ones.
+    var source = try ScanSource.init(allocator, store, scope, node_pattern.labels);
+    defer source.deinit();
+    while (source.next()) |node_ptr| {
+        const node = node_ptr.*;
         // SONNY-1326 / SONNY-2679 / SONNY-2687: a start/end node the session
         // cannot see (another graph or tenant, or denied by RLS) must read as
         // ABSENT (`null`), never as an error that would confirm it exists.
-        if (!scope.nodeVisible(entry.value_ptr)) continue;
+        if (!scope.nodeVisible(node_ptr)) continue;
         if (nodeMatchesPattern(node, node_pattern, env, allocator)) {
             return node.id;
         }
@@ -662,12 +716,14 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
 
             // No outer variable binding - fall through to regular node counting
             // Count nodes matching the pattern
-            var iter = store.nodes.iterator();
-            while (iter.next()) |entry| {
-                const node = entry.value_ptr.*;
+            // SONNY-1562: every node of the graph, not just the resident ones.
+            var source = try ScanSource.init(allocator, store, &scope, node_pattern.labels);
+            defer source.deinit();
+            while (source.next()) |node_ptr| {
+                const node = node_ptr.*;
                 // SONNY-1326 / SONNY-2679 / SONNY-2687: count only rows the
                 // session scope admits (graph, tenant and RLS).
-                if (!scope.nodeVisible(entry.value_ptr)) continue;
+                if (!scope.nodeVisible(node_ptr)) continue;
                 var matches = true;
 
                 // Check labels
@@ -707,7 +763,22 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                     }
                 }
 
-                if (matches) {
+                if (matches and chain.hops.len > 0) {
+                    // SONNY-1562: an uncorrelated relationship pattern counts
+                    // the HOP's matches from this start node, as the correlated
+                    // branch above does. It counted the start node itself, so
+                    // `COUNT { (a:A)-[:R]->(:B) }` was the number of `:A` nodes
+                    // and `EXISTS { … }` was true whenever one existed. The
+                    // start node is bound for the WHERE filter.
+                    const hop = chain.hops[0];
+                    const start_env = if (node_pattern.name) |name| try env.withBinding(allocator, name, Value{ .Node = node_ptr }) else env;
+                    defer freeExtendedEnv(allocator, start_env, env);
+                    const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
+                    count += if (is_var_length)
+                        try countVariableLengthPathMatches(allocator, node_ptr, hop, hop.rel.types, where_filter, start_env, store, &scope)
+                    else
+                        try countSingleHopMatches(allocator, node_ptr, hop, hop.rel.types, where_filter, start_env, store, &scope);
+                } else if (matches) {
                     // Check WHERE filter if present
                     if (where_filter) |wf| {
                         // Build environment with this node bound (if pattern
@@ -716,7 +787,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                         // arrays after the WHERE is evaluated (they were
                         // freed before it, so `EXISTS { MATCH (k:G) WHERE
                         // k.i = 2 }` read freed names and matched nothing).
-                        if (evaluateWhereFilter(wf, env, node_pattern.name, entry.value_ptr, allocator)) count += 1;
+                        if (evaluateWhereFilter(wf, env, node_pattern.name, node_ptr, allocator)) count += 1;
                     } else {
                         count += 1;
                     }
@@ -941,7 +1012,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     // CANARY: REQ=REQ-NESTING-REFACTOR-006; FEATURE="NestingReduction"; ASPECT=ShortestPathStart; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
     // If not found in env, try pattern matching using helper
     if (start_id == null) {
-        start_id = findFirstMatchingNode(store, hop.left, env, allocator, &scope);
+        start_id = try findFirstMatchingNode(store, hop.left, env, allocator, &scope);
     }
 
     // CANARY: REQ=REQ-SONNY-3318-SHORTEST-PATH; FEATURE="ShortestPath"; ASPECT=EndPatternTypesDirection; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
@@ -1196,9 +1267,10 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
     if (chain.hops.len == 0) {
         if (chain.head) |node_pattern| {
             // Iterate over all nodes matching the pattern using helper
-            var iter = store.nodes.iterator();
-            while (iter.next()) |entry| {
-                const node_ptr = entry.value_ptr;
+            // SONNY-1562: every node of the graph, not just the resident ones.
+            var source = try ScanSource.init(allocator, store, &scope, node_pattern.labels);
+            defer source.deinit();
+            while (source.next()) |node_ptr| {
                 const node = node_ptr.*;
 
                 // SONNY-1326 / SONNY-2679 / SONNY-2687: yield only elements
@@ -1250,9 +1322,10 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
         // CANARY: REQ=REQ-NESTING-REFACTOR-009; FEATURE="NestingReduction"; ASPECT=SourceNodeMatch; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
         // If no source nodes from env, find all matching the left pattern using helper
         if (source_nodes.items.len == 0) {
-            var iter = store.nodes.iterator();
-            while (iter.next()) |entry| {
-                const node_ptr: *const graph_store.Node = entry.value_ptr;
+            // SONNY-1562: every node of the graph, not just the resident ones.
+            var source = try ScanSource.init(allocator, store, &scope, hop.left.labels);
+            defer source.deinit();
+            while (source.next()) |node_ptr| {
                 const node = node_ptr.*;
                 // SONNY-1326 / SONNY-2679 / SONNY-2687: never start a
                 // comprehension walk from a row the session scope cannot see.

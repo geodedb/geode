@@ -332,6 +332,8 @@ fn seedPairs(s: *Session, comptime from_label: []const u8, comptime to_label: []
 //     node. That is a real pre-existing residency-dependent-correctness bug,
 //     recorded in the SONNY-1330 report for SONNY-1562; it is NOT this
 //     ticket's race and cannot serve as its oracle (0 == 0 proves nothing).
+//     (Measured before SONNY-1562, which fixed that scan; its regression is
+//     `tests/test_sonny1562_cold_subquery_scan.zig`.)
 //   * The pattern-comprehension arm declines, but still returns all 300 rows
 //     (the refusal only empties the per-row list), so serial and arm output
 //     agree by luck and the fallback is not load-bearing.

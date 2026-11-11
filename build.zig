@@ -8553,9 +8553,7 @@ pub fn build(b: *std.Build) void {
     run_sonny1562_tests.setEnvironmentVariable("GEODE_NODE_CACHE_ENTRIES", "64");
     run_sonny1562_tests.setEnvironmentVariable("GEODE_EDGE_CACHE_ENTRIES", "64");
     run_sonny1562_tests.setEnvironmentVariable("GEODE_ADJ_CACHE_ENTRIES", "64");
-    // Intentionally red TDD reproduction until the fix lands: kept out of the
-    // aggregate, compiled by `test-compile`.
-    if (g_test_compile_step) |c| c.dependOn(&sonny1562_tests.step);
+    shardDep(test_step, &run_sonny1562_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny1562_step = b.step("test-sonny1562-cold-subquery-scan", "Run SONNY-1562 regression (COUNT{}, EXISTS{} and pattern comprehensions see every node of a cold, persisted store, not just the resident cache)");
     sonny1562_step.dependOn(&run_sonny1562_tests.step);
 

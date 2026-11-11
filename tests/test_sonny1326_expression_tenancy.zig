@@ -391,18 +391,16 @@ test "SONNY-1326: COUNT{} counts only the session tenant's matches" {
 
     // Anonymous relationship shape.
     //
-    // NOTE (pre-existing engine behaviour, NOT a SONNY-1326 regression):
-    // `COUNT { ()-[:L]->() }` counts the LEFT NODE pattern, not the
-    // relationship. `countPatternMatches` derives `node_pattern_opt` from
-    // `chain.hops[0].left` whenever `chain.head` is null, and `hops[0].left` is
-    // a non-optional `NodePattern`, so the relationship-counting arm (the
-    // `store.allEdgeIds` loop) is unreachable from GQL. What this pins is
-    // therefore the tenant scope on the bare-node loop for this shape: tenant A
-    // sees its own two nodes, never all four.
+    // SONNY-1562: `COUNT { ()-[:L]->() }` counts the relationship's matches
+    // from every start node the scope admits (it used to count the start
+    // nodes themselves, which pinned 2 here). Tenant A sees exactly ONE: its
+    // own `a1 -> a2`. The tenant-A-tagged bridge `a2 -> b1` is NOT counted,
+    // because its far endpoint belongs to tenant B (`edgeTraversable`), and
+    // `b1 -> b2` is tenant B's.
     {
         var res = try h.runAs(aa, tenant_a, "RETURN COUNT { ()-[:L]->() } AS c");
         defer res.deinit(aa);
-        try testing.expectEqual(@as(i64, 2), try scalarInt(res));
+        try testing.expectEqual(@as(i64, 1), try scalarInt(res));
     }
 }
 
@@ -601,12 +599,12 @@ test "SONNY-1326: non-strict deployment with no tenant scope is unchanged" {
             try testing.expectEqual(@as(i64, 1), row[1].Int);
         }
     }
-    // The anonymous shape STILL sees every tenant (see the note in test 2 on
-    // what this shape actually counts).
+    // The anonymous shape STILL sees every tenant: all three `:L`
+    // relationships, the bridge included (see the note in test 2).
     {
         var res = try h.runAs(aa, null, "RETURN COUNT { ()-[:L]->() } AS c");
         defer res.deinit(aa);
-        try testing.expectEqual(@as(i64, 4), try scalarInt(res));
+        try testing.expectEqual(@as(i64, 3), try scalarInt(res));
     }
     // The comprehension STILL yields the other tenant's element.
     {
