@@ -877,22 +877,21 @@ fn writerCreateUser(ctx: ?*anyopaque, username: []const u8, email: []const u8, p
 
 fn writerDeleteUser(ctx: ?*anyopaque, username: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = (try agm.findUserIdByName(username)) orelse return;
-    try agm.removeUser(&agm.hmac_key, uid);
+    try agm.deleteUserWriteThrough(&agm.hmac_key, username);
     user_mgmt.notePersistentAuthMutation();
 }
 
 fn writerUpdatePassword(ctx: ?*anyopaque, username: []const u8, new_password_hash: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = (try agm.findUserIdByName(username)) orelse return;
-    _ = try agm.updateUserPassword(&agm.hmac_key, uid, new_password_hash);
+    try agm.updatePasswordWriteThrough(&agm.hmac_key, username, new_password_hash);
     user_mgmt.notePersistentAuthMutation();
 }
 
+/// The built-in role names, for `writerSetRole`.
+const builtin_role_names = [_][]const u8{ "admin", "readwrite", "user", "readonly" };
+
 fn writerSetRole(ctx: ?*anyopaque, username: []const u8, role: user_mgmt.Role) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = (try agm.findUserIdByName(username)) orelse return;
-
     // geode_auth_ddl_persistence.yml regression: storage.assignUserRole
     // only short-circuits when the SAME (uid, rid) edge already exists,
     // so successive ALTER USER ... SET ROLE calls leave one HAS_ROLE
@@ -903,25 +902,13 @@ fn writerSetRole(ctx: ?*anyopaque, username: []const u8, role: user_mgmt.Role) a
     // time, so revoke any prior built-in HAS_ROLE edge before assigning
     // the new one.  Custom roles live on their own HAS_ROLE edges and
     // are intentionally NOT touched here.
-    const builtin_roles = [_]user_mgmt.Role{ .Admin, .ReadWrite, .User, .ReadOnly };
-    for (builtin_roles) |old_role| {
-        if (old_role == role) continue;
-        if (try agm.findRoleIdByName(old_role.toString())) |old_rid| {
-            _ = try agm.revokeUserRole(&agm.hmac_key, uid, old_rid);
-        }
-    }
-
-    _ = try agm.createRole(&agm.hmac_key, role.toString(), "");
-    if (try agm.findRoleIdByName(role.toString())) |rid| {
-        _ = try agm.assignUserRole(&agm.hmac_key, uid, rid);
-        user_mgmt.notePersistentAuthMutation();
-    }
+    try agm.setBuiltinRoleWriteThrough(&agm.hmac_key, username, role.toString(), &builtin_role_names);
+    user_mgmt.notePersistentAuthMutation();
 }
 
 fn writerSetActive(ctx: ?*anyopaque, username: []const u8, active: bool) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = (try agm.findUserIdByName(username)) orelse return;
-    _ = try agm.setUserActive(&agm.hmac_key, uid, active);
+    try agm.setActiveWriteThrough(&agm.hmac_key, username, active);
     user_mgmt.notePersistentAuthMutation();
 }
 

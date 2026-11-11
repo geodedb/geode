@@ -13232,6 +13232,31 @@ pub fn build(b: *std.Build) void {
     const sonny1333_step = b.step("test-sonny1333-grant-persist-show-grants", "Run the SONNY-1333 regression (GRANT/REVOKE/CREATE USER whose __geode_security write fails answer an error and leave memory consistent with the store; SHOW GRANTS [FOR <user>] lists per-graph grants, self or admin only)");
     sonny1333_step.dependOn(&run_sonny1333_tests.step);
 
+    // SONNY-3038 (the v0.8.24 part): the auth write-throughs (DROP USER,
+    // ALTER USER password/role/ENABLE/DISABLE, CREATE/DROP ROLE,
+    // geode.auth.user_import) answer 58030 on a failed save and store all of
+    // a change or none of it, a security-reducing one failing closed; policy
+    // write-throughs are atomic and DROP POLICY removes every record of the
+    // name; a label deny goes into both RLS engines or neither; the algorithm
+    // post-filter reads an evicted node from the engine; the federation filter
+    // frees what it removes; the dead RLS QueryRewriter is gone.
+    const sonny3038b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3038_auth_rls_low_findings.zig"), .target = target, .optimize = optimize });
+    sonny3038b_test_mod.link_libc = true;
+    sonny3038b_test_mod.addImport("geode", root_mod);
+    sonny3038b_test_mod.addImport("schema", schema_mod);
+    sonny3038b_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3038b_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3038b_test_mod.addImport("logging", logging_mod);
+    sonny3038b_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny3038b_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    sonny3038b_test_mod.addImport("rls_types", rls_types_mod);
+    sonny3038b_test_mod.addImport("rls", rls_mod);
+    const sonny3038b_tests = b.addTest(.{ .root_module = sonny3038b_test_mod });
+    const run_sonny3038b_tests = b.addRunArtifact(sonny3038b_tests);
+    shardDep(test_step, &run_sonny3038b_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3038b_step = b.step("test-sonny3038-auth-rls-low-findings", "Run the SONNY-3038 (v0.8.24 part) regression (auth write-throughs answer 58030 on a failed save and store all or nothing, security-reducing ones failing closed; atomic policy write-through; DROP POLICY removes duplicates; label deny in both RLS engines or neither; algorithm post-filter reads evicted nodes; federation filter frees removed rows; RLS QueryRewriter removed)");
+    sonny3038b_step.dependOn(&run_sonny3038b_tests.step);
+
     // GPS Phase 7 Task 7-1: bounded LRU decision cache tests.
     const gps_decision_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decision_cache.zig"), .target = target, .optimize = optimize });
     gps_decision_cache_test_mod.addImport("geode", root_mod);

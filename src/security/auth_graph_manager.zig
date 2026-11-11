@@ -1704,6 +1704,41 @@ pub const AuthGraphManager = struct {
         return uid;
     }
 
+    /// DROP USER's write-through (`server_init.writerDeleteUser`).
+    pub fn deleteUserWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8) !void {
+        const uid = (try self.findUserIdByName(username)) orelse return;
+        try self.removeUser(hmac_key, uid);
+    }
+
+    /// A password change's write-through (`server_init.writerUpdatePassword`).
+    pub fn updatePasswordWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, new_password_hash: []const u8) !void {
+        const uid = (try self.findUserIdByName(username)) orelse return;
+        _ = try self.updateUserPassword(hmac_key, uid, new_password_hash);
+    }
+
+    /// ALTER USER ... ENABLE / DISABLE's write-through (`server_init.writerSetActive`).
+    pub fn setActiveWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, active: bool) !void {
+        const uid = (try self.findUserIdByName(username)) orelse return;
+        _ = try self.setUserActive(hmac_key, uid, active);
+    }
+
+    /// A built-in role change's write-through (`server_init.writerSetRole`):
+    /// revoke the user's HAS_ROLE edges to the other built-in roles, then
+    /// assign one to `role_name` (its role node created if missing).
+    pub fn setBuiltinRoleWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, role_name: []const u8, builtin_names: []const []const u8) !void {
+        const uid = (try self.findUserIdByName(username)) orelse return;
+        for (builtin_names) |other| {
+            if (std.mem.eql(u8, other, role_name)) continue;
+            if (try self.findRoleIdByName(other)) |old_rid| {
+                _ = try self.revokeUserRole(hmac_key, uid, old_rid);
+            }
+        }
+        _ = try self.createRole(hmac_key, role_name, "");
+        if (try self.findRoleIdByName(role_name)) |rid| {
+            _ = try self.assignUserRole(hmac_key, uid, rid);
+        }
+    }
+
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     /// List all persisted graph grants. Caller owns the returned slice.
     pub fn listGraphGrants(self: *Self, allocator: std.mem.Allocator) ![]user_storage.UserStorageBackend.GraphGrantRecord {

@@ -201,6 +201,20 @@ pub const RLSFilterEngine = struct {
     }
 };
 
+/// `geode.rls.add_deny`'s write (server/main.zig): a label deny for
+/// `username` on `label` in `graph` goes into `label_engine` (this
+/// post-filter) and `types_engine` (the executor's `rls_types` engine).
+pub fn addDenyToEngines(label_engine: *RLSFilterEngine, types_engine: anytype, graph: []const u8, label: []const u8, username: []const u8) !void {
+    try label_engine.addDenyPolicy(graph, label, username);
+    types_engine.addDenyPolicy(graph, label, username) catch |err| {
+        log.warn("rls_types addDenyPolicy failed", &.{
+            Attr.string("err", @errorName(err)),
+            Attr.string("graph", graph),
+            Attr.string("label", label),
+        });
+    };
+}
+
 /// Global singleton — set once at server startup, read by every connection handler.
 var g_rls_filter_engine: ?*RLSFilterEngine = null;
 

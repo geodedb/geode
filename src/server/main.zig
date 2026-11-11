@@ -2078,14 +2078,7 @@ pub fn main() !void {
             username: []const u8,
         ) anyerror!void {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
-            try ctx.label_engine.addDenyPolicy(graph, label, username);
-            ctx.types_engine.addDenyPolicy(graph, label, username) catch |err| {
-                log.warn("rls_types addDenyPolicy failed", &.{
-                    logging.Attr.string("err", @errorName(err)),
-                    logging.Attr.string("graph", graph),
-                    logging.Attr.string("label", label),
-                });
-            };
+            try rls_filter_mod.addDenyToEngines(ctx.label_engine, ctx.types_engine, graph, label, username);
         }
         fn removeDeny(
             ctx_anyopaque: ?*anyopaque,
