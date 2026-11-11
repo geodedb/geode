@@ -213,7 +213,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // SONNY-3038: geode.auth.revoke could not save the revoke.
-        error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph; the privilege may return at the next start. Retry it" },
+        // SONNY-1333: the privilege is taken away in memory first.
+        error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph: the privilege is removed now but returns at the next start. Retry it" },
+        // SONNY-1333: geode.auth.grant could not save the grant.
+        error.GrantNotPersisted => .{ .code = "58030", .message = "The grant could not be saved to the security graph; nothing was granted. Retry it" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
         // SONNY-3134: or another session's open transaction.
         error.ObjectInUse => .{ .code = "55006", .message = "Object in use: an open transaction (this session's or another's) changed the graph; it can be dropped or replaced once that transaction commits or rolls back" },

@@ -166,13 +166,46 @@ pub const GrantPersistCallbacks = struct {
     /// Resolve a username to a graph User-node id. Returns null if unknown / not
     /// in server context (e.g. CLI or test without a live server).
     resolve_user_id_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8) ?u64 = null,
-    /// Persist a grant to the __geode_security graph and in-memory RBAC.
-    /// action: 0=read, 1=write, 2=schema
-    grant_fn: ?*const fn (ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!void = null,
-    /// Remove a grant from the __geode_security graph and in-memory RBAC.
-    /// Returns true if the grant was present and removed.
+    /// Persist grants to the __geode_security graph and in-memory RBAC.
+    /// actions: 0=read, 1=write, 2=schema. SONNY-1333: all of them or none;
+    /// an error means nothing was granted.
+    grant_fn: ?*const fn (ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, actions: []const u8) anyerror!void = null,
+    /// Remove a grant from the in-memory RBAC and the __geode_security graph.
+    /// Returns true if the grant was present and removed. SONNY-1333: the
+    /// in-memory grant goes first; an error means the stored one remains.
     revoke_fn: ?*const fn (ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!bool = null,
+    /// SONNY-1333: the user's stored grants, for SHOW GRANTS. The caller
+    /// frees them with `freeGrantEntries`.
+    list_fn: ?*const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, user_id: u64) anyerror![]GrantEntry = null,
 };
+
+/// One stored per-graph grant (SONNY-1333, SHOW GRANTS).
+pub const GrantEntry = struct {
+    graph_name: []const u8,
+    /// 0=read, 1=write, 2=schema
+    action: u8,
+};
+
+/// `GrantEntry`s for stored grant records (anything with `getGraphName()`
+/// and `action`), each graph name copied.
+pub fn grantEntriesFrom(allocator: std.mem.Allocator, records: anytype) ![]GrantEntry {
+    const out = try allocator.alloc(GrantEntry, records.len);
+    var made: usize = 0;
+    errdefer {
+        for (out[0..made]) |e| allocator.free(e.graph_name);
+        allocator.free(out);
+    }
+    for (records, 0..) |*r, i| {
+        out[i] = .{ .graph_name = try allocator.dupe(u8, r.getGraphName()), .action = r.action };
+        made = i + 1;
+    }
+    return out;
+}
+
+pub fn freeGrantEntries(allocator: std.mem.Allocator, entries: []GrantEntry) void {
+    for (entries) |e| allocator.free(e.graph_name);
+    allocator.free(entries);
+}
 
 var g_grant_persist: GrantPersistCallbacks = .{};
 
@@ -393,6 +426,7 @@ const dispatch_table = std.StaticStringMap(AuthHandler).initComptime(.{
     .{ "geode.auth.policy_delete", handlePolicyDelete },
     .{ "geode.auth.grant", handleGrantRevoke },
     .{ "geode.auth.revoke", handleGrantRevoke },
+    .{ "geode.auth.grant_list", handleGrantList },
     .{ "geode.auth.apikey_create", handleApikeyCreate },
     .{ "geode.auth.apikey_list", handleApikeyList },
     .{ "geode.auth.apikey_revoke", handleApikeyRevoke },
@@ -407,6 +441,9 @@ const read_only_set = std.StaticStringMap(void).initComptime(.{
     .{ "geode.auth.user_list", {} },
     .{ "geode.auth.role_list", {} },
     .{ "geode.auth.policy_list", {} },
+    // SONNY-1333: any user, for itself; another user's grants need Admin
+    // (checked in the handler).
+    .{ "geode.auth.grant_list", {} },
     .{ "geode.auth.apikey_list", {} },
     .{ "geode.auth.apikey_check_scope", {} },
 });
@@ -1414,48 +1451,51 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     }
     const uid = uid_opt.?;
 
-    // Apply grant/revoke for each action code. Callback failures are logged and
-    // skipped — best effort; don't fail the whole handler.
     // CANARY: REQ=REQ-SONNY-3038-REVOKE-DURABLE; FEATURE="GQL Auth DDL Persistence"; ASPECT=RevokeFailureReported; STATUS=TESTED; TEST=tests/test_sonny3038_revoke_and_schema_ddl.zig; OWNER=security; UPDATED=2026-09-27
-    // SONNY-3038: except a revoke: one that could not be saved fails the
-    // call (`RevokeNotPersisted`). It reported "Revoked", and the privilege
-    // came back at the next start.
-    var revoke_failure: ?anyerror = null;
-    for (actions) |action| {
-        if (is_grant) {
-            if (g_grant_persist.grant_fn) |f| {
-                f(g_grant_persist.ctx, uid, resource, action) catch |e| {
-                    log.warn("grant persist failed", &.{
-                        Attr.string("err", @errorName(e)),
-                        Attr.string("user", target),
-                        Attr.string("graph", resource),
-                        Attr.uint("action", @as(u64, action)),
-                    });
-                };
-            }
-        } else {
-            if (g_grant_persist.revoke_fn) |f| {
-                _ = f(g_grant_persist.ctx, uid, resource, action) catch |e| {
-                    log.warn("revoke persist failed", &.{
-                        Attr.string("err", @errorName(e)),
-                        Attr.string("user", target),
-                        Attr.string("graph", resource),
-                        Attr.uint("action", @as(u64, action)),
-                    });
-                    if (revoke_failure == null) revoke_failure = e;
-                };
-            }
+    // SONNY-3038: a revoke that could not be saved fails the call
+    // (`RevokeNotPersisted`). It reported "Revoked", and the privilege came
+    // back at the next start.
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=GrantFailureReported; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-1333: and a grant that could not be saved fails the call
+    // (`GrantNotPersisted`) having granted nothing: the callback adds every
+    // action or none. It logged the failure and reported "Granted". With no
+    // persistence callback installed nothing can be saved, and the call fails.
+    var persist_failure: ?anyerror = null;
+    if (is_grant) {
+        if (g_grant_persist.grant_fn) |f| {
+            f(g_grant_persist.ctx, uid, resource, actions) catch |e| {
+                log.warn("grant persist failed; nothing was granted", &.{
+                    Attr.string("err", @errorName(e)),
+                    Attr.string("user", target),
+                    Attr.string("graph", resource),
+                });
+                persist_failure = e;
+            };
+        } else persist_failure = error.NoGrantPersistence;
+    } else if (g_grant_persist.revoke_fn) |f| {
+        // Every action is attempted; each revoke takes its privilege away
+        // in memory first, so a failed save leaves nothing in force.
+        for (actions) |action| {
+            _ = f(g_grant_persist.ctx, uid, resource, action) catch |e| {
+                log.warn("revoke persist failed", &.{
+                    Attr.string("err", @errorName(e)),
+                    Attr.string("user", target),
+                    Attr.string("graph", resource),
+                    Attr.uint("action", @as(u64, action)),
+                });
+                if (persist_failure == null) persist_failure = e;
+            };
         }
-    }
+    } else persist_failure = error.NoGrantPersistence;
 
-    if (revoke_failure != null) {
+    if (persist_failure != null) {
         // The in-memory RBAC state may have moved; tell the LSP providers.
         schema_change_notifier.notify();
         allocator.free(columns[0]);
         allocator.free(columns);
         allocator.free(row);
         allocator.free(rows);
-        return error.RevokeNotPersisted;
+        return if (is_grant) error.GrantNotPersisted else error.RevokeNotPersisted;
     }
 
     // Return the status row with wording the geodetestlab spec asserts.
@@ -1467,11 +1507,81 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
 
     // Task 9: a grant/revoke changes which graphs a user can see, which
     // changes the LSP SchemaProvider's user-visible label/edge-type set.
-    // Per-graph callback failures above are best-effort — we still notify
-    // because the in-memory RBAC state will have moved.
     schema_change_notifier.notify();
 
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
+// CANARY: REQ=REQ-SONNY-1333-SHOW-GRANTS; FEATURE="GQL Auth DDL"; ASPECT=GrantListProcedure; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+/// `geode.auth.grant_list([username])` -> username, graph, action: the user's
+/// per-graph grants as stored in __geode_security, one row per grant, by
+/// graph then action (SONNY-1333; `SHOW GRANTS` reads it). Without a username,
+/// the caller's own. Read-only, so any authenticated user may call it, but
+/// for itself only: another user's grants need the Admin role, and a refusal
+/// is audited as the admin-only procedures' are.
+fn handleGrantList(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
+    var username: []const u8 = context.user orelse "";
+    if (call_stmt.procedure == .Call) {
+        const args = call_stmt.procedure.Call.args;
+        if (args.len >= 1 and args[0].* == .String and args[0].String.len > 0) username = args[0].String;
+    }
+    if (user_mgmt.isAuthEnabled()) {
+        const own = if (context.user) |u| std.mem.eql(u8, u, username) else false;
+        const is_admin = if (context.role) |r| r == .Admin else false;
+        if (!own and !is_admin) {
+            const audit_mod = @import("../security/audit.zig");
+            audit_mod.logSecurityGraphEvent(allocator, .{
+                .event_type = .access_denied,
+                .action = proc_name,
+                .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+                .username = context.user orelse "",
+                .details = "auth procedure denied: admin role required to list another user's grants",
+                .result_failure = true,
+            });
+            return error.Unauthorized;
+        }
+    }
+
+    const columns = try allocator.alloc([]const u8, 3);
+    columns[0] = try allocator.dupe(u8, "username");
+    columns[1] = try allocator.dupe(u8, "graph");
+    columns[2] = try allocator.dupe(u8, "action");
+    var rows_list = std.ArrayList([]Value).empty;
+
+    const uid_opt: ?u64 = if (username.len == 0) null else if (g_grant_persist.resolve_user_id_fn) |f| f(g_grant_persist.ctx, username) else null;
+    // No such user, or no security graph (CLI / tests): no stored grants.
+    if (uid_opt) |uid| {
+        const list = g_grant_persist.list_fn orelse return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
+        const entries = try list(g_grant_persist.ctx, allocator, uid);
+        defer freeGrantEntries(allocator, entries);
+        std.mem.sort(GrantEntry, entries, {}, struct {
+            fn lessThan(_: void, a: GrantEntry, b: GrantEntry) bool {
+                return switch (std.mem.order(u8, a.graph_name, b.graph_name)) {
+                    .lt => true,
+                    .gt => false,
+                    .eq => a.action < b.action,
+                };
+            }
+        }.lessThan);
+        for (entries) |e| {
+            const row = try allocator.alloc(Value, 3);
+            row[0] = Value{ .Str = try allocator.dupe(u8, username) };
+            row[1] = Value{ .Str = try allocator.dupe(u8, e.graph_name) };
+            row[2] = Value{ .Str = try allocator.dupe(u8, grantActionName(e.action)) };
+            try rows_list.append(allocator, row);
+        }
+    }
+    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
+}
+
+/// The privilege name of a stored grant action code.
+pub fn grantActionName(action: u8) []const u8 {
+    return switch (action) {
+        0 => "read",
+        1 => "write",
+        2 => "schema",
+        else => "unknown",
+    };
 }
 
 fn handleApikeyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {

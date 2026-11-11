@@ -157,6 +157,80 @@ pub fn executeShowPermissions(allocator: std.mem.Allocator, target: ?[]const u8,
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_permissions", &.{username});
 }
 
+// CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsColumns; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
+// CANARY: REQ=REQ-SONNY-1333-SHOW-GRANTS; FEATURE="GQL Auth DDL"; ASPECT=ShowGrants; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+/// SHOW GRANTS [ FOR <username> ]: columns policy_name, graph, actions,
+/// effect, enabled. First the GPS policies that apply to the user, then
+/// (SONNY-1333) one row per graph the user holds per-graph grants on (GRANT
+/// ... ON GRAPH), as stored in __geode_security, with a null policy_name and
+/// the granted privileges in `actions`. Without FOR, the current user. The
+/// grants come from `geode.auth.grant_list`, which carries the authorization:
+/// a user may list its own; another user's need the Admin role.
+pub fn executeShowGrants(allocator: std.mem.Allocator, target: ?[]const u8, ctx: ExecutionContext) !ExecutionResult {
+    const user_name = target orelse (ctx.user orelse "");
+    var grants = try auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.grant_list", &.{user_name});
+    defer grants.deinit(allocator);
+
+    const column_list = [_][]const u8{ "policy_name", "graph", "actions", "effect", "enabled" };
+    const columns = try allocator.alloc([]const u8, column_list.len);
+    for (column_list, 0..) |col, i| columns[i] = try allocator.dupe(u8, col);
+    var rows_list = std.ArrayList([]Value).empty;
+
+    // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsRows; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
+    // Policies applicable to the user: (a) expression_source == "true"
+    // (universally applicable), or (b) expression_source containing the
+    // literal "current_user() = '<username>'" (a text match).
+    const policy_catalog_mod = @import("../security/policy_catalog.zig");
+    if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
+        const user_expr = try std.fmt.allocPrint(allocator, "current_user() = '{s}'", .{user_name});
+        defer allocator.free(user_expr);
+        for (pol_cat.listPolicies()) |pol| {
+            const is_universal = std.mem.eql(u8, pol.expression_source, "true");
+            const is_user_specific = std.mem.indexOf(u8, pol.expression_source, user_expr) != null;
+            if (!is_universal and !is_user_specific) continue;
+
+            var actions_buf = std.ArrayList(u8).empty;
+            for (pol.actions, 0..) |a, ai| {
+                if (ai > 0) try actions_buf.appendSlice(allocator, ", ");
+                try actions_buf.appendSlice(allocator, @tagName(a));
+            }
+            const row = try allocator.alloc(Value, 5);
+            row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
+            row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
+            row[2] = Value{ .Str = try actions_buf.toOwnedSlice(allocator) };
+            row[3] = Value{ .Str = try allocator.dupe(u8, @tagName(pol.effect)) };
+            row[4] = Value{ .Bool = pol.enabled };
+            try rows_list.append(allocator, row);
+        }
+    }
+
+    // The per-graph grants: grant_list rows are (username, graph, action),
+    // by graph then action; one row per graph.
+    var i: usize = 0;
+    while (i < grants.rows.len) {
+        const graph = grants.rows[i][1].Str;
+        var actions_buf = std.ArrayList(u8).empty;
+        while (i < grants.rows.len and std.mem.eql(u8, grants.rows[i][1].Str, graph)) : (i += 1) {
+            if (actions_buf.items.len > 0) try actions_buf.appendSlice(allocator, ", ");
+            try actions_buf.appendSlice(allocator, grants.rows[i][2].Str);
+        }
+        const row = try allocator.alloc(Value, 5);
+        row[0] = .Null;
+        row[1] = Value{ .Str = try allocator.dupe(u8, graph) };
+        row[2] = Value{ .Str = try actions_buf.toOwnedSlice(allocator) };
+        row[3] = Value{ .Str = try allocator.dupe(u8, "allow") };
+        row[4] = Value{ .Bool = true };
+        try rows_list.append(allocator, row);
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = try rows_list.toOwnedSlice(allocator),
+        .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
+    };
+}
+
 pub fn executeShowVersion(allocator: std.mem.Allocator) !ExecutionResult {
     // build_options.version is injected by build.zig addOption("version", ...) at build time.
     // In debug/dev builds where the option is not overridden, the fallback from

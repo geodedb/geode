@@ -37,6 +37,7 @@ REVOKE READ  | WRITE | SCHEMA | ALL [ ON GRAPH <name> ] FROM <username>
 SHOW USERS
 SHOW ROLES
 SHOW PERMISSIONS [ FOR <username> ]
+SHOW GRANTS [ FOR <username> ]
 SHOW VERSION
 SHOW CAPABILITIES
 ```
@@ -64,11 +65,26 @@ single-quoted or double-quoted string literal.
 | `SHOW USERS` | `geode.auth.user_list` |
 | `SHOW ROLES` | `geode.auth.role_list` |
 | `SHOW PERMISSIONS [ FOR ... ]` | `geode.auth.user_permissions` |
+| `SHOW GRANTS [ FOR ... ]` | `geode.auth.grant_list` (plus the GPS policies that apply to the user) |
 | `SHOW VERSION` | *(local — no auth handler)* |
 | `SHOW CAPABILITIES` | *(local — no auth handler)* |
 
 `SHOW PERMISSIONS` without a `FOR` clause uses the current authenticated user's
 permissions. With `FOR <username>`, an Admin role is required.
+
+`SHOW GRANTS` without a `FOR` clause shows the current user's grants. A user
+may list its own grants (`FOR` its own name, or no `FOR`); another user's
+need the Admin role, and a refusal answers 42501 and is audited like the
+admin-only procedures. Columns: `policy_name`, `graph`, `actions`, `effect`,
+`enabled`. The GPS policies that apply to the user come first (a policy
+whose condition is `true` or names the user with `current_user() = '<name>'`).
+Then one row per graph the user holds per-graph grants on, read from the
+`GraphGrant` records in `__geode_security` (what the next start loads):
+`policy_name` is null, `actions` lists the granted privileges (`read`,
+`write`, `schema`), `effect` is `allow`, `enabled` is true. The procedure
+`CALL geode.auth.grant_list([<username>])` returns the stored grants one
+row per grant (`username`, `graph`, `action`) with the same authorization
+(SONNY-1333).
 
 Implementation: `src/gql/parser.zig` (parse) → `src/gql/ast.zig` (AST nodes) →
 `src/execution/admin_ddl.zig` (execution) → `src/execution/auth_dispatch.zig`
@@ -166,6 +182,28 @@ All auth DDL mutations persist to the HMAC-chained `__geode_security` graph via
   `__geode_security`, and the in-memory `GraphRBACPolicy` is updated immediately.
   See [Per-graph grant semantics](#per-graph-grant-semantics).
 
+### When a save fails (SONNY-1333)
+
+A statement whose write to `__geode_security` fails answers an error, never
+its success text, and leaves nothing usable that is not stored:
+
+| Statement | On a failed save |
+|---|---|
+| `GRANT <priv> ON GRAPH g TO u` | 58030 (`GrantNotPersisted`): nothing is granted. Every privilege of the statement (all three for `ALL`) is stored and added to the live grant table, or none is: what one statement added is taken out again, as `CREATE POLICY` takes out a policy whose save failed. A grant held before the statement is kept. Retry the statement. |
+| `REVOKE <priv> ON GRAPH g FROM u` | 58030 (`RevokeNotPersisted`): the privilege is taken away in memory first, so it stops at once, but its stored record remains and is loaded at the next start. Retry the statement to remove it. (A record removed whose chain seal failed is sealed again in the same statement; if that holds, the revoke succeeds.) Every action of `ALL` is attempted. This is fail-closed, unlike `DROP POLICY`, which on a failed save keeps the policy in memory and in the store. |
+| `CREATE USER` | Status `error: UserNotPersisted`: the user is not created (in memory or in the store). A user stored without its role edge is removed again, so the retry succeeds. |
+
+`SHOW GRANTS` reads the stored records, so it shows what the next start
+will load. These write-throughs undo themselves and run outside the
+statement undo (SONNY-3348), so a `GRANT`, `REVOKE` or `CREATE USER` inside
+an explicit transaction is not undone by `ROLLBACK`. Residuals: the other write-throughs (`DROP USER`, `ALTER USER`,
+`CREATE` / `DROP ROLE`, `geode.auth.user_import`) still log a failed save and
+report success (SONNY-3038); if the undo of a failed `GRANT` itself
+fails (a second failure), the error is logged and the stored record remains
+until revoked; and a failure inside the graph store's own node create or
+delete can leave a half-written node behind, which these undos do not
+repair.
+
 On startup, `server_init` hydrates the security state from `__geode_security`:
 users are loaded via the existing `PersistentUserResolver`; custom roles are
 loaded via `auth_dispatch.hydrateCustomRolesFromGraph`; per-graph grants are
@@ -260,9 +298,10 @@ create/revoke) are wired at startup in `server_init`.
    restricted by default, for `readonly`/`user` principals, and for users with
    no stored role, for whom every grant is load-bearing.
 
-5. **No `SHOW GRANTS` statement yet.** Per-graph grant survival is verified
-   indirectly via restart health and role-change assertions; a dedicated
-   `SHOW GRANTS [ FOR <username> ]` statement is tracked for a future release.
+5. **`SHOW GRANTS` shows per-graph grants and policies, not roles.** A
+   user's built-in role and the permissions it gives are shown by
+   `SHOW USERS` and `SHOW PERMISSIONS`. (Until SONNY-1333 there was no way to
+   read a per-graph grant back.)
 
 6. **`IF EXISTS` on `DROP USER` / `DROP ROLE` is effectively always-satisfied.**
    The underlying delete handlers (`geode.auth.user_delete`,
@@ -309,5 +348,5 @@ alias once the parser path lands.
 
 ---
 
-*Last Updated: May 2026*
+*Last Updated: November 2026*
 *Status: Geode extension — not part of ISO/IEC 39075:2024*

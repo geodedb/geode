@@ -70,7 +70,10 @@ const Harness = struct {
             .allocator = allocator,
             .tmp = tmp,
             .data_dir = data_dir,
-            .ctx = execution.ExecutionContext{ .catalog = exec_catalog },
+            // SONNY-1333: SHOW GRANTS is authorized as the auth SHOW
+            // statements are (authentication is on by default): an Admin,
+            // who may list any user's grants.
+            .ctx = execution.ExecutionContext{ .catalog = exec_catalog, .user = "admin", .role = .Admin },
             .catalog = cat,
         };
     }

@@ -876,12 +876,38 @@ pub const UserStorageBackend = struct {
             const stored_graph = getStringProp(self.store, node_id, "graph_name", "");
             if (!std.mem.eql(u8, stored_graph, graph_name)) continue;
 
-            // Found the matching grant
+            // Found the matching grant. SONNY-1333: the node goes first, and
+            // the map entry only once it is gone, so a failed delete leaves
+            // the grant stored and a retry finds it.
+            try self.deleteNodeChecked(node_id);
             _ = self.graph_grant_nodes.remove(grant_id);
-            self.store.deleteNode(node_id);
             return true;
         }
         return false;
+    }
+
+    /// SONNY-1333: is the grant (user_id, graph_name, action) stored?
+    pub fn hasGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
+        return self.graph_grant_nodes.contains(graphGrantId(user_id, graph_name, action));
+    }
+
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=DiscardGraphGrant; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-1333: take out the record of a grant a failed GRANT stored, found
+    /// by its id, so a record whose fields were only partly written goes too.
+    pub fn discardGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) !void {
+        const grant_id = graphGrantId(user_id, graph_name, action);
+        const node_id = self.graph_grant_nodes.get(grant_id) orelse return;
+        try self.deleteNodeChecked(node_id);
+        _ = self.graph_grant_nodes.remove(grant_id);
+    }
+
+    /// SONNY-1333: delete a record's node and confirm it is gone.
+    /// `GraphStore.deleteNode` reports nothing: when it fails part way (an
+    /// allocation, the storage adapter) the node stays, and a revoked grant
+    /// would be loaded again at the next start.
+    fn deleteNodeChecked(self: *Self, node_id: u64) !void {
+        self.store.deleteNode(node_id);
+        if (self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
     }
 
     pub fn listGraphGrants(self: *Self, allocator: Allocator) ![]GraphGrantRecord {
@@ -931,7 +957,15 @@ pub const UserStorageBackend = struct {
         record.updated_at = record.created_at;
         record.auth_version = 1;
 
+        // SONNY-1333: a new record whose node could not be written leaves the
+        // cache again. The chain counts cache entries and seals mapped nodes:
+        // a cached record with no node made the next seal panic
+        // (RecordCountMismatch).
+        const was_cached = self.user_cache.contains(user_id);
         try self.user_cache.put(user_id, record);
+        errdefer if (!was_cached) {
+            _ = self.user_cache.remove(user_id);
+        };
         try self.upsertUserNode(record);
     }
 
@@ -1275,7 +1309,12 @@ pub const UserStorageBackend = struct {
         record.created_at = compat_milliTimestamp();
         record.updated_at = record.created_at;
 
+        // SONNY-1333: as in persistUser.
+        const was_cached = self.role_cache.contains(role_id);
         try self.role_cache.put(role_id, record);
+        errdefer if (!was_cached) {
+            _ = self.role_cache.remove(role_id);
+        };
         try self.upsertRoleNode(record);
     }
 
@@ -1577,7 +1616,11 @@ pub const UserStorageBackend = struct {
     }
 
     fn upsertGraphGrantNode(self: *Self, record: GraphGrantRecord) !void {
-        const node_id = self.graph_grant_nodes.get(record.id) orelse try self.createEntityNode(GRAPH_GRANT_LABEL);
+        const existing = self.graph_grant_nodes.get(record.id);
+        const node_id = existing orelse try self.createEntityNode(GRAPH_GRANT_LABEL);
+        // SONNY-1333: a node made here and left unmapped by a failed put could
+        // not be found to undo; take it out again.
+        errdefer if (existing == null and !self.graph_grant_nodes.contains(record.id)) self.store.deleteNode(node_id);
         try self.graph_grant_nodes.put(record.id, node_id);
 
         // The id is a 64-bit hash: store its bit pattern, not a clamped value.
@@ -1685,7 +1728,10 @@ pub const UserStorageBackend = struct {
     }
 
     pub fn upsertUserNode(self: *Self, record: UserRecord) !void {
-        const node_id = self.user_nodes.get(record.id) orelse try self.createEntityNode(USER_LABEL);
+        const existing = self.user_nodes.get(record.id);
+        const node_id = existing orelse try self.createEntityNode(USER_LABEL);
+        // SONNY-1333: as in upsertGraphGrantNode.
+        errdefer if (existing == null and !self.user_nodes.contains(record.id)) self.store.deleteNode(node_id);
         try self.user_nodes.put(record.id, node_id);
 
         // Build a batch of all property mutations so the underlying
@@ -1756,7 +1802,10 @@ pub const UserStorageBackend = struct {
     }
 
     fn upsertRoleNode(self: *Self, record: RoleRecord) !void {
-        const node_id = self.role_nodes.get(record.id) orelse try self.createEntityNode(ROLE_LABEL);
+        const existing = self.role_nodes.get(record.id);
+        const node_id = existing orelse try self.createEntityNode(ROLE_LABEL);
+        // SONNY-1333: as in upsertGraphGrantNode.
+        errdefer if (existing == null and !self.role_nodes.contains(record.id)) self.store.deleteNode(node_id);
         try self.role_nodes.put(record.id, node_id);
 
         try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(record.id) });

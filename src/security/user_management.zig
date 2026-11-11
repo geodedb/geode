@@ -769,8 +769,15 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
     bumpAuthInvalidationEpoch();
     if (persistent_writer) |w| {
         if (w.create_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=CreateUserFailureReported; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-1333: a user that could not be saved is not created. It
+            // was kept in memory and reported created: it could log in until
+            // the next start, then was gone.
             f(w.ctx, username, email, inserted.user.password_hash, role) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
+                log.warn("persistent user writer failed; the user was not created", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
+                _ = store.remove(username);
+                bumpAuthInvalidationEpoch();
+                return error.UserNotPersisted;
             };
         }
     }

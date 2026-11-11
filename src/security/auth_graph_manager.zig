@@ -1133,6 +1133,14 @@ pub const AuthGraphManager = struct {
 
         const user_id = self.next_user_id;
         self.next_user_id += 1;
+        // SONNY-1333: a user whose save failed part way is taken out again,
+        // so the CREATE USER that reports the failure can be retried.
+        errdefer {
+            self.storage.removeUser(user_id) catch {};
+            self.sealChain(hmac_key) catch |err| {
+                log.err("SONNY-1333: the security chain could not be sealed after a failed CREATE USER", &.{Attr.string("error", @errorName(err))});
+            };
+        }
 
         // Persist with HMAC
         try self.storage.persistUserWithHmac(user_id, username, email, password_hash, "", hmac_key);
@@ -1546,6 +1554,154 @@ pub const AuthGraphManager = struct {
             self.logSecurityGraphMutation(.configuration_change, "REVOKE_GRAPH_PERMISSION", user_id, graph_name, null);
         }
         return removed;
+    }
+
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=GrantWriteThrough; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-1333: GRANT `actions` ON GRAPH `graph_name` for the user: each
+    /// grant stored in __geode_security and added to the live grant table
+    /// `pol`, or none of them. If any step fails, every grant this call added,
+    /// to the store or to `pol`, is taken out again and the error returned: a
+    /// failed GRANT confers nothing now and nothing at the next start. A grant
+    /// held before the call is left as it was.
+    pub fn grantGraphPermissionsWriteThrough(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        pol: ?*geode.multi_graph_security.GraphRBACPolicy,
+        user_id: u64,
+        graph_name: []const u8,
+        actions: []const u8,
+    ) !void {
+        const max_actions = 8;
+        if (actions.len > max_actions) return error.TooManyGrantActions;
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        var stored_new: [max_actions]bool = undefined;
+        var live_new: [max_actions]bool = undefined;
+        var touched: usize = 0;
+        errdefer self.undoGraphGrants(hmac_key, pol, user_id, graph_name, actions[0..touched], stored_new[0..touched], live_new[0..touched]);
+        for (actions, 0..) |action, i| {
+            stored_new[i] = !self.storage.hasGraphGrant(user_id, graph_name, action);
+            live_new[i] = if (pol) |p| !p.hasGraphGrant(user_id, graph_name, action) else false;
+            touched = i + 1;
+            try self.grantUserGraphPermission(hmac_key, user_id, graph_name, action);
+            if (pol) |p| try p.grantGraphPermission(user_id, graph_name, action);
+        }
+    }
+
+    /// SONNY-1333: the write-throughs above are their own unit of undo. The
+    /// statement undo (SONNY-3348) replays a failed statement's store writes
+    /// but not this manager's record maps or the HMAC chain, so it would undo
+    /// the security graph behind their back (and a statement that recorded a
+    /// limit fences, silently, the writes that undo a failed save). They run
+    /// with capture and the fence suspended, as the transaction undo does.
+    fn suspendStatementUndo() void {
+        geode.statement_undo.suspendCapture();
+    }
+
+    /// The undo of a failed `grantGraphPermissionsWriteThrough`. The chain is
+    /// sealed again whatever was undone: a failed seal, or a re-stored grant
+    /// held before, left it stale.
+    fn undoGraphGrants(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        pol: ?*geode.multi_graph_security.GraphRBACPolicy,
+        user_id: u64,
+        graph_name: []const u8,
+        actions: []const u8,
+        stored_new: []const bool,
+        live_new: []const bool,
+    ) void {
+        for (actions, stored_new, live_new) |action, s, l| {
+            if (l) if (pol) |p| {
+                _ = p.revokeGraphPermission(user_id, graph_name, action);
+            };
+            if (s) self.storage.discardGraphGrant(user_id, graph_name, action) catch |err| {
+                log.err("SONNY-1333: a failed GRANT left its record stored; it is loaded at the next start unless revoked", &.{
+                    Attr.uint("user_id", user_id),
+                    Attr.string("graph", graph_name),
+                    Attr.uint("action", @as(u64, action)),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+        self.sealChain(hmac_key) catch |err| {
+            log.err("SONNY-1333: the security chain could not be sealed after a failed GRANT", &.{Attr.string("error", @errorName(err))});
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=RevokeWriteThrough; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-1333: REVOKE `action` ON GRAPH `graph_name` from the user. The
+    /// live grant table `pol` first, so the privilege stops at once whatever
+    /// the save does (fail closed), then the stored record. An error means the
+    /// record could not be removed: the grant is gone until the next start,
+    /// when it is loaded again unless the REVOKE is retried. Returns whether
+    /// the grant was held, live or stored.
+    pub fn revokeGraphPermissionWriteThrough(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        pol: ?*geode.multi_graph_security.GraphRBACPolicy,
+        user_id: u64,
+        graph_name: []const u8,
+        action: u8,
+    ) !bool {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const live_removed = if (pol) |p| p.revokeGraphPermission(user_id, graph_name, action) else false;
+        const stored_removed = self.revokeUserGraphPermission(hmac_key, user_id, graph_name, action) catch |err| {
+            // The record may be gone with only the seal failed. Seal again:
+            // if that holds, the revoke is saved. Otherwise the chain stays
+            // stale (a retry that finds no record would not seal it).
+            if (self.storage.hasGraphGrant(user_id, graph_name, action)) return err;
+            self.sealChain(hmac_key) catch return err;
+            return true;
+        };
+        return live_removed or stored_removed;
+    }
+
+    /// SONNY-1333: the stored grants of one user, for SHOW GRANTS. Caller owns
+    /// the returned slice.
+    pub fn listGraphGrantsForUser(self: *Self, allocator: std.mem.Allocator, user_id: u64) ![]user_storage.UserStorageBackend.GraphGrantRecord {
+        const all = try self.storage.listGraphGrants(allocator);
+        defer allocator.free(all);
+        var out: std.ArrayList(user_storage.UserStorageBackend.GraphGrantRecord) = .empty;
+        errdefer out.deinit(allocator);
+        for (all) |g| {
+            if (g.user_id == user_id) try out.append(allocator, g);
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=CreateUserWriteThrough; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-1333: CREATE USER's write-through: the User node and, with
+    /// `role_name`, the role node and its HAS_ROLE edge, or none of it. A user
+    /// stored without its role was left behind by a failed CREATE USER; the
+    /// retry then failed as a duplicate.
+    pub fn createUserWithRole(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        username: []const u8,
+        email: []const u8,
+        password_hash: []const u8,
+        is_superuser: bool,
+        role_name: ?[]const u8,
+    ) !u64 {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = try self.createUser(hmac_key, username, email, password_hash, is_superuser);
+        errdefer self.removeUser(hmac_key, uid) catch |err| {
+            log.err("SONNY-1333: a failed CREATE USER left its user stored", &.{
+                Attr.string("user", username),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+        if (role_name) |rn| {
+            // createRole is idempotent.
+            _ = try self.createRole(hmac_key, rn, "");
+            if (try self.findRoleIdByName(rn)) |rid| {
+                _ = try self.assignUserRole(hmac_key, uid, rid);
+            }
+        }
+        return uid;
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11

@@ -6135,8 +6135,8 @@ pub const Parser = struct {
         if (show_type == .permissions and self.cur.kind == .FOR) {
             self.advance(); // FOR
             target = try self.parseName();
-        } else if (show_type == .grants_for) {
-            if (self.cur.kind != .FOR) return self.unexpected("expected FOR after SHOW GRANTS");
+        } else if (show_type == .grants_for and self.cur.kind == .FOR) {
+            // SONNY-1333: FOR is optional; SHOW GRANTS is the current user's.
             self.advance(); // FOR
             target = try self.parseName();
         }

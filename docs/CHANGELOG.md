@@ -52,6 +52,41 @@
   drops the rows left. A retry that finds a row already removed by a failed
   run reseals the auth chain, so it verifies again.
   Regression: `zig build test-sonny4877-grant-retire-fail-closed`.
+- **A `GRANT`, `REVOKE` or `CREATE USER` whose save fails answers an error
+  and leaves nothing in force that is not stored (SONNY-1333).** A per-graph
+  `GRANT` (and `geode.auth.grant`) logged a failed write to
+  `__geode_security` and answered `Granted ...`: when the store write failed
+  nothing was granted, and when the live-table insert failed the stored
+  grant appeared at the next start. It now answers 58030
+  (`GrantNotPersisted`) and grants nothing: every privilege of the statement
+  (all three for `ALL`) is stored and live, or none is, and a grant held
+  before is kept. A `REVOKE` takes the privilege away in memory first, so a
+  failed save (58030, as since SONNY-3038) no longer leaves it usable until
+  the restart; the retry removes the stored record. A revoke whose record
+  delete failed inside the store used to count as done (the store's delete
+  reports nothing) and the grant came back at the next start; the delete is
+  now checked. `CREATE USER` whose save fails answers `error:
+  UserNotPersisted` and creates no user (it could log in until the restart),
+  and a user stored without its role edge is removed again, so the retry
+  succeeds. With no persistence installed a `GRANT` or `REVOKE` fails rather
+  than reporting success. A user or role record whose node could not be
+  written no longer stays cached: the next auth-chain seal panicked
+  (`RecordCountMismatch`). These write-throughs undo themselves and are not
+  replayed by the statement undo (SONNY-3348), which reverted the security
+  graph behind the auth manager's record maps; behaviour change: a `GRANT`,
+  `REVOKE` or `CREATE USER` inside an explicit transaction is not undone by
+  `ROLLBACK` (its in-memory effect never was).
+- **`SHOW GRANTS [ FOR <user> ]` lists per-graph grants (SONNY-1333).**
+  After the GPS policies that apply to the user, one row per graph the user
+  holds grants on, as stored in `__geode_security` (null `policy_name`, the
+  privileges in `actions`). `FOR` is optional (the current user). A user may
+  list its own grants; another user's need the Admin role (42501 otherwise,
+  audited). The new read-only `geode.auth.grant_list([username])` procedure
+  returns one row per stored grant with the same rule. Behaviour change:
+  `SHOW GRANTS FOR <other user>`, which listed policies for any caller, is
+  refused for a non-admin, and an unauthenticated one (auth on) answers
+  28000 like the other auth `SHOW` statements.
+  Regression: `zig build test-sonny1333-grant-persist-show-grants`.
 
 ### Added
 

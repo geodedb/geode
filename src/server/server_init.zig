@@ -870,14 +870,9 @@ const auth_dispatch = geode.auth_dispatch;
 
 fn writerCreateUser(ctx: ?*anyopaque, username: []const u8, email: []const u8, password_hash: []const u8, role: user_mgmt.Role) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = try agm.createUser(&agm.hmac_key, username, email, password_hash, role == .Admin);
-    if (role != .Admin) {
-        // Ensure the built-in role node exists (createRole is idempotent) then assign.
-        _ = try agm.createRole(&agm.hmac_key, role.toString(), "");
-        if (try agm.findRoleIdByName(role.toString())) |rid| {
-            _ = try agm.assignUserRole(&agm.hmac_key, uid, rid);
-        }
-    }
+    // SONNY-1333: the user and its role edge, or neither (an admin is a
+    // superuser with no role edge).
+    _ = try agm.createUserWithRole(&agm.hmac_key, username, email, password_hash, role == .Admin, if (role == .Admin) null else role.toString());
 }
 
 fn writerDeleteUser(ctx: ?*anyopaque, username: []const u8) anyerror!void {
@@ -970,22 +965,26 @@ fn grantResolveUserId(ctx: ?*anyopaque, username: []const u8) ?u64 {
     return agm.findUserIdByName(username) catch null;
 }
 
-fn grantApply(ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!void {
+/// SONNY-1333: stored and live, every action or none (the in-memory policy
+/// makes the grant take effect without restart).
+fn grantApply(ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, actions: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    try agm.grantUserGraphPermission(&agm.hmac_key, user_id, graph_name, action);
-    // Also update the in-memory policy so the grant takes effect without restart.
-    if (multi_graph_security.getGlobalPolicy()) |pol| {
-        try pol.grantGraphPermission(user_id, graph_name, action);
-    }
+    try agm.grantGraphPermissionsWriteThrough(&agm.hmac_key, multi_graph_security.getGlobalPolicy(), user_id, graph_name, actions);
 }
 
+/// SONNY-1333: live first (the privilege stops at once), then stored.
 fn grantRevoke(ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!bool {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const removed = try agm.revokeUserGraphPermission(&agm.hmac_key, user_id, graph_name, action);
-    if (multi_graph_security.getGlobalPolicy()) |pol| {
-        _ = pol.revokeGraphPermission(user_id, graph_name, action);
-    }
-    return removed;
+    return agm.revokeGraphPermissionWriteThrough(&agm.hmac_key, multi_graph_security.getGlobalPolicy(), user_id, graph_name, action);
+}
+
+/// SONNY-1333: a user's stored grants, for SHOW GRANTS. The caller frees the
+/// entries' graph names and the slice.
+fn grantList(ctx: ?*anyopaque, allocator: std.mem.Allocator, user_id: u64) anyerror![]auth_dispatch.GrantEntry {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const grants = try agm.listGraphGrantsForUser(allocator, user_id);
+    defer allocator.free(grants);
+    return auth_dispatch.grantEntriesFrom(allocator, grants);
 }
 
 // -- graph_grant_check_fn (injected into execution.zig) --
@@ -1034,6 +1033,7 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
         .resolve_user_id_fn = &grantResolveUserId,
         .grant_fn = &grantApply,
         .revoke_fn = &grantRevoke,
+        .list_fn = &grantList,
     });
 
     // 5. Per-graph grant check function for execution.zig fallback path.

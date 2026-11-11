@@ -654,7 +654,7 @@ pub const DropConstraintStatement = struct {
 
 pub const ShowStatement = struct {
     show_type: ShowType,
-    /// Optional target for SHOW PERMISSIONS FOR <username>; null for all other SHOW forms.
+    /// Optional target for SHOW PERMISSIONS / SHOW GRANTS FOR <username>; null otherwise.
     target: ?[]const u8 = null,
 };
 
@@ -672,7 +672,8 @@ pub const ShowType = enum {
     capabilities,
     policies,
     // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowTypeGrantsFor; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
-    /// SHOW GRANTS FOR <username>: ShowStatement.target holds the username.
+    /// SHOW GRANTS [FOR <username>]: ShowStatement.target holds the username,
+    /// null for the current user (SONNY-1333).
     grants_for,
     // CANARY: REQ=REQ-DIST-SHOW-CLUSTER-STATUS; FEATURE="SHOW CLUSTER STATUS"; ASPECT=ShowTypeClusterStatus; STATUS=TESTED; TEST=tests/test_show_cluster_status.zig; OWNER=distributed; UPDATED=2026-05-26
     /// SHOW CLUSTER STATUS: returns one row per cluster member (node_id,
