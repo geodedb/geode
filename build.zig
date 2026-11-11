@@ -10095,6 +10095,18 @@ pub fn build(b: *std.Build) void {
     const sonny2675_agg_step = b.step("test-sonny2675-aggregate-semantics", "Run SONNY-2675 follow-up regression (parameters inside aggregates, typed min/max, typed group keys: in-memory, RLS-policy, tenant-scoped and persisted sessions)");
     sonny2675_agg_step.dependOn(&run_sonny2675_agg_tests.step);
 
+    // SONNY-2696, SONNY-2734: aggregates inside projection items, and
+    // computed aggregate arguments, on every executor.
+    const sonny2696_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2696_aggregate_expressions.zig"), .target = target, .optimize = optimize });
+    sonny2696_test_mod.addImport("geode", root_mod);
+    sonny2696_test_mod.addImport("logging", logging_mod);
+    sonny2696_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2696_tests = b.addTest(.{ .root_module = sonny2696_test_mod });
+    const run_sonny2696_tests = b.addRunArtifact(sonny2696_tests);
+    shardDep(test_step, &run_sonny2696_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2696_step = b.step("test-sonny2696-aggregate-expressions", "Run SONNY-2696 / SONNY-2734 regression (an aggregate inside a RETURN or WITH item is computed once per group, and an aggregate's computed argument per input row, with grouping errors kept and hidden rows excluded: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny2696_step.dependOn(&run_sonny2696_tests.step);
+
     // SONNY-2739: a float or decimal narrowed to an integer (a group or
     // DISTINCT key at 2^63, the power operator, casts, rounding functions,
     // geometry, decoders) no longer aborts the server; a value that does not
