@@ -72,6 +72,22 @@
   catalog, as before), so an upgrade loses nothing. Constraint enforcement
   on writes is unchanged (SONNY-2846, SONNY-3358). Regression:
   `zig build test-sonny1319-graph-scoped-catalog`.
+- **A dropped index stays dropped, and DROP INDEX takes the catalog lock
+  (SONNY-2795):** DROP INDEX removed the catalog row in memory and never
+  saved the catalog, so the index came back after a restart. It now saves
+  as CREATE INDEX does; if the save fails the statement fails and the
+  index stays, in memory and on disk. DROP INDEX also removed and freed
+  the row without the catalog lock while readers could hold it; it now
+  holds the lock exclusive, and the vector-index readers on the write and
+  knn paths, `db.indexes()` and `CALL geode.fts.rebuild` copy what they
+  need under the lock. CREATE INDEX and the vector dimension guard created
+  the process-wide index manager with the statement's per-request
+  allocator; it now uses the process allocator. A session with no data
+  directory read and wrote its catalog at the shared
+  `/tmp/geode_catalog.dat`, so separate sessions and processes shared one
+  catalog and a new session loaded an earlier one's indexes; its catalog
+  is now kept in memory only, as its store is. Regression:
+  `zig build test-sonny2795-drop-index-catalog`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

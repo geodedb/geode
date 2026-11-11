@@ -26,6 +26,7 @@ const language_metadata = @import("../gql/language_metadata.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
 const session_graph = @import("session_graph.zig");
+const catalog_mod = @import("../schema/catalog.zig");
 
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -303,9 +304,31 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
 
 fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !ExecutionResult {
     const catalog = context.catalog;
+    // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DbIndexesLocked; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
     // SONNY-1319: the session's graph's catalog, as SHOW INDEXES lists it.
-    const indexes = try catalog.listIndexesForGraph(allocator, session_graph.current(context));
-    defer allocator.free(indexes);
+    // SONNY-2795: each row's strings are copied under the catalog lock, as
+    // SHOW INDEXES does. `listIndexesForGraph` hands back rows that borrow
+    // the catalog's strings, and they were read after the lock was dropped,
+    // while DROP INDEX could free them.
+    var catalog_rows = std.ArrayList([]Value).empty;
+    defer catalog_rows.deinit(allocator);
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const graph = session_graph.current(context);
+        catalog.rwlock.lockSharedUncancelable(io);
+        defer catalog.rwlock.unlockShared(io);
+        var it = catalog.indexes.valueIterator();
+        while (it.next()) |idx| {
+            if (!catalog_mod.rowInGraph(idx.graph, graph)) continue;
+            const row = try allocator.alloc(Value, 4);
+            row[0] = .{ .Str = try allocator.dupe(u8, idx.name) };
+            row[1] = .{ .Str = try allocator.dupe(u8, idx.index_type) };
+            row[2] = .{ .Str = try allocator.dupe(u8, idx.table_name) };
+            row[3] = .{ .Str = try joinStrings(allocator, idx.columns, ", ") };
+            try catalog_rows.append(allocator, row);
+        }
+    }
+    const indexes = catalog_rows.items;
 
     // #844: FULLTEXT indexes live in IndexManager.fulltext_indexes and were
     // never registered with the Catalog -- so SHOW INDEXES couldn't see them
@@ -329,14 +352,7 @@ fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !Ex
     columns[3] = try allocator.dupe(u8, "properties");
 
     const rows = try allocator.alloc([]Value, total);
-    for (indexes, 0..) |idx, i| {
-        const row = try allocator.alloc(Value, 4);
-        row[0] = .{ .Str = try allocator.dupe(u8, idx.name) };
-        row[1] = .{ .Str = try allocator.dupe(u8, idx.index_type) };
-        row[2] = .{ .Str = try allocator.dupe(u8, idx.table_name) };
-        row[3] = .{ .Str = try joinStrings(allocator, idx.columns, ", ") };
-        rows[i] = row;
-    }
+    @memcpy(rows[0..indexes.len], indexes);
     for (fts_names.items, 0..) |name, j| {
         const row = try allocator.alloc(Value, 4);
         row[0] = .{ .Str = try allocator.dupe(u8, name) };

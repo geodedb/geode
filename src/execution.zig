@@ -368,7 +368,12 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
         return instance;
     }
 
-    // Prefer GraphStore data dir override; fall back to GEODE_DATA_DIR or /tmp
+    // Prefer GraphStore data dir override; fall back to GEODE_DATA_DIR.
+    // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=InMemoryCatalog; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    // SONNY-2795: with neither, the store is in memory and so is the catalog
+    // (an empty data dir: `Catalog.isPersisted`). It fell back to /tmp, so
+    // every such session in every process shared /tmp/geode_catalog.dat and
+    // a fresh one loaded whatever an earlier run had left there.
     var data_dir_owned: ?[]u8 = null;
     const data_dir = if (graph_store.getDataDirOverride()) |override| blk: {
         data_dir_owned = try allocator.dupe(u8, override);
@@ -376,7 +381,7 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     } else blk: {
         const env = getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| {
             if (err == error.EnvironmentVariableNotFound) {
-                break :blk "/tmp";
+                break :blk "";
             }
             return err;
         };
@@ -2392,35 +2397,71 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             const cat = context.catalog;
             const index_name = di.name;
 
-            var found_key: ?[]const u8 = null;
-            var found_rank: u2 = 0;
-            var iter = cat.indexes.iterator();
-            while (iter.next()) |entry| {
-                const info = entry.value_ptr.*;
-                if (!std.mem.eql(u8, info.name, index_name)) continue;
-                const rank: u2 = if (std.mem.eql(u8, info.graph, drop_graph))
-                    3
-                else if (info.graph.len == 0)
-                    2
-                else if (std.mem.eql(u8, info.index_type, "fulltext") and std.mem.eql(u8, info.graph, graph_store.DEFAULT_GRAPH_NAME))
-                    1
-                else
-                    0;
-                if (rank > found_rank) {
-                    found_key = entry.key_ptr.*;
-                    found_rank = rank;
+            // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DropIndexLockedAndSaved; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-2795: the row is found, removed and saved under the
+            // catalog lock held EXCLUSIVE, as CREATE INDEX's `addIndex` does.
+            // DROP INDEX took no lock (so it freed a row a reader could be
+            // holding) and never saved (so the index came back after a
+            // restart). A failed save refuses the statement with the row
+            // still in place. Nothing else is done under the lock: the
+            // authorization below can read the security graph (a graph lock,
+            // a lower tier), and the runtime teardown takes `rebuild_mutex`
+            // (DROP of a vector index waits there for in-flight readers),
+            // also a lower tier.
+            const io_dl = std.Io.Threaded.global_single_threaded.io();
+            const Resolve = struct {
+                key: ?[]const u8 = null,
+                rank: u2 = 0,
+
+                /// The row DROP INDEX drops. Caller holds the catalog lock.
+                fn find(c: *catalog_mod.Catalog, name: []const u8, graph: []const u8) @This() {
+                    var found: @This() = .{};
+                    var iter = c.indexes.iterator();
+                    while (iter.next()) |entry| {
+                        const info = entry.value_ptr.*;
+                        if (!std.mem.eql(u8, info.name, name)) continue;
+                        const rank: u2 = if (std.mem.eql(u8, info.graph, graph))
+                            3
+                        else if (info.graph.len == 0)
+                            2
+                        else if (std.mem.eql(u8, info.index_type, "fulltext") and std.mem.eql(u8, info.graph, graph_store.DEFAULT_GRAPH_NAME))
+                            1
+                        else
+                            0;
+                        if (rank > found.rank) found = .{ .key = entry.key_ptr.*, .rank = rank };
+                    }
+                    return found;
                 }
-            }
+
+                fn needsDefaultGraph(self: @This(), graph: []const u8) bool {
+                    return self.key != null and self.rank < 3 and !std.mem.eql(u8, graph, graph_store.DEFAULT_GRAPH_NAME);
+                }
+            };
+
+            cat.rwlock.lockUncancelable(io_dl);
+            var cat_locked = true;
+            defer if (cat_locked) cat.rwlock.unlock(io_dl);
+            var found = Resolve.find(cat, index_name, drop_graph);
 
             // An engine-wide or fulltext row is the default graph's as much as
             // this one's: schema on the default graph as well, as DROP INDEX
-            // always asked before SONNY-1319.
-            if (found_key != null and found_rank < 3 and !std.mem.eql(u8, drop_graph, graph_store.DEFAULT_GRAPH_NAME)) {
+            // always asked before SONNY-1319. Asked with the lock released,
+            // then the row is resolved again (the catalog may have changed).
+            if (found.needsDefaultGraph(drop_graph)) {
+                cat.rwlock.unlock(io_dl);
+                cat_locked = false;
                 try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
+                cat.rwlock.lockUncancelable(io_dl);
+                cat_locked = true;
+                found = Resolve.find(cat, index_name, drop_graph);
             }
+            const found_key = found.key;
 
             if (found_key) |key| {
-                if (cat.indexes.fetchRemove(key)) |removed| {
+                const taken = try cat.takeIndexLocked(key);
+                cat.rwlock.unlock(io_dl);
+                cat_locked = false;
+                if (taken) |removed| {
                     // A4a: fulltext index → drop the NAMED fts-storage engine and
                     // free its cached facade. Done BEFORE the catalog strings are
                     // freed (so the index name is still valid). Tolerates a

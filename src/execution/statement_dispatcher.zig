@@ -81,24 +81,47 @@ pub fn armVectorDimGuard(
     const execution = @import("../execution.zig");
     const catalog = execution.getCatalogInstanceIfPresent() orelse return;
 
-    var iter = catalog.indexes.iterator();
-    while (iter.next()) |entry| {
-        const info = entry.value_ptr.*;
-        if (info.columns.len != 1) continue;
-        if (!std.mem.eql(u8, info.columns[0], property)) continue;
-        if (!std.mem.eql(u8, info.index_type, "vector") and
-            !std.mem.eql(u8, info.index_type, "vector_f32")) continue;
-        var covers = false;
-        for (labels) |label| {
-            if (std.mem.eql(u8, info.table_name, label)) {
-                covers = true;
-                break;
-            }
+    // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=VectorReadersLocked; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    // SONNY-2795: the matching rows' names are copied under the catalog lock
+    // (shared), then registered with it released. The map was walked with no
+    // lock while DROP INDEX freed rows. Nothing below is called under it.
+    var names = std.ArrayList([]const u8).empty;
+    var row_labels = std.ArrayList([]const u8).empty;
+    defer {
+        for (names.items) |n| allocator.free(n);
+        names.deinit(allocator);
+        row_labels.deinit(allocator);
+    }
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        catalog.rwlock.lockSharedUncancelable(io);
+        defer catalog.rwlock.unlockShared(io);
+        var iter = catalog.indexes.iterator();
+        while (iter.next()) |entry| {
+            const info = entry.value_ptr.*;
+            if (info.columns.len != 1) continue;
+            if (!std.mem.eql(u8, info.columns[0], property)) continue;
+            if (!std.mem.eql(u8, info.index_type, "vector") and
+                !std.mem.eql(u8, info.index_type, "vector_f32")) continue;
+            // The row's label is the matching entry of `labels`, which the
+            // caller owns: only the name needs copying.
+            const label = for (labels) |l| {
+                if (std.mem.eql(u8, info.table_name, l)) break l;
+            } else continue;
+            try names.ensureUnusedCapacity(allocator, 1);
+            try row_labels.ensureUnusedCapacity(allocator, 1);
+            names.appendAssumeCapacity(try allocator.dupe(u8, info.name));
+            row_labels.appendAssumeCapacity(label);
         }
-        if (!covers) continue;
+    }
+    if (names.items.len == 0) return;
 
-        const manager = try index_manager.ensureGlobalIndexManager(allocator);
-        try manager.registerVectorDimValidation(info.name, info.table_name, info.columns[0]);
+    // SONNY-2795: the manager is process-lifetime; `allocator` is the
+    // caller's (the write path's per-request arena). See
+    // ensureAdvancedVectorIndexForProperty below.
+    const manager = try index_manager.ensureGlobalIndexManager(std.heap.smp_allocator);
+    for (names.items, row_labels.items) |name, label| {
+        try manager.registerVectorDimValidation(name, label, property);
     }
 }
 
@@ -130,14 +153,15 @@ pub fn armVectorDimGuard(
 /// catalog row — see `IndexInfo.metric`), not a guessed `l2`, and it arms the
 /// ENG-3912 dimension guard exactly as the DDL path does.
 ///
-/// The catalog map is read WITHOUT taking `catalog.rwlock`, matching
-/// `armVectorDimGuard` above. Taking it here would risk the exclusive-then-
-/// shared self-deadlock this codebase has already been bitten by (see the
-/// CREATE INDEX note in src/execution.zig), because this runs deep inside
-/// expression evaluation with no knowledge of what the statement above holds.
-/// The residual is a narrow race with a concurrent DROP INDEX; every string the
-/// build below keeps is duplicated by the index manager, so the exposure is
-/// limited to this call's own reads.
+/// SONNY-2795: the catalog row is copied under `catalog.rwlock` (shared) and
+/// used with it released, as in `armVectorDimGuard` above. The map was read
+/// with no lock, so a concurrent DROP INDEX could free the row mid-read. The
+/// lock is held only for the copy and nothing is called under it, so the
+/// self-deadlock the CREATE INDEX note in src/execution.zig describes (a
+/// GRAPH lock re-taken on the same thread) cannot arise here: no statement
+/// holds the catalog lock while evaluating expressions. A DROP INDEX that
+/// lands between the copy and the build below leaves a runtime index with no
+/// row until the next DROP or restart, as before.
 pub fn ensureAdvancedVectorIndexForProperty(allocator: std.mem.Allocator, property: []const u8) !void {
     // Already registered in this process — the overwhelmingly common case, and
     // what keeps a per-query call cheap.
@@ -154,15 +178,32 @@ pub fn ensureAdvancedVectorIndexForProperty(allocator: std.mem.Allocator, proper
 
     // Find the catalog row BEFORE touching the index manager, so a property
     // with no recorded vector index never causes one to be created.
-    var iter = catalog.indexes.iterator();
-    const info = while (iter.next()) |entry| {
-        const candidate = entry.value_ptr.*;
-        if (candidate.columns.len != 1) continue;
-        if (!std.mem.eql(u8, candidate.columns[0], property)) continue;
-        if (!std.mem.eql(u8, candidate.index_type, "vector") and
-            !std.mem.eql(u8, candidate.index_type, "vector_f32")) continue;
-        break candidate;
-    } else return;
+    const Row = struct { name: []u8, label: []u8, metric: ?[]u8 };
+    const info: Row = blk: {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        catalog.rwlock.lockSharedUncancelable(io);
+        defer catalog.rwlock.unlockShared(io);
+        var iter = catalog.indexes.iterator();
+        const candidate = while (iter.next()) |entry| {
+            const c = entry.value_ptr.*;
+            if (c.columns.len != 1) continue;
+            if (!std.mem.eql(u8, c.columns[0], property)) continue;
+            if (!std.mem.eql(u8, c.index_type, "vector") and
+                !std.mem.eql(u8, c.index_type, "vector_f32")) continue;
+            break c;
+        } else return;
+        const name = try allocator.dupe(u8, candidate.name);
+        errdefer allocator.free(name);
+        const label = try allocator.dupe(u8, candidate.table_name);
+        errdefer allocator.free(label);
+        const metric: ?[]u8 = if (candidate.metric) |m| try allocator.dupe(u8, m) else null;
+        break :blk .{ .name = name, .label = label, .metric = metric };
+    };
+    defer {
+        allocator.free(info.name);
+        allocator.free(info.label);
+        if (info.metric) |m| allocator.free(m);
+    }
 
     // The index manager and every HNSW graph inside it are PROCESS-lifetime, so
     // they must not be built from the caller's allocator here: this runs inside
@@ -180,9 +221,9 @@ pub fn ensureAdvancedVectorIndexForProperty(allocator: std.mem.Allocator, proper
     // Same order as ensureAdvancedRuntimeIndex: arm the dimension guard, create
     // the (empty, dimension-0) wrapper with the RECORDED metric, register the
     // property mapping, then populate from the store.
-    try manager.registerVectorDimValidation(info.name, info.table_name, info.columns[0]);
+    try manager.registerVectorDimValidation(info.name, info.label, property);
     try manager.createAdvancedVectorIndex(info.name, 0, toRuntimeVectorMetric(info.metric));
-    try manager.registerAdvancedPropertyIndex(info.name, info.table_name, info.columns[0], .vector_f32);
+    try manager.registerAdvancedPropertyIndex(info.name, info.label, property, .vector_f32);
     // Run inline rather than through `queueOrRunAdvancedIndexBackfill`: the
     // deferral queue exists to get a backfill out of the CREATE INDEX EXCLUSIVE
     // write lock, and this path runs under a read query, which holds no
@@ -219,15 +260,20 @@ pub fn ensureAdvancedRuntimeIndex(
     // dimension write-check. This is a lightweight validation registry —
     // deliberately NOT the advanced wrapper machinery, whose per-write
     // drop/recreate churns the hnsw thread pool.
+    // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=ProcessLifetimeIndexManager; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    // SONNY-2795: the manager is process-lifetime and `allocator` is the
+    // statement's (a per-request arena on the server): if this call created
+    // it, the global was left pointing at freed memory. `smp_allocator`, as
+    // in ensureAdvancedVectorIndexForProperty above.
     if ((index_type == .vector or index_type == .vector_f32) and properties.len == 1) {
-        const manager = try index_manager.ensureGlobalIndexManager(allocator);
+        const manager = try index_manager.ensureGlobalIndexManager(std.heap.smp_allocator);
         try manager.registerVectorDimValidation(index_name, label, properties[0]);
     }
 
     const runtime_type = toRuntimeAdvancedIndexType(index_type) orelse return;
     if (properties.len != 1) return error.Unsupported;
 
-    const manager = try index_manager.ensureGlobalIndexManager(allocator);
+    const manager = try index_manager.ensureGlobalIndexManager(std.heap.smp_allocator);
     switch (runtime_type) {
         .vector_f32 => try manager.createAdvancedVectorIndex(index_name, 0, toRuntimeVectorMetric(metric)),
         .spatial_geographic => try manager.createAdvancedSpatialIndex(index_name),

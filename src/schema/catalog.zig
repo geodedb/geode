@@ -200,6 +200,8 @@ pub const Catalog = struct {
     graphs: std.StringHashMap([16]u8),
     indexes: std.StringHashMap(IndexInfo),
     constraints: std.StringHashMap(ConstraintInfo),
+    /// Empty: an in-memory catalog (a session with no data directory),
+    /// never read from or written to a file (SONNY-2795).
     data_dir: []const u8,
 
     /// Initialize a new catalog with dependency injection
@@ -295,11 +297,21 @@ pub const Catalog = struct {
         self.allocator.free(info.graph);
     }
 
+    // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=InMemoryCatalog; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    /// SONNY-2795: does this catalog live in a file? Not with no data
+    /// directory: such a session used to share /tmp/geode_catalog.dat with
+    /// every other one, loading whatever an earlier run left there. Its
+    /// store is in memory, and so is its catalog.
+    pub fn isPersisted(self: *const Catalog) bool {
+        return self.data_dir.len > 0;
+    }
+
     /// Save catalog to disk
     /// NOTE: Caller must hold rwlock (either shared or exclusive) before calling
     pub fn save(self: *Catalog) !void {
         // No locking - caller must hold rwlock
         // This is necessary because save() is typically called while holding a write lock
+        if (!self.isPersisted()) return;
 
         const catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/geode_catalog.dat", .{self.data_dir});
         defer self.allocator.free(catalog_path);
@@ -436,6 +448,7 @@ pub const Catalog = struct {
 
     /// Load catalog from disk
     pub fn load(self: *Catalog) !void {
+        if (!self.isPersisted()) return;
         const catalog_path = try std.fmt.allocPrint(self.allocator, "{s}/geode_catalog.dat", .{self.data_dir});
         defer self.allocator.free(catalog_path);
 
@@ -1085,6 +1098,24 @@ pub const Catalog = struct {
             _ = self.indexes.remove(scoped_key);
             return err;
         };
+    }
+
+    // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DropIndexPersisted; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    /// SONNY-2795: remove the index row at `key` and persist, as `addIndex`
+    /// persists an added one. If the save fails the row is put back, so
+    /// memory matches disk, and the error is returned. Null if there is no
+    /// such row.
+    ///
+    /// Caller holds the rwlock EXCLUSIVE, and owns the returned key and row:
+    /// `allocator.free(kv.key)` and `freeIndexInfo(kv.value)`.
+    pub fn takeIndexLocked(self: *Catalog, key: []const u8) !?std.StringHashMap(IndexInfo).KV {
+        const removed = self.indexes.fetchRemove(key) orelse return null;
+        self.save() catch |err| {
+            // The removal freed the slot this takes back: no allocation.
+            self.indexes.putAssumeCapacityNoClobber(removed.key, removed.value);
+            return err;
+        };
+        return removed;
     }
 
     /// Get index metadata of the default graph's catalog by label and name.

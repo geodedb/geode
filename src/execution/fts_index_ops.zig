@@ -117,6 +117,31 @@ pub fn createFulltextIndex(
     };
 }
 
+/// Copies of an index's label and properties into `label_out` / `props_out`,
+/// owned by `allocator`. On an error nothing is left allocated.
+fn dupeSpec(
+    allocator: std.mem.Allocator,
+    label: []const u8,
+    properties: []const []const u8,
+    label_out: *[]const u8,
+    props_out: *[]const []const u8,
+) !void {
+    const owned_label = try allocator.dupe(u8, label);
+    errdefer allocator.free(owned_label);
+    const owned_props = try allocator.alloc([]const u8, properties.len);
+    var filled: usize = 0;
+    errdefer {
+        for (owned_props[0..filled]) |p| allocator.free(p);
+        allocator.free(owned_props);
+    }
+    for (properties, 0..) |p, i| {
+        owned_props[i] = try allocator.dupe(u8, p);
+        filled = i + 1;
+    }
+    label_out.* = owned_label;
+    props_out.* = owned_props;
+}
+
 /// Spec geode-vectorization-and-reranking: post-bulk-ingest invariant — rebuild
 /// the fulltext engine for `index_name` from current store contents. Resolves
 /// the (label, properties) spec from the schema catalog when available (works
@@ -138,9 +163,10 @@ pub fn rebuildFulltextIndex(
     // Resolve label + properties: catalog first (survives restart — the DDL
     // path always writes this row, see execution.zig:1671), registry fallback
     // for a defensive edge case (mid-transition state with no catalog row).
-    // `properties`/`label` from the catalog branch borrow catalog-owned memory
-    // (alive for the process lifetime); the registry branch dupes with
-    // `allocator` and is freed by `owns_fallback_strings` below.
+    // Both branches dupe with `allocator`, freed by `owns_fallback_strings`
+    // below. SONNY-2795: the catalog branch borrowed the row's strings, which
+    // a concurrent DROP INDEX frees; it now copies them under the catalog
+    // lock.
     var label: []const u8 = undefined;
     var properties: []const []const u8 = undefined;
     var owns_fallback_strings = false;
@@ -155,14 +181,18 @@ pub fn rebuildFulltextIndex(
         // ensureAdvancedVectorIndexForProperty uses to iterate indexes — scan
         // for the row whose `.name` matches and whose `.index_type` is a
         // fulltext index (`table_name` = label, `columns` = properties).
-        const all_indexes = try catalog.listAllIndexes(allocator);
-        defer allocator.free(all_indexes);
-        for (all_indexes) |info| {
-            if (!std.mem.eql(u8, info.name, index_name)) continue;
-            if (!std.mem.startsWith(u8, info.index_type, "fulltext")) continue;
-            label = info.table_name;
-            properties = info.columns;
-            break :resolve;
+        {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            catalog.rwlock.lockSharedUncancelable(io);
+            defer catalog.rwlock.unlockShared(io);
+            var it = catalog.indexes.valueIterator();
+            while (it.next()) |info| {
+                if (!std.mem.eql(u8, info.name, index_name)) continue;
+                if (!std.mem.startsWith(u8, info.index_type, "fulltext")) continue;
+                try dupeSpec(allocator, info.table_name, info.columns, &label, &properties);
+                owns_fallback_strings = true;
+                break :resolve;
+            }
         }
 
         // Registry fallback: scan every (label -> []FtsIndexSpec) list for a
@@ -172,20 +202,7 @@ pub fn rebuildFulltextIndex(
         const entries = try mg.snapshotFtsLabelIndex(arena.allocator());
         for (entries) |entry| {
             if (!std.mem.eql(u8, entry.name, index_name)) continue;
-            const owned_label = try allocator.dupe(u8, entry.label);
-            errdefer allocator.free(owned_label);
-            const owned_props = try allocator.alloc([]const u8, entry.properties.len);
-            var filled: usize = 0;
-            errdefer {
-                for (owned_props[0..filled]) |p| allocator.free(p);
-                allocator.free(owned_props);
-            }
-            for (entry.properties, 0..) |p, i| {
-                owned_props[i] = try allocator.dupe(u8, p);
-                filled = i + 1;
-            }
-            label = owned_label;
-            properties = owned_props;
+            try dupeSpec(allocator, entry.label, entry.properties, &label, &properties);
             owns_fallback_strings = true;
             break :resolve;
         }
