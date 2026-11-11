@@ -19,16 +19,22 @@
 # Pinned to the same version used by the zig-fips CI catalog component.
 FROM registry.gitlab.com/devnw/ci-catalog/zig-fips:0.16.0 AS fipsprov
 
-# Stage 2: runtime image
-FROM debian:bookworm-slim
+# Stage 2: runtime image.
+# MUST be glibc >= 2.38: the OpenSSL 3.6.2 libcrypto in the zig-fips provider
+# tree references GLIBC_2.38 (`__isoc23_strtol`), so it cannot load on
+# bookworm-slim (glibc 2.36). debian:trixie-slim ships glibc 2.41, the same
+# runtime as Dockerfile.devimage.fips (SONNY-4885). release/dockerfile_manifest.json
+# records this as glibc_required and tools/release_dockerfile_manifest.py checks it.
+FROM debian:trixie-slim
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install runtime dependencies (ca-certificates + base TLS libs for system calls;
-# libssl3 satisfies any dynamic linker probes for the Debian-packaged libssl.
+# libssl3t64 -- trixie's name for libssl3 after the 64-bit time_t transition --
+# satisfies any dynamic linker probes for the Debian-packaged libssl.
 # The validated FIPS provider itself arrives via the COPY below.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libssl3 \
+    libssl3t64 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -m -u 10000 geode \
     && mkdir -p /data /certs /var/log/geode \
@@ -61,6 +67,20 @@ WORKDIR /home/geode
 # Execute the copied binary as the runtime user so a loader/glibc
 # incompatibility fails the image build instead of shipping (SONNY-4884)
 RUN ["/usr/local/bin/geode", "--version"]
+
+# Load the shipped provider tree as the runtime user with the image's
+# OPENSSL_CONF: its openssl (RPATH /usr/local/ssl/lib64) must start, and the
+# base and fips providers must report active (fips.so runs its self-tests on
+# load). A glibc/provider ABI mismatch or a failed self-test fails the image
+# build instead of shipping (SONNY-4885). Same check zig-fips runs on itself.
+RUN providers="$(/usr/local/ssl/bin/openssl list -providers)" \
+    && printf '%s\n' "${providers}" \
+    && for provider in base fips; do \
+        printf '%s\n' "${providers}" \
+            | grep -A3 -i "^[[:space:]]*${provider}\$" \
+            | grep -i 'status: active' >/dev/null \
+            || { echo "OpenSSL ${provider} provider is not active" >&2; exit 1; }; \
+    done
 
 # Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
 # GET http://127.0.0.1:$GEODE_METRICS_PORT/health (bound to loopback unless

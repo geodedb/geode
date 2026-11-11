@@ -62,6 +62,17 @@
   `tools/release_dockerfile_manifest.py` now refuses a glibc base that is older
   than `release_binary.glibc_required`, or whose glibc it does not know.
   Regression: `tests/test_sonny4884_release_image_runtime_compat.py`.
+- **FIPS release image can load the OpenSSL provider it ships (SONNY-4885):**
+  `Dockerfile.release.fips` ran on `debian:bookworm-slim` (glibc 2.36), but the
+  OpenSSL 3.6.2 provider tree it copies from `zig-fips:0.16.0` needs
+  GLIBC_2.38, so the image could not load its own FIPS provider. It now runs on
+  `debian:trixie-slim` with `libssl3t64`, like `Dockerfile.devimage.fips`. The
+  image build runs the shipped `/usr/local/ssl/bin/openssl list -providers` as
+  the non-root runtime user and fails unless the base and fips providers are
+  active. The manifest entry records `glibc_required: "2.38"` and
+  `openssl_provider_tree`, and `tools/release_dockerfile_manifest.py` now
+  checks manual Dockerfiles too. Ordinary release images stay on bookworm.
+  Regression: `tests/test_sonny4885_fips_release_runtime_compat.py`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

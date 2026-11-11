@@ -139,8 +139,14 @@
         "Multi-stage: copies validated OpenSSL FIPS provider from ci-catalog/zig-fips image.",
         "MANUALLY MAINTAINED — do not run release_dockerfile_manifest.py sync on this file.",
         "amd64-only: FIPS-validated OpenSSL provider is x86_64 Linux.",
-        "The geode binary must be built with -Dfips=true -Dopenssl_path=/usr/local/ssl."
-      ]
+        "The geode binary must be built with -Dfips=true -Dopenssl_path=/usr/local/ssl.",
+        "SONNY-4885: glibc_required is the OpenSSL 3.6.2 libcrypto shipped in zig-fips:0.16.0",
+        "(GLIBC_2.38, __isoc23_strtol), which is also the -Dfips glibc floor in build.zig. The",
+        "guard checks the runtime base in this file against it, and requires the image build to",
+        "run openssl_provider_tree's own `openssl list -providers` as the runtime user."
+      ],
+      "glibc_required": "2.38",
+      "openssl_provider_tree": "/usr/local/ssl"
     }
   ]
 }

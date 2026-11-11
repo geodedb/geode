@@ -85,7 +85,7 @@ def runtime_compat_errors(manifest: dict[str, Any]) -> list[str]:
 
     The release binary's glibc requirement is recorded once in the manifest's
     release_binary.glibc_required. apk (musl) bases carry the musl build and
-    are exempt; manual Dockerfiles are maintained by hand and not checked here.
+    are exempt; manual Dockerfiles are checked by manual_runtime_compat_errors().
     """
     errors: list[str] = []
     glibc_specs = [s for s in manifest["dockerfiles"] if not s.get("manual") and s["package_manager"] == "apt"]
@@ -116,6 +116,109 @@ def runtime_compat_errors(manifest: dict[str, Any]) -> list[str]:
             errors.append(
                 f"{spec['path']}: base {spec['base_image']} packages OpenSSL 3 as "
                 f"{profile['libssl']}, not {', '.join(libssl)}"
+            )
+    return errors
+
+
+def _dockerfile_instructions(content: str) -> list[tuple[str, str]]:
+    """Return (INSTRUCTION, args) per Dockerfile instruction, continuations joined."""
+    joined = re.sub(r"\\[ \t]*\n", " ", content)
+    out: list[tuple[str, str]] = []
+    for line in joined.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        keyword, _, args = stripped.partition(" ")
+        out.append((keyword.upper(), args.strip()))
+    return out
+
+
+def _manual_provider_errors(path: str, stage: list[tuple[str, str]], tree: str) -> list[str]:
+    """The build must load the shipped OpenSSL provider tree as the runtime user."""
+    probe_cmd = f"{tree}/bin/openssl list -providers"
+    copy_idx = next(
+        (i for i, (kw, args) in enumerate(stage) if kw == "COPY" and args.split()[-1:] == [tree]),
+        None,
+    )
+    probe_idx = next(
+        (i for i, (kw, args) in enumerate(stage) if kw == "RUN" and probe_cmd in args),
+        None,
+    )
+    if copy_idx is None:
+        return [f"{path}: final stage never copies the OpenSSL provider tree to {tree}"]
+    if probe_idx is None:
+        return [f"{path}: image build never runs `{probe_cmd}` to prove the shipped provider loads"]
+    errors: list[str] = []
+    probe = stage[probe_idx][1]
+    if "status: active" not in probe or not all(re.search(rf"\b{p}\b", probe) for p in ("base", "fips")):
+        errors.append(f"{path}: `{probe_cmd}` step must fail unless the base and fips providers are active")
+    if probe_idx < copy_idx:
+        errors.append(f"{path}: `{probe_cmd}` runs before the provider tree is copied")
+    users = [args for kw, args in stage[:probe_idx] if kw == "USER"]
+    if not users or users[-1].split(":")[0] in {"root", "0"}:
+        errors.append(f"{path}: `{probe_cmd}` does not run as the non-root runtime user")
+    return errors
+
+
+def manual_runtime_compat_errors(manifest: dict[str, Any], repo_root: pathlib.Path) -> list[str]:
+    """Check manually-maintained glibc release Dockerfiles against what they ship.
+
+    A manual entry may record glibc_required (else release_binary.glibc_required
+    applies) and openssl_provider_tree. The final-stage base of the Dockerfile
+    on disk must ship at least that glibc and install its distro's OpenSSL 3
+    package name; with a provider tree, the image build must load that tree's
+    providers as the non-root runtime user (SONNY-4885). Alpine (musl) bases are
+    exempt from the glibc check; a missing file is reported by sync_or_check.
+    """
+    errors: list[str] = []
+    for spec in manifest["dockerfiles"]:
+        if not spec.get("manual"):
+            continue
+        dockerfile = repo_root / spec["path"]
+        if not dockerfile.exists():
+            continue
+        instructions = _dockerfile_instructions(dockerfile.read_text(encoding="utf-8"))
+        from_idx = [i for i, (kw, _) in enumerate(instructions) if kw == "FROM"]
+        if not from_idx:
+            errors.append(f"{spec['path']}: no FROM instruction")
+            continue
+        stage = instructions[from_idx[-1] :]
+        base = next((tok for tok in stage[0][1].split() if not tok.startswith("--")), "")
+
+        tree = spec.get("openssl_provider_tree")
+        if tree:
+            errors.extend(_manual_provider_errors(spec["path"], stage, tree))
+        if re.search(r"(?:^|/)alpine[:@]", base):
+            continue
+
+        required_text = spec.get("glibc_required") or manifest.get("release_binary", {}).get("glibc_required")
+        if not isinstance(required_text, str) or not re.fullmatch(r"\d+\.\d+", required_text):
+            errors.append(f'{spec["path"]}: manual glibc release image needs glibc_required (e.g. "2.38")')
+            continue
+        profile = base_image_profile(base)
+        if profile is None:
+            errors.append(
+                f"{spec['path']}: base {base} has unknown glibc version; "
+                "add it to BASE_IMAGE_PROFILES in tools/release_dockerfile_manifest.py"
+            )
+            continue
+        base_glibc = ".".join(str(part) for part in profile["glibc"])
+        if profile["glibc"] < _parse_version(required_text):
+            errors.append(
+                f"{spec['path']}: base {base} ships glibc {base_glibc}, "
+                f"but what the image runs requires glibc {required_text}"
+            )
+        libssl = sorted(
+            {
+                pkg
+                for kw, args in stage
+                if kw == "RUN"
+                for pkg in re.findall(r"(?<![\w.-])libssl3(?:t64)?(?![\w.-])", args)
+            }
+        )
+        if libssl and libssl != [profile["libssl"]]:
+            errors.append(
+                f"{spec['path']}: base {base} packages OpenSSL 3 as {profile['libssl']}, not {', '.join(libssl)}"
             )
     return errors
 
@@ -292,7 +395,7 @@ def main() -> int:
     manifest = load_manifest(pathlib.Path(args.manifest))
     repo_root = pathlib.Path(args.repo_root).resolve()
 
-    compat_errors = runtime_compat_errors(manifest)
+    compat_errors = runtime_compat_errors(manifest) + manual_runtime_compat_errors(manifest, repo_root)
     if compat_errors:
         print("error: release images cannot run the release binary", file=sys.stderr)
         for message in compat_errors:
