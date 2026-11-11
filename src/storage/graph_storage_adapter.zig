@@ -3917,6 +3917,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
         // Statement-atomicity pre-pass. This path SKIPS the undo log by design
@@ -4086,6 +4087,7 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -4870,6 +4872,7 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -5036,6 +5039,7 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -5509,6 +5513,7 @@ pub const StorageAdapter = struct {
         txn_id_opt: ?u64,
         apply_on_match: bool,
     ) !MergeResult {
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
         // GAP-0046 / GAP-0900 Layer-3 (Fix 2): in lean-index mode the merge key

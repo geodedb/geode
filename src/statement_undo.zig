@@ -307,3 +307,16 @@ fn discardAll() void {
 pub fn pendingCount() usize {
     return t_entries.items.len;
 }
+
+/// SONNY-2846: the open record's entries, oldest first, for the UNIQUE
+/// check at the end of the statement (`execution/unique_constraints.zig`):
+/// every node the statement created, changed a property of, or added a
+/// label to is in it. Borrowed; valid until the record is finished.
+pub fn entries() []const UndoEntry {
+    return t_entries.items;
+}
+
+/// SONNY-2846: the store the open record's changes were made on, if any.
+pub fn recordStore() ?*graph_store.GraphStore {
+    return t_store;
+}

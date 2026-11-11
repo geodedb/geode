@@ -47,6 +47,7 @@ const graph_store = @import("graph_store.zig");
 const storage_adapter = @import("storage/graph_storage_adapter.zig");
 const index_manager = @import("index/index_manager.zig");
 const catalog_mod = @import("schema/catalog.zig");
+const unique_constraints = @import("execution/unique_constraints.zig");
 const fle_hooks_mod = @import("execution/fle_hooks.zig");
 const graph_algorithms = @import("execution/graph_algorithms.zig");
 const set_operations = @import("execution/set_operations.zig");
@@ -392,6 +393,16 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
 
     // Create the catalog instance with provided allocator
     const instance = try catalog_mod.Catalog.init(allocator, data_dir);
+    // SONNY-2846: the graphs the loaded UNIQUE rows apply in are closed to
+    // the server's bulk fast paths (`graph_store.uniqueFenced`). Fail
+    // closed: a catalog whose fences cannot be recorded is not used.
+    graph_store.resetUniqueFences();
+    unique_constraints.registerCatalogFences(instance) catch |err| {
+        graph_store.resetUniqueFences();
+        instance.deinit();
+        allocator.destroy(instance);
+        return err;
+    };
     // GAP-0203: Atomic store ensures other threads see the fully-initialized instance
     @atomicStore(?*catalog_mod.Catalog, &global_catalog_instance, instance, .release);
     return instance;
@@ -422,6 +433,7 @@ pub fn tearDownGlobalCatalogForTest() void {
         instance.deinit();
         a.destroy(instance);
         @atomicStore(?*catalog_mod.Catalog, &global_catalog_instance, null, .release);
+        graph_store.resetUniqueFences(); // SONNY-2846: derived from the catalog
     }
 }
 
@@ -478,6 +490,7 @@ pub fn cleanupCatalogInstance() void {
         alloc.destroy(instance);
 
         global_catalog_instance = null;
+        graph_store.resetUniqueFences(); // SONNY-2846: derived from the catalog
     }
 }
 
@@ -1647,7 +1660,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         result.deinit(allocator);
         return endStatementFailed(owns_in_predicate_scope, err);
     }
-    endStatementSucceeded(owns_in_predicate_scope) catch |err| {
+    endStatementSucceeded(owns_in_predicate_scope, context.catalog) catch |err| {
         result.deinit(allocator);
         return err;
     };
@@ -1701,7 +1714,14 @@ pub fn endStatementFailed(owns: bool, err: anytype) (@TypeOf(err) || StatementSc
 /// an error. On a cluster leader its held writes are proposed now, as one
 /// entry (round 19); if that fails, it fails (nothing was applied). Then its
 /// undo record joins its explicit transaction, or is dropped.
-pub fn endStatementSucceeded(owns: bool) (statement_proposals.Error || StatementScopeError)!void {
+///
+/// SONNY-2846: first, its writes are checked against the UNIQUE
+/// constraints of `catalog` (`unique_constraints.checkStatementWrites`); a
+/// violation fails it, and its changes are undone. Still under the
+/// transport's graph write lock, so no other statement writes in between.
+pub fn endStatementSucceeded(owns: bool, catalog: *catalog_mod.Catalog) (statement_proposals.Error || StatementScopeError || unique_constraints.Error)!void {
+    // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=StatementEndHook; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=execution; UPDATED=2026-11-11
+    if (owns) unique_constraints.checkStatementWrites(catalog) catch |err| return endStatementFailed(owns, err);
     statement_proposals.flush(owns) catch |err| return endStatementFailed(owns, err);
     try statement_undo.finishSucceeded(owns);
 }
@@ -2357,6 +2377,37 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 }
             }
 
+            // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=CreateConstraintValidates; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=engine; UPDATED=2026-11-11
+            // SONNY-2846: a UNIQUE (or NODE KEY) constraint is enforced from
+            // here on (`unique_constraints`), so it is refused over data
+            // that already breaks it: 23505, naming how many groups of
+            // nodes share a value. The graph's fence goes up first (the
+            // server's bulk fast paths stop writing it), then the data is
+            // validated: under the transport's graph write lock, a bulk
+            // write either finished before (and is seen) or is refused
+            // after. The name is checked first so a duplicate name stays
+            // 42710.
+            const enforces_unique = constraint_type == .unique or constraint_type == .node_key;
+            var fenced = false;
+            defer if (fenced) graph_store.removeUniqueFence(constraint_graph);
+            if (enforces_unique) {
+                if ((cat.getConstraintInGraph(constraint_graph, cc.label, cc.name) catch null) != null) {
+                    if (cc.if_not_exists) return ExecutionResult{
+                        .columns = try allocator.alloc([]const u8, 0),
+                        .rows = try allocator.alloc([]Value, 0),
+                        .flags = std.ArrayList([]const u8).empty,
+                    };
+                    return error.ConstraintAlreadyExists;
+                }
+                try graph_store.addUniqueFence(constraint_graph);
+                fenced = true;
+                const groups = try unique_constraints.countDuplicateGroups(graph_store.getGlobalStore(allocator), constraint_graph, cc.label, cc.properties);
+                if (groups > 0) {
+                    unique_constraints.setDuplicatesMessage(cc.name, cc.label, cc.properties, groups);
+                    return error.UniqueConstraintViolation;
+                }
+            }
+
             // Add constraint to catalog. SONNY-2809: a duplicate name is
             // refused with ConstraintAlreadyExists (42710). It returned a
             // result whose one column and one row were uninitialized memory;
@@ -2372,6 +2423,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 }
                 return err;
             };
+            // The row is in: its fence stays up for as long as it is.
+            fenced = false;
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),

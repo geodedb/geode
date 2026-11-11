@@ -90,11 +90,15 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Constraint Enforcement** ✅ January 2026
 
-- **UNIQUE Constraints**: Prevent duplicate property values
-- **NOT NULL Constraints**: Require non-null property values
-- **NODE KEY Constraints**: Combined uniqueness + existence
+- **UNIQUE Constraints**: Enforced at the end of every statement on CREATE,
+  MERGE, SET and the server's write fast paths, per graph and tenant, with
+  SQLSTATE 23505 (SONNY-2846; see docs/API_REFERENCE.md, Constraint
+  Operations). CREATE CONSTRAINT over existing duplicates is refused.
+- **NOT NULL Constraints**: Recorded only; not enforced
+- **NODE KEY Constraints**: The uniqueness half is enforced; the existence
+  half is not
 - **Catalog Persistence**: Constraints stored across restarts
-- **Implementation**: `src/schema/catalog.zig`, `src/execution/crud_operations.zig`
+- **Implementation**: `src/schema/catalog.zig`, `src/execution/unique_constraints.zig`
 
 ### **Point-in-Time Recovery** ✅ January 2026
 

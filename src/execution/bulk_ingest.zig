@@ -101,6 +101,17 @@ pub fn sessionAllowsKeyResolvedWrites(ctx: *const execution.ExecutionContext) bo
     return !(has_user and execution.activeRlsPoliciesConfigured());
 }
 
+// CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=FastPathDecline; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=transport; UPDATED=2026-11-11
+/// SONNY-2846: must the server's node-writing fast paths (simple CREATE,
+/// bulk MERGE, `/*+BATCH*/` MERGE, `USE GRAPH g; MERGE`) decline `graph`,
+/// sending the write to the executor? Yes when a UNIQUE or NODE KEY
+/// constraint applies in it: only the executor checks one (at the end of
+/// the statement, `unique_constraints`). The adapter's bulk helpers check
+/// again under the graph lock (`graph_store.refuseIfUniqueFenced`).
+pub fn uniqueConstraintsDeclineFastPath(graph: []const u8) bool {
+    return @import("unique_constraints.zig").graphFenced(graph);
+}
+
 /// The set of bulk-ingest shapes we know how to fast-path.  `none` means
 /// the statement is not in a fast-path form; callers must fall back to the
 /// regular executor.

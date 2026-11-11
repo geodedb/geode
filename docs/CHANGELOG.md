@@ -88,6 +88,39 @@
   catalog and a new session loaded an earlier one's indexes; its catalog
   is now kept in memory only, as its store is. Regression:
   `zig build test-sonny2795-drop-index-catalog`.
+- **BEHAVIOUR CHANGE: UNIQUE constraints are enforced (SONNY-2846,
+  SONNY-3358).** `CREATE CONSTRAINT ... IS UNIQUE` recorded a row and
+  nothing checked it: CREATE, MERGE that creates, `ON CREATE SET`, `SET
+  n.p = <taken value>` and `SET n:<constrained label>` all made duplicates,
+  on in-memory and persisted sessions, and the server's write fast paths
+  skipped the executor altogether. **Writes that used to succeed can now
+  fail:** every statement is checked when it ends (SQL's rule for a
+  constraint that is not deferred), and one that would leave two nodes
+  holding one key fails with 23505 (`unique_violation`, naming the
+  constraint, never the value) with none of its changes kept, a
+  multi-element CREATE included. A swap is allowed. Uniqueness is per graph
+  (an engine-wide row from an older catalog applies in every graph, each
+  checked on its own) and per tenant tag, so a refusal never tells one
+  tenant what another holds; NULL and missing values never conflict; values
+  compare as MERGE matches them (`1` = `1.0`; strings byte for byte, so an
+  NFC and an NFD spelling are distinct). **`CREATE CONSTRAINT ... IS UNIQUE`
+  (or `NODE KEY`) over data that already has duplicates is now refused**
+  (23505, with the number of duplicate groups); it used to be accepted. The
+  uniqueness half of NODE KEY is enforced; NOT NULL, EXISTS and NODE KEY's
+  existence half are still recorded only. The holder is found through the
+  exact node-property index, or, where it cannot answer (lean mode, the
+  index rebuilding after a restart, an in-memory session, a non-scalar
+  value), by a scan of the label, including nodes that are not resident.
+  The simple-CREATE, bulk MERGE, `/*+BATCH*/` and `USE GRAPH g; MERGE` fast
+  paths no longer serve a graph with a UNIQUE constraint (those writes run
+  through the executor, and are slower); a fast-path write already past
+  that check when the constraint is created is refused with 40001. A
+  cluster leader refuses (40001) a replicated non-delete write on such a
+  graph. The dead `validateConstraints` (crud_operations.zig) and
+  `Catalog.getConstraintsForLabel` are removed. `CREATE UNIQUE INDEX` still
+  creates no constraint (documented). Regressions:
+  `zig build test-sonny2846-unique-constraint-enforcement` and
+  `zig build test-sonny2846-unique-fast-paths-wire`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

@@ -159,6 +159,15 @@ pub fn heldCount() usize {
     return b.items.items.len;
 }
 
+/// SONNY-2846: the kind and graph of held write `i` (< `heldCount()`), for
+/// the UNIQUE check: a leader applies its writes only through the Raft log,
+/// after the statement, where no constraint is checked, so a held write
+/// that could break one is refused (`execution/unique_constraints.zig`).
+pub fn heldWrite(i: usize) struct { mutation: MutationType, graph: []const u8 } {
+    const h = t_batch.?.items.items[i];
+    return .{ .mutation = h.mutation, .graph = h.graph };
+}
+
 /// Propose the write `data` (a lone-entry payload of `mutation`), or hold it
 /// for the statement's batch. `reads`: the write read the store to decide
 /// what it writes (see `checkRead`).

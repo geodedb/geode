@@ -524,7 +524,7 @@ pub fn executeProfiledIfSupported(
         if (in_type_error) return execution.endStatementFailed(owns_scope, error.InListRequiresList);
         return execution.endStatementFailed(owns_scope, limit_error.?);
     }
-    execution.endStatementSucceeded(owns_scope) catch |err| {
+    execution.endStatementSucceeded(owns_scope, context.catalog) catch |err| {
         profiled.result.deinit(allocator);
         profiled.deinitMetadata(allocator);
         return err;

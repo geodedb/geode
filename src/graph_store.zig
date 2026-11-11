@@ -284,6 +284,82 @@ pub fn setLeanIndexingForTest(enabled: bool) void {
     g_lean_index_key_count = 0;
 }
 
+// CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=FastPathFence; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=storage; UPDATED=2026-11-11
+// SONNY-2846: the graphs that have a UNIQUE (or NODE KEY) constraint, as a
+// count of such rows per graph ("" = an engine-wide row, in every graph).
+// The executor checks a constraint when a statement ends
+// (`execution/unique_constraints.zig`); the server's bulk write fast paths
+// skip the executor, so they must not serve such a graph. The handler's gate
+// (`bulk_ingest.uniqueConstraintsDeclineFastPath`) reads this to send the
+// write to the executor, and the adapter's bulk node helpers read it again
+// while they hold the graph's lock (`refuseIfUniqueFenced`), so a write
+// that passed the gate just before CREATE CONSTRAINT is refused instead of
+// landing after the constraint validated the data. CREATE CONSTRAINT adds
+// the row's fence before it validates, under the graph's write lock.
+//
+// Leaf lock: nothing else is acquired while `g_unique_fence_mutex` is held.
+var g_unique_fence_mutex: std.Io.Mutex = .init;
+var g_unique_fences: std.StringHashMapUnmanaged(u32) = .empty;
+var g_unique_fence_rows: std.atomic.Value(u32) = .init(0);
+
+/// A UNIQUE row now applies in `graph` ("" = every graph).
+pub fn addUniqueFence(graph: []const u8) error{OutOfMemory}!void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_unique_fence_mutex.lockUncancelable(io);
+    defer g_unique_fence_mutex.unlock(io);
+    const gop = try g_unique_fences.getOrPut(std.heap.smp_allocator, graph);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = std.heap.smp_allocator.dupe(u8, graph) catch |err| {
+            _ = g_unique_fences.remove(graph);
+            return err;
+        };
+        gop.value_ptr.* = 0;
+    }
+    gop.value_ptr.* += 1;
+    _ = g_unique_fence_rows.fetchAdd(1, .release);
+}
+
+/// One UNIQUE row of `graph` no longer applies (its CREATE CONSTRAINT failed).
+pub fn removeUniqueFence(graph: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_unique_fence_mutex.lockUncancelable(io);
+    defer g_unique_fence_mutex.unlock(io);
+    const count = g_unique_fences.getPtr(graph) orelse return;
+    count.* -= 1;
+    _ = g_unique_fence_rows.fetchSub(1, .release);
+    if (count.* == 0) {
+        const kv = g_unique_fences.fetchRemove(graph).?;
+        std.heap.smp_allocator.free(kv.key);
+    }
+}
+
+/// Forget every fence (the process catalog was torn down).
+pub fn resetUniqueFences() void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_unique_fence_mutex.lockUncancelable(io);
+    defer g_unique_fence_mutex.unlock(io);
+    var it = g_unique_fences.keyIterator();
+    while (it.next()) |k| std.heap.smp_allocator.free(k.*);
+    g_unique_fences.clearAndFree(std.heap.smp_allocator);
+    g_unique_fence_rows.store(0, .release);
+}
+
+/// Does a UNIQUE row apply in `graph`? One atomic load when no graph has one.
+pub fn uniqueFenced(graph: []const u8) bool {
+    if (g_unique_fence_rows.load(.acquire) == 0) return false;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_unique_fence_mutex.lockUncancelable(io);
+    defer g_unique_fence_mutex.unlock(io);
+    return g_unique_fences.contains(graph) or g_unique_fences.contains("");
+}
+
+/// For a bulk write helper, called with the graph's lock held: refuse to
+/// write into a graph a UNIQUE constraint applies in (40001: retry, and the
+/// retry takes the executor, which checks the constraint).
+pub fn refuseIfUniqueFenced(graph: []const u8) error{UniqueConstraintFastPathConflict}!void {
+    if (uniqueFenced(graph)) return error.UniqueConstraintFastPathConflict;
+}
+
 /// Whether a property `key` should be added to the exact + merge property
 /// indexes. Always true when lean mode is off (default). When on, true only for
 /// registered merge keys. Over-indexing is always safe; this only ever SKIPS
@@ -6210,7 +6286,9 @@ pub const GraphStore = struct {
     /// Null for any other value, or when `buf` is too small. MERGE's index
     /// keeps the integers, strings and booleans (`serializePropValueForIndex`);
     /// a lookup of any number compares by these bytes (`findMergeHolders`).
-    fn writeMergeValue(buf: []u8, value: PropertyValue) ?usize {
+    /// `pub` for the UNIQUE check's grouping of existing nodes (SONNY-2846),
+    /// which must key values exactly as MERGE does.
+    pub fn writeMergeValue(buf: []u8, value: PropertyValue) ?usize {
         var writer: std.Io.Writer = .fixed(buf);
         if (numberOfProperty(value)) |n| {
             value_order.writeNumberKey(&writer, n) catch return null;
@@ -6557,6 +6635,19 @@ pub const GraphStore = struct {
             if (try self.holdsMergeKey(id, graph_name, label, source)) return .{ .lowest = id };
         }
         return .{};
+    }
+
+    // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=ExactIndexCandidates; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=storage; UPDATED=2026-11-11
+    /// SONNY-2846: for the UNIQUE check, the nodes of `label` in `graph_name`
+    /// the exact node-property index lists under one of `props`' values (the
+    /// smallest posting), as `findMergeHolders` reads them: every node that
+    /// may hold all of them, resident or not. The caller checks each one.
+    /// Null when the index cannot answer (no storage adapter, lean mode, the
+    /// index deferred or being rebuilt); the caller then scans the label.
+    pub fn uniqueKeyCandidates(self: *GraphStore, allocator: std.mem.Allocator, graph_name: []const u8, label: []const u8, props: []const graph_storage_adapter.StorageAdapter.PropKV) !?[]u64 {
+        self.ensureGraphHydrated(graph_name);
+        const adapter = self.exactIndexAdapter() orelse return null;
+        return adapter.exactIndexMergeCandidates(self, allocator, graph_name, label, props);
     }
 
     /// The storage adapter whose exact node-property index describes this

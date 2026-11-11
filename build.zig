@@ -12766,6 +12766,20 @@ pub fn build(b: *std.Build) void {
     const sonny2846_step = b.step("test-sonny2846-unique-constraint-enforcement", "Run SONNY-2846 / SONNY-3358 regression (UNIQUE constraints are enforced on CREATE, MERGE and SET at statement end, per graph and tenant, on in-memory, persisted, reopened and lean stores; CREATE CONSTRAINT over duplicates is refused; N concurrent writers of one value: one wins; the bulk fast-path helpers refuse a constrained graph)");
     sonny2846_step.dependOn(&run_sonny2846_tests.step);
 
+    const sonny2846_wire_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2846_unique_fast_paths_wire.zig"), .target = target, .optimize = optimize });
+    sonny2846_wire_test_mod.link_libc = true;
+    sonny2846_wire_test_mod.addImport("geode", root_mod);
+    sonny2846_wire_test_mod.addImport("schema", schema_mod);
+    sonny2846_wire_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2846_wire_test_mod.addImport("logging", logging_mod);
+    sonny2846_wire_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2846_wire_tests = b.addTest(.{ .root_module = sonny2846_wire_test_mod });
+    const run_sonny2846_wire_tests = b.addRunArtifact(sonny2846_wire_tests);
+    run_sonny2846_wire_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny2846_wire_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2846_wire_step = b.step("test-sonny2846-unique-fast-paths-wire", "Run SONNY-2846 wire regression (spawns a server: simple CREATE, bulk MERGE, /*+BATCH*/ and USE GRAPH; MERGE fast paths answer 23505 on a UNIQUE duplicate, with group commit on and off; 8 concurrent QUIC writers of one value: exactly one wins)");
+    sonny2846_wire_step.dependOn(&run_sonny2846_wire_tests.step);
+
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once
     // per candidate row (RC-6, O(N^2) query), and the backfill reports no indexed

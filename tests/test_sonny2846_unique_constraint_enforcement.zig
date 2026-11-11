@@ -187,8 +187,8 @@ fn exerciseCore(h: *Harness) !void {
 
     // ---- CREATE of a taken value is refused, and nothing is written ----
     try h.expectViolation("CREATE (:P {id: 1, name: 'second'})");
-    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P) WHERE n.id = 1 RETURN count(n) AS c"));
-    try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:P) WHERE n.name = 'second' RETURN count(n) AS c"));
+    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P {id: 1}) RETURN count(n) AS c"));
+    try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:P {name: 'second'}) RETURN count(n) AS c"));
 
     // The wire error is 23505 and names the constraint, never the value or
     // the holder's other properties.
@@ -202,7 +202,7 @@ fn exerciseCore(h: *Harness) !void {
     try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:P) WHERE n.id IN [50, 51] RETURN count(n) AS c"));
     // Two new nodes of one statement conflict with each other.
     try h.expectViolation("CREATE (:P {id: 7}), (:P {id: 7})");
-    try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:P) WHERE n.id = 7 RETURN count(n) AS c"));
+    try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:P {id: 7}) RETURN count(n) AS c"));
 
     // ---- NULL and missing are no conflict ----
     try h.run("CREATE (:P {name: 'no id a'})");
@@ -223,34 +223,34 @@ fn exerciseCore(h: *Harness) !void {
 
     // ---- SET of a taken value is refused, and the old value stays ----
     try h.run("CREATE (:P {id: 2})");
-    try h.expectViolation("MATCH (n:P) WHERE n.id = 2 SET n.id = 1");
-    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P) WHERE n.id = 2 RETURN count(n) AS c"));
+    try h.expectViolation("MATCH (n:P {id: 2}) SET n.id = 1");
+    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P {id: 2}) RETURN count(n) AS c"));
     // A swap ends with no duplicate: allowed (checked at statement end).
     try h.run("CREATE (:P {id: 3})");
-    try h.run("MATCH (a:P), (b:P) WHERE a.id = 2 AND b.id = 3 SET a.id = 3, b.id = 2");
-    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P) WHERE n.id = 2 RETURN count(n) AS c"));
-    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P) WHERE n.id = 3 RETURN count(n) AS c"));
+    try h.run("MATCH (a:P {id: 2}), (b:P {id: 3}) SET a.id = 3, b.id = 2");
+    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P {id: 2}) RETURN count(n) AS c"));
+    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P {id: 3}) RETURN count(n) AS c"));
 
     // ---- SET adding the constrained label is refused ----
     try h.run("CREATE (:Q {id: 1})");
-    try h.expectViolation("MATCH (n:Q) WHERE n.id = 1 SET n:P");
+    try h.expectViolation("MATCH (n:Q {id: 1}) SET n:P");
     try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:Q:P) RETURN count(n) AS c"));
     try h.run("CREATE (:Q {id: 900})");
-    try h.run("MATCH (n:Q) WHERE n.id = 900 SET n:P");
+    try h.run("MATCH (n:Q {id: 900}) SET n:P");
 
     // ---- MERGE: matching the holder is fine, creating a duplicate is not ----
     try h.run("MERGE (n:P {id: 1})");
-    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P) WHERE n.id = 1 RETURN count(n) AS c"));
+    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P {id: 1}) RETURN count(n) AS c"));
     try h.run("MERGE (n:P {id: 4})");
-    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P) WHERE n.id = 4 RETURN count(n) AS c"));
+    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:P {id: 4}) RETURN count(n) AS c"));
     // No node has {id: 1, name: 'other'}, so MERGE creates one: refused.
     try h.expectViolation("MERGE (n:P {id: 1, name: 'other'})");
     // ON CREATE SET of a taken value: refused, and the created node is gone.
     try h.expectViolation("MERGE (n:P {code: 'z'}) ON CREATE SET n.id = 1");
-    try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:P) WHERE n.code = 'z' RETURN count(n) AS c"));
+    try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:P {code: 'z'}) RETURN count(n) AS c"));
 
     // ---- delete, then the value is free again ----
-    try h.run("MATCH (n:P) WHERE n.id = 4 DELETE n");
+    try h.run("MATCH (n:P {id: 4}) DELETE n");
     try h.run("CREATE (:P {id: 4})");
 
     // ---- a composite UNIQUE: the tuple is the key; NULL in it is no conflict ----
@@ -300,7 +300,7 @@ test "SONNY-2846: UNIQUE is enforced on CREATE, MERGE and SET in a persisted ses
     // ---- cold store: the holder is not resident after a reopen ----
     try h.restart();
     try h.expectViolation("CREATE (:P {id: 1})");
-    try h.expectViolation("MATCH (n:P) WHERE n.id = 2 SET n.id = 3");
+    try h.expectViolation("MATCH (n:P {id: 2}) SET n.id = 3");
     try h.run("CREATE (:P {id: 1000})");
 
     // ---- the same in lean index mode, where the exact index cannot answer ----
@@ -418,7 +418,7 @@ test "SONNY-2846: N writers creating the same value at once: exactly one succeed
         }
         try testing.expectEqual(@as(usize, 1), wins);
         var cbuf: [96]u8 = undefined;
-        try testing.expectEqual(@as(i64, 1), try h.count(try std.fmt.bufPrint(&cbuf, "MATCH (n:C) WHERE n.id = {d} RETURN count(n) AS c", .{round})));
+        try testing.expectEqual(@as(i64, 1), try h.count(try std.fmt.bufPrint(&cbuf, "MATCH (n:C {{id: {d}}}) RETURN count(n) AS c", .{round})));
     }
 }
 
@@ -465,8 +465,8 @@ fn exerciseFastPaths(h: *Harness) !void {
     const mp = [_]PropKV{ .{ .key = "code", .value = .{ .String = "zz" } }, .{ .key = "id", .value = .{ .Int = 1 } } };
     try expectFastPathRefusal(adapter.bulkMergeNodeWithReservedIdMultiProp("default", 0, "F", &mp, &.{}, false));
     try expectFastPathRefusal(adapter.bulkInsertNodeWithReservedId("default", 0, &labels, &dup));
-    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:F) WHERE n.id = 1 RETURN count(n) AS c"));
-    try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:F) WHERE n.code = 'zz' RETURN count(n) AS c"));
+    try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:F {id: 1}) RETURN count(n) AS c"));
+    try testing.expectEqual(@as(i64, 0), try h.count("MATCH (n:F {code: 'zz'}) RETURN count(n) AS c"));
 
     // Another graph is not fenced.
     try h.run("CREATE GRAPH g2846f");

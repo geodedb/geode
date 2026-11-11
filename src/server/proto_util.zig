@@ -9,6 +9,7 @@ const heap = @import("../storage/heap.zig");
 const type_helpers = @import("../eval/type_helpers.zig");
 const eval_extended = @import("../eval_extended.zig");
 const property_codec = @import("../property_value_codec.zig");
+const unique_constraints = @import("../execution/unique_constraints.zig");
 
 pub const ParamBindings = struct {
     names: []const []const u8,
@@ -240,6 +241,17 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.IndexNameInUseByOtherGraph => .{ .code = "42P07", .message = "Index name is in use in another graph by an index type whose runtime structure is shared by name (vector and other advanced indexes); choose another name" },
         // SONNY-2809: a second CREATE CONSTRAINT with the same name.
         error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name" },
+        // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=UniqueViolationCode; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=engine; UPDATED=2026-11-11
+        // SONNY-2846: a statement that would give two nodes one UNIQUE key,
+        // or a CREATE CONSTRAINT over existing duplicates. 23505 is SQL's
+        // unique_violation. The message names the constraint (or how many
+        // duplicate groups there are), never a value.
+        error.UniqueConstraintViolation => .{ .code = "23505", .message = unique_constraints.violationMessage() },
+        error.UniqueConstraintCheckFailed => .{ .code = "58030", .message = "the UNIQUE constraint check could not read the store; the statement was not applied" },
+        // SONNY-2846: a bulk fast-path write that reached a graph a UNIQUE
+        // constraint was just created in; a retry runs through the executor,
+        // which checks it.
+        error.UniqueConstraintFastPathConflict => .{ .code = "40001", .message = "UniqueConstraintFastPathConflict: a UNIQUE constraint now applies in this graph; the write was not applied, retry it" },
         // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
         error.PolicyAlreadyExists => .{ .code = "42710", .message = "Duplicate policy name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },

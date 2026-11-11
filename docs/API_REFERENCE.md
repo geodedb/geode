@@ -16,7 +16,9 @@ ON label(property[, ...])
 
 #### Parameters
 
-- `UNIQUE`: Optional. Creates a unique constraint on the indexed property
+- `UNIQUE`: Optional. Accepted for compatibility; it does **not** create a
+  uniqueness constraint and nothing is enforced. Use `CREATE CONSTRAINT ...
+  IS UNIQUE` (see Constraint Operations below)
 - `IF NOT EXISTS`: Optional. Prevents error if index already exists
 - `index_name`: Name of the index to create
 - `label`: Node label to index
@@ -84,6 +86,79 @@ DROP INDEX [IF EXISTS] index_name
 
 ```gql
 DROP INDEX IF EXISTS person_age_idx;
+```
+
+## Constraint Operations
+
+### CREATE CONSTRAINT
+
+Records a constraint in the session graph's catalog.
+
+#### Syntax
+
+```gql
+CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE n.prop IS UNIQUE
+CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE (n.a, n.b) IS NODE KEY
+CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT prop IS UNIQUE
+CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT (a, b) IS UNIQUE
+CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE n.prop IS NOT NULL
+CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT EXISTS (prop)
+```
+
+#### UNIQUE enforcement
+
+A `UNIQUE` constraint, and the uniqueness half of `NODE KEY`, is enforced
+on every write (SONNY-2846):
+
+- **When:** at the end of each statement, before its changes are kept (the
+  SQL rule for a constraint that is not deferred). A statement that would
+  leave two nodes with one key fails with SQLSTATE `23505`
+  (`unique_violation`) and none of its changes are kept, also for a
+  multi-element `CREATE`. A swap (`SET a.id = b.id, b.id = a.id`) is
+  allowed. `CREATE`, `MERGE` (when it creates), `MERGE ... ON CREATE SET` /
+  `ON MATCH SET`, `SET n.prop = ...`, `SET n:Label` and procedures are all
+  checked; so are the server's bulk write fast paths, which hand such a
+  write to the executor.
+- **Scope:** per graph (the constraint's own; a row written by an older,
+  engine-global catalog applies in every graph, each graph checked on its
+  own) and per tenant tag: nodes of two tenants may hold the same value, so
+  a refusal never tells one tenant what another holds. In a single-tenant
+  deployment this is graph-wide.
+- **NULL:** a missing or `NULL` property is never a conflict. A composite
+  key conflicts only when every property is present and equal.
+- **Equality:** the rule MERGE and inline property maps match by: numbers
+  by exact value (`1` = `1.0`, `1.5` = `1.50`; a DOUBLE `0.1` is not the
+  decimal `0.1`), strings byte for byte (an NFC and an NFD spelling are two
+  values, though the `=` operator compares them equal), `'1'` is not `1`.
+- **Existing data:** `CREATE CONSTRAINT ... IS UNIQUE` (or `NODE KEY`) over
+  nodes that already share a value is refused with `23505`, naming how many
+  groups of nodes share one; remove the duplicates first.
+- **Cost:** the other holder is found through the exact node-property index
+  (one lookup per checked node) when it can answer: full index mode, the
+  index built, and a number, string or boolean value. Otherwise (lean mode,
+  `GEODE_INDEX_MERGE_KEYS_ONLY=1`; the index still rebuilding after a
+  restart; an in-memory session; a list, temporal or other value) by a scan
+  of the label's nodes, for each node the statement wrote under a
+  constrained label.
+- **Fast paths:** the server's simple-CREATE, bulk MERGE, `/*+BATCH*/` and
+  `USE GRAPH g; MERGE` fast paths do not serve a graph that has a UNIQUE
+  constraint; those writes run through the executor (slower). A fast-path
+  write already past that check when the constraint is created is refused
+  with `40001`; retry it.
+- **Cluster mode:** constraint DDL is refused in cluster mode. A leader
+  refuses (`40001`, `ClusterWriteNotReplicable`) a replicated write, other
+  than a delete, on a graph a UNIQUE constraint applies in.
+
+Not enforced: `NOT NULL`, `EXISTS`, and the existence half of `NODE KEY`
+(the rows are recorded only). `CREATE UNIQUE INDEX` creates no constraint.
+`DROP CONSTRAINT` does not remove a constraint yet (SONNY-6270).
+
+#### Example
+
+```gql
+CREATE CONSTRAINT person_email FOR (p:Person) REQUIRE p.email IS UNIQUE;
+CREATE (:Person {email: 'a@example.com'});
+CREATE (:Person {email: 'a@example.com'});  -- 23505, nothing written
 ```
 
 ## Backup and Restore
@@ -588,6 +663,7 @@ Geode follows ISO/IEC SQL error code standards:
 - `0A000`: Feature not supported
 - `22000`: Data exception
 - `23000`: Integrity constraint violation
+- `23505`: Unique violation (a UNIQUE constraint, see Constraint Operations)
 - `42000`: Syntax error or access rule violation
 - `42P01`: Undefined table
 - `42P07`: Duplicate table/index

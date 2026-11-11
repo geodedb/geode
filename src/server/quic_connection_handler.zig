@@ -7847,6 +7847,13 @@ fn handleClientMessage(
             // merge key (every MERGE shape, and MATCH … CREATE edge) serve a
             // session only when no tenant scope or RLS policy restricts it.
             const key_resolved_writes_ok = is_mutation and keyResolvedWriteFastPathServes(state, &exec_context);
+            // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=QuicFastPathDecline; STATUS=TESTED; TEST=tests/test_sonny2846_unique_fast_paths_wire.zig; OWNER=transport; UPDATED=2026-11-11
+            // SONNY-2846: the node-writing fast paths (simple CREATE, bulk
+            // MERGE, `/*+BATCH*/`, `USE GRAPH g; MERGE`) skip the executor's
+            // UNIQUE check, so they decline a graph a UNIQUE constraint
+            // applies in and the write takes the executor. The edge fast
+            // paths write no node and are not affected.
+            const node_fast_paths_ok = !geode.bulk_ingest.uniqueConstraintsDeclineFastPath(query_graph_name);
 
             // GAP-0900 lever (c): opt-in concurrent batch-merge fast path.
             // A client signals "this program is a batch of independent simple
@@ -7867,6 +7874,7 @@ fn handleClientMessage(
             if (batch_requested and
                 is_mutation and
                 key_resolved_writes_ok and
+                node_fast_paths_ok and
                 !state.in_txn and
                 graph_store.getGlobalAdapter() != null and
                 geode.distributed.cluster.getGlobalClusterCoordinator() == null)
@@ -8071,7 +8079,7 @@ fn handleClientMessage(
             const cluster_active = geode.distributed.cluster.getGlobalClusterCoordinator() != null;
             if (is_mutation and !state.in_txn and geode.bulk_ingest.isEnabled() and !cluster_active) {
                 const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
-                if (bulk_shape == .simple_node_create) {
+                if (bulk_shape == .simple_node_create and node_fast_paths_ok) {
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
                     return;
                 }
@@ -8093,7 +8101,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok) {
+                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok and node_fast_paths_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -8127,7 +8135,7 @@ fn handleClientMessage(
             // -> proposeWrite and replicates to every node.
             if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled() and graph_store.getGlobalAdapter() != null and geode.distributed.cluster.getGlobalClusterCoordinator() == null) {
                 const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
-                if (bulk_shape == .simple_node_create) {
+                if (bulk_shape == .simple_node_create and node_fast_paths_ok) {
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
                     return;
                 }
@@ -8147,7 +8155,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok) {
+                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok and node_fast_paths_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -8172,7 +8180,7 @@ fn handleClientMessage(
             // falls through so the graph-access check + session rebind run in
             // the regular executor. Same gating as the single-statement fast
             // paths: autocommit, non-cluster (cluster writes must reach Raft).
-            if (is_mutation and key_resolved_writes_ok and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
+            if (is_mutation and key_resolved_writes_ok and node_fast_paths_ok and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
                 if (geode.bulk_ingest.matchGraphSelectorThenMerge(&parse_result.program)) |gs| {
                     if (std.mem.eql(u8, gs.graph_name, query_graph_name)) {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, gs.merge, query_graph_name, exec_context);
