@@ -13274,6 +13274,24 @@ pub fn build(b: *std.Build) void {
     const sonny6269_step = b.step("test-sonny6269-permissions-admin-gate", "Run the SONNY-6269 regression (SHOW PERMISSIONS FOR / geode.auth.user_permissions: another user's permissions need Admin, 42501 and audited; own permissions for any authenticated user)");
     sonny6269_step.dependOn(&run_sonny6269_tests.step);
 
+    // SONNY-6273: DROP POLICY removes its records and seals the auth chain as
+    // one step: a failure at any allocation (the seal's retry included)
+    // leaves records and chain as they were, or the drop done and sealed.
+    const sonny6273_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6273_drop_policy_atomic.zig"), .target = target, .optimize = optimize });
+    sonny6273_test_mod.link_libc = true;
+    sonny6273_test_mod.addImport("geode", root_mod);
+    sonny6273_test_mod.addImport("schema", schema_mod);
+    sonny6273_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6273_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6273_test_mod.addImport("logging", logging_mod);
+    sonny6273_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6273_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    const sonny6273_tests = b.addTest(.{ .root_module = sonny6273_test_mod });
+    const run_sonny6273_tests = b.addRunArtifact(sonny6273_tests);
+    shardDep(test_step, &run_sonny6273_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6273_step = b.step("test-sonny6273-drop-policy-atomic", "Run the SONNY-6273 regression (DROP POLICY with any AuthGraphManager allocation failing, the seal's retry included, fails with records and HMAC chain as before or succeeds sealed; a failed DENY drop keeps denying; the next start verifies)");
+    sonny6273_step.dependOn(&run_sonny6273_tests.step);
+
     // GPS Phase 7 Task 7-1: bounded LRU decision cache tests.
     const gps_decision_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decision_cache.zig"), .target = target, .optimize = optimize });
     gps_decision_cache_test_mod.addImport("geode", root_mod);
