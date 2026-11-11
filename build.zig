@@ -410,28 +410,15 @@ fn addExecutablesToTestCompile(b: *std.Build, target: std.Build.ResolvedTarget) 
 
 /// SONNY-2746: executables that did not compile when test-compile first took
 /// in every executable (2026-09-25). No step that a gate runs compiled them,
-/// so they rotted unseen: Zig 0.16 removed std.process.argsAlloc and
-/// argsWithAllocator, std.time.nanoTimestamp, heap.GeneralPurposeAllocator,
-/// Io.fixedBufferStream and File.read, and the engine APIs two benchmarks
-/// call have moved. canary_main also reaches AdvancedIndexManager
-/// persistAll/loadAll and src/index/interval_persist.zig, engine code that no
-/// longer compiles and that nothing calls. Each stays out of test-compile
+/// so they rotted unseen after Zig 0.16 removed std APIs and engine APIs
+/// moved. Ten with no caller were deleted (SONNY-2771); these three are
+/// still run by a build step or a gate. Each stays out of test-compile
 /// until it is migrated (then delete its line) or deleted. A name that
 /// matches no executable fails every build, so the list cannot go stale.
 const rotted_executables = [_][]const u8{
-    "bench_extract", // src/tools/bench_extract.zig: File.read
-    "bench_regress", // src/tools/bench_regress.zig: process.argsAlloc
     "bench_remote_kms_unwrap_concurrency", // RemoteKmsServer.init now returns an error union
     "benchmark_rls_row_skip", // expects a CompactPropertyMap, passes a StringHashMap
-    "canary_main", // tools/canary_main.zig -> src/index/interval_persist.zig: Io.fixedBufferStream
-    "fed_latency_aggregate", // Io.fixedBufferStream; std.c without libc
-    "fed_latency_governance", // process.argsWithAllocator
-    "fed_latency_streak", // process.argsWithAllocator
-    "fed_latency_validate", // process.argsWithAllocator
     "gen_fuzz", // tools/gen_fuzz.zig: process.argsAlloc
-    "generate_fuzz_dict", // scripts/generate_fuzz_dict.zig: heap.GeneralPurposeAllocator
-    "impl_reality_delta", // src/tools/implementation_reality_delta.zig: process.argsAlloc
-    "run_variance_benches", // src/tools/run_variance_benches.zig: time.nanoTimestamp
 };
 
 fn linksSystemLibrary(compile: *std.Build.Step.Compile, name: []const u8) bool {
@@ -4442,16 +4429,6 @@ pub fn build(b: *std.Build) void {
     const canary_extended_builtins_tests_step = b.step("test-canary-extended-builtins", "Run extended built-ins adapter + decimal formatter CANARY tests (REQ-GQL-082/083)");
     canary_extended_builtins_tests_step.dependOn(&run_canary_extended_builtins_tests.step);
 
-    // Add canary test target
-    const canary_exe = b.addExecutable(.{
-        .name = "canary_main",
-        .root_module = b.createModule(.{ .root_source_file = b.path("tools/canary_main.zig"), .target = target, .optimize = optimize }),
-    });
-    canary_exe.root_module.addImport("geode", root_mod);
-    const run_canary = b.addRunArtifact(canary_exe);
-    const canary_step = b.step("canary", "Run additional data types canary tests");
-    canary_step.dependOn(&run_canary.step);
-
     // Add Phase 1 performance benchmark step
     // CANARY: REQ=REQ-PERF-PHASE1-BENCH-001; FEATURE="PerformanceBenchmarking"; ASPECT=BUILD; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
     //
@@ -5928,30 +5905,8 @@ pub fn build(b: *std.Build) void {
     const validate_meta_step = b.step("validate-metadata", "Validate generated files are in sync with metadata");
     validate_meta_step.dependOn(&validate_meta_run.step);
 
-    // CANARY: REQ=REQ-FUZZ-DICT-002; FEATURE="FuzzDictionaries"; ASPECT=BuildTarget; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
-    // Fuzz dictionary generator
-    const gen_fuzz_dict_exe = b.addExecutable(.{
-        .name = "generate_fuzz_dict",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("scripts/generate_fuzz_dict.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    gen_fuzz_dict_exe.root_module.addImport("geode", root_mod);
-    const gen_fuzz_dict_run = b.addRunArtifact(gen_fuzz_dict_exe);
-    const gen_fuzz_dict_step = b.step("generate-fuzz-dict", "Generate fuzzing dictionary from metadata");
-    gen_fuzz_dict_step.dependOn(&gen_fuzz_dict_run.step);
-
     const tools_step = b.step("tools", "Build all auxiliary tools");
     tools_step.dependOn(&doccheck_exe.step);
-
-    // Benchmark extraction tool
-    const bench_extract_exe = b.addExecutable(.{
-        .name = "bench_extract",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/bench_extract.zig"), .target = target, .optimize = optimize }),
-    });
-    tools_step.dependOn(&bench_extract_exe.step);
 
     // High-throughput bulk loader for internet-scale data ingestion
     const bulk_loader_exe = b.addExecutable(.{
@@ -5960,68 +5915,6 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(bulk_loader_exe);
     tools_step.dependOn(&bulk_loader_exe.step);
-
-    // Benchmark regression tool
-    const bench_regress_exe = b.addExecutable(.{
-        .name = "bench_regress",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/bench_regress.zig"), .target = target, .optimize = optimize }),
-    });
-    bench_regress_exe.root_module.addImport("logging", logging_mod);
-    tools_step.dependOn(&bench_regress_exe.step);
-
-    // Federation latency multi-run aggregation tool
-    const fed_latency_aggregate_exe = b.addExecutable(.{
-        .name = "fed_latency_aggregate",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_aggregate.zig"), .target = target, .optimize = optimize }),
-    });
-    tools_step.dependOn(&fed_latency_aggregate_exe.step);
-
-    // Federation latency JSON schema validation tool
-    const fed_latency_validate_exe = b.addExecutable(.{
-        .name = "fed_latency_validate",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_validate.zig"), .target = target, .optimize = optimize }),
-    });
-    tools_step.dependOn(&fed_latency_validate_exe.step);
-
-    // Federation latency streak analysis tool
-    const fed_latency_streak_exe = b.addExecutable(.{
-        .name = "fed_latency_streak",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_streak.zig"), .target = target, .optimize = optimize }),
-    });
-    tools_step.dependOn(&fed_latency_streak_exe.step);
-
-    // Federation latency governance summary tool
-    const fed_latency_governance_exe = b.addExecutable(.{
-        .name = "fed_latency_governance",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/fed_latency_governance.zig"), .target = target, .optimize = optimize }),
-    });
-    fed_latency_governance_exe.root_module.addImport("logging", logging_mod);
-    tools_step.dependOn(&fed_latency_governance_exe.step);
-
-    // Variance benchmark runner tool (aggregates benchmarks that don't surface via test harness)
-    const run_variance_benches_exe = b.addExecutable(.{
-        .name = "run_variance_benches",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/run_variance_benches.zig"), .target = target, .optimize = optimize }),
-    });
-    run_variance_benches_exe.root_module.addImport("geode", root_mod);
-    tools_step.dependOn(&run_variance_benches_exe.step);
-    // Dedicated step to build only the variance benchmark runner (useful for CI or manual metric capture)
-    const variance_step = b.step("variance", "Build variance benchmark runner (run_variance_benches)");
-    variance_step.dependOn(&run_variance_benches_exe.step);
-
-    // Implementation reality delta tool
-    const impl_reality_delta_exe = b.addExecutable(.{
-        .name = "impl_reality_delta",
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/implementation_reality_delta.zig"), .target = target, .optimize = optimize }),
-    });
-    tools_step.dependOn(&impl_reality_delta_exe.step);
-    const delta_run = b.addRunArtifact(impl_reality_delta_exe);
-    // Provide args placeholders: status.json docs/IMPLEMENTATION_REALITY.md prev snapshot path
-    if (b.args) |a| delta_run.addArgs(a) else {
-        delta_run.addArgs(&.{ "status.json", "docs/IMPLEMENTATION_REALITY.md", "docs/.implementation_reality_prev.json" });
-    }
-    const delta_step = b.step("delta", "Append implementation reality delta section");
-    delta_step.dependOn(&delta_run.step);
 
     // WAL compaction tool removed (GraphStore-only storage).
 

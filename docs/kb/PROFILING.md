@@ -61,7 +61,7 @@
 
 ### Standardized JSON Schema (schema_version=1)
 
-Variance envelopes emitted by `run_variance_benches` (and future consolidated runners) follow a normalized JSON Lines schema:
+Variance envelopes emitted by the variance benchmarks follow a normalized JSON Lines schema:
 
 ```json
 {

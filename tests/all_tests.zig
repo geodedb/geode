@@ -58,7 +58,6 @@ const _network_types_regression = @import("network_types_regression_test.zig");
 const _advanced_types_regression = @import("advanced_types_regression_test.zig");
 const _canary_freshness_guard = @import("canary_freshness_guard.zig");
 const _runtime_advanced_types = @import("runtime_advanced_types.zig");
-const _index_integration = @import("index_integration_persistence.zig");
 const _advanced_types_operators = @import("advanced_types_operators.zig");
 
 // Gap Analysis Fix Tests (January 2026)

@@ -333,12 +333,6 @@ make fuzz
 ```bash
 # Run all benchmarks
 make bench
-
-# Extract benchmark results
-make bench 2>&1 | bench_extract
-
-# Compare with baseline
-bench_regress --baseline old.json --current new.json
 ```
 
 ## CANARY Markers
