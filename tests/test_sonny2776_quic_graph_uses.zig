@@ -12,6 +12,7 @@
 // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=QuicE2E; STATUS=TESTED; TEST=tests/test_sonny2776_quic_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -65,7 +66,7 @@ const Server = struct {
         errdefer allocator.free(self.addr);
         self.server = try util.spawnServer(
             allocator,
-            &.{ "./zig-out/bin/geode", "serve", "--listen", self.addr, "--data-dir", self.data_dir },
+            &.{ geode_test_bin.geode_exe, "serve", "--listen", self.addr, "--data-dir", self.data_dir },
             util.TestEnv.standard(),
         );
         try util.waitForServerReady(allocator, self.addr, 30000);

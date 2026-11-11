@@ -175,6 +175,25 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
 /// each registered Run step's artifact to it.
 var g_test_compile_step: ?*std.Build.Step = null;
 
+/// SONNY-2697: the `geode_test_bin` module (tests/geode_test_bin.zig), whose
+/// `geode_exe` is the absolute path of the geode executable this build emits.
+/// Set once in build() right after geode_exe is declared.
+var g_geode_test_bin_mod: ?*std.Build.Module = null;
+
+/// SONNY-2697: register a test artifact that spawns the geode binary. The
+/// artifact gets the `geode_test_bin` module, so it spawns the executable this
+/// build emitted, by absolute path, built before the test compiles. It used to
+/// spawn `./zig-out/bin/geode`, which held whatever the last install left (a
+/// stale binary, or none: the test then failed or SKIPped), missed a
+/// `-p <prefix>` install, and raced any other build writing zig-out. Only an
+/// artifact registered here can `@import("geode_test_bin")`, so a spawning
+/// test that is not registered fails to compile.
+fn spawnsBuiltGeode(artifact: *std.Build.Step.Compile) void {
+    const mod = g_geode_test_bin_mod orelse
+        @panic("spawnsBuiltGeode: called before geode_exe is declared (SONNY-2697)");
+    artifact.root_module.addImport("geode_test_bin", mod);
+}
+
 /// SRE-187: `-Dtest-coverage=true` turns the aggregate `test` step into the
 /// kcov coverage lane. Every Run step this shard selects is executed under
 /// `kcov` (so its exact argv, cwd and env are preserved -- no second, lossy
@@ -1366,6 +1385,16 @@ pub fn build(b: *std.Build) void {
     const install_geode_exe = b.addInstallArtifact(geode_exe, .{});
     b.getInstallStep().dependOn(&install_geode_exe.step);
 
+    // SONNY-2697: tests that spawn geode reach the emitted executable through
+    // spawnsBuiltGeode. The path is relative to the build root when the cache
+    // root is, so the build root rides along to make it absolute.
+    const geode_test_bin_opts = b.addOptions();
+    geode_test_bin_opts.addOptionPath("geode_exe", geode_exe.getEmittedBin());
+    geode_test_bin_opts.addOption([]const u8, "build_root", b.build_root.path orelse ".");
+    const geode_test_bin_mod = b.createModule(.{ .root_source_file = b.path("tests/geode_test_bin.zig"), .target = target, .optimize = optimize });
+    geode_test_bin_mod.addImport("geode_test_bin_options", geode_test_bin_opts.createModule());
+    g_geode_test_bin_mod = geode_test_bin_mod;
+
     // Unified CLI only; legacy geodec/geoded binaries removed.
 
     const gql_exe = b.addExecutable(.{
@@ -2009,8 +2038,7 @@ pub fn build(b: *std.Build) void {
     // self-signed / discarded), via subprocess `geode serve` runs whose stdout
     // is a PIPE — the exact launch context that flipped the bug — plus unit
     // tests of the new cert_gen.certFileReadable / requireExistingCertificates
-    // helpers. The subprocess tests depend on a pre-built ./zig-out/bin/geode
-    // (they SKIP if it is missing).
+    // helpers. The subprocess tests spawn the geode this build emitted.
     const cert_provided_mod = b.createModule(.{
         .root_source_file = b.path("src/tools/cert_gen.zig"),
         .target = target,
@@ -2025,13 +2053,11 @@ pub fn build(b: *std.Build) void {
     cert_provided_tests.root_module.addImport("cert_gen", cert_provided_mod);
     cert_provided_tests.root_module.link_libc = true;
     const run_cert_provided_tests = b.addRunArtifact(cert_provided_tests);
-    // This e2e test spawns ./zig-out/bin/geode (BINARY_PATH) directly, so it MUST
-    // depend on the geode install — otherwise a test shard that contains no other
-    // install-dependent test never (re)builds the binary, and the test spawns
-    // whatever stale binary is already in zig-out. A stale RELEASE binary rejects
-    // the test's --no-auth (debug-only), so geode exits before logging the cert
-    // load and the test fails (pre-push shard-2 flake, 2026-06-14).
-    run_cert_provided_tests.step.dependOn(&install_geode_exe.step);
+    // This e2e test spawns geode (BINARY_PATH) directly, so it MUST spawn the
+    // geode this build emitted: a stale RELEASE binary rejects the test's
+    // --no-auth (debug-only), so geode exits before logging the cert load and
+    // the test fails (pre-push shard-2 flake, 2026-06-14; SONNY-2697).
+    spawnsBuiltGeode(cert_provided_tests);
     const cert_provided_step = b.step("test-cert-provided", "Run explicit-cert-honored regression (provided --cert not discarded)");
     cert_provided_step.dependOn(&run_cert_provided_tests.step);
 
@@ -2039,7 +2065,7 @@ pub fn build(b: *std.Build) void {
     // First boot must emit a secret-free breadcrumb to stdout/stderr pointing at
     // <data-dir>/.geode_admin_password (so log-scraping harnesses + operators can
     // discover the generated password) WITHOUT ever printing the secret. Spawns a
-    // real ./zig-out/bin/geode with a clean env (SKIPs if the binary is missing).
+    // real geode (the one this build emitted) with a clean env.
     const first_boot_pw_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_first_boot_admin_password_breadcrumb.zig"),
         .target = target,
@@ -2047,6 +2073,7 @@ pub fn build(b: *std.Build) void {
     }) });
     first_boot_pw_tests.root_module.link_libc = true;
     const run_first_boot_pw_tests = b.addRunArtifact(first_boot_pw_tests);
+    spawnsBuiltGeode(first_boot_pw_tests);
     const first_boot_pw_step = b.step("test-first-boot-admin-breadcrumb", "Run first-boot admin-password breadcrumb regression (secret-free, discoverable)");
     first_boot_pw_step.dependOn(&run_first_boot_pw_tests.step);
 
@@ -2054,7 +2081,7 @@ pub fn build(b: *std.Build) void {
     // 3 real geode subprocesses on DISTINCT loopback IPs (127.0.0.11/12/13),
     // same cluster port, CA-signed TLS, asserting a single leader is elected and
     // HOLDS for >= N seconds (the flap-to-all-candidates failure mode). Requires
-    // a pre-built ./zig-out/bin/geode + openssl (SKIPs otherwise) and the
+    // the geode this build emitted + openssl (SKIPs without openssl) and the
     // GEODE_CLUSTER_LISTEN_ADDRESS knob (so each node binds a distinct address
     // instead of sharing 0.0.0.0:<port> via SO_REUSEPORT on one host).
     const cluster_steady_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -2064,6 +2091,7 @@ pub fn build(b: *std.Build) void {
     }) });
     cluster_steady_tests.root_module.link_libc = true;
     const run_cluster_steady_tests = b.addRunArtifact(cluster_steady_tests);
+    spawnsBuiltGeode(cluster_steady_tests);
     const cluster_steady_step = b.step("test-cluster-steady-state", "Run 3-node distinct-IP CA-TLS steady-state leader-hold regression");
     cluster_steady_step.dependOn(&run_cluster_steady_tests.step);
 
@@ -2120,7 +2148,7 @@ pub fn build(b: *std.Build) void {
     // Subprocess test: with GEODE_METRICS_PORT set, `geode serve` must print a
     // reliable [startup] breadcrumb naming the out-of-band GET /health liveness
     // URL to stdout/stderr (the structured log.info alone did not surface on the
-    // serve path). SKIPs if ./zig-out/bin/geode is not built.
+    // serve path). Spawns the geode this build emitted.
     const liveness_breadcrumb_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_liveness_endpoint_breadcrumb.zig"),
         .target = target,
@@ -2128,12 +2156,13 @@ pub fn build(b: *std.Build) void {
     }) });
     liveness_breadcrumb_tests.root_module.link_libc = true;
     const run_liveness_breadcrumb_tests = b.addRunArtifact(liveness_breadcrumb_tests);
+    spawnsBuiltGeode(liveness_breadcrumb_tests);
     const liveness_breadcrumb_step = b.step("test-liveness-breadcrumb", "Run out-of-band /health liveness breadcrumb regression (2026-06-07 liveness-kill fix)");
     liveness_breadcrumb_step.dependOn(&run_liveness_breadcrumb_tests.step);
 
     // Idle-server CPU regression: an idle geode (0 connections) must not spin the
     // QUIC poll workers (was ~810% on a 16-worker release node / ~100% on the
-    // 1-worker debug build). SKIPs if ./zig-out/bin/geode is not built.
+    // 1-worker debug build). Spawns the geode this build emitted.
     const idle_cpu_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_quic_idle_cpu.zig"),
         .target = target,
@@ -2141,6 +2170,7 @@ pub fn build(b: *std.Build) void {
     }) });
     idle_cpu_tests.root_module.link_libc = true;
     const run_idle_cpu_tests = b.addRunArtifact(idle_cpu_tests);
+    spawnsBuiltGeode(idle_cpu_tests);
     const idle_cpu_step = b.step("test-quic-idle-cpu", "Run idle-server poll-loop CPU regression (2026-06-08 idle-spin fix)");
     idle_cpu_step.dependOn(&run_idle_cpu_tests.step);
 
@@ -2176,6 +2206,7 @@ pub fn build(b: *std.Build) void {
     }) });
     cluster_replicable_mut_tests.root_module.link_libc = true;
     const run_cluster_replicable_mut_tests = b.addRunArtifact(cluster_replicable_mut_tests);
+    spawnsBuiltGeode(cluster_replicable_mut_tests);
     const cluster_replicable_mut_step = b.step("test-cluster-replicable-mutations", "Run 3-node subprocess edge/delete/merge/SET replication regression (2026-06-09 gaps)");
     cluster_replicable_mut_step.dependOn(&run_cluster_replicable_mut_tests.step);
 
@@ -2428,7 +2459,7 @@ pub fn build(b: *std.Build) void {
     }) });
     capability_gate_startup_tests.root_module.addImport("build_options", build_options_mod);
     const run_capability_gate_startup_tests = b.addRunArtifact(capability_gate_startup_tests);
-    run_capability_gate_startup_tests.step.dependOn(b.getInstallStep());
+    spawnsBuiltGeode(capability_gate_startup_tests);
     b.step("test-capability-gate-startup", "Run native observed capability startup refusal and ordinary controls").dependOn(&run_capability_gate_startup_tests.step);
 
     // drainReady-and-bridge dispatch test (Task A5b of the 2026-05-25
@@ -2464,11 +2495,10 @@ pub fn build(b: *std.Build) void {
     }) });
     cluster_3node_subproc_tests.root_module.link_libc = true;
     const run_cluster_3node_subproc_tests = b.addRunArtifact(cluster_3node_subproc_tests);
-    // The test reads `./zig-out/bin/geode`, so it requires the install
-    // step to have run.  Wire that dependency explicitly so a fresh
-    // `zig build test-cluster-3node-subprocess` rebuilds the binary first
-    // instead of skipping with "geode binary missing".
-    run_cluster_3node_subproc_tests.step.dependOn(b.getInstallStep());
+    // The test spawns geode, so a fresh `zig build
+    // test-cluster-3node-subprocess` builds the binary first instead of
+    // skipping with "geode binary missing" (SONNY-2697).
+    spawnsBuiltGeode(cluster_3node_subproc_tests);
     const cluster_3node_subproc_step = b.step("test-cluster-3node-subprocess", "Run subprocess 3-node cluster smoke test (A6)");
     cluster_3node_subproc_step.dependOn(&run_cluster_3node_subproc_tests.step);
 
@@ -3217,9 +3247,9 @@ pub fn build(b: *std.Build) void {
     gap0203_tests.root_module.addImport("transport/quic", transport_quic_mod);
     gap0203_tests.root_module.addImport("grpc_client", grpc_client_mod);
     const run_gap0203_tests = b.addRunArtifact(gap0203_tests);
-    // SONNY-2394: named step so the GAP-0203 QUIC suite (spawns
-    // ./zig-out/bin/geode; lives in test-e2e only) can run on its own.
-    run_gap0203_tests.step.dependOn(&install_geode_exe.step);
+    // SONNY-2394: named step so the GAP-0203 QUIC suite (spawns geode;
+    // lives in test-e2e only) can run on its own.
+    spawnsBuiltGeode(gap0203_tests);
     const gap0203_step = b.step("test-gap0203", "Run the GAP-0203 query-pipeline suite (spawns a real geode server over QUIC)");
     gap0203_step.dependOn(&run_gap0203_tests.step);
 
@@ -3323,6 +3353,7 @@ pub fn build(b: *std.Build) void {
     test_openssl_options.addOption(bool, "enable_openssl", target.result.os.tag != .windows);
     custom_tests.root_module.addOptions("openssl_config", test_openssl_options);
     const run_custom_tests = b.addRunArtifact(custom_tests);
+    spawnsBuiltGeode(custom_tests);
 
     // GAP-0401: MATCH refactor staged parity campaign
     const match_parity_tests = b.addTest(.{
@@ -4504,9 +4535,9 @@ pub fn build(b: *std.Build) void {
     cpa_accept_step.dependOn(&run_cpa_accept.step);
 
     const run_gql_conformance_tests = b.addRunArtifact(gql_conformance_tests);
-    // The suite spawns ./zig-out/bin/geode: install the server it tests
-    // (SONNY-2775: it ran whatever binary was last installed).
-    run_gql_conformance_tests.step.dependOn(&install_geode_exe.step);
+    // The suite spawns the server it tests (SONNY-2775, SONNY-2697: it ran
+    // whatever binary ./zig-out/bin/geode last held).
+    spawnsBuiltGeode(gql_conformance_tests);
     test_e2e_step.dependOn(&run_gql_conformance_tests.step);
     // GAP-0892: named step so the conformance suite (incl. the T11/T12/T14
     // count-pushdown regressions) can run without the rest of test-e2e.
@@ -4519,6 +4550,7 @@ pub fn build(b: *std.Build) void {
     sonny2697_test_mod.addImport("build_options", build_options_mod);
     const sonny2697_tests = b.addTest(.{ .root_module = sonny2697_test_mod });
     const run_sonny2697_tests = b.addRunArtifact(sonny2697_tests);
+    spawnsBuiltGeode(sonny2697_tests);
     shardDep(test_step, &run_sonny2697_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2697_step = b.step("test-sonny2697-spawned-geode-fresh", "Run SONNY-2697 regression (a test that spawns geode runs this build's executable, by absolute path, reporting this build's version; not whatever ./zig-out/bin/geode holds)");
     sonny2697_step.dependOn(&run_sonny2697_tests.step);
@@ -4528,6 +4560,7 @@ pub fn build(b: *std.Build) void {
     cli_tests.root_module.addImport("geode", root_mod);
     cli_tests.root_module.addImport("json", json_mod);
     const run_cli_tests = b.addRunArtifact(cli_tests);
+    spawnsBuiltGeode(cli_tests);
     test_e2e_step.dependOn(&run_cli_tests.step);
 
     // Server RSS regression test — spawns the built geode binary and samples
@@ -4537,6 +4570,7 @@ pub fn build(b: *std.Build) void {
     const server_mem_pressure_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/integration/test_server_memory_pressure.zig"), .target = target, .optimize = optimize }) });
     server_mem_pressure_tests.root_module.link_libc = true;
     const run_server_mem_pressure_tests = b.addRunArtifact(server_mem_pressure_tests);
+    spawnsBuiltGeode(server_mem_pressure_tests);
     test_e2e_step.dependOn(&run_server_mem_pressure_tests.step);
 
     // Protobuf wire protocol compatibility tests (Phase 6 validation)
@@ -4978,7 +5012,7 @@ pub fn build(b: *std.Build) void {
         quic_high_concurrency_e2e.root_module.linkSystemLibrary("dl", .{});
     }
     const run_quic_high_concurrency_e2e_tests = b.addRunArtifact(quic_high_concurrency_e2e);
-    run_quic_high_concurrency_e2e_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(quic_high_concurrency_e2e);
     const quic_high_concurrency_e2e_step = b.step("test-quic-high-concurrency-e2e", "Run QUIC high-concurrency read/write integration test");
     quic_high_concurrency_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
     test_e2e_step.dependOn(&run_quic_high_concurrency_e2e_tests.step);
@@ -5005,7 +5039,7 @@ pub fn build(b: *std.Build) void {
         quic_first_stream_close_mux_e2e.root_module.linkSystemLibrary("dl", .{});
     }
     const run_quic_first_stream_close_mux_e2e = b.addRunArtifact(quic_first_stream_close_mux_e2e);
-    run_quic_first_stream_close_mux_e2e.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(quic_first_stream_close_mux_e2e);
     const quic_first_stream_close_mux_step = b.step("test-quic-first-stream-close-mux-e2e", "SONNY-1219: a QUIC connection must outlive its first stream (multiplexed siblings survive)");
     quic_first_stream_close_mux_step.dependOn(&run_quic_first_stream_close_mux_e2e.step);
     test_e2e_step.dependOn(&run_quic_first_stream_close_mux_e2e.step);
@@ -5056,8 +5090,8 @@ pub fn build(b: *std.Build) void {
             parity_test.root_module.linkSystemLibrary("dl", .{});
         }
         const run_parity_test = b.addRunArtifact(parity_test);
-        // Every one of these drives the real `./zig-out/bin/geode` binary.
-        run_parity_test.step.dependOn(&install_geode_exe.step);
+        // Every one of these drives the real geode binary.
+        spawnsBuiltGeode(parity_test);
         transport_parity_step.dependOn(&run_parity_test.step);
     }
 
@@ -5112,7 +5146,7 @@ pub fn build(b: *std.Build) void {
         shutdown_drain_e2e.root_module.linkSystemLibrary("dl", .{});
     }
     const run_shutdown_drain_e2e = b.addRunArtifact(shutdown_drain_e2e);
-    run_shutdown_drain_e2e.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(shutdown_drain_e2e);
     const shutdown_drain_step = b.step("test-shutdown-drain-timeout", "Gap 0039: SIGTERM shutdown must stop accepting, bound the connection drain (GEODE_SHUTDOWN_DRAIN_TIMEOUT_MS), force-close stalled connections, and exit rc=0");
     shutdown_drain_step.dependOn(&run_shutdown_drain_e2e.step);
 
@@ -5134,7 +5168,7 @@ pub fn build(b: *std.Build) void {
         quic_sequential_upsert_e2e.root_module.linkSystemLibrary("dl", .{});
     }
     const run_quic_sequential_upsert_e2e = b.addRunArtifact(quic_sequential_upsert_e2e);
-    run_quic_sequential_upsert_e2e.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(quic_sequential_upsert_e2e);
     const quic_sequential_upsert_e2e_step = b.step("test-quic-sequential-upsert-desync", "Run sequential single-connection find+create stream-desync regression (BUG_STREAM_DESYNC; fixed in quic v0.1.32)");
     quic_sequential_upsert_e2e_step.dependOn(&run_quic_sequential_upsert_e2e.step);
 
@@ -7303,7 +7337,7 @@ pub fn build(b: *std.Build) void {
     gap0514_repl_test_mod.link_libc = true;
     const gap0514_repl_tests = b.addTest(.{ .root_module = gap0514_repl_test_mod });
     const run_gap0514_repl_tests = b.addRunArtifact(gap0514_repl_tests);
-    run_gap0514_repl_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(gap0514_repl_tests);
     const gap0514_repl_step = b.step("test-gap0514-repl", "GAP-0514: repl_dispatch e2e CANARY regression (interrupt/txn-error/drain/source-chunked lanes)");
     gap0514_repl_step.dependOn(&run_gap0514_repl_tests.step);
 
@@ -7319,7 +7353,7 @@ pub fn build(b: *std.Build) void {
     gap0514_quic_test_mod.link_libc = true;
     const gap0514_quic_tests = b.addTest(.{ .root_module = gap0514_quic_test_mod });
     const run_gap0514_quic_tests = b.addRunArtifact(gap0514_quic_tests);
-    run_gap0514_quic_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(gap0514_quic_tests);
     const gap0514_quic_step = b.step("test-gap0514-quic", "GAP-0514: quic_connection_handler e2e CANARY regression (savepoint/rollback_to, HELLO graph binding)");
     gap0514_quic_step.dependOn(&run_gap0514_quic_tests.step);
 
@@ -7335,7 +7369,7 @@ pub fn build(b: *std.Build) void {
     new1_bola_test_mod.link_libc = true;
     const new1_bola_tests = b.addTest(.{ .root_module = new1_bola_test_mod });
     const run_new1_bola_tests = b.addRunArtifact(new1_bola_tests);
-    run_new1_bola_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(new1_bola_tests);
     const new1_bola_step = b.step("test-new1-cross-graph-bola", "NEW-1: QUIC HELLO cross-graph BOLA regression (non-admin binds ungranted graph, #861)");
     new1_bola_step.dependOn(&run_new1_bola_tests.step);
 
@@ -7350,7 +7384,7 @@ pub fn build(b: *std.Build) void {
     sec002_cdc_test_mod.link_libc = true;
     const sec002_cdc_tests = b.addTest(.{ .root_module = sec002_cdc_test_mod });
     const run_sec002_cdc_tests = b.addRunArtifact(sec002_cdc_tests);
-    run_sec002_cdc_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sec002_cdc_tests);
     const sec002_cdc_step = b.step("test-sec002-cdc-preauth", "SEC-002: unauthenticated CDC arm access regression (#849)");
     sec002_cdc_step.dependOn(&run_sec002_cdc_tests.step);
 
@@ -7863,9 +7897,8 @@ pub fn build(b: *std.Build) void {
     }) });
     datadir_lock_subproc_tests.root_module.link_libc = true;
     const run_datadir_lock_subproc_tests = b.addRunArtifact(datadir_lock_subproc_tests);
-    // The test execs ./zig-out/bin/geode, so it needs the install step to
-    // have run (same wiring as test-cluster-3node-subprocess).
-    run_datadir_lock_subproc_tests.step.dependOn(b.getInstallStep());
+    // The test execs geode (same wiring as test-cluster-3node-subprocess).
+    spawnsBuiltGeode(datadir_lock_subproc_tests);
     const datadir_lock_subproc_step = b.step("test-datadir-lock-subprocess", "ENG-3921: two `geode serve` on one data dir must be refused (subprocess e2e)");
     datadir_lock_subproc_step.dependOn(&run_datadir_lock_subproc_tests.step);
 
@@ -7880,7 +7913,7 @@ pub fn build(b: *std.Build) void {
     }) });
     cli_batch_mode_tests.root_module.link_libc = true;
     const run_cli_batch_mode_tests = b.addRunArtifact(cli_batch_mode_tests);
-    run_cli_batch_mode_tests.step.dependOn(b.getInstallStep());
+    spawnsBuiltGeode(cli_batch_mode_tests);
     const cli_batch_mode_step = b.step("test-cli-batch-mode", "ENG-3914: `geode query --batch` executes every statement on one connection (subprocess e2e)");
     cli_batch_mode_step.dependOn(&run_cli_batch_mode_tests.step);
 
@@ -7898,7 +7931,7 @@ pub fn build(b: *std.Build) void {
     }) });
     cli_timeout_exit_tests.root_module.link_libc = true;
     const run_cli_timeout_exit_tests = b.addRunArtifact(cli_timeout_exit_tests);
-    run_cli_timeout_exit_tests.step.dependOn(b.getInstallStep());
+    spawnsBuiltGeode(cli_timeout_exit_tests);
     const cli_timeout_exit_step = b.step("test-cli-timeout-exit-code", "`geode query` timeout gets its own exit code + truthful message (subprocess e2e)");
     cli_timeout_exit_step.dependOn(&run_cli_timeout_exit_tests.step);
 
@@ -7918,7 +7951,7 @@ pub fn build(b: *std.Build) void {
     }) });
     grpc_large_payload_tests.root_module.link_libc = true;
     const run_grpc_large_payload_tests = b.addRunArtifact(grpc_large_payload_tests);
-    run_grpc_large_payload_tests.step.dependOn(b.getInstallStep());
+    spawnsBuiltGeode(grpc_large_payload_tests);
     const grpc_large_payload_step = b.step("test-grpc-large-payload", "gRPC client carries >16KiB requests and reassembles >16KiB responses (subprocess e2e)");
     grpc_large_payload_step.dependOn(&run_grpc_large_payload_tests.step);
 
@@ -7936,7 +7969,7 @@ pub fn build(b: *std.Build) void {
     }) });
     grpc_shutdown_drain_tests.root_module.link_libc = true;
     const run_grpc_shutdown_drain_tests = b.addRunArtifact(grpc_shutdown_drain_tests);
-    run_grpc_shutdown_drain_tests.step.dependOn(b.getInstallStep());
+    spawnsBuiltGeode(grpc_shutdown_drain_tests);
     const grpc_shutdown_drain_step = b.step("test-grpc-shutdown-drain", "SIGTERM with an in-flight gRPC query drains instead of use-after-freeing the store (subprocess e2e)");
     grpc_shutdown_drain_step.dependOn(&run_grpc_shutdown_drain_tests.step);
 
@@ -7975,7 +8008,7 @@ pub fn build(b: *std.Build) void {
     }) });
     cli_file_chunked_tests.root_module.link_libc = true;
     const run_cli_file_chunked_tests = b.addRunArtifact(cli_file_chunked_tests);
-    run_cli_file_chunked_tests.step.dependOn(b.getInstallStep());
+    spawnsBuiltGeode(cli_file_chunked_tests);
     const cli_file_chunked_step = b.step("test-cli-file-chunked", "`geode query --file`: a rejected chunk must not exit 0, and the 16 MiB cap must be actionable (subprocess e2e)");
     cli_file_chunked_step.dependOn(&run_cli_file_chunked_tests.step);
 
@@ -8631,7 +8664,7 @@ pub fn build(b: *std.Build) void {
     }
     const sonny1221_tests = b.addTest(.{ .root_module = sonny1221_test_mod });
     const run_sonny1221_tests = b.addRunArtifact(sonny1221_tests);
-    run_sonny1221_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny1221_tests);
     shardDep(test_step, &run_sonny1221_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny1221_step = b.step("test-sonny1221-fast-path-schema", "Run SONNY-1221 regression (the node-scan fast path's schema frame reports the executor's projection column types over QUIC and gRPC, NULL only for an all-null column)");
     sonny1221_step.dependOn(&run_sonny1221_tests.step);
@@ -8962,7 +8995,7 @@ pub fn build(b: *std.Build) void {
     sonny2776_quic_test_mod.link_libc = true;
     const sonny2776_quic_tests = b.addTest(.{ .root_module = sonny2776_quic_test_mod });
     const run_sonny2776_quic_tests = b.addRunArtifact(sonny2776_quic_tests);
-    run_sonny2776_quic_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2776_quic_tests);
     const sonny2776_quic_step = b.step("test-sonny2776-quic-graph-uses", "Run SONNY-2776 QUIC e2e regression (spawns a server: the label-deny post-filter after USE GRAPH applies the switched-to graph's policies; a transaction that changes a second graph is refused)");
     sonny2776_quic_step.dependOn(&run_sonny2776_quic_tests.step);
 
@@ -8981,7 +9014,7 @@ pub fn build(b: *std.Build) void {
     sonny2802_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny2802_tests = b.addTest(.{ .root_module = sonny2802_test_mod });
     const run_sonny2802_tests = b.addRunArtifact(sonny2802_tests);
-    run_sonny2802_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2802_tests);
     const sonny2802_step = b.step("test-sonny2802-profile-regime", "Run SONNY-2802/SONNY-2752 regression (an EXPLAIN or PROFILE sent with other statements is refused, 0A000, rather than run in part under the whole program's lock; a PROFILE'd change is recorded in the transaction; gRPC in process and QUIC against a spawned server)");
     sonny2802_step.dependOn(&run_sonny2802_tests.step);
 
@@ -9032,7 +9065,7 @@ pub fn build(b: *std.Build) void {
     sonny2805_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny2805_tests = b.addTest(.{ .root_module = sonny2805_test_mod });
     const run_sonny2805_tests = b.addRunArtifact(sonny2805_tests);
-    run_sonny2805_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2805_tests);
     const sonny2805_step = b.step("test-sonny2805-txn-sessions", "Run SONNY-2805/SONNY-2799 regression (transaction control in program order; a failed statement rolls back only its own transaction, under its graph's write lock; the undo log keys changes and savepoints by transaction and never matches all; gRPC keeps the transaction per session across threads; QUIC e2e)");
     sonny2805_step.dependOn(&run_sonny2805_tests.step);
     // The undo log's inline tests (src/txn_undo_log.zig, and the store's undo
@@ -9060,7 +9093,7 @@ pub fn build(b: *std.Build) void {
     sonny2823_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny2823_tests = b.addTest(.{ .root_module = sonny2823_test_mod });
     const run_sonny2823_tests = b.addRunArtifact(sonny2823_tests);
-    run_sonny2823_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2823_tests);
     shardDep(test_step, &run_sonny2823_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2823_step = b.step("test-sonny2823-session-engine-txn", "Run SONNY-2823 regression (no engine transaction outlives the request that opened it or stays on a worker thread: gRPC sessions interleaved on one worker; COMMIT, ROLLBACK, a failed statement and teardown; a committed transaction, and other sessions' writes around it, survive a crash; QUIC with one worker, killed and restarted)");
     sonny2823_step.dependOn(&run_sonny2823_tests.step);
@@ -9077,7 +9110,7 @@ pub fn build(b: *std.Build) void {
     sonny2824_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny2824_tests = b.addTest(.{ .root_module = sonny2824_test_mod });
     const run_sonny2824_tests = b.addRunArtifact(sonny2824_tests);
-    run_sonny2824_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2824_tests);
     shardDep(test_step, &run_sonny2824_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2824_step = b.step("test-sonny2824-hello-graph-gate", "Run SONNY-2824 regression (spawns a server: a QUIC or gRPC HELLO naming a missing graph creates it only for a principal with the schema permission on it; a ReadWrite user is refused and nothing is created; a GPS FOR SCHEMA policy grants it)");
     sonny2824_step.dependOn(&run_sonny2824_tests.step);
@@ -9101,7 +9134,7 @@ pub fn build(b: *std.Build) void {
     backup_remote_failure_mod.link_libc = true;
     const backup_remote_failure_tests = b.addTest(.{ .root_module = backup_remote_failure_mod });
     const run_backup_remote_failure_tests = b.addRunArtifact(backup_remote_failure_tests);
-    run_backup_remote_failure_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(backup_remote_failure_tests);
     shardDep(test_step, &run_backup_remote_failure_tests.step, 1, test_shard_loads, test_shard_index);
     const backup_remote_failure_step = b.step("test-backup-create-remote-failure", "Run backup-create regression (a failed remote backup exits non-zero with no output file instead of falling back to a local backup; --local needs an explicit data directory)");
     backup_remote_failure_step.dependOn(&run_backup_remote_failure_tests.step);
@@ -9120,7 +9153,7 @@ pub fn build(b: *std.Build) void {
     sonny3026_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3026_tests = b.addTest(.{ .root_module = sonny3026_test_mod });
     const run_sonny3026_tests = b.addRunArtifact(sonny3026_tests);
-    run_sonny3026_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3026_tests);
     shardDep(test_step, &run_sonny3026_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3026_step = b.step("test-sonny3026-profile-txn-control", "Run SONNY-3026 regression (EXPLAIN and PROFILE of START TRANSACTION, COMMIT, ROLLBACK, a session statement or graph selection are refused, 0A000, and leave the session's transaction and graph as they were; gRPC in process and QUIC against a spawned server)");
     sonny3026_step.dependOn(&run_sonny3026_tests.step);
@@ -9141,7 +9174,7 @@ pub fn build(b: *std.Build) void {
     sonny3027_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3027_tests = b.addTest(.{ .root_module = sonny3027_test_mod });
     const run_sonny3027_tests = b.addRunArtifact(sonny3027_tests);
-    run_sonny3027_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3027_tests);
     shardDep(test_step, &run_sonny3027_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3027_step = b.step("test-sonny3027-profile-engine-txn", "Run SONNY-3027 regression (a PROFILE'd MERGE or CREATE in a transaction leaves no engine transaction open once its write lock is released; the backstop aborts and fails the transaction, never commits outside the lock; executor, gRPC in process, QUIC e2e)");
     sonny3027_step.dependOn(&run_sonny3027_tests.step);
@@ -9243,7 +9276,7 @@ pub fn build(b: *std.Build) void {
     sonny3033_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3033_tests = b.addTest(.{ .root_module = sonny3033_test_mod });
     const run_sonny3033_tests = b.addRunArtifact(sonny3033_tests);
-    run_sonny3033_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3033_tests);
     shardDep(test_step, &run_sonny3033_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3033_step = b.step("test-sonny3033-batch-graph-gate", "Run SONNY-3033 regression (spawns a server: a /*+BATCH*/ against a graph another session dropped is refused, 3F000, and does not recreate it, for a ReadWrite user and an Admin)");
     sonny3033_step.dependOn(&run_sonny3033_tests.step);
@@ -9262,7 +9295,7 @@ pub fn build(b: *std.Build) void {
     sonny3130_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3130_tests = b.addTest(.{ .root_module = sonny3130_test_mod });
     const run_sonny3130_tests = b.addRunArtifact(sonny3130_tests);
-    run_sonny3130_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3130_tests);
     shardDep(test_step, &run_sonny3130_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3130_step = b.step("test-sonny3130-graph-ddl-alone", "Run SONNY-3130 regression (a program that creates, replaces or drops a graph and has a statement on graph data is refused, 0A000, and changes nothing; graph DDL with graph selection runs; gRPC in process and QUIC against a spawned server)");
     sonny3130_step.dependOn(&run_sonny3130_tests.step);
@@ -9329,7 +9362,7 @@ pub fn build(b: *std.Build) void {
     sonny3134_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3134_tests = b.addTest(.{ .root_module = sonny3134_test_mod });
     const run_sonny3134_tests = b.addRunArtifact(sonny3134_tests);
-    run_sonny3134_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3134_tests);
     shardDep(test_step, &run_sonny3134_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3134_step = b.step("test-sonny3134-drop-graph-other-txn", "Run SONNY-3134 regression (DROP GRAPH and CREATE OR REPLACE GRAPH of a graph another session's open transaction changed are refused, 55006; its COMMIT keeps and its ROLLBACK undoes the change; the graph drops once the transaction ends or its client disconnects; gRPC in process and QUIC)");
     sonny3134_step.dependOn(&run_sonny3134_tests.step);
@@ -9366,7 +9399,7 @@ pub fn build(b: *std.Build) void {
     sonny3181_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3181_tests = b.addTest(.{ .root_module = sonny3181_test_mod });
     const run_sonny3181_tests = b.addRunArtifact(sonny3181_tests);
-    run_sonny3181_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3181_tests);
     shardDep(test_step, &run_sonny3181_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3181_step = b.step("test-sonny3181-expr-chain-cap", "Run SONNY-3181/SONNY-3189 regression (an expression of more than max_expr_links operator links is refused, 42000; chains of +, AND, OR, ||, member access and unary operators in RETURN, WHERE, ORDER BY, a property map, a UNION arm, an aggregate and EXPLAIN evaluate correctly up to the cap; no length to 1,000,000 terms overflows an 8 MiB or 16 MiB thread; gRPC in process, parser, QUIC; run in Debug and ReleaseSafe)");
     sonny3181_step.dependOn(&run_sonny3181_tests.step);
@@ -9400,7 +9433,7 @@ pub fn build(b: *std.Build) void {
     sonny3032_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3032_tests = b.addTest(.{ .root_module = sonny3032_test_mod });
     const run_sonny3032_tests = b.addRunArtifact(sonny3032_tests);
-    run_sonny3032_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3032_tests);
     shardDep(test_step, &run_sonny3032_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3032_step = b.step("test-sonny3032-grpc-session-expiry", "Run SONNY-3032 regression (a gRPC session idle in an open transaction past the timeout is closed, its transaction rolled back and its graph hold released, so DROP GRAPH runs; idle sessions are closed, never one a request holds; one user holds at most max_sessions_per_principal sessions; gRPC in process and a spawned server)");
     sonny3032_step.dependOn(&run_sonny3032_tests.step);
@@ -9419,7 +9452,7 @@ pub fn build(b: *std.Build) void {
     sonny3191_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3191_tests = b.addTest(.{ .root_module = sonny3191_test_mod });
     const run_sonny3191_tests = b.addRunArtifact(sonny3191_tests);
-    run_sonny3191_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3191_tests);
     shardDep(test_step, &run_sonny3191_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3191_step = b.step("test-sonny3191-round13-items", "Run SONNY-3191 (N-4..N-7) and SONNY-3122 regression (COMMIT/ROLLBACK then DROP GRAPH in one program runs; queries run on the QUIC admission thread's stack; WITH chain of 64: parsed in release, refused cleanly in Debug on 8 MiB; CURRENT_GRAPH/HOME_GRAPH reserved, 42939; edge type names read by lookup and pin; gRPC in process and QUIC)");
     sonny3191_step.dependOn(&run_sonny3191_tests.step);
@@ -9517,7 +9550,7 @@ pub fn build(b: *std.Build) void {
     sonny3312_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3312_tests = b.addTest(.{ .root_module = sonny3312_test_mod });
     const run_sonny3312_tests = b.addRunArtifact(sonny3312_tests);
-    run_sonny3312_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3312_tests);
     shardDep(test_step, &run_sonny3312_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3312_step = b.step("test-sonny3312-multi-graph-read", "Run SONNY-3312 regression (a read program spanning graphs reads each graph: the review's repro and its mirror, three graphs, a missing graph answers as alone; readers in both orders race writers and CREATE/DROP GRAPH churn with no deadlock; gRPC in process with unbounded and bounded caches, and QUIC; spawned server)");
     sonny3312_step.dependOn(&run_sonny3312_tests.step);
@@ -9647,7 +9680,7 @@ pub fn build(b: *std.Build) void {
     sonny3253_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3253_tests = b.addTest(.{ .root_module = sonny3253_test_mod });
     const run_sonny3253_tests = b.addRunArtifact(sonny3253_tests);
-    run_sonny3253_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3253_tests);
     shardDep(test_step, &run_sonny3253_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3253_step = b.step("test-sonny3253-round14-minors", "Run SONNY-3253 regression (a dropped graph's IdMap is freed when no walk holds it, and when the last walk lets go; clearNodes keeps an IdMap a walk holds; a QUIC admission thread that cannot be spawned rejects its connection quickly and the server serves on; spawned server)");
     sonny3253_step.dependOn(&run_sonny3253_tests.step);
@@ -9686,7 +9719,7 @@ pub fn build(b: *std.Build) void {
     sonny3317_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3317_tests = b.addTest(.{ .root_module = sonny3317_test_mod });
     const run_sonny3317_tests = b.addRunArtifact(sonny3317_tests);
-    run_sonny3317_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3317_tests);
     shardDep(test_step, &run_sonny3317_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3317_step = b.step("test-sonny3317-round15-minors", "Run SONNY-3317 regression (M4: createGraph and openOrCreateGraphWithUuid under an out of memory at each allocation free their name copy once; M5: GEODE_QUIC_ADMISSION_STACK_MB floors at 8 MiB, a server told 1 serves; M7: snapshot reads race Raft snapshot installs; M8: a Handshake with a tenant failing at each allocation gives the quota back; spawned server)");
     sonny3317_step.dependOn(&run_sonny3317_tests.step);
@@ -9828,7 +9861,7 @@ pub fn build(b: *std.Build) void {
     sonny3232_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny3232_tests = b.addTest(.{ .root_module = sonny3232_test_mod });
     const run_sonny3232_tests = b.addRunArtifact(sonny3232_tests);
-    run_sonny3232_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3232_tests);
     shardDep(test_step, &run_sonny3232_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (a QUIC request of 256 KiB is answered, one past the 16 MiB maximum is not, 1 MiB and 4 MiB outcomes are recorded (SONNY-3232, left for S2); the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
     sonny3232_step.dependOn(&run_sonny3232_tests.step);
@@ -10030,7 +10063,7 @@ pub fn build(b: *std.Build) void {
     sonny2724_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny2724_tests = b.addTest(.{ .root_module = sonny2724_test_mod });
     const run_sonny2724_tests = b.addRunArtifact(sonny2724_tests);
-    run_sonny2724_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2724_tests);
     shardDep(test_step, &run_sonny2724_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2724_step = b.step("test-sonny2724-quic-fast-path-gate", "Run SONNY-2724 regression (over QUIC, the key-resolved write fast paths never serve a tenant-scoped session, an unscoped session under strict tenancy, or a user while an RLS policy is installed; each takes the executor and gives its correct answer)");
     sonny2724_step.dependOn(&run_sonny2724_tests.step);
@@ -10043,7 +10076,7 @@ pub fn build(b: *std.Build) void {
     sonny2816_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny2816_tests = b.addTest(.{ .root_module = sonny2816_test_mod });
     const run_sonny2816_tests = b.addRunArtifact(sonny2816_tests);
-    run_sonny2816_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2816_tests);
     shardDep(test_step, &run_sonny2816_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2816_step = b.step("test-sonny2816-bulk-ingest-txn", "Run SONNY-2816 regression (spawns a GEODE_BULK_INGEST=1 server: over QUIC, a simple CREATE or MERGE and a MATCH ... CREATE or MERGE edge sent inside a transaction take the executor, so ROLLBACK undoes them and COMMIT keeps them)");
     sonny2816_step.dependOn(&run_sonny2816_tests.step);
@@ -10281,7 +10314,7 @@ pub fn build(b: *std.Build) void {
         mod.addImport("transport/quic", transport_quic_mod);
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
-        run_tests.step.dependOn(&install_geode_exe.step);
+        spawnsBuiltGeode(tests);
         const step = b.step("test-sonny-write-allowlist-r4-transport", "Run the Task W round 4a regression over gRPC (in process) and QUIC (a spawned server): the round-3 review's PROFILE repros are refused (0A000) with nothing written; MERGE actions and later chains read the statement's variables (go/oidc ClaimJTI replay, TOTP); a SET swap swaps; an unsupplied parameter is refused (42P02) on every path, the QUIC MERGE fast path too; the parser's limits answer 54000 and 54001");
         step.dependOn(&run_tests.step);
     }
@@ -10331,7 +10364,7 @@ pub fn build(b: *std.Build) void {
     sonny2977_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny2977_tests = b.addTest(.{ .root_module = sonny2977_test_mod });
     const run_sonny2977_tests = b.addRunArtifact(sonny2977_tests);
-    run_sonny2977_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2977_tests);
     shardDep(test_step, &run_sonny2977_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2977_step = b.step("test-sonny2977-inline-map-set", "Run SONNY-2977 regression (MATCH (x {k: v}) with a one- or two-property map, a literal or a parameter, WHERE, a per-row or aggregate RETURN, or none, and MATCH (x) WHERE x.k = v, SET every node holding the key: in-memory, persisted, tenant-scoped and RLS-policy sessions and over QUIC; a key whose only holder the session may not see is written by none)");
     sonny2977_step.dependOn(&run_sonny2977_tests.step);
@@ -12146,7 +12179,7 @@ pub fn build(b: *std.Build) void {
     sonny2798_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
     const sonny2798_tests = b.addTest(.{ .root_module = sonny2798_test_mod });
     const run_sonny2798_tests = b.addRunArtifact(sonny2798_tests);
-    run_sonny2798_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2798_tests);
     shardDep(test_step, &run_sonny2798_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2798_step = b.step("test-sonny2798-offline-verify", "Run SONNY-2798 regression (every offline auth command refuses a store whose chain a planted record broke, signs nothing, and seals a verified change)");
     sonny2798_step.dependOn(&run_sonny2798_tests.step);
@@ -12162,7 +12195,7 @@ pub fn build(b: *std.Build) void {
     sonny3035_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
     const sonny3035_tests = b.addTest(.{ .root_module = sonny3035_test_mod });
     const run_sonny3035_tests = b.addRunArtifact(sonny3035_tests);
-    run_sonny3035_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3035_tests);
     shardDep(test_step, &run_sonny3035_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3035_step = b.step("test-sonny3035-offline-chain-root", "Run SONNY-3035 regression (a store emptied at rest keeps its chain root and does not verify, so auth init and user changes are refused; verification with no key available writes no .geode_hmac_key)");
     sonny3035_step.dependOn(&run_sonny3035_tests.step);
@@ -12177,7 +12210,7 @@ pub fn build(b: *std.Build) void {
     sonny3037_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
     const sonny3037_tests = b.addTest(.{ .root_module = sonny3037_test_mod });
     const run_sonny3037_tests = b.addRunArtifact(sonny3037_tests);
-    run_sonny3037_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny3037_tests);
     shardDep(test_step, &run_sonny3037_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3037_step = b.step("test-sonny3037-revoke-principal", "Run SONNY-3037 regression (geode revoke --from revokes the named principal's grant and no other principal's; a principal with no such grant is refused and nothing changes)");
     sonny3037_step.dependOn(&run_sonny3037_tests.step);
@@ -12194,7 +12227,7 @@ pub fn build(b: *std.Build) void {
     sonny2778_test_mod.addImport("user_storage", user_storage_mod);
     const sonny2778_tests = b.addTest(.{ .root_module = sonny2778_test_mod });
     const run_sonny2778_tests = b.addRunArtifact(sonny2778_tests);
-    run_sonny2778_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2778_tests);
     shardDep(test_step, &run_sonny2778_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2778_step = b.step("test-sonny2778-admin-password-file", "Run SONNY-2778 regression (the generated admin password file is created O_EXCL|O_NOFOLLOW 0600 under the data dir only, never over a planted file or link, by SecurityManager, the server and geode auth init; UserManager frees its policy strings)");
     sonny2778_step.dependOn(&run_sonny2778_tests.step);
@@ -12269,7 +12302,7 @@ pub fn build(b: *std.Build) void {
     sonny2791_test_mod.addImport("user_storage", user_storage_mod);
     const sonny2791_tests = b.addTest(.{ .root_module = sonny2791_test_mod });
     const run_sonny2791_tests = b.addRunArtifact(sonny2791_tests);
-    run_sonny2791_tests.step.dependOn(&install_geode_exe.step);
+    spawnsBuiltGeode(sonny2791_tests);
     const sonny2791_step = b.step("test-sonny2791-internal-graphs-reseal", "Run SONNY-2791 regression (no statement or HELLO selects, creates or drops an internal __geode_* graph; the recovery reseal refuses an unsigned policy record without a kind unless its id is accepted; spawns a server)");
     sonny2791_step.dependOn(&run_sonny2791_tests.step);
 

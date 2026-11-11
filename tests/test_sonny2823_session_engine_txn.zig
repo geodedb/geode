@@ -28,6 +28,7 @@
 // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -511,7 +512,7 @@ const QuicServer = struct {
         errdefer allocator.free(addr);
         var handle = try util.spawnServer(
             allocator,
-            &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+            &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
             &quic_env,
         );
         errdefer handle.deinit();

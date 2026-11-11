@@ -34,7 +34,8 @@ test "SONNY-2697: the spawned geode is this build's executable, not the zig-out 
     defer allocator.free(result.stderr);
 
     try std.testing.expect(result.term == .exited and result.term.exited == 0);
-    const reported = std.mem.trim(u8, result.stdout, " \r\n\t");
+    // `geode --version` prints to stderr (cli_dispatcher.zig).
+    const reported = std.mem.trim(u8, result.stderr, " \r\n\t");
     const expected = "geode " ++ build_options.version;
     std.testing.expectEqualStrings(expected, reported) catch |err| {
         std.debug.print("spawned {s} reported '{s}', this build is '{s}'\n", .{ exe, reported, expected });

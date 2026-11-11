@@ -8,17 +8,18 @@
 // and leaves no output file; the local path runs only with --local and a
 // data directory given by --data-dir or GEODE_DATA_DIR.
 //
-// Spawns ./zig-out/bin/geode (the build step installs it first). The private-CA
+// Spawns the geode this build emitted (SONNY-2697). The private-CA
 // qualification starts real owned servers; remote-failure cases use a closed
 // loopback port. Every remote-failure child is capped at 60 s.
 //
 // CANARY: REQ=REQ-BACKUP-CLI-001; FEATURE="CLI Backup"; ASPECT=RemoteFailureIsAnError; STATUS=TESTED; TEST=tests/test_backup_create_remote_failure.zig; OWNER=cli; UPDATED=2026-10-24
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 
-const geode_binary = "./zig-out/bin/geode";
+const geode_binary = geode_test_bin.geode_exe;
 // Nothing listens on UDP port 1 on loopback.
 const dead_server = "127.0.0.1:1";
 

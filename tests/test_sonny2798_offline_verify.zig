@@ -22,6 +22,7 @@
 // CANARY: REQ=REQ-SONNY-2798-OFFLINE-VERIFY-FIRST; FEATURE="OfflineAuthStoreSafety"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2798_offline_verify.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -32,7 +33,7 @@ const graph_store = geode.graph_store;
 const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 const linux = std.os.linux;
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const hmac_hex = "5a" ** 32;
 const strong_password = "Correct Horse Battery Staple Seven";
 

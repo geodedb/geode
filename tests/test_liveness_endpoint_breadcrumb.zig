@@ -13,13 +13,14 @@
 // `geode serve` emits a reliable `[startup]` breadcrumb to stdout/stderr that
 // names the out-of-band `GET /health` liveness URL (visible at all log levels).
 //
-// Depends on a pre-built ./zig-out/bin/geode (SKIPs if missing); Linux-only
+// Spawns the geode this build emitted (SONNY-2697); Linux-only
 // (non-blocking pipe reads).
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 
-const BINARY_PATH = "./zig-out/bin/geode";
+const BINARY_PATH = geode_test_bin.geode_exe;
 
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;

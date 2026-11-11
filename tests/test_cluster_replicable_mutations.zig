@@ -42,9 +42,10 @@
 // flaky CI runner.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 
-const BINARY_PATH = "./zig-out/bin/geode";
+const BINARY_PATH = geode_test_bin.geode_exe;
 const NODE_IPS = [_][]const u8{ "127.0.0.11", "127.0.0.12", "127.0.0.13" };
 const CLUSTER_PORT_STR = "4242";
 const STARTUP_DEADLINE_MS: i64 = 45_000;

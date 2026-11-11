@@ -49,12 +49,13 @@
 // CANARY: REQ=REQ-CLI-GRPC-FRAMING-002; FEATURE="GrpcQueryTransport"; ASPECT=ResponseReassembly; STATUS=TESTED; TEST=tests/test_grpc_large_payload.zig; OWNER=cli; UPDATED=2026-09-01
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const posix = std.posix;
 const linux = std.os.linux;
 
-const binary_path = "zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const admin_username = "geode";
 const admin_password = "testpass123";
 const ready_marker = "server ready";

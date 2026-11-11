@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
@@ -252,7 +253,7 @@ pub fn spawnServerWithAddr(
     addr: []const u8,
     env: ?[]const []const u8,
 ) !ServerHandle {
-    const args = &[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen", addr };
+    const args = &[_][]const u8{ geode_test_bin.geode_exe, "serve", "--listen", addr };
     return spawnServer(allocator, args, env);
 }
 

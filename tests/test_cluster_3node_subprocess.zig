@@ -43,6 +43,7 @@
 //   populated for every test step.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 
 // Zig 0.16 compat: std.posix.getenv was removed.  Mirror the helper used
@@ -308,7 +309,7 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
 
     // The test must run from the geode repo root because the binary path
     // is relative.  std.testing's harness sets cwd to the repo root.
-    const binary_path = "./zig-out/bin/geode";
+    const binary_path = geode_test_bin.geode_exe;
     const io_check = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io_check, binary_path, .{}) catch {
         std.debug.print(

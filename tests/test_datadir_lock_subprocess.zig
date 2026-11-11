@@ -60,13 +60,14 @@
 //      say what it is waiting for (or the refusal must land promptly).
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 
 const linux = std.os.linux;
 const posix = std.posix;
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const ready_marker = "[startup] server ready";
 const locked_marker = "data directory is locked by pid";
 /// ENG-3921 R2 — operator-facing diagnostic for the

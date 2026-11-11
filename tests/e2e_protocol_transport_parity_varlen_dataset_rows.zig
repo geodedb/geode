@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
@@ -26,7 +27,7 @@ test "protocol: transport parity varlen dataset rows QUIC (gated)" {
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const data_dir = "./data/varlen_determinism";
     const q = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 6";
 
@@ -40,7 +41,7 @@ test "protocol: transport parity varlen dataset rows QUIC (gated)" {
     defer allocator.free(addr);
 
     util.progress("Starting server on port {d}...", .{port});
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", data_dir }, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data_dir", data_dir }, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 10000);
 

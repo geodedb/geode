@@ -36,6 +36,7 @@
 // CANARY: REQ=REQ-SONNY-1221-FAST-PATH-SCHEMA; FEATURE="EngineDirectProjectionSchema"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny1221_fast_path_schema.zig; OWNER=engine; UPDATED=2026-09-24
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const schema = @import("schema");
 const protobuf = @import("protobuf");
@@ -227,7 +228,7 @@ test "SONNY-1221: QUIC fast-path schema frame reports the executor's column type
     defer allocator.free(addr);
 
     // `--data-dir` makes it a persisted deployment, so the fast path is live.
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, null);
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, null);
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 120_000);
 

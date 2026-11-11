@@ -1,8 +1,10 @@
 // CANARY: REQ=REQ-SONNY-CAPABILITY-PROFILE-002; FEATURE="SonnyCapabilityProfile"; ASPECT=ProcessRefusal; STATUS=IMPL; TEST=tests/test_capability_gate_startup.zig; OWNER=server; UPDATED=2026-09-08
-// Linux process acceptance uses real installed geode and native syscall tracing.
+// Linux process acceptance uses the real geode this build emitted (argv[2],
+// SONNY-2697) and native syscall tracing.
 // Python orchestrates bounded children/fixtures; it never supplies engine rows.
 const std = @import("std");
 const build_options = @import("build_options");
+const geode_test_bin = @import("geode_test_bin");
 
 // The live refusal reason for a canonical profile is version-relative: below the
 // engine floor the gate stops at the version check, at or above it the still-false
@@ -21,7 +23,7 @@ test "real startup gate refuses before every listener and releases its lock" {
     defer threaded.deinit();
     const expected_reason = try expectedCanonicalReason();
     const result = try std.process.run(std.testing.allocator, threaded.io(), .{
-        .argv = &.{ "/usr/bin/python3", "-c", process_test ++ "\n" ++ growth_test, expected_reason },
+        .argv = &.{ "/usr/bin/python3", "-c", process_test ++ "\n" ++ growth_test, expected_reason, geode_test_bin.geode_exe },
         .stdout_limit = .limited(1 << 20),
         .stderr_limit = .limited(1 << 20),
     });
@@ -36,7 +38,7 @@ const process_test =
     \\canonical_reason = sys.argv[1]
     \\assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0, 'subreaper unavailable'
     \\work = pathlib.Path.cwd()
-    \\binary = work / 'zig-out/bin/geode'
+    \\binary = pathlib.Path(sys.argv[2])
     \\manifest = work / 'release/sonny_capability_profile.json'
     \\(work/'.superpowers'/'sdd').mkdir(parents=True, exist_ok=True)
     \\root = pathlib.Path(tempfile.mkdtemp(prefix='geode-capability-startup-', dir=str(work/'.superpowers'/'sdd')))

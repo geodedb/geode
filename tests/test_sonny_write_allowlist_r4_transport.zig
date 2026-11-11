@@ -36,6 +36,7 @@
 // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=TransportProfile; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -730,7 +731,7 @@ test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 
     defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_READ_EXECUTOR_BUDGET_MB=64"});
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_READ_EXECUTOR_BUDGET_MB=64"});
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 30000);
     const server_pid: std.posix.pid_t = server.child.id orelse return error.NoServerPid;
@@ -832,7 +833,7 @@ test "round 4b-1c over a real gRPC server: a node a chained part returns is pull
     defer allocator.free(quic_addr);
     const grpc_addr = try util.formatAddr(allocator, grpc_port);
     defer allocator.free(grpc_addr);
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr, "--data-dir", data_dir }, util.TestEnv.grpcPlaintext());
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr, "--data-dir", data_dir }, util.TestEnv.grpcPlaintext());
     defer server.deinit();
     try util.waitForServerReady(allocator, quic_addr, 30000);
     const server_pid: std.posix.pid_t = server.child.id orelse return error.NoServerPid;
@@ -1002,7 +1003,7 @@ test "round 4a over QUIC: PROFILE repros refused, C3, I2, I11 (the MERGE fast pa
     defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, util.TestEnv.standard());
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, util.TestEnv.standard());
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 30000);
     var client = try util.QuicProtoClient.connect(allocator, addr);

@@ -19,6 +19,7 @@
 // CANARY: REQ=REQ-SONNY-2791-INTERNAL-GRAPHS; FEATURE="GraphRBACEnforcement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2791_internal_graphs_reseal.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -418,7 +419,7 @@ test "SONNY-2791: over QUIC no HELLO binds an internal graph, and an Admin canno
     defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, util.TestEnv.standard());
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, util.TestEnv.standard());
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 30000);
 

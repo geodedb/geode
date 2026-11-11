@@ -103,6 +103,21 @@
   counted failed callers but dropped their errors. When it fails it now prints,
   per caller, the error name or returned role and the elapsed time. Bounds,
   caller count and assertions are unchanged.
+- **Test steps spawn the geode this build emitted (SONNY-2697):** every test
+  that starts a geode server or CLI spawned `./zig-out/bin/geode`, which held
+  whatever the last install left. With `zig build -p <prefix>` the fresh
+  binary went to the prefix and `test-gql-conformance` ran the old one; eight
+  steps (`test-first-boot-admin-breadcrumb`, `test-cluster-steady-state`,
+  `test-liveness-breadcrumb`, `test-quic-idle-cpu`,
+  `test-cluster-replicable-mutations`, the aggregate `all_tests.zig` run, and
+  the `cli_test.zig` and server-memory-pressure runs in `test-e2e`) did not
+  build geode at all, so they ran a stale binary or SKIPped as passed. A test
+  that spawns geode is now registered with build.zig's `spawnsBuiltGeode`,
+  which gives it the `geode_test_bin` module: the absolute path of the
+  executable this build emitted, built before the test compiles. The path
+  does not depend on zig-out, the install prefix or the working directory,
+  and a spawning test that is not registered fails to compile.
+  Regression: `zig build test-sonny2697-spawned-geode-fresh`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

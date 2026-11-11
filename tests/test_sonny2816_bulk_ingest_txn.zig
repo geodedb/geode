@@ -20,12 +20,13 @@
 // message 2 :T2816 nodes and 2 edges remained, after the ROLLBACK statement
 // 3 and 3, and the committed transaction left four :T2816 nodes, not two.
 //
-// Spawns the real ./zig-out/bin/geode (the step installs it first) with
+// Spawns the real geode this build emitted (SONNY-2697) with
 // GEODE_BULK_INGEST=1 and speaks the real protobuf protocol.
 //
 // CANARY: REQ=REQ-SONNY-2816-BULK-INGEST-TXN; FEATURE="TransactionUndoLog"; ASPECT=BulkIngestFastPathInTxn; STATUS=TESTED; TEST=tests/test_sonny2816_bulk_ingest_txn.zig; OWNER=transport; UPDATED=2026-09-27
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const util = @import("proto_test_util.zig");
@@ -70,7 +71,7 @@ const Server = struct {
         try std.Io.Dir.cwd().createDirPath(io, data_dir);
         const addr = try util.formatAddr(allocator, port);
         errdefer allocator.free(addr);
-        var handle = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_BULK_INGEST=1"});
+        var handle = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_BULK_INGEST=1"});
         errdefer handle.deinit();
         try util.waitForServerReady(allocator, addr, 30000);
         return .{ .handle = handle, .data_dir = data_dir, .addr = addr };

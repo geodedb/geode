@@ -17,13 +17,14 @@
 //     hides: the fast path would rewrite it; the executor refuses (42501).
 // Each must take the general executor and give its correct answer.
 //
-// Spawns the real ./zig-out/bin/geode (the step installs it first) and
+// Spawns the real geode this build emitted (SONNY-2697) and
 // speaks the real protobuf protocol. The ticket stays open: making the fast
 // paths themselves tenant- and RLS-correct is future work.
 //
 // CANARY: REQ=REQ-SONNY-2724-QUIC-FAST-PATH-GATE; FEATURE="MergeRowVisibility"; ASPECT=QuicFastPathGateBehaviour; STATUS=TESTED; TEST=tests/test_sonny2724_quic_fast_path_gate.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const util = @import("proto_test_util.zig");
@@ -86,7 +87,7 @@ const Server = struct {
         try std.Io.Dir.cwd().createDirPath(io, data_dir);
         const addr = try util.formatAddr(allocator, port);
         errdefer allocator.free(addr);
-        var handle = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, extra_env);
+        var handle = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, extra_env);
         errdefer handle.deinit();
         try util.waitForServerReady(allocator, addr, 30000);
         return .{ .handle = handle, .data_dir = data_dir, .addr = addr };

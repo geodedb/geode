@@ -26,12 +26,13 @@
 // with the graph_storage residual + CI load noise) from ANY regression of the
 // four spinners above (each is >100% on its own when broken). FAILS before the
 // fix (670% on the ReleaseSafe binary / ~100% on the 1-worker debug build).
-// Depends on a pre-built ./zig-out/bin/geode (SKIPs if missing); Linux-only.
+// Spawns the geode this build emitted (SONNY-2697); Linux-only.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 
-const BINARY_PATH = "./zig-out/bin/geode";
+const BINARY_PATH = geode_test_bin.geode_exe;
 
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;

@@ -21,6 +21,7 @@
 // CANARY: REQ=REQ-SONNY-2778-ADMIN-PASSWORD-FILE; FEATURE="Secure Default Password"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2778_admin_password_file.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const geode_auth = @import("geode_auth");
@@ -31,7 +32,7 @@ const geode = @import("geode");
 
 const linux = std.os.linux;
 const graph_store = geode.graph_store;
-const binary_path = "./zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const file_name = ".geode_admin_password";
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;

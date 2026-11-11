@@ -13,6 +13,7 @@
 // regresses to GPA defaults, this test fails.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 
 // std.c.mkdtemp is not exposed in Zig 0.15.2 — declare the libc extern directly.
@@ -95,10 +96,10 @@ test "server RSS stays bounded across 60 connections" {
     const listen = try std.fmt.bufPrint(&port_buf, "127.0.0.1:{d}", .{port});
 
     const argv = [_][]const u8{
-        "./zig-out/bin/geode", "serve",
-        "--data-dir",          tmp_dir,
-        "--listen",            listen,
-        "--log-level",         "error",
+        geode_test_bin.geode_exe, "serve",
+        "--data-dir",             tmp_dir,
+        "--listen",               listen,
+        "--log-level",            "error",
     };
 
     // GEODE_ADMIN_PASSWORD bootstraps the admin user on first launch; the
@@ -198,11 +199,11 @@ test "server RSS stays bounded across 60 connections" {
 
 fn runOneQuery(alloc: std.mem.Allocator, listen: []const u8, query: []const u8) !void {
     const argv = [_][]const u8{
-        "./zig-out/bin/geode",   "query",
-        "--insecure",            "--server",
-        listen,                  "-U",
-        "geode",                 "-P",
-        "GeodeTestPassword123!", query,
+        geode_test_bin.geode_exe, "query",
+        "--insecure",             "--server",
+        listen,                   "-U",
+        "geode",                  "-P",
+        "GeodeTestPassword123!",  query,
     };
     _ = alloc;
     const io = testIo();

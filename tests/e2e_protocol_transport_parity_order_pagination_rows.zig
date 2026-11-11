@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
@@ -25,7 +26,7 @@ test "protocol: transport parity QUIC (ORDER BY with LIMIT/OFFSET)" {
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // Construct 3 rows then slice middle two deterministically.
     const q = "RETURN 3 AS a, 'z' AS t UNION ALL RETURN 1 AS a, 'x' AS t UNION ALL RETURN 2 AS a, 'y' AS t ORDER BY a, t LIMIT 2 OFFSET 1";
 

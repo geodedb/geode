@@ -1,5 +1,6 @@
 // CANARY: REQ=REQ-QUIC-HC-002; FEATURE="QUIC High-Concurrency Requests"; ASPECT=ParallelReadWriteE2E; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-25
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const util = @import("proto_test_util.zig");
 
@@ -866,7 +867,7 @@ fn verifyRestartRecovery(
     errdefer if (restart_addr_owned) allocator.free(restart_addr);
 
     const restart_args = &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         restart_addr,
@@ -1385,7 +1386,7 @@ pub fn main() !void {
     else
         "GEODE_QUIC_SHORT_HEADER_TIMING=0";
     const args = &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,
