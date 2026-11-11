@@ -4513,6 +4513,16 @@ pub fn build(b: *std.Build) void {
     const gql_conformance_step = b.step("test-gql-conformance", "Run GQL conformance e2e suite (spawns QUIC servers; GAP-0892 T11/T12/T14 acceptance)");
     gql_conformance_step.dependOn(&run_gql_conformance_tests.step);
 
+    // SONNY-2697: the geode a test step spawns is the executable this build
+    // emitted (absolute path, this build's version), not the zig-out copy.
+    const sonny2697_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2697_spawned_geode_fresh.zig"), .target = target, .optimize = optimize });
+    sonny2697_test_mod.addImport("build_options", build_options_mod);
+    const sonny2697_tests = b.addTest(.{ .root_module = sonny2697_test_mod });
+    const run_sonny2697_tests = b.addRunArtifact(sonny2697_tests);
+    shardDep(test_step, &run_sonny2697_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2697_step = b.step("test-sonny2697-spawned-geode-fresh", "Run SONNY-2697 regression (a test that spawns geode runs this build's executable, by absolute path, reporting this build's version; not whatever ./zig-out/bin/geode holds)");
+    sonny2697_step.dependOn(&run_sonny2697_tests.step);
+
     // CLI integration tests
     const cli_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/cli_test.zig"), .target = target, .optimize = optimize }) });
     cli_tests.root_module.addImport("geode", root_mod);
