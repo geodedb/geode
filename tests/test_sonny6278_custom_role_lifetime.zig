@@ -246,3 +246,71 @@ test "SONNY-6278: a custom role created, assigned and hydrated in one request is
     }
     try testing.expectEqual(@as(u32, 0), auth_dispatch.g_custom_roles.count());
 }
+
+/// Counts the allocations the custom-role store holds (over
+/// testing.allocator, which also reports anything never freed).
+const Counting = struct {
+    inner: std.mem.Allocator,
+    live: usize = 0,
+
+    fn allocator(self: *Counting) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
+    }
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *Counting = @ptrCast(@alignCast(ctx));
+        const p = self.inner.rawAlloc(len, alignment, ra) orelse return null;
+        self.live += 1;
+        return p;
+    }
+
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *Counting = @ptrCast(@alignCast(ctx));
+        return self.inner.rawResize(memory, alignment, new_len, ra);
+    }
+
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *Counting = @ptrCast(@alignCast(ctx));
+        return self.inner.rawRemap(memory, alignment, new_len, ra);
+    }
+
+    fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *Counting = @ptrCast(@alignCast(ctx));
+        self.live -= 1;
+        self.inner.rawFree(memory, alignment, ra);
+    }
+};
+
+test "SONNY-6278: DROP ROLE frees the role's copies, re-creating a role leaks nothing, and the store frees the rest at deinit" {
+    // The store under a counting allocator for this test.
+    auth_dispatch.deinitCustomRoleStore();
+    var counting = Counting{ .inner = testing.allocator };
+    auth_dispatch.setCustomRoleStoreAllocatorForTesting(counting.allocator());
+    defer auth_dispatch.setCustomRoleStoreAllocatorForTesting(std.heap.c_allocator);
+    defer auth_dispatch.deinitCustomRoleStore();
+
+    var w: World = undefined;
+    try w.init();
+    defer w.deinit();
+
+    // (A non-empty description: an empty one takes no allocation.)
+    freeNames(try w.request("CREATE ROLE keep6278 SET DESCRIPTION 'first'"));
+    const base = counting.live;
+    try testing.expect(base > 0);
+
+    freeNames(try w.request("CREATE ROLE gone6278 SET DESCRIPTION 'temporary'"));
+    try testing.expect(counting.live > base);
+    freeNames(try w.request("DROP ROLE gone6278"));
+    try testing.expectEqual(base, counting.live);
+
+    // Re-creating a role replaces its description, and frees the old one.
+    freeNames(try w.request("CREATE ROLE keep6278 SET DESCRIPTION 'second'"));
+    try testing.expectEqual(base, counting.live);
+    try testing.expectEqualStrings("second", auth_dispatch.g_custom_roles.get("keep6278").?);
+
+    freeNames(try w.request("GRANT ROLE keep6278 TO dave"));
+    try testing.expect(counting.live > base);
+
+    auth_dispatch.deinitCustomRoleStore();
+    try testing.expectEqual(@as(usize, 0), counting.live);
+}

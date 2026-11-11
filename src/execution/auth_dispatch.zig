@@ -87,27 +87,82 @@ pub var g_custom_role_members: std.StringHashMap(std.ArrayList([]const u8)) = un
 pub var g_custom_role_members_init: bool = false;
 pub var g_custom_role_members_mu: std.Io.Mutex = std.Io.Mutex.init;
 
-fn ensureCustomRoleMembersInit(allocator: std.mem.Allocator) void {
+// CANARY: REQ=REQ-SONNY-6278-CUSTOM-ROLE-LIFETIME; FEATURE="GQL Auth DDL"; ASPECT=CustomRoleStoreOwnsMemory; STATUS=TESTED; TEST=tests/test_sonny6278_custom_role_lifetime.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6278: the allocator that owns the custom-role store and its
+/// membership side-table (the tables, every key and every value). Both
+/// outlive every request, so it is process-lifetime, as for the ABAC
+/// attribute store (GAP-0284) and the user store's side-tables. They used
+/// the allocator of whichever request (or the startup hydration) came
+/// first, and copied names with the request's arena: once the request
+/// ended the store held freed memory, which SHOW ROLES, role lookups,
+/// GRANT ROLE and DROP ROLE then read.
+var g_role_store_alloc: std.mem.Allocator = std.heap.c_allocator;
+
+fn ensureCustomRoleMembersInit() void {
     if (!g_custom_role_members_init) {
-        g_custom_role_members = std.StringHashMap(std.ArrayList([]const u8)).init(allocator);
+        g_custom_role_members = std.StringHashMap(std.ArrayList([]const u8)).init(g_role_store_alloc);
         g_custom_role_members_init = true;
     }
 }
 
 /// Record a custom-role assignment. Idempotent: re-assigning the same role
 /// to the same user is a no-op. Caller must hold g_custom_role_members_mu.
-fn recordCustomRoleMemberLocked(allocator: std.mem.Allocator, username: []const u8, role_name: []const u8) !void {
-    ensureCustomRoleMembersInit(allocator);
+fn recordCustomRoleMemberLocked(username: []const u8, role_name: []const u8) !void {
+    const a = g_role_store_alloc;
+    ensureCustomRoleMembersInit();
     const entry = try g_custom_role_members.getOrPut(username);
     if (!entry.found_existing) {
-        entry.key_ptr.* = try allocator.dupe(u8, username);
+        entry.key_ptr.* = a.dupe(u8, username) catch |err| {
+            g_custom_role_members.removeByPtr(entry.key_ptr);
+            return err;
+        };
         entry.value_ptr.* = std.ArrayList([]const u8).empty;
     }
     // Idempotent: skip if already a member.
     for (entry.value_ptr.items) |existing| {
         if (std.mem.eql(u8, existing, role_name)) return;
     }
-    try entry.value_ptr.append(allocator, try allocator.dupe(u8, role_name));
+    const role_copy = try a.dupe(u8, role_name);
+    errdefer a.free(role_copy);
+    try entry.value_ptr.append(a, role_copy);
+}
+
+/// SONNY-6278: free the custom-role store and its membership side-table,
+/// with everything they own (process teardown, tests).
+pub fn deinitCustomRoleStore() void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const a = g_role_store_alloc;
+    g_custom_roles_mu.lockUncancelable(io);
+    defer g_custom_roles_mu.unlock(io);
+    if (g_custom_roles_init) {
+        var it = g_custom_roles.iterator();
+        while (it.next()) |e| {
+            a.free(e.key_ptr.*);
+            a.free(e.value_ptr.*);
+        }
+        g_custom_roles.deinit();
+        g_custom_roles_init = false;
+    }
+    g_custom_role_members_mu.lockUncancelable(io);
+    defer g_custom_role_members_mu.unlock(io);
+    if (g_custom_role_members_init) {
+        var it = g_custom_role_members.iterator();
+        while (it.next()) |e| {
+            for (e.value_ptr.items) |role| a.free(role);
+            e.value_ptr.deinit(a);
+            a.free(e.key_ptr.*);
+        }
+        g_custom_role_members.deinit();
+        g_custom_role_members_init = false;
+    }
+}
+
+/// SONNY-6278: let a test own the custom-role store with its own allocator
+/// (to check what DROP ROLE frees). Only while the store is empty
+/// (`deinitCustomRoleStore` first).
+pub fn setCustomRoleStoreAllocatorForTesting(a: std.mem.Allocator) void {
+    std.debug.assert(!g_custom_roles_init and !g_custom_role_members_init);
+    g_role_store_alloc = a;
 }
 
 /// Return the list of custom roles assigned to `username`, or null if none.
@@ -374,9 +429,9 @@ fn passwordHasLetterAndDigit(password: []const u8) bool {
     return has_digit and has_alpha;
 }
 
-fn ensureRolesInit(allocator: std.mem.Allocator) void {
+fn ensureRolesInit() void {
     if (!g_custom_roles_init) {
-        g_custom_roles = std.StringHashMap([]const u8).init(allocator);
+        g_custom_roles = std.StringHashMap([]const u8).init(g_role_store_alloc);
         g_custom_roles_init = true;
     }
 }
@@ -850,11 +905,11 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
     // computation merges built-in + custom-role grants.
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureRolesInit(allocator);
+    ensureRolesInit();
     if (g_custom_roles.contains(role_name)) {
         g_custom_role_members_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer g_custom_role_members_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-        recordCustomRoleMemberLocked(allocator, username, role_name) catch |err| {
+        recordCustomRoleMemberLocked(username, role_name) catch |err| {
             row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: failed to record custom-role membership: {s}", .{@errorName(err)}) };
             return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
         };
@@ -1219,15 +1274,28 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
 
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureRolesInit(allocator);
+    ensureRolesInit();
     // error-policy: C — the procedure reports "created"; a failed in-memory
     // registration must propagate instead of lying to the client (and the
     // dupes must not leak on the error path).
-    const role_key = try allocator.dupe(u8, role_name);
-    errdefer allocator.free(role_key);
-    const desc_copy = try allocator.dupe(u8, desc);
-    errdefer allocator.free(desc_copy);
-    try g_custom_roles.put(role_key, desc_copy);
+    // SONNY-6278: the store owns its key and value (g_role_store_alloc),
+    // not this request's allocator. Re-creating a role replaces its
+    // description and keeps its key.
+    const store_alloc = g_role_store_alloc;
+    const desc_copy = try store_alloc.dupe(u8, desc);
+    const gop = g_custom_roles.getOrPut(role_name) catch |err| {
+        store_alloc.free(desc_copy);
+        return err;
+    };
+    const previous_desc: ?[]const u8 = if (gop.found_existing) gop.value_ptr.* else null;
+    if (!gop.found_existing) {
+        gop.key_ptr.* = store_alloc.dupe(u8, role_name) catch |err| {
+            g_custom_roles.removeByPtr(gop.key_ptr);
+            store_alloc.free(desc_copy);
+            return err;
+        };
+    }
+    gop.value_ptr.* = desc_copy;
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-021; FEATURE="AuthDDLPersistence"; ASPECT=RoleCreatePersist; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
     // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=CreateRoleFailureReported; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
     // SONNY-3038: a role that could not be saved is not created (as CREATE
@@ -1236,7 +1304,13 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     if (g_role_persist.create_fn) |f| {
         _ = f(g_role_persist.ctx, role_name, desc) catch |e| {
             log.warn("role_create graph persist failed; the role was not created", &.{ Attr.string("role", role_name), Attr.string("error", @errorName(e)) });
-            _ = g_custom_roles.fetchRemove(role_name);
+            // The store as it was: a role held before keeps its description.
+            if (previous_desc) |old| {
+                g_custom_roles.getPtr(role_name).?.* = old;
+            } else if (g_custom_roles.fetchRemove(role_name)) |kv| {
+                store_alloc.free(kv.key);
+            }
+            store_alloc.free(desc_copy);
             allocator.free(columns[0]);
             allocator.free(columns);
             allocator.free(row);
@@ -1244,6 +1318,7 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
             return error.RoleNotPersisted;
         };
     }
+    if (previous_desc) |old| store_alloc.free(old);
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "created {s}", .{role_name}) };
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
@@ -1256,8 +1331,12 @@ fn handleRoleDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     }
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureRolesInit(allocator);
-    _ = g_custom_roles.fetchRemove(role_name);
+    ensureRolesInit();
+    // SONNY-6278: the store's key and description are freed (they leaked).
+    if (g_custom_roles.fetchRemove(role_name)) |kv| {
+        g_role_store_alloc.free(kv.key);
+        g_role_store_alloc.free(kv.value);
+    }
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-022; FEATURE="AuthDDLPersistence"; ASPECT=RoleDeletePersist; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
     // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=DropRoleFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
     // SONNY-3038: the role goes from memory first (fail closed, as REVOKE);
@@ -1302,7 +1381,7 @@ fn handleRoleList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProced
     }
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureRolesInit(allocator);
+    ensureRolesInit();
     var it = g_custom_roles.iterator();
     while (it.next()) |entry| {
         // Defensive dedup: skip any custom entry whose name collides with a built-in
@@ -1962,28 +2041,33 @@ pub fn callAuthProcedure(
 /// and role persistence callbacks are installed.
 /// Loads custom (non-built-in) Role node names from __geode_security into
 /// g_custom_roles so that the in-memory role store is consistent with what was
-/// persisted in a prior run.
+/// persisted in a prior run. `allocator` is for the listing only; the store
+/// owns what it keeps (SONNY-6278, `g_role_store_alloc`).
 pub fn hydrateCustomRolesFromGraph(allocator: std.mem.Allocator) void {
     const list_f = g_role_persist.list_fn orelse return;
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureRolesInit(allocator);
+    ensureRolesInit();
     const entries = list_f(g_role_persist.ctx, allocator) catch |e| {
         log.warn("hydrateCustomRolesFromGraph: listRoles failed", &.{Attr.string("error", @errorName(e))});
         return;
     };
     defer allocator.free(entries);
+    const store_alloc = g_role_store_alloc;
     for (entries) |entry| {
         if (isBuiltinRoleName(entry.name)) continue;
+        // A role already in the store is kept as it is (its copies are not
+        // replaced, so nothing leaks).
+        if (g_custom_roles.contains(entry.name)) continue;
         // dupe the name and description so g_custom_roles owns its keys/values
-        const key = allocator.dupe(u8, entry.name) catch continue;
-        const val = allocator.dupe(u8, entry.description) catch {
-            allocator.free(key);
+        const key = store_alloc.dupe(u8, entry.name) catch continue;
+        const val = store_alloc.dupe(u8, entry.description) catch {
+            store_alloc.free(key);
             continue;
         };
         g_custom_roles.put(key, val) catch {
-            allocator.free(key);
-            allocator.free(val);
+            store_alloc.free(key);
+            store_alloc.free(val);
         };
     }
 }

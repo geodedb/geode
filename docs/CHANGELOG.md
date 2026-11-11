@@ -163,6 +163,19 @@
   restart too), and the retry drops it. A failure of the graph store's own
   seal write is sealed again, as before.
   Regression: `zig build test-sonny6273-drop-policy-atomic`.
+- **Custom roles are no longer kept in a request's freed memory
+  (SONNY-6278).** `CREATE ROLE`, `GRANT ROLE <custom role> TO <user>` and
+  the startup hydration of stored roles copied the role name, description
+  and member names into the process-wide custom-role store with the
+  allocator of the request running them (the statement's arena). Once the
+  request ended the store pointed at freed memory: `SHOW ROLES` could list a
+  garbage name, and a role lookup, `GRANT ROLE` or `DROP ROLE` read freed
+  memory (a use after free). The store and its membership table now own
+  their copies with a process-lifetime allocator, as the ABAC attribute
+  store does (GAP-0284); `DROP ROLE` frees the role's copies (they leaked),
+  re-creating a role frees its old description, and
+  `auth_dispatch.deinitCustomRoleStore` frees the rest.
+  Regression: `zig build test-sonny6278-custom-role-lifetime`.
 
 ### Added
 
