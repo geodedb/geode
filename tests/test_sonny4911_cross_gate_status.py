@@ -93,8 +93,35 @@ def _yaml_scalar(raw: str) -> str:
     return raw
 
 
-def hook_argv() -> list[str]:
-    """Return the argv pre-commit runs for the cross-compile-check hook.
+def _literal_block(lines: list[str], start: int, parent_indent: int) -> tuple[str, int]:
+    """Read a YAML ``|`` (clip) literal block starting at ``lines[start]``.
+
+    Returns the scalar and the index of the first line after the block.
+    """
+    body: list[str] = []
+    indent = None
+    i = start
+    while i < len(lines):
+        line = lines[i]
+        if line.strip():
+            current = len(line) - len(line.lstrip(" "))
+            if current <= parent_indent:
+                break
+            if indent is None:
+                indent = current
+            if current < indent:
+                raise AssertionError(f"under-indented literal block line: {line!r}")
+            body.append(line[indent:])
+        else:
+            body.append("")
+        i += 1
+    while body and not body[-1]:
+        body.pop()
+    return ("\n".join(body) + "\n" if body else ""), i
+
+
+def hook_argv(hook_id: str = HOOK_ID) -> list[str]:
+    """Return the argv pre-commit runs for the ``hook_id`` hook.
 
     pre-commit executes ``shlex.split(entry) + args`` (pass_filenames is
     false).  Parsed with a minimal line reader so the test runs on a bare
@@ -102,21 +129,28 @@ def hook_argv() -> list[str]:
     """
     lines = PRE_COMMIT_CONFIG.read_text(encoding="utf-8").splitlines()
     start = next(
-        (i for i, line in enumerate(lines) if re.fullmatch(rf"\s*- id: {HOOK_ID}\s*", line)),
+        (i for i, line in enumerate(lines) if re.fullmatch(rf"\s*- id: {re.escape(hook_id)}\s*", line)),
         None,
     )
     if start is None:
-        raise AssertionError(f"hook {HOOK_ID!r} not found in {PRE_COMMIT_CONFIG}")
+        raise AssertionError(f"hook {hook_id!r} not found in {PRE_COMMIT_CONFIG}")
     entry = None
     args: list[str] = []
     in_args = False
-    for line in lines[start + 1 :]:
+    i = start + 1
+    while i < len(lines):
+        line = lines[i]
+        i += 1
         if re.match(r"\s*- (id|repo):", line):
             break
         if in_args:
-            item = re.fullmatch(r"\s*- (.*)", line)
+            item = re.fullmatch(r"(\s*)- (.*)", line)
             if item:
-                args.append(_yaml_scalar(item.group(1)))
+                if item.group(2).strip() == "|":
+                    block, i = _literal_block(lines, i, len(item.group(1)))
+                    args.append(block)
+                else:
+                    args.append(_yaml_scalar(item.group(2)))
                 continue
             in_args = False
         key = re.fullmatch(r"\s*(\w+):\s*(.*)", line)
@@ -129,16 +163,16 @@ def hook_argv() -> list[str]:
                 raise AssertionError("inline args lists are not supported by this reader")
             in_args = True
     if entry is None:
-        raise AssertionError(f"hook {HOOK_ID!r} has no entry")
+        raise AssertionError(f"hook {hook_id!r} has no entry")
     argv = shlex.split(entry) + args
     try:
         import yaml  # noqa: PLC0415
     except ImportError:
         return argv
     config = yaml.safe_load(PRE_COMMIT_CONFIG.read_text(encoding="utf-8"))
-    hooks = [h for repo in config["repos"] for h in repo.get("hooks", []) if h.get("id") == HOOK_ID]
+    hooks = [h for repo in config["repos"] for h in repo.get("hooks", []) if h.get("id") == hook_id]
     if len(hooks) != 1:
-        raise AssertionError(f"expected exactly one {HOOK_ID!r} hook, found {len(hooks)}")
+        raise AssertionError(f"expected exactly one {hook_id!r} hook, found {len(hooks)}")
     parsed = shlex.split(hooks[0]["entry"]) + list(hooks[0].get("args", []))
     if parsed != argv:
         raise AssertionError(f"hook parse mismatch: {argv!r} != {parsed!r}")
@@ -154,11 +188,14 @@ def _base_env(stub_dir: pathlib.Path) -> dict[str, str]:
 class CrossMakeTargetStatusTests(unittest.TestCase):
     """The committed required cross targets propagate compiler status."""
 
+    make: str
+
     @classmethod
     def setUpClass(cls) -> None:
-        cls.make = shutil.which("make")
-        if cls.make is None:
+        make = shutil.which("make")
+        if make is None:
             raise AssertionError("GNU make is required to exercise the committed Makefile")
+        cls.make = make
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
