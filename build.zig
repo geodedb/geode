@@ -477,6 +477,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-first-boot-admin-breadcrumb", .reason = "failing: reset-password checks the password policy before loading the user (KNOWN_TEST_ISSUES)" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
+    .{ .name = "test-sonny6280-cli-restore-writes-data", .reason = "failing: intentionally red SONNY-6280 reproduction (geode restore of a local file writes nothing); moves to shardDep with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9293,6 +9294,25 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_backup_remote_failure_tests.step, 1, test_shard_loads, test_shard_index);
     const backup_remote_failure_step = b.step("test-backup-create-remote-failure", "Run backup-create regression (a failed remote backup exits non-zero with no output file instead of falling back to a local backup; --local needs an explicit data directory)");
     backup_remote_failure_step.dependOn(&run_backup_remote_failure_tests.step);
+
+    // SONNY-6280: `geode restore <local file>` writes the backup into the
+    // directory named by --data-dir (or GEODE_DATA_DIR) and reports success
+    // only after the restored store is written and verified; corrupt,
+    // truncated, missing, wrong-key, unsafe-entry and remote-URI restores
+    // and an unwritable or non-empty target fail with nothing left behind.
+    const sonny6280_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6280_cli_restore_writes_data.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    sonny6280_tests.root_module.addImport("geode", root_mod);
+    sonny6280_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    spawnsBuiltGeode(sonny6280_tests);
+    const run_sonny6280_tests = b.addRunArtifact(sonny6280_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6280_tests.step);
+    const sonny6280_step = b.step("test-sonny6280-cli-restore-writes-data", "Run SONNY-6280 regression (geode restore of a local backup writes every node, edge and typed property into --data-dir, verified cold, and fails closed with nothing left behind on a corrupt, truncated, missing, wrong-key or unsafe archive, a remote URI, or an unwritable, non-empty or missing target)");
+    sonny6280_step.dependOn(&run_sonny6280_tests.step);
 
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
