@@ -72,11 +72,17 @@ policy).
 - **Evaluated per session, at read time.** The function is evaluated when the
   row is read, for the session reading it, never when the policy is created.
   So one policy, `owner = current_user()`, shows each user their own rows.
-- **Fail closed.** A condition holds only when both sides are known strings. A
-  missing or null property, a non-string property (for example an integer
-  `owner`), or a session function with no value (an empty or absent user,
-  tenant or graph) makes the comparison false, for `=` and for `<>`, so the row
-  is denied.
+- **Fail closed.** A comparison is known only when both sides are known
+  strings. A missing or null property, a non-string property (for example an
+  integer `owner`), or a session function with no value (an empty or absent
+  user, tenant or graph) makes the comparison UNKNOWN, for `=` and for `<>`.
+  `AND` and `OR` combine UNKNOWN with three-valued logic: `UNKNOWN AND FALSE`
+  is FALSE, `UNKNOWN OR TRUE` is TRUE, and otherwise the result stays UNKNOWN.
+  An allow policy matches only a TRUE condition, so UNKNOWN does not allow the
+  row. A deny policy applies to every condition that is not FALSE, so UNKNOWN
+  withholds the row, even beside an allow policy that matches it. For example
+  a deny `owner <> current_user()` withholds a row with no `owner` from every
+  user (SONNY-4878).
 - **Not cached.** Each row is decided for the session in hand. A row verdict
   is never put in the GPS decision cache. That cache holds statement-level
   decisions only, and its key includes the user, tenant and active graph.
@@ -84,7 +90,7 @@ policy).
   the expression RLS policies. A session with no authenticated user, which is
   possible only with authentication disabled, is not subject to any RLS policy.
 - **Statement-level decisions.** In `decide()` a row condition has no row, so
-  it is false. For example, `owner = current_user() OR current_user() =
+  it is UNKNOWN and does not hold. For example, `owner = current_user() OR current_user() =
   'auditor'` grants statement access only to `auditor`.
 - **Listing.** `SHOW POLICIES` shows the condition text in its `using` column,
   and `CALL geode.auth.policy_list()` in its `condition` column.

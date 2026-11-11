@@ -1626,13 +1626,13 @@ REQ-GITLAB-LABELS-001,GitLab Label Taxonomy,Tooling,EXEMPT,,,tooling,2026-01-14,
 REQ-GPS-ABAC-001,GPS ABAC Predicates,AndWithAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig,139
 REQ-GPS-ABAC-001,GPS ABAC Predicates,DecidePopulateAttributes,TESTED,,,security,2026-05-22,src/security/gps.zig,601
 REQ-GPS-ABAC-001,GPS ABAC Predicates,DecidePopulateAttributes,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig,231
-REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalAttrPredicate,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,214
+REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalAttrPredicate,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,238
 REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig,76
-REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalContextAttributes,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,71
-REQ-GPS-ABAC-001,GPS ABAC Predicates,ParseAttrPredicate,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,369
+REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalContextAttributes,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,74
+REQ-GPS-ABAC-001,GPS ABAC Predicates,ParseAttrPredicate,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,406
 REQ-GPS-ABAC-001,GPS ABAC Predicates,ParseAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig,62
 REQ-GPS-ABAC-001,GPS ABAC Predicates,PolicyExpressionModule,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,2
-REQ-GPS-ABAC-001,GPS ABAC Predicates,PredicateIRAttr,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,141
+REQ-GPS-ABAC-001,GPS ABAC Predicates,PredicateIRAttr,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,146
 REQ-GPS-ADMIN-TENANT-001,GPS AdminTenant Action,AdminAllowed,TESTED,,,security,2026-06-08,src/security/gps.zig,468
 REQ-GPS-AUDIT-001,GPS Policy DDL Audit,CreatePolicyAuditEmission,TESTED,,,security,2026-05-21,src/execution.zig,2907
 REQ-GPS-AUDIT-002,GPS Policy DDL Audit,DropPolicyAuditEmission,TESTED,,,security,2026-05-21,src/execution.zig,2955
@@ -1813,13 +1813,13 @@ REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ReasonCodePresent,TESTED,,,security,2026-
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ShowClassifiedAsShowMetadata,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,222
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,TestSuite,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,10
 REQ-GPS-EXPR-001,GPS Expression Compilation,AndPredicate,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,147
-REQ-GPS-EXPR-001,GPS Expression Compilation,Compile,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,171
+REQ-GPS-EXPR-001,GPS Expression Compilation,Compile,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,176
 REQ-GPS-EXPR-001,GPS Expression Compilation,CurrentGraphEquality,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,113
 REQ-GPS-EXPR-001,GPS Expression Compilation,CurrentTenantEquality,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,96
 REQ-GPS-EXPR-001,GPS Expression Compilation,CurrentUserEquality,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,73
 REQ-GPS-EXPR-001,GPS Expression Compilation,DecideEvalExpression,TESTED,,,security,2026-05-20,src/security/gps.zig,543
 REQ-GPS-EXPR-001,GPS Expression Compilation,EndToEndDecide,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,255
-REQ-GPS-EXPR-001,GPS Expression Compilation,Evaluate,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,194
+REQ-GPS-EXPR-001,GPS Expression Compilation,Evaluate,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,199
 REQ-GPS-EXPR-001,GPS Expression Compilation,LiteralTrue,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,58
 REQ-GPS-EXPR-001,GPS Expression Compilation,OrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,171
 REQ-GPS-EXPR-001,GPS Expression Compilation,Parentheses,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,195
@@ -1830,7 +1830,7 @@ REQ-GPS-EXPR-001,GPS Expression Compilation,PolicyCatalogIntegration,TESTED,,,se
 REQ-GPS-EXPR-001,GPS Expression Compilation,PolicyCatalogRemoveDeinit,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig,261
 REQ-GPS-EXPR-001,GPS Expression Compilation,PolicyCompiledField,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig,47
 REQ-GPS-EXPR-001,GPS Expression Compilation,PolicyExpressionModule,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,1
-REQ-GPS-EXPR-001,GPS Expression Compilation,PredicateIR,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,131
+REQ-GPS-EXPR-001,GPS Expression Compilation,PredicateIR,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,136
 REQ-GPS-EXPR-001,GPS Expression Compilation,ResourceLabelEquality,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,130
 REQ-GPS-EXPR-002,GPS Policy Expression,CreatePolicyExpressionSource,TESTED,,,security,2026-05-21,src/execution.zig,2879
 REQ-GPS-EXPR-002,GPS Policy Expression,CreatePolicyExpressionSource,TESTED,,,security,2026-05-21,src/gql/ast.zig,880
@@ -1846,7 +1846,7 @@ REQ-GPS-FLE-001,GPS FLE Enforcement,DecryptReadOnlyDenied,TESTED,,,security,2026
 REQ-GPS-FLE-001,GPS FLE Enforcement,DecryptReadWriteDenied,TESTED,,,security,2026-05-20,tests/test_gps_fle_enforcement.zig,123
 REQ-GPS-FLE-001,GPS FLE Enforcement,DecryptUnauthenticated,TESTED,,,security,2026-05-20,tests/test_gps_fle_enforcement.zig,136
 REQ-GPS-FLE-001,GPS FLE Enforcement,PolicyCatalogActions,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig,30
-REQ-GPS-FLE-001,GPS FLE Enforcement,PolicyMatchAction,TESTED,,,security,2026-05-20,src/security/gps.zig,895
+REQ-GPS-FLE-001,GPS FLE Enforcement,PolicyMatchAction,TESTED,,,security,2026-05-20,src/security/gps.zig,901
 REQ-GPS-FLE-001,GPS FLE Enforcement,PolicyPersistenceBitMapping,TESTED,,,security,2026-05-20,src/security/policy_persistence.zig,46
 REQ-GPS-FLE-001,GPS FLE Enforcement,UnwrapKeyAdminAllowed,TESTED,,,security,2026-05-20,tests/test_gps_fle_enforcement.zig,179
 REQ-GPS-FLE-001,GPS FLE Enforcement,UnwrapKeyExplicitPolicyGrants,TESTED,,,security,2026-05-20,tests/test_gps_fle_enforcement.zig,230
@@ -4899,8 +4899,8 @@ REQ-RLS-SESSION-001,RLSSessionAccess,Security,TESTED,,,security,2026-04-16,src/s
 REQ-RLS-SESSION-ROW-CONDITIONS,GPS Row Conditions,MatchRowFilter,TESTED,,,security,2026-10-11,src/execution/match_operations.zig,567
 REQ-RLS-SESSION-ROW-CONDITIONS,GPS Row Conditions,ReadOnlyRowConditions,TESTED,,,security,2026-10-11,src/security/policy_catalog.zig,201
 REQ-RLS-SESSION-ROW-CONDITIONS,GPS Row Conditions,Regression,TESTED,,,security,2026-10-11,tests/test_rls_session_row_conditions.zig,25
-REQ-RLS-SESSION-ROW-CONDITIONS,GPS Row Conditions,RowPolicyApplicability,TESTED,,,security,2026-10-11,src/security/gps.zig,681
-REQ-RLS-SESSION-ROW-CONDITIONS,GPS Row Conditions,RowPolicyVerdict,TESTED,,,security,2026-10-11,src/security/gps.zig,721
+REQ-RLS-SESSION-ROW-CONDITIONS,GPS Row Conditions,RowPolicyApplicability,TESTED,,,security,2026-10-11,src/security/gps.zig,682
+REQ-RLS-SESSION-ROW-CONDITIONS,GPS Row Conditions,RowPolicyVerdict,TESTED,,,security,2026-10-11,src/security/gps.zig,722
 REQ-RLS-TEMPORAL-001,RLSTemporalConstraints,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,1686
 REQ-RLS-TEST-001,RLSUnitTests,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,3608
 REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,TESTED,,,storage,2025-10-05,tests/test_s3_backup.zig,5
@@ -4929,7 +4929,7 @@ REQ-SEC-CRYPTO-TRUTH-001,HmacSha3RealConstruction,Security,TESTED,,,security,202
 REQ-SEC-DATA-001,Security,DataSecurity,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,28
 REQ-SEC-DATA-MASK-001,Security,DataMasking,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig,63
 REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED,FailClosedDefaultRole,GrantOnlyGraphAccess,TESTED,,,security,2026-10-11,src/security/gps.zig,512
-REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED,FailClosedDefaultRole,GrantOnlyPrincipal,TESTED,,,security,2026-10-11,src/security/gps.zig,783
+REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED,FailClosedDefaultRole,GrantOnlyPrincipal,TESTED,,,security,2026-10-11,src/security/gps.zig,789
 REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED,FailClosedDefaultRole,GrpcReadGate,TESTED,,,security,2026-10-11,src/transport/grpc_server.zig,3396
 REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED,FailClosedDefaultRole,NoneRole,TESTED,,,security,2026-10-11,src/security/user_management.zig,99
 REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED,FailClosedDefaultRole,ProgramGraphGate,TESTED,,,security,2026-10-11,src/execution/session_graph.zig,85
@@ -4950,9 +4950,9 @@ REQ-SEC-MIG-01,MigrationSignatureVerification,UnitTest,TESTED,,,migration,2026-0
 REQ-SEC-MIG-04,CrossProcessMigrationLock,FileLock,TESTED,,,migration,2026-04-10,src/migration/lock.zig,48
 REQ-SEC-NETWORK-001,Security,NetworkSecurity,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig,28
 REQ-SEC-NONCE-001,Nonce Replay Protection,NonceTracker,IMPL,,,security,2026-04-01,src/distributed/nonce_tracker.zig,12
-REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,AllowPolicyScope,TESTED,,,security,2026-10-11,src/security/gps.zig,911
-REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,GraphReadGate,TESTED,,,security,2026-10-11,src/security/gps.zig,842
-REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,GraphWriteGate,TESTED,,,security,2026-10-11,src/security/gps.zig,852
+REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,AllowPolicyScope,TESTED,,,security,2026-10-11,src/security/gps.zig,917
+REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,GraphReadGate,TESTED,,,security,2026-10-11,src/security/gps.zig,848
+REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,GraphWriteGate,TESTED,,,security,2026-10-11,src/security/gps.zig,858
 REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,GrpcWriteGate,TESTED,,,security,2026-10-11,src/transport/grpc_server.zig,3381
 REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,LiveGrantInDecide,TESTED,,,security,2026-10-11,src/security/gps.zig,513
 REQ-SEC-PER-GRAPH-GRANTS,PerGraphGrants,ProgramReadGate,TESTED,,,security,2026-10-11,src/execution/session_graph.zig,86
@@ -5321,7 +5321,7 @@ REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,GrpcHandler,TESTED,,,se
 REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,HandlerDecision,TESTED,,,security,2026-09-25,src/query/query_traits.zig,452
 REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,QuicHandler,TESTED,,,security,2026-09-25,src/server/quic_connection_handler.zig,7461
 REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2743_whole_program_gate.zig,17
-REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,WriteGate,TESTED,,,security,2026-09-25,src/security/gps.zig,866
+REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,WriteGate,TESTED,,,security,2026-09-25,src/security/gps.zig,872
 REQ-SONNY-2744-GPS-DENY-OVERRIDES,GPS Policy Evaluation,DenyOverridesAllow,TESTED,,,security,2026-09-25,src/security/gps.zig,337
 REQ-SONNY-2744-GPS-DENY-OVERRIDES,GPS Policy Evaluation,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2744_gps_deny.zig,12
 REQ-SONNY-2746-RLS-ATTRIBUTE-POLICY-OOM,RLS deny-policy procedure,AttributePolicyOomCleanup,TESTED,,,security,2026-09-25,src/execution/rls_dispatch.zig,417
@@ -5564,7 +5564,7 @@ REQ-SONNY-3189-HAVING-WALKERS,GroupedHaving,Regression,TESTED,,,engine,2026-09-2
 REQ-SONNY-3189-HAVING-WALKERS,PlannedReadRuntime,ProjectionWalker,TESTED,,,engine,2026-09-28,src/execution/planned_read_runtime.zig,2320
 REQ-SONNY-3190-CLAUSE-CAP,WriteClauseCap,Parser,TESTED,,,parser,2026-09-27,src/gql/parser.zig,439
 REQ-SONNY-3191-HOLD-AT-COMMIT,MultiGraphIsolation,ReleaseAtStatement,TESTED,,,storage,2026-09-27,src/graph_store.zig,15758
-REQ-SONNY-3191-POLICY-EXPR-BOUNDS,GPS Expression Compilation,NestingAndLinkBounds,TESTED,,,security,2026-09-27,src/security/policy_expression.zig,252
+REQ-SONNY-3191-POLICY-EXPR-BOUNDS,GPS Expression Compilation,NestingAndLinkBounds,TESTED,,,security,2026-09-27,src/security/policy_expression.zig,289
 REQ-SONNY-3191-RESERVED-GRAPH-NAMES,MultiGraphIsolation,RefuseReserved,TESTED,,,storage,2026-09-27,src/execution/session_graph.zig,40
 REQ-SONNY-3191-ROUND13-ITEMS,MultiGraphIsolation,Regression,TESTED,,,storage,2026-09-27,tests/test_sonny3191_round13_items.zig,23
 REQ-SONNY-3232-QUIC-LARGE-REQUEST,QuicTransport,Diagnosis,TESTED,,,transport,2026-09-28,tests/test_sonny3232_quic_large_request.zig,52
@@ -5677,6 +5677,7 @@ REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,OwnedGraphEntities,TESTED,,,tra
 REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,RealServer,TESTED,,,transport,2026-09-29,tests/test_sonny_write_allowlist_r4_transport.zig,818
 REQ-SONNY-3386-MULTI-CHAIN-WITH,MultiChainRelationshipMatch,WithStage,TESTED,,,engine,2026-09-29,src/execution/match_operations.zig,9379
 REQ-SONNY-4878-ROW-DENY-UNKNOWN,GPS Row Conditions,Regression,TESTED,,,security,2026-11-11,tests/test_sonny4878_row_deny_unknown.zig,16
+REQ-SONNY-4878-ROW-DENY-UNKNOWN,GPS Row Conditions,ThreeValuedEval,TESTED,,,security,2026-11-11,src/security/policy_expression.zig,209
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,,,execution,2026-09-08,src/execution/admin_ddl.zig,219
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,,,execution,2026-09-08,tests/test_sonny_capability_profile.zig,1
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,IMPL,,,server,2026-09-08,src/server/cli_args.zig,69

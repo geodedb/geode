@@ -634,7 +634,8 @@ fn policyExpressionHolds(allocator: std.mem.Allocator, policy: *const @import("p
         },
         .principal_attributes = attrs.entries,
         // A statement-level decision has no row: every row condition in the
-        // expression is false (see policy_expression.evalRowCondition).
+        // expression is unknown, which `evaluate` reports as not holding
+        // (see policy_expression.evalRowCondition).
         .row = null,
     };
     return policy_expression.evaluate(cexpr, ctx);
@@ -730,9 +731,11 @@ pub fn rowPoliciesConfigured() bool {
 ///
 /// Every row is decided afresh for the session in hand: the decision is never
 /// put in the GPS decision cache, so one user's verdict cannot be served to
-/// another. Fail-closed: a condition that cannot be evaluated (a missing or
-/// null property or session value, or attributes that cannot be read) does
-/// not hold for an allow policy and does hold for a deny policy.
+/// another. Fail-closed: a condition that cannot be evaluated (a missing,
+/// null or non-string property, a missing session value, or attributes that
+/// cannot be read) does not hold for an allow policy and does hold for a deny
+/// policy. AND / OR propagate an unknown comparison with three-valued logic
+/// (`policy_expression.evaluateTruth`) before that decision (SONNY-4878).
 pub fn rowPoliciesAllow(allocator: std.mem.Allocator, session: RowSession, graph_name: []const u8, row: @import("policy_expression.zig").RowAccessor) bool {
     const policy_expression = @import("policy_expression.zig");
     const pc = @import("policy_catalog.zig");
@@ -761,7 +764,10 @@ pub fn rowPoliciesAllow(allocator: std.mem.Allocator, session: RowSession, graph
             if (attrs) |a| entries = a.entries else if (policy.effect == .deny) return false;
         }
 
-        const holds = policy_expression.evaluate(cexpr, .{
+        // SONNY-4878: three-valued. A deny applies unless its condition is
+        // FALSE (an unknown comparison withholds the row); an allow matches
+        // only when its condition is TRUE.
+        const t = policy_expression.evaluateTruth(cexpr, .{
             .current_user = session.username,
             .current_tenant = session.tenant_id,
             .current_graph = session.active_graph,
@@ -770,10 +776,10 @@ pub fn rowPoliciesAllow(allocator: std.mem.Allocator, session: RowSession, graph
             .row = row,
         });
         switch (policy.effect) {
-            .deny => if (holds) return false,
+            .deny => if (t != .false_) return false,
             .allow => {
                 allow_applies = true;
-                if (holds) allowed = true;
+                if (t == .true_) allowed = true;
             },
         }
     }

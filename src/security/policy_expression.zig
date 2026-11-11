@@ -29,11 +29,14 @@
 // Row conditions compare a property of the row being read with a function of
 // the session, e.g. `owner = current_user()`. The function is evaluated per
 // session when the row is read, never when the policy is created. A row
-// condition holds only when both sides are known strings: a missing or null
+// condition is known only when both sides are known strings: a missing or null
 // property, a property that is not a string, or a session function with no
-// value makes the comparison false (for `<>` too), so the row is denied. With
-// no row in the context (a statement-level decision) every row condition is
-// false.
+// value makes the comparison UNKNOWN (for `<>` too), as is every row condition
+// with no row in the context (a statement-level decision). AND / OR combine
+// unknown with three-valued (Kleene) logic (`evaluateTruth`). `evaluate`
+// reports only TRUE as holding, so an allow policy does not match an unknown
+// condition; `gps.rowPoliciesAllow` applies a DENY policy unless its condition
+// is FALSE, so an unknown condition withholds the row (SONNY-4878).
 //
 // AND binds tighter than OR (standard SQL precedence).
 // Comparisons are case-sensitive.
@@ -73,7 +76,8 @@ pub const PolicyEvalContext = struct {
     /// that attribute predicates simply fail-closed when no attributes are set.
     principal_attributes: []const AttributeEntry = &.{},
     /// The row being read, for row conditions (`owner = current_user()`).
-    /// Null for a statement-level decision: every row condition is then false.
+    /// Null for a statement-level decision: every row condition is then
+    /// unknown (and `evaluate` reports it as not holding).
     row: ?RowAccessor = null,
 };
 
@@ -104,7 +108,8 @@ pub const SessionFn = enum {
 pub const CmpOp = enum { eq, ne };
 
 /// A row property as a row condition sees it. Only `string` compares; the
-/// others make every comparison false (fail-closed).
+/// others make every comparison unknown (an allow does not match it, a deny
+/// applies: SONNY-4878).
 pub const RowValue = union(enum) {
     missing,
     null_,
@@ -194,9 +199,24 @@ pub fn compileExpression(allocator: std.mem.Allocator, source: []const u8) !Comp
 // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=Evaluate; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
 
 /// Evaluate a compiled expression against the given context.
-/// Always returns a definite boolean (fail-closed: unknown values evaluate
-/// to false for equality predicates).
+/// Always returns a definite boolean: true only when the expression is TRUE
+/// (fail-closed for an allow: an UNKNOWN expression does not hold). A deny
+/// decision must not use this — see `evaluateTruth`.
 pub fn evaluate(expr: *const CompiledExpression, ctx: PolicyEvalContext) bool {
+    return evaluateTruth(expr, ctx) == .true_;
+}
+
+// CANARY: REQ=REQ-SONNY-4878-ROW-DENY-UNKNOWN; FEATURE="GPS Row Conditions"; ASPECT=ThreeValuedEval; STATUS=TESTED; TEST=tests/test_sonny4878_row_deny_unknown.zig; OWNER=security; UPDATED=2026-11-11
+/// The three-valued truth of an expression. A row condition whose row
+/// property or session value is unknown is UNKNOWN, and AND / OR propagate it
+/// (`unknown AND false` is false, `unknown OR true` is true, otherwise
+/// unknown). Equality predicates against a literal stay definite (a missing
+/// value is false), as before.
+pub const Truth = enum { false_, true_, unknown };
+
+/// Evaluate a compiled expression to its three-valued truth. A deny policy
+/// applies unless this is `.false_` (SONNY-4878).
+pub fn evaluateTruth(expr: *const CompiledExpression, ctx: PolicyEvalContext) Truth {
     return evalPredicate(expr.root, ctx);
 }
 
@@ -204,45 +224,62 @@ pub fn evaluate(expr: *const CompiledExpression, ctx: PolicyEvalContext) bool {
 // Evaluator (private)
 // ---------------------------------------------------------------------------
 
-fn evalPredicate(p: *const Predicate, ctx: PolicyEvalContext) bool {
+fn truth(b: bool) Truth {
+    return if (b) .true_ else .false_;
+}
+
+fn evalPredicate(p: *const Predicate, ctx: PolicyEvalContext) Truth {
     return switch (p.*) {
-        .literal_true => true,
-        .eq_current_user => |v| ctx.current_user != null and std.mem.eql(u8, ctx.current_user.?, v),
-        .eq_current_tenant => |v| ctx.current_tenant != null and std.mem.eql(u8, ctx.current_tenant.?, v),
-        .eq_current_graph => |v| ctx.current_graph != null and std.mem.eql(u8, ctx.current_graph.?, v),
-        .eq_resource_label => |v| ctx.resource_label != null and std.mem.eql(u8, ctx.resource_label.?, v),
+        .literal_true => .true_,
+        .eq_current_user => |v| truth(ctx.current_user != null and std.mem.eql(u8, ctx.current_user.?, v)),
+        .eq_current_tenant => |v| truth(ctx.current_tenant != null and std.mem.eql(u8, ctx.current_tenant.?, v)),
+        .eq_current_graph => |v| truth(ctx.current_graph != null and std.mem.eql(u8, ctx.current_graph.?, v)),
+        .eq_resource_label => |v| truth(ctx.resource_label != null and std.mem.eql(u8, ctx.resource_label.?, v)),
         // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=EvalAttrPredicate; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-20
         .eq_principal_attr => |kv| blk: {
             for (ctx.principal_attributes) |e| {
                 if (std.mem.eql(u8, e.key, kv.key)) {
-                    break :blk std.mem.eql(u8, e.value, kv.value);
+                    break :blk truth(std.mem.eql(u8, e.value, kv.value));
                 }
             }
             // Key not present in the attribute set → fail-closed.
-            break :blk false;
+            break :blk .false_;
         },
         .row_vs_session => |rc| evalRowCondition(rc.property, rc.func, rc.op, ctx),
-        .and_ => |a| evalPredicate(a.left, ctx) and evalPredicate(a.right, ctx),
-        .or_ => |o| evalPredicate(o.left, ctx) or evalPredicate(o.right, ctx),
+        // Kleene AND / OR: unknown propagates unless the other side decides.
+        .and_ => |a| blk: {
+            const l = evalPredicate(a.left, ctx);
+            if (l == .false_) break :blk .false_;
+            const r = evalPredicate(a.right, ctx);
+            if (r == .false_) break :blk .false_;
+            break :blk if (l == .unknown or r == .unknown) .unknown else .true_;
+        },
+        .or_ => |o| blk: {
+            const l = evalPredicate(o.left, ctx);
+            if (l == .true_) break :blk .true_;
+            const r = evalPredicate(o.right, ctx);
+            if (r == .true_) break :blk .true_;
+            break :blk if (l == .unknown or r == .unknown) .unknown else .false_;
+        },
     };
 }
 
-/// A row condition. Fail-closed: false unless the session function has a
-/// non-empty value and the row property is a string; only then does `=` or
-/// `<>` compare them.
-fn evalRowCondition(property: []const u8, func: SessionFn, op: CmpOp, ctx: PolicyEvalContext) bool {
-    const session_value = func.value(ctx) orelse return false;
-    if (session_value.len == 0) return false;
-    const row = ctx.row orelse return false;
+/// A row condition. UNKNOWN unless the session function has a non-empty
+/// value and the row property is a string; only then does `=` or `<>`
+/// compare them. With no row (a statement-level decision) it is UNKNOWN.
+fn evalRowCondition(property: []const u8, func: SessionFn, op: CmpOp, ctx: PolicyEvalContext) Truth {
+    const session_value = func.value(ctx) orelse return .unknown;
+    if (session_value.len == 0) return .unknown;
+    const row = ctx.row orelse return .unknown;
     const row_value = switch (row.get(property)) {
         .string => |v| v,
-        .missing, .null_, .other => return false,
+        .missing, .null_, .other => return .unknown,
     };
     const equal = std.mem.eql(u8, row_value, session_value);
-    return switch (op) {
+    return truth(switch (op) {
         .eq => equal,
         .ne => !equal,
-    };
+    });
 }
 
 // ---------------------------------------------------------------------------

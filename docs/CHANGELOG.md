@@ -4,6 +4,15 @@
 
 ### Security
 
+- **A row DENY policy now withholds a row whose comparison is unknown
+  (SONNY-4878).** A deny row condition such as `owner <> current_user()` read
+  a missing, null or non-string `owner`, or a session with no user or tenant,
+  as false: the deny did not apply and the row was returned, also when an
+  allow policy matched it. Row conditions are now three-valued: such a
+  comparison is UNKNOWN, `AND` and `OR` propagate it (`UNKNOWN AND FALSE` is
+  FALSE, `UNKNOWN OR TRUE` is TRUE), a deny applies unless its condition is
+  FALSE, and an allow still matches only a TRUE condition. Known comparisons
+  are unchanged. Regression: `zig build test-sonny4878-row-deny-unknown`.
 - **BREAKING: fail-closed default role.** A user with no stored built-in
   role (not a superuser, no `HAS_ROLE` edge to `admin`, `user`, `readwrite`
   or `readonly`) used to fall back to `readwrite` and could read and write
@@ -53,7 +62,8 @@
   nodes each session reads, on every read path: a user sees the rows the
   condition allows for them. The function is evaluated for the reading
   session when the row is read. A missing, null or non-string property, or a
-  session function with no value, denies the row (fail-closed, `<>` too).
+  session function with no value, makes the comparison unknown: an allow
+  policy does not match it and a deny policy applies (fail-closed, `<>` too).
   Row verdicts are never cached. Admin sessions bypass row conditions, as they
   bypass expression RLS policies. A row condition on a policy for a write
   action is refused with 42000. Until now these conditions were refused with
