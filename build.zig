@@ -408,18 +408,15 @@ fn addExecutablesToTestCompile(b: *std.Build, target: std.Build.ResolvedTarget) 
     for (exes.items) |step| compile_all.dependOn(step);
 }
 
-/// SONNY-2746: executables that did not compile when test-compile first took
-/// in every executable (2026-09-25). No step that a gate runs compiled them,
-/// so they rotted unseen after Zig 0.16 removed std APIs and engine APIs
-/// moved. Ten with no caller were deleted (SONNY-2771); these three are
-/// still run by a build step or a gate. Each stays out of test-compile
-/// until it is migrated (then delete its line) or deleted. A name that
-/// matches no executable fails every build, so the list cannot go stale.
-const rotted_executables = [_][]const u8{
-    "bench_remote_kms_unwrap_concurrency", // RemoteKmsServer.init now returns an error union
-    "benchmark_rls_row_skip", // expects a CompactPropertyMap, passes a StringHashMap
-    "gen_fuzz", // tools/gen_fuzz.zig: process.argsAlloc
-};
+/// SONNY-2746: executables that do not compile yet, kept out of
+/// test-compile until they are migrated (then delete the line) or deleted.
+/// Empty since SONNY-2771/SONNY-2474 (2026-11-11): the thirteen tools that
+/// rotted unseen after the Zig 0.16 upgrade were migrated (gen_fuzz,
+/// benchmark_rls_row_skip, bench_remote_kms_unwrap_concurrency) or, having
+/// no caller, deleted. Prefer fixing a broken executable to listing it here.
+/// A name that matches no executable fails every build, so the list cannot
+/// go stale.
+const rotted_executables = [_][]const u8{};
 
 fn linksSystemLibrary(compile: *std.Build.Step.Compile, name: []const u8) bool {
     for (compile.root_module.link_objects.items) |link_object| switch (link_object) {
@@ -5838,6 +5835,7 @@ pub fn build(b: *std.Build) void {
     sonny2771_gen_fuzz_test_mod.addImport("gen_fuzz", gen_fuzz_mod);
     const sonny2771_gen_fuzz_tests = b.addTest(.{ .root_module = sonny2771_gen_fuzz_test_mod });
     const run_sonny2771_gen_fuzz_tests = b.addRunArtifact(sonny2771_gen_fuzz_tests);
+    shardDep(test_step, &run_sonny2771_gen_fuzz_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2771_gen_fuzz_step = b.step("test-sonny2771-gen-fuzz", "Run SONNY-2771 regression (gen_fuzz parses its arguments and writes a fuzz scaffold without overwriting an existing target)");
     sonny2771_gen_fuzz_step.dependOn(&run_sonny2771_gen_fuzz_tests.step);
 

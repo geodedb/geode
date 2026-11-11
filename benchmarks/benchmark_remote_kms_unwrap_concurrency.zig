@@ -49,12 +49,13 @@ fn connectClient(port: u16, auth: []const u8) !kms.RemoteKmsClient {
 
 pub fn main() !void {
     // Use page_allocator (thread-safe) instead of GPA to allow server loop in separate thread.
-    var server = kms.RemoteKmsServer.init(std.heap.page_allocator, 0xfeedfacecafebeef);
+    var server = try kms.RemoteKmsServer.init(std.heap.page_allocator, 0xfeedfacecafebeef);
+    defer server.deinit();
     // Local direct mode (skip QUIC handshake due to instability in benchmark context)
     var plain: [32]u8 = undefined;
     // GAP-0142: Use cryptographic random instead of PRNG
     compat_fillRandom(&plain);
-    const env = server.server.wrap(plain);
+    const env = try server.server.wrap(plain);
     const iterations: usize = 64;
     var times = try std.heap.page_allocator.alloc(u64, iterations);
     defer std.heap.page_allocator.free(times);

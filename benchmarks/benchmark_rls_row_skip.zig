@@ -244,10 +244,10 @@ fn setupEngine(allocator: std.mem.Allocator, row_bound_compiled: *CompiledExpres
     return engine;
 }
 
-fn buildProperties(allocator: std.mem.Allocator) !std.StringHashMap(graph_store.PropertyValue) {
+fn buildProperties(allocator: std.mem.Allocator) !graph_store.CompactPropertyMap {
     // 8 mixed-type properties — a representative node payload for the
     // per-row conversion the old path performed unconditionally.
-    var props = std.StringHashMap(graph_store.PropertyValue).init(allocator);
+    var props = graph_store.CompactPropertyMap.init(allocator);
     try props.put("name", .{ .String = "alice" });
     try props.put("classification", .{ .String = "public" });
     try props.put("age", .{ .Int = 34 });
@@ -274,7 +274,7 @@ fn runScenario(
     allocator: std.mem.Allocator,
     out: *std.ArrayListUnmanaged(u8),
     engine: *RLSEngine,
-    props: *const std.StringHashMap(graph_store.PropertyValue),
+    props: *const graph_store.CompactPropertyMap,
     mode: Mode,
     name: []const u8,
     mean_out: *f64,

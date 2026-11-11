@@ -134,6 +134,25 @@
   `test-cert-provided` and `test-cluster-replicable-mutations` create are now
   removed when an `openssl` step fails, too.
   Regression: `zig build test-sonny2413-scratch-cleanup`.
+- **`zig build tools` builds again, and every executable compiles
+  (SONNY-2474, SONNY-2771):** thirteen executables had not compiled since
+  the Zig 0.16 upgrade, eight of them under `zig build tools` (so
+  `make tools` and `make doccheck` failed), and `test-compile` skipped all
+  thirteen through `rotted_executables`. Three that a build step, a doc or a
+  gate still runs now compile on Zig 0.16 and current engine APIs:
+  `gen_fuzz` (`zig build gen-fuzz`, documented in fuzz/README.md; it now
+  reports an existing target instead of claiming to create it),
+  `benchmark_rls_row_skip` (`zig build bench-rls-row-skip`) and
+  `bench_remote_kms_unwrap_concurrency` (run by `test-e2e`). The other ten
+  had no caller and were deleted with their build steps (`canary`, `delta`,
+  `variance`, `generate-fuzz-dict`): `bench_extract`, `bench_regress`, the
+  four `fed_latency_*` tools, `run_variance_benches`, `impl_reality_delta`,
+  `canary_main` and `generate_fuzz_dict`. So were the engine code only
+  `canary_main` reached (`AdvancedIndexManager.persistAll`/`loadAll` and
+  `src/index/interval_persist.zig`; interval-tree indexes were never
+  persisted by the server) and the never-compiled tests that imported the
+  deleted code. `rotted_executables` is now empty, so `test-compile`
+  compiles every executable. Regression: `zig build test-sonny2771-gen-fuzz`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)
