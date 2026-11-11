@@ -1801,6 +1801,22 @@ pub fn build(b: *std.Build) void {
     const gap0880_upload_step = b.step("test-gap0880", "Run GAP-0880 backup upload ingestion + compression truth regression");
     gap0880_upload_step.dependOn(&run_gap0880_upload_tests.step);
 
+    // SONNY-6277: backup create -> restore into a fresh data dir, read cold
+    // (and again after a reopen) through the executor and the store's full
+    // enumeration: nodes, edges and typed properties, default and named
+    // graph, uncompressed and gzip.
+    const sonny6277_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6277_backup_restore_roundtrip.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    sonny6277_tests.root_module.addImport("geode", root_mod);
+    sonny6277_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    const run_sonny6277_tests = b.addRunArtifact(sonny6277_tests);
+    const sonny6277_step = b.step("test-sonny6277-backup-restore-roundtrip", "Run SONNY-6277 regression (a restored backup holds every node, edge and typed property, default and named graph, read cold and after a reopen, with and without gzip)");
+    sonny6277_step.dependOn(&run_sonny6277_tests.step);
+
     // GAP-0855a: webhook CDC sink real HTTP delivery + retries + auth header.
     // Drives the REAL WebhookSink (std.http.Client) against an in-test loopback
     // HTTP/1.1 listener that scripts status codes and captures the request.
@@ -4146,6 +4162,8 @@ pub fn build(b: *std.Build) void {
         run_fts_e2e_tests,
         run_gap0869_tests,
     }) |run| shardDep(test_step, &run.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-6277 (declared next to test-gap0880 above).
+    shardDep(test_step, &run_sonny6277_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_show_capabilities_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_sonny_capability_profile_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_capability_gate_tests.step, 1, test_shard_loads, test_shard_index);
