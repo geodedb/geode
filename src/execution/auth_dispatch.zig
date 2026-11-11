@@ -437,6 +437,8 @@ const dispatch_table = std.StaticStringMap(AuthHandler).initComptime(.{
 
 const read_only_set = std.StaticStringMap(void).initComptime(.{
     .{ "geode.auth.user_show", {} },
+    // SONNY-6269: any user, for itself; another user's need Admin (checked
+    // in the handler, as grant_list's).
     .{ "geode.auth.user_permissions", {} },
     .{ "geode.auth.user_list", {} },
     .{ "geode.auth.role_list", {} },
@@ -931,13 +933,13 @@ fn handleUserRemoveAttribute(allocator: std.mem.Allocator, _: []const u8, call_s
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
-fn handleUserPermissions(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    // geode.auth.user_permissions(username) -> permission list
-    var username: []const u8 = "";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
-    }
+// CANARY: REQ=REQ-SONNY-6269-PERMISSIONS-ADMIN-GATE; FEATURE="GQL Auth DDL"; ASPECT=UserPermissionsGate; STATUS=TESTED; TEST=tests/test_sonny6269_permissions_admin_gate.zig; OWNER=security; UPDATED=2026-11-11
+fn handleUserPermissions(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
+    // geode.auth.user_permissions([username]) -> permission list. Without a
+    // username, the caller's. SONNY-6269: another user's need the Admin role
+    // (as SHOW GRANTS, SONNY-1333); any authenticated user listed anyone's.
+    const username = targetUserOrSelf(call_stmt, context);
+    try requireSelfOrAdmin(allocator, proc_name, context, username, "auth procedure denied: admin role required to list another user's permissions");
     const user = user_mgmt.getUser(username);
     const perms = if (user) |u| user_mgmt.Permission.fromRole(u.role) else user_mgmt.Permission.fromRole(.User);
     const columns = try allocator.alloc([]const u8, 2);
@@ -1557,6 +1559,42 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
+/// The user a read-only procedure about one user's security state is asked
+/// about: its first argument, or the caller when there is none (or it is
+/// empty).
+fn targetUserOrSelf(call_stmt: ast.CallProcedure, context: ExecutionContext) []const u8 {
+    var username: []const u8 = context.user orelse "";
+    if (call_stmt.procedure == .Call) {
+        const args = call_stmt.procedure.Call.args;
+        if (args.len >= 1 and args[0].* == .String and args[0].String.len > 0) username = args[0].String;
+    }
+    return username;
+}
+
+// CANARY: REQ=REQ-SONNY-6269-PERMISSIONS-ADMIN-GATE; FEATURE="GQL Auth DDL"; ASPECT=SelfOrAdminGate; STATUS=TESTED; TEST=tests/test_sonny6269_permissions_admin_gate.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-1333 / SONNY-6269: the gate of the read-only procedures that list
+/// one user's security state (`grant_list`, `user_permissions`). With
+/// authorization on, a user may ask about itself; about another user only
+/// with the Admin role. A refusal answers error.Unauthorized (42501) and is
+/// audited as the admin-only procedures' are. (An unauthenticated request
+/// never gets here: `execute` refuses it first.)
+fn requireSelfOrAdmin(allocator: std.mem.Allocator, proc_name: []const u8, context: ExecutionContext, username: []const u8, details: []const u8) !void {
+    if (!user_mgmt.isAuthEnabled()) return;
+    const own = if (context.user) |u| std.mem.eql(u8, u, username) else false;
+    const is_admin = if (context.role) |r| r == .Admin else false;
+    if (own or is_admin) return;
+    const audit_mod = @import("../security/audit.zig");
+    audit_mod.logSecurityGraphEvent(allocator, .{
+        .event_type = .access_denied,
+        .action = proc_name,
+        .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+        .username = context.user orelse "",
+        .details = details,
+        .result_failure = true,
+    });
+    return error.Unauthorized;
+}
+
 // CANARY: REQ=REQ-SONNY-1333-SHOW-GRANTS; FEATURE="GQL Auth DDL"; ASPECT=GrantListProcedure; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
 /// `geode.auth.grant_list([username])` -> username, graph, action: the user's
 /// per-graph grants as stored in __geode_security, one row per grant, by
@@ -1565,27 +1603,8 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
 /// for itself only: another user's grants need the Admin role, and a refusal
 /// is audited as the admin-only procedures' are.
 fn handleGrantList(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
-    var username: []const u8 = context.user orelse "";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String and args[0].String.len > 0) username = args[0].String;
-    }
-    if (user_mgmt.isAuthEnabled()) {
-        const own = if (context.user) |u| std.mem.eql(u8, u, username) else false;
-        const is_admin = if (context.role) |r| r == .Admin else false;
-        if (!own and !is_admin) {
-            const audit_mod = @import("../security/audit.zig");
-            audit_mod.logSecurityGraphEvent(allocator, .{
-                .event_type = .access_denied,
-                .action = proc_name,
-                .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
-                .username = context.user orelse "",
-                .details = "auth procedure denied: admin role required to list another user's grants",
-                .result_failure = true,
-            });
-            return error.Unauthorized;
-        }
-    }
+    const username = targetUserOrSelf(call_stmt, context);
+    try requireSelfOrAdmin(allocator, proc_name, context, username, "auth procedure denied: admin role required to list another user's grants");
 
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "username");

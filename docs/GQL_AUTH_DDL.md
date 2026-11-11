@@ -70,7 +70,11 @@ single-quoted or double-quoted string literal.
 | `SHOW CAPABILITIES` | *(local — no auth handler)* |
 
 `SHOW PERMISSIONS` without a `FOR` clause uses the current authenticated user's
-permissions. With `FOR <username>`, an Admin role is required.
+permissions. With `FOR <username>`, an Admin role is required unless
+`<username>` is the current user; a refusal answers 42501 and is audited
+like the admin-only procedures (SONNY-6269, the `SHOW GRANTS` rule below).
+`CALL geode.auth.user_permissions([<username>])` has the same rule; without
+a username it lists the caller's permissions.
 
 `SHOW GRANTS` without a `FOR` clause shows the current user's grants. A user
 may list its own grants (`FOR` its own name, or no `FOR`); another user's

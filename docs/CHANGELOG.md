@@ -136,6 +136,18 @@
 - **Removed the unused RLS `QueryRewriter` (SONNY-3038):**
   `rls_core.QueryRewriter` and `RLSEngine.rewriteQuery` built query text
   from policy text and combined policies the old way; nothing called them.
+- **`SHOW PERMISSIONS FOR <user>` needs Admin for another user
+  (SONNY-6269).** The docs said so, but `geode.auth.user_permissions` did
+  not check it, so any authenticated user could list any other user's
+  permissions. It now applies the `SHOW GRANTS` rule (SONNY-1333), through
+  the same check: a user may list its own permissions (no `FOR`, or `FOR`
+  its own name); another user's, a user that does not exist included, need
+  the Admin role, and a refusal answers 42501 and is audited
+  (`access_denied`). `CALL geode.auth.user_permissions()` with no argument
+  now lists the caller's permissions, as `geode.auth.grant_list()` does,
+  instead of an unnamed user's. Behaviour change: a non-admin's
+  `SHOW PERMISSIONS FOR <other user>` is refused.
+  Regression: `zig build test-sonny6269-permissions-admin-gate`.
 
 ### Added
 
