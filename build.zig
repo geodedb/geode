@@ -12780,6 +12780,14 @@ pub fn build(b: *std.Build) void {
     const sonny2846_wire_step = b.step("test-sonny2846-unique-fast-paths-wire", "Run SONNY-2846 wire regression (spawns a server: simple CREATE, bulk MERGE, /*+BATCH*/ and USE GRAPH; MERGE fast paths answer 23505 on a UNIQUE duplicate, with group commit on and off; 8 concurrent QUIC writers of one value: exactly one wins)");
     sonny2846_wire_step.dependOn(&run_sonny2846_wire_tests.step);
 
+    const sonny6270_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6270_drop_constraint.zig"), .target = target, .optimize = optimize });
+    sonny6270_test_mod.addImport("geode", root_mod);
+    const sonny6270_tests = b.addTest(.{ .root_module = sonny6270_test_mod });
+    const run_sonny6270_tests = b.addRunArtifact(sonny6270_tests);
+    shardDep(test_step, &run_sonny6270_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny6270_step = b.step("test-sonny6270-drop-constraint", "Run SONNY-6270 regression (DROP CONSTRAINT removes the session graph's or an engine-wide row, saves the catalog under its lock and refuses when the save fails; a dropped constraint stops being enforced and stays dropped after a restart; the UNIQUE fast-path fence comes down with the last applicable row; db.constraints() copies rows under the catalog lock; schema permission required)");
+    sonny6270_step.dependOn(&run_sonny6270_tests.step);
+
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once
     // per candidate row (RC-6, O(N^2) query), and the backfill reports no indexed
