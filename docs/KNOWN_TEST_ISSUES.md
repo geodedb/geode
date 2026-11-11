@@ -110,8 +110,6 @@ these are not load-induced flakes unless noted).
 | `test-cluster-replicable-mutations` | TIMEOUT (300 s) — **intentionally red** (TDD reproduction) | Added 2026-06-09 (commit `7b168f62`) as a deliberately FAILING reproduction of the cluster write-replication gaps (edge CREATE, DELETE/DETACH DELETE, MERGE, ungated MATCH…SET do not replicate; only pure single-node CREATE does). Spawns three real `geode serve` subprocesses — same 3-node subprocess family as the `test-cluster-3node-subprocess` hang below. Stays red/timeout by design until the replication gaps are fixed; do not count it against the gate as a regression. |
 | `test-first-boot-admin-breadcrumb` | FAIL 1/2 — **pre-existing, revealed 2026-11-11 by SONNY-2697** (named step only, not in the aggregate) | Until SONNY-2697 the step did not build geode: it SKIPped (reported as passing) when `./zig-out/bin/geode` was missing and otherwise ran whatever binary was there. It now spawns the geode this build emitted, and `test "reset-password reports failure honestly when the target user cannot be loaded"` (`tests/test_first_boot_admin_password_breadcrumb.zig:180`) fails: `geode user reset-password geode --new-password resetpass12345` answers `Error: password does not meet policy requirements (min 8 chars, letters and numbers)` before it tries to load the user, so the expected `password NOT reset` never prints. The binary built at `2d74b878` (before SONNY-2697) answers the same, so the change only exposed it. The first-boot breadcrumb test in the same file passes. |
 | `test-slab-packing-geode` | TIMEOUT (1800 s) — **found 2026-11-11 by SONNY-2772** (named step only, not in the aggregate) | The step had stopped compiling: `tests/test_slab_packing_geode.zig` walked each shard's edge index with `.iterator()` and a `u32` `prop_head`, but graph_storage 0.4.10's `EdgeIndexMap` has no iterator (it is visited with `forEachLive`) and its `prop_head` is `u64` (`error: no field or member function named 'iterator' in 'edge_index_map.EdgeIndexMap'`, then `:161`). SONNY-2772 ported both walks to `forEachLive` (`countLegacyEdgePropHeads`). The step now compiles, but a Debug run did not finish in 30 minutes: the test process wrote ~2 MB/s at ~16% CPU (2.8 GB after 23 min) while ingesting its `N = 50_000` nodes (`tests/test_slab_packing_geode.zig:34`) through the durable adapter path, so no assertion was reached. Kept out of the aggregate (`not_in_aggregate_steps`) until it is made to finish (fewer nodes, or a ReleaseFast lane) and passes. |
-| `test-gap0862` | FAIL 1/3 — **pre-existing, found 2026-11-11 by SONNY-2772** (named step only, not in the aggregate; SONNY-6277) | `test "GAP-0862 restore preserves node/edge counts and properties"` (`tests/test_gap0862_backup_integrity.zig`) fails `expected 5, found 0`: the store restored from a backup reports 0 nodes. Identical on a clean checkout of main `122230c4`, so it predates SONNY-2772; the step had run in no aggregate shard, pre-push or CI. Kept out of the aggregate (`not_in_aggregate_steps`) until SONNY-6277 makes it pass. |
-| `test-gap0880` | FAIL 2/5 — **pre-existing, found 2026-11-11 by SONNY-2772** (named step only, not in the aggregate; SONNY-6277) | `test "GAP-0880 gzip backup compresses for real and round-trips"` and `test "GAP-0880 upload ingestion stores payload bytes and registers durably"` (`tests/test_gap0880_backup_upload.zig`) fail `expected 2, found 0` on the restored store. Identical on a clean checkout of main `122230c4`. Same cause as `test-gap0862`; kept out of the aggregate until SONNY-6277 makes it pass. |
 | `test-sonny-write-allowlist-r4-transport` | FAIL (QUIC read timeout) — **found 2026-11-11 by SONNY-2772** (named step only, not in the aggregate) | `test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, …"` (`tests/test_sonny_write_allowlist_r4_transport.zig:721`, SONNY-3368) times out reading the reply while seeding its two 1,500-pair chains (`executeAndCollectWithTimeout`, ~line 745) on unmodified code; under host load `test "round 4a over QUIC: PROFILE repros refused, …"` (`:993`) also timed out in some runs. The gRPC cases pass. Kept out of the aggregate until the QUIC seeding answers inside its timeout. |
 | `test-all` | TIMEOUT (300 s) | The `test-all` aggregate (unit + e2e) inherits the `test-e2e` runtime failures (T11/T12/T14 — the compile failures are fixed as of `487a2424`) and the `test-count-pushdown` slowness (~7-13 min, passes). Not a distinct issue — it is the union of the rows above. |
 
@@ -169,15 +167,16 @@ with its reason, in `not_in_aggregate_steps` in `build.zig`.
 `zig build -l` fails on a named step that is in neither, and on a listed name
 that matches no step or one that runs in the aggregate. Before SONNY-2772,
 108 of 628 named steps ran in no aggregate shard. 54 were registered through
-`shardDep`. The other 54 are listed: aggregators (`test-all`, `test-e2e`,
-`test-perf`), TSan companions, the e2e, benchmark and perf lanes, GPU, the subprocess cluster and CLI e2e tests, per-file
-runners whose files already run in the aggregate (the `test-lsp-*` files
-through `test-lsp`, the in-process cluster smokes through
-`tests/all_tests.zig`), and five steps that do not pass,
-`test-first-boot-admin-breadcrumb`, `test-slab-packing-geode`,
-`test-gap0862`, `test-gap0880` and `test-sonny-write-allowlist-r4-transport`
-(rows above). Read the list in `build.zig` for the
-current set; this document does not copy it.
+`shardDep`; the other 54 were listed. Two of those, `test-gap0862` and
+`test-gap0880`, failed on the restored store's resident-cache counts and were
+fixed and registered by SONNY-6277. The list holds aggregators (`test-all`,
+`test-e2e`, `test-perf`), TSan companions, the e2e, benchmark and perf lanes,
+GPU, the subprocess cluster and CLI e2e tests, per-file runners whose files
+already run in the aggregate (the `test-lsp-*` files through `test-lsp`, the
+in-process cluster smokes through `tests/all_tests.zig`), and three steps that
+do not pass, `test-first-boot-admin-breadcrumb`, `test-slab-packing-geode` and
+`test-sonny-write-allowlist-r4-transport` (rows above). Read the list in
+`build.zig` for the current set; this document does not copy it.
 
 ### Reproduction
 

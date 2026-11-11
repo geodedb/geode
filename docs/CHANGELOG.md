@@ -50,6 +50,22 @@
 
 ### Fixed
 
+- **Backup/restore regressions count the restored store the way the engine
+  does (SONNY-6277):** `test-gap0862` (1 of 3) and `test-gap0880` (2 of 5)
+  reported 0 nodes in a restored store (`expected 5, found 0`;
+  `expected 2, found 0`). No data was lost: the restore writes every graph
+  file, and the restored store holds every node, edge and property. The tests
+  read `GraphStore.nodes.count()`, `edges.count()` and `edges.getPtr()`,
+  which are resident caches, and since Phase 1b (`a31800da`, 2026-06-29)
+  `loadFromFile` defers each graph's resident load to first access, so on a
+  cold store those caches are empty. They now read through
+  `getNodeCount`/`getEdgeCount`/`getEdgePtr`, which hydrate, with the same
+  exact counts and property checks, and both steps run in the aggregate. The
+  new `zig build test-sonny6277-backup-restore-roundtrip` backs up a store
+  (default and named graph; String, Int, Float and Bool properties),
+  restores it into a fresh data directory, and reads it cold through the
+  executor and `getAllNodes`, and again after a reopen, uncompressed and
+  with gzip.
 - **GPU release image can start the release binary (SONNY-4884):**
   `Dockerfile.release.gpu` was based on
   `nvidia/cuda:13.4.2-runtime-ubuntu22.04`, whose glibc 2.35 is older than the

@@ -476,8 +476,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-first-boot-admin-breadcrumb", .reason = "failing: reset-password checks the password policy before loading the user (KNOWN_TEST_ISSUES)" },
-    .{ .name = "test-gap0862", .reason = "failing: restore reports 0 nodes; SONNY-6277" },
-    .{ .name = "test-gap0880", .reason = "failing: restore reports 0 nodes; SONNY-6277" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
 };
 
@@ -4127,7 +4125,9 @@ pub fn build(b: *std.Build) void {
     for ([_]*std.Build.Step.Run{
         run_fts_smoke,
         run_fts_adapter,
+        run_gap0862_backup_tests,
         run_gap0871_refusal_tests,
+        run_gap0880_upload_tests,
         run_gap0855_webhook_tests,
         run_gap0855_kafka_tests,
         run_gap0872_tests,
