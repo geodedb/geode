@@ -326,7 +326,7 @@ repos:
     entry: bash scripts/hook-env.sh bash
     args:
     - -c
-    - make cross-compile-required 2>&1 | tail -20
+    - set -o pipefail; make cross-compile-required 2>&1 | tail -20
     language: system
     files: \.(zig|zon)$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
@@ -358,6 +358,18 @@ repos:
       #      of one cold run. `--summary failures` keeps a passing run silent
       #      and still names every failing step, and the tail-30 dump below
       #      keeps a failure legible.
+      #
+      # SONNY-4920 CPU BUDGET: without -j every Zig build runner sizes its job
+      # pool to all CPUs it can see, so four parallel shards oversubscribed the
+      # box ~4x (50 processes / 509 threads on 12 CPUs). The four shards now
+      # share one budget: `nproc` (honours CPU affinity, e.g. taskset), or
+      # GEODE_PREPUSH_ZIG_JOBS when set (a positive integer; use it to leave
+      # headroom for other work, or when a cgroup quota is below nproc). Up to
+      # four shards run at once and each gets an explicit
+      # `zig build -j<budget / shards running>` (at least 1), the same per-shard
+      # bound CI applies with `zig build -j${ZIG_BUILD_JOBS}`. Budgets below
+      # four run the shards in waves, so every shard still runs exactly once;
+      # a failed wave does not stop later waves.
   - id: zig-test
     name: zig build test (sharded x4 parallel)
     entry: bash scripts/hook-env.sh bash
@@ -390,26 +402,46 @@ repos:
       # bug is tracked separately (docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md);
       # it must not wedge every unrelated .zig push behind a known-failing test.
       export GEODE_SKIP_SUBPROC_CLUSTER=1
-      pids=()
-      for idx in 0 1 2 3; do
-        mkdir -p "$PWD/.zig-cache/shard-${idx}"
-        timeout --signal=TERM --kill-after=60 40m \
-          zig build test -Dtest-shard-total=4 -Dtest-shard-index="$idx" \
-            --cache-dir "$PWD/.zig-cache/shard-${idx}" --summary failures \
-          > ".zig-cache/pre-push-shard-${idx}.log" 2>&1 &
-        pids+=($!)
-      done
+      # SONNY-4920: one CPU budget for all four shards (see comment above).
+      positive_int() { case "$1" in '' | *[!0-9]* | 0*) return 1 ;; esac; }
+      if ! cpus=$(nproc) || ! positive_int "$cpus"; then
+        echo "zig-test: nproc did not report a CPU count ('${cpus:-}'); set GEODE_PREPUSH_ZIG_JOBS" >&2
+        exit 2
+      fi
+      budget="${GEODE_PREPUSH_ZIG_JOBS:-$cpus}"
+      if ! positive_int "$budget"; then
+        echo "zig-test: GEODE_PREPUSH_ZIG_JOBS must be a positive integer, got '${budget}'" >&2
+        exit 2
+      fi
+      shards=4
+      wave=$(( budget < shards ? budget : shards ))
+      shard_jobs=$(( budget / wave ))
+      echo "zig-test: CPU budget ${budget} (nproc ${cpus}): ${wave} shard(s) at a time, zig build -j${shard_jobs} each"
       rc=0
-      for i in "${!pids[@]}"; do
-        shard_rc=0
-        wait "${pids[$i]}" || shard_rc=$?
-        if [ "$shard_rc" -eq 124 ]; then
-          echo "shard ${i} TIMED OUT after 40m (see .zig-cache/pre-push-shard-${i}.log) — the pre-push wedge, not a test failure"
-          rc=1
-        elif [ "$shard_rc" -ne 0 ]; then
-          echo "shard ${i} FAILED (rc=${shard_rc}) — see .zig-cache/pre-push-shard-${i}.log"
-          rc=1
-        fi
+      for (( first = 0; first < shards; first += wave )); do
+        pids=()
+        idxs=()
+        for (( idx = first; idx < first + wave && idx < shards; idx++ )); do
+          mkdir -p "$PWD/.zig-cache/shard-${idx}"
+          timeout --signal=TERM --kill-after=60 40m \
+            zig build test -j"$shard_jobs" -Dtest-shard-total=4 -Dtest-shard-index="$idx" \
+              --cache-dir "$PWD/.zig-cache/shard-${idx}" --summary failures \
+            > ".zig-cache/pre-push-shard-${idx}.log" 2>&1 &
+          pids+=($!)
+          idxs+=("$idx")
+        done
+        for j in "${!pids[@]}"; do
+          i="${idxs[$j]}"
+          shard_rc=0
+          wait "${pids[$j]}" || shard_rc=$?
+          if [ "$shard_rc" -eq 124 ]; then
+            echo "shard ${i} TIMED OUT after 40m (see .zig-cache/pre-push-shard-${i}.log) — the pre-push wedge, not a test failure"
+            rc=1
+          elif [ "$shard_rc" -ne 0 ]; then
+            echo "shard ${i} FAILED (rc=${shard_rc}) — see .zig-cache/pre-push-shard-${i}.log"
+            rc=1
+          fi
+        done
       done
       if [ "$rc" -ne 0 ]; then
         for i in 0 1 2 3; do
@@ -567,6 +599,20 @@ repos:
     entry: bash scripts/hook-env.sh python3 scripts/test_hook_env.py
     language: system
     files: ^(scripts/(hook-env\.sh|test_hook_env\.py)|\.pre-commit-config\.yaml)$
+    pass_filenames: false
+    stages: [pre-commit, pre-push]
+  - id: cross-gate-status-regression
+    name: required cross-build gates propagate failures (SONNY-4911)
+    entry: bash scripts/hook-env.sh python3 tests/test_sonny4911_cross_gate_status.py
+    language: system
+    files: ^(Makefile|\.pre-commit-config\.yaml|tests/test_sonny4911_cross_gate_status\.py)$
+    pass_filenames: false
+    stages: [pre-commit, pre-push]
+  - id: zig-test-budget-regression
+    name: zig-test pre-push shards fit one CPU budget (SONNY-4920)
+    entry: bash scripts/hook-env.sh python3 tests/test_sonny4920_prepush_shard_budget.py
+    language: system
+    files: ^(\.pre-commit-config\.yaml|scripts/hook-env\.sh|tests/test_sonny49(11_cross_gate_status|20_prepush_shard_budget)\.py)$
     pass_filenames: false
     stages: [pre-commit, pre-push]
   - id: check-version-tag

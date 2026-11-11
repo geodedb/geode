@@ -50,6 +50,90 @@
 
 ### Fixed
 
+- **GPU release image can start the release binary (SONNY-4884):**
+  `Dockerfile.release.gpu` was based on
+  `nvidia/cuda:13.4.2-runtime-ubuntu22.04`, whose glibc 2.35 is older than the
+  GLIBC_2.36 the `x86_64-linux-gnu` release binary needs, so the published GPU
+  image exited 1 before `main`. It now uses
+  `nvidia/cuda:13.4.2-runtime-ubuntu24.04` and installs `libssl3t64`, the name
+  Ubuntu 24.04 gives OpenSSL 3. Every release Dockerfile now runs
+  `geode --version` as the non-root runtime user while the image builds, so a
+  loader or glibc mismatch fails the build instead of shipping.
+  `tools/release_dockerfile_manifest.py` now refuses a glibc base that is older
+  than `release_binary.glibc_required`, or whose glibc it does not know.
+  Regression: `tests/test_sonny4884_release_image_runtime_compat.py`.
+- **FIPS release image can load the OpenSSL provider it ships (SONNY-4885):**
+  `Dockerfile.release.fips` ran on `debian:bookworm-slim` (glibc 2.36), but the
+  OpenSSL 3.6.2 provider tree it copies from `zig-fips:0.16.0` needs
+  GLIBC_2.38, so the image could not load its own FIPS provider. It now runs on
+  `debian:trixie-slim` with `libssl3t64`, like `Dockerfile.devimage.fips`. The
+  image build runs the shipped `/usr/local/ssl/bin/openssl list -providers` as
+  the non-root runtime user and fails unless the base and fips providers are
+  active. The manifest entry records `glibc_required: "2.38"` and
+  `openssl_provider_tree`, and `tools/release_dockerfile_manifest.py` now
+  checks manual Dockerfiles too. Ordinary release images stay on bookworm.
+  Regression: `tests/test_sonny4885_fips_release_runtime_compat.py`.
+- **Required cross-build gates fail when a build fails (SONNY-4911):** the
+  pre-push `cross-compile-check` hook ran
+  `make cross-compile-required 2>&1 | tail -20` without `pipefail`, so it took
+  `tail`'s exit status and passed when make failed. It now sets `pipefail` and
+  still shows the last 20 lines. `cross-macos-x86_64` and `cross-macos-arm64`
+  ran Zig inside an `if` and then echoed success unconditionally, so a compiler
+  failure exited 0 and printed success. The success line is now chained with
+  `&&`, so the recipe exits non-zero. Native-macOS skips are unchanged.
+  Regression: `tests/test_sonny4911_cross_gate_status.py`
+  (`make cross-gate-status-test`, a `cross-gate-status-regression` pre-commit
+  hook, and the `governance-cross-gate-status` CI job).
+- **The `zig-test` pre-push shards share one CPU budget (SONNY-4920):** the
+  hook started all four `zig build test` shards at once with no `-j`, and each
+  Zig build runner sized its job pool to every visible CPU, so the box ran
+  about four times as many jobs as it had CPUs (50 processes / 509 threads on
+  12 CPUs). The budget is now `nproc`, which honours CPU affinity, or
+  `GEODE_PREPUSH_ZIG_JOBS` when set. Up to four shards run at once, each with
+  an explicit `zig build -j<budget / shards running>` (at least 1); budgets
+  below four run the shards in waves. Every shard still runs exactly once, a
+  failed wave does not stop later ones, and the hook still fails on any shard
+  failure or 40-minute timeout and keeps every shard log. An invalid budget
+  stops the hook before any shard runs.
+  Regression: `tests/test_sonny4920_prepush_shard_budget.py` (in
+  `make cross-gate-status-test`, a `zig-test-budget-regression` pre-commit
+  hook, and the `governance-cross-gate-status` CI job).
+- **Concurrent-login test reports each caller's outcome (SONNY-4920):**
+  `authenticate_concurrent_cached_user_singleflights_persistent_refresh`
+  counted failed callers but dropped their errors. When it fails it now prints,
+  per caller, the error name or returned role and the elapsed time. Bounds,
+  caller count and assertions are unchanged.
+- **Test steps spawn the geode this build emitted (SONNY-2697):** every test
+  that starts a geode server or CLI spawned `./zig-out/bin/geode`, which held
+  whatever the last install left. With `zig build -p <prefix>` the fresh
+  binary went to the prefix and `test-gql-conformance` ran the old one; eight
+  steps (`test-first-boot-admin-breadcrumb`, `test-cluster-steady-state`,
+  `test-liveness-breadcrumb`, `test-quic-idle-cpu`,
+  `test-cluster-replicable-mutations`, the aggregate `all_tests.zig` run, and
+  the `cli_test.zig` and server-memory-pressure runs in `test-e2e`) did not
+  build geode at all, so they ran a stale binary or SKIPped as passed. A test
+  that spawns geode is now registered with build.zig's `spawnsBuiltGeode`,
+  which gives it the `geode_test_bin` module: the absolute path of the
+  executable this build emitted, built before the test compiles. The path
+  does not depend on zig-out, the install prefix or the working directory,
+  and a spawning test that is not registered fails to compile.
+  Regression: `zig build test-sonny2697-spawned-geode-fresh`.
+- **Test runs remove their scratch dirs from `/tmp` (SONNY-2413):** a test
+  process that spawned a server without `--data-dir` gave it
+  `/tmp/geode-test-<pid>`, and nothing removed it (one task's runs left 62).
+  `test-gql-conformance` left one `/tmp/geode-gqlconf-<pid>-<n>` per query,
+  20 per run. Scratch dirs now come from `tests/test_scratch.zig`. Each test
+  process gets one root, `/tmp/geode-test-<pid>-<random>`, created fresh
+  (nothing already there is reused or deleted). A small `/bin/sh` reaper
+  removes the root when the process exits, even when the process is killed
+  with SIGKILL. The default server data dir is `<root>/data`.
+  `ScratchDir.create` makes a dir under the root for a single test, and
+  `remove()`, deferred before the server is spawned, deletes it once the
+  server has stopped. If the dir survives, `remove()` fails the test.
+  `gql_conformance.zig` uses it. The cert dirs that
+  `test-cert-provided` and `test-cluster-replicable-mutations` create are now
+  removed when an `openssl` step fails, too.
+  Regression: `zig build test-sonny2413-scratch-cleanup`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

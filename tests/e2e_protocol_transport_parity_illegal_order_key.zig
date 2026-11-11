@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -50,7 +51,7 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
     //     which `ORDER BY f(a)` is legal and returns rows. The IllegalOrderKey
     //     diagnostic only exists under the opt-in ident-only policy, so pin it
     //     with `GEODE_ORDER_KEYS_EXPR=0` (server_init.zig:233).
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--listen-grpc", grpc_addr }, &.{
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--listen-grpc", grpc_addr }, &.{
         "GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK=1",
         "GEODE_QUIC_PASSIVE_TEARDOWN=1",
         "GEODE_ORDER_KEYS_EXPR=0",

@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
@@ -26,7 +27,7 @@ test "protocol: transport parity MATCH varlen rows QUIC (gated)" {
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // Use a deterministic small synthetic dataset exposed by built-in example loader
     // The query orders by projected names to ensure stable order metadata and rows.
     const q = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 3 OFFSET 0";

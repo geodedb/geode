@@ -48,10 +48,11 @@
 // (run `zig build` first) or when openssl is unavailable for fixture creation.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const cert_gen = @import("cert_gen");
 
-const BINARY_PATH = "./zig-out/bin/geode";
+const BINARY_PATH = geode_test_bin.geode_exe;
 
 // ---------------------------------------------------------------------------
 // Zig 0.16 compat helpers (mirrored from tests/test_cluster_3node_subprocess.zig)
@@ -152,6 +153,8 @@ fn makeProvidedCert(aa: std.mem.Allocator) !Provided {
 
     const dir = try std.fmt.allocPrint(aa, "/tmp/geode-cert-honored-{d}", .{std.os.linux.getpid()});
     std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    // SONNY-2413: the caller removes it on success; a failed openssl step must too.
+    errdefer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
     const crt = try std.fmt.allocPrint(aa, "{s}/provided.crt", .{dir});
     const key = try std.fmt.allocPrint(aa, "{s}/provided.key", .{dir});
 

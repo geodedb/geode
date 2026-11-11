@@ -15,6 +15,7 @@
 // CANARY: REQ=REQ-GAP-0514-QUIC-HANDLER; FEATURE="CanaryReconciliation"; ASPECT=QuicHandlerRegression; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=server; UPDATED=2026-06-11
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -82,7 +83,7 @@ test "HELLO graph binding: valid graph binds (RBAC-checked), oversize/malformed 
     defer allocator.free(addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();

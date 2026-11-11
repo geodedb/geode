@@ -1,4 +1,6 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
+const test_scratch = @import("test_scratch.zig");
 const builtin = @import("builtin");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
@@ -252,7 +254,7 @@ pub fn spawnServerWithAddr(
     addr: []const u8,
     env: ?[]const []const u8,
 ) !ServerHandle {
-    const args = &[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen", addr };
+    const args = &[_][]const u8{ geode_test_bin.geode_exe, "serve", "--listen", addr };
     return spawnServer(allocator, args, env);
 }
 
@@ -352,16 +354,15 @@ pub fn spawnServer(
     // durability still see the same store, while sibling test binaries no
     // longer collide. An explicit `--data-dir` argument or a caller/parent
     // GEODE_DATA_DIR always wins.
+    //
+    // SONNY-2413: the dir lives under the process's scratch root, which is
+    // removed when the test process exits (it used to be `/tmp/geode-test-<pid>`,
+    // which nothing ever removed).
     if (map.get("GEODE_DATA_DIR") == null and !hasFlag(args, "--data-dir")) {
-        var dir_buf: [64]u8 = undefined;
-        const pid = if (comptime builtin.os.tag == .linux)
-            @as(i64, std.os.linux.getpid())
-        else
-            @as(i64, std.c.getpid());
-        if (std.fmt.bufPrint(&dir_buf, "/tmp/geode-test-{d}", .{pid})) |test_data_dir| {
-            std.Io.Dir.cwd().createDirPath(io, test_data_dir) catch {};
-            map.put("GEODE_DATA_DIR", test_data_dir) catch {};
-        } else |_| {}
+        var dir_buf: [192]u8 = undefined;
+        const test_data_dir = try std.fmt.bufPrint(&dir_buf, "{s}/data", .{try test_scratch.processRoot()});
+        try std.Io.Dir.cwd().createDirPath(io, test_data_dir);
+        try map.put("GEODE_DATA_DIR", test_data_dir);
     }
 
     // CANARY: REQ=REQ-QUIC-HC-024; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ServerStderrPassThrough; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26

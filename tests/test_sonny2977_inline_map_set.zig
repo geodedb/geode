@@ -23,6 +23,7 @@
 // CANARY: REQ=REQ-SONNY-2977-INLINE-MAP-SET; FEATURE="MatchSet"; ASPECT=EveryInlineMapHolder; STATUS=TESTED; TEST=tests/test_sonny2977_inline_map_set.zig; OWNER=engine; UPDATED=2026-09-27
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const rls_types = @import("rls_types");
@@ -320,7 +321,7 @@ const Server = struct {
         try std.Io.Dir.cwd().createDirPath(io, data_dir);
         const addr = try util.formatAddr(allocator, port);
         errdefer allocator.free(addr);
-        var handle = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, &.{});
+        var handle = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, &.{});
         errdefer handle.deinit();
         try util.waitForServerReady(allocator, addr, 30000);
         return .{ .handle = handle, .data_dir = data_dir, .addr = addr };

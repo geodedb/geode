@@ -73,13 +73,14 @@
 // skip when the binary is missing or $GEODE_SKIP_SUBPROC_CLUSTER is set.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 
 const linux = std.os.linux;
 const posix = std.posix;
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const ready_marker = "[startup] server ready";
 const admin_username = "geode";
 const admin_password = "GeodeTestPassword123!";

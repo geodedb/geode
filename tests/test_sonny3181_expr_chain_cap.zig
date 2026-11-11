@@ -28,6 +28,7 @@
 // CANARY: REQ=REQ-SONNY-3181-EXPR-CHAIN-CAP; FEATURE="GQLParser"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=parser; UPDATED=2026-09-27
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -478,7 +479,7 @@ test "SONNY-3181: over QUIC chains are evaluated up to the cap and refused (4200
     defer allocator.free(addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();

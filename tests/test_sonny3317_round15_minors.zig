@@ -17,6 +17,7 @@
 // CANARY: REQ=REQ-SONNY-3317-ROUND15-MINORS; FEATURE="MultiGraphIsolation"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3317_round15_minors.zig; OWNER=storage; UPDATED=2026-09-28
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const util = @import("proto_test_util.zig");
@@ -154,7 +155,7 @@ test "SONNY-3317 (M5): the QUIC admission stack's floor is 8 MiB (pinned), and a
     defer allocator.free(addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         &.{ "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1", "GEODE_QUIC_ADMISSION_STACK_MB=1" },
     );
     defer server.deinit();

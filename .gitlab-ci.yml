@@ -464,6 +464,26 @@ governance-ci-yaml-lint:
       python3 -m unittest discover -s scripts/ci -p test_workflow_rules.py
       echo "✓ CI YAML lints passed"
 
+governance-cross-gate-status:
+  extends: .governance-python
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends make
+  script:
+    - |
+      echo "=== Required cross-build gates propagate failures (SONNY-4911) ==="
+      # Hermetic: runs the committed cross-* Makefile targets with a stub zig
+      # and the configured cross-compile-check hook command with a stub make.
+      python3 tests/test_sonny4911_cross_gate_status.py
+      echo "✓ Cross-build gates propagate compiler and make failures"
+      echo "=== zig-test pre-push shards fit one CPU budget (SONNY-4920) ==="
+      # Hermetic: runs the configured zig-test hook command with stub zig/nproc.
+      python3 tests/test_sonny4920_prepush_shard_budget.py
+      echo "✓ zig-test shards fit the CPU budget and propagate failures"
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
 governance-zig-package-cache:
   extends: .governance-python
   script:
@@ -534,6 +554,12 @@ governance-release-manifests:
       python3 tools/release_dockerfile_manifest.py check \
         --manifest release/dockerfile_manifest.json \
         --repo-root .
+      # SONNY-4884: glibc release bases must load the release binary, and
+      # every release image must execute it as the runtime user at build time.
+      python3 tests/test_sonny4884_release_image_runtime_compat.py
+      # SONNY-4885: the manual FIPS image must run on a glibc that loads its
+      # OpenSSL provider, and prove the provider loads at image build time.
+      python3 tests/test_sonny4885_fips_release_runtime_compat.py
       echo "✓ Release manifests are in sync"
   rules:
     - if: '$CI_MERGE_REQUEST_ID'

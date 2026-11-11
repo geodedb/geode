@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
@@ -77,7 +78,7 @@ test "protocol: transport parity QUIC (CASE 3VL)" {
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const q = "RETURN CASE WHEN a IS NULL THEN 'n' WHEN a THEN 't' ELSE 'f' END AS r";
     const param = "[null,true,false]";
 

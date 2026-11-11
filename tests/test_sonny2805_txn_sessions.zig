@@ -33,6 +33,7 @@
 // CANARY: REQ=REQ-SONNY-2805-TXN-SESSION; FEATURE="TransactionUndoLog"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -627,7 +628,7 @@ test "SONNY-2805: over QUIC transaction control runs in program order, and a fai
     defer allocator.free(addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();

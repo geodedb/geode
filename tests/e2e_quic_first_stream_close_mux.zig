@@ -61,6 +61,7 @@
 // CANARY: REQ=REQ-QUIC-MUX-011; FEATURE="StreamMultiplexing"; ASPECT=AcceptReactorOccupancy; STATUS=TESTED; TEST=test-quic-first-stream-close-mux-e2e; OWNER=server; UPDATED=2026-09-15
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -717,7 +718,7 @@ pub fn main() !void {
     const gpa = std.heap.smp_allocator;
 
     const io_fs = std.Io.Threaded.global_single_threaded.io();
-    std.Io.Dir.cwd().access(io_fs, "./zig-out/bin/geode", .{}) catch {
+    std.Io.Dir.cwd().access(io_fs, geode_test_bin.geode_exe, .{}) catch {
         std.debug.print("SKIP: geode binary missing; run `zig build` first\n", .{});
         return;
     };

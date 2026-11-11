@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
@@ -33,7 +34,7 @@ test "protocol: transport parity diagnostics (US001) QUIC vs gRPC (gated)" {
     errdefer util.testFail();
 
     const allocator = testing.allocator;
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const q = "RETURN 1 LIMIT 10 OFFSET 5";
 
     // `util.GrpcProtoClient` speaks plaintext HTTP/2 while the gRPC listener is

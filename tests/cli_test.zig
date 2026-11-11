@@ -1,10 +1,11 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const builtin = @import("builtin");
 
 // Test CLI components by spawning the actual geode binary
 
-const geode_binary = "./zig-out/bin/geode";
+const geode_binary = geode_test_bin.geode_exe;
 
 // Zig 0.16 compat: std.fs.cwd()/std.process.Child.init were retired in favor
 // of std.Io.Dir + the free function std.process.spawn(io, SpawnOptions).

@@ -1565,10 +1565,21 @@ test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
     try testing.expectEqual(Role.Admin, warm.role);
     const baseline_version_lookups = state.auth_version_calls.load(.acquire);
 
+    // SONNY-4920: each caller keeps its own outcome so a failure says which
+    // callers failed and how (error name, or the wrong role) instead of only
+    // a count. Written by the worker, read only after every thread joined.
+    const Outcome = union(enum) {
+        not_run,
+        role: Role,
+        err: anyerror,
+    };
+
     const Worker = struct {
         start: *std.atomic.Value(bool),
         ok: *std.atomic.Value(u32),
         failed: *std.atomic.Value(u32),
+        outcome: Outcome = .not_run,
+        elapsed_ns: u64 = 0,
 
         fn run(ctx: *@This()) void {
             while (!ctx.start.load(.acquire)) {
@@ -1576,14 +1587,31 @@ test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
                 // loop simply spins hotter, which is harmless.
                 std.Thread.yield() catch {};
             }
-            const auth = authenticate("alice", "Password1!") catch {
+            const started_ns = compat_monotonicNs();
+            defer ctx.elapsed_ns = compat_monotonicNs() -| started_ns;
+            const auth = authenticate("alice", "Password1!") catch |err| {
+                ctx.outcome = .{ .err = err };
                 _ = ctx.failed.fetchAdd(1, .acq_rel);
                 return;
             };
+            ctx.outcome = .{ .role = auth.role };
             if (auth.role == .Admin) {
                 _ = ctx.ok.fetchAdd(1, .acq_rel);
             } else {
                 _ = ctx.failed.fetchAdd(1, .acq_rel);
+            }
+        }
+
+        // Names only: no credentials, hashes or tokens.
+        fn report(workers: []const @This()) void {
+            std.debug.print("\nauth concurrent refresh: per-caller outcomes (expected role Admin)\n", .{});
+            for (workers, 0..) |w, i| {
+                const elapsed_ms = w.elapsed_ns / std.time.ns_per_ms;
+                switch (w.outcome) {
+                    .not_run => std.debug.print("  caller {d}: not run\n", .{i}),
+                    .role => |role| std.debug.print("  caller {d}: role {s} after {d} ms\n", .{ i, @tagName(role), elapsed_ms }),
+                    .err => |err| std.debug.print("  caller {d}: error.{s} after {d} ms\n", .{ i, @errorName(err), elapsed_ms }),
+                }
             }
         }
     };
@@ -1594,6 +1622,9 @@ test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
     var ok = std.atomic.Value(u32).init(0);
     var failed = std.atomic.Value(u32).init(0);
     var contexts: [worker_count]Worker = undefined;
+    for (&contexts) |*ctx| ctx.* = .{ .start = &start, .ok = &ok, .failed = &failed };
+    // Runs after the block below has joined every spawned worker.
+    errdefer Worker.report(&contexts);
     var threads: [worker_count]std.Thread = undefined;
     {
         state.release_refresh.store(false, .release);
@@ -1606,7 +1637,6 @@ test "authenticate_concurrent_cached_user_singleflights_persistent_refresh" {
             for (threads[0..spawned]) |thread| thread.join();
         }
         for (&contexts, 0..) |*ctx, i| {
-            ctx.* = .{ .start = &start, .ok = &ok, .failed = &failed };
             threads[i] = try std.Thread.spawn(.{}, Worker.run, .{ctx});
             spawned += 1;
         }

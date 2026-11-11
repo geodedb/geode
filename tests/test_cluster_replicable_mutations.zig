@@ -42,9 +42,10 @@
 // flaky CI runner.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 
-const BINARY_PATH = "./zig-out/bin/geode";
+const BINARY_PATH = geode_test_bin.geode_exe;
 const NODE_IPS = [_][]const u8{ "127.0.0.11", "127.0.0.12", "127.0.0.13" };
 const CLUSTER_PORT_STR = "4242";
 const STARTUP_DEADLINE_MS: i64 = 45_000;
@@ -158,6 +159,8 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
     // race on a shared cert/serial file.
     const dir = try std.fmt.allocPrint(aa, "/tmp/geode-repl-mut-{d}-{d}", .{ std.os.linux.getpid(), nowMillis() });
     std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    // SONNY-2413: the caller removes it on success; a failed openssl step must too.
+    errdefer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
     const j = struct {
         fn p(al: std.mem.Allocator, d: []const u8, f: []const u8) []const u8 {
             return std.fmt.allocPrint(al, "{s}/{s}", .{ d, f }) catch unreachable;

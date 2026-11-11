@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const util = @import("proto_test_util.zig");
@@ -32,7 +33,7 @@ const ServerFixture = struct {
 };
 
 fn startServer(allocator: std.mem.Allocator, addr: []const u8) !ServerFixture {
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, null);
     errdefer server.deinit();
 
     // Wait for server to be ready with retries

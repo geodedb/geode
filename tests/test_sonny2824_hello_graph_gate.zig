@@ -20,6 +20,7 @@
 // CANARY: REQ=REQ-SONNY-2824-HELLO-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2824_hello_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -73,7 +74,7 @@ const Server = struct {
         errdefer allocator.free(self.grpc_addr);
         self.handle = try util.spawnServer(
             allocator,
-            &.{ "./zig-out/bin/geode", "serve", "--listen", self.quic_addr, "--listen-grpc", self.grpc_addr, "--data-dir", self.data_dir },
+            &.{ geode_test_bin.geode_exe, "serve", "--listen", self.quic_addr, "--listen-grpc", self.grpc_addr, "--data-dir", self.data_dir },
             // The plaintext gRPC client (Debug builds of the server only).
             util.TestEnv.grpcPlaintext(),
         );

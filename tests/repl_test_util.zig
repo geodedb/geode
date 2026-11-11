@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const geode = @import("geode");
 const proto_util = @import("proto_test_util.zig");
 
@@ -28,7 +29,7 @@ pub fn startServer(allocator: std.mem.Allocator) !ServerFixture {
     const addr = try std.fmt.allocPrint(allocator, "127.0.0.1:{d}", .{port});
     const handle = try proto_util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         null,
     );
     return .{ .allocator = allocator, .addr = addr, .handle = handle };

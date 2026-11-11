@@ -8,6 +8,7 @@
 //   through gps.decide(.bind_graph)) make every assertion GREEN.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -28,7 +29,7 @@ test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();
@@ -117,7 +118,7 @@ test "QUIC HELLO race-recovery path: ReadOnly user bind to existing ungranted gr
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();

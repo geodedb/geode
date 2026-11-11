@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const schema = @import("schema");
 const util = @import("proto_test_util.zig");
 
@@ -42,7 +43,7 @@ pub fn runParityRandom(
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
         env,
     );
     errdefer server.deinit();
@@ -90,7 +91,7 @@ pub fn runParity(
 ) !struct { server: util.ServerHandle, result: ParityResult } {
     const server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
         env,
     );
 
