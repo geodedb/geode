@@ -325,7 +325,6 @@ pub const index = struct {
     pub const rtree = @import("rtree_lib");
     pub const hnsw = @import("hnsw_lib");
     pub const interval_tree = @import("index/interval_tree.zig");
-    pub const interval_persist = @import("index/interval_persist.zig");
     pub const jsonb_inverted = @import("index/jsonb_inverted.zig");
     pub const jsonb_inverted_persist = @import("index/jsonb_inverted_persist.zig");
     pub const domain_trie = @import("index/domain_trie.zig");

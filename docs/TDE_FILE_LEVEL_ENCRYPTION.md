@@ -47,7 +47,6 @@ All specialized index structures are encrypted when persisted to disk:
 | Patricia Trie (IP) | `.gdxp`        | `GDXP`       | `src/index/patricia_persist.zig`        |
 | Domain Trie        | `.gddn`        | `GDDN`       | `src/index/domain_trie_persist.zig`     |
 | JSONB Inverted     | `.gdjb`        | `GDJB`       | `src/index/jsonb_inverted_persist.zig`  |
-| Interval Tree      | `.gdir`        | `GDIR`       | `src/index/interval_persist.zig`        |
 
 ### Schema Catalogs
 
@@ -169,7 +168,6 @@ All TDE-protected files include CANARY markers for requirement traceability:
 | `patricia_persist.zig`       | PatriciaTrie  |
 | `domain_trie_persist.zig`    | DomainTrie    |
 | `jsonb_inverted_persist.zig` | JSONBIndex    |
-| `interval_persist.zig`       | IntervalTree  |
 | `raft_persistent.zig`        | RaftState     |
 | `catalog.zig`                | SchemaCatalog |
 | `fle_catalog.zig`            | FLECatalog    |
