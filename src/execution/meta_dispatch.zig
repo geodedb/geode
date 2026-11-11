@@ -25,6 +25,7 @@ const value_types = @import("../value_types.zig");
 const language_metadata = @import("../gql/language_metadata.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
+const session_graph = @import("session_graph.zig");
 
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -302,7 +303,8 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
 
 fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !ExecutionResult {
     const catalog = context.catalog;
-    const indexes = try catalog.listAllIndexes(allocator);
+    // SONNY-1319: the session's graph's catalog, as SHOW INDEXES lists it.
+    const indexes = try catalog.listIndexesForGraph(allocator, session_graph.current(context));
     defer allocator.free(indexes);
 
     // #844: FULLTEXT indexes live in IndexManager.fulltext_indexes and were
@@ -359,7 +361,8 @@ fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !Ex
 
 fn executeDbConstraints(allocator: std.mem.Allocator, context: ExecutionContext) !ExecutionResult {
     const catalog = context.catalog;
-    const constraints = try catalog.listAllConstraints(allocator);
+    // SONNY-1319: the session's graph's catalog, as SHOW CONSTRAINTS lists it.
+    const constraints = try catalog.listConstraintsForGraph(allocator, session_graph.current(context));
     defer allocator.free(constraints);
 
     const columns = try allocator.alloc([]const u8, 5);

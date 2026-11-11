@@ -50,6 +50,28 @@
 
 ### Fixed
 
+- **Index and constraint catalogs are graph-scoped (SONNY-1319):** the
+  catalog keyed a row `<label>:<name>` with no graph, so with two graphs
+  `CREATE INDEX IF NOT EXISTS i ...` in one was a silent no-op when the other
+  had `i`, a plain CREATE answered 42P07, `DROP INDEX i` in one graph removed
+  the other's `i` (one tenant could drop another's indexes by name), `CREATE
+  CONSTRAINT c` was refused (42710) when another graph had `c`, and `SHOW
+  INDEXES` / `SHOW CONSTRAINTS` / `db.indexes()` / `db.constraints()` listed
+  every graph's rows. Every row now records its graph (the session's; the
+  default graph for a fulltext index, where its engine lives), persisted in a
+  trailer after the catalog records and reloaded at restart. CREATE, IF NOT
+  EXISTS, DROP INDEX and SHOW resolve within the session's graph; DROP INDEX
+  now needs the schema permission on the session's graph (and, as before,
+  on the database; on `default` too for a fulltext or engine-wide index).
+  Two exceptions: an index whose runtime structure is keyed by name alone
+  (vector/HNSW and the other advanced types, SONNY-1223) cannot share its
+  name with another graph's index — that CREATE, IF NOT EXISTS included, is
+  refused with 42P07 `IndexNameInUseByOtherGraph` instead of being
+  swallowed; and rows from a catalog written before this change, and the
+  implicit `auto_idx_*_id` indexes, are engine-wide (in every graph's
+  catalog, as before), so an upgrade loses nothing. Constraint enforcement
+  on writes is unchanged (SONNY-2846, SONNY-3358). Regression:
+  `zig build test-sonny1319-graph-scoped-catalog`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

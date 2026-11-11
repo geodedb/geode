@@ -40,7 +40,56 @@ pub const IndexInfo = struct {
     // brute-force scan it replaces. `null` means "not recorded" and keeps the
     // documented `l2` default. Non-vector index types leave it null.
     metric: ?[]const u8 = null,
+    // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=IndexGraphField; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    // SONNY-1319: the graph the index belongs to. ENGINE_WIDE_GRAPH ("") is a
+    // row that applies to every graph: one the engine-global catalog wrote
+    // before rows carried a graph, or an implicit auto-index.
+    graph: []const u8 = ENGINE_WIDE_GRAPH,
 };
+
+// CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=GraphScope; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+/// SONNY-1319: the graph of an index or constraint row that applies to every
+/// graph. Rows read from a catalog file written before rows carried a graph
+/// get it, so an upgrade keeps their old (engine-global) meaning and loses
+/// nothing.
+pub const ENGINE_WIDE_GRAPH: []const u8 = "";
+
+/// SONNY-1319: is a row of `row_graph` part of `graph`'s catalog?
+pub fn rowInGraph(row_graph: []const u8, graph: []const u8) bool {
+    return row_graph.len == 0 or std.mem.eql(u8, row_graph, graph);
+}
+
+/// SONNY-1319: does an index of this catalog type have a runtime structure
+/// that is process-wide and keyed by index NAME alone (the HNSW vector index,
+/// its dimension guard, and the other advanced indexes — mirrors
+/// `statement_dispatcher.runtimeAdvancedIndexTypeFromCatalog`)? Such a name
+/// cannot also be used in another graph: both rows would share one structure
+/// (SONNY-1223), and dropping either would drop it.
+pub fn indexHasNameKeyedRuntime(index_type: []const u8) bool {
+    const names = [_][]const u8{
+        "vector",        "vector_f32",   "spatial_geographic", "network_cidr",  "signature_crypto",
+        "interval_tree", "IntervalTree", "jsonb_inverted",     "JsonbInverted", "domain_trie",
+        "DomainTrie",
+    };
+    for (names) |n| {
+        if (std.mem.eql(u8, index_type, n)) return true;
+    }
+    return false;
+}
+
+/// SONNY-1319: map key of an index or constraint row:
+/// "<graph>\x1f<label>:<name>". The unit separator keeps a graph name that
+/// contains ':' from colliding with a label.
+fn graphScopedKey(allocator: std.mem.Allocator, graph: []const u8, label: []const u8, name: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}\x1f{s}:{s}", .{ graph, label, name });
+}
+
+/// SONNY-1319: trailer appended after the constraint records, carrying each
+/// row's graph in record order. The file has no format version, so the graphs
+/// cannot ride in the records themselves; a file with no trailer (written by
+/// the engine-global catalog) loads every row as ENGINE_WIDE_GRAPH, and an
+/// older reader stops after the constraint records and ignores it.
+const GRAPH_TRAILER_MAGIC = "GSC1";
 
 // CANARY: REQ=REQ-ADVANCED-INDEX-RESTART-REBUILD; FEATURE="SchemaCatalog"; ASPECT=VectorMetricPersistence; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=catalog; UPDATED=2026-08-25
 /// On-disk separator between an index's type and its optional metric.
@@ -64,6 +113,8 @@ pub const ConstraintInfo = struct {
     label: []const u8, // Node/edge label
     properties: [][]const u8, // Property names involved
     is_enforced: bool, // Whether constraint is currently enforced
+    // SONNY-1319: the graph the constraint belongs to (see IndexInfo.graph).
+    graph: []const u8 = ENGINE_WIDE_GRAPH,
 
     pub const ConstraintType = enum {
         unique, // IS UNIQUE - single property uniqueness
@@ -73,9 +124,9 @@ pub const ConstraintInfo = struct {
     };
 };
 
-/// Generate a scoped index key for catalog storage
-/// Format: "label:index_name" to allow same index name on different labels
-/// This follows database best practices where indexes are scoped per table/label
+/// Label-scoped index identifier "label:index_name" (same index name allowed
+/// on different labels). SONNY-1319: the catalog's map key is no longer this;
+/// it is graph-scoped as well (`graphScopedKey`).
 pub fn getScopedIndexKey(allocator: std.mem.Allocator, label: []const u8, index_name: []const u8) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}:{s}", .{ label, index_name });
 }
@@ -91,6 +142,53 @@ fn isZeroUuid(uuid: [16]u8) bool {
         if (byte != 0) return false;
     }
     return true;
+}
+
+/// SONNY-1319: may rows of `a` and `b` name the same object? An engine-wide
+/// row is in every graph.
+fn graphsOverlap(a: []const u8, b: []const u8) bool {
+    return a.len == 0 or b.len == 0 or std.mem.eql(u8, a, b);
+}
+
+/// SONNY-1319: `graph`'s row for (label, name), else the engine-wide one.
+/// Caller holds the catalog rwlock.
+fn lookupInGraph(
+    comptime V: type,
+    allocator: std.mem.Allocator,
+    map: *const std.StringHashMap(V),
+    graph: []const u8,
+    label: []const u8,
+    name: []const u8,
+) !?V {
+    for ([_][]const u8{ graph, ENGINE_WIDE_GRAPH }) |g| {
+        var key_buf: [512]u8 = undefined;
+        if (std.fmt.bufPrint(&key_buf, "{s}\x1f{s}:{s}", .{ g, label, name })) |key| {
+            if (map.get(key)) |v| return v;
+        } else |_| {
+            const key = try graphScopedKey(allocator, g, label, name);
+            defer allocator.free(key);
+            if (map.get(key)) |v| return v;
+        }
+        if (g.len == 0) break;
+    }
+    return null;
+}
+
+fn readLenPrefixed(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {
+    var len_buf: [4]u8 = undefined;
+    if ((try reader.readSliceShort(&len_buf)) < 4) return error.InvalidCatalogFile;
+    const len = std.mem.readInt(u32, &len_buf, .little);
+    const bytes = try allocator.alloc(u8, len);
+    errdefer allocator.free(bytes);
+    if ((try reader.readSliceShort(bytes)) < len) return error.InvalidCatalogFile;
+    return bytes;
+}
+
+fn appendLenPrefixed(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), bytes: []const u8) !void {
+    var len_buf: [4]u8 = undefined;
+    std.mem.writeInt(u32, &len_buf, @intCast(bytes.len), .little);
+    try buf.appendSlice(allocator, &len_buf);
+    try buf.appendSlice(allocator, bytes);
 }
 
 /// Catalog manages database metadata (schemas, graphs, indexes, constraints)
@@ -158,15 +256,7 @@ pub const Catalog = struct {
             var iter = self.indexes.iterator();
             while (iter.next()) |entry| {
                 self.allocator.free(entry.key_ptr.*);
-                const info = entry.value_ptr.*;
-                self.allocator.free(info.name);
-                self.allocator.free(info.index_type);
-                self.allocator.free(info.table_name);
-                if (info.metric) |m| self.allocator.free(m);
-                for (info.columns) |col| {
-                    self.allocator.free(col);
-                }
-                self.allocator.free(info.columns);
+                self.freeIndexInfo(entry.value_ptr.*);
             }
             self.indexes.deinit();
         }
@@ -176,19 +266,33 @@ pub const Catalog = struct {
             var iter = self.constraints.iterator();
             while (iter.next()) |entry| {
                 self.allocator.free(entry.key_ptr.*);
-                const info = entry.value_ptr.*;
-                self.allocator.free(info.name);
-                self.allocator.free(info.label);
-                for (info.properties) |prop| {
-                    self.allocator.free(prop);
-                }
-                self.allocator.free(info.properties);
+                self.freeConstraintInfo(entry.value_ptr.*);
             }
             self.constraints.deinit();
         }
 
         self.allocator.free(self.data_dir);
         // Caller is responsible for destroying the Catalog struct itself
+    }
+
+    /// Free every catalog-owned field of an index row.
+    pub fn freeIndexInfo(self: *Catalog, info: IndexInfo) void {
+        self.allocator.free(info.name);
+        self.allocator.free(info.index_type);
+        self.allocator.free(info.table_name);
+        if (info.metric) |m| self.allocator.free(m);
+        for (info.columns) |col| self.allocator.free(col);
+        self.allocator.free(info.columns);
+        self.allocator.free(info.graph);
+    }
+
+    /// Free every catalog-owned field of a constraint row.
+    pub fn freeConstraintInfo(self: *Catalog, info: ConstraintInfo) void {
+        self.allocator.free(info.name);
+        self.allocator.free(info.label);
+        for (info.properties) |prop| self.allocator.free(prop);
+        self.allocator.free(info.properties);
+        self.allocator.free(info.graph);
     }
 
     /// Save catalog to disk
@@ -235,10 +339,16 @@ pub const Catalog = struct {
             try buffer.appendSlice(self.allocator, &uuid);
         }
 
+        // SONNY-1319: each row's graph, in record order (GRAPH_TRAILER_MAGIC).
+        var trailer = try std.ArrayList(u8).initCapacity(self.allocator, 64);
+        defer trailer.deinit(self.allocator);
+        try trailer.appendSlice(self.allocator, GRAPH_TRAILER_MAGIC);
+
         // Write indexes
         var index_iter = self.indexes.iterator();
         while (index_iter.next()) |entry| {
             const index_info = entry.value_ptr.*;
+            try appendLenPrefixed(self.allocator, &trailer, index_info.graph);
 
             // Write index name
             var name_len_buf: [4]u8 = undefined;
@@ -283,6 +393,7 @@ pub const Catalog = struct {
         var constraint_iter = self.constraints.iterator();
         while (constraint_iter.next()) |entry| {
             const constraint_info = entry.value_ptr.*;
+            try appendLenPrefixed(self.allocator, &trailer, constraint_info.graph);
 
             // Write constraint name
             var name_len_buf: [4]u8 = undefined;
@@ -316,6 +427,8 @@ pub const Catalog = struct {
                 try buffer.appendSlice(self.allocator, prop);
             }
         }
+
+        try buffer.appendSlice(self.allocator, trailer.items);
 
         // Encrypt and write to file
         try tde.writeEncryptedFile(self.allocator, catalog_path, buffer.items);
@@ -413,6 +526,20 @@ pub const Catalog = struct {
         // hydration state and resident products untouched.
         try store.registerAdapterGraphsForLazyHydration(newly_opened.items);
 
+        // SONNY-1319: rows are keyed by graph, and the graphs follow every
+        // record (GRAPH_TRAILER_MAGIC), so the rows wait here until the
+        // trailer has been read. `moved_*` counts the ones the maps own.
+        var pending_indexes: std.ArrayList(IndexInfo) = .empty;
+        var pending_constraints: std.ArrayList(ConstraintInfo) = .empty;
+        var moved_indexes: usize = 0;
+        var moved_constraints: usize = 0;
+        defer {
+            for (pending_indexes.items[moved_indexes..]) |info| self.freeIndexInfo(info);
+            pending_indexes.deinit(self.allocator);
+            for (pending_constraints.items[moved_constraints..]) |info| self.freeConstraintInfo(info);
+            pending_constraints.deinit(self.allocator);
+        }
+
         // Read indexes
         i = 0;
         while (i < index_count) : (i += 1) {
@@ -478,10 +605,7 @@ pub const Catalog = struct {
                 .metric = metric,
             };
 
-            // Reconstruct scoped key: "label:index_name"
-            // This ensures compatibility with new scoped key format
-            const scoped_key = try getScopedIndexKey(self.allocator, table_name, name);
-            try self.indexes.put(scoped_key, index_info);
+            try pending_indexes.append(self.allocator, index_info);
         }
 
         // Read constraints (if present in catalog file)
@@ -540,27 +664,57 @@ pub const Catalog = struct {
                 .is_enforced = is_enforced,
             };
 
-            // Use scoped key: "label:constraint_name"
-            const scoped_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ label, name });
-            try self.constraints.put(scoped_key, constraint_info);
+            try pending_constraints.append(self.allocator, constraint_info);
+        }
+
+        // SONNY-1319: the graph of every row. No trailer: a file the
+        // engine-global catalog wrote, whose rows keep their every-graph
+        // meaning (ENGINE_WIDE_GRAPH). Anything else after the records is not
+        // a catalog this engine wrote.
+        var magic: [GRAPH_TRAILER_MAGIC.len]u8 = undefined;
+        const magic_len = try reader.readSliceShort(&magic);
+        if (magic_len != 0) {
+            if (magic_len != magic.len or !std.mem.eql(u8, &magic, GRAPH_TRAILER_MAGIC)) return error.InvalidCatalogFile;
+            for (pending_indexes.items) |*info| info.graph = try readLenPrefixed(self.allocator, &reader);
+            for (pending_constraints.items) |*info| info.graph = try readLenPrefixed(self.allocator, &reader);
+        }
+
+        for (pending_indexes.items) |info| {
+            const key = try graphScopedKey(self.allocator, info.graph, info.table_name, info.name);
+            errdefer self.allocator.free(key);
+            if (self.indexes.contains(key)) return error.InvalidCatalogFile;
+            try self.indexes.put(key, info);
+            moved_indexes += 1;
+        }
+        for (pending_constraints.items) |info| {
+            const key = try graphScopedKey(self.allocator, info.graph, info.label, info.name);
+            errdefer self.allocator.free(key);
+            if (self.constraints.contains(key)) return error.InvalidCatalogFile;
+            try self.constraints.put(key, info);
+            moved_constraints += 1;
         }
     }
 
     // CANARY: REQ=REQ-CONSTRAINT-002; FEATURE="ConstraintManagement"; ASPECT=CatalogMethods; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=schema; UPDATED=2026-01-09
-    /// Add a constraint to the catalog
+    // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=ConstraintGraphScope; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    /// Add a constraint to the catalog, in `info.graph`. SONNY-1319: a
+    /// same-named constraint on the label in ANOTHER graph is no duplicate; one
+    /// in the same graph, or an engine-wide one (which is in every graph), is.
     pub fn addConstraint(self: *Catalog, info: ConstraintInfo) !void {
         self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        // Create scoped key
-        const scoped_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ info.label, info.name });
+        // SONNY-2809: the errdefer frees scoped_key on every error return
+        // below; an explicit free as well made every duplicate CREATE
+        // CONSTRAINT free the key twice (the bug GAP-0903 fixed in addIndex).
+        const scoped_key = try graphScopedKey(self.allocator, info.graph, info.label, info.name);
         errdefer self.allocator.free(scoped_key);
 
-        // SONNY-2809: no explicit free here — the errdefer above frees
-        // scoped_key on this error return. The explicit free made every
-        // duplicate CREATE CONSTRAINT free the key twice, which corrupted the
-        // allocator and aborted the server (the bug GAP-0903 fixed in addIndex).
-        if (self.constraints.contains(scoped_key)) return error.ConstraintAlreadyExists;
+        var it = self.constraints.valueIterator();
+        while (it.next()) |row| {
+            if (!std.mem.eql(u8, row.name, info.name) or !std.mem.eql(u8, row.label, info.label)) continue;
+            if (graphsOverlap(row.graph, info.graph)) return error.ConstraintAlreadyExists;
+        }
 
         // Duplicate strings for catalog ownership
         const owned_name = try self.allocator.dupe(u8, info.name);
@@ -568,6 +722,9 @@ pub const Catalog = struct {
 
         const owned_label = try self.allocator.dupe(u8, info.label);
         errdefer self.allocator.free(owned_label);
+
+        const owned_graph = try self.allocator.dupe(u8, info.graph);
+        errdefer self.allocator.free(owned_graph);
 
         const owned_props = try self.allocator.alloc([]const u8, info.properties.len);
         var props_filled: usize = 0;
@@ -587,6 +744,7 @@ pub const Catalog = struct {
             .label = owned_label,
             .properties = owned_props,
             .is_enforced = info.is_enforced,
+            .graph = owned_graph,
         };
 
         try self.constraints.put(scoped_key, owned_info);
@@ -599,37 +757,38 @@ pub const Catalog = struct {
         };
     }
 
-    /// Remove a constraint from the catalog
+    /// Remove a constraint of the default graph's catalog (its own, or an
+    /// engine-wide one) by label and name.
     pub fn removeConstraint(self: *Catalog, label: []const u8, name: []const u8) !void {
         self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        const scoped_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ label, name });
-        defer self.allocator.free(scoped_key);
+        const entry = blk: {
+            for ([_][]const u8{ graph_store.DEFAULT_GRAPH_NAME, ENGINE_WIDE_GRAPH }) |graph| {
+                const scoped_key = try graphScopedKey(self.allocator, graph, label, name);
+                defer self.allocator.free(scoped_key);
+                if (self.constraints.fetchRemove(scoped_key)) |e| break :blk e;
+            }
+            return error.ConstraintNotFound;
+        };
 
-        const entry = self.constraints.fetchRemove(scoped_key) orelse return error.ConstraintNotFound;
-
-        // Free the stored values
         self.allocator.free(entry.key);
-        self.allocator.free(entry.value.name);
-        self.allocator.free(entry.value.label);
-        for (entry.value.properties) |prop| {
-            self.allocator.free(prop);
-        }
-        self.allocator.free(entry.value.properties);
+        self.freeConstraintInfo(entry.value);
 
         try self.save();
     }
 
-    /// Get a constraint by label and name
+    /// Get a constraint of the default graph's catalog by label and name.
     pub fn getConstraint(self: *Catalog, label: []const u8, name: []const u8) !?ConstraintInfo {
+        return self.getConstraintInGraph(graph_store.DEFAULT_GRAPH_NAME, label, name);
+    }
+
+    /// SONNY-1319: get a constraint of `graph`'s catalog (its own row, else an
+    /// engine-wide one) by label and name.
+    pub fn getConstraintInGraph(self: *Catalog, graph: []const u8, label: []const u8, name: []const u8) !?ConstraintInfo {
         self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-
-        var key_buf: [512]u8 = undefined;
-        const scoped_key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ label, name }) catch return null;
-
-        return self.constraints.get(scoped_key);
+        return lookupInGraph(ConstraintInfo, self.allocator, &self.constraints, graph, label, name);
     }
 
     /// Get all constraints for a label
@@ -802,13 +961,16 @@ pub const Catalog = struct {
         // SONNY-2809 audit: on an allocation failure below, these (and the
         // "id" column) were leaked.
         errdefer self.allocator.free(index_name);
-        const scoped_key = try getScopedIndexKey(self.allocator, label, index_name);
+        // SONNY-1319: an auto-index is implicit and per label, not per graph:
+        // it is an engine-wide row.
+        const scoped_key = try graphScopedKey(self.allocator, ENGINE_WIDE_GRAPH, label, index_name);
         errdefer self.allocator.free(scoped_key);
 
         self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        if (self.indexes.contains(scoped_key)) {
+        const exists = self.indexes.contains(scoped_key) or self.hasIndexRowLocked(label, index_name);
+        if (exists) {
             self.allocator.free(scoped_key);
             self.allocator.free(index_name);
             return; // Already exists
@@ -840,21 +1002,47 @@ pub const Catalog = struct {
         };
     }
 
-    /// Add an index to the catalog and persist
+    /// Is there a row named `index_name` on `label`, in any graph? Caller
+    /// holds the rwlock.
+    fn hasIndexRowLocked(self: *Catalog, label: []const u8, index_name: []const u8) bool {
+        var it = self.indexes.valueIterator();
+        while (it.next()) |row| {
+            if (std.mem.eql(u8, row.name, index_name) and std.mem.eql(u8, row.table_name, label)) return true;
+        }
+        return false;
+    }
+
+    // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=IndexGraphScope; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    /// Add an index to the catalog, in `info.graph`, and persist.
+    ///
+    /// SONNY-1319: `DuplicateIndex` for a same-named index on the label in the
+    /// same graph, or an engine-wide one (which is in every graph). A
+    /// same-named index in ANOTHER graph is no duplicate, unless either one's
+    /// runtime structure is keyed by name alone (`indexHasNameKeyedRuntime`):
+    /// then the two would be one structure, and the CREATE is refused with
+    /// `IndexNameInUseByOtherGraph` — never swallowed by IF NOT EXISTS, which
+    /// asks about this graph only.
     pub fn addIndex(self: *Catalog, info: IndexInfo) !void {
         self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        const scoped_key = try getScopedIndexKey(self.allocator, info.table_name, info.name);
+        // GAP-0903: the errdefer frees scoped_key on every error return below;
+        // an explicit free as well made every duplicate CREATE INDEX
+        // double-free the key, corrupting the allocator.
+        const scoped_key = try graphScopedKey(self.allocator, info.graph, info.table_name, info.name);
         errdefer self.allocator.free(scoped_key);
 
-        if (self.indexes.contains(scoped_key)) {
-            // GAP-0903: no explicit free here — the errdefer above runs on this
-            // error return and frees scoped_key. The former explicit free made
-            // every duplicate CREATE INDEX double-free the key, corrupting the
-            // allocator and eventually segfaulting the server.
-            return error.DuplicateIndex;
+        var in_other_graph = false;
+        var it = self.indexes.valueIterator();
+        while (it.next()) |row| {
+            if (!std.mem.eql(u8, row.name, info.name)) continue;
+            if (graphsOverlap(row.graph, info.graph)) {
+                if (std.mem.eql(u8, row.table_name, info.table_name)) return error.DuplicateIndex;
+            } else if (indexHasNameKeyedRuntime(row.index_type) or indexHasNameKeyedRuntime(info.index_type)) {
+                in_other_graph = true;
+            }
         }
+        if (in_other_graph) return error.IndexNameInUseByOtherGraph;
 
         const owned_name = try self.allocator.dupe(u8, info.name);
         errdefer self.allocator.free(owned_name);
@@ -862,6 +1050,8 @@ pub const Catalog = struct {
         errdefer self.allocator.free(owned_type);
         const owned_table = try self.allocator.dupe(u8, info.table_name);
         errdefer self.allocator.free(owned_table);
+        const owned_graph = try self.allocator.dupe(u8, info.graph);
+        errdefer self.allocator.free(owned_graph);
 
         const owned_metric: ?[]const u8 = if (info.metric) |m| try self.allocator.dupe(u8, m) else null;
         errdefer if (owned_metric) |m| self.allocator.free(m);
@@ -883,6 +1073,7 @@ pub const Catalog = struct {
             .table_name = owned_table,
             .columns = owned_cols,
             .metric = owned_metric,
+            .graph = owned_graph,
         };
 
         try self.indexes.put(scoped_key, owned_info);
@@ -896,18 +1087,17 @@ pub const Catalog = struct {
         };
     }
 
-    /// Get index metadata by label and name (scoped key)
+    /// Get index metadata of the default graph's catalog by label and name.
     pub fn getIndex(self: *Catalog, label: []const u8, index_name: []const u8) !?IndexInfo {
+        return self.getIndexInGraph(graph_store.DEFAULT_GRAPH_NAME, label, index_name);
+    }
+
+    /// SONNY-1319: get index metadata of `graph`'s catalog (its own row, else
+    /// an engine-wide one) by label and name.
+    pub fn getIndexInGraph(self: *Catalog, graph: []const u8, label: []const u8, index_name: []const u8) !?IndexInfo {
         self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-
-        var key_buf: [512]u8 = undefined;
-        const scoped_key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ label, index_name }) catch {
-            const owned = try getScopedIndexKey(self.allocator, label, index_name);
-            defer self.allocator.free(owned);
-            return self.indexes.get(owned);
-        };
-        return self.indexes.get(scoped_key);
+        return lookupInGraph(IndexInfo, self.allocator, &self.indexes, graph, label, index_name);
     }
 
     // GAP-0139: SHOW INDEXES implementation
@@ -945,6 +1135,36 @@ pub const Catalog = struct {
             try result.append(allocator, entry.value_ptr.*);
         }
 
+        return result.toOwnedSlice(allocator);
+    }
+
+    /// SONNY-1319: the indexes of `graph`'s catalog (its own rows and the
+    /// engine-wide ones). Caller owns the returned slice, not its rows.
+    pub fn listIndexesForGraph(self: *Catalog, allocator: std.mem.Allocator, graph: []const u8) ![]IndexInfo {
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+
+        var result = std.ArrayList(IndexInfo).empty;
+        errdefer result.deinit(allocator);
+        var iter = self.indexes.valueIterator();
+        while (iter.next()) |info| {
+            if (rowInGraph(info.graph, graph)) try result.append(allocator, info.*);
+        }
+        return result.toOwnedSlice(allocator);
+    }
+
+    /// SONNY-1319: the constraints of `graph`'s catalog (its own rows and the
+    /// engine-wide ones). Caller owns the returned slice, not its rows.
+    pub fn listConstraintsForGraph(self: *Catalog, allocator: std.mem.Allocator, graph: []const u8) ![]ConstraintInfo {
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+
+        var result = std.ArrayList(ConstraintInfo).empty;
+        errdefer result.deinit(allocator);
+        var iter = self.constraints.valueIterator();
+        while (iter.next()) |info| {
+            if (rowInGraph(info.graph, graph)) try result.append(allocator, info.*);
+        }
         return result.toOwnedSlice(allocator);
     }
 

@@ -726,6 +726,9 @@ pub const ExecutionError = error{
     Unauthorized,
     SearchNotPermitted,
     DuplicateIndex,
+    // SONNY-1319: an index name another graph holds for an index whose
+    // runtime structure is keyed by name alone.
+    IndexNameInUseByOtherGraph,
     IncompatibleIndexDataType,
     GraphNotFound,
     // GAP-0871: GQL BACKUP/RESTORE statements are intentionally unsupported —
@@ -2116,8 +2119,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // SONNY-2803: schema on the graph the index DDL runs on (the
             // session's; a fulltext index lives in the default graph,
             // SONNY-2790), before the IF NOT EXISTS lookup.
-            // SONNY-3030: and on the database: the catalog is database-wide.
-            try session_graph.authorizeCatalogSchemaChange(context, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context));
+            // SONNY-3030: and on the database.
+            // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=CreateIndexGraph; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-1319: the index belongs to that graph's catalog: IF NOT
+            // EXISTS asks about it, and the row records it.
+            const index_graph = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context);
+            try session_graph.authorizeCatalogSchemaChange(context, index_graph);
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -2131,7 +2138,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             };
 
             if (ci.if_not_exists) {
-                const existing = cat.getIndex(ci.label, index_name) catch null;
+                const existing = cat.getIndexInGraph(index_graph, ci.label, index_name) catch null;
                 if (existing != null) {
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
@@ -2211,8 +2218,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 // index the DDL actually asked for instead of guessing `l2`.
                 // Only vector indexes have one; everything else stays null.
                 .metric = if (ci.index_type == .vector or ci.index_type == .vector_f32) ci.metric else null,
+                .graph = index_graph,
             };
 
+            // SONNY-1319: IndexNameInUseByOtherGraph is not swallowed by IF
+            // NOT EXISTS: no index of that name exists in this graph, and none
+            // can be created.
             cat.addIndex(index_info) catch |err| {
                 if (err == error.DuplicateIndex and ci.if_not_exists) {
                     return ExecutionResult{
@@ -2298,7 +2309,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2803: schema on the session's graph, before the IF NOT
             // EXISTS lookup. SONNY-3030: and on the database.
-            try session_graph.authorizeCatalogSchemaChange(context, session_graph.current(context));
+            const constraint_graph = session_graph.current(context);
+            try session_graph.authorizeCatalogSchemaChange(context, constraint_graph);
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT implementation - store in catalog and enforce
 
@@ -2317,6 +2329,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 .label = cc.label,
                 .properties = cc.properties,
                 .is_enforced = true, // Constraints are enforced by default
+                // SONNY-1319: the session's graph's catalog.
+                .graph = constraint_graph,
             };
 
             // Get catalog from context
@@ -2324,7 +2338,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             // Check IF NOT EXISTS
             if (cc.if_not_exists) {
-                const existing = cat.getConstraint(cc.label, cc.name) catch null;
+                const existing = cat.getConstraintInGraph(constraint_graph, cc.label, cc.name) catch null;
                 if (existing != null) {
                     // Constraint already exists, return success (no-op)
                     return ExecutionResult{
@@ -2366,22 +2380,43 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         .DropIndex => |di| {
             // Cluster fail-closed: see .CreateIndex (GateIndexDDL).
             try cluster_mod.gateUnreplicatedWrite();
-            // SONNY-2803: schema on the default graph, the graph DROP INDEX
-            // runs on (SONNY-2790: the index may be a fulltext one), before
-            // the index is looked up.
-            // SONNY-3030: and on the database: the catalog is database-wide.
-            try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
+            // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DropIndexGraph; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-1319: DROP INDEX drops an index of the session's graph's
+            // catalog: its own, an engine-wide one, or a fulltext one (those
+            // live in the default graph, SONNY-2790). It used to drop the
+            // first index of that name in ANY graph.
+            // SONNY-2803: schema on the session's graph before the index is
+            // looked up; SONNY-3030: and on the database.
+            const drop_graph = session_graph.current(context);
+            try session_graph.authorizeCatalogSchemaChange(context, drop_graph);
             const cat = context.catalog;
             const index_name = di.name;
 
             var found_key: ?[]const u8 = null;
+            var found_rank: u2 = 0;
             var iter = cat.indexes.iterator();
             while (iter.next()) |entry| {
                 const info = entry.value_ptr.*;
-                if (std.mem.eql(u8, info.name, index_name)) {
+                if (!std.mem.eql(u8, info.name, index_name)) continue;
+                const rank: u2 = if (std.mem.eql(u8, info.graph, drop_graph))
+                    3
+                else if (info.graph.len == 0)
+                    2
+                else if (std.mem.eql(u8, info.index_type, "fulltext") and std.mem.eql(u8, info.graph, graph_store.DEFAULT_GRAPH_NAME))
+                    1
+                else
+                    0;
+                if (rank > found_rank) {
                     found_key = entry.key_ptr.*;
-                    break;
+                    found_rank = rank;
                 }
+            }
+
+            // An engine-wide or fulltext row is the default graph's as much as
+            // this one's: schema on the default graph as well, as DROP INDEX
+            // always asked before SONNY-1319.
+            if (found_key != null and found_rank < 3 and !std.mem.eql(u8, drop_graph, graph_store.DEFAULT_GRAPH_NAME)) {
+                try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
             }
 
             if (found_key) |key| {
@@ -2418,16 +2453,9 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         manager.unregisterVectorDimValidation(removed.value.name);
                     }
                     cat.allocator.free(removed.key);
-                    cat.allocator.free(removed.value.name);
-                    cat.allocator.free(removed.value.index_type);
-                    cat.allocator.free(removed.value.table_name);
-                    // ADVANCED-INDEX-RESTART: the persisted vector metric is
-                    // catalog-owned like every other field of the row.
-                    if (removed.value.metric) |m| cat.allocator.free(m);
-                    for (removed.value.columns) |col| {
-                        cat.allocator.free(col);
-                    }
-                    cat.allocator.free(removed.value.columns);
+                    // Every catalog-owned field: the ADVANCED-INDEX-RESTART
+                    // metric and the SONNY-1319 graph included.
+                    cat.freeIndexInfo(removed.value);
                 }
             } else if (!di.if_exists) {
                 return error.IndexNotFound;

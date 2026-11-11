@@ -234,6 +234,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
         error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
+        // SONNY-1319: the name is held in another graph by an index whose
+        // runtime structure is keyed by name alone (vector and other advanced
+        // indexes), so it cannot be created in this graph too.
+        error.IndexNameInUseByOtherGraph => .{ .code = "42P07", .message = "Index name is in use in another graph by an index type whose runtime structure is shared by name (vector and other advanced indexes); choose another name" },
         // SONNY-2809: a second CREATE CONSTRAINT with the same name.
         error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name" },
         // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
