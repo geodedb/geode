@@ -5849,11 +5849,20 @@ pub fn build(b: *std.Build) void {
     const doccheck_step = b.step("doccheck", "Validate documentation conformance tables");
     doccheck_step.dependOn(&doccheck_run.step);
 
-    const gen_fuzz_exe = b.addExecutable(.{ .name = "gen_fuzz", .root_module = b.createModule(.{ .root_source_file = b.path("tools/gen_fuzz.zig"), .target = target, .optimize = optimize }) });
+    const gen_fuzz_mod = b.createModule(.{ .root_source_file = b.path("tools/gen_fuzz.zig"), .target = target, .optimize = optimize });
+    const gen_fuzz_exe = b.addExecutable(.{ .name = "gen_fuzz", .root_module = gen_fuzz_mod });
     const gen_fuzz_run = b.addRunArtifact(gen_fuzz_exe);
     if (b.args) |a| gen_fuzz_run.addArgs(a);
     const gen_fuzz_step = b.step("gen-fuzz", "Generate fuzz target scaffold");
     gen_fuzz_step.dependOn(&gen_fuzz_run.step);
+
+    // SONNY-2771: gen_fuzz argument parsing and scaffold generation.
+    const sonny2771_gen_fuzz_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2771_gen_fuzz.zig"), .target = target, .optimize = optimize });
+    sonny2771_gen_fuzz_test_mod.addImport("gen_fuzz", gen_fuzz_mod);
+    const sonny2771_gen_fuzz_tests = b.addTest(.{ .root_module = sonny2771_gen_fuzz_test_mod });
+    const run_sonny2771_gen_fuzz_tests = b.addRunArtifact(sonny2771_gen_fuzz_tests);
+    const sonny2771_gen_fuzz_step = b.step("test-sonny2771-gen-fuzz", "Run SONNY-2771 regression (gen_fuzz parses its arguments and writes a fuzz scaffold without overwriting an existing target)");
+    sonny2771_gen_fuzz_step.dependOn(&run_sonny2771_gen_fuzz_tests.step);
 
     // CANARY: REQ=REQ-SYNTAX-GEN-002; FEATURE="VSCodeSyntaxGeneration"; ASPECT=BuildTarget; STATUS=EXEMPT; OWNER=tooling; UPDATED=2026-01-03
     // Syntax generator - generates gql.tmLanguage.json from language_metadata
