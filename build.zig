@@ -12862,6 +12862,17 @@ pub fn build(b: *std.Build) void {
     const rls_session_row_conditions_step = b.step("test-rls-session-row-conditions", "Run RLS row-condition regressions (owner = current_user() per-user visibility, fail-closed, decision cache, restart, listing)");
     rls_session_row_conditions_step.dependOn(&run_rls_session_row_conditions_tests.step);
 
+    // SONNY-4878: a row DENY policy whose comparison is unknown (missing, null
+    // or non-string property, or no session value) let the row through.
+    const sonny4878_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny4878_row_deny_unknown.zig"), .target = target, .optimize = optimize });
+    sonny4878_test_mod.addImport("geode", root_mod);
+    sonny4878_test_mod.addImport("logging", logging_mod);
+    const sonny4878_tests = b.addTest(.{ .root_module = sonny4878_test_mod });
+    const run_sonny4878_tests = b.addRunArtifact(sonny4878_tests);
+    shardDep(test_step, &run_sonny4878_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny4878_step = b.step("test-sonny4878-row-deny-unknown", "Run SONNY-4878 regressions (row DENY policies withhold rows whose comparison is unknown)");
+    sonny4878_step.dependOn(&run_sonny4878_tests.step);
+
     // FTS-INDEX-OPTIONS: CREATE INDEX ... OPTIONS { ... } parsed the braces and discarded
     // every key (same class as ENG-3906).
     const fts_index_options_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_fts_index_options.zig"), .target = target, .optimize = optimize });
