@@ -158,13 +158,15 @@ test "GAP-0880 gzip backup compresses for real and round-trips" {
     restored.data_dir = restore_dir;
     try restored.loadFromFile();
 
-    try testing.expectEqual(@as(usize, 2), restored.nodes.count());
-    try testing.expectEqual(@as(usize, 1), restored.edges.count());
+    // Counted through the hydrating reads: the restored store is cold, its
+    // resident `nodes`/`edges` caches empty until first access (SONNY-6277).
+    try testing.expectEqual(@as(usize, 2), restored.getNodeCount());
+    try testing.expectEqual(@as(usize, 1), restored.getEdgeCount());
     const name = restored.getNodeProperty(seed.alice, "name") orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Alice", name.String);
     const title = restored.getNodeProperty(seed.post, "title") orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Hello World", title.String);
-    const edge_ptr = restored.edges.getPtr(seed.edge) orelse return error.EdgeMissing;
+    const edge_ptr = restored.getEdgePtr(seed.edge) orelse return error.EdgeMissing;
     const since = edge_ptr.properties.get("since") orelse return error.EdgePropertyMissing;
     try testing.expectEqual(@as(i64, 2026), since.Int);
 }
@@ -266,8 +268,10 @@ test "GAP-0880 upload ingestion stores payload bytes and registers durably" {
     defer restored.deinit();
     restored.data_dir = restore_dir;
     try restored.loadFromFile();
-    try testing.expectEqual(@as(usize, 2), restored.nodes.count());
-    try testing.expectEqual(@as(usize, 1), restored.edges.count());
+    // Counted through the hydrating reads: the restored store is cold, its
+    // resident `nodes`/`edges` caches empty until first access (SONNY-6277).
+    try testing.expectEqual(@as(usize, 2), restored.getNodeCount());
+    try testing.expectEqual(@as(usize, 1), restored.getEdgeCount());
     const name = restored.getNodeProperty(seed.alice, "name") orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Alice", name.String);
 }

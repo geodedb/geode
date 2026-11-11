@@ -302,6 +302,9 @@ fn shardDep(
     if (g_test_compile_step) |compile_all| {
         if (run.producer) |artifact| compile_all.dependOn(&artifact.step);
     }
+    // SONNY-2772: recorded in every shard, before the shard filter, so the
+    // named-step guard sees the whole aggregate whichever shard this is.
+    g_aggregate_runs.put(dep.owner.allocator, dep, {}) catch @panic("OOM");
     g_test_coverage_seq += 1;
     if (loads.len <= 1) {
         coverageWrap(run);
@@ -314,6 +317,167 @@ fn shardDep(
         test_step.dependOn(dep);
     }
 }
+
+/// SONNY-2772: every Run step passed to shardDep, across ALL shards.
+var g_aggregate_runs: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+
+/// SONNY-2772: top-level `test-*` steps that are not named test steps of
+/// their own: they aggregate or compile other steps.
+const named_test_step_guard_exempt = [_][]const u8{ "test-compile", "test-coverage-manifest" };
+
+/// SONNY-2772: collects the Run steps reachable from `root`. It does not
+/// descend into a Compile step: the runs behind one (code generators) are
+/// build inputs, not tests.
+fn collectRunSteps(
+    b: *std.Build,
+    root: *std.Build.Step,
+    seen: *std.AutoHashMapUnmanaged(*std.Build.Step, void),
+    runs: *std.ArrayList(*std.Build.Step),
+) void {
+    var pending: std.ArrayList(*std.Build.Step) = .empty;
+    defer pending.deinit(b.allocator);
+    pending.append(b.allocator, root) catch @panic("OOM");
+    while (pending.pop()) |step| {
+        const gop = seen.getOrPut(b.allocator, step) catch @panic("OOM");
+        if (gop.found_existing) continue;
+        if (step.id == .compile) continue;
+        if (step.id == .run) runs.append(b.allocator, step) catch @panic("OOM");
+        pending.appendSlice(b.allocator, step.dependencies.items) catch @panic("OOM");
+    }
+}
+
+/// SONNY-2772: every named `test-*` step either runs in the aggregate `test`
+/// step or is listed in `not_in_aggregate_steps` with the reason it stays
+/// out. 97 named steps used to run in no aggregate, pre-push shard or CI job
+/// and rotted unseen (test-gap0891-repro stopped compiling). A step counts as
+/// in the aggregate when every Run step it reaches is reached by some Run
+/// step passed to shardDep (in any shard). Runs once, when build() returns,
+/// so `zig build -l` checks it without compiling anything.
+fn checkNamedTestStepsInAggregate(b: *std.Build) void {
+    var agg_seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer agg_seen.deinit(b.allocator);
+    var agg_runs: std.ArrayList(*std.Build.Step) = .empty;
+    defer agg_runs.deinit(b.allocator);
+    var it = g_aggregate_runs.keyIterator();
+    while (it.next()) |run| collectRunSteps(b, run.*, &agg_seen, &agg_runs);
+
+    var allowed_found = [_]bool{false} ** not_in_aggregate_steps.len;
+    var unaccounted: std.ArrayList(u8) = .empty;
+    var unaccounted_count: usize = 0;
+    var stale: std.ArrayList(u8) = .empty;
+    steps: for (b.top_level_steps.values()) |tls| {
+        const name = tls.step.name;
+        if (!std.mem.startsWith(u8, name, "test-")) continue;
+        for (named_test_step_guard_exempt) |exempt| {
+            if (std.mem.eql(u8, name, exempt)) continue :steps;
+        }
+        var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+        defer seen.deinit(b.allocator);
+        var runs: std.ArrayList(*std.Build.Step) = .empty;
+        defer runs.deinit(b.allocator);
+        collectRunSteps(b, &tls.step, &seen, &runs);
+        var in_aggregate = runs.items.len > 0;
+        for (runs.items) |run| {
+            if (!agg_seen.contains(run)) in_aggregate = false;
+        }
+        var allowed = false;
+        for (not_in_aggregate_steps, &allowed_found) |entry, *found| {
+            if (std.mem.eql(u8, entry.name, name)) {
+                found.* = true;
+                allowed = true;
+            }
+        }
+        if (allowed) {
+            if (in_aggregate) stale.print(b.allocator, "  {s} (it runs in the aggregate now)\n", .{name}) catch @panic("OOM");
+        } else if (!in_aggregate) {
+            unaccounted_count += 1;
+            unaccounted.print(b.allocator, "  {s}\n", .{name}) catch @panic("OOM");
+        }
+    }
+    for (not_in_aggregate_steps, allowed_found) |entry, found| {
+        if (!found) stale.print(b.allocator, "  {s} (no such step)\n", .{entry.name}) catch @panic("OOM");
+    }
+    if (unaccounted_count > 0) std.debug.panic(
+        "SONNY-2772: {d} named test step(s) run in no aggregate `zig build test` shard. " ++
+            "Register each RUN step through shardDep (see CLAUDE.md, Zig Test Conventions), " ++
+            "or, when it must stay out (TSAN, subprocess cluster, GPU, external service, benchmark, " ++
+            "intentionally red reproduction), add it to not_in_aggregate_steps with the reason:\n{s}",
+        .{ unaccounted_count, unaccounted.items },
+    );
+    if (stale.items.len > 0) std.debug.panic(
+        "SONNY-2772: remove these entries from not_in_aggregate_steps:\n{s}",
+        .{stale.items},
+    );
+}
+
+/// SONNY-2772: the named `test-*` steps that deliberately stay out of the
+/// aggregate `test` step, each with the reason. checkNamedTestStepsInAggregate
+/// fails configuration for a named step that is neither in the aggregate nor
+/// here, and for an entry here that names no step or one that is in the
+/// aggregate. Prefer registering a step through shardDep to listing it.
+const NotInAggregate = struct { name: []const u8, reason: []const u8 };
+const not_in_aggregate_steps = [_]NotInAggregate{
+    // Aggregators of other named steps.
+    .{ .name = "test-all", .reason = "aggregator: the aggregate test step plus test-e2e (Makefile test-all)" },
+    .{ .name = "test-e2e", .reason = "aggregator: the end-to-end lane (spawned QUIC servers, fuzz targets, benchmarks; Makefile test-e2e)" },
+    .{ .name = "test-perf", .reason = "aggregator: perf harness and timing tests; host-load sensitive" },
+    // ThreadSanitizer companions: the same file runs uninstrumented in the aggregate.
+    .{ .name = "test-sonny1318-procedure-tenancy-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-sonny1330-parallel-union-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-startup-lazy-hydrate-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-ordered-scan-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-ordered-index-autobuild-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-parallel-index-rebuild-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
+    // Members of the end-to-end lane (test-e2e).
+    .{ .name = "test-gap0203", .reason = "e2e lane (test-e2e): QUIC pipeline suite with a 5 s read deadline, flaky under load (KNOWN_TEST_ISSUES)" },
+    .{ .name = "test-gql-conformance", .reason = "e2e lane (test-e2e): spawns QUIC servers per case" },
+    .{ .name = "test-transport-fuzz", .reason = "e2e lane (test-e2e): transport performance fuzz target" },
+    .{ .name = "test-quic-high-concurrency-e2e", .reason = "e2e lane (test-e2e): QUIC high-concurrency load against a spawned server" },
+    .{ .name = "test-quic-first-stream-close-mux-e2e", .reason = "e2e lane (test-e2e): spawned-server QUIC multiplexing scenario" },
+    .{ .name = "test-shutdown-drain-timeout", .reason = "e2e lane (test-e2e): SIGTERM drain timing against a spawned server" },
+    .{ .name = "test-quic-sequential-upsert-desync", .reason = "e2e lane (test-e2e): spawned-server stream-desync scenario" },
+    .{ .name = "test-transport-parity", .reason = "e2e lane: twelve stdio-vs-QUIC parity smokes; run by `make transport-parity-smokes`" },
+    // Benchmarks, perf gates and diagnostics (timing assertions or no assertion).
+    .{ .name = "test-match-bench", .reason = "benchmark: needs GEODE_MATCH_BENCH_ENABLE=1; CI job governance-match-ops-campaign" },
+    .{ .name = "test-perf-gap-bench", .reason = "benchmark: performance gap micro-benchmarks" },
+    .{ .name = "test-gap0810-regression", .reason = "perf investigation reproducer (test-perf member)" },
+    .{ .name = "test-gap0821-multilabel-match-diagnostic", .reason = "perf diagnostic: measures allocator timings, asserts no behaviour" },
+    .{ .name = "test-mutation-timing", .reason = "perf timing test (test-perf member)" },
+    .{ .name = "test-label-posting-concurrent-insert", .reason = "perf concurrency timing test (test-perf member)" },
+    // Hardware, separate products, subprocess clusters.
+    .{ .name = "test-gpu", .reason = "GPU: needs a Vulkan loader/device; the aggregate must not require the Vulkan SDK" },
+    .{ .name = "test-clients", .reason = "client-library lane (clients/zig/client_minimal.zig declares no test blocks)" },
+    .{ .name = "test-cluster-3node-subprocess", .reason = "subprocess 3-node cluster: known hang in multi-node bring-up (KNOWN_TEST_ISSUES); also referenced by tests/all_tests.zig" },
+    // Covered: the same tests already run in the aggregate through another artifact.
+    .{ .name = "test-cluster-3node-election", .reason = "covered: runs in the aggregate through tests/all_tests.zig (refAllDecls)" },
+    .{ .name = "test-cluster-propose-write", .reason = "covered: runs in the aggregate through tests/all_tests.zig (refAllDecls)" },
+    .{ .name = "test-cluster-forward-to-shard", .reason = "covered: runs in the aggregate through tests/all_tests.zig (refAllDecls)" },
+    .{ .name = "test-drainready-dispatch", .reason = "covered: runs in the aggregate through tests/all_tests.zig (refAllDecls)" },
+    .{ .name = "test-lsp-protocol", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-framer", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-json-helpers", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-document", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-transport", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-mcp-input-guards", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-features", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-server", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-e2e", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-debounce", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-definition", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-invalid-params", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    .{ .name = "test-lsp-server-auth", .reason = "covered: per-file runner; the file runs in the aggregate through test-lsp (src/cli/lsp/test_runner.zig)" },
+    // Subprocess e2e: geode serve plus the geode CLI as child processes on real ports.
+    .{ .name = "test-datadir-lock-subprocess", .reason = "subprocess e2e (two geode serve on one data dir); also referenced by tests/all_tests.zig" },
+    .{ .name = "test-cli-batch-mode", .reason = "subprocess e2e (geode serve + geode query --batch on real ports); promotion owes a green run" },
+    .{ .name = "test-cli-timeout-exit-code", .reason = "subprocess e2e (geode serve + geode query timeout on real ports); promotion owes a green run" },
+    .{ .name = "test-grpc-large-payload", .reason = "subprocess e2e (gRPC listener + CLI on real ports); promotion owes a green run" },
+    .{ .name = "test-grpc-shutdown-drain", .reason = "subprocess e2e (SIGTERM with an in-flight gRPC query); promotion owes a green run" },
+    .{ .name = "test-cli-file-chunked", .reason = "subprocess e2e (geode serve + geode query --file on real ports); promotion owes a green run" },
+    // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
+    .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
+    .{ .name = "test-first-boot-admin-breadcrumb", .reason = "failing: reset-password checks the password policy before loading the user (KNOWN_TEST_ISSUES)" },
+    .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
+};
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
 /// `kcov --include-path=<root>/src <out>` and records it in the manifest. Only
@@ -1634,6 +1798,22 @@ pub fn build(b: *std.Build) void {
     const run_gap0880_upload_tests = b.addRunArtifact(gap0880_upload_tests);
     const gap0880_upload_step = b.step("test-gap0880", "Run GAP-0880 backup upload ingestion + compression truth regression");
     gap0880_upload_step.dependOn(&run_gap0880_upload_tests.step);
+
+    // SONNY-6277: backup create -> restore into a fresh data dir, read cold
+    // (and again after a reopen) through the executor and the store's full
+    // enumeration: nodes, edges and typed properties, default and named
+    // graph, uncompressed and gzip.
+    const sonny6277_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6277_backup_restore_roundtrip.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    sonny6277_tests.root_module.addImport("geode", root_mod);
+    sonny6277_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    const run_sonny6277_tests = b.addRunArtifact(sonny6277_tests);
+    const sonny6277_step = b.step("test-sonny6277-backup-restore-roundtrip", "Run SONNY-6277 regression (a restored backup holds every node, edge and typed property, default and named graph, read cold and after a reopen, with and without gzip)");
+    sonny6277_step.dependOn(&run_sonny6277_tests.step);
 
     // GAP-0855a: webhook CDC sink real HTTP delivery + retries + auth header.
     // Drives the REAL WebhookSink (std.http.Client) against an in-test loopback
@@ -3938,6 +4118,52 @@ pub fn build(b: *std.Build) void {
     g_test_compile_step = b.step("test-compile", "Compile every artifact the aggregate `test` step runs, in all shards, and every executable target, without running any of them (SONNY-2394, SONNY-2746)");
     // SONNY-2746: deferred so it runs once every step of build() exists.
     defer addExecutablesToTestCompile(b, target);
+    // SONNY-2772: deferred so it sees every named step and shardDep call.
+    defer checkNamedTestStepsInAggregate(b);
+    // SONNY-2772: named regression steps declared above that had joined no
+    // aggregate shard, so nothing ran them unless someone did by name.
+    for ([_]*std.Build.Step.Run{
+        run_fts_smoke,
+        run_fts_adapter,
+        run_gap0862_backup_tests,
+        run_gap0871_refusal_tests,
+        run_gap0880_upload_tests,
+        run_gap0855_webhook_tests,
+        run_gap0855_kafka_tests,
+        run_gap0872_tests,
+        run_node_cache_tests,
+        run_idmap_snap_tests,
+        run_idmap_inplace_tests,
+        run_fips_chacha_tests,
+        run_quality733_tests,
+        run_slow_poll_warn_tests,
+        run_liveness_breadcrumb_tests,
+        run_idle_cpu_tests,
+        run_raft_per_peer_drain_tests,
+        run_raft_stall_detector_tests,
+        run_raft_receiver_reap_tests,
+        run_raft_rebuild_probation_tests,
+        run_raft_follower_response_eviction_tests,
+        run_raft_inbound_pool_occupancy_tests,
+        run_show_cluster_status_tests,
+        run_capability_gate_startup_tests,
+        run_gap0900_ast_cache_bytes_tests,
+        run_gap0900_lean_index_tests,
+        run_gap0900_compact_node_store_tests,
+        run_gap0900_reopen_remerge_tests,
+        run_lean_merge_key_seek_reopen_tests,
+        run_reopen_merge_hydration_tests,
+        run_ts_scalar_eval_tests,
+        run_eval_handler_tests,
+        run_gap0535_ownership_tests,
+        run_ts_durability_tests,
+        run_gap0892_tests,
+        run_read_only_execute_tests,
+        run_fts_e2e_tests,
+        run_gap0869_tests,
+    }) |run| shardDep(test_step, &run.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-6277 (declared next to test-gap0880 above).
+    shardDep(test_step, &run_sonny6277_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_show_capabilities_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_sonny_capability_profile_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_capability_gate_tests.step, 1, test_shard_loads, test_shard_index);
@@ -4316,6 +4542,7 @@ pub fn build(b: *std.Build) void {
     const run_gap0889_twophase_tests = b.addRunArtifact(gap0889_twophase_tests);
     const gap0889_step = b.step("test-gap0889", "GAP-0889: distributed quality batch — 2PC delivery honesty + raft persistent fail-loud");
     gap0889_step.dependOn(&run_gap0889_twophase_tests.step);
+    shardDep(test_step, &run_gap0889_twophase_tests.step, 1, test_shard_loads, test_shard_index);
     gap0889_step.dependOn(&run_raft_persistent_tests.step);
 
     // MATCH…CREATE summary-counter mislabel regression: the implicit summary
@@ -5109,6 +5336,7 @@ pub fn build(b: *std.Build) void {
     const run_grpc_raw_io_tests = b.addRunArtifact(grpc_raw_io_tests);
     const grpc_raw_io_step = b.step("test-grpc-raw-io", "Run gRPC plaintext raw socket I/O unit tests (coalesced-read frame-loss regression)");
     grpc_raw_io_step.dependOn(&run_grpc_raw_io_tests.step);
+    shardDep(test_step, &run_grpc_raw_io_tests.step, 1, test_shard_loads, test_shard_index);
 
     // Gap 0039 (data-ingest enterprise review): `geode serve` SIGTERM shutdown
     // busy-spun forever draining abandoned QUIC connections (client vanished
@@ -5966,6 +6194,7 @@ pub fn build(b: *std.Build) void {
     // the dedicated test-gap0869 step (test-e2e only compiles them).
     const run_e2e_fts_advanced = b.addRunArtifact(e2e_fts_advanced_test);
     gap0869_step.dependOn(&run_e2e_fts_advanced.step);
+    shardDep(test_step, &run_e2e_fts_advanced.step, 1, test_shard_loads, test_shard_index);
     const e2e_parallel_execution_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_parallel_execution.zig"), .target = target, .optimize = optimize }) });
     e2e_parallel_execution_test.root_module.addImport("geode", root_mod);
     test_e2e_step.dependOn(&e2e_parallel_execution_test.step);
@@ -6260,6 +6489,7 @@ pub fn build(b: *std.Build) void {
     const run_user_management_tests = b.addRunArtifact(user_management_tests);
     const user_management_step = b.step("test-user-management", "Run user_management.zig inline tests (auth cache, roles, single-flight; ENG-3954 R-C)");
     user_management_step.dependOn(&run_user_management_tests.step);
+    shardDep(test_step, &run_user_management_tests.step, 1, test_shard_loads, test_shard_index);
 
     // CANARY: REQ=REQ-TDE-ENFORCE-015; FEATURE="TDEEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
     // CRITICAL SECURITY: TDE enforcement tests - verify all disk writes are encrypted when TDE is enabled
@@ -6552,6 +6782,7 @@ pub fn build(b: *std.Build) void {
     const run_gap0894_tests = b.addRunArtifact(gap0894_tests);
     const gap0894_step = b.step("test-gap0894", "GAP-0894 regression (single-property MERGE striping through merge_tuple_locks)");
     gap0894_step.dependOn(&run_gap0894_tests.step);
+    shardDep(test_step, &run_gap0894_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0840 regression: opt-in strict-tenancy mode. The shared
     // tenancy.resolveTenantFilter decision (delegated to by both
@@ -7254,6 +7485,7 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(gap0514_repl_tests);
     const gap0514_repl_step = b.step("test-gap0514-repl", "GAP-0514: repl_dispatch e2e CANARY regression (interrupt/txn-error/drain/source-chunked lanes)");
     gap0514_repl_step.dependOn(&run_gap0514_repl_tests.step);
+    shardDep(test_step, &run_gap0514_repl_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0514 Phase 6 P1: quic_connection_handler hotspot lanes the repl e2e
     // does not reach — QUIC savepoint/rollback_to dispatch, HELLO graph
@@ -7270,6 +7502,7 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(gap0514_quic_tests);
     const gap0514_quic_step = b.step("test-gap0514-quic", "GAP-0514: quic_connection_handler e2e CANARY regression (savepoint/rollback_to, HELLO graph binding)");
     gap0514_quic_step.dependOn(&run_gap0514_quic_tests.step);
+    shardDep(test_step, &run_gap0514_quic_tests.step, 1, test_shard_loads, test_shard_index);
 
     // NEW-1 (#861): QUIC HELLO cross-graph BOLA regression — non-Admin user must
     // not bind a graph for which they hold no grant. Spawns a real server with a
@@ -7286,6 +7519,7 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(new1_bola_tests);
     const new1_bola_step = b.step("test-new1-cross-graph-bola", "NEW-1: QUIC HELLO cross-graph BOLA regression (non-admin binds ungranted graph, #861)");
     new1_bola_step.dependOn(&run_new1_bola_tests.step);
+    shardDep(test_step, &run_new1_bola_tests.step, 1, test_shard_loads, test_shard_index);
 
     // SEC-002 (#849): Unauthenticated CDC arm access — per-arm guard regression.
     // Spawns a real server with GEODE_CDC_ENABLE=1, connects WITHOUT hello,
@@ -7301,6 +7535,7 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(sec002_cdc_tests);
     const sec002_cdc_step = b.step("test-sec002-cdc-preauth", "SEC-002: unauthenticated CDC arm access regression (#849)");
     sec002_cdc_step.dependOn(&run_sec002_cdc_tests.step);
+    shardDep(test_step, &run_sec002_cdc_tests.step, 1, test_shard_loads, test_shard_index);
 
     // SEC-002 (#849) gRPC CDC handler auth — in-file unit tests in grpc_server.zig.
     //
@@ -7332,6 +7567,7 @@ pub fn build(b: *std.Build) void {
     const run_sec002_grpc_cdc_tests = b.addRunArtifact(sec002_grpc_cdc_tests);
     const sec002_grpc_cdc_step = b.step("test-sec002-grpc-cdc", "SEC-002: gRPC CDC handler auth gate unit tests (#849)");
     sec002_grpc_cdc_step.dependOn(&run_sec002_grpc_cdc_tests.step);
+    shardDep(test_step, &run_sec002_grpc_cdc_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0883: server-level coverage for the documented `CALL algo.*` graph
     // algorithm procedures through the real parse → dispatch → executor path
@@ -8296,6 +8532,7 @@ pub fn build(b: *std.Build) void {
     const run_proto_reap_tests = b.addRunArtifact(proto_reap_tests);
     const proto_reap_step = b.step("test-proto-reader-idle-reap", "Run idle-connection reap-cap regression (8.3h vs 300s reap deadline)");
     proto_reap_step.dependOn(&run_proto_reap_tests.step);
+    shardDep(test_step, &run_proto_reap_tests.step, 1, test_shard_loads, test_shard_index);
 
     // geode-reachable supporting suite for the same REQ (framing-pin lives here;
     // imports only the public `geode` surface).
@@ -8912,6 +9149,7 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(sonny2776_quic_tests);
     const sonny2776_quic_step = b.step("test-sonny2776-quic-graph-uses", "Run SONNY-2776 QUIC e2e regression (spawns a server: the label-deny post-filter after USE GRAPH applies the switched-to graph's policies; a transaction that changes a second graph is refused)");
     sonny2776_quic_step.dependOn(&run_sonny2776_quic_tests.step);
+    shardDep(test_step, &run_sonny2776_quic_tests.step, 1, test_shard_loads, test_shard_index);
 
     // SONNY-2802 / SONNY-2752: EXPLAIN and PROFILE run alone (a program that
     // carries one with other statements is refused, 0A000), and a PROFILE'd
@@ -8931,6 +9169,7 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(sonny2802_tests);
     const sonny2802_step = b.step("test-sonny2802-profile-regime", "Run SONNY-2802/SONNY-2752 regression (an EXPLAIN or PROFILE sent with other statements is refused, 0A000, rather than run in part under the whole program's lock; a PROFILE'd change is recorded in the transaction; gRPC in process and QUIC against a spawned server)");
     sonny2802_step.dependOn(&run_sonny2802_tests.step);
+    shardDep(test_step, &run_sonny2802_tests.step, 1, test_shard_loads, test_shard_index);
 
     // SONNY-2803: graph, index and constraint DDL need decide(schema) and
     // bind_graph on the graph they change, checked before existence. The
@@ -8982,12 +9221,14 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(sonny2805_tests);
     const sonny2805_step = b.step("test-sonny2805-txn-sessions", "Run SONNY-2805/SONNY-2799 regression (transaction control in program order; a failed statement rolls back only its own transaction, under its graph's write lock; the undo log keys changes and savepoints by transaction and never matches all; gRPC keeps the transaction per session across threads; QUIC e2e)");
     sonny2805_step.dependOn(&run_sonny2805_tests.step);
+    shardDep(test_step, &run_sonny2805_tests.step, 1, test_shard_loads, test_shard_index);
     // The undo log's inline tests (src/txn_undo_log.zig, and the store's undo
     // tests) through the geode lib module, filtered, as test-quality733 does.
     const txn_undo_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{ "undo log", "savepoint" } });
     const run_txn_undo_inline_tests = b.addRunArtifact(txn_undo_inline_tests);
     const txn_undo_inline_step = b.step("test-txn-undo-log-inline", "Run the undo log's inline tests (undo log, savepoints) from the geode lib module, filtered");
     txn_undo_inline_step.dependOn(&run_txn_undo_inline_tests.step);
+    shardDep(test_step, &run_txn_undo_inline_tests.step, 1, test_shard_loads, test_shard_index);
 
     // SONNY-2823: the storage adapter's session engine transaction (R9) is
     // the session's, on a thread only while one of its requests runs there,
@@ -11203,6 +11444,7 @@ pub fn build(b: *std.Build) void {
     const run_h3_fastpath_repro_tests = b.addRunArtifact(h3_fastpath_repro_tests);
     const h3_fastpath_repro_step = b.step("test-h3-fastpath-repro", "Run H3-P3 bench repro (CREATE INDEX before nodes)");
     h3_fastpath_repro_step.dependOn(&run_h3_fastpath_repro_tests.step);
+    shardDep(test_step, &run_h3_fastpath_repro_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0064 FIX C: ORDER BY on a FRESH store (no CREATE INDEX) auto-builds the
     // value-ordered index in the background, serves it (hits==1) once built, and
@@ -12219,6 +12461,7 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(sonny2791_tests);
     const sonny2791_step = b.step("test-sonny2791-internal-graphs-reseal", "Run SONNY-2791 regression (no statement or HELLO selects, creates or drops an internal __geode_* graph; the recovery reseal refuses an unsigned policy record without a kind unless its id is accepted; spawns a server)");
     sonny2791_step.dependOn(&run_sonny2791_tests.step);
+    shardDep(test_step, &run_sonny2791_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0514 Phase 6 P2: AuthGraphManager unit tests (global accessor,
     // periodic HMAC verification thread lifecycle, login-state persistence,
@@ -12368,6 +12611,7 @@ pub fn build(b: *std.Build) void {
     const run_conn_pool_diag_tests = b.addRunArtifact(conn_pool_diag_tests);
     const gap0927_step = b.step("test-gap0927", "Run GAP-0927/GAP-0928 connection-pool operability regressions (idle-reap wiring + pool-exhausted diagnostic)");
     gap0927_step.dependOn(&run_conn_pool_diag_tests.step);
+    shardDep(test_step, &run_conn_pool_diag_tests.step, 1, test_shard_loads, test_shard_index);
 
     // SONNY-1835 / SONNY-1837 / SONNY-1841: QUIC stream-semantics batch. The
     // proof predicates are inline tests in server/quic_connection_handler.zig
@@ -12405,6 +12649,7 @@ pub fn build(b: *std.Build) void {
     const run_sonny_quic_stream_tests = b.addRunArtifact(sonny_quic_stream_tests);
     const sonny_quic_stream_step = b.step("test-sonny-quic-stream-semantics", "Run SONNY-1835/1837/1841 QUIC stream-semantics proof predicates (unbound-sibling refusal, sibling idle-reap override, per-stream cancel-by-id)");
     sonny_quic_stream_step.dependOn(&run_sonny_quic_stream_tests.step);
+    shardDep(test_step, &run_sonny_quic_stream_tests.step, 1, test_shard_loads, test_shard_index);
 
     // GAP-0929: GEODE_PORT env var now sets the bind address (was inert).
     const gap0929_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0929_geode_port.zig"), .target = target, .optimize = optimize });
@@ -12541,14 +12786,15 @@ pub fn build(b: *std.Build) void {
     // the statement. bulk-vs-general therefore share no mutual exclusion and
     // both mint a node for one merge key.
     //
-    // NOT wired into the aggregate `test` step while the defect is open —
-    // add the `shardDep(test_step, ...)` line alongside the fix.
+    // The RC-2 fix landed (the bulk path holds `mg.rwlock` SHARED across the
+    // whole probe→insert); in the aggregate since SONNY-2772 (6/6 pass).
     const eng3914_xpath_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_eng3914_cross_path_merge_race.zig"), .target = target, .optimize = optimize });
     eng3914_xpath_test_mod.addImport("geode", root_mod);
     const eng3914_xpath_tests = b.addTest(.{ .root_module = eng3914_xpath_test_mod });
     const run_eng3914_xpath_tests = b.addRunArtifact(eng3914_xpath_tests);
     const eng3914_xpath_step = b.step("test-eng3914-cross-path", "Run ENG-3914 RC-2 cross-path (bulk vs general) MERGE race regressions");
     eng3914_xpath_step.dependOn(&run_eng3914_xpath_tests.step);
+    shardDep(test_step, &run_eng3914_xpath_tests.step, 1, test_shard_loads, test_shard_index);
 
     // ENG-3916(b): `id()` had no .Edge arm (a relationship's identity could not
     // be named in any expression) and `toString(NULL)` returned the STRING

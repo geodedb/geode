@@ -133,9 +133,13 @@ fn seedKnownGraph(store: *graph_store.GraphStore) !SeededGraph {
 }
 
 fn assertRestoredIntegrity(restored: *graph_store.GraphStore, seed: SeededGraph) !void {
-    // Node and edge counts must match the seeded graph exactly.
-    try testing.expectEqual(@as(usize, 5), restored.nodes.count());
-    try testing.expectEqual(@as(usize, 3), restored.edges.count());
+    // Node and edge counts must match the seeded graph exactly. Read them the
+    // way the engine does: loadFromFile defers each graph's resident load to
+    // first access (Phase 1b, a31800da), so `nodes`/`edges` are caches that
+    // are empty on a cold store (SONNY-6277); getNodeCount/getEdgeCount and
+    // getEdgePtr hydrate.
+    try testing.expectEqual(@as(usize, 5), restored.getNodeCount());
+    try testing.expectEqual(@as(usize, 3), restored.getEdgeCount());
 
     // Sampled node property round-trip (String + Int).
     const alice_name = restored.getNodeProperty(seed.user_alice, "name") orelse return error.NodePropertyMissing;
@@ -153,7 +157,7 @@ fn assertRestoredIntegrity(restored: *graph_store.GraphStore, seed: SeededGraph)
 
     // Sampled edge round-trip: topology (from/to/label) + property.
     for (seed.edges) |ef| {
-        const edge_ptr = restored.edges.getPtr(ef.id) orelse return error.EdgeMissing;
+        const edge_ptr = restored.getEdgePtr(ef.id) orelse return error.EdgeMissing;
         try testing.expectEqual(ef.from, edge_ptr.from_id);
         try testing.expectEqual(ef.to, edge_ptr.to_id);
         try testing.expectEqualStrings(ef.label, edge_ptr.label);

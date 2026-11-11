@@ -50,6 +50,22 @@
 
 ### Fixed
 
+- **Backup/restore regressions count the restored store the way the engine
+  does (SONNY-6277):** `test-gap0862` (1 of 3) and `test-gap0880` (2 of 5)
+  reported 0 nodes in a restored store (`expected 5, found 0`;
+  `expected 2, found 0`). No data was lost: the restore writes every graph
+  file, and the restored store holds every node, edge and property. The tests
+  read `GraphStore.nodes.count()`, `edges.count()` and `edges.getPtr()`,
+  which are resident caches, and since Phase 1b (`a31800da`, 2026-06-29)
+  `loadFromFile` defers each graph's resident load to first access, so on a
+  cold store those caches are empty. They now read through
+  `getNodeCount`/`getEdgeCount`/`getEdgePtr`, which hydrate, with the same
+  exact counts and property checks, and both steps run in the aggregate. The
+  new `zig build test-sonny6277-backup-restore-roundtrip` backs up a store
+  (default and named graph; String, Int, Float and Bool properties),
+  restores it into a fresh data directory, and reads it cold through the
+  executor and `getAllNodes`, and again after a reopen, uncompressed and
+  with gzip.
 - **GPU release image can start the release binary (SONNY-4884):**
   `Dockerfile.release.gpu` was based on
   `nvidia/cuda:13.4.2-runtime-ubuntu22.04`, whose glibc 2.35 is older than the
@@ -153,6 +169,32 @@
   persisted by the server) and the never-compiled tests that imported the
   deleted code. `rotted_executables` is now empty, so `test-compile`
   compiles every executable. Regression: `zig build test-sonny2771-gen-fuzz`.
+- **Every named test step runs in the aggregate or is listed with a reason
+  (SONNY-2772):** 108 named `test-*` steps ran in no aggregate `zig build
+  test` shard, so no pre-push hook or CI shard ran them, and they rotted
+  unseen (`test-gap0891-repro` once stopped compiling). Among them were
+  security regressions (`test-new1-cross-graph-bola`,
+  `test-sec002-cdc-preauth`, `test-sec002-grpc-cdc`) and the round-8
+  server-spawning regressions `test-sonny2776-quic-graph-uses` and
+  `test-sonny2791-internal-graphs-reseal`. 54 of them now run in the
+  aggregate. The other 54 are listed in `build.zig`'s
+  `not_in_aggregate_steps`, each with its reason: aggregators, TSan
+  companions, the e2e, benchmark and perf lanes, GPU, the subprocess cluster
+  and CLI e2e tests, per-file runners whose files already run in the
+  aggregate, and five steps that do not pass
+  (`test-first-boot-admin-breadcrumb`; `test-slab-packing-geode`, which
+  had stopped compiling against graph_storage 0.4.10's `EdgeIndexMap` and,
+  ported to `forEachLive`, does not finish in 30 minutes; `test-gap0862`
+  and `test-gap0880`, whose restored store reports 0 nodes, SONNY-6277; and
+  `test-sonny-write-allowlist-r4-transport`, whose SONNY-3368 QUIC case
+  times out while seeding).
+  `checkNamedTestStepsInAggregate` fails configuration, `zig build -l`
+  included, when a named step is neither in the aggregate nor listed, or when
+  a listed name matches no step or one that runs in the aggregate. The
+  `getNodePtrHydrated` doc comment now gives its real contract: before a
+  crash-reopened graph is hydrated it returns null for a node that exists,
+  so callers take ids from a hydration chokepoint (every caller does).
+  Regression: the configure-time guard (`zig build -l`).
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)
