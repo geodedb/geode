@@ -25,8 +25,8 @@ const value_types = @import("../value_types.zig");
 const Value = value_types.Value;
 
 // Step 1 finding: build_options IS wired into root_mod (build.zig:543) which includes
-// all execution submodules. The fallback in src/build_options.zig is "dev"; at build time
-// addOption("version", ...) injects the real value from build.zig.zon ("0.1.4").
+// all execution submodules. addOption("version", ...) in build.zig injects the value
+// of `git describe --tags --always` (getGitVersion) at build time.
 const build_options = @import("build_options");
 
 fn emptyResult(allocator: std.mem.Allocator) !ExecutionResult {
@@ -159,8 +159,6 @@ pub fn executeShowPermissions(allocator: std.mem.Allocator, target: ?[]const u8,
 
 pub fn executeShowVersion(allocator: std.mem.Allocator) !ExecutionResult {
     // build_options.version is injected by build.zig addOption("version", ...) at build time.
-    // In debug/dev builds where the option is not overridden, the fallback from
-    // src/build_options.zig is "dev".
     return oneRowResult(allocator, "version", build_options.version);
 }
 

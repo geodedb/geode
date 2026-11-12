@@ -72,8 +72,8 @@ const NANOS_PER_MICRO: i128 = 1_000;
 //     RETURN duration_sub(duration('PT3H'), duration('PT1H'))  -> TypeMismatch
 //     RETURN json_get(json('{"a": 1}'), 'a')                   -> TypeMismatch
 //
-// Microseconds per calendar day, matching src/eval/temporal_arithmetic.zig's
-// `micros_per_day`: a day in this engine's Interval is exactly 24h, so the
+// Microseconds per calendar day, matching `micros_per_day` in src/eval.zig's
+// interval comparison: a day in this engine's Interval is exactly 24h, so the
 // day component converts to a nanosecond length losslessly.
 const MICROS_PER_DAY: i64 = 24 * 3600 * 1_000_000;
 
