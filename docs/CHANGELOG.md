@@ -202,6 +202,25 @@
 
 ### Fixed
 
+- **Lean mode: MERGE no longer duplicates a holder that is not resident
+  (SONNY-3056).** With `GEODE_INDEX_MERGE_KEYS_ONLY=1`, a MERGE key is
+  indexed only once registered (the first MERGE on it), and the
+  registration backfilled MERGE's index from the resident nodes only, so a
+  node written before (by CREATE, or a MERGE on another key) and evicted
+  from the node cache had no entry: the executor's MERGE and the server's
+  bulk MERGE trusted the miss and created a duplicate. A key registered at
+  runtime is now backfilled per (graph, label) from the label's postings,
+  hydrating nodes that are not resident, before the first lookup trusts a
+  miss (`GraphStore.ensureLeanMergeBackfill`); the cost is one scan of the
+  label per key, once (keys read from `merge_index_keys.dat` at start cost
+  nothing). The legacy executor's point read through the same index
+  (`lookupOnlyMergeHolder`) is covered too. **Still open:** in lean mode the
+  exact node-property index stays incomplete for such a key (nodes written
+  before it was registered) until it is rebuilt from the durable pages, so
+  an inline-property seek on it can miss those nodes, and a registered composite MERGE key is
+  backfilled from resident nodes only. Regression:
+  `zig build test-sonny3056-lean-merge-evicted-holder`.
+
 - **BEHAVIOUR CHANGE: NOT NULL, EXISTS and NODE KEY existence are enforced;
   `CREATE UNIQUE INDEX` is refused (SONNY-6281).** `REQUIRE n.p IS NOT
   NULL`, `ASSERT EXISTS (p)` and the existence half of `IS NODE KEY` were

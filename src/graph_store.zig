@@ -96,6 +96,21 @@ var g_lean_index_flag_loaded: bool = false;
 var g_lean_index_key_bufs: [lean_index_max_keys][lean_index_key_cap]u8 = undefined;
 var g_lean_index_key_lens: [lean_index_max_keys]usize = [_]usize{0} ** lean_index_max_keys;
 var g_lean_index_key_count: usize = 0;
+// SONNY-3056: per registered key, whether it was registered at RUNTIME (the
+// first MERGE on it in this process) rather than read from the sidecar at
+// adapter init, and the registration's generation (process-monotonic, never
+// reset, so a re-registration after `setLeanIndexingForTest` is a new one).
+// A runtime-registered key may have holders written before it was indexed
+// that are no longer resident; `GraphStore.ensureLeanMergeBackfill` makes
+// MERGE's index complete for it, per (graph, label), from the label's
+// postings, before a lookup trusts a miss. A sidecar key was registered
+// before any graph hydrated, so hydration and every later write indexed it.
+var g_lean_index_key_late: [lean_index_max_keys]bool = [_]bool{false} ** lean_index_max_keys;
+var g_lean_index_key_gen: [lean_index_max_keys]u64 = [_]u64{0} ** lean_index_max_keys;
+var g_lean_registration_gen: u64 = 0;
+/// Late keys registered (lock-free fast path for every lookup: zero after a
+/// restart, when every key comes from the sidecar).
+var g_lean_late_key_count = std.atomic.Value(u32).init(0);
 
 fn leanIndexEnabledLocked() bool {
     if (!g_lean_index_flag_loaded) {
@@ -144,6 +159,11 @@ fn registerMergeIndexKeyInner(key: []const u8, persist: bool) void {
         if (g_lean_index_key_count >= lean_index_max_keys) break :blk false; // overflow: tolerate
         @memcpy(g_lean_index_key_bufs[g_lean_index_key_count][0..key.len], key);
         g_lean_index_key_lens[g_lean_index_key_count] = key.len;
+        g_lean_registration_gen += 1;
+        g_lean_index_key_gen[g_lean_index_key_count] = g_lean_registration_gen;
+        // `persist` is true on the runtime path, false for a sidecar key.
+        g_lean_index_key_late[g_lean_index_key_count] = persist;
+        if (persist) _ = g_lean_late_key_count.fetchAdd(1, .release);
         g_lean_index_key_count += 1;
         break :blk true;
     };
@@ -282,6 +302,25 @@ pub fn setLeanIndexingForTest(enabled: bool) void {
     g_lean_index_flag_loaded = true;
     g_lean_index_enabled = enabled;
     g_lean_index_key_count = 0;
+    g_lean_late_key_count.store(0, .release);
+}
+
+// CANARY: REQ=REQ-SONNY-3056-LEAN-MERGE-BACKFILL; FEATURE="MergeIdempotency"; ASPECT=LateKeyRegistry; STATUS=TESTED; TEST=tests/test_sonny3056_lean_merge_evicted_holder.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-3056: the registration generation of `key` when lean mode is on
+/// and `key` was registered at runtime (see `g_lean_index_key_late`), else
+/// null (lean off, the key not registered, or read from the sidecar).
+fn leanLateKeyGen(key: []const u8) ?u64 {
+    if (g_lean_late_key_count.load(.acquire) == 0) return null;
+    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (!leanIndexEnabledLocked()) return null;
+    var i: usize = 0;
+    while (i < g_lean_index_key_count) : (i += 1) {
+        if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) {
+            return if (g_lean_index_key_late[i]) g_lean_index_key_gen[i] else null;
+        }
+    }
+    return null;
 }
 
 // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=FastPathFence; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=storage; UPDATED=2026-11-11
@@ -2356,6 +2395,13 @@ pub const GraphStore = struct {
     // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
     // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
     merge_prop_index: MergePropertyIndex,
+    // SONNY-3056: "graph\x00label\x00key" -> the registration generation
+    // of a runtime-registered lean key (`leanLateKeyGen`) whose holders of
+    // that label were backfilled into `merge_prop_index`
+    // (`ensureLeanMergeBackfill`). Guarded by `lean_backfill_mutex`, a leaf
+    // held only for map operations, never across the scan.
+    lean_backfilled: std.StringHashMapUnmanaged(u64) = .empty,
+    lean_backfill_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // PERF-C (issue #814) race fix (2026-05-18): serialize every access to
     // the three tenant-keyed refcount maps (`node_labels_by_tenant`,
     // `edge_types_by_tenant`, `label_properties_by_tenant`).  The bump/dec
@@ -2696,6 +2742,8 @@ pub const GraphStore = struct {
         deinitTenantStringMultiset(&self.label_properties_by_tenant, self.allocator);
 
         self.merge_prop_index.deinit();
+        self.clearLeanBackfilled();
+        self.lean_backfilled.deinit(self.allocator);
 
         // PERF-P0-001: Clean up edge-type index
         var eti_iter = self.edge_type_index.iterator();
@@ -2822,6 +2870,7 @@ pub const GraphStore = struct {
         self.label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
 
         self.merge_prop_index.reset();
+        self.clearLeanBackfilled();
 
         // PERF-P0-001: Reset edge-type index (SONNY-3233: under its lock).
         {
@@ -6636,6 +6685,81 @@ pub const GraphStore = struct {
         }
     }
 
+    /// SONNY-3056: forget which (graph, label, key) triples were backfilled
+    /// (`merge_prop_index` was emptied or the store is going).
+    fn clearLeanBackfilled(self: *GraphStore) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.lean_backfill_mutex.lockUncancelable(io);
+        defer self.lean_backfill_mutex.unlock(io);
+        var it = self.lean_backfilled.keyIterator();
+        while (it.next()) |k| self.allocator.free(k.*);
+        self.lean_backfilled.clearRetainingCapacity();
+    }
+
+    // CANARY: REQ=REQ-SONNY-3056-LEAN-MERGE-BACKFILL; FEATURE="MergeIdempotency"; ASPECT=PerLabelBackfillFromPostings; STATUS=TESTED; TEST=tests/test_sonny3056_lean_merge_evicted_holder.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-3056: before a lookup of `key` under `label` in `graph_name`
+    /// trusts MERGE's index, make the index complete for that triple when
+    /// `key` is a lean key registered at runtime (`leanLateKeyGen`). Such a
+    /// key's holders written before it was registered were indexed only if
+    /// they were resident at registration (`backfillMergeIndexForKey`); an
+    /// evicted one had no entry, the lookup trusted the miss, and MERGE
+    /// created a duplicate. This reads every node the label's postings list
+    /// (`snapshotNodesByLabel`), hydrating those that are not resident
+    /// (`residentNodeSatisfies`), and adds its entry. Once per (graph,
+    /// label, key) and registration; holders written afterwards index
+    /// themselves (the key is registered). The caller holds the graph's
+    /// lock, as for any lookup; this takes no graph lock. A key from the
+    /// sidecar costs nothing (the lock-free check in `leanLateKeyGen`).
+    fn ensureLeanMergeBackfill(self: *GraphStore, graph_name: []const u8, label: []const u8, key: []const u8) !void {
+        const gen = leanLateKeyGen(key) orelse return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const triple = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph_name, label, key });
+        var triple_owned = true;
+        defer if (triple_owned) self.allocator.free(triple);
+        {
+            self.lean_backfill_mutex.lockUncancelable(io);
+            defer self.lean_backfill_mutex.unlock(io);
+            if (self.lean_backfilled.get(triple)) |done| if (done == gen) return;
+        }
+
+        const Probe = struct {
+            graph_name: []const u8,
+            label: []const u8,
+            key: []const u8,
+            buf: [1024]u8 = undefined,
+            len: usize = 0,
+
+            fn build(c: *@This(), node: *const Node) bool {
+                c.len = 0;
+                if (!std.mem.eql(u8, node.graph_name, c.graph_name)) return false;
+                if (!nodeCarriesLabel(node, c.label)) return false;
+                const value = node.properties.get(c.key) orelse return false;
+                const probe = buildMergeIndexKey(&c.buf, c.graph_name, c.label, c.key, value) orelse return false;
+                c.len = probe.len;
+                return true;
+            }
+        };
+        if (try self.snapshotNodesByLabel(self.allocator, graph_name, label)) |ids| {
+            defer self.allocator.free(ids);
+            var probe: Probe = .{ .graph_name = graph_name, .label = label, .key = key };
+            for (ids) |id| {
+                if (!try self.residentNodeSatisfies(id, &probe, Probe.build)) continue;
+                // An id with bit 63 set is never an entry (`putOrUpdate`), as
+                // on every other path that writes one.
+                self.merge_prop_index.putOrUpdate(probe.buf[0..probe.len], id) catch |err| switch (err) {
+                    error.MergeHolderIdFlagged => continue,
+                    else => return err,
+                };
+            }
+        }
+
+        self.lean_backfill_mutex.lockUncancelable(io);
+        defer self.lean_backfill_mutex.unlock(io);
+        const gop = try self.lean_backfilled.getOrPut(self.allocator, triple);
+        if (!gop.found_existing) triple_owned = false;
+        gop.value_ptr.* = gen;
+    }
+
     /// Caveat "B": backfill the COMPOSITE merge entry for every RESIDENT node.
     /// Called when a composite key is registered AFTER nodes were already
     /// loaded into the cache (the in-process register-then-merge order, and as a
@@ -6713,6 +6837,10 @@ pub const GraphStore = struct {
     /// answer.
     pub fn lookupMergeCandidate(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
+        // SONNY-3056: a lean key registered at runtime is complete for this
+        // label only after its backfill; a failed one leaves the index unable
+        // to answer.
+        self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable;
         var buf: [1024]u8 = undefined;
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
 
@@ -6736,6 +6864,7 @@ pub const GraphStore = struct {
     /// so such a key answers here once more.)
     pub fn lookupOnlyMergeHolder(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
+        self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable; // SONNY-3056
         var buf: [1024]u8 = undefined;
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
         const entry = self.merge_prop_index.get(probe) orelse return .not_found;
@@ -7439,6 +7568,7 @@ pub const GraphStore = struct {
         self.label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
 
         self.merge_prop_index.reset();
+        self.clearLeanBackfilled();
 
         // PERF-P0-001: Reset edge-type index (SONNY-3233: under its lock).
         {
