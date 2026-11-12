@@ -2182,7 +2182,14 @@ pub const RLSEngine = struct {
     }
 };
 
-// Policy Cache for performance
+// CANARY: REQ=REQ-SONNY-3135-POLICY-CACHE-OWNED-KEYS; FEATURE="RLS Expression Wiring"; ASPECT=CacheOwnsKeys; STATUS=TESTED; TEST=tests/test_sonny3135_policy_cache_keys_grant_wildcard.zig; OWNER=security; UPDATED=2026-11-12
+// Policy Cache for performance.
+//
+// SONNY-3135 (N6): each entry's key holds the cache's own copy of the graph
+// and table strings, freed when the entry is removed (expiry, invalidation,
+// eviction, deinit). `put` stored the caller's slices: `checkRowAccess`
+// passes the strings its caller gave it, so once a library caller freed them
+// every later `get`, `invalidate` or eviction read freed memory.
 pub const PolicyCache = struct {
     allocator: Allocator,
     cache: std.HashMap(CacheKey, CacheEntry, CacheKey.HashContext, 80),
@@ -2227,7 +2234,19 @@ pub const PolicyCache = struct {
     }
 
     pub fn deinit(self: *PolicyCache) void {
+        var it = self.cache.keyIterator();
+        while (it.next()) |key| self.freeKey(key.*);
         self.cache.deinit();
+    }
+
+    fn freeKey(self: *PolicyCache, key: CacheKey) void {
+        self.allocator.free(key.policy_key.graph);
+        self.allocator.free(key.policy_key.table);
+    }
+
+    /// Remove the entry for `key` (any equal key), freeing its strings.
+    fn removeEntry(self: *PolicyCache, key: CacheKey) void {
+        if (self.cache.fetchRemove(key)) |kv| self.freeKey(kv.key);
     }
 
     pub fn get(
@@ -2248,7 +2267,7 @@ pub const PolicyCache = struct {
                 return entry.allowed;
             }
             // Entry expired
-            _ = self.cache.remove(key);
+            self.removeEntry(key);
         }
 
         return null;
@@ -2272,10 +2291,24 @@ pub const PolicyCache = struct {
             .operation = operation,
         };
 
-        try self.cache.put(key, CacheEntry{
+        const entry = try self.cache.getOrPut(key);
+        if (!entry.found_existing) {
+            // The entry holds copies of the caller's strings (equal, so the
+            // hash is unchanged); on failure it is removed again.
+            errdefer self.cache.removeByPtr(entry.key_ptr);
+            const graph = try self.allocator.dupe(u8, policy_key.graph);
+            errdefer self.allocator.free(graph);
+            const table = try self.allocator.dupe(u8, policy_key.table);
+            entry.key_ptr.* = .{
+                .policy_key = .{ .graph = graph, .table = table },
+                .user_id = user_id,
+                .operation = operation,
+            };
+        }
+        entry.value_ptr.* = CacheEntry{
             .allowed = allowed,
             .timestamp = compat_milliTimestamp(),
-        });
+        };
     }
 
     pub fn invalidate(self: *PolicyCache, policy_key: RLSEngine.PolicyKey) !void {
@@ -2289,9 +2322,7 @@ pub const PolicyCache = struct {
             }
         }
 
-        for (to_remove.items) |key| {
-            _ = self.cache.remove(key);
-        }
+        for (to_remove.items) |key| self.removeEntry(key);
     }
 
     fn evictOldest(self: *PolicyCache) !void {
@@ -2306,9 +2337,7 @@ pub const PolicyCache = struct {
             }
         }
 
-        if (oldest_key) |key| {
-            _ = self.cache.remove(key);
-        }
+        if (oldest_key) |key| self.removeEntry(key);
     }
 };
 

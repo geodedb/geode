@@ -1478,6 +1478,17 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
         freeStatusScaffold(allocator, columns, row, rows);
         return error.GlobalPrivilegeNotSupported;
     }
+    // CANARY: REQ=REQ-SONNY-3135-GRANT-WILDCARD-REFUSED; FEATURE="GQL Auth DDL"; ASPECT=GrantOnStarRefused; STATUS=TESTED; TEST=tests/test_sonny3135_policy_cache_keys_grant_wildcard.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-3135 (N7d): a per-graph grant is matched by the graph a request
+    // is on, and a request on `*` matches none, so a grant on graph `*`
+    // conferred nothing and was reported granted (before the 2026-10 grant
+    // rework a restart turned it into a wildcard policy). Refused (0A000),
+    // nothing stored. A revoke of `*` still runs, to remove such a grant an
+    // older release stored.
+    if (is_grant and std.mem.eql(u8, resource, "*")) {
+        freeStatusScaffold(allocator, columns, row, rows);
+        return error.GrantWildcardNotSupported;
+    }
 
     // Map perm name (case-insensitive) to action code(s): 0=read, 1=write, 2=schema
     // Use a small fixed-size buffer for the action list (max 3 for ALL)

@@ -473,6 +473,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.MfaRateLimited => .{ .code = "53400", .message = "Too many failed MFA verifications for the user: locked out for 5 minutes" },
         error.FeatureDisabled => .{ .code = "0A000", .message = "Feature disabled on this server: the operation needs a feature that is turned off (MFA: start the server with GEODE_ENABLE_MFA=1)" },
         error.FipsUnsupported => .{ .code = "0A000", .message = "Not available under FIPS mode: the operation needs a primitive that is not FIPS-approved (Argon2id, BLAKE2b)" },
+        // SONNY-3135 (N7d): geode.auth.grant(..., '*') (it stored a grant on a
+        // graph named '*', which no request matches).
+        error.GrantWildcardNotSupported => .{ .code = "0A000", .message = "A per-graph grant needs one graph: there is no grant on every graph ('*'). Give the user a built-in role, or create an allow policy for every graph (CREATE POLICY ... ON GRAPH *); nothing was changed" },
         error.GlobalPrivilegeNotSupported => .{ .code = "0A000", .message = "GRANT / REVOKE of a privilege needs ON GRAPH <graph>: there are no global per-privilege grants (global privilege is the user's role: admin, readwrite, user, readonly); nothing was changed" },
         error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
         // GAP-0856: distributed EXPLAIN/PROFILE is intentionally node-local only.

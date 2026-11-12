@@ -4,6 +4,19 @@
 
 ### Security
 
+- **The RLS policy cache owns its keys; no grant on graph `*` (SONNY-3135
+  N6, N7d).** (N6) `RLSEngine.checkRowAccess` cached each decision under
+  the graph and table strings its caller passed (`PolicyCache.put` kept the
+  borrowed slices), so a library caller that freed them left every later
+  cache lookup, invalidation and eviction reading freed memory (a crash in
+  the eviction scan). The cache now keeps its own copy of each key and frees
+  it with the entry. (N7d) **Behaviour change:** `geode.auth.grant(<priv>,
+  <user>, '*')` answers 0A000 (`GrantWildcardNotSupported`) and stores
+  nothing; it stored a grant on a graph named `*`, which no request matches,
+  and reported it granted. A revoke of `*` still removes one an older
+  release stored. N7c (graph drops that do not wait for the graph's lock
+  holders: a graph created between a request's lock attempt and its
+  execution, a raft apply, a HELLO rollback) remains open.
 - **`geode query` exit code, superuser roles, procedure errors, EXPLAIN
   POLICY's executor checks, legacy hashes (SONNY-6369).** (1) **Behaviour
   change:** `geode query` exits 1 when the server answers the query with an

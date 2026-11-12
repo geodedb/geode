@@ -430,7 +430,13 @@ create/revoke) are wired at startup in `server_init`.
    `geode.auth.grant` / `revoke` with an empty resource) fails with SQLSTATE
    0A000 and changes nothing; it used to answer 00000 with a `note:` row
    (SONNY-6359). Global privilege is governed by the user's role — there is
-   no per-privilege override model at the global level.
+   no per-privilege override model at the global level. Likewise a grant on
+   every graph, `geode.auth.grant(<priv>, <user>, '*')`, fails with 0A000
+   (`GrantWildcardNotSupported`) and stores nothing (SONNY-3135): it used to
+   store a grant on a graph literally named `*`, which no request matches.
+   For every graph use a built-in role or `CREATE POLICY ... ON GRAPH *`.
+   `geode.auth.revoke(<priv>, <user>, '*')` still removes such a grant an
+   older release stored.
 
 2. **Custom roles carry no privileges and cannot be granted to users.**
    Roles created via `CREATE ROLE <custom-name>` are stored (and persisted) in
