@@ -583,6 +583,16 @@
 
 ### Fixed
 
+- **An index-served read no longer waits for an exact-index build
+  (SONNY-6362 item 6).** While a deferred build or a late-key catch-up of a
+  graph's exact node-property index held its build mutex (an O(graph)
+  scan), every property-equality seek on the graph
+  (`getCandidateNodesByLabelAndProperty`, `countCandidateNodesByLabelAndProperty`,
+  `collectPropertyPostingSummaries`) parked on it. They now answer
+  `ExactIndexBusy` at once and their callers serve the read from a scan; a
+  read finding the mutex free still builds the index itself. The MERGE
+  resolver and the write paths still wait for the build. Regression:
+  `zig build test-sonny6362-exact-index-read-fallback`.
 - **Full-text and vector indexes follow `REMOVE n:L` and a `SET` that
   replaces indexed text; an undo repair survives a background vector
   rebuild (SONNY-6421).** `REMOVE n:L` called the store alone, so a

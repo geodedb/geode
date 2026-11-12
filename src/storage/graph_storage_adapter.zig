@@ -2818,13 +2818,32 @@ fn scanExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFlags
 /// checkpoint can never lose its non-blocking `tryLock` to the very build it is
 /// persisting (the lost persist).
 fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
+    return ensureExactIndex(adapter, mg, .wait);
+}
+
+// CANARY: REQ=REQ-SONNY-6362-READ-NO-BUILD-WAIT; FEATURE="ExactPropertyIndex"; ASPECT=ReadFallsBackDuringBuild; STATUS=TESTED; TEST=tests/test_sonny6362_exact_index_read_fallback.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6362 item 6: `ensureExactNodePropertyIndexBuilt` for an index-served
+/// READ. While another thread holds `exact_index_build_mutex` (a deferred
+/// build or a late-key catch-up, O(graph)) a read parked on it for the whole
+/// build; it now answers `error.ExactIndexBusy` at once, and every read
+/// caller treats an error as "no index answer" and scans. With the mutex
+/// free the read builds (or catches up) the index itself, as before. Write
+/// paths and the MERGE resolver keep waiting: they must see a complete index.
+fn ensureExactIndexForRead(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
+    return ensureExactIndex(adapter, mg, .no_wait);
+}
+
+fn ensureExactIndex(adapter: *StorageAdapter, mg: *ManagedGraph, comptime mode: enum { wait, no_wait }) !void {
     // SONNY-6354: built AND complete for every lean key registered so far.
     if (exactIndexCurrent(mg)) return;
     const io = std.Io.Threaded.global_single_threaded.io();
     // SONNY-1574: the build runs in an INNER scope so `exact_index_build_mutex`
     // is released BEFORE the persist worker is spawned (see the spawn below).
     const built_here = blk: {
-        mg.exact_index_build_mutex.lockUncancelable(io);
+        switch (mode) {
+            .wait => mg.exact_index_build_mutex.lockUncancelable(io),
+            .no_wait => if (!mg.exact_index_build_mutex.tryLock()) return error.ExactIndexBusy,
+        }
         defer mg.exact_index_build_mutex.unlock(io);
         // Double-check under the mutex: a peer first-accessor may have built it
         // while we waited for the lock. A built index may still lack a lean
@@ -6826,6 +6845,8 @@ pub const StorageAdapter = struct {
     /// Return node candidates for an exact `(label, property = value)` probe.
     /// Hash collisions are tolerated because higher layers still verify the
     /// full property map before treating a candidate as a MERGE match.
+    /// Index-served read: `error.ExactIndexBusy` while a build of the index
+    /// is in flight (SONNY-6362 item 6; the caller scans instead).
     pub fn getCandidateNodesByLabelAndProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -6833,6 +6854,18 @@ pub const StorageAdapter = struct {
         property_key: []const u8,
         value: graph_store.PropertyValue,
         allocator: Allocator,
+    ) ![]u64 {
+        return self.getCandidateNodesImpl(graph_name, label, property_key, value, allocator, false);
+    }
+
+    fn getCandidateNodesImpl(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        value: graph_store.PropertyValue,
+        allocator: Allocator,
+        comptime wait_for_build: bool,
     ) ![]u64 {
         _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
 
@@ -6842,7 +6875,7 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         // H4: build the exact index on first access if it was deferred at open.
-        try ensureExactNodePropertyIndexBuilt(self, mg);
+        if (wait_for_build) try ensureExactNodePropertyIndexBuilt(self, mg) else try ensureExactIndexForRead(self, mg);
         const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
 
         const storage_value = try toStorageProperty(allocator, value);
@@ -7378,7 +7411,7 @@ pub const StorageAdapter = struct {
         var seed_idx: usize = 0;
         var best_len: usize = std.math.maxInt(usize);
         for (filters, 0..) |f, i| {
-            const len = self.countCandidateNodesByLabelAndProperty(graph_name, label, f.key, f.value) catch continue;
+            const len = self.countCandidateNodesImpl(graph_name, label, f.key, f.value, true) catch continue;
             if (len == 0) {
                 // Authoritative miss only when the exact index covers this key.
                 if (graph_store.shouldIndexProperty(f.key)) return missing_err;
@@ -7390,7 +7423,8 @@ pub const StorageAdapter = struct {
             }
         }
 
-        const candidates = try self.getCandidateNodesByLabelAndProperty(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, self.allocator);
+        // SONNY-6362 item 6: a MERGE lookup waits for an in-flight build.
+        const candidates = try self.getCandidateNodesImpl(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, self.allocator, true);
         defer self.allocator.free(candidates);
 
         for (candidates) |node_id| {
@@ -7526,7 +7560,7 @@ pub const StorageAdapter = struct {
         var seed_idx: usize = 0;
         var best_len: usize = std.math.maxInt(usize);
         for (filters, 0..) |f, i| {
-            const len = self.countCandidateNodesByLabelAndProperty(graph_name, label, f.key, f.value) catch continue;
+            const len = self.countCandidateNodesImpl(graph_name, label, f.key, f.value, true) catch continue;
             if (len == 0) {
                 if (graph_store.shouldIndexProperty(f.key)) return missing_err;
                 continue;
@@ -7644,12 +7678,25 @@ pub const StorageAdapter = struct {
     /// copying the list or touching the engine — used by the read fast path to
     /// pick the most selective indexed inline property before the real seek.
     /// Returns 0 when the label is unknown or the posting is absent.
+    /// Index-served read: `error.ExactIndexBusy` while a build of the index
+    /// is in flight (SONNY-6362 item 6; the caller scans instead).
     pub fn countCandidateNodesByLabelAndProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
         label: []const u8,
         property_key: []const u8,
         value: graph_store.PropertyValue,
+    ) !usize {
+        return self.countCandidateNodesImpl(graph_name, label, property_key, value, false);
+    }
+
+    fn countCandidateNodesImpl(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        value: graph_store.PropertyValue,
+        comptime wait_for_build: bool,
     ) !usize {
         // This probes the exact node-property index by value hash exactly like
         // getCandidateNodesByLabelAndProperty — count it as an exact-index lookup
@@ -7661,7 +7708,7 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         // H4: build the exact index on first access if it was deferred at open.
-        try ensureExactNodePropertyIndexBuilt(self, mg);
+        if (wait_for_build) try ensureExactNodePropertyIndexBuilt(self, mg) else try ensureExactIndexForRead(self, mg);
         const label_id = mg.label_dict.getId(label) orelse return 0;
 
         const storage_value = try toStorageProperty(self.allocator, value);
@@ -7715,7 +7762,7 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         // H4: build the exact index on first access if it was deferred at open.
-        try ensureExactNodePropertyIndexBuilt(self, mg);
+        try ensureExactIndexForRead(self, mg); // SONNY-6362 item 6
         const label_id = mg.label_dict.getId(label) orelse
             return try allocator.alloc(PropertyPostingSummary, 0);
 

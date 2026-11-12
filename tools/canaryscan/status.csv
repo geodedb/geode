@@ -68,10 +68,8 @@ GQL-39075-RQ-0024,ConformanceProfile/AnnexB,ImplDefined,TESTED,src/conformance.z
 GQL-39075-RQ-0024,ConformanceProfile/AnnexB,ImplDefined,TESTED,,TestCANARY_GQL39075_RQ_0024_ImplDefinedFlagsComplete,,conformance,2026-02-23
 PERF-D-ADMISSION-SIGNAL-001,GlobalStreamThrottle,FutexWakeOnRelease,TESTED,tests/test_perf_d_admission_signal.zig,tests/test_perf_d_admission_signal.zig,,server,2026-05-15
 PERF-D-ADMISSION-SIGNAL-001,GlobalStreamThrottle,FutexWakeOnReleaseBuild,TESTED,build.zig,,,build,2026-05-15
-PERF-D-ADMISSION-SIGNAL-001,GlobalStreamThrottle,FutexWakeOnReleaseBuild,TESTED,tests/build.zig.full,,,build,2026-05-15
 PERF-D-ADMISSION-WAKE-001,QuicTransport.connection_slot_freed_gen,AdmissionFutexWake,TESTED,tests/test_perf_d_admission_wake.zig,tests/test_perf_d_admission_wake.zig,,transport,2026-05-15
 PERF-D-ADMISSION-WAKE-001,QuicTransport.connection_slot_freed_gen,AdmissionFutexWakeBuild,TESTED,build.zig,,,build,2026-05-15
-PERF-D-ADMISSION-WAKE-001,QuicTransport.connection_slot_freed_gen,AdmissionFutexWakeBuild,TESTED,tests/build.zig.full,,,build,2026-05-15
 PERF-P1-001,BFSDequeue,O1FrontIndex,TESTED,src/execution.zig,tests/test_path_iterator_bfs_dequeue.zig,,engine,2026-04-11
 PERF-P1-001,BFSDequeue,O1PendingDequeue,TESTED,src/execution.zig,tests/test_path_iterator_bfs_dequeue.zig,,engine,2026-04-11
 PERF-P1-001,BFSDequeue,O1PendingDrain,TESTED,src/execution.zig,tests/test_path_iterator_bfs_dequeue.zig,,engine,2026-04-11
@@ -166,7 +164,6 @@ REQ-ANALYTICS-TEST-002,Pattern Detection Tests,PatternRecognition,TESTED,tests/t
 REQ-ANALYTICS-TEST-003,Anomaly Detection Tests,StatisticalAnalysis,TESTED,tests/test_real_time_analytics.zig,TestCANARY_ANALYTICS_TEST_003,,analytics,2025-10-05
 REQ-API-DOCS-001,APIDocumentation,MetadataDerived,EXEMPT,scripts/generate_api_docs.zig,,,tooling,2026-01-03
 REQ-API-DOCS-002,APIDocumentation,BuildTarget,EXEMPT,build.zig,,,tooling,2026-01-03
-REQ-API-DOCS-002,APIDocumentation,BuildTarget,EXEMPT,tests/build.zig.full,,,tooling,2026-01-03
 REQ-ARCH-M2-FIX,DependencyInjection,CATALOG,EXEMPT,src/schema/catalog.zig,,,core,2025-10-17
 REQ-AST-001,AST,ASTConstruction,TESTED,tests/test_gap_0193_batch3_comprehensive.zig,,,parser,2026-01-16
 REQ-AST-NODE-001,AST,NodeConstruction,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,parser,2026-01-16
@@ -205,7 +202,6 @@ REQ-AUTH-DEFAULT-001,AuthDefault,UserCreation,IMPL,tests/test_gap_0193_batch2_se
 REQ-AUTH-DEFAULT-001,Default User Creation,Security,TESTED,src/security/geode_auth_lib.zig,TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser,,security,2025-09-30
 REQ-AUTH-ENFORCE-003,AuthEnforcement,UnitTests,TESTED,src/security/test_auth_enforcement.zig,,,security,2026-01-28
 REQ-AUTH-ENFORCE-004,AuthEnforcement,BuildIntegration,TESTED,build.zig,,,security,2026-01-28
-REQ-AUTH-ENFORCE-004,AuthEnforcement,BuildIntegration,TESTED,tests/build.zig.full,,,security,2026-01-28
 REQ-AUTH-ENFORCE-025,AuthEnforcement,AuthorizationTests,TESTED,src/security/test_auth_enforcement.zig,,,security,2026-01-28
 REQ-AUTH-ENFORCE-026,AuthEnforcement,OperationMapping,TESTED,src/security/test_auth_enforcement.zig,,,security,2026-01-28
 REQ-AUTH-ENFORCE-027,AuthEnforcement,SecurityBoundaries,TESTED,src/security/test_auth_enforcement.zig,,,security,2026-01-28
@@ -547,7 +543,6 @@ REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,FalsePositiveRegression,TEST
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,Lifetime,TESTED,src/cli/query_deadline.zig,tests/test_query_deadline_state_lifetime.zig,,cli,2026-04-16
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegression,TESTED,tests/test_query_deadline_state_lifetime.zig,tests/test_query_deadline_state_lifetime.zig,,cli,2026-04-16
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegressionBuild,TESTED,build.zig,test-deadline-watchdog,,cli,2026-06-11
-REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegressionBuild,TESTED,tests/build.zig.full,,,cli,2026-06-11
 REQ-CLI-DEADLINE-WATCHDOG-002,QueryDeadlineWatchdog,QuicProgressHookFollowup,IMPL,tests/test_deadline_watchdog_quic_progress_followup.sh,,,cli,2026-04-16
 REQ-CLI-DEADLINE-WATCHDOG-002,QueryDeadlineWatchdog,QuicProgressHookIntegration,IMPL,tests/test_quic_long_query_no_false_timeout.sh,,,cli,2026-04-16
 REQ-CLI-DNS-5077,CLI QUIC hostname resolution,HostnameResolution,TESTED,src/client/quic_endpoint_host.zig,tests/test_5077_quic_endpoint_host.zig,,cli,2026-11-07
@@ -604,11 +599,8 @@ REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedBinary,TEST
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedBinary,TESTED,src/cli/main.zig,geodetestlab/specs/geode_auth_ddl.yml,,cli,2026-06-11
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedEntry,IMPL,src/unified_entry.zig,,,cli,2026-02-03
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedEntry,TESTED,build.zig,test-quic-high-concurrency-e2e,,build,2026-06-11
-REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedEntry,TESTED,tests/build.zig.full,,,build,2026-06-11
 REQ-CLI-SUBPROCESS-ELIMINATION-002,CLI Subprocess Elimination,ServerModules,TESTED,build.zig,test-quic-high-concurrency-e2e,,build,2026-06-11
-REQ-CLI-SUBPROCESS-ELIMINATION-002,CLI Subprocess Elimination,ServerModules,TESTED,tests/build.zig.full,,,build,2026-06-11
 REQ-CLI-SUBPROCESS-ELIMINATION-003,CLI Subprocess Elimination,AuthModule,TESTED,build.zig,geodetestlab/specs/geode_auth_ddl.yml,,build,2026-06-11
-REQ-CLI-SUBPROCESS-ELIMINATION-003,CLI Subprocess Elimination,AuthModule,TESTED,tests/build.zig.full,,,build,2026-06-11
 REQ-CLI-SUBPROCESS-ELIMINATION-TEST-001,CLI Subprocess Elimination Tests,UnitTests,EXEMPT,tests/test_cli_subprocess_elimination.zig,TestCANARY_REQ_CLI_SUBPROCESS_ELIMINATION_TEST_001_UnitTests,,cli,2025-10-05
 REQ-CLI-SUBPROCESS-ELIMINATION-TEST-001,CLISubprocess,Elimination,IMPL,tests/test_gap_0193_batch2_testing.zig,,,cli,2026-11-12
 REQ-CLI-SUBPROCESS-INTEGRATION-001,CLI Subprocess Elimination,IntegrationTesting,EXEMPT,tests/test_cli_subprocess_elimination_integration.zig,TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_001,,claude,2025-10-05
@@ -936,11 +928,9 @@ REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,CliPlaintextDiagnostic,TESTED,src/cli/
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,ClientFrameReadTimeout,TESTED,src/client/grpc_query_transport.zig,test-transport-parity,,transport,2026-08-24
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,DualListenerLifetime,TESTED,src/server/main.zig,geodetestlab/specs/grpc_dual_transport.yml,,transport,2026-08-24
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,RawIoUnitWiring,TESTED,build.zig,test-grpc-raw-io,,transport,2026-08-25
-REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,RawIoUnitWiring,TESTED,tests/build.zig.full,,,transport,2026-08-25
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,RawReadCoalescedFrames,TESTED,src/transport/grpc_tls.zig,test-grpc-raw-io,,transport,2026-08-25
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,ServeHelpSingleSource,TESTED,src/cli/main.zig,geodetestlab/specs/grpc_dual_transport.yml,,transport,2026-08-24
 REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,TransportParitySmokeWiring,TESTED,build.zig,test-transport-parity,,transport,2026-08-24
-REQ-ENG-3907-GRPC-TRANSPORT,GrpcTransport,TransportParitySmokeWiring,TESTED,tests/build.zig.full,,,transport,2026-08-24
 REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY,InOperator,NonListRightHandSide,TESTED,src/eval.zig,tests/test_eng3910_in_type_safety.zig,,eval,2026-08-24
 REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY,InOperator,NonListRightHandSide,TESTED,src/server/proto_util.zig,,,eval,2026-08-24
 REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY,InOperator,NonListRightHandSide,TESTED,src/value_types.zig,,,eval,2026-08-24
@@ -1061,7 +1051,6 @@ REQ-EXEC-MATERIALIZE-OWNERSHIP-001,PlannedReadMaterialize,InteriorBytesUnconditi
 REQ-EXEC-MATERIALIZE-OWNERSHIP-002,PlannedReadMaterialize,NoArenaCallerLeak,TESTED,tests/test_materialize_node_no_arena_leak.zig,tests/test_materialize_node_no_arena_leak.zig,,execution,2026-09-01
 REQ-EXEC-MERGE-001,Execution,MergeExecution,TESTED,tests/test_gap_0193_batch5_comprehensive.zig,,,exec,2026-01-16
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,BuildStep,TESTED,build.zig,tests/test_read_only_execute.zig,,engine,2026-08-28
-REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,BuildStep,TESTED,tests/build.zig.full,,,engine,2026-08-28
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliFlag,TESTED,src/cli/main.zig,tests/test_read_only_execute.zig,,engine,2026-08-28
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,src/cli/main.zig,tests/test_read_only_execute.zig,,engine,2026-08-28
 REQ-EXEC-READ-ONLY-REQUEST-001,ReadOnlyExecute,CliOption,TESTED,src/client/quic_query_runner.zig,,,engine,2026-08-28
@@ -1144,7 +1133,6 @@ REQ-FLE-BATCH-001,FLE Batch Re-encryption,ProgressTracking,TESTED,src/admin/fle_
 REQ-FLE-BI-001,FieldLevelEncryption,SECURITY,TESTED,src/crypto/hmac.zig,src/crypto/hmac.zig,,security,2026-01-15
 REQ-FLE-BI-002,FieldLevelEncryption,SECURITY,TESTED,src/index/blind_index.zig,tests/test_sonny6321_fle_schema_blind_index.zig,,security,2026-11-12
 REQ-FLE-BUILD-001,FieldLevelEncryption,BUILD,TESTED,build.zig,geodetestlab/specs/fle_comprehensive_security.yml,,security,2025-10-15
-REQ-FLE-BUILD-001,FieldLevelEncryption,BUILD,TESTED,tests/build.zig.full,,,security,2025-10-15
 REQ-FLE-BUILD-001,FieldLevelEncryption,Build,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,security,2026-01-15
 REQ-FLE-CATALOG-001,FieldLevelEncryption,CATALOG,TESTED,src/execution.zig,geodetestlab/specs/fle_comprehensive_security.yml,,security,2025-10-15
 REQ-FLE-CATALOG-001,FieldLevelEncryption,Catalog,TESTED,tests/test_gap_0193_high_priority.zig,test_gap_0193_high_priority.zig,,security,2026-01-15
@@ -1277,7 +1265,6 @@ REQ-FTS-ROW-VISIBILITY-HYDRATE-001,FullText,SearchHitHydrate,TESTED,tests/test_f
 REQ-FTS-ROW-VISIBILITY-HYDRATE-001,FullText,SearchHitHydrateNegativeControl,TESTED,tests/test_fts_authorization.zig,tests/test_fts_authorization.zig,,security,2026-08-29
 REQ-FTS-ROW-VISIBILITY-HYDRATE-001,FullText,SearchHitHydrateTenantScoped,TESTED,tests/test_fts_authorization.zig,tests/test_fts_authorization.zig,,security,2026-08-29
 REQ-FTS-SEARCH-001,FTS,FullTextSearch,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,fts,2026-01-16
-REQ-FUZZ-DICT-002,FuzzDictionaries,BuildTarget,EXEMPT,tests/build.zig.full,,,tooling,2026-01-03
 REQ-FUZZ-ENTRY-001,Fuzz Harness,LibFuzzerEntry,TESTED,src/fuzz/main.zig,,,security,2026-01-16
 REQ-FUZZ-PARSER-001,Fuzz Harness,ParserFuzzing,TESTED,src/fuzz/main.zig,,,security,2026-01-16
 REQ-FUZZ-PARSER-002,Fuzz Harness,InputParsing,TESTED,src/fuzz/main.zig,,,security,2026-01-16
@@ -1635,7 +1622,6 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,tests/test_g
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,src/gql/ast.zig,tests/test_gps_explain_policy.zig,,security,2026-05-21
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,src/gql/ast.zig,tests/test_gps_explain_policy.zig,,security,2026-05-21
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,build.zig,tests/test_gps_explain_policy.zig,,security,2026-05-21
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,tests/build.zig.full,,,security,2026-05-21
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,tests/test_gps_explain_policy.zig,,,security,2026-05-21
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,src/execution.zig,tests/test_gps_explain_policy.zig,,security,2026-05-21
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,src/execution/statement_handlers.zig,tests/test_gps_explain_policy.zig,,security,2026-05-21
@@ -1778,7 +1764,6 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,tests/te
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,src/execution/procedure_access.zig,geode-test-harness/geodetestlab-cli/specs/gps_phase5_procedure_fle.yml,,security,2026-05-21
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,src/client/quic_query_runner.zig,,,security,2026-05-21
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,build.zig,tests/test_gps_mcp_wire.zig,,security,2026-05-21
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,tests/build.zig.full,,,security,2026-05-21
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,src/cli/main.zig,geodetestlab/specs/2pc_principal_propagation.yml,,security,2026-06-11
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,src/cli/main.zig,geodetestlab/specs/2pc_principal_propagation.yml,,security,2026-06-11
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,src/cli/main.zig,geodetestlab/specs/2pc_principal_propagation.yml,,security,2026-06-11
@@ -1791,7 +1776,6 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,tests/test_gps
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,src/server/quic_connection_handler.zig,tests/test_gps_mcp_wire.zig,,security,2026-06-10
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,tests/test_gps_distributed_wire.zig,tests/test_gps_distributed_wire.zig,,security,2026-05-21
 REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,build.zig,tests/test_gps_distributed_wire.zig,,security,2026-05-21
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,tests/build.zig.full,,,security,2026-05-21
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,tests/test_gps_distributed_wire.zig,tests/test_gps_distributed_wire.zig,,security,2026-05-21
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,tests/test_gps_distributed_wire.zig,tests/test_gps_distributed_wire.zig,,security,2026-05-21
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,tests/test_gps_distributed_wire.zig,tests/test_gps_distributed_wire.zig,,security,2026-05-21
@@ -2976,13 +2960,10 @@ REQ-GQL-UNICODE-005,UnicodeCore,CaseFolding,TESTED,src/unicode/geode_unicode.zig
 REQ-GQL-UNICODE-005,UnicodeCore,CaseFolding,TESTED,tests/canary_unicode_basic.zig,,,unicode,2025-09-27
 REQ-GQL-UNICODE-005,UnicodeCore,CliFoldCaseFlag,TESTED,tests/canary_cli_unicode.zig,TestCANARY_ClientCli_FoldCase,,clients,2025-09-27
 REQ-GQL-UNICODE-006,UnicodeBuildIntegration,BuildStep,EXEMPT,build.zig,,,unicode,2026-01-14
-REQ-GQL-UNICODE-006,UnicodeBuildIntegration,BuildStep,EXEMPT,tests/build.zig.full,,,unicode,2026-01-14
 REQ-GQL-UNICODE-006,UnicodeBuildIntegration,BuildStep,TESTED,tests/canary_unicode_build_integration.zig,TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables,,unicode,2025-09-27
 REQ-GQL-UNICODE-007,UnicodeBuildEnforcement,Verification,EXEMPT,build.zig,,,unicode,2026-01-14
-REQ-GQL-UNICODE-007,UnicodeBuildEnforcement,Verification,EXEMPT,tests/build.zig.full,,,unicode,2026-01-14
 REQ-GQL-UNICODE-007,UnicodeFtsIntegration,IndexerNormalize,TESTED,tests/canary_unicode_fts.zig,TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize,,unicode,2025-09-27
 REQ-GQL-UNICODE-008,UnicodeBuildVerification,TableCheck,EXEMPT,build.zig,,,unicode,2026-01-14
-REQ-GQL-UNICODE-008,UnicodeBuildVerification,TableCheck,EXEMPT,tests/build.zig.full,,,unicode,2026-01-14
 REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,src/fts/advanced.zig,TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower,,unicode,2025-09-27
 REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,tests/canary_unicode_fts.zig,TestCANARY_REQ_GQL_UNICODE_008_FtsAdvancedAnalyzer,,unicode,2025-09-27
 REQ-GQL-UNICODE-009,UnicodeEval,CompareNfc,TESTED,src/eval.zig,TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc,,unicode,2025-09-27
@@ -3201,7 +3182,6 @@ REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Streaming,EXEMPT,src/streaming/cdc
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,TDE,EXEMPT,src/storage/tde_file_encryption.zig,,,security,2026-01-28
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,ValueTypes,EXEMPT,src/value_types.zig,,,value_types,2026-01-24
 REQ-LIB-MIGRATION-SLOG-004,Centralized Structured Logging,BuildConfig,EXEMPT,build.zig,,,core,2026-06-11
-REQ-LIB-MIGRATION-SLOG-004,Centralized Structured Logging,BuildConfig,EXEMPT,tests/build.zig.full,,,core,2026-06-11
 REQ-LIB-MIGRATION-SLOG-010,Structured Logging,ServerMain,EXEMPT,src/server/main.zig,,,server,2026-01-24
 REQ-LIB-MIGRATION-SLOG-012,Structured Logging,QUICHandler,EXEMPT,src/server/quic_connection_handler.zig,,,server,2026-01-24
 REQ-LIB-MIGRATION-SLOG-014,Structured Logging,ServerInit,EXEMPT,src/server/server_init.zig,,,server,2026-01-24
@@ -3482,7 +3462,6 @@ REQ-META-INT-006,MetadataIntegration,ConstraintMetadata,TESTED,tests/test_gap_01
 REQ-META-INT-007,MetadataIntegration,FunctionMetadata,TESTED,tests/test_gap_0193_impl_batch_promotion.zig,test_gap_0193_impl_batch_promotion.zig,,catalog,2026-01-15
 REQ-META-VALIDATE-001,MetadataValidation,CI,TESTED,scripts/validate_metadata_sync.zig,geodetestlab/specs/gql_catalog_operations_comprehensive.yml,,tooling,2026-01-03
 REQ-META-VALIDATE-002,MetadataValidation,BuildTarget,TESTED,build.zig,geodetestlab/specs/gql_catalog_operations_comprehensive.yml,,tooling,2026-01-03
-REQ-META-VALIDATE-002,MetadataValidation,BuildTarget,TESTED,tests/build.zig.full,,,tooling,2026-01-03
 REQ-METADATA-001,MetadataDerived,LabelMetadata,TESTED,tests/test_gap_0193_final_batch.zig,,,engine,2026-01-15
 REQ-METADATA-001,UnifiedLanguageMetadata,SingleSourceOfTruth,TESTED,src/gql/language_metadata.zig,geodetestlab/specs/geode_gql_compliance.yml,,api,2026-01-03
 REQ-METADATA-LIB-001,MetadataIntegration,LibExport,EXEMPT,src/lib.zig,,,lib,2026-01-03
@@ -3778,7 +3757,6 @@ REQ-PERF-BENCH-002,HighDegreeExpansion,BenchmarkFixture,TESTED,src/graph_store.z
 REQ-PERF-BENCH-003,SortedPostingList,BenchmarkFixture,TESTED,src/graph_store.zig,src/graph_store.zig,,engine,2026-04-09
 REQ-PERF-BENCH-004,PathIteratorStreaming,BenchmarkFixture,TESTED,src/execution.zig,src/execution.zig,,engine,2026-04-09
 REQ-PERF-BENCH-BUILD-001,ThroughputBenchmark,BuildIntegration,BENCHED,build.zig,,bench-transport,build,2026-06-11
-REQ-PERF-BENCH-BUILD-001,ThroughputBenchmark,BuildIntegration,BENCHED,tests/build.zig.full,,,build,2026-06-11
 REQ-PERF-BOUNDED-ANALYTICAL-0902,BoundedAnalyticalReads,Regression,TESTED,tests/test_gap0902_bounded_analytical_reads.zig,tests/test_gap0902_bounded_analytical_reads.zig,,storage,2026-06-22
 REQ-PERF-BOUNDED-HYDRATE-RECLAIM-0901,BoundedCacheHydrateReclaim,Regression,TESTED,tests/test_gap0901_bounded_snapshot_no_materialize.zig,tests/test_gap0901_bounded_snapshot_no_materialize.zig,,storage,2026-06-22
 REQ-PERF-BULK-EDGE-ENDPOINT-SEEK,BulkEdgeEndpointSeek,Regression,TESTED,tests/test_bulk_edge_endpoint_seek.zig,tests/test_bulk_edge_endpoint_seek.zig,,performance,2026-06-24
@@ -3801,7 +3779,6 @@ REQ-PERF-DELETE-005,Execution,AdapterDeleteSnapshotElision,TESTED,tests/test_gap
 REQ-PERF-DELETE-006,Execution,RelationshipDeleteEndpointLookup,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
 REQ-PERF-DIAG-RUNTIME-METRICS,RuntimeMetricsHelper,CounterRegistry,TESTED,tests/test_runtime_metrics.zig,tests/test_runtime_metrics.zig,,perf,2026-04-25
 REQ-PERF-DRR-BUILD-001,DRRScheduler,BuildIntegration,TESTED,build.zig,test-perf-optimizations,,build,2026-06-11
-REQ-PERF-DRR-BUILD-001,DRRScheduler,BuildIntegration,TESTED,tests/build.zig.full,,,build,2026-06-11
 REQ-PERF-DRR-SCHED-001,DRRScheduler,StreamFairness,TESTED,src/transport/stream_scheduler.zig,test_performance_optimizations.zig,,transport,2026-01-30
 REQ-PERF-EDGE-ADJ-001,EdgeAdjacencyIndex,EdgeLookup,TESTED,src/graph_store.zig,tests/test_gap0514_graph_store_regression.zig,,perf,2026-04-11
 REQ-PERF-EDGE-ADJ-002,EdgeAdjacencyIndex,IndexMaintenance,TESTED,src/graph_store.zig,tests/test_gap0514_graph_store_regression.zig,,perf,2026-04-11
@@ -3825,7 +3802,6 @@ REQ-PERF-FLE-SKIP-003,FLESkipOptimization,NodePropertyWrite,IMPL,src/execution/v
 REQ-PERF-FLE-SKIP-004,FLESkipOptimization,EdgePropertyWrite,IMPL,src/execution/value_utilities.zig,,,perf,2026-01-27
 REQ-PERF-FUZZ-001,TransportFuzzing,PerformanceOptimizations,IMPL,fuzz/targets/transport_perf_fuzz.zig,,,fuzz,2026-01-26
 REQ-PERF-FUZZ-BUILD-001,TransportFuzzing,BuildIntegration,TESTED,build.zig,test-transport-fuzz,,build,2026-06-11
-REQ-PERF-FUZZ-BUILD-001,TransportFuzzing,BuildIntegration,TESTED,tests/build.zig.full,,,build,2026-06-11
 REQ-PERF-GAP-0525,PerfGapBenchmarks,MicroBenchmarks,BENCHED,tests/benchmark_perf_gap_closure.zig,,tests/benchmark_perf_gap_closure.zig,engine,2026-04-10
 REQ-PERF-GAP0203-TESTS,QueryPipelineOptimization,UnitTests,TESTED,tests/test_perf_optimizations.zig,,,perf,2026-01-27
 REQ-PERF-GRAPH-SCOPED-NODES-001,GraphScopedNodeIndex,NodesByGraph,TESTED,src/graph_store.zig,tests/test_perf_b_graph_scoped_iteration.zig,,perf,2026-05-15
@@ -3869,7 +3845,6 @@ REQ-PERF-MEMORY-OPT-001,Performance,MemoryOptimization,TESTED,tests/test_gap_019
 REQ-PERF-MERGE-001,IndexRebuild,DeferredRebuild,IMPL,src/index/index_manager.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-001,MergeThroughput,BulkInsert,BENCHED,benchmarks/benchmark_merge_throughput.zig,,benchmark_merge_throughput,perf,2026-04-09
 REQ-PERF-MERGE-001,MergeThroughputBenchmarkBuild,PerformanceValidation,BENCHED,build.zig,,,build,2026-04-09
-REQ-PERF-MERGE-001,MergeThroughputBenchmarkBuild,PerformanceValidation,BENCHED,tests/build.zig.full,,,build,2026-04-09
 REQ-PERF-MERGE-002,Execution,IndexRebuild,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-003,Execution,AdapterMergeSnapshotElision,TESTED,tests/test_gap_0511_regression.zig,,,engine,2026-04-10
 REQ-PERF-MERGE-004,Execution,AdapterMergeVarianceEnvelope,BENCHED,tests/benchmark_merge_adapter_variance.zig,,BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope,engine,2026-04-08
@@ -3887,14 +3862,11 @@ REQ-PERF-PARALLEL-001,Performance,ParallelExecution,TESTED,tests/test_gap_0193_b
 REQ-PERF-PHASE1-001,PerfPhase1,Optimization,IMPL,tests/test_gap_0193_batch2_testing.zig,,,performance,2026-11-12
 REQ-PERF-PHASE1-001,PerformanceOptimization,Testing,EXEMPT,benchmarks/phase1_benchmarks.zig,,,performance,2025-10-16
 REQ-PERF-PHASE1-BENCH-001,PerformanceBenchmarking,BUILD,EXEMPT,build.zig,,,performance,2025-10-16
-REQ-PERF-PHASE1-BENCH-001,PerformanceBenchmarking,BUILD,EXEMPT,tests/build.zig.full,,,performance,2025-10-16
 REQ-PERF-PHASE2-BENCH-001,PerfPhase2,StorageBench,IMPL,tests/test_gap_0193_batch2_testing.zig,,,performance,2026-11-12
 REQ-PERF-PHASE2-BENCH-001,StorageBenchmarking,BUILD,EXEMPT,build.zig,,,performance,2025-10-16
-REQ-PERF-PHASE2-BENCH-001,StorageBenchmarking,BUILD,EXEMPT,tests/build.zig.full,,,performance,2025-10-16
 REQ-PERF-PHASE2-BENCH-001,StorageOptimization,TESTING,EXEMPT,benchmarks/phase2_benchmarks.zig,,,performance,2025-10-16
 REQ-PERF-PHASE3-001,ConcurrencyOptimization,CATALOG_LOCK,EXEMPT,src/schema/catalog.zig,,,performance,2025-10-17
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyBenchmarking,BUILD,EXEMPT,build.zig,,,performance,2025-10-16
-REQ-PERF-PHASE3-BENCH-001,ConcurrencyBenchmarking,BUILD,EXEMPT,tests/build.zig.full,,,performance,2025-10-16
 REQ-PERF-PHASE3-BENCH-001,ConcurrencyOptimization,TESTING,EXEMPT,benchmarks/phase3_benchmarks.zig,,,performance,2026-04-16
 REQ-PERF-PHASE5-001,ColumnOptimization,BATCH_ALLOC,EXEMPT,src/execution.zig,,,performance,2025-10-16
 REQ-PERF-PHASE5-001,ColumnOptimization,HELPER_FN,EXEMPT,src/execution/statement_handlers.zig,,,performance,2025-10-16
@@ -3969,7 +3941,6 @@ REQ-PERF-SCAN-NO-CLONE-0900,ScanNoClone,Regression,TESTED,tests/test_gap0900_sca
 REQ-PERF-SESSION-ADMISSION-001,ConnectionAdmissionParallelism,RegressionRepro,TESTED,tests/test_session_admission_parallelism.sh,test_session_admission_parallelism,,transport,2026-04-16
 REQ-PERF-SESSION-ADMISSION-002,ConnectionAdmissionLaneWiring,SourceAudit,TESTED,tests/test_thread_pool_admission_lane.sh,test_thread_pool_admission_lane,,transport,2026-04-16
 REQ-PERF-SESSION-ADMISSION-003,ConnectionAdmissionLaneAPI,LaneParallelismBuild,TESTED,build.zig,test-thread-pool-lane-parallelism,,transport,2026-06-11
-REQ-PERF-SESSION-ADMISSION-003,ConnectionAdmissionLaneAPI,LaneParallelismBuild,TESTED,tests/build.zig.full,,,transport,2026-06-11
 REQ-PERF-SESSION-ADMISSION-003,ConnectionAdmissionLaneAPI,UnitTest,TESTED,tests/test_thread_pool_lane_parallelism.zig,test_thread_pool_lane_parallelism,,transport,2026-04-16
 REQ-PERF-SHARD-COORD-HUB,ShardedCoordinatorHubRegression,MVCCContention,TESTED,tests/test_sharded_coordinator_hub_regression.zig,tests/test_sharded_coordinator_hub_regression.zig,,perf,2026-04-25
 REQ-PERF-SHARD-COORD-MVCC-GUARD,ShardedCoordinatorRoutingGuard,MVCCInvariant,TESTED,tests/test_txn_manager_routing_guard.zig,tests/test_txn_manager_routing_guard.zig,,perf,2026-04-25
@@ -3983,14 +3954,11 @@ REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,InitContext,TESTED,src/server/serve
 REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,UnitTest,TESTED,tests/test_shared_optimizer.zig,,,engine,2026-02-17
 REQ-PERF-SPICE-003,ParallelWrapper,CoreInterface,IMPL,src/parallel/thread_pool_parallel.zig,,,performance,2026-04-12
 REQ-PERF-SPICE-008,ParallelWrapperModule,BuildIntegration,TESTED,build.zig,test-thread-pool-parallel,,performance,2026-06-11
-REQ-PERF-SPICE-008,ParallelWrapperModule,BuildIntegration,TESTED,tests/build.zig.full,,,performance,2026-06-11
 REQ-PERF-SPICE-009,ParallelWrapperIntegration,ExecutionPool,IMPL,src/execution/parallel.zig,,,performance,2026-04-12
 REQ-PERF-SPICE-026,ParallelWrapperTests,Testing,IMPL,tests/test_thread_pool_parallel.zig,,,performance,2026-04-12
 REQ-PERF-SPICE-027,ParallelWrapperBenchmarks,Performance,IMPL,benchmarks/benchmark_thread_pool_parallelism.zig,,,performance,2026-04-12
 REQ-PERF-SPICE-027,ParallelWrapperTests,BuildIntegration,TESTED,build.zig,test-thread-pool-parallel,,performance,2026-06-11
-REQ-PERF-SPICE-027,ParallelWrapperTests,BuildIntegration,TESTED,tests/build.zig.full,,,performance,2026-06-11
 REQ-PERF-SPICE-028,ParallelWrapperBenchBuild,BuildIntegration,BENCHED,build.zig,,bench-thread-pool-parallel,performance,2026-06-11
-REQ-PERF-SPICE-028,ParallelWrapperBenchBuild,BuildIntegration,BENCHED,tests/build.zig.full,,,performance,2026-06-11
 REQ-PERF-STREAM-001,Performance,StreamProcessing,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,perf,2026-01-16
 REQ-PERF-STREAM-POOL-001,SharedStreamPool,ThreadPoolInit,TESTED,src/server/main.zig,tests/e2e_quic_high_concurrency.zig,,server,2026-06-11
 REQ-PERF-TEST-001,PerfTest,QuerySpeed,IMPL,tests/test_gap_0193_batch2_testing.zig,,,performance,2026-11-12
@@ -3998,10 +3966,8 @@ REQ-PERF-TEST-001,PerformanceTests,UnitTests,IMPL,tests/test_performance_optimiz
 REQ-PERF-TEST-002,PerfTest,MemoryUsage,IMPL,tests/test_gap_0193_batch2_testing.zig,,,performance,2026-11-12
 REQ-PERF-TEST-003,PerfTest,IndexPerf,IMPL,tests/test_gap_0193_batch2_testing.zig,,,performance,2026-11-12
 REQ-PERF-TEST-BUILD-001,PerformanceTests,BuildIntegration,TESTED,build.zig,test-perf-optimizations,,build,2026-06-11
-REQ-PERF-TEST-BUILD-001,PerformanceTests,BuildIntegration,TESTED,tests/build.zig.full,,,build,2026-06-11
 REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,TESTED,src/transport/thread_pool.zig,test_performance_optimizations.zig,,transport,2026-04-01
 REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,TESTED,build.zig,test-thread-pool-parallel,,build,2026-06-11
-REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,TESTED,tests/build.zig.full,,,build,2026-06-11
 REQ-PERF-TRAVERSAL-COMPOSITE-SEED,TraversalCompositeSeed,Regression,TESTED,tests/test_traversal_composite_seed.zig,tests/test_traversal_composite_seed.zig,,performance,2026-06-26
 REQ-PERF-TRAVERSAL-REVERSE-SEED,TraversalReverseSeed,Regression,TESTED,tests/test_traversal_reverse_seed.zig,tests/test_traversal_reverse_seed.zig,,performance,2026-06-26
 REQ-PERF-TRAVERSAL-SEED,TraversalSeedPerf,PerfMicrobenchmark,TESTED,tests/test_traversal_seed_perf.zig,tests/test_traversal_seed_perf.zig,,performance,2026-06-26
@@ -4030,7 +3996,6 @@ REQ-PROFILE-RLS-TENANT-001,PROFILE,TenantScopedProfile,TESTED,tests/test_profile
 REQ-PROMETHEUS-WIRE-001,Prometheus Metrics Endpoint,HTTPServer,TESTED,src/monitoring/metrics_server.zig,geodetestlab/specs/gap_0166_prometheus_metrics.yml,,monitoring,2026-04-16
 REQ-PROMETHEUS-WIRE-001,Prometheus Metrics Endpoint,HTTPServerLifecycle,TESTED,tests/test_metrics_server_lifecycle.zig,tests/test_metrics_server_lifecycle.zig,,monitoring,2026-04-16
 REQ-PROMETHEUS-WIRE-001,Prometheus Metrics Endpoint,LifetimeRegressionBuild,TESTED,build.zig,test-metrics-server,,monitoring,2026-06-11
-REQ-PROMETHEUS-WIRE-001,Prometheus Metrics Endpoint,LifetimeRegressionBuild,TESTED,tests/build.zig.full,,,monitoring,2026-06-11
 REQ-PROMETHEUS-WIRE-002,Prometheus Metrics Endpoint,GlobalCollector,TESTED,src/monitoring/metrics_server.zig,geodetestlab/specs/gap_0166_prometheus_metrics.yml,,monitoring,2026-01-14
 REQ-PROMETHEUS-WIRE-003,Prometheus Metrics Endpoint,HTTPEndpointsIntegration,TESTED,tests/test_metrics_server_endpoints.sh,tests/test_metrics_server_endpoints.sh,,monitoring,2026-04-16
 REQ-PROMETHEUS-WIRE-003,Prometheus Metrics Endpoint,ServerImport,TESTED,src/server/main.zig,geodetestlab/specs/gap_0166_prometheus_metrics.yml,,monitoring,2026-01-14
@@ -4073,7 +4038,6 @@ REQ-QUALITY-GAP-406-008,SafeStdioHandles,ErrorHandling,TESTED,src/log/logger.zig
 REQ-QUALITY-GAP-406-011,SafeStdioHandles,ErrorHandling,TESTED,src/fuzz/main.zig,,,quality,2026-01-30
 REQ-QUALITY-GAP-413-001,OrphanedTestFix,API,TESTED,src/performance/json_optimized_fixed.zig,,,quality,2026-01-30
 REQ-QUALITY-GAP-413-002,OrphanedTestRemediation,BuildSystem,TESTED,build.zig,,,quality,2026-01-30
-REQ-QUALITY-GAP-413-002,OrphanedTestRemediation,BuildSystem,TESTED,tests/build.zig.full,,,quality,2026-01-30
 REQ-QUALITY-GAP-413-003,OrphanedTestRemediation,AuditFilters,TESTED,tests/test_filters.zig,,,quality,2026-01-30
 REQ-QUALITY-GAP-413-004,OrphanedTestRemediation,AuditTransports,TESTED,tests/test_transports.zig,,,quality,2026-01-30
 REQ-QUALITY-GAP-413-005,OrphanedTestRemediation,AuditCef,TESTED,tests/test_cef.zig,,,quality,2026-01-30
@@ -4102,13 +4066,10 @@ REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME,QuicTransport,FirstStreamOwnerLifetime,TEST
 REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME,QuicTransport,FirstStreamOwnerLifetimeTestRoot,TESTED,src/first_stream_owner_lifetime_test_root.zig,tests/test_first_stream_owner_lifetime.zig,,server,2026-06-10
 REQ-QUIC-FLOW-001,QUICProtocol,FlowControl,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,transport,2026-01-16
 REQ-QUIC-HC-001,QUIC High-Concurrency Wakeups,PollSyncBuild,TESTED,build.zig,,,transport,2026-05-25
-REQ-QUIC-HC-001,QUIC High-Concurrency Wakeups,PollSyncBuild,TESTED,tests/build.zig.full,,,transport,2026-05-25
 REQ-QUIC-HC-001,QUIC High-Concurrency Wakeups,PollSyncFutexWake,TESTED,tests/test_quic_pollsync_wake.zig,tests/test_quic_pollsync_wake.zig,,transport,2026-05-25
 REQ-QUIC-HC-002,QUIC High-Concurrency Requests,ParallelReadWriteE2E,TESTED,tests/e2e_quic_high_concurrency.zig,test-quic-high-concurrency-e2e,,transport,2026-05-25
 REQ-QUIC-HC-002,QUIC High-Concurrency Requests,ParallelReadWriteE2EBuild,TESTED,build.zig,,,transport,2026-05-25
-REQ-QUIC-HC-002,QUIC High-Concurrency Requests,ParallelReadWriteE2EBuild,TESTED,tests/build.zig.full,,,transport,2026-05-25
 REQ-QUIC-HC-003,QUIC High-Concurrency Requests,VendorParallelPoolGating,TESTED,build.zig,test-quic-high-concurrency-e2e,,transport,2026-06-11
-REQ-QUIC-HC-003,QUIC High-Concurrency Requests,VendorParallelPoolGating,TESTED,tests/build.zig.full,,,transport,2026-06-11
 REQ-QUIC-HC-004,QUIC High-Concurrency Shutdown,PollLoopLifetime,IMPL,src/server/main.zig,,,transport,2026-05-25
 REQ-QUIC-HC-005,QUIC High-Concurrency Client Wait,ProtoReadDeadline,TESTED,tests/proto_test_util.zig,test_quic_condition_timedwait_cadence,,transport,2026-05-25
 REQ-QUIC-HC-005,QUIC High-Concurrency Client Wait,StreamReadPollCadence,TESTED,src/transport/quic.zig,test_quic_condition_timedwait_cadence,,transport,2026-05-25
@@ -4252,7 +4213,6 @@ REQ-QUIC-HC-178,HighConcurrencyMutations,CooperativeMutationOffload,TESTED,src/s
 REQ-QUIC-HC-179,HighConcurrencyMutations,CoordinatorActiveShardTuning,TESTED,src/storage/group_commit.zig,test_group_commit_coordinator,,storage,2026-05-29
 REQ-QUIC-HC-180,Sequential Single-Connection Upsert Liveness,FirstStreamSchedulerLostWake,TESTED,tests/e2e_quic_sequential_upsert_desync.zig,test-quic-sequential-upsert-desync,,transport,2026-06-19
 REQ-QUIC-HC-180,Sequential Single-Connection Upsert Liveness,FirstStreamSchedulerLostWakeBuild,TESTED,build.zig,,,transport,2026-06-19
-REQ-QUIC-HC-180,Sequential Single-Connection Upsert Liveness,FirstStreamSchedulerLostWakeBuild,TESTED,tests/build.zig.full,,,transport,2026-06-19
 REQ-QUIC-LOCALHOST-001,LocalhostNormalization,ClientConnect,TESTED,src/transport/quic.zig,"""QuicClient.connect normalizes localhost to 127.0.0.1 (GAP-0514 P3)""",,transport,2026-06-11
 REQ-QUIC-LOCALHOST-002,LocalhostNormalization,ClientConnectEx,IMPL,src/transport/quic.zig,,,transport,2026-06-11
 REQ-QUIC-MSG-001,QUICProtocol,Messaging,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,transport,2026-01-16
@@ -4263,12 +4223,9 @@ REQ-QUIC-MUX-004,StreamMultiplexing,AcceptorSpawn,TESTED,src/server/quic_connect
 REQ-QUIC-MUX-005,ActiveStreamRegistryTests,ParallelCorrectness,IMPL,tests/test_quic_stream_registry.zig,,,test,2026-04-08
 REQ-QUIC-MUX-007,ActiveStreamRegistryBenchmarks,ParallelThroughput,BENCHED,benchmarks/benchmark_quic_stream_registry.zig,,benchmark_quic_stream_registry,server,2026-04-08
 REQ-QUIC-MUX-008,StreamRegistryBuildIntegration,ParallelRegression,TESTED,build.zig,test-quic-streams,,build,2026-06-11
-REQ-QUIC-MUX-008,StreamRegistryBuildIntegration,ParallelRegression,TESTED,tests/build.zig.full,,,build,2026-06-11
 REQ-QUIC-MUX-009,StreamRegistryBenchmarkBuild,PerformanceValidation,BENCHED,build.zig,,bench-quic-streams,build,2026-06-11
-REQ-QUIC-MUX-009,StreamRegistryBenchmarkBuild,PerformanceValidation,BENCHED,tests/build.zig.full,,,build,2026-06-11
 REQ-QUIC-MUX-010,StreamMultiplexing,ConnectionOutlivesFirstStream,TESTED,tests/e2e_quic_first_stream_close_mux.zig,test-quic-first-stream-close-mux-e2e,,server,2026-09-15
 REQ-QUIC-MUX-010,StreamMultiplexing,ConnectionOutlivesFirstStreamBuild,TESTED,build.zig,,,server,2026-09-15
-REQ-QUIC-MUX-010,StreamMultiplexing,ConnectionOutlivesFirstStreamBuild,TESTED,tests/build.zig.full,,,server,2026-09-15
 REQ-QUIC-MUX-011,StreamMultiplexing,AcceptReactorOccupancy,TESTED,tests/e2e_quic_first_stream_close_mux.zig,test-quic-first-stream-close-mux-e2e,,server,2026-09-15
 REQ-QUIC-PROTOCOL-001,QUICProtocol,Connection,IMPL,tests/test_gap_0193_batch2_misc.zig,,,transport,2026-11-12
 REQ-QUIC-PROTOCOL-002,QUICProtocol,Streaming,IMPL,tests/test_gap_0193_batch2_misc.zig,,,transport,2026-11-12
@@ -4434,13 +4391,11 @@ REQ-SEC-RLS-WIRE-002,RLS Query Enforcement,QUICImport,TESTED,src/server/quic_con
 REQ-SEC-RLS-WIRE-003,RLS Query Enforcement,PostResultFilter,TESTED,src/server/quic_connection_handler.zig,,,security,2026-04-01
 REQ-SEC-RLS-WIRE-004,RLS Query Enforcement,ServerInit,TESTED,src/server/main.zig,src/server/rls_filter.zig,,security,2026-06-11
 REQ-SEC-RLS-WIRE-005,RLS Query Enforcement,UnitTests,TESTED,build.zig,test-rls-filter,,security,2026-06-11
-REQ-SEC-RLS-WIRE-005,RLS Query Enforcement,UnitTests,TESTED,tests/build.zig.full,,,security,2026-06-11
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,TESTED,src/execution.zig,tests/test_rls_expr_engine_wiring.zig,,security,2026-04-11
 REQ-SEC-RLS-WIRE-007,RLS Property Filtering,SharedTypes,TESTED,src/security/rls_types.zig,,,security,2026-04-01
 REQ-SEC-RLS-WIRE-007,RLS Query Enforcement,SecurityContext,TESTED,src/execution.zig,tests/test_rls_expr_engine_wiring.zig,,security,2026-04-11
 REQ-SEC-RLS-WIRE-008,RLS Property Filtering,PolicyCRUD,TESTED,src/security/rls_types.zig,,,security,2026-04-01
 REQ-SEC-RLS-WIRE-010,RLS Expression Wiring,ValueBridge,TESTED,build.zig,,,security,2026-04-06
-REQ-SEC-RLS-WIRE-010,RLS Expression Wiring,ValueBridge,TESTED,tests/build.zig.full,,,security,2026-04-06
 REQ-SEC-RLS-WIRE-011,RLS Expression Wiring,ExprEngineGlobal,IMPL,src/security/rls_types.zig,,,security,2026-04-06
 REQ-SEC-RLS-WIRE-012,RLS Expression Wiring,ServerInitLabelEngine,TESTED,src/server/main.zig,tests/test_rls_expr_engine_wiring.zig,,security,2026-06-11
 REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,ExecContextWiring,TESTED,src/server/quic_connection_handler.zig,tests/test_rls_expr_engine_wiring.zig,,security,2026-06-11
@@ -4765,7 +4720,6 @@ REQ-SONNY-2757-STORED-INT-CAST,AuthDDLPersistence,CheckedStoredCasts,TESTED,src/
 REQ-SONNY-2769-DECIMAL-SCALE,IntegerOverflow,HeapDecimalScale,TESTED,src/property_value_codec.zig,tests/test_sonny2769_integer_overflow.zig,,codec,2026-09-26
 REQ-SONNY-2769-DECIMAL-TEXT,DecimalText,ExactAtAnyScale,TESTED,src/types/decimal_text.zig,tests/test_sonny2769_integer_overflow.zig,,types,2026-09-26
 REQ-SONNY-2769-INTEGER-OVERFLOW,IntegerOverflow,Regression,TESTED,tests/test_sonny2769_integer_overflow.zig,tests/test_sonny2769_integer_overflow.zig,,engine,2026-09-25
-REQ-SONNY-2774-EXACT-SUM,GroupedAggregates,ExactIntegerSum,TESTED,tests/test_sonny2774_exact_sum.zig,tests/test_sonny2774_exact_sum.zig,,execution,2026-11-12
 REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,Change,TESTED,src/execution/session_graph.zig,tests/test_sonny2775_session_graph_gate.zig,,security,2026-09-26
 REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,MayBind,TESTED,src/execution/session_graph.zig,tests/test_sonny2775_session_graph_gate.zig,,security,2026-09-26
 REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,Regression,TESTED,tests/test_sonny2775_session_graph_gate.zig,tests/test_sonny2775_session_graph_gate.zig,,security,2026-09-26
@@ -4833,7 +4787,6 @@ REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,Regression,TESTED,tests/test
 REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,SettleThroughExactIndex,TESTED,src/graph_store.zig,tests/test_sonny2806_merge_resolve.zig,,storage,2026-09-27
 REQ-SONNY-2806-STORED-PROPERTY-EQUALITY,InlinePropertyMatch,ExactValueOnPersistedPaths,TESTED,src/execution/stored_property_equality.zig,tests/test_sonny2806_exact_property_matching.zig,,execution,2026-09-26
 REQ-SONNY-2809-DUPLICATE-CONSTRAINT,ConstraintManagement,DuplicateNameSingleFree,TESTED,tests/test_sonny2809_duplicate_constraint.zig,tests/test_sonny2809_duplicate_constraint.zig,,schema,2026-09-26
-REQ-SONNY-2812-DISTINCT-LIST-KEYS,AggregateSetQuantifier,ListKeys,TESTED,tests/test_sonny2812_distinct_list_keys.zig,tests/test_sonny2812_distinct_list_keys.zig,,execution,2026-11-12
 REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny2816_bulk_ingest_txn.zig,,transport,2026-09-27
 REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED,tests/test_sonny2816_bulk_ingest_txn.zig,,,transport,2026-09-27
 REQ-SONNY-2818-PARAM-MAP-DUP-KEYS,WireParameters,DuplicateMapKeys,TESTED,src/server/proto_util.zig,tests/test_sonny2818_param_map_dup_keys.zig,,security,2026-09-27
@@ -4868,7 +4821,6 @@ REQ-SONNY-2846-UNIQUE-ENFORCEMENT,ConstraintEnforcement,UniqueViolationCode,TEST
 REQ-SONNY-2846-UNIQUE-ENFORCEMENT,ConstraintEnforcement,WireRegression,TESTED,tests/test_sonny2846_unique_fast_paths_wire.zig,tests/test_sonny2846_unique_fast_paths_wire.zig,,transport,2026-11-11
 REQ-SONNY-2847-MERGE-INDEX-MULTI-HOLDER,MergeIdempotency,Regression,TESTED,tests/test_sonny2847_merge_index_multi_holder.zig,tests/test_sonny2847_merge_index_multi_holder.zig,,storage,2026-11-12
 REQ-SONNY-2977-INLINE-MAP-SET,MatchSet,EveryInlineMapHolder,TESTED,tests/test_sonny2977_inline_map_set.zig,tests/test_sonny2977_inline_map_set.zig,,engine,2026-09-27
-REQ-SONNY-3025-WRITE-RETURN-ROWS,WriteBehindAggregate,PlainReturnPerRow,TESTED,tests/test_sonny3025_match_write_return_rows.zig,tests/test_sonny3025_match_write_return_rows.zig,,engine,2026-11-12
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,ExplainProfileTarget,TESTED,src/query/query_traits.zig,tests/test_sonny3026_profile_txn_control.zig,,security,2026-09-27
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,GrpcHandler,TESTED,src/transport/grpc_server.zig,tests/test_sonny3026_profile_txn_control.zig,,security,2026-09-27
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,QuicHandler,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny3026_profile_txn_control.zig,,security,2026-09-27
@@ -5236,7 +5188,6 @@ REQ-SONNY-6348-KMS-TMP-SELFTESTS,TDE Procedures,NoFabricatedKmsSelfTestTruth,TES
 REQ-SONNY-6348-READONLY-RESTORE-CHECKS,Backup Restore,ChecksOnThrowawayCopy,TESTED,src/storage/backup.zig,tests/test_sonny6348_readonly_restore_checks_registry.zig,,storage,2026-11-12
 REQ-SONNY-6348-READONLY-RESTORE-CHECKS,Backup Restore,CommittedRestoreIsTheArchive,TESTED,tests/test_sonny6348_readonly_restore_checks_registry.zig,tests/test_sonny6348_readonly_restore_checks_registry.zig,,storage,2026-11-12
 REQ-SONNY-6348-TENANT-REGISTRY-CORRUPT,TenantRegistry,CorruptLineRefused,TESTED,src/security/tenant_registry.zig,tests/test_sonny6348_readonly_restore_checks_registry.zig,,security,2026-11-12
-REQ-SONNY-6351-LABELS-PARSE-DEFAULT,ReadSemanticsBatch,Regression,TESTED,tests/test_sonny6351_labels_parse_default.zig,tests/test_sonny6351_labels_parse_default.zig,,engine,2026-11-12
 REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES,MergeIdempotency,CompositeBackfillFromPostings,TESTED,src/graph_store.zig,tests/test_sonny6354_lean_late_key_indexes.zig,,storage,2026-11-12
 REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES,MergeIdempotency,ExactIndexConfigStamp,TESTED,src/graph_store.zig,tests/test_sonny6354_lean_late_key_indexes.zig,,storage,2026-11-12
 REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES,MergeIdempotency,ExactIndexLateKeyCatchUp,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6354_lean_late_key_indexes.zig,,storage,2026-11-12
@@ -5247,7 +5198,8 @@ REQ-SONNY-6362-FLAGGED-ID-REFUSED,MergeIdempotency,CreateRefusesFlaggedId,TESTED
 REQ-SONNY-6362-MERGE-ADD-FAILURE,MergeIdempotency,FailedAddUntrustsIndex,TESTED,src/graph_store.zig,tests/test_sonny6362_merge_index_residuals.zig,,storage,2026-11-12
 REQ-SONNY-6362-MERGE-FLE-FAIL-CLOSED,FieldLevelEncryption,MergeOnEncryptedFieldRefused,TESTED,src/execution/crud_operations.zig,tests/test_sonny6362_merge_index_residuals.zig,,security,2026-11-12
 REQ-SONNY-6362-MERGE-INDEX-RESIDUALS,MergeIdempotency,Regression,TESTED,tests/test_sonny6362_merge_index_residuals.zig,tests/test_sonny6362_merge_index_residuals.zig,,storage,2026-11-12
-REQ-SONNY-6362-READ-NO-BUILD-WAIT,ExactPropertyIndex,ReadFallsBackDuringBuild,TESTED,tests/test_sonny6362_exact_index_read_fallback.zig,tests/test_sonny6362_exact_index_read_fallback.zig,,storage,2026-11-12
+REQ-SONNY-6362-READ-NO-BUILD-WAIT,ExactPropertyIndex,ReadFallsBackDuringBuild,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6362_exact_index_read_fallback.zig,,storage,2026-11-12
+REQ-SONNY-6362-READ-NO-BUILD-WAIT,ExactPropertyIndex,ReadFallsBackDuringBuild,TESTED,tests/test_sonny6362_exact_index_read_fallback.zig,,,storage,2026-11-12
 REQ-SONNY-6362-SEED-RECHECK,MergeIdempotency,SeedFilterVerified,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6362_merge_index_residuals.zig,,storage,2026-11-12
 REQ-SONNY-6362-STATEMENT-RECORD,Execution,CrossThreadRecordRegression,TESTED,tests/test_sonny6362_statement_undo_threads.zig,tests/test_sonny6362_statement_undo_threads.zig,,execution,2026-11-12
 REQ-SONNY-6362-STATEMENT-RECORD,Execution,StatementScopedRecord,TESTED,src/statement_undo.zig,tests/test_sonny6362_statement_undo_threads.zig,,execution,2026-11-12
@@ -5264,8 +5216,6 @@ REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME,Embedded LSP,AuthProviderOutlivesSessi
 REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME,Embedded LSP,ListenerOwnsProviderLifetime,TESTED,src/server/main.zig,tests/test_sonny6374_lsp_auth_provider_lifetime.zig,,lsp,2026-11-12
 REQ-SONNY-6374-SERVER-RESIDUALS,Server Hygiene,HelpAbacArgonCanaryDeadCode,TESTED,tests/test_sonny6374_server_residuals.zig,tests/test_sonny6374_server_residuals.zig,,server,2026-11-12
 REQ-SONNY-6378-SERVER-EXIT-HYGIENE,Server Hygiene,ExitLeaksArgonBoundsLoggerDocker,TESTED,tests/test_sonny6378_server_exit_and_hygiene.zig,tests/test_sonny6378_server_exit_and_hygiene.zig,,server,2026-11-12
-REQ-SONNY-6383-CALL-RETURN-FLAGS,ProcedureYield,FlagsKept,TESTED,tests/test_sonny6383_call_return_flags.zig,tests/test_sonny6383_call_return_flags.zig,,engine,2026-11-12
-REQ-SONNY-6383-QUERY-RESIDUALS,ReadSemanticsBatch,Regression,TESTED,tests/test_sonny6383_query_residuals.zig,tests/test_sonny6383_query_residuals.zig,,engine,2026-11-12
 REQ-SONNY-6421-FTS-LABEL-FILTER,FullText,SearchLabelFilter,TESTED,src/execution/fts_dispatch.zig,tests/test_sonny6421_index_maintenance.zig,,fts,2026-11-12
 REQ-SONNY-6421-INDEX-MAINTENANCE,Execution,IndexMaintenanceRegression,TESTED,tests/test_sonny6421_index_maintenance.zig,tests/test_sonny6421_index_maintenance.zig,,execution,2026-11-12
 REQ-SONNY-6421-REMOVE-LABEL-MAINTENANCE,Execution,RemoveLabel,TESTED,src/execution/property_mutation.zig,tests/test_sonny6421_index_maintenance.zig,,engine,2026-11-12
@@ -5393,10 +5343,8 @@ REQ-STRING-MINMAX-006,StringMinMax,UnicodeSort,TESTED,tests/test_gap_0193_impl_b
 REQ-SUBQUERY-IMPORT-001,Subquery Imported Variables,GQLCompliance,TESTED,src/gql/parser.zig,geodetestlab/specs/gql_subquery_comprehensive.yml,,parser,2026-01-25
 REQ-SYNTAX-GEN-001,VSCodeSyntaxGeneration,MetadataDerived,EXEMPT,scripts/generate_syntax.zig,,,tooling,2026-01-03
 REQ-SYNTAX-GEN-002,VSCodeSyntaxGeneration,BuildTarget,EXEMPT,build.zig,,,tooling,2026-01-03
-REQ-SYNTAX-GEN-002,VSCodeSyntaxGeneration,BuildTarget,EXEMPT,tests/build.zig.full,,,tooling,2026-01-03
 REQ-SYNTAX-VIM-001,VimSyntaxGeneration,MetadataDerived,EXEMPT,scripts/generate_vim_syntax.zig,,,tooling,2026-01-03
 REQ-SYNTAX-VIM-002,VimSyntaxGeneration,BuildTarget,EXEMPT,build.zig,,,tooling,2026-01-03
-REQ-SYNTAX-VIM-002,VimSyntaxGeneration,BuildTarget,EXEMPT,tests/build.zig.full,,,tooling,2026-01-03
 REQ-TDE-ENFORCE-001,TDEEnforcement,UnitTests,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
 REQ-TDE-ENFORCE-002,TDEEnforcement,CoreTests,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
 REQ-TDE-ENFORCE-002,TDEEnforcement,WALEncryption,TESTED,src/wal.zig,,,security,2026-02-19
@@ -5413,7 +5361,6 @@ REQ-TDE-ENFORCE-012,TDEEnforcement,MemorySecurity,TESTED,src/security/test_tde_e
 REQ-TDE-ENFORCE-013,TDEEnforcement,Verification,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
 REQ-TDE-ENFORCE-014,TDEEnforcement,PerformanceThreshold,TESTED,src/security/test_tde_enforcement.zig,,,security,2026-01-28
 REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,build.zig,,,security,2026-01-28
-REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,tests/build.zig.full,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FLECatalog,TESTED,src/schema/fle_catalog.zig,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,src/index/hnsw_persist.zig,,,security,2026-04-01
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,RaftState,TESTED,src/distributed/raft_persistent.zig,,,security,2026-01-28
