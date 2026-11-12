@@ -639,6 +639,14 @@
   graph write lock, as production writers do. Regressions:
   `zig build test-sonny6375-ordered-scan-locking` (and its `-tsan`
   companion).
+- **`getCurrentGlobalStore` no longer copies the global store (SONNY-6375).**
+  It tested `global_store != null` on the `?GraphStore` value, which copied
+  the store's bytes, live mutexes included; ThreadSanitizer reported it
+  against a concurrent `hydration_build_mutex` lock in
+  `test-startup-lazy-hydrate-tsan`. The persistence loop and
+  `flushForCleanShutdown` did the same. They now test the optional through
+  a pointer capture. Regression: `zig build
+  test-sonny6375-global-store-race` (and its `-tsan` companion).
 - **The long write suites finish in minutes on a loaded host
   (SONNY-6333).** `tests/sonny738_write_harness.zig` opens, writes, reloads
   and closes a persisted store for every case in three sessions; on a
