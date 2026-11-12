@@ -3366,7 +3366,7 @@ REQ-GQL-UNICODE-014,UnicodeWtf8,Wtf8LossyDecode,TESTED,,,unicode,2025-09-27,src/
 REQ-GQL-UNICODE-014,WTF-8 Lossy Decode,ClientTestZig,TESTED,,,clients,2025-09-27,tests/canary_client_unicode.zig,41
 REQ-GQL-UNION-001,UnionPropertyAccess,PropertyEvaluation,TESTED,,,engine,2025-10-04,tests/test_union_property_access.zig,97
 REQ-GQL-UNION-INTEGRATION-001,UNION Property Access Integration,Integration,TESTED,,,claude,2025-01-04,tests/test_union_property_access_integration.zig,8
-REQ-GQL-UNWIND-001,UNWIND Clause,Execution,TESTED,,,execution,2026-01-25,src/execution/query_execution.zig,2392
+REQ-GQL-UNWIND-001,UNWIND Clause,Execution,TESTED,,,execution,2026-01-25,src/execution/query_execution.zig,2395
 REQ-GQL-VALUES-MATCH-001,ValuesMatchChaining,BindingPropagation,TESTED,,,engine,2026-01-17,docs/VALUES_MATCH_CHAINING_SPEC.md,574
 REQ-GQL-VALUES-MATCH-001,ValuesMatchChaining,Parser,TESTED,,,engine,2026-04-17,src/gql/parser.zig,937
 REQ-GQL-VAR-LEN-SUBQUERY-001,GQLPaths,VarLenSubquery,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig,276
@@ -3407,7 +3407,7 @@ REQ-GQL-WITH-GROUPBY-002,WithGroupByAggregation,AggregationComputation,TESTED,,,
 REQ-GQL-WITH-GROUPBY-003,WithGroupByAggregation,CallSite,TESTED,,,execution,2025-12-22,src/execution/match_operations.zig,12432
 REQ-GQL-WITH-GROUPBY-003,WithGroupByAggregation,CallSite,TESTED,,,execution,2025-12-22,src/execution/match_operations.zig,13158
 REQ-GQL-WITH-GROUPBY-003,WithGroupByAggregation,CallSite,TESTED,,,execution,2025-12-22,src/execution/query_execution.zig,2268
-REQ-GQL-WITH-GROUPBY-003,WithGroupByAggregation,CallSite,TESTED,,,execution,2025-12-22,src/execution/query_execution.zig,2321
+REQ-GQL-WITH-GROUPBY-003,WithGroupByAggregation,CallSite,TESTED,,,execution,2025-12-22,src/execution/query_execution.zig,2324
 REQ-GQL-WITH-GROUPBY-004,WithGroupByAggregation,RowBuilding,TESTED,,,execution,2025-12-22,src/execution/match_operations.zig,9567
 REQ-GQL-WITH-GROUPBY-005,WithGroupByAggregation,VarLenRowBuilding,TESTED,,,execution,2025-12-22,src/execution/match_operations.zig,9044
 REQ-GQL-WITH-REL-VARS-002,WithClauseRelationshipVars,ValueOrder,TESTED,,,execution,2026-07-31,src/execution/match_operations.zig,9396
@@ -5524,7 +5524,7 @@ REQ-SONNY-3135-PROFILE-ALLOWLIST,StatementAuthorization,Regression,TESTED,,,secu
 REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,DispatcherCall,TESTED,,,engine,2026-09-27,src/execution.zig,1768
 REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,ExecutorTable,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,198
 REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,InitialWithBinding,TESTED,,,engine,2026-09-27,src/execution/query_execution.zig,2024
-REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,InitialWithBinding,TESTED,,,engine,2026-09-27,src/execution/query_execution.zig,2525
+REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,InitialWithBinding,TESTED,,,engine,2026-09-27,src/execution/query_execution.zig,2528
 REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,ParserRecords,TESTED,,,parser,2026-09-27,src/gql/ast.zig,124
 REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,PlannedRuntimeDeclinesWrites,TESTED,,,engine,2026-09-28,src/execution/planned_read_runtime.zig,548
 REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,PreDispatchValidator,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,56
@@ -5533,7 +5533,7 @@ REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,Regression,TESTED,,,engine,2026-
 REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,TransportProfile,TESTED,,,engine,2026-09-28,src/execution.zig,1361
 REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,TransportProfile,TESTED,,,engine,2026-09-28,tests/test_sonny_write_allowlist_r4_transport.zig,36
 REQ-SONNY-3140-WITH-STAGE,WriteStep,WithStageRows,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,9866
-REQ-SONNY-3144-UNWIND-WRITES,WriteShapeValidator,UnwindEach,TESTED,,,engine,2026-09-27,src/execution/query_execution.zig,2625
+REQ-SONNY-3144-UNWIND-WRITES,WriteShapeValidator,UnwindEach,TESTED,,,engine,2026-09-27,src/execution/query_execution.zig,2628
 REQ-SONNY-3145-SET-BEFORE-CREATE,PropertyStorage,StorableValues,TESTED,,,engine,2026-09-27,src/execution/write_precheck.zig,425
 REQ-SONNY-3146-DELETE-PATHS,DeleteStatement,ExpandPathsAndLists,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,10388
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,EvaluatedValueOwnership,TESTED,,,engine,2026-09-27,src/execution/value_utilities.zig,360

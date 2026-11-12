@@ -2300,10 +2300,13 @@ pub fn executeLegacyQueryWithResolvedParams(
                     input.rows = shrunk;
                 }
             }
-            var projected = try match_operations.projectReturnOverRows(allocator, q, input, param_names.items, param_values.items);
-            errdefer projected.deinit(allocator);
-            try execution.applyQueryWindow(allocator, &projected, try execution.queryWindow(q, context));
-            return projected;
+            // SONNY-2680: the statement's SKIP / LIMIT is applied once, by
+            // whoever runs this query as a whole: the statement window
+            // (`execution.executeStatementWithContext`), or the CALL { }
+            // body window above for a nested one. Applying it here too
+            // skipped twice (`... RETURN k ORDER BY k SKIP 1 LIMIT 2`
+            // answered one row).
+            return match_operations.projectReturnOverRows(allocator, q, input, param_names.items, param_values.items);
         },
 
         // Handle standalone WITH clause (e.g., WITH 5 AS x RETURN x)

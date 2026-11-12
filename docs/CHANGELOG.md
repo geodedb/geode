@@ -260,6 +260,14 @@
   variable scope clause `CALL (q) { ... }`, OPTIONAL CALL, and two CALL { }
   in sequence. Regression (in-memory, persisted, tenant-scoped and RLS
   sessions, leak-checked): `zig build test-sonny3184-optional-match-distinct-call`.
+- **A SKIP after CALL { } ... RETURN is applied once (SONNY-2680):**
+  `CALL { MATCH (x:X) RETURN x.k AS k } RETURN k ORDER BY k SKIP 1 LIMIT 2`
+  answered one row: the RETURN's window was applied inside the CALL { }
+  executor and again by the statement. A literal or parameter SKIP, OFFSET
+  and LIMIT now window it once. Every other window site (single query,
+  chain, UNION, OPTIONAL MATCH, write RETURN, planned and legacy reads) was
+  already applying `$p` once; the batch test pins them. Regression:
+  `zig build test-sonny2672-read-semantics-batch`.
 
 ---
 
