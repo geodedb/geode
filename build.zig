@@ -13315,6 +13315,20 @@ pub fn build(b: *std.Build) void {
     const bug731_pwpolicy_step = b.step("test-bug731-pwpolicy", "Run bug-731 unified password policy regressions (CLI/wire/seed agree)");
     bug731_pwpolicy_step.dependOn(&run_bug731_pwpolicy_tests.step);
 
+    // SONNY-6271: the documented password policy, rule by rule, and the
+    // offline CLI naming the rule a password breaks (it said "min 8 chars,
+    // letters and numbers" for the 20-character passphrase policy). Spawns
+    // the geode this build emitted.
+    const sonny6271_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6271_password_policy_rules.zig"), .target = target, .optimize = optimize });
+    sonny6271_test_mod.addImport("geode_auth", auth_mod);
+    sonny6271_test_mod.link_libc = true;
+    const sonny6271_tests = b.addTest(.{ .root_module = sonny6271_test_mod });
+    const run_sonny6271_tests = b.addRunArtifact(sonny6271_tests);
+    spawnsBuiltGeode(sonny6271_tests);
+    shardDep(test_step, &run_sonny6271_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny6271_step = b.step("test-sonny6271-password-policy-rules", "Run SONNY-6271 regression (documented password policy table; the offline CLI names the rule a password breaks and accepts its own generated password)");
+    sonny6271_step.dependOn(&run_sonny6271_tests.step);
+
     // GAP-0903: repeated duplicate CREATE INDEX double-free (errdefer +
     // explicit free of the scoped key on the DuplicateIndex path).
     const gap0903_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0903_dup_index_double_free.zig"), .target = target, .optimize = optimize });
