@@ -29,6 +29,7 @@ const std = @import("std");
 const kms = @import("security/kms_remote"); // module provided by build.zig
 const quic = @import("transport/quic");
 const kms_tls = @import("kms_test_tls.zig");
+const test_ports = @import("test_ports.zig");
 
 fn monoMs() u64 {
     var ts: std.posix.timespec = undefined;
@@ -119,7 +120,7 @@ fn connectClient(port: u16, auth: []const u8) !kms.RemoteKmsClient {
 // clients can keep it busy beyond the old, hard-coded ten-second connect
 // timeout, before the response deadline can help any of those clients.
 test "TestSONNY2394_KmsClientHandshakeWaitsOutBusyServer" {
-    const port: u16 = 13181;
+    const port = try test_ports.freeUdpPort(); // SONNY-6301: not a constant
     var ps: PausableServer = undefined;
     try ps.start(port, "handshake-token");
     defer ps.deinit();
@@ -139,7 +140,7 @@ test "TestSONNY2394_KmsClientHandshakeWaitsOutBusyServer" {
 // A server that never resumes must still fail at the configured handshake
 // deadline without marking the client connected.
 test "TestSONNY2394_KmsClientHandshakeDeadlineIsBounded" {
-    const port: u16 = 13182;
+    const port = try test_ports.freeUdpPort(); // SONNY-6301: not a constant
     var ps: PausableServer = undefined;
     try ps.start(port, "handshake-token");
     defer ps.deinit();
@@ -160,7 +161,7 @@ test "TestSONNY2394_KmsClientHandshakeDeadlineIsBounded" {
 // timers fire -- must still get its answer delivered: the client waits on a
 // wall-clock deadline, not on a count of empty polls.
 test "TestSONNY2394_KmsClientWaitsOutBusyServer" {
-    const port: u16 = 13061;
+    const port = try test_ports.freeUdpPort(); // SONNY-6301: not a constant
     var ps: PausableServer = undefined;
     try ps.start(port, "deadline-token");
     defer ps.deinit();
@@ -188,7 +189,7 @@ test "TestSONNY2394_KmsClientWaitsOutBusyServer" {
 
 // The deadline is the client's to set, and it is honoured as wall-clock time.
 test "TestSONNY2394_KmsClientDeadlineIsWallClock" {
-    const port: u16 = 13062;
+    const port = try test_ports.freeUdpPort(); // SONNY-6301: not a constant
     var ps: PausableServer = undefined;
     try ps.start(port, "deadline-token");
     defer ps.deinit();
@@ -224,7 +225,7 @@ const Waiter = struct {
 // every client) fails promptly with error.ConnectionClosed instead of waiting
 // out its whole response deadline.
 test "TestSONNY2394_KmsClientFailsFastOnClosedConnection" {
-    const port: u16 = 13063;
+    const port = try test_ports.freeUdpPort(); // SONNY-6301: not a constant
     var ps: PausableServer = undefined;
     try ps.start(port, "deadline-token");
     var server_alive = true;
@@ -278,7 +279,7 @@ fn readResponseLine(client: *kms.RemoteKmsClient, stream: *quic.QuicClientStream
 // announcements there were, the request is answered exactly once and no
 // stream wrapper outlives it.
 test "TestSONNY2394_KmsServerAnswersSplitRequestOnce" {
-    const port: u16 = 13064;
+    const port = try test_ports.freeUdpPort(); // SONNY-6301: not a constant
     var ps: PausableServer = undefined;
     try ps.start(port, "stale-token");
     defer ps.deinit();
@@ -321,7 +322,7 @@ test "TestSONNY2394_KmsServerAnswersSplitRequestOnce" {
 // read the partial line with a blocking retry, gave up after ~50 ms and closed
 // the stream, so the request was lost.
 test "TestSONNY2394_KmsServerAssemblesPartialRequestPerConnection" {
-    const port: u16 = 13065;
+    const port = try test_ports.freeUdpPort(); // SONNY-6301: not a constant
     var ps: PausableServer = undefined;
     try ps.start(port, "partial-token");
     defer ps.deinit();

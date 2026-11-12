@@ -32,7 +32,9 @@ pub fn runParityRandom(
 ) !struct { server: ParityServer, result: ParityResult } {
     // Get two random ports
     const quic_port = try util.getRandomPort();
-    const grpc_port = try util.getRandomPort();
+    // SONNY-6301: the gRPC listener is TCP; probe TCP, not UDP.
+    var grpc_port = try util.getRandomTcpPort();
+    while (grpc_port == quic_port) grpc_port = try util.getRandomTcpPort();
 
     const quic_addr = try util.formatAddr(allocator, quic_port);
     errdefer allocator.free(quic_addr);

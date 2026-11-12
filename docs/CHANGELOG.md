@@ -89,6 +89,40 @@
 
 ### Fixed
 
+- **Tests start servers on free ports, and the shared test clients wait for
+  a live server instead of failing at a fixed deadline (SONNY-6301).**
+  `tests/gql_conformance.zig` started every server on 127.0.0.1:3181, so two
+  runs on one host reached each other's server: two concurrent runs failed
+  in 5 of 5 rounds (11-18 of 21 each, HELLO timeouts and `42P07 Duplicate
+  graph name` seeds). It, `test-first-boot-admin-breadcrumb`,
+  `test-liveness-breadcrumb`, `test-quic-idle-cpu`, `test-cert-provided`
+  and `test-sonny2394-kms-client-deadline` now take ports from
+  `tests/test_ports.zig` (bind port 0, read the port, release it; UDP for
+  QUIC, TCP for gRPC and metrics), and gRPC ports are no longer probed with
+  UDP. A `QuicProtoClient` connected to a loopback address now treats every
+  reply deadline as soft: it keeps waiting while the server still holds its
+  port, up to 120 s (`liveness_cap_ns`, was 60 s and opt-in through
+  `watchServerLiveness`), and fails at once with `error.ServerExited` when
+  the port is released. `backup` failed at a fixed 10 s on a loaded host
+  (test-sonny6288-server-restore-target, 2 of 5 runs), HELLO and queries at
+  5 s. The gRPC test client's socket timeout is 120 s instead of 5 s (TCP
+  reports an exited server at once). Regression:
+  `zig build test-sonny6301-test-ports-and-timeouts`.
+- **The offline `geode user` CLI names the password-policy rule a password
+  breaks; `reset-password` and `password` accept `--generate-password`
+  (SONNY-6271).** `user create`, `update`, `password` and `reset-password`
+  answered "password does not meet policy requirements (min 8 chars, letters
+  and numbers)", the CLI's rule before it adopted the unified passphrase
+  policy (20+ characters, upper and lower case, 3+ words; docs/USER_AUTH.md),
+  so `resetpass12345` was refused with a message it satisfied. The message
+  now ends with the rule that failed, e.g. `: Password too short (minimum 20
+  characters)`, and never echoes the password. `reset-password` and
+  `password` checked the policy against a `--generate-password` secret too
+  (32 lower-case hex digits, which can never pass), so they refused every
+  generated password; like `user create`, they now check only a password
+  the operator supplies. `test-first-boot-admin-breadcrumb` uses a
+  compliant passphrase and runs in the aggregate. Regression:
+  `zig build test-sonny6271-password-policy-rules`.
 - **`geode backup cleanup` deletes old backups instead of reporting a
   cleanup it never did; `geode backup info` no longer crashes (SONNY-6289).**
   `backup cleanup` printed "Cleaned 0 backup files" / "Backup cleanup
