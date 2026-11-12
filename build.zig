@@ -9454,6 +9454,35 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6321-tde-procedures", "Run SONNY-6321 regression (the TDE self-test procedures succeed through the executor with TDE on and claim nothing with TDE off; no CANARY cites tests/test_tde_kms_integration.zig for code it does not exercise)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6321 (remaining parts): simulate_oltp_workload, authorization,
+    // argument validation and the cluster gate of the TDE procedures, and
+    // the FLE parser/AST/schema/blind-index/execution/storage requirements.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6321_tde_fle_cases.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("sonny6321b_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6321-tde-fle-cases", "Run SONNY-6321 remaining-parts regression (simulate_oltp_workload happy path, the GPS gate, argument validation and cluster mode for the TDE procedures; FLE annotations parse and apply, the blind index, and envelope-on-write / plaintext-for-visible-roles through the executor; the markers these back are TESTED)").dependOn(&run_tests.step);
+    }
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6321_fle_schema_blind_index.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("fle_annotations", fle_annotations_mod);
+        mod.addImport("fle_blind_index", fle_blind_index_mod);
+        mod.addImport("sonny6321c_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6321-fle-schema-blind-index", "Run SONNY-6321 FLE schema/blind-index regression (CREATE GRAPH TYPE annotation texts apply to field encryption, search and visibility metadata; the blind index stores, normalizes, looks up and removes; REQ-FLE-SCHEMA-001 and REQ-FLE-BI-002 cite it)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2439 (partial): gated benchmarks time with a monotonic clock, the
     // test-local-only benchmarks are gone, and the enforced job's steps exist.
     {

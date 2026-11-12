@@ -5046,7 +5046,9 @@ REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,ManagerRestoreIsStaged,TESTED,
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,NoInPlaceRestoreOneSyncTimeouts,TESTED,tests/test_sonny6300_staged_restore_paths.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,S3RestoreIsStaged,IMPL,src/storage/s3_backup.zig,,,storage,2026-11-12
 REQ-SONNY-6320-PASSWORD-HASHING,Argon2id Password Hashing,DeterministicHashAndConstantTimeVerify,TESTED,tests/test_sonny6320_password_hashing.zig,tests/test_sonny6320_password_hashing.zig,,security,2026-11-12
+REQ-SONNY-6321-FLE-SCHEMA-BI,FieldLevelEncryption,AnnotationsBlindIndexEvidence,TESTED,tests/test_sonny6321_fle_schema_blind_index.zig,tests/test_sonny6321_fle_schema_blind_index.zig,,security,2026-11-12
 REQ-SONNY-6321-TDE-FLE-CANARY-EVIDENCE,TDEProcedures,SelfTestProceduresAndHonestMarkers,TESTED,tests/test_sonny6321_tde_procedures.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
+REQ-SONNY-6321-TDE-FLE-CASES,TDEProcedures,OltpAuthClusterFleEvidence,TESTED,tests/test_sonny6321_tde_fle_cases.zig,tests/test_sonny6321_tde_fle_cases.zig,,tde,2026-11-12
 REQ-SONNY-6322-AUDIT-KEY-EPOCH,Audit Verification,EpochVerification,TESTED,src/cli/geode_audit_verify.zig,tests/test_sonny6322_audit_seed_and_hmac_startup.zig,,security,2026-11-11
 REQ-SONNY-6322-AUDIT-KEY-EPOCH,AuditDurability,KeyEpochs,TESTED,src/security/audit.zig,tests/test_sonny6322_audit_seed_and_hmac_startup.zig,,security,2026-11-11
 REQ-SONNY-6322-AUDIT-KEY-EPOCH,Backup Restore,ExcludeAuditSeed,TESTED,src/storage/backup.zig,tests/test_sonny6322_audit_seed_and_hmac_startup.zig,,storage,2026-11-11
