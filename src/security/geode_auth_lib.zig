@@ -2045,10 +2045,14 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
 
     const params_str = parts.next() orelse return false;
     // Parse params: m=19456,t=2,p=1
+    // SONNY-6374: a stored hash is untrusted input. An unparseable or
+    // out-of-range parameter refuses the hash (it used to fall back to the
+    // default), and `p` is parsed straight into Argon2's u24 lane count: a
+    // corrupt p above 2^24-1 panicked the @intCast below in safe builds.
     var param_parts = std.mem.splitScalar(u8, params_str, ',');
     var m: u32 = 19456;
     var t: u32 = 2;
-    var p: u32 = 1;
+    var p: u24 = 1;
 
     while (param_parts.next()) |param| {
         var kv = std.mem.splitScalar(u8, param, '=');
@@ -2056,11 +2060,11 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
         const value = kv.next() orelse continue;
 
         if (std.mem.eql(u8, key, "m")) {
-            m = std.fmt.parseInt(u32, value, 10) catch 19456;
+            m = std.fmt.parseInt(u32, value, 10) catch return false;
         } else if (std.mem.eql(u8, key, "t")) {
-            t = std.fmt.parseInt(u32, value, 10) catch 2;
+            t = std.fmt.parseInt(u32, value, 10) catch return false;
         } else if (std.mem.eql(u8, key, "p")) {
-            p = std.fmt.parseInt(u32, value, 10) catch 1;
+            p = std.fmt.parseInt(u24, value, 10) catch return false;
         }
     }
 
@@ -2089,7 +2093,7 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
     const argon2_params = std.crypto.pwhash.argon2.Params{
         .t = t,
         .m = m,
-        .p = @intCast(p),
+        .p = p,
     };
 
     var computed_hash: [32]u8 = undefined;

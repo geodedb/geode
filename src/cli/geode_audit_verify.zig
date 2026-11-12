@@ -9,7 +9,7 @@ fn compat_fillRandom(buf: []u8) void {
         std.c.arc4random_buf(buf.ptr, buf.len);
     }
 }
-// CANARY: REQ=REQ-AUDIT-VERIFY-001; FEATURE="Audit Verification"; ASPECT=ChainVerification; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml,tests/test_audit_verify_chain_roundtrip.zig; OWNER=security; UPDATED=2026-05-21
+// CANARY: REQ=REQ-AUDIT-VERIFY-001; FEATURE="Audit Verification"; ASPECT=ChainVerification; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth.yml,tests/test_audit_verify_chain_roundtrip.zig; OWNER=security; UPDATED=2026-05-21
 // GAP-0151 RESOLVED: Now implements Ed25519 signature verification and digest interval validation
 
 pub const HashAlgo = enum { sha256, blake3 };
@@ -209,7 +209,7 @@ pub fn hex64(buf: []const u8) VerifyError![64]u8 {
 }
 
 /// GAP-0151: Full audit verification with Ed25519 signature and digest interval validation
-/// CANARY: REQ=REQ-AUDIT-VERIFY-002; FEATURE="Audit Signature Verification"; ASPECT=Ed25519Verify; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
+/// CANARY: REQ=REQ-AUDIT-VERIFY-002; FEATURE="Audit Signature Verification"; ASPECT=Ed25519Verify; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
 pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo, digest_interval_events: u32, require_digest: bool, pubkey: ?[32]u8, is_default_path: bool) VerifyError!void {
     var one: [1][32]u8 = undefined;
     const keys: []const [32]u8 = if (pubkey) |pk| blk: {

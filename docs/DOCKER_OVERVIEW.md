@@ -175,7 +175,7 @@ the container for future use (GAP-0878).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEODE_ENABLE_ABAC` | - | Enable attribute-based access control |
+| `GEODE_ENABLE_ABAC` | `true` | Has no effect: no request path enforces ABAC policies (authorization is GPS; SONNY-6376). Only reported in a startup log line. |
 | `FIPS_MODE` | - | Enable FIPS 140-2 compliant cryptography |
 
 ### Monitoring & Telemetry

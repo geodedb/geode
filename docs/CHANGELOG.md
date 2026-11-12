@@ -4,6 +4,32 @@
 
 ### Security
 
+- **A corrupt stored Argon2id hash is refused, not a panic; GEODE_ENABLE_ABAC
+  no longer claims enforcement; `serve --help` (SONNY-6374 items 3-8).**
+  `verifyPasswordArgon2id` narrowed the stored hash's `p` into Argon2's u24
+  with `@intCast`, so a hash with `p` above 2^24-1 panicked a safe build; an
+  unparseable `m`, `t` or `p` fell back to the default. Such a hash now fails
+  verification. The startup log no longer says "ABAC enforcement enabled":
+  no request path enforces ABAC (SONNY-6376), and the line now says so;
+  `docs/DOCKER_OVERVIEW.md` described `GEODE_ENABLE_ABAC` as enabling ABAC.
+  `geode serve --help` gave `--listen-grpc 0.0.0.0:3142`, the embedded LSP
+  default port, as its gRPC example; it now gives 50051 and documents
+  `--lsp-port` and `--lsp-bind-all`. Also: the GAP-0193 batch 2 security
+  and testing suites lose their `... or true` assertions and are built
+  (`test-gap0193-batch2-security`, `test-gap0193-batch2-testing`);
+  canaryscan sorts rows of one requirement in a total order, so
+  `tools/canaryscan/status.csv` no longer reorders between runs (both
+  outputs regenerated); 51 CANARY `TEST=` tokens that named missing files
+  are re-pointed to the tests that exercise them or, where none does,
+  downgraded to IMPL (`REQ-AUTH-SESSION-ROTATE-001`, `REQ-AUTH-MTLS-002..004`,
+  `REQ-HEX-PARSE-KEYPROV-001`, `REQ-HEX-PARSE-KEYROT-001/002`,
+  `REQ-STREAMING-KEYROT-REENCRYPT-001`, `REQ-GQL-SEC-KEYROT-001`,
+  `REQ-GQL-VAULT-KMS-001`, `REQ-GQL-2PC-001`); and the unimported
+  `src/performance/async_io_simple.zig` and
+  `src/distributed/federation_latency_aggregate.zig` (with its unbuilt tests
+  and benchmark) are deleted. Regression:
+  `zig build test-sonny6374-server-residuals`, `go test` in
+  `tools/canaryscan`.
 - **The embedded LSP listener no longer frees its AuthProvider while
   sessions use it (SONNY-6374 item 1).** `geode serve` freed the listener's
   `AuthProvider` in a `defer` inside the block that spawned the listener
@@ -451,7 +477,7 @@
   duplicate or mock-module cases). The ABAC-WIRE CANARY markers that cited
   `test_abac_enforcement.zig` are now IMPL: `SecurityManager.authorize`
   and its ABAC policies are called by no server request path (authorization
-  is GPS), and `GEODE_ABAC_ENABLED` changes only a startup log line.
+  is GPS), and `GEODE_ENABLE_ABAC` changes only a startup log line.
 - **The ThreadSanitizer companion steps instrument the code (SONNY-6328).**
   With Zig 0.16 a Debug x86_64 build uses the self-hosted backend, which
   ignores `-fsanitize-thread`: the six `test-*-tsan` steps had no TSan

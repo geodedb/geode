@@ -166,7 +166,7 @@ const LastPayloadKind = enum {
     @"error",
 };
 
-// CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
+// CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-11-12
 // Issue #390: Helper function to check for Ctrl+C (ASCII 3) in stdin without blocking
 // Made public so it can be used by other modules for interrupt handling
 // In raw terminal mode, Ctrl+C generates ASCII 3 which we poll for
@@ -2814,7 +2814,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     const info_msg = std.fmt.bufPrint(&info_buf, "Sourcing: {s}\r\n", .{resolved_path}) catch return;
     try stdout.writeStreamingAll(replIo(), info_msg);
 
-    // CANARY: REQ=REQ-SHELL-SPINNER-003; FEATURE="ShellProcessingIndicator"; ASPECT=SourceFileSpinner; STATUS=TESTED; TEST=tests/test_spinner.zig; OWNER=cli; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SHELL-SPINNER-003; FEATURE="ShellProcessingIndicator"; ASPECT=SourceFileSpinner; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig:"executeSourceFile: small batch path, re-source tracking, error extraction"; OWNER=cli; UPDATED=2026-11-12
     // Initialize spinner with background thread for visual feedback during long-running source operations
     // Using startBackground() ensures animation continues during blocking server calls
     var progress_spinner = spinner_mod.Spinner.init(state.allocator, "Parsing file...");
@@ -3174,7 +3174,7 @@ const MetaCommand = struct {
     position: usize, // Statement position where this command appears
 };
 
-/// CANARY: REQ=REQ-SHELL-SOURCE-ERROR-003; FEATURE="SourceFileErrorDetails"; ASPECT=ErrorExtraction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
+/// CANARY: REQ=REQ-SHELL-SOURCE-ERROR-003; FEATURE="SourceFileErrorDetails"; ASPECT=ErrorExtraction; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-11-12
 /// Extract the error message from a server response for user-friendly display
 pub fn extractServerErrorMessage(allocator: std.mem.Allocator, response: []const u8) ?[]const u8 {
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch {

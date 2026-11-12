@@ -13,7 +13,7 @@ fn compat_milliTimestamp() i64 {
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
-// CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=RateLimitPredicate; STATUS=TESTED; TEST=tests/test_gap0928_pool_exhausted.zig; OWNER=transport; UPDATED=2026-07-10
+// CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=RateLimitPredicate; STATUS=TESTED; TEST=test-gap0927; OWNER=transport; UPDATED=2026-11-12
 /// GAP-0928: rate-limit the POOL_EXHAUSTED diagnostic to at most once per
 /// `pool_exhausted_log_window_ms` while the pool stays at capacity. Pure and
 /// unit-testable — it reads no clock. `last_log_ms == 0` means "never logged"
@@ -3468,7 +3468,7 @@ pub fn main() !void {
         posix.sigaction(posix.SIG.TERM, &sa, null);
         posix.sigaction(posix.SIG.INT, &sa, null);
 
-        // CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=AdmissionDiagnostic; STATUS=TESTED; TEST=tests/test_gap0928_pool_exhausted.zig; OWNER=transport; UPDATED=2026-07-10
+        // CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=AdmissionDiagnostic; STATUS=TESTED; TEST=test-gap0927; OWNER=transport; UPDATED=2026-11-12
         // GAP-0928: at `--max-connections` capacity the accept loop parks and
         // the N+1-th connection got NO server-side signal — the operator only
         // saw the client's own --timeout fire (pool exhaustion was invisible

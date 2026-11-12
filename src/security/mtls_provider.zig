@@ -1,5 +1,5 @@
 // mTLS Authentication Provider
-// CANARY: REQ=REQ-AUTH-MTLS-001; FEATURE="MtlsAuthentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mtls_provider.zig|geodetestlab/specs/mtls_auth.yml; OWNER=security; UPDATED=2026-01-29
+// CANARY: REQ=REQ-AUTH-MTLS-001; FEATURE="MtlsAuthentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/mtls_auth.yml; OWNER=security; UPDATED=2026-11-12
 // GAP-0248: mTLS auth vs transport clarification
 //
 // This module provides certificate-based authentication by extracting identity
@@ -132,7 +132,7 @@ pub const MtlsProvider = struct {
     }
 
     /// Add a certificate-to-user mapping
-    /// CANARY: REQ=REQ-AUTH-MTLS-002; FEATURE="CertificateMappingCreation"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mtls_provider.zig; OWNER=security; UPDATED=2026-01-29
+    /// CANARY: REQ=REQ-AUTH-MTLS-002; FEATURE="CertificateMappingCreation"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
     pub fn addMapping(
         self: *Self,
         method: IdentityMethod,
@@ -208,7 +208,7 @@ pub const MtlsProvider = struct {
     }
 
     /// Authenticate a certificate and return the user ID
-    /// CANARY: REQ=REQ-AUTH-MTLS-003; FEATURE="CertificateAuthentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mtls_provider.zig; OWNER=security; UPDATED=2026-01-29
+    /// CANARY: REQ=REQ-AUTH-MTLS-003; FEATURE="CertificateAuthentication"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
     pub fn authenticate(self: *Self, identity: *const CertificateIdentity) !?AuthResult {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -305,7 +305,7 @@ pub const AuthResult = struct {
 
 /// Extract identity from raw certificate DER bytes
 /// GAP-0248: Implements ASN.1/DER X.509 parsing for subject CN, SAN, validity dates, serial number.
-/// CANARY: REQ=REQ-AUTH-MTLS-004; FEATURE="CertificateIdentityExtraction"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mtls_provider.zig; OWNER=security; UPDATED=2026-03-13
+/// CANARY: REQ=REQ-AUTH-MTLS-004; FEATURE="CertificateIdentityExtraction"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 pub fn extractIdentity(allocator: Allocator, cert_der: []const u8) !CertificateIdentity {
     // Calculate SHA-256 fingerprint via FIPS seam
     var fingerprint_bytes: [32]u8 = undefined;

@@ -4439,17 +4439,6 @@ pub fn build(b: *std.Build) void {
     const run_raft_integration_tests = b.addRunArtifact(raft_integration_tests);
     shardDep(test_step, &run_raft_integration_tests.step, 10, test_shard_loads, test_shard_index);
 
-    // GAP-0513: federation_latency_aggregate unit tests (Welford stats, reservoir, archive ring)
-    const fed_latency_agg_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/distributed/federation_latency_aggregate.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    fed_latency_agg_test_mod.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    const fed_latency_agg_tests = b.addTest(.{ .root_module = fed_latency_agg_test_mod });
-    const run_fed_latency_agg_tests = b.addRunArtifact(fed_latency_agg_tests);
-    shardDep(test_step, &run_fed_latency_agg_tests.step, 1, test_shard_loads, test_shard_index);
-
     // GAP-0513: network_transport compile-time verification tests
     const network_transport_test_mod = b.createModule(.{
         .root_source_file = b.path("src/distributed/network_transport.zig"),
@@ -9528,6 +9517,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "test-gap0193-batch2-engine", .path = b.path("tests/test_gap_0193_batch2_engine.zig"), .desc = "Run the GAP-0193 batch 2 engine parse suite (SONNY-6320: registered)" },
         .{ .name = "test-gap0193-batch2-misc", .path = b.path("tests/test_gap_0193_batch2_misc.zig"), .desc = "Run the GAP-0193 batch 2 misc parse suite (SONNY-6320: registered)" },
         .{ .name = "test-gap0193-impl-verification", .path = b.path("tests/test_gap_0193_impl_verification.zig"), .desc = "Run the GAP-0193 IMPL verification parse suite (SONNY-6320: registered)" },
+        .{ .name = "test-gap0193-batch2-security", .path = b.path("tests/test_gap_0193_batch2_security.zig"), .desc = "Run the GAP-0193 batch 2 security parse suite (SONNY-6374: registered, always-true assertions removed)" },
+        .{ .name = "test-gap0193-batch2-testing", .path = b.path("tests/test_gap_0193_batch2_testing.zig"), .desc = "Run the GAP-0193 batch 2 testing parse suite (SONNY-6374: registered, always-true assertions removed)" },
     }) |t| {
         const mod = b.createModule(.{ .root_source_file = t.path, .target = target, .optimize = optimize });
         mod.addImport("geode", root_mod);

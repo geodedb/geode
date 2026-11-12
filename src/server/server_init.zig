@@ -112,8 +112,9 @@ pub const EnvironmentConfig = struct {
     disable_estimates: bool = false,
     order_keys_expr: bool = true, // ISO/GQL standard allows property paths in ORDER BY
     // CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement"; ASPECT=EnvConfig; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
-    // GAP-0165 / SEC-14: ABAC enforcement enabled by default for security.
-    // Set GEODE_ENABLE_ABAC=false to disable.
+    // GAP-0165 / SEC-14: GEODE_ENABLE_ABAC (default true). SONNY-6374: it
+    // is only reported in a startup log line; no request path enforces ABAC
+    // (SONNY-6376).
     abac_enabled: bool = true,
     // #683: Cache per-connection env vars at startup to avoid repeated syscalls.
     query_optimizer_enabled: bool = false,
@@ -762,12 +763,14 @@ pub fn initialize(
             log.err("Failed to hydrate SecurityManager from auth graph", &.{Attr.string("error", @errorName(err))});
             break :blk null;
         };
+        // SONNY-6374: no request path calls SecurityManager.authorize or
+        // its ABAC policies (authorization is GPS), so GEODE_ENABLE_ABAC
+        // changes nothing; this line used to claim that it turned
+        // enforcement on. Enforcement is tracked by SONNY-6376.
         if (ctx.security_manager_storage != null) {
-            if (env_config.abac_enabled) {
-                log.info("ABAC enforcement enabled - SecurityManager hydrated from auth graph", &.{});
-            } else {
-                log.info("SecurityManager hydrated from auth graph (ABAC enforcement disabled)", &.{});
-            }
+            log.info("SecurityManager hydrated from auth graph; ABAC policies are not enforced on any request path (GEODE_ENABLE_ABAC has no effect)", &.{
+                Attr.boolean("geode_enable_abac", env_config.abac_enabled),
+            });
         }
     }
 

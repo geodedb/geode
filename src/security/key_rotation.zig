@@ -452,7 +452,7 @@ pub const KeyRegistry = struct {
                 const second_quote = std.mem.indexOfScalarPos(u8, line, first_quote + 1, '"') orelse continue;
                 const third_quote = std.mem.indexOfScalarPos(u8, line, second_quote + 1, '"') orelse continue;
                 // GAP-0141: Safe hex parsing with proper error handling
-                // CANARY: REQ=REQ-HEX-PARSE-KEYROT-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_key_rotation.zig; OWNER=security; UPDATED=2026-01-15
+                // CANARY: REQ=REQ-HEX-PARSE-KEYROT-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
                 const fourth_quote = std.mem.indexOfScalarPos(u8, line, third_quote + 1, '"') orelse continue;
                 const hex_slice = line[third_quote + 1 .. fourth_quote];
                 if (hex_slice.len == 32) {
@@ -495,7 +495,7 @@ pub const KeyRegistry = struct {
                         }
                     };
                     // GAP-0141: Safe hex parsing with proper error handling
-                    // CANARY: REQ=REQ-HEX-PARSE-KEYROT-002; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_key_rotation.zig; OWNER=security; UPDATED=2026-01-15
+                    // CANARY: REQ=REQ-HEX-PARSE-KEYROT-002; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
                     const hex_slice = line[second_last_quote + 1 .. hex_quote];
                     if (hex_slice.len == 64) {
                         var material: [32]u8 = undefined;
@@ -613,7 +613,7 @@ pub const KeyRegistry = struct {
         return true; // no key yet
     }
 
-    // CANARY: REQ=REQ-STREAMING-KEYROT-REENCRYPT-001; FEATURE="Page Re-encryption"; ASPECT=ReEncryption; STATUS=TESTED; TEST=tests/test_key_rotation.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-STREAMING-KEYROT-REENCRYPT-001; FEATURE="Page Re-encryption"; ASPECT=ReEncryption; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
     /// Re-encrypt a page with the current active key
     /// This supports online rotation without downtime by re-encrypting pages lazily
     pub fn reencryptPage(self: *KeyRegistry, page_id: u64, ciphertext: []u8) !void {
@@ -760,7 +760,7 @@ pub const KeyRegistry = struct {
 
 // CANARY: REQ=REQ-GQL-SEC-KEYROT-STATE-001; FEATURE="KeyRotationStatePersistence"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave; OWNER=security; UPDATED=2026-01-15
 // Simple unit test for scaffold ensuring rotate increases key id and history grows.
-// CANARY: REQ=REQ-GQL-SEC-KEYROT-001; FEATURE="KeyRotationScaffold"; ASPECT=TEST; STATUS=TESTED; TEST=tests/test_key_rotation.zig; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-SEC-KEYROT-001; FEATURE="KeyRotationScaffold"; ASPECT=TEST; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 test "key rotation scaffold increments id" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();

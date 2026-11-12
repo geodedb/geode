@@ -58,7 +58,7 @@ pub const Provider = struct {
 
 /// P2-3: Now accepts allocator parameter
 /// GAP-0141: Safe hex parsing with proper error handling
-/// CANARY: REQ=REQ-HEX-PARSE-KEYPROV-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_key_rotation.zig; OWNER=security; UPDATED=2026-01-15
+/// CANARY: REQ=REQ-HEX-PARSE-KEYPROV-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
     const hex = getEnvVarOwned(allocator, "GEODE_DISK_KEY_HEX") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,

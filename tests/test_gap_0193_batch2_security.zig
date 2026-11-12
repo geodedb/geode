@@ -13,15 +13,6 @@ const geode = @import("geode");
 
 // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC"; ASPECT=TLSSecurity; STATUS=TESTED; OWNER=distributed; UPDATED=2026-01-16
 test "GAP-0193: 2PC TLS - Distributed transaction security" {
-    // Verify distributed module exists with TLS support
-    const has_distributed = @hasDecl(geode, "distributed");
-    if (has_distributed) {
-        const distributed = geode.distributed;
-        // Check for TLS-related functionality
-        try testing.expect(@hasDecl(distributed, "TwoPhaseCoordinator") or
-            @hasDecl(distributed, "twophase") or
-            @hasDecl(distributed, "TLSConfig") or true);
-    }
     // Parse distributed transaction query
     var result = try geode.parse(testing.allocator, "BEGIN TRANSACTION", .{});
     defer result.deinit();
@@ -41,14 +32,6 @@ test "GAP-0193: 2PC TLS - One-shot transaction" {
 
 // CANARY: REQ=REQ-AUTH-CONFIG-001; FEATURE="AuthConfig"; ASPECT=PasswordPolicy; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
 test "GAP-0193: Auth Config - Configurable password policy" {
-    const has_security = @hasDecl(geode, "security");
-    if (has_security) {
-        const security = geode.security;
-        // Check for auth configuration
-        try testing.expect(@hasDecl(security, "AuthConfig") or
-            @hasDecl(security, "PasswordPolicy") or
-            @hasDecl(security, "auth") or true);
-    }
     var result = try geode.parse(testing.allocator, "RETURN current_user() AS user", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
@@ -194,13 +177,6 @@ test "GAP-0193: TDE - Key rotation" {
 
 // CANARY: REQ=REQ-AUDIT-TLS-TEST-001; FEATURE="AuditTLS"; ASPECT=SyslogTests; STATUS=TESTED; OWNER=audit; UPDATED=2026-01-16
 test "GAP-0193: Audit TLS - Syslog tests" {
-    const has_audit = @hasDecl(geode, "audit");
-    if (has_audit) {
-        const audit = geode.audit;
-        try testing.expect(@hasDecl(audit, "syslog") or
-            @hasDecl(audit, "SyslogHandler") or
-            @hasDecl(audit, "TLSConfig") or true);
-    }
     var result = try geode.parse(testing.allocator, "RETURN timestamp() AS audit_time", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
@@ -276,13 +252,6 @@ test "GAP-0193: RLS Security - Policy compilation" {
 
 // CANARY: REQ=REQ-NETWORK-SECURITY-001; FEATURE="NetworkSecurity"; ASPECT=TLSConnection; STATUS=TESTED; OWNER=transport; UPDATED=2026-01-16
 test "GAP-0193: Network Security - TLS connection" {
-    const has_transport = @hasDecl(geode, "transport");
-    if (has_transport) {
-        const transport = geode.transport;
-        try testing.expect(@hasDecl(transport, "TLS") or
-            @hasDecl(transport, "QUIC") or
-            @hasDecl(transport, "SecureConnection") or true);
-    }
     var result = try geode.parse(testing.allocator, "RETURN 'tls_secure' AS connection", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);

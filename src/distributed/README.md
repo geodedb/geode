@@ -76,8 +76,8 @@ go through `cluster_auth.validateClusterToken`. Regression:
       v
 +------------------+
 |   Federation     |  federation.zig, federation_flag.zig,
-|   & Merge        |  federation_merge.zig, federation_latency_aggregate.zig,
-|                  |  merge_strategies.zig, result_utils.zig, value_convert.zig
+|   & Merge        |  federation_merge.zig, merge_strategies.zig,
+|                  |  result_utils.zig, value_convert.zig
 +------------------+
 ```
 
@@ -186,7 +186,6 @@ const BasicQuery = distributed.QueryCoordinator;
 | `federation.zig` | Federation configuration, routing, and cross-cluster query dispatch |
 | `federation_flag.zig` | Federation mismatch flag propagation (schema/version divergence) |
 | `federation_merge.zig` | Result merging across federated clusters |
-| `federation_latency_aggregate.zig` | Latency aggregation and percentile tracking for federated queries |
 | `merge_strategies.zig` | Pluggable merge strategies (union, intersection, priority) |
 | `result_utils.zig` | Utility functions for result set manipulation |
 | `value_convert.zig` | Cross-node value type conversion and normalization |
