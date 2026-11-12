@@ -1632,6 +1632,69 @@
 
 ### Fixed
 
+- **BREAKING (query results): a WHERE, FILTER or HAVING keeps a row only
+  when its condition is the Boolean True (SONNY-6425 item 1).** ISO/IEC
+  39075:2024 19.1 `<search condition>` General Rule 2 ("satisfied if and
+  only if the result of the `<boolean value expression>` is True") and 16.13
+  `<where clause>` General Rule 2b (a record is kept "If INCLUDE is True").
+  The single-node MATCH (label scan, point read, hop, multi-chain, OPTIONAL
+  MATCH), FILTER, WITH ... WHERE, GROUP BY ... HAVING, UNWIND ... WHERE, CALL
+  ... WHERE, planned-read and streamed node-scan paths took a non-zero
+  integer as true; the initial-WITH dispatcher (SONNY-3184) and a cluster
+  leader's MATCH ... SET did not. Every site now keeps a row only for True.
+  **What changes:** a statement whose WHERE / FILTER / HAVING evaluates to a
+  non-zero integer, for example `MATCH (n) WHERE n.count RETURN n`,
+  `MATCH (n) FILTER n.flag RETURN n` with an integer `flag`, `... GROUP BY
+  n.k HAVING count(*)`, or `MATCH (n) WHERE n.a SET n.b = 1`, returned (or
+  wrote) those rows and now returns (writes) none, on a single node as on a
+  leader. Conditions that are Boolean (`n.count > 0`, `n.flag = 1`,
+  `count(*) >= 1`), null, strings and zero are unchanged. ISO's Syntax Rule 3
+  (a non-Boolean predicand is a type error) is not enforced: such a condition
+  keeps no row rather than failing. Regression:
+  `zig build test-sonny6425-where-truthiness`.
+- **A cluster leader's MATCH ... SET answers a failing WHERE or SET
+  expression's own error (SONNY-6425 item 2).** It answered 40001
+  (`ClusterWriteNotReplicable`, which asks the client to retry, and no retry
+  can succeed) where a single node answers the expression's error (for
+  example `DivisionByZero` for `SET n.e = n.a / n.z` with a zero `z`).
+  Nothing is proposed either way. Regression: `zig build
+  test-sonny6425-where-truthiness`.
+- **`CALL db.labels()`, `db.relationshipTypes()`, `db.propertyKeys()` and
+  SHOW TABLES list the data after the store is reopened (SONNY-6425 item
+  3).** After an open, a graph's resident structures (including the
+  per-tenant label, type and property-key counts) are built on first touch;
+  these procedures read a snapshot of the store, which copied only what was
+  resident, so until a MATCH touched the graph they listed nothing, for every
+  session. The snapshot now hydrates the graphs it copies first
+  (`QueryReadSession.initScoped`). Regression: `zig build
+  test-sonny6425-tenant-listings-reopen`.
+- **A one-node CREATE commits one storage-engine transaction (SONNY-6425
+  item 4).** The statement transaction and the node were placed on shards
+  round-robin from the same counter, so the node always landed on another
+  shard: its record and each property committed on their own (3 to 6 commits,
+  each a WAL fsync, for one `CREATE (:L {a: 1, b: 2})`). With a statement
+  transaction open, `StorageAdapter.createNode` now allocates the node on
+  that transaction's shard. Regression: `zig build
+  test-sonny6425-create-one-shard-commit`.
+- **`GraphStore.dropGraph` refuses (`ObjectInUse`) when the calling thread
+  holds the graph's read lock (SONNY-6425 item 5).** Since SONNY-3135 the drop
+  takes the graph's write lock, and a thread holding the read lock waited for
+  itself forever (no caller does this today). The adapter records the read
+  locks each thread holds through `acquireGraphReadLock`. Regression: `zig
+  build test-sonny6425-drop-under-own-read-lock`.
+- **`geode query --grpc --file` stops with its summary when a statement it
+  retries on its own gets no answer after it was sent (SONNY-6425 item 6).**
+  A rejected chunk is retried statement by statement; on gRPC a statement
+  whose client timed out, or whose connection failed after it was sent,
+  exited the process with no "Chunked execution complete" summary. It is not
+  sent again, the run stops, and the summary and the count of statements not
+  executed are printed, as for a chunk (SONNY-6384). Exit code 1 (as before).
+  Regression: `zig build test-sonny6425-grpc-retry-summary`.
+- **Documented: cluster data written before SONNY-2726 stays tagged
+  `default` (SONNY-6425 item 9).** The writer's tenant was never recorded
+  (the raft entries carried none), so geode cannot re-tag it; the operator
+  procedure (read the rows as admin, write them again from a session of the
+  right tenant, delete the old copies) is in `docs/MIGRATION_GUIDE.md`.
 - **A write inside an explicit transaction no longer crashes the server,
   and the MATCH ... CREATE / MATCH ... MERGE edge fast paths answer and
   write what the executor does (SONNY-6429 item 1).** The process-global

@@ -5121,6 +5121,15 @@ pub const GraphStore = struct {
         var drop_lock: ?*graph_storage_adapter.ManagedGraph = null;
         if (drop_lock_adapter) |adapter| {
             if (!adapter.threadHoldsGraphWriteLock(graph_name)) {
+                // SONNY-6425 item 5: a caller holding the graph's READ lock
+                // would wait for itself here forever (the writer-preferring
+                // acquire never completes while its own shared hold is open,
+                // and every writer of the graph queues behind it). Refused
+                // before anything is dropped.
+                if (adapter.threadHoldsGraphReadLock(graph_name)) {
+                    log.err("dropGraph refused: the calling thread holds the graph's read lock", &.{Attr.string("graph", graph_name)});
+                    return error.ObjectInUse;
+                }
                 drop_lock = adapter.acquireGraphWriteLockCancelable(graph_name, std.math.maxInt(u64)) catch |err| switch (err) {
                     error.GraphNotFound => null,
                     error.Deadline => unreachable, // no deadline
@@ -18345,6 +18354,21 @@ pub const QueryReadSession = struct {
             source_store.schema_name,
         );
         errdefer session.snapshot.deinit();
+
+        // CANARY: REQ=REQ-SONNY-6425-LISTINGS-AFTER-REOPEN; FEATURE="PerTenantIsolation"; ASPECT=SnapshotHydratesSource; STATUS=TESTED; TEST=tests/test_sonny6425_tenant_listings_reopen.zig; OWNER=storage; UPDATED=2026-11-12
+        // SONNY-6425 item 3: the graphs the snapshot copies are hydrated
+        // first. After an open, a graph's resident products (nodes, label
+        // index, the per-tenant label / type / property-key counts) are
+        // built on first touch (`ensureGraphHydrated`), and the clone below
+        // copies only what is resident: a CALL db.labels() / SHOW TABLES
+        // served from a snapshot taken before anything touched the graph
+        // listed nothing, for every tenant, while MATCH (which reads the
+        // store, hydrating it) saw the rows. Hydration takes no graph lock.
+        if (scope) |names| {
+            for (names) |name| source_store.ensureGraphHydrated(name);
+        } else {
+            source_store.ensureAllGraphsHydrated();
+        }
 
         // Clone nodes/edges from the global store instead of loading from the
         // shared adapter buffer pool (which races with concurrent writers).

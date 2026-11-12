@@ -4332,7 +4332,8 @@ const HavingFilter = struct {
     }
 
     /// An unknown function still fails the query. Any other evaluation error,
-    /// and any result but a true Bool or a nonzero Int, fails the row.
+    /// and any result but the Boolean True, fails the row (SONNY-6425: a
+    /// nonzero Int passed).
     fn evaluate(self: *HavingFilter, allocator: std.mem.Allocator, names: []const []const u8, values: []const Value) !bool {
         const env = Env{
             .names = names,
@@ -4344,7 +4345,6 @@ const HavingFilter = struct {
         const result = try evalGroupedExpr(allocator, self.expr, env, Value{ .Bool = false });
         return switch (result) {
             .Bool => |b| b,
-            .Int => |i| i != 0,
             else => false,
         };
     }

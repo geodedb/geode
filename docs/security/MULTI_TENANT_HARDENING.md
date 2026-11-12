@@ -379,8 +379,10 @@ write `default`, and a `default` node is already hidden from every tenant; a
 `default` edge is hidden the same way. In a cluster, a write's raft entry
 carries the writing session's tenant (SONNY-2726), so every node applies it
 under that tenant; data replicated before that change was applied as
-`default` on every node and is still tagged so (no replicated re-tag exists
-yet). Before SONNY-2693
+`default` on every node and is still tagged so. Geode cannot re-tag it (the
+writer's tenant was never recorded, and no replicated re-tag exists); the
+operator-driven repair is in `docs/MIGRATION_GUIDE.md` ("Cluster Data
+Written Before SONNY-2726 Stays Tagged `default`", SONNY-6425). Before SONNY-2693
 some read paths admitted an edge whose endpoints were visible whatever its tag
 (the GAP-0891 "endpoint bridge"). That showed a tenant another tenant's edge
 between its own nodes, with its properties. It also kept legacy edges visible
