@@ -359,6 +359,17 @@
   assertions in the uncompiled `tests/test_gap_0193_batch2_testing.zig` now
   assert what they meant; its distributed-query case would fail, because
   neither `QueryCoordinator` nor `Federation` exists.
+- **Uncompiled demos, micro-benchmarks, tools and containers (SONNY-6298).**
+  `src/audit_demo.zig`, `src/bench/ordering_cmp_bench.zig`,
+  `src/benchmarks/{adaptive_replan_autotune_variance,pagination_prefetch_sim,tde_bench}.zig`,
+  `src/tools/{canary_freshness,doc_sync}.zig`,
+  `src/runtime/{multi_loop_pseudocode,poller_iface}.zig`, `src/sentinel.zig`
+  (a guard-byte allocator nothing used), `src/flagger_impl_defined.zig` (an
+  older copy of `src/server/flagger_impl_defined.zig`, which is unchanged),
+  `src/compat.zig`, `src/testing/fake_fs.zig` and
+  `src/containers/{cursor_container,signaled_queue}.zig` were reachable from
+  no executable or test, and nothing outside `build.zig` ran them. They are
+  removed with the uncompiled tests and benchmarks that only exercised them.
 
 ---
 

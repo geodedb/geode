@@ -5548,8 +5548,6 @@ pub fn build(b: *std.Build) void {
     // since the server code is already part of the geode module through statement_dispatcher.
 
     // Shared modules needed by various executables
-    //    const sentinel_mod = b.createModule(.{ .root_source_file = b.path("src/sentinel.zig"), .target = target, .optimize = optimize });
-
     //    const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
 
     // Legacy CSR adjacency module removed with PageManager storage.

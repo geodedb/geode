@@ -17,6 +17,12 @@ This document contains gaps that have been verified as resolved from previous ga
 > A fix cited only in those files never ran (for example GAP-0017's key
 > wrapping in `key_provider.zig`, and GAP-0210's RPC transport). The entries
 > are kept as the historical record.
+>
+> The same holds for these files, removed later in SONNY-6298:
+> `src/runtime/poller_iface.zig` (GAP-0238),
+> `src/containers/{cursor_container,signaled_queue}.zig` (GAP-0239) and
+> `src/sentinel.zig` (GAP-0218: the `SentinelAllocator` was never compiled,
+> so no allocation was ever guarded by it).
 
 **Current Status**: 7 open/partial actionable gaps (2 Critical — both Blocked; 3 High — GAP-0885 open/partial, GAP-0893 Blocked-vendor, GAP-0900 write-throughput serialization root-caused 2026-06-17; 2 Medium — GAP-0873 deferred, GAP-0897 observability; 0 Low). GAP-0899 (checkpoint-vs-writer crash) closed 2026-06-17. See docs/GAP_ANALYSIS.md.
 
