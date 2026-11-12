@@ -4595,7 +4595,7 @@ REQ-QUIC-HC-020,ConfigurableStreamThrottle,ServerEnv,TESTED,,,transport,2026-05-
 REQ-QUIC-HC-021,HighFanoutConnectionLimit,ServerEnv,TESTED,,,transport,2026-05-26,src/server/main.zig,2436
 REQ-QUIC-HC-022,HighConcurrencyMutations,ShardTxnPropertyFastPath,TESTED,,,storage,2026-05-26,src/graph_store.zig,7478
 REQ-QUIC-HC-022,HighConcurrencyMutations,ShardTxnPropertyFastPath,TESTED,,,storage,2026-05-26,src/storage/graph_storage_adapter.zig,4227
-REQ-QUIC-HC-023,QUIC High-Concurrency Diagnostics,ClientExecTimeout,TESTED,,,transport,2026-05-26,tests/proto_test_util.zig,1422
+REQ-QUIC-HC-023,QUIC High-Concurrency Diagnostics,ClientExecTimeout,TESTED,,,transport,2026-05-26,tests/proto_test_util.zig,1427
 REQ-QUIC-HC-024,QUIC High-Concurrency Diagnostics,ServerStderrPassThrough,TESTED,,,transport,2026-05-26,tests/proto_test_util.zig,367
 REQ-QUIC-HC-025,QUIC High-Concurrency Reads,ServerReadBackoff,TESTED,,,transport,2026-05-26,src/transport/quic.zig,253
 REQ-QUIC-HC-026,QUIC High-Concurrency Requests,PersistentStreamFairness,TESTED,,,transport,2026-05-26,src/server/quic_connection_handler.zig,3839
@@ -4661,7 +4661,7 @@ REQ-QUIC-HC-118,High-Concurrency Test Harness,BoundedDriverThreadStacks,TESTED,,
 REQ-QUIC-HC-119,QUIC High-Concurrency Reads,BatchedCountFastPathResponse,TESTED,,,transport,2026-05-27,src/server/quic_connection_handler.zig,7989
 REQ-QUIC-HC-120,High-Concurrency Label Counts,LabelCountRefcountRead,TESTED,,,storage,2026-05-28,src/graph_store.zig,8669
 REQ-QUIC-HC-120,High-Concurrency Label Counts,LabelCountRefcounts,TESTED,,,storage,2026-05-28,src/graph_store.zig,2153
-REQ-QUIC-HC-120,High-Concurrency Test Client,PostReadAckFlush,IMPL,,,transport,2026-05-27,tests/proto_test_util.zig,1044
+REQ-QUIC-HC-120,High-Concurrency Test Client,PostReadAckFlush,IMPL,,,transport,2026-05-27,tests/proto_test_util.zig,1049
 REQ-QUIC-HC-121,High-Concurrency Mutations,CandidateShardReadLocks,TESTED,,,storage,2026-05-28,src/storage/graph_storage_adapter.zig,11557
 REQ-QUIC-HC-122,HighConcurrencyMutations,ExactPropertyIndexSharding,TESTED,,,storage,2026-05-28,src/storage/graph_storage_adapter.zig,306
 REQ-QUIC-HC-124,High-Concurrency Test Harness,ConnectionWorkerHeadroom,TESTED,,,transport,2026-06-11,tests/e2e_quic_high_concurrency.zig,1304

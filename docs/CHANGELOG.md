@@ -320,6 +320,14 @@
 
 ### Fixed
 
+- **The QUIC test client fails at once on a connection the server closed
+  (SONNY-6374 item 2).** `QuicProtoClient` (tests/proto_test_util.zig)
+  waited for a reply until the 120 s liveness cap whenever the server was
+  still alive, because a stream read on a closed connection reports
+  WouldBlock. A refused connection (the server sends CONNECTION_CLOSE) now
+  fails with `error.ConnectionClosed`: the F13 case of
+  `test-sonny3253-round14-minors` failed every run at 120 s and now sees the
+  refusal in about 250 ms.
 - **No in-place restore; a restore syncs once; the CLI's server wait is
   configurable (SONNY-6300).** `BackupManager.restoreToPointInTime` wrote a
   backup over whatever directory it was given, the live data directory
