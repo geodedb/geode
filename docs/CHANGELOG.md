@@ -446,6 +446,16 @@
   job runs them until those are fixed. Until then concurrency fixes rest on
   deterministic lock-wait proofs and stress tests. Regression:
   `zig build test-sonny6328-tsan-detects-race`.
+- **The mock S3 backup tests and the stale canaryscan rows are gone
+  (SONNY-6355 item 4).** `tests/e2e_s3_backup_restore.zig` and
+  `tests/test_s3_backup.zig` exercised a mock S3 client and were imported
+  only by `tests/all_tests.zig`, which nothing compiles; the binary has no
+  object-storage backup path (SONNY-6290). `tools/canaryscan/status.csv`
+  and `status.json`, the scanner's committed output, are regenerated with
+  `tools/canaryscan`: 224 rows named a source file that no longer exists
+  (the backup API tests at rows 476, 1754 and 3429 among them, and rows
+  from dependency checkouts under `zig-pkg/`). Regression:
+  `zig build test-sonny6355-dead-backup-tests`.
 - **The offline `geode user` CLI names the password-policy rule a password
   breaks; `reset-password` and `password` accept `--generate-password`
   (SONNY-6271).** `user create`, `update`, `password` and `reset-password`

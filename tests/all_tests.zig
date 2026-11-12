@@ -83,7 +83,6 @@ const _gap_0193_batch6_comprehensive = @import("test_gap_0193_batch6_comprehensi
 
 // v0.18 feature tests
 const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");
-const _e2e_s3_backup_restore = @import("e2e_s3_backup_restore.zig");
 const _e2e_cdc_webhook_reliability = @import("e2e_cdc_webhook_reliability.zig");
 const _e2e_cbo_small_n = @import("e2e_cbo_small_n.zig");
 const _canary_cdc_backpressure_adaptive = @import("canary_cdc_backpressure_adaptive.zig");
@@ -165,9 +164,6 @@ const _test_repl_e2e = @import("test_repl_e2e.zig");
 
 // Query Optimizer tests
 const _test_cardinality_estimator = @import("test_cardinality_estimator.zig");
-
-// S3 Backup tests
-const _test_s3_backup = @import("test_s3_backup.zig");
 
 // Vector Index Population tests
 const _test_vector_index_population = @import("test_vector_index_population.zig");
