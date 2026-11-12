@@ -102,12 +102,17 @@ const Harness = struct {
     }
 
     fn restart(self: *Harness) !void {
+        return self.restartLean(true);
+    }
+
+    /// A new process, with lean index mode on or off.
+    fn restartLean(self: *Harness, lean: bool) !void {
         self.session.deinit();
         execution.cleanupCatalogInstance();
         index_manager.cleanupGlobalIndexManager();
         graph_store.deinitGlobalStore();
         // A new process: no key registered until the sidecar is read.
-        graph_store.setLeanIndexingForTest(true);
+        graph_store.setLeanIndexingForTest(lean);
         graph_store.getGlobalStore(self.allocator).installNodeCacheHydrate();
         const catalog = try execution.ensureCatalogInstance(self.allocator);
         self.session = execution.SessionState.init(self.allocator);
@@ -283,4 +288,17 @@ test "SONNY-6354: a composite MERGE key registered at runtime resolves a holder 
         .{ .key = "sid", .value = .{ .Int = 999_999 } },
     };
     try testing.expectError(error.EndpointMissing, adapter.lookupPublicNodeIdByLabelAndAllProps(G, "C", &none, error.EndpointMissing));
+}
+
+test "SONNY-6354: an exact index saved in lean mode is not trusted after a restart with lean mode off" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    // `z` is never a MERGE key: in lean mode the exact index leaves it out.
+    for (0..N) |i| try h.runf("CREATE (:Z {{z: {d}, t: 'z{d}'}})", .{ i, i });
+    try h.expectCell("MATCH (n:Z {z: 4}) RETURN n.t AS t", "'z4'");
+
+    // Lean mode off: every key is indexed and every seek trusts the index.
+    try h.restartLean(false);
+    try h.expectCell("MATCH (n:Z {z: 5}) RETURN n.t AS t", "'z5'");
+    try h.expectCell("MATCH (n:Z) WHERE n.z = 6 RETURN count(n) AS c", "1");
 }

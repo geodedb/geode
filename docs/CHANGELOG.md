@@ -202,6 +202,37 @@
 
 ### Fixed
 
+- **BEHAVIOUR CHANGE: lean-mode late keys and runtime composite keys are
+  complete in their indexes; a bit-63 reserved id takes property SETs
+  again (SONNY-6354).** (1) Regression from SONNY-6268: a property SET,
+  no-save SET or label add on a node whose reserved id has bit 63 set
+  failed with `MergeHolderIdFlagged`. Such an id is never a MERGE index
+  entry (the bit flags an entry), so the write now goes on and writes no
+  entry, as every other path does; a removal for such an id no longer
+  drops the entry of the node whose id has the same low bits. (2) With
+  `GEODE_INDEX_MERGE_KEYS_ONLY=1` the exact node-property index held a key
+  registered at runtime (the first MERGE on it) only for nodes written
+  after, yet every seek trusted it as complete: `MATCH (n:L {k: v})`,
+  WHERE seeks and both bulk endpoint resolvers missed older nodes (the
+  resolvers reported a present endpoint as missing), and the index saved
+  at shutdown carried the hole across a restart. The first access to a
+  graph's exact index after such a registration now adds the older
+  holders of the new key (one scan of the graph per registration, under
+  the index's build mutex; a lean-off store never pays it), and an index is
+  saved only once complete. (3) `prop_exact.idx` is stamped with the
+  indexed-key set (format `GENPIDX5`): one saved under another key set, or
+  with lean mode on and read with it off (it lacked every non-MERGE key, so
+  seeks on them returned nothing), is rebuilt instead of trusted.
+  **Upgrade note:** every graph's `prop_exact.idx` from an older binary is
+  rebuilt once, in the background, on its first open. (4) A composite
+  MERGE key registered at runtime gets the entries of holders written
+  before it, from the label's postings (evicted nodes included), before a
+  probe trusts a miss; it covered resident nodes only. The two eager scans
+  of the node cache at registration, which walked every graph without its
+  lock, are gone. (5) The unwired second constraint implementation
+  (`src/schema/constraint_manager.zig`, `schema_manager.zig`) and the tests
+  of it only are removed. Regression:
+  `zig build test-sonny6354-lean-late-key-indexes`.
 - **Lean mode: MERGE no longer duplicates a holder that is not resident
   (SONNY-3056).** With `GEODE_INDEX_MERGE_KEYS_ONLY=1`, a MERGE key is
   indexed only once registered (the first MERGE on it), and the
@@ -214,11 +245,8 @@
   miss (`GraphStore.ensureLeanMergeBackfill`); the cost is one scan of the
   label per key, once (keys read from `merge_index_keys.dat` at start cost
   nothing). The legacy executor's point read through the same index
-  (`lookupOnlyMergeHolder`) is covered too. **Still open:** in lean mode the
-  exact node-property index stays incomplete for such a key (nodes written
-  before it was registered) until it is rebuilt from the durable pages, so
-  an inline-property seek on it can miss those nodes, and a registered composite MERGE key is
-  backfilled from resident nodes only. Regression:
+  (`lookupOnlyMergeHolder`) is covered too. The exact node-property index
+  and runtime composite keys followed in SONNY-6354. Regression:
   `zig build test-sonny3056-lean-merge-evicted-holder`.
 
 - **BEHAVIOUR CHANGE: NOT NULL, EXISTS and NODE KEY existence are enforced;

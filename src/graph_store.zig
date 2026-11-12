@@ -111,6 +111,10 @@ var g_lean_registration_gen: u64 = 0;
 /// Late keys registered (lock-free fast path for every lookup: zero after a
 /// restart, when every key comes from the sidecar).
 var g_lean_late_key_count = std.atomic.Value(u32).init(0);
+/// SONNY-6354: the generation of the latest lean key registered at runtime.
+/// The adapter's exact property index records the generation it is complete
+/// for (`leanLateGenMax`).
+var g_lean_late_gen_max = std.atomic.Value(u64).init(0);
 
 fn leanIndexEnabledLocked() bool {
     if (!g_lean_index_flag_loaded) {
@@ -163,24 +167,24 @@ fn registerMergeIndexKeyInner(key: []const u8, persist: bool) void {
         g_lean_index_key_gen[g_lean_index_key_count] = g_lean_registration_gen;
         // `persist` is true on the runtime path, false for a sidecar key.
         g_lean_index_key_late[g_lean_index_key_count] = persist;
-        if (persist) _ = g_lean_late_key_count.fetchAdd(1, .release);
         g_lean_index_key_count += 1;
+        if (persist) {
+            g_lean_late_gen_max.store(g_lean_registration_gen, .release);
+            _ = g_lean_late_key_count.fetchAdd(1, .release);
+        }
         break :blk true;
     };
 
     // GAP-0900 Layer-3 (Fix 3): a key that becomes indexable for the FIRST time
-    // in lean mode may already have loaded nodes carrying it (hydrated from disk
-    // before this registration). `addToMergePropertyIndex` skipped those at load
-    // because the key was not yet registered, so the merge index has no entry —
-    // and the first re-MERGE after a reopen would create a duplicate. Backfill
-    // the index for this single key now by scanning loaded nodes. Done OUTSIDE
-    // `g_lean_index_mutex` (a leaf lock) so the scan can take the per-shard node
-    // locks without inverting lock order. Only the primary global store is
-    // backfilled; ad-hoc unit stores never reopen, so they need no backfill.
+    // in lean mode may already have nodes carrying it, written or hydrated
+    // before this registration, with no entry in MERGE's index or the exact
+    // property index. SONNY-3056 / SONNY-6354: both are made complete for it
+    // lazily, under the graph lock of the reader that needs it
+    // (`GraphStore.ensureLeanMergeBackfill` per graph and label from the
+    // label's postings; the adapter's exact index per graph,
+    // `leanLateGenMax`). The scan of the resident node cache this replaced
+    // walked every graph without its lock and missed evicted nodes.
     if (newly_registered) {
-        if (getCurrentGlobalStore()) |store| {
-            store.backfillMergeIndexForKey(key);
-        }
         // LEAN-MERGE-KEY-SEEK (Part 1): persist the newly-registered merge key
         // so it survives a restart. On reopen the adapter loads this set BEFORE
         // it opens any graph (and thus before the exact-index rebuild runs), so
@@ -303,6 +307,49 @@ pub fn setLeanIndexingForTest(enabled: bool) void {
     g_lean_index_enabled = enabled;
     g_lean_index_key_count = 0;
     g_lean_late_key_count.store(0, .release);
+}
+
+/// SONNY-6354: the generation of the latest lean key registered at runtime,
+/// or 0 when none is (always 0 with lean mode off, when every key is
+/// indexed). An exact index made complete for every registered key at
+/// generation `g` is complete while this is `<= g`. Lock-free.
+pub fn leanLateGenMax() u64 {
+    if (g_lean_late_key_count.load(.acquire) == 0) return 0;
+    return g_lean_late_gen_max.load(.acquire);
+}
+
+/// SONNY-6354: whether `key` is a lean key registered at runtime after
+/// generation `since` (so an index complete at `since` lacks the holders
+/// written before it).
+pub fn leanKeyRegisteredAfter(key: []const u8, since: u64) bool {
+    const gen = leanLateKeyGen(key) orelse return false;
+    return gen > since;
+}
+
+// CANARY: REQ=REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES; FEATURE="MergeIdempotency"; ASPECT=ExactIndexConfigStamp; STATUS=TESTED; TEST=tests/test_sonny6354_lean_late_key_indexes.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6354: fingerprint of what the adapter's exact property index holds:
+/// the lean flag and, in lean mode, the registered key set (order-free). A
+/// saved index loads only under the same fingerprint, so one written before
+/// a key was registered (or with lean mode off and read with it on, or the
+/// reverse) is rebuilt instead of trusted as complete for that key.
+pub fn exactIndexConfigHash() u64 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_lean_index_mutex.lockUncancelable(io);
+    defer g_lean_index_mutex.unlock(io);
+    var h = std.hash.Wyhash.init(0x6578_6163_7469_6478); // "exactidx"
+    const lean = leanIndexEnabledLocked();
+    h.update(&[_]u8{@intFromBool(lean)});
+    if (lean) {
+        var acc: u64 = 0;
+        var i: usize = 0;
+        while (i < g_lean_index_key_count) : (i += 1) {
+            acc ^= std.hash.Wyhash.hash(1, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]]);
+        }
+        var b: [8]u8 = undefined;
+        std.mem.writeInt(u64, &b, acc, .little);
+        h.update(&b);
+    }
+    return h.final();
 }
 
 // CANARY: REQ=REQ-SONNY-3056-LEAN-MERGE-BACKFILL; FEATURE="MergeIdempotency"; ASPECT=LateKeyRegistry; STATUS=TESTED; TEST=tests/test_sonny3056_lean_merge_evicted_holder.zig; OWNER=storage; UPDATED=2026-11-12
@@ -528,6 +575,12 @@ const PropNameIter = struct {
 
 var g_composite_keys: [composite_index_max_keys]CompositeKeySpec = undefined;
 var g_composite_key_count: usize = 0;
+// SONNY-6354: per composite, the generation of its registration when it was
+// registered at runtime (0: read from the sidecar before any graph
+// hydrated, so hydration wrote its entries). Its holders written earlier
+// get their entries from `GraphStore.ensureLeanMergeBackfill`.
+var g_composite_key_late_gen: [composite_index_max_keys]u64 = [_]u64{0} ** composite_index_max_keys;
+var g_composite_late_count = std.atomic.Value(u32).init(0);
 
 /// Compare two prop-name sets for set-equality (order-insensitive). Used to test
 /// whether a filter set matches a registered composite key.
@@ -584,6 +637,12 @@ fn registerCompositeMergeKeyInner(prop_names: []const []const u8, persist: bool)
         // always built from this order, and lookups sort their filters the same
         // way, so caller filter order never matters.
         sortCompositeSpec(spec);
+        g_composite_key_late_gen[g_composite_key_count] = 0;
+        if (persist) {
+            g_lean_registration_gen += 1;
+            g_composite_key_late_gen[g_composite_key_count] = g_lean_registration_gen;
+            _ = g_composite_late_count.fetchAdd(1, .release);
+        }
         g_composite_key_count += 1;
         break :blk true;
     };
@@ -595,14 +654,12 @@ fn registerCompositeMergeKeyInner(prop_names: []const []const u8, persist: bool)
     for (prop_names) |n| registerMergeIndexKeyInner(n, persist);
 
     if (newly_registered) {
-        // Backfill the composite entry for already-loaded nodes (a reopen
-        // registers the composite AFTER nodes were hydrated; without this the
-        // edges-only run after a separate node-load run would find no composite
-        // entry and fall back to seed+verify). Mirrors the single-key
-        // backfillMergeIndexForKey.
-        if (getCurrentGlobalStore()) |store| {
-            store.backfillCompositeMergeEntries();
-        }
+        // SONNY-6354: nodes that carried the composite before it was
+        // registered get their entries before a probe trusts a miss
+        // (`GraphStore.ensureLeanMergeBackfill`, per graph and label, from
+        // the label's postings). The scan of the resident node cache this
+        // replaced missed evicted holders and took no graph lock.
+        //
         // Persist so a fresh process (the from-dump EDGE phase runs separately
         // from the NODE phase) re-registers it on reopen and the rebuild/backfill
         // repopulates the composite entries. Best-effort.
@@ -788,6 +845,19 @@ pub fn clearCompositeMergeKeysForTest() void {
     g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     g_composite_key_count = 0;
+    g_composite_late_count.store(0, .release);
+}
+
+/// SONNY-6354: the generation of composite `idx`'s registration when it was
+/// registered at runtime, else null.
+fn compositeLateGen(idx: usize) ?u64 {
+    if (g_composite_late_count.load(.acquire) == 0) return null;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_lean_index_mutex.lockUncancelable(io);
+    defer g_lean_index_mutex.unlock(io);
+    if (idx >= g_composite_key_count) return null;
+    const gen = g_composite_key_late_gen[idx];
+    return if (gen == 0) null else gen;
 }
 
 const node_id_sequence_mask: u64 = 0x0fff;
@@ -2123,7 +2193,13 @@ pub const MergePropertyIndex = struct {
     /// kept. (The removal was unconditional
     /// before round 7: deleting either of two equal nodes dropped the entry,
     /// and a later MERGE trusted the miss and created a third node.)
+    ///
+    /// SONNY-6354: an id with bit 63 set never holds an entry
+    /// (`putOrUpdate`), so it removes none. It would otherwise compare equal
+    /// to the entry "shared, lowest holder <the id without bit 63>" and
+    /// drop another node's entry.
     fn remove(self: *MergePropertyIndex, key: []const u8, node_id: u64) void {
+        if (node_id & merge_entry_shared != 0) return;
         const io = std.Io.Threaded.global_single_threaded.io();
         const shard = &self.shards[shardForKey(key)];
         shard.mutex.lockUncancelable(io);
@@ -6654,8 +6730,15 @@ pub const GraphStore = struct {
     /// one fails, so on error the index is as it was. `old` is the value the
     /// node held under `prop_key` (null for none): an entry the old value
     /// keys alike was the node's already and is left in place.
+    ///
+    /// SONNY-6354: an id with bit 63 set is never an entry (`putOrUpdate`
+    /// refuses it: the bit flags an entry), so it writes none and the write
+    /// it belongs to goes on, as on every other path that adds an entry
+    /// (creates, hydration, `ensureLeanMergeBackfill`). Only a failure to
+    /// store an entry (out of memory) fails the write.
     fn addToMergePropertyIndexAtomic(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue, node_id: u64, old: ?PropertyValue) !void {
         if (!shouldIndexProperty(prop_key)) return;
+        if (node_id & merge_entry_shared != 0) return;
         var buf: [1024]u8 = undefined;
         for (labels, 0..) |label, i| {
             const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
@@ -6663,25 +6746,6 @@ pub const GraphStore = struct {
                 self.removeFromMergePropertyIndex(graph_name, labels[0..i], prop_key, prop_value, node_id, old);
                 return err;
             };
-        }
-    }
-
-    /// GAP-0900 Layer-3 (Fix 3): backfill the merge property index for a single
-    /// key by scanning all currently-loaded nodes. Called when a NEW merge key
-    /// is registered in lean mode (`registerMergeIndexKey`) AFTER the graph was
-    /// hydrated from disk — at hydration time the key was not yet registered, so
-    /// `addToMergePropertyIndex` skipped it and the index had no entry for the
-    /// loaded nodes. Without this, the first re-MERGE of that key after a reopen
-    /// would create a duplicate. Real workloads register a tiny fixed set of
-    /// merge keys once at startup, so this scan runs a handful of times total —
-    /// never per node. Indexes only the named key (lean's RAM bound is intact:
-    /// the other ~19 never-queried SET props stay unindexed).
-    pub fn backfillMergeIndexForKey(self: *GraphStore, key: []const u8) void {
-        var node_iter = self.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const node = entry.value_ptr;
-            const value = node.properties.get(key) orelse continue;
-            self.addToMergePropertyIndex(node.graph_name, node.labels, key, value, node.id) catch {};
         }
     }
 
@@ -6700,9 +6764,8 @@ pub const GraphStore = struct {
     /// SONNY-3056: before a lookup of `key` under `label` in `graph_name`
     /// trusts MERGE's index, make the index complete for that triple when
     /// `key` is a lean key registered at runtime (`leanLateKeyGen`). Such a
-    /// key's holders written before it was registered were indexed only if
-    /// they were resident at registration (`backfillMergeIndexForKey`); an
-    /// evicted one had no entry, the lookup trusted the miss, and MERGE
+    /// key's holders written before it was registered have no entry (they
+    /// were not indexed then), so the lookup trusted the miss and MERGE
     /// created a duplicate. This reads every node the label's postings list
     /// (`snapshotNodesByLabel`), hydrating those that are not resident
     /// (`residentNodeSatisfies`), and adds its entry. Once per (graph,
@@ -6712,8 +6775,36 @@ pub const GraphStore = struct {
     /// sidecar costs nothing (the lock-free check in `leanLateKeyGen`).
     fn ensureLeanMergeBackfill(self: *GraphStore, graph_name: []const u8, label: []const u8, key: []const u8) !void {
         const gen = leanLateKeyGen(key) orelse return;
+        return self.ensureMergeBackfill(graph_name, label, .{ .key = key }, gen);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES; FEATURE="MergeIdempotency"; ASPECT=CompositeBackfillFromPostings; STATUS=TESTED; TEST=tests/test_sonny6354_lean_late_key_indexes.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6354: `ensureLeanMergeBackfill` for a composite key registered
+    /// at runtime (`compositeLateGen`), in any index mode: its holders
+    /// written before the registration get their composite entry, from the
+    /// label's postings, before a probe trusts a miss. (The registration
+    /// used to add entries for the resident nodes only.)
+    fn ensureCompositeMergeBackfill(self: *GraphStore, graph_name: []const u8, label: []const u8, composite_idx: usize) !void {
+        const gen = compositeLateGen(composite_idx) orelse return;
+        return self.ensureMergeBackfill(graph_name, label, .{ .composite = composite_idx }, gen);
+    }
+
+    const MergeBackfillTarget = union(enum) {
+        key: []const u8,
+        composite: usize,
+    };
+
+    /// The backfill both of the above run: once per (graph, label, target)
+    /// and registration generation `gen` (`lean_backfilled`, guarded by the
+    /// leaf `lean_backfill_mutex`, held only for its map).
+    fn ensureMergeBackfill(self: *GraphStore, graph_name: []const u8, label: []const u8, target: MergeBackfillTarget, gen: u64) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
-        const triple = try std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph_name, label, key });
+        // A composite's entry is keyed apart from any property name: a
+        // property name never starts with NUL.
+        const triple = switch (target) {
+            .key => |key| try std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph_name, label, key }),
+            .composite => |idx| try std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00\x00composite {d}", .{ graph_name, label, idx }),
+        };
         var triple_owned = true;
         defer if (triple_owned) self.allocator.free(triple);
         {
@@ -6722,10 +6813,21 @@ pub const GraphStore = struct {
             if (self.lean_backfilled.get(triple)) |done| if (done == gen) return;
         }
 
+        const spec: ?CompositeKeySpec = switch (target) {
+            .key => null,
+            .composite => |idx| blk: {
+                g_lean_index_mutex.lockUncancelable(io);
+                defer g_lean_index_mutex.unlock(io);
+                if (idx >= g_composite_key_count) return;
+                break :blk g_composite_keys[idx];
+            },
+        };
+
         const Probe = struct {
             graph_name: []const u8,
             label: []const u8,
-            key: []const u8,
+            target: MergeBackfillTarget,
+            spec: ?CompositeKeySpec,
             buf: [1024]u8 = undefined,
             len: usize = 0,
 
@@ -6733,15 +6835,28 @@ pub const GraphStore = struct {
                 c.len = 0;
                 if (!std.mem.eql(u8, node.graph_name, c.graph_name)) return false;
                 if (!nodeCarriesLabel(node, c.label)) return false;
-                const value = node.properties.get(c.key) orelse return false;
-                const probe = buildMergeIndexKey(&c.buf, c.graph_name, c.label, c.key, value) orelse return false;
+                const probe = switch (c.target) {
+                    .key => |key| blk: {
+                        const value = node.properties.get(key) orelse return false;
+                        break :blk buildMergeIndexKey(&c.buf, c.graph_name, c.label, key, value) orelse return false;
+                    },
+                    .composite => blk: {
+                        const cs = &c.spec.?;
+                        var values: [composite_index_max_props]PropertyValue = undefined;
+                        var i: usize = 0;
+                        while (i < cs.prop_count) : (i += 1) {
+                            values[i] = node.properties.get(cs.prop_bufs[i][0..cs.prop_lens[i]]) orelse return false;
+                        }
+                        break :blk buildCompositeMergeIndexKey(&c.buf, c.graph_name, c.label, cs, values[0..cs.prop_count]) orelse return false;
+                    },
+                };
                 c.len = probe.len;
                 return true;
             }
         };
         if (try self.snapshotNodesByLabel(self.allocator, graph_name, label)) |ids| {
             defer self.allocator.free(ids);
-            var probe: Probe = .{ .graph_name = graph_name, .label = label, .key = key };
+            var probe: Probe = .{ .graph_name = graph_name, .label = label, .target = target, .spec = spec };
             for (ids) |id| {
                 if (!try self.residentNodeSatisfies(id, &probe, Probe.build)) continue;
                 // An id with bit 63 set is never an entry (`putOrUpdate`), as
@@ -6758,20 +6873,6 @@ pub const GraphStore = struct {
         const gop = try self.lean_backfilled.getOrPut(self.allocator, triple);
         if (!gop.found_existing) triple_owned = false;
         gop.value_ptr.* = gen;
-    }
-
-    /// Caveat "B": backfill the COMPOSITE merge entry for every RESIDENT node.
-    /// Called when a composite key is registered AFTER nodes were already
-    /// loaded into the cache (the in-process register-then-merge order, and as a
-    /// best-effort top-up). The authoritative full-graph rebuild on reopen runs
-    /// in `loadOneGraphFromAdapter` (covers ALL nodes, resident or not); this
-    /// covers the resident set when registration happens mid-process. No-op when
-    /// no composite key is registered.
-    pub fn backfillCompositeMergeEntries(self: *GraphStore) void {
-        var node_iter = self.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            self.addNodeCompositeMergeEntries(entry.value_ptr);
-        }
     }
 
     /// `node_id` no longer holds `prop_value` under each of its labels (see
@@ -7164,6 +7265,9 @@ pub const GraphStore = struct {
         } orelse return .not_indexable;
 
         if (filters.len != spec.prop_count) return .not_indexable;
+        // SONNY-6354: a composite registered at runtime is complete for this
+        // label only after its backfill; a failed one cannot answer.
+        self.ensureCompositeMergeBackfill(graph_name, label, composite_idx) catch return .not_indexable;
 
         // Gather values in the spec's (sorted) prop order by matching names.
         var values: [composite_index_max_props]PropertyValue = undefined;
@@ -14774,8 +14878,8 @@ pub const GraphStore = struct {
                     // off (default) indexes every key; on
                     // (GEODE_INDEX_MERGE_KEYS_ONLY=1) indexes only keys registered
                     // SO FAR. Keys registered AFTER load (e.g. the first MERGE of a
-                    // fresh server process) are backfilled at registration time by
-                    // `registerMergeIndexKey` -> `backfillMergeIndexForKey`.
+                    // fresh server process) are backfilled per graph and label
+                    // before a lookup trusts a miss (`ensureLeanMergeBackfill`).
                     // GAP-ENT-0023 P3: the whole merge product (single-key AND
                     // composite entries) came from the merge snapshot — skip the
                     // per-node rebuild (putOrUpdate would be an idempotent

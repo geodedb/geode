@@ -305,6 +305,11 @@ This document describes the modularized architecture resulting from the systemat
   - TypeMetadata, FieldMetadata, EncryptionAlgorithm
   - **Boundary**: Type annotations and metadata
 
+> **Removed (SONNY-6354, 2026-11):** `constraint_manager.zig` and
+> `schema_manager.zig` were never wired into a write path and were deleted.
+> Constraints live in the catalog (`schema/catalog.zig`) and are enforced by
+> `execution/unique_constraints.zig`. The two entries below are historical.
+
 - **`constraint_manager.zig`** (12,371 bytes - already exists)
   - Constraint management and validation
   - ConstraintManager, Constraint types

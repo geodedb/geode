@@ -136,7 +136,6 @@ pub const printer = @import("gql/print.zig");
 // thread stack size.
 pub const stack_guard = @import("stack_guard.zig");
 // GAP-0875: exported for the residual-stubs regression suite (test-gap0875)
-pub const constraint_manager = @import("schema/constraint_manager.zig");
 pub const memory_mapped_io = @import("performance/memory_mapped_io.zig");
 // Re-export conformance profile helpers for CLI/tools
 pub const conformance = @import("conformance.zig");

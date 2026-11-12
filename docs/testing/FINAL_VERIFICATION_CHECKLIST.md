@@ -78,8 +78,8 @@ This checklist provides step-by-step verification procedures for the Geode modul
 
 - [ ] Run module-specific tests
   ```bash
-  # Schema module tests
-  zig test src/schema/schema_manager.zig
+  # Schema module tests (schema_manager.zig was removed, SONNY-6354)
+  zig build test-sonny1319-graph-scoped-catalog
 
   # Transaction module tests
   zig test src/transactions/transaction_manager.zig

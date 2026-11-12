@@ -7231,8 +7231,7 @@ pub fn build(b: *std.Build) void {
 
     // GAP-0875: residual local stubs batch. Two test modules under one step:
     //  - tests/test_gap0875_stubs.zig (via the `geode` module; lib.zig exports
-    //    constraint_manager + memory_mapped_io for it): unique-constraint
-    //    index consultation, printer IN/NOT IN subquery round-trip +
+    //    memory_mapped_io for it): printer IN/NOT IN subquery round-trip +
     //    temporal-walker descent, measured mmap write benchmark.
     //  - tests/test_gap0875_stubs_mcp.zig (rooted module at src/mcp/tools.zig
     //    exposed as `mcp_tools`, mirroring the gap0516 import set): MCP
@@ -7261,7 +7260,7 @@ pub fn build(b: *std.Build) void {
     const run_gap0875_mcp_tests = b.addRunArtifact(gap0875_mcp_tests);
     shardDep(test_step, &run_gap0875_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0875_mcp_tests.step, 1, test_shard_loads, test_shard_index);
-    const gap0875_step = b.step("test-gap0875", "GAP-0875: residual stubs batch (unique-index check, printer subqueries, MCP cancellation, measured write bench)");
+    const gap0875_step = b.step("test-gap0875", "GAP-0875: residual stubs batch (printer subqueries, MCP cancellation, measured write bench)");
     gap0875_step.dependOn(&run_gap0875_tests.step);
     gap0875_step.dependOn(&run_gap0875_mcp_tests.step);
 
