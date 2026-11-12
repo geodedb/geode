@@ -157,6 +157,35 @@
   type mismatch) now fails the query, as the same expression does outside an
   aggregate; the row was skipped. Regression (four sessions, leak-checked):
   `zig build test-sonny2696-aggregate-expressions`.
+- **A CREATE path with more than one hop creates the node between two hops
+  once (SONNY-6295):** `CREATE (:P {k: 1})-[:R]->(:Q {k: 1})-[:S]->(:T {k: 1})`
+  created two `:Q` nodes, one with the `:R` relationship and one with the
+  `:S` relationship, so the path was not connected (`MATCH (b:Q)` found two
+  nodes and `MATCH (:P)-[:R]->(:Q)-[:S]->(:T)` none). Every node between two
+  hops of a path was created once per hop when it had no variable; a named
+  one (`(q:Q)`) was created once. This held for CREATE, INSERT, MATCH ...
+  CREATE, CREATE with a SET, WITH or ORDER BY after it, FOR ... CREATE and
+  PROFILE CREATE, on every session, and the cluster leader's replicated
+  create made the same two nodes on every replica. The QUIC fast paths take
+  no path with more than one hop, and a MERGE of one is refused (0A000), so
+  neither was affected. Each hop now starts at the node the previous hop
+  ended at. MATCH ... CREATE and a CREATE followed by SET, WITH or ORDER BY
+  also stored a backward relationship (`(a)<-[:R]-(b)`) as `(a)-[:R]->(b)`;
+  it is now stored `(b)-[:R]->(a)`, as a plain CREATE already did. The
+  defect dates from the first CREATE executor (before v0.1.0) and is in
+  every released version. **Data written by the affected shapes is not
+  repaired:** each such statement left one extra node per inner node of the
+  path, with the same labels and properties, and backward relationships
+  stored forward. To find them, for each multi-hop shape your application
+  creates without naming the inner nodes, count the inner nodes that have
+  the next hop but not the previous one, for example
+  `MATCH (q:Q)-[:S]->() WHERE NOT EXISTS { ()-[:R]->(q) } RETURN count(q)`
+  for `(:P)-[:R]->(:Q)-[:S]->(:T)`; each is the second copy of a node whose
+  first copy has `:R` but no `:S`. Repair them by hand (recreate the second
+  hop's relationship from the first copy and delete the second copy) or
+  rewrite the data. Regression (in-memory, persisted warm and reloaded,
+  tenant-scoped and RLS sessions, leak-checked):
+  `zig build test-sonny6295-create-path-middle-node`.
 
 ---
 

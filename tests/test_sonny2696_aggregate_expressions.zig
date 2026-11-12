@@ -139,14 +139,11 @@ const Session = struct {
     }
 
     /// One `(:P {k})-[:R]->(:Q {k})-[:S]->(:T {k})` chain, the nodes
-    /// labelled `extra` too. Created node by node and joined by MATCH ...
-    /// CREATE: a two-hop CREATE with anonymous nodes creates its middle node
-    /// twice (reported separately).
+    /// labelled `extra` too, in one chained CREATE (its anonymous middle
+    /// node is created once, SONNY-6295).
     fn chain(self: *Session, tenant: ?[]const u8, k: usize, extra: []const u8) !void {
         const aa = self.arena.allocator();
-        for ([_][]const u8{ "P", "Q", "T" }) |label| try self.execAs(tenant, try std.fmt.allocPrint(aa, "CREATE (:{s}{s} {{k: {d}}})", .{ label, extra, k }));
-        try self.execAs(tenant, try std.fmt.allocPrint(aa, "MATCH (a:P {{k: {d}}}), (b:Q {{k: {d}}}) CREATE (a)-[:R]->(b)", .{ k, k }));
-        try self.execAs(tenant, try std.fmt.allocPrint(aa, "MATCH (b:Q {{k: {d}}}), (c:T {{k: {d}}}) CREATE (b)-[:S]->(c)", .{ k, k }));
+        try self.execAs(tenant, try std.fmt.allocPrint(aa, "CREATE (:P{s} {{k: {d}}})-[:R]->(:Q{s} {{k: {d}}})-[:S]->(:T{s} {{k: {d}}})", .{ extra, k, extra, k, extra, k }));
     }
 
     fn seed(self: *Session) !void {
