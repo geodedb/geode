@@ -5094,6 +5094,7 @@ REQ-SONNY-6378-SERVER-EXIT-HYGIENE,Server Hygiene,ExitLeaksArgonBoundsLoggerDock
 REQ-SONNY-6386-DEAD-MOCK-STALE-DOCS,Test Hygiene,NoMockBackupTestNoStaleArchitectureDocs,TESTED,tests/test_sonny6386_dead_mock_and_stale_docs.zig,tests/test_sonny6386_dead_mock_and_stale_docs.zig,,storage,2026-11-12
 REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED,FieldLevelEncryption,RotateKeyRefusedAsUnsupported,TESTED,src/admin/fle_commands.zig,tests/test_sonny6386_fle_rotate_key_unsupported.zig,,security,2026-11-12
 REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED,FieldLevelEncryption,RotateKeyRefusedAsUnsupported,TESTED,tests/test_sonny6386_fle_rotate_key_unsupported.zig,,,security,2026-11-12
+REQ-SONNY-6386-KEYROT-TRUTH,KeyRotation,NoUncompiledPersistenceOrSimulatedKmsClaims,TESTED,tests/test_sonny6386_key_rotation_truth.zig,tests/test_sonny6386_key_rotation_truth.zig,,security,2026-11-12
 REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,src/cli/backup_cli.zig,tests/test_sonny6386_remote_backup_atomic_output.zig,,cli,2026-11-12
 REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,tests/test_sonny6386_remote_backup_atomic_output.zig,,,cli,2026-11-12
 REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED,TDE baseline,MalformedKeyRefusesStartup,TESTED,tests/test_sonny6386_tde_key_fail_closed.zig,tests/test_sonny6386_tde_key_fail_closed.zig,,security,2026-11-12

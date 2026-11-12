@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:53:46.457210107Z",
+  "generated_at": "2026-11-12T18:56:14.907509755Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79347,6 +79347,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6386-KEYROT-TRUTH",
+      "features": [
+        {
+          "feature": "KeyRotation",
+          "aspect": "NoUncompiledPersistenceOrSimulatedKmsClaims",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_key_rotation_truth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_key_rotation_truth.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC",
       "features": [
         {
@@ -87055,7 +87074,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4476
+      "TESTED": 4477
     },
     "by_aspect": {
       "2PC": 3,
@@ -89209,6 +89228,7 @@
       "NoSaveOperations": 2,
       "NoSilentResubmission": 1,
       "NoTmpCertFallback": 1,
+      "NoUncompiledPersistenceOrSimulatedKmsClaims": 1,
       "NodeCache": 1,
       "NodeCapture": 1,
       "NodeCompare": 1,

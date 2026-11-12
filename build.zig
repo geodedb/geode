@@ -9681,6 +9681,19 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-external-kms-provider", "Run the external KMS client envelope wrap/unwrap and tamper-detection tests (SONNY-6320: registered)").dependOn(&run_tests.step);
+
+        // SONNY-6386 item 5: no uncompiled KeyRegistry persistence or
+        // simulated-KMS rotation, no marker or doc claiming them, and the
+        // external_kms_client guards those markers named, tested for real.
+        const kr_opts = b.addOptions();
+        kr_opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const kr_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_key_rotation_truth.zig"), .target = target, .optimize = optimize });
+        kr_mod.addImport("external_kms_client", ext_kms_mod);
+        kr_mod.addImport("sonny6386_kr_options", kr_opts.createModule());
+        const kr_tests = b.addTest(.{ .root_module = kr_mod });
+        const run_kr_tests = b.addRunArtifact(kr_tests);
+        shardDep(test_step, &run_kr_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6386-key-rotation-truth", "Run SONNY-6386 item 5 regression (KeyRegistry has no uncompiled saveState/loadState or simulated-KMS rotateWithKms and their unbuilt tests are gone; no marker or doc claims them; KMS backend/TLS production guards and envelope JSON hex parsing are tested)").dependOn(&run_kr_tests.step);
     }
 
     // SONNY-6328: a deliberate data race built exactly like the TSan
