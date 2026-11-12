@@ -616,6 +616,8 @@ test "AuthProvider: API key authentication" {
     const result = try provider.authenticate(.{
         .bearer_token = key_string,
     });
+    // SONNY-6342: the api-key result owns its username and scopes.
+    defer result.deinit(allocator);
 
     try std.testing.expectEqual(@as(u64, 100), result.user_id);
     try std.testing.expectEqual(AuthMethod.api_key, result.method);

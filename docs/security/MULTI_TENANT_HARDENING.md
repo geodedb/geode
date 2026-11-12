@@ -294,8 +294,13 @@ tests — the gate short-circuits to allow, identical to every other admin op.)
 
 **Durability.** The registry persists to `{data_dir}/tenants/registry.jsonl`
 (atomic temp-file + rename per mutation) and is hydrated at startup, so the
-tenant set, parents, and quota overrides survive restart. A null `data_dir`
-(in-memory server / CLI) runs non-durable and logs that it is non-durable.
+tenant set, parents, and quota overrides survive restart. A server always
+has a resolved data directory (SONNY-6339), and it refuses to start when
+`{data_dir}/tenants` cannot be created or `registry.jsonl` cannot be read
+(SONNY-6346: it ran with an in-memory registry and a warning, so the
+tenants were lost at the next restart). Only a caller without a data
+directory (CLI, tests) gets the non-durable registry, which logs that it is
+non-durable.
 
 ### Safe drop semantics (GAP-0847)
 

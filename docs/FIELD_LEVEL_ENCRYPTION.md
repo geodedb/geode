@@ -9,7 +9,8 @@ Geode implements **native, application-level field-level encryption** that provi
 
 - **Transparent encryption/decryption** for authorized users
 - **RBAC/ABAC-gated access** to plaintext values
-- **Equality search** on encrypted fields via blind indexes
+- **Equality search** on encrypted fields via blind indexes: designed, **not
+  available** (see "Searchable fields today" below)
 - **Online key rotation** with zero downtime
 - **Hierarchical key management** (TRK → SK → FEK/BIK)
 - **AEAD encryption** using Zig `std.crypto` (AES-256-GCM, ChaCha20-Poly1305)
@@ -80,9 +81,26 @@ BI = HMAC-SHA256(BIK, normalize(plaintext))
 
 **Storage:** Index maps `BI → [record_ids]`
 
-**Query Rewrite:** `WHERE p.email = "alice@example.com"` becomes BI token lookup
+**Query Rewrite (not implemented):** `WHERE p.email = "alice@example.com"`
+was meant to become a BI token lookup.
 
 **Leakage:** Reveals equality patterns (same plaintext → same BI) and frequency. Document this risk.
+
+#### Searchable fields today (SONNY-6342)
+
+- A field cannot be made searchable through the supported surface:
+  `CALL geode.fle.configureField` reads only `algorithm` and `visibility`
+  from its config map, so every field it configures reports
+  `searchable = false` in `getFieldConfig` / `listEncryptedFields`
+  (SONNY-6335 item 5). The `@searchable` annotation belongs to the FLE DDL,
+  which is not available.
+- Query planning does not use blind indexes: no `WHERE` predicate on an
+  encrypted field is rewritten to a blind-index lookup. The predicate rewrite
+  that was meant to do it (`planner/rewrite.zig` `performFLERewrite`, with
+  `fle_integration.computeBlindIndex`) had no caller and did not compile; it
+  was removed. `fle_integration.lookupEncryptedField` /
+  `matchesEncryptedField` exist but no query path calls them.
+- So equality search through blind indexes is not available.
 
 ---
 
@@ -555,7 +573,8 @@ Run: `python3 extended_test_runner.py`
 1. **Correctness:** AEAD auth fails closed; AAD binds context
 2. **Transparency:** Authorized users see plaintext; unauthorized see redaction
 3. **Rotation:** Rewrap/re-encrypt online with progress telemetry
-4. **Search:** Equality predicates on @searchable fields work
+4. **Search:** Equality predicates on @searchable fields work (not met: see
+   "Searchable fields today")
 5. **Performance:** <250 µs encrypt+BI; <10 µs key cache hit
 
 ---

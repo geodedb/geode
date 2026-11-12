@@ -3513,69 +3513,35 @@ pub const AuditLogger = struct {
             try writer.writeAll("\"details\":");
             if (ev.details) |map| {
                 try writer.writeAll("{");
-                // Canonical JSON requires sorted keys.
-                // We must collect keys, sort them, then print.
-                // Since this uses an allocator for the map, we need an allocator for the keys?
-                // `writer` is generic. We don't have direct access to an allocator here unless we pass it.
-                // The `writeCanonicalJson` signature in existing code doesn't take allocator.
-                // BUT `AuditEvent` usually lives in a context where we might not want to alloc.
-                // However, sorting keys requires storage.
-                // Assuming small number of details. stack buffer?
-                // The map is `std.StringHashMap([]const u8)`.
-
-                // NOTE: To be safe and strict without allocator, I might need to change signature or use a fixed buffer if possible.
-                // Or... `crypto_enhanced.zig` has `allocator`.
-                // Let's assume for now we print them in whatever order the iterator gives?
-                // NO, canonical means deterministic order. HashMap iteration is random/undefined order.
-                // I MUST SORT.
-                // I will assume I can't easily alloc here.
-                // Wait, `rls.zig` has `allocator` in structs but this is a static method on `AuditEvent` struct?
-                // Actually it is in `AuditEvent` which is inside `AuditLogger`? No, `struct` inside `AuditLogger`.
-                // The method `writeCanonicalJson` takes `writer`.
-                // I will try to sort if I can.
-                // Current implementation: `try writer.writeAll(",\"details\":null");` was hardcoded null!
-                // I need to implement it.
-
-                // If I can't alloc, I can't sort dynamic keys comfortably.
-                // BUT `details` is `?std.StringHashMap`.
-                // I'll take a risk and assume for this specific task, I can skip sorting IF the map is small or use a small buffer.
-                // OR better, I update the signature to take an allocator?
-                // The prompt for `writeCanonicalJson` signature: `pub fn writeCanonicalJson(w: anytype, ev: *const AuditEvent) !void;`
-                // It does NOT have allocator.
-                // Changing signature might break callers.
-                // EXCEPT I am rewriting the callers too (AuditLogger).
-                // I'll add `allocator` to the signature. It makes life easier.
-
-                // Wait, I can't change `writeCanonicalJson` signature in the replacement content easily if I don't see the callers yet.
-                // But I am supposed to implement it.
-                // Let's rely on a fixed size stack buffer for pointers to keys?
-                var keys_buffer: [32][]const u8 = undefined;
-                var count: usize = 0;
-                var it = map.iterator();
-                while (it.next()) |entry| {
-                    if (count < 32) {
-                        keys_buffer[count] = entry.key_ptr.*;
-                        count += 1;
+                // CANARY: REQ=REQ-SONNY-6346-NO-SILENT-DEGRADE; FEATURE="AuditDurability"; ASPECT=EveryDetailKey; STATUS=TESTED; TEST=tests/test_sonny6346_silent_degrade_audit_housekeeping.zig; OWNER=security; UPDATED=2026-11-12
+                // Canonical JSON: the keys in sorted order. SONNY-6346: they
+                // were collected into a 32-entry stack buffer and any further
+                // key was dropped from the record (and its hash). No allocator
+                // is at hand here, so the keys are emitted by selection: each
+                // round writes the smallest key above the last one written.
+                // A map's keys are distinct, so every key is written exactly
+                // once; O(n^2) in the number of detail keys, which is small.
+                var last: ?[]const u8 = null;
+                var written: usize = 0;
+                while (true) {
+                    var next: ?[]const u8 = null;
+                    var it = map.keyIterator();
+                    while (it.next()) |kp| {
+                        const k = kp.*;
+                        if (last) |l| if (!std.mem.lessThan(u8, l, k)) continue;
+                        if (next == null or std.mem.lessThan(u8, k, next.?)) next = k;
                     }
-                }
-                const keys = keys_buffer[0..count];
-                const SortComparator = struct {
-                    pub fn less(_: void, lhs: []const u8, rhs: []const u8) bool {
-                        return std.mem.lessThan(u8, lhs, rhs);
-                    }
-                };
-                std.mem.sort([]const u8, keys, {}, SortComparator.less);
-
-                for (keys, 0..) |key, i| {
-                    if (i > 0) try writer.writeAll(",");
+                    const key = next orelse break;
+                    if (written > 0) try writer.writeAll(",");
                     try writeJsonString(writer, key);
                     try writer.writeAll(":");
-                    // Value is []const u8
                     if (map.get(key)) |val| {
                         try writeJsonString(writer, val);
                     } else {
                         try writer.writeAll("null");
                     }
+                    written += 1;
+                    last = key;
                 }
                 try writer.writeAll("}");
             } else {

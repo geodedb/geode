@@ -101,22 +101,26 @@ pub const TenantRegistry = struct {
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-6346-NO-SILENT-DEGRADE; FEATURE="TenantRegistry"; ASPECT=DurableOrError; STATUS=TESTED; TEST=tests/test_sonny6346_silent_degrade_audit_housekeeping.zig; OWNER=security; UPDATED=2026-11-12
     /// Initialize a durable registry rooted at `{data_dir}/tenants`. Creates the
     /// directory if missing and hydrates any previously persisted tenants. A
     /// null `data_dir` yields the in-memory (non-durable) variant.
+    /// SONNY-6346: a directory that cannot be created, or a registry file that
+    /// cannot be read, is an error. It fell back to an in-memory registry with
+    /// a warning (an unreadable file hydrated nothing), so the tenants created
+    /// afterwards, or all of them, were gone at the next restart.
     pub fn initWithDataDir(allocator: std.mem.Allocator, data_dir: ?[]const u8) !TenantRegistry {
         var self = TenantRegistry.init(allocator);
+        errdefer self.deinit();
         if (data_dir) |dd| {
             const dir_path = try std.fmt.allocPrint(allocator, "{s}/tenants", .{dd});
-            errdefer allocator.free(dir_path);
             std.Io.Dir.cwd().createDirPath(registryIo(), dir_path) catch |err| {
-                log.warn("tenant_registry.makepath_failed", &.{
+                log.err("tenant_registry.makepath_failed", &.{
                     Attr.string("dir", dir_path),
                     Attr.string("error", @errorName(err)),
                 });
-                // Fall back to in-memory rather than failing server startup.
                 allocator.free(dir_path);
-                return self;
+                return error.TenantRegistryUnavailable;
             };
             self.dir_path = dir_path;
             try self.hydrate();
@@ -412,8 +416,10 @@ pub const TenantRegistry = struct {
         ) catch |err| switch (err) {
             error.FileNotFound => return,
             else => {
-                log.warn("tenant_registry.hydrate_read_failed", &.{Attr.string("error", @errorName(err))});
-                return;
+                // SONNY-6346: an unreadable registry is an error, not an
+                // empty one.
+                log.err("tenant_registry.hydrate_read_failed", &.{Attr.string("error", @errorName(err))});
+                return error.TenantRegistryUnavailable;
             },
         };
         defer self.allocator.free(data);

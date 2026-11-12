@@ -127,9 +127,14 @@ What a verifier can and cannot attest across an epoch boundary:
 
 ### File Rotation
 
-- Time/size rotation continues `seq_no`
-- First record of new file uses `prev_hash` from the prior file's tail
-- PII redaction and `log_denies_only` preserved across rotation
+The server does not rotate its audit log: nothing acts on
+`rotation_size_mb`. The rotation code was reachable only from the
+`audit.configure_rotation` and `audit.test_rotation_continuity` procedures,
+which rotated a logger of their own in the working directory, not the
+server's log; SONNY-6340 refused those procedures and removed the code. A
+rotated file (`audit.jsonl.<ms>`) from an earlier release continues the chain
+of the file before it (see below), and `CALL audit.cleanup_log_files()`
+deletes such files older than the logger's `retention_days`.
 
 ## Verification CLI
 
@@ -181,6 +186,45 @@ only the records since the logger opened). The server-side
 A rotated file (`audit.jsonl.<ms>`) continues the chain of the file before
 it, so it does not verify on its own (its first `prev_hash` follows the
 previous file's last record, and its `seq_no` does not start at 1); verify the files concatenated in order.
+
+### Audit Procedures (`CALL audit.*`)
+
+What the server-side procedures do (SONNY-6340):
+
+- `audit.get_merkle_digests()`: a Merkle root over the lines of the server's
+  audit log (the process-global log, `GEODE_AUDIT_LOG_PATH` or
+  `<data dir>/audit.jsonl`): SHA-256 of each non-empty line as the leaves,
+  pairs hashed level by level, an odd node paired with itself. It is not an
+  attestation (the log's signatures are checked only by `geode audit
+  verify`). Refused (`0A000`) when the server writes no audit log
+  (`GEODE_AUDIT_ENABLED` unset).
+- `audit.cleanup_log_files()`: deletes the server audit log's rotated files
+  older than its retention. Refused when the server writes no audit log.
+- `audit.test_signature_verification()`: an Ed25519 sign/verify self-test
+  with a fresh key pair; it does not read the log.
+- `audit.test_file_output()`, `audit.test_auth_categories()`,
+  `audit.cleanup_test_artifacts()`: write and remove private files in
+  `<data dir>/audit-diagnostics/` only, never the server's log.
+
+Every other `audit.*` procedure fails with `0A000` (unsupported). They
+reported results they did not produce: `compliant`/`passed`/`valid` with no
+check, export, report and forensic-package files under `/tmp` that were never
+written, `logged=true` without logging, hard-coded "anomalies", "threat
+indicators", SIEM alerts and privilege escalations, constant disk and memory
+figures, synthetic events written into the server's real audit log, or a
+"configuration" of a logger of their own that the server never used:
+`configure`, `log_auth_event`, `log_lifecycle_event`, `get_recent_events`,
+`verify_hash_chain`, `comprehensive_integrity_check`,
+`test_command_categories`, `test_data_access_categories`,
+`configure_rotation`, `configure_retention`, `simulate_windows_eventlog`,
+`simulate_syslog_output`, `test_combined_output`, `test_siem_correlation`,
+`test_siem_alerts`, `generate_compliance_report`,
+`test_powershell_compatibility`, `test_rotation_continuity`,
+`detect_anomalies`, `extract_threat_indicators`,
+`detect_privilege_escalation`, `performance_test`, `memory_usage_test`,
+`concurrent_access_test`, `test_disk_space_handling`,
+`test_corruption_handling`, `test_invalid_config`, `export_for_verification`,
+`prepare_forensic_package`, `compliance_verification`.
 
 ## Quick Start
 

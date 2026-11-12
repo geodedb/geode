@@ -4,6 +4,76 @@
 
 ### Security
 
+- **BREAKING: no silent degrade in the tenant registry and the audit log
+  writer (SONNY-6346).** A server whose `<data dir>/tenants` could not be
+  created (or whose `registry.jsonl` could not be read) ran with an
+  in-memory tenant registry and a warning, and every tenant was gone at the
+  next restart; it now refuses to start and names the registry. An audit
+  record with more than 32 detail keys was written without the extra keys
+  (a fixed 32-entry buffer in rls_core); every key is written, in the same
+  sorted order. `cleanupOldLogs` (`CALL audit.cleanup_log_files()`)
+  scanned the working directory for `audit.jsonl.<ts>`, so the log's own
+  rotated files were never removed and files in the working directory could
+  be deleted; it deletes `<log file name>.<ms>` beside the log, older than
+  its retention. Regression:
+  `zig build test-sonny6346-silent-degrade-audit-housekeeping`.
+- **BREAKING: the `tde.*` key-management stubs are refused (SONNY-6342).**
+  36 `tde.*` procedures answered with constants: `tde.rotate_keys` reported
+  success and a new master key id `mk-00000002` with nothing rotated,
+  `initialize_key_hierarchy` answered `mk-00000001`,
+  `get_encryption_status` answered `enabled=true` with TDE off,
+  `configure_kms` / `configure_external_kms` reported a configured,
+  connection-verified KMS nothing contacted, `zeroize_keys`,
+  `cleanup_key_hierarchy` and `test_key_zeroization` reported zeroized keys
+  that were never the server's, `audit_plaintext_keys` reported constant
+  counts, and the rotation-schedule, access-control, KMS-failure and
+  corrupted-key procedures returned hard-coded verdicts
+  (`configure_mock_kms` also wrote `mock_kms_config.json` into the working
+  directory). They fail with SQLSTATE `0A000` now (real key management is
+  SONNY-6303). The procedures that run real cryptography on the server's
+  TDE key still answer (`encrypt_page`, `test_encryption`,
+  `test_decryption`, `test_key_escrow`, `test_transparent_encryption`,
+  `encrypt_page_test`, `encrypt_backup_test`, `roundtrip_test`,
+  `measure_overhead`, `simulate_oltp_workload`, `test_kms_wrap_unwrap`,
+  `test_kms_attestation`); `test_transparent_encryption` measures its
+  performance impact against a real unencrypted copy (it used an invented
+  1000 µs). The dead `fle_integration.computeBlindIndex` (it did not
+  compile) and its only caller, the unreferenced FLE predicate rewrite in
+  `planner/rewrite.zig`, are removed; docs/FIELD_LEVEL_ENCRYPTION.md now
+  says that searchable fields cannot be configured through
+  `CALL geode.fle.configureField` and that equality search on encrypted
+  fields is not available. The AuthProvider API-key unit test freed its
+  result (3 leaked allocations) and runs as
+  `zig build test-sonny6342-authn-inline`. Regression:
+  `zig build test-sonny6342-tde-stub-procedures`.
+- **BREAKING: audit and TDE procedures that reported work they did not do
+  are refused (SONNY-6340).** 30 `audit.*` procedures answered with made-up
+  rows: `audit.compliance_verification` said `compliant` with no check,
+  `export_for_verification`, `prepare_forensic_package` and
+  `generate_compliance_report` named `/tmp` files never written,
+  `log_lifecycle_event` said `logged=true` without logging, the anomaly,
+  threat-indicator, SIEM and privilege-escalation procedures counted
+  hard-coded patterns, `performance_test` and `memory_usage_test` wrote
+  synthetic events into the server's real audit log and reported constant
+  memory figures, and `configure`, `configure_rotation` and
+  `configure_retention` set up a logger of their own in the working
+  directory (on the query's allocator, kept after the query ended). The
+  `tde.*` backup family (`create_encrypted_backup`, `restore_with_keys`,
+  `backup_encrypted`, `encrypt_backup`, `verify_backup_encryption`,
+  `generate_key_manifest`, `restore_with_historical_keys`) reported backups,
+  manifests and 1000 restored records that were never written or read. All
+  of them now fail with SQLSTATE `0A000` (unsupported); the list is in
+  docs/AUDIT_LOGGING.md. `audit.get_merkle_digests` hashes the server's
+  audit log (it hashed the fixed `/etc/geode/geode_audit.jsonl`, and only
+  its first MiB) and `audit.cleanup_log_files` cleans the server's log, both
+  refused when the server writes no audit log; `tde.test_encryption` and
+  `tde.test_decryption` report `success=false` when TDE is off or no key is
+  loaded (they reported `true`); `audit.cleanup_test_artifacts` no longer
+  reports `logs_archived=true`. The diagnostic audit logger is made with the
+  process allocator. The server never rotated its audit log (nothing acts
+  on `rotation_size_mb`); the rotation code, reachable only from the
+  refused procedures, was removed. Regression:
+  `zig build test-sonny6340-no-fabricated-procedures`.
 - **BREAKING: the audit `event_hash` covers the whole record; old logs
   verify as format 1 (SONNY-3147).** A record's `event_hash` covered only
   the previous hash, the event type, `resource.id` and the action: the

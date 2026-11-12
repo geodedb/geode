@@ -815,33 +815,6 @@ pub fn isFieldSearchable(ctx: EncryptionContext, type_name: []const u8, field_na
     return catalog.isFieldSearchable(type_name, field_name);
 }
 
-/// Compute blind index hash for a value
-/// Used for predicate rewriting to enable equality search on encrypted fields
-pub fn computeBlindIndex(
-    ctx: EncryptionContext,
-    type_name: []const u8,
-    field_name: []const u8,
-    plaintext_value: []const u8,
-) ![]const u8 {
-    _ = type_name;
-
-    // Get BIK from key manager
-    const key_manager = try getGlobalKeyManager(ctx.allocator);
-    const key_ids = key_types.KeyIds{
-        .tenant = ctx.tenant_id,
-        .schema = ctx.schema_name,
-        .field = field_name,
-        .version = 1,
-    };
-    const bik = try key_manager.getBIK(key_ids);
-
-    // Get blind index
-    const blind_index = try getGlobalBlindIndex(ctx.allocator);
-
-    // Compute hash
-    return try blind_index.computeHash(bik, plaintext_value);
-}
-
 test "FLE integration placeholder" {
     const testing = std.testing;
 
