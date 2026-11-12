@@ -4702,6 +4702,17 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     return encodeMessage(allocator, resp);
 }
 
+/// Owned audit identity; authorization is performed separately for each poll.
+fn copySessionActor(allocator: std.mem.Allocator, session_id: []const u8) !?[]u8 {
+    const store = getSessionStore() orelse return null;
+    const entry = store.acquire(session_id) orelse return null;
+    defer store.release(entry);
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const username = entry.state.authenticated_user orelse return null;
+    return try allocator.dupe(u8, username);
+}
+
 fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.RestoreRequest, &reader, allocator) catch {
@@ -4738,52 +4749,14 @@ fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
         },
     }
 
-    if (!req.confirm) {
-        const resp = schema.RestoreResponse{
-            .success = false,
-            .message = try allocator.dupe(u8, "Restore requires confirmation"),
-        };
-        return encodeMessage(allocator, resp);
-    }
-
-    var mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{
-        // Restore reads the codec from each backup file's header; keep the
-        // honest default (.none) — .zstd has no encoder (GAP-0880).
-        .compression = .none,
-        .encryption = false,
-        .retention_days = 30,
-    }) catch |err| {
-        const msg = try std.fmt.allocPrint(allocator, "Restore init failed: {s}", .{@errorName(err)});
-        const resp = schema.RestoreResponse{ .success = false, .message = msg };
-        return encodeMessage(allocator, resp);
+    const actor = try copySessionActor(allocator, req.session_id);
+    defer if (actor) |owned| allocator.free(owned);
+    var response = @import("geode").restore_service.handle(allocator, req, actor orelse "") catch |err| schema.RestoreResponse{
+        .success = false,
+        .message = try std.fmt.allocPrint(allocator, "Restore failed: {s}", .{@errorName(err)}),
     };
-    defer mgr.deinit();
-
-    const target_time: i64 = if (req.target_time.len > 0)
-        std.fmt.parseInt(i64, req.target_time, 10) catch compat_milliTimestamp()
-    else
-        compat_milliTimestamp();
-
-    const restore_dir = if (getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |dir| blk: {
-        defer allocator.free(dir);
-        break :blk try allocator.dupe(u8, dir);
-    } else |_| try allocator.dupe(u8, "./data");
-
-    mgr.restoreToPointInTime(target_time, restore_dir) catch |err| {
-        const msg = try std.fmt.allocPrint(allocator, "Restore failed: {s}", .{@errorName(err)});
-        const resp = schema.RestoreResponse{ .success = false, .message = msg };
-        allocator.free(restore_dir);
-        return encodeMessage(allocator, resp);
-    };
-
-    const resp = schema.RestoreResponse{
-        .success = true,
-        .message = try allocator.dupe(u8, "Restore completed"),
-        .restore_dir = restore_dir,
-        .target_time = try allocator.dupe(u8, if (req.target_time.len > 0) req.target_time else "latest"),
-        .restore_timestamp = @intCast(compat_milliTimestamp()),
-    };
-    return encodeMessage(allocator, resp);
+    defer response.deinit(allocator);
+    return encodeMessage(allocator, response);
 }
 
 fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {

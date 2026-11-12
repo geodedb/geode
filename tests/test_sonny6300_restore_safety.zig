@@ -5,64 +5,7 @@ const graph_store = geode.graph_store;
 const backup = @import("storage/backup");
 const s3 = @import("s3_backup");
 
-// Real storage only: the backup has one node, the live store has two. A
-// refused restore must leave both the resident state and its next reopen intact.
-const Fixture = struct {
-    tmp: testing.TmpDir,
-    root: []u8,
-    live: []u8,
-    backups: []u8,
-    store: graph_store.GraphStore,
-
-    fn init() !Fixture {
-        const a = testing.allocator;
-        const io = std.Io.Threaded.global_single_threaded.io();
-        var tmp = testing.tmpDir(.{ .iterate = true });
-        errdefer tmp.cleanup();
-        var buf: [std.fs.max_path_bytes]u8 = undefined;
-        const len = try tmp.dir.realPath(io, &buf);
-        const root = try a.dupe(u8, buf[0..len]);
-        errdefer a.free(root);
-        const live = try std.fmt.allocPrint(a, "{s}/live", .{root});
-        errdefer a.free(live);
-        const backups = try std.fmt.allocPrint(a, "{s}/backups", .{root});
-        errdefer a.free(backups);
-        graph_store.deinitGlobalStore();
-        graph_store.deinitGlobalAdapter();
-        graph_store.setDataDirOverride(a, live);
-        errdefer graph_store.setDataDirOverride(a, null);
-        _ = try graph_store.initGlobalAdapter(a, live);
-        errdefer graph_store.deinitGlobalAdapter();
-        var store = try graph_store.GraphStore.init(a);
-        errdefer store.deinit();
-        store.data_dir = live;
-        _ = try store.createNode(&.{"BeforeBackup"});
-        try store.saveToFile();
-        return .{ .tmp = tmp, .root = root, .live = live, .backups = backups, .store = store };
-    }
-
-    fn deinit(self: *Fixture) void {
-        self.store.deinit();
-        graph_store.deinitGlobalAdapter();
-        graph_store.setDataDirOverride(testing.allocator, null);
-        testing.allocator.free(self.backups);
-        testing.allocator.free(self.live);
-        testing.allocator.free(self.root);
-        self.tmp.cleanup();
-    }
-
-    fn assertLiveAfterReopen(self: *Fixture) !void {
-        try testing.expectEqual(@as(usize, 2), self.store.nodes.count());
-        graph_store.deinitGlobalAdapter();
-        _ = try graph_store.initGlobalAdapter(testing.allocator, self.live);
-        var reopened = try graph_store.GraphStore.init(testing.allocator);
-        defer reopened.deinit();
-        reopened.data_dir = self.live;
-        try reopened.loadFromFile();
-        reopened.ensureGraphHydrated("default");
-        try testing.expectEqual(@as(usize, 2), reopened.nodes.count());
-    }
-};
+const Fixture = @import("support/restore_harness.zig").Fixture;
 
 fn checkRefusal(alias: bool, empty_store_path: bool) !void {
     var fixture = try Fixture.init();
@@ -262,4 +205,39 @@ test "SONNY-6300 snapshot verification must not import metadata into the live pr
     defer testing.allocator.free(target);
     try mgr.restoreToPointInTime(target, meta.timestamp + 1);
     try testing.expect(!graph_store.shouldIndexProperty("snapshot_only_key"));
+}
+
+const Progress = struct {
+    phases: std.enums.EnumSet(backup.RestorePhase) = .initEmpty(),
+    invalid: bool = false,
+    total: u64 = 0,
+    last: ?backup.RestoreProgress = null,
+    fn update(raw: *anyopaque, progress: backup.RestoreProgress) void {
+        const self: *Progress = @ptrCast(@alignCast(raw));
+        self.phases.insert(progress.phase);
+        if (progress.completed_files > progress.total_files) self.invalid = true;
+        if (self.last) |last| {
+            if (@intFromEnum(progress.phase) < @intFromEnum(last.phase)) self.invalid = true;
+            if (progress.phase == last.phase and progress.completed_files < last.completed_files) self.invalid = true;
+        }
+        self.total = @max(self.total, progress.total_files);
+        self.last = progress;
+    }
+};
+
+test "SONNY-6300 actual restore reports phases and file progress through durable completion" {
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    var mgr = try backup.BackupManager.init(testing.allocator, fixture.backups, .{}, &fixture.store);
+    defer mgr.deinit();
+    const meta = try mgr.createFullBackup();
+    const target = try std.fmt.allocPrint(testing.allocator, "{s}/restored", .{fixture.root});
+    defer testing.allocator.free(target);
+    var progress = Progress{};
+    try mgr.restoreWithProgress(target, meta.timestamp + 1, .{ .context = &progress, .update = Progress.update });
+    try testing.expect(!progress.invalid);
+    try testing.expect(progress.total > 0);
+    inline for (std.meta.tags(backup.RestorePhase)) |phase| try testing.expect(progress.phases.contains(phase));
+    try testing.expectEqual(backup.RestorePhase.completed, progress.last.?.phase);
+    try testing.expectEqual(progress.total, progress.last.?.completed_files);
 }

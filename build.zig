@@ -7540,6 +7540,20 @@ pub fn build(b: *std.Build) void {
     s3_backup_sig_mod.addImport("storage/backup", storage_backup_mod);
     s3_backup_sig_mod.addImport("s3_sigv4", s3_sigv4_mod);
     s3_backup_sig_mod.link_libc = true;
+    const sonny6300_jobs_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6300_restore_jobs.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6300_jobs_tests.root_module.addImport("geode", root_mod);
+    sonny6300_jobs_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    sonny6300_jobs_tests.root_module.addImport("schema", schema_mod);
+    sonny6300_jobs_tests.root_module.addImport("protobuf", protobuf_mod);
+    const run_sonny6300_jobs_tests = b.addRunArtifact(sonny6300_jobs_tests);
+    shardDep(test_step, &run_sonny6300_jobs_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6300_jobs_step = b.step("test-sonny6300-restore-jobs", "Run SONNY-6300 actual restore job progress and shutdown regressions");
+    sonny6300_jobs_step.dependOn(&run_sonny6300_jobs_tests.step);
+
     const sonny6300_restore_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_sonny6300_restore_safety.zig"),
         .target = target,

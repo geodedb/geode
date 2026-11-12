@@ -788,6 +788,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     var target_time: ?[]const u8 = null;
     var server: []const u8 = "127.0.0.1:3141";
     var skip_confirmation: bool = false;
+    var restore_timeout_ms: u64 = 30 * 60 * 1000;
+    var restore_job_id: ?[]const u8 = null;
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
     // GAP-0137: TLS configuration options
@@ -801,13 +803,16 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "\n" ++
                 "Usage: geode restore [backup_file] [options]\n" ++
                 "       geode restore --source <URI> [options]\n" ++
+                "       geode restore --job <id> [options]\n" ++
                 "\n" ++
                 "Arguments:\n" ++
                 "  backup_file            Path to backup file (positional argument)\n" ++
                 "\n" ++
                 "Options:\n" ++
                 "  --source <URI>         Backup source (alternative to positional)\n" ++
-                "  --target-time <time>   Restore to specific timestamp\n" ++
+                "  --target-time <time>   Restore to Unix timestamp in milliseconds\n" ++
+                "  --job <id>             Resume polling an existing server restore job\n" ++
+                "  --timeout-ms <ms>      Total remote wait (default: 1800000; max: 86400000)\n" ++
                 "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
                 "  --user <username>      Username for authentication\n" ++
                 "  --password <password>  Password for authentication\n" ++
@@ -838,6 +843,16 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             }
             i += 1;
             source = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--timeout-ms")) {
+            if (i + 1 >= argv.len) return error.MissingRestoreTimeout;
+            i += 1;
+            restore_timeout_ms = std.fmt.parseInt(u64, argv[i], 10) catch return error.InvalidRestoreTimeout;
+            if (restore_timeout_ms == 0 or restore_timeout_ms > 86_400_000) return error.InvalidRestoreTimeout;
+        } else if (std.mem.eql(u8, argv[i], "--job")) {
+            if (i + 1 >= argv.len) return error.MissingRestoreJob;
+            i += 1;
+            if (argv[i].len == 0) return error.InvalidRestoreJob;
+            restore_job_id = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--target-time")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --target-time requires a value\n", .{});
@@ -902,7 +917,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         }
     }
 
-    if (source == null) {
+    if (restore_job_id != null and (source != null or target_time != null)) return error.ConflictingRestoreOptions;
+    if (source == null and restore_job_id == null) {
         std.debug.print("Error: --source is required\n", .{});
         std.debug.print("Use 'geode restore --help' for usage information\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -918,7 +934,7 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     }
 
     // Confirmation prompt unless --yes is specified
-    if (!skip_confirmation) {
+    if (!skip_confirmation and restore_job_id == null) {
         std.debug.print("WARNING: This will restore the database from backup.\n", .{});
         std.debug.print("All current data will be replaced with backup data.\n", .{});
         std.debug.print("Use --yes to skip this confirmation prompt.\n", .{});
@@ -959,7 +975,7 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     }
 
     // Execute restore (GAP-0137: pass TLS config)
-    try executeRestore(allocator, source.?, target_time, server, tls_config, username, password);
+    try executeRestore(allocator, source orelse "", target_time, server, tls_config, username, password, .{ .timeout_ms = restore_timeout_ms, .job_id = restore_job_id });
 
     std.debug.print("Restore completed successfully\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
@@ -2023,6 +2039,12 @@ fn computeChecksum(data: []const u8) u64 {
 // CANARY: REQ=REQ-BACKUP-RESTORE-001; FEATURE="Backup Restore"; ASPECT=RemoteRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Remote server restore execution function - sends restore request via QUIC
+// CANARY: REQ=REQ-SONNY-6300; FEATURE="Restore jobs"; ASPECT=ClientPolling; STATUS=IMPL; OWNER=cli; UPDATED=2026-11-11
+const RestoreClientOptions = struct {
+    timeout_ms: u64 = 30 * 60 * 1000,
+    job_id: ?[]const u8 = null,
+};
+
 fn executeRemoteRestore(
     allocator: std.mem.Allocator,
     source: []const u8,
@@ -2031,6 +2053,7 @@ fn executeRemoteRestore(
     tls_config: TlsConfig,
     username: ?[]const u8,
     password: ?[]const u8,
+    options: RestoreClientOptions,
 ) !void {
     std.debug.print("RESTORE: Connecting to server {s} for remote restore...\n", .{server});
 
@@ -2103,38 +2126,67 @@ fn executeRemoteRestore(
         std.debug.print("RESTORE: Note - remote restore uses server-managed backups; source URI is not transferred.\n", .{});
     }
 
-    const restore_req = schema.RestoreRequest{
-        .target_time = target_time orelse "",
-        .confirm = true,
-    };
-    writeProtoMessage(allocator, &client, .{ .restore = restore_req }) catch |err| {
-        std.debug.print("RESTORE: Failed to send restore request: {}\n", .{err});
-        return error.WriteFailed;
-    };
-
-    const resp_msg = readProtoMessage(arena.allocator(), &client, 30000) catch |err| {
-        std.debug.print("RESTORE: Failed to read server response: {}\n", .{err});
-        return error.ReadFailed;
-    };
-
-    switch (resp_msg) {
-        .restore => |resp| {
-            if (!resp.success) {
-                std.debug.print("RESTORE: Server returned error: {s}\n", .{resp.message});
-                return error.ServerError;
-            }
-            std.debug.print("RESTORE: Restore initiated successfully\n", .{});
-            if (resp.restore_dir.len > 0) {
-                std.debug.print("  Restore dir: {s}\n", .{resp.restore_dir});
-            }
-            if (resp.target_time.len > 0) {
-                std.debug.print("  Target time: {s}\n", .{resp.target_time});
-            }
-        },
-        else => {
-            std.debug.print("RESTORE: Unexpected restore response\n", .{});
-            return error.ServerError;
-        },
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const started = std.Io.Clock.awake.now(io);
+    var job_id: ?[]u8 = if (options.job_id) |id| try allocator.dupe(u8, id) else null;
+    defer if (job_id) |id| allocator.free(id);
+    var first = true;
+    var last_phase: ?[]u8 = null;
+    defer if (last_phase) |phase| allocator.free(phase);
+    var last_count: u64 = std.math.maxInt(u64);
+    while (true) {
+        const elapsed_signed = started.durationTo(std.Io.Clock.awake.now(io)).toMilliseconds();
+        const elapsed: u64 = @intCast(@max(elapsed_signed, 0));
+        if (elapsed >= options.timeout_ms) {
+            if (job_id) |id| std.debug.print("RESTORE: Wait timed out; job {s} continues. Resume with 'geode restore --job {s} --server {s}' and your authentication/TLS options.\n", .{ id, id, server });
+            return error.RestoreWaitTimeout;
+        }
+        const request = schema.RestoreRequest{
+            .target_time = if (job_id == null) target_time orelse "" else "",
+            .confirm = job_id == null,
+            .async_restore = first and job_id == null,
+            .job_id = job_id orelse "",
+        };
+        first = false;
+        try writeProtoMessage(allocator, &client, .{ .restore = request });
+        // A poll never waits for the restore itself. Reset decode memory each
+        // exchange so a multi-hour restore cannot accumulate response arenas.
+        var reply_arena = std.heap.ArenaAllocator.init(allocator);
+        defer reply_arena.deinit();
+        const reply = readProtoMessage(reply_arena.allocator(), &client, @min(options.timeout_ms - elapsed, 30_000)) catch |err| {
+            if (job_id) |id| std.debug.print("RESTORE: Connection interrupted; job {s} can be resumed with --job.\n", .{id});
+            return err;
+        };
+        switch (reply) {
+            .restore => |response| {
+                if (response.job_id.len > 0 and job_id == null) {
+                    job_id = try allocator.dupe(u8, response.job_id);
+                    std.debug.print("RESTORE: Job {s}\n", .{response.job_id});
+                }
+                const pending = std.mem.eql(u8, response.job_state, "queued") or std.mem.eql(u8, response.job_state, "running");
+                if (pending) {
+                    if (job_id == null) return error.InvalidRestoreJobResponse;
+                    if (last_phase == null or !std.mem.eql(u8, last_phase.?, response.phase) or last_count != response.completed_files) {
+                        const next_phase = try allocator.dupe(u8, response.phase);
+                        if (last_phase) |phase| allocator.free(phase);
+                        last_phase = next_phase;
+                        last_count = response.completed_files;
+                        std.debug.print("RESTORE: {s} {d}/{d} files ({s})\n", .{ response.phase, response.completed_files, response.total_files, response.job_state });
+                    }
+                } else {
+                    if (!response.success) {
+                        std.debug.print("RESTORE: Server returned error: {s}\n", .{response.message});
+                        return error.ServerError;
+                    }
+                    if (response.job_state.len > 0 and !std.mem.eql(u8, response.job_state, "completed")) return error.InvalidRestoreJobResponse;
+                    std.debug.print("RESTORE: {s}\n", .{response.message});
+                    if (response.restore_dir.len > 0) std.debug.print("  Restore dir: {s}\n", .{response.restore_dir});
+                    return;
+                }
+            },
+            else => return error.UnexpectedRestoreResponse,
+        }
+        try io.sleep(.fromMilliseconds(250), .awake);
     }
 }
 
@@ -2149,16 +2201,17 @@ fn executeRestore(
     tls_config: TlsConfig,
     username: ?[]const u8,
     password: ?[]const u8,
+    options: RestoreClientOptions,
 ) !void {
     std.debug.print("RESTORE: Initiating restore from '{s}'\n", .{source});
 
     // Check if source is a remote URI (s3://, https://, etc.)
-    if (std.mem.startsWith(u8, source, "s3://") or
+    if (options.job_id != null or std.mem.startsWith(u8, source, "s3://") or
         std.mem.startsWith(u8, source, "https://") or
         std.mem.startsWith(u8, source, "http://"))
     {
         // Remote restore via server (GAP-0137: pass TLS config)
-        return executeRemoteRestore(allocator, source, target_time, server, tls_config, username, password);
+        return executeRemoteRestore(allocator, source, target_time, server, tls_config, username, password, options);
     }
 
     // Local restore

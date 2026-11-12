@@ -1596,6 +1596,22 @@ pub fn main() !void {
     init_ctx.fixupSelfPointers();
     defer init_ctx.deinit();
 
+    const restore_manager = try gpa.create(geode.restore_jobs.Manager);
+    restore_manager.* = geode.restore_jobs.Manager.init(gpa);
+    geode.restore_service.install(restore_manager);
+    defer {
+        geode.restore_service.shutdown();
+        geode.restore_service.install(null);
+        // Match the store's existing straggler policy: never free a service
+        // that an undrained detached gRPC handler may still be using.
+        if (grpc_transport.grpcInflightCount() == 0) {
+            restore_manager.deinit();
+            gpa.destroy(restore_manager);
+        } else {
+            log.warn("preserving restore service for in-flight gRPC handlers at process exit", &.{});
+        }
+    }
+
     std.debug.print("[startup] server initialized ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     phase_start = compat_milliTimestamp();
@@ -2456,6 +2472,7 @@ pub fn main() !void {
             // Stop persistence thread first (final flush), then free the global store.
             // Without deinitGlobalStore(), all in-memory graph data (nodes, edges, indexes,
             // properties) leaks and the GPA reports errors on SIGTERM exit.
+            geode.restore_service.shutdown();
             if (!persistence_flushed_eagerly) graph_store.stopPersistenceThread(gpa);
             // REQ-TRANSPORT-GRPC-SHUTDOWN-001: never free the store while a
             // detached gRPC handler thread is still executing against it — the

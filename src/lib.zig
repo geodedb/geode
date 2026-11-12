@@ -159,6 +159,8 @@ pub const temporal = @import("temporal.zig");
 // Query analysis helpers (EXPLAIN/PROFILE traits)
 pub const query_traits = @import("query/query_traits.zig");
 pub const planned_read_runtime = @import("execution/planned_read_runtime.zig");
+pub const restore_service = @import("server/restore_service.zig");
+pub const restore_jobs = @import("server/restore_jobs.zig");
 pub const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
 // Task 19: per-graph group-commit coordinator.
 pub const group_commit = @import("storage/group_commit.zig");

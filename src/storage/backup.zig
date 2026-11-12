@@ -152,6 +152,23 @@ pub const BackupConfig = struct {
     retention_days: u32 = 30,
 };
 
+/// Progress describes work in the current phase, never a success receipt.
+/// Observers run on the restore worker; they must not mutate the live store.
+pub const RestorePhase = enum { reading, decoding, extracting, verifying_files, verifying_store, syncing, publishing, completed };
+pub const RestoreProgress = struct {
+    phase: RestorePhase,
+    completed_files: u64 = 0,
+    total_files: u64 = 0,
+};
+pub const RestoreObserver = struct {
+    context: *anyopaque,
+    update: *const fn (*anyopaque, RestoreProgress) void,
+
+    fn report(self: ?RestoreObserver, progress: RestoreProgress) void {
+        if (self) |observer| observer.update(observer.context, progress);
+    }
+};
+
 pub const CompressionType = enum(u32) {
     none = 0,
     zstd = 1,
@@ -398,6 +415,11 @@ pub const BackupManager = struct {
 
     /// Restore to a point in time using the latest full backup before the timestamp.
     pub fn restoreToPointInTime(self: *BackupManager, restore_dir: []const u8, target_time: i64) !void {
+        return self.restoreWithProgress(restore_dir, target_time, null);
+    }
+
+    pub fn restoreWithProgress(self: *BackupManager, restore_dir: []const u8, target_time: i64, observer: ?RestoreObserver) !void {
+        RestoreObserver.report(observer, .{ .phase = .reading });
         try validateRestoreTarget(self.allocator, self.store, restore_dir);
         if (self.metadata_log.items.len == 0) {
             _ = try self.loadMetadata();
@@ -430,6 +452,7 @@ pub const BackupManager = struct {
 
         if (header.checksum != computeChecksum(payload)) return error.BackupChecksumMismatch;
 
+        RestoreObserver.report(observer, .{ .phase = .decoding });
         var decrypted: []u8 = payload;
         var decrypted_owned = false;
         if (header.encrypted) {
@@ -442,7 +465,7 @@ pub const BackupManager = struct {
         defer self.allocator.free(decompressed);
 
         if (decompressed.len >= 8 and std.mem.eql(u8, decompressed[0..8], "GEODBAK1")) {
-            try restorePerGraphPayload(self.allocator, restore_dir, decompressed);
+            try restorePerGraphPayload(self.allocator, restore_dir, decompressed, observer);
         } else {
             return error.UnsupportedBackupFormat;
         }
@@ -808,7 +831,7 @@ fn syncRestoreTree(dir: std.Io.Dir) !void {
 /// engine, flush once per filesystem on Linux, then publish atomically.
 // CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_sonny6300_restore_safety.zig; OWNER=storage; UPDATED=2026-11-11
 // CANARY: REQ=REQ-SONNY-6300; FEATURE="Offline restore safety"; ASPECT=VerifiedStaging; STATUS=TESTED; TEST=tests/test_sonny6300_restore_safety.zig; OWNER=storage; UPDATED=2026-11-11
-fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8) !void {
+fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8, observer: ?RestoreObserver) !void {
     const existing_empty = try emptyRestoreTarget(restore_dir);
     const entries = try parseArchive(allocator, payload);
     defer allocator.free(entries);
@@ -823,15 +846,24 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
     defer cwd.deleteTree(io, stage) catch {}; // Private staging only; never the target.
     var dir = try cwd.openDir(io, stage, .{ .iterate = true });
     defer dir.close(io);
-    for (entries) |entry| {
+    RestoreObserver.report(observer, .{ .phase = .extracting, .total_files = entries.len });
+    for (entries, 0..) |entry, i| {
         if (std.fs.path.dirname(entry.name)) |subdir| try dir.createDirPath(io, subdir);
         const out = try dir.createFile(io, entry.name, .{ .exclusive = true });
         defer out.close(io);
         try out.writeStreamingAll(io, entry.data);
+        RestoreObserver.report(observer, .{ .phase = .extracting, .completed_files = i + 1, .total_files = entries.len });
     }
-    for (entries) |entry| try verifyEntry(dir, entry);
+    RestoreObserver.report(observer, .{ .phase = .verifying_files, .total_files = entries.len });
+    for (entries, 0..) |entry, i| {
+        try verifyEntry(dir, entry);
+        RestoreObserver.report(observer, .{ .phase = .verifying_files, .completed_files = i + 1, .total_files = entries.len });
+    }
+    RestoreObserver.report(observer, .{ .phase = .verifying_store, .completed_files = entries.len, .total_files = entries.len });
     try verifyRestoredStore(allocator, stage);
+    RestoreObserver.report(observer, .{ .phase = .syncing, .completed_files = entries.len, .total_files = entries.len });
     try syncRestoreTree(dir);
+    RestoreObserver.report(observer, .{ .phase = .publishing, .completed_files = entries.len, .total_files = entries.len });
     // rename refuses a nonempty target even if it changed since the preflight.
     // Missing targets use no-replace publication to preserve concurrent data.
     if (existing_empty) {
@@ -842,6 +874,7 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
     var parent_dir = try cwd.openDir(io, parent, .{ .iterate = true });
     defer parent_dir.close(io);
     try syncDirectory(parent_dir);
+    RestoreObserver.report(observer, .{ .phase = .completed, .completed_files = entries.len, .total_files = entries.len });
 }
 
 /// Result of compressData: the compressed payload plus the compression type

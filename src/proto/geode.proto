@@ -13,6 +13,7 @@ service GeodeService {
   rpc Rollback(RollbackRequest) returns (RollbackResponse);
   rpc GetCdcDiagnostics(CdcDiagnosticsRequest) returns (CdcDiagnosticsResponse);
   rpc ControlCdc(CdcControlRequest) returns (CdcControlResponse);
+  rpc Restore(RestoreRequest) returns (RestoreResponse);
 }
 
 // ============================================================================
@@ -585,6 +586,9 @@ message RestoreRequest {
   string target_time = 1;
   bool confirm = 2;
   string session_id = 3;
+  // Opt-in: return a pending job immediately. Poll with job_id and session_id.
+  bool async_restore = 4;
+  string job_id = 5;
 }
 message RestoreResponse {
   bool success = 1;
@@ -592,6 +596,12 @@ message RestoreResponse {
   string restore_dir = 3;
   string target_time = 4;
   uint64 restore_timestamp = 5;
+  // success is true only after durable completion, never merely acceptance.
+  string job_id = 6;
+  string job_state = 7; // queued, running, completed, failed
+  string phase = 8;
+  uint64 completed_files = 9;
+  uint64 total_files = 10;
 }
 message UploadBackupRequest {
   uint64 size_bytes = 1;

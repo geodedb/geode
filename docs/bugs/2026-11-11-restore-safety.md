@@ -117,3 +117,67 @@ Additional evidence:
 
 Client timeouts and progress/job behavior, real S3 transport qualification,
 unpublished SONNY-6288 integration, and final required CI/merge remain open.
+
+## Restore jobs and client waits
+
+The job manager permits one active restore and retains the most recent eight
+job records in memory. It owns copied request strings, uses a private random
+job id and a sibling output directory, and reports queued/running/completed/
+failed states. Status snapshots own their strings. Completed history is bounded;
+synchronous waiters pin their result until returned. Unknown/evicted job ids
+return `RestoreJobNotFound`; job records do not survive server restart.
+
+Progress reports reading, decoding, extraction, file verification, store
+verification, syncing and publication. Completion is recorded only after the
+parent sync. Failed checksums remain failed jobs and do not publish output.
+Shutdown first refuses new jobs and then joins workers without holding the
+status mutex. The server drains this manager before freeing the global store;
+its outer cleanup follows the existing gRPC-straggler preservation policy.
+
+QUIC and gRPC share the service. Both keep current-session Admin authorization
+before each start or status poll. New restores are cluster-gated and audited as
+`SERVER_RESTORE` with the job id and state. The service chooses a sibling of the
+adapter's actual data directory, never a client-controlled target or a fresh
+environment lookup. This implements the necessary server-target/staging behavior
+independently of SONNY-6288's unpublished branch. A later integration must retain
+the new job and lifetime behavior; its unavailable source is not represented as
+reviewed or qualified here.
+
+Wire additions are optional protobuf fields: `RestoreRequest.async_restore`
+opts into immediate job acceptance; `job_id` polls an existing job. Responses
+include job id/state, phase and completed/total file counts. `success` is true
+only for completed restoration, never acceptance. Legacy synchronous requests
+continue to wait for terminal state, and completion timestamps are stable across
+polls. The restored copy is offline; the response instructs the operator to
+restart with its reported data directory. Starting a job does not switch the
+live engine or make that server serve the restored copy.
+
+The remote CLI requests jobs and polls progress. `--timeout-ms` configures the
+total wait (default 1800000 ms / 30 minutes, range 1..86400000); each request has
+a bounded wait and each poll releases its decode arena. A timeout/disconnect
+after the job id has been received reports how to resume with `--job <id>` and
+the same server/authentication/TLS options. Timing out does not cancel the server
+job. `--job` is read-only polling and needs no confirmation; it cannot be combined
+with a source or new target time. gRPC clients opt into `async_restore`, poll with
+their authenticated session id and choose their normal per-request RPC deadline;
+a poll does not wait for the long filesystem operation.
+
+Executed evidence for this phase:
+
+- `geode-6300-progress`: 35/35 steps and 12/12 actual-storage tests passed.
+- `geode-6300-jobs2` and `geode-6300-jobs-service-base2`: 38/38 steps and 15/15
+  actual job/storage tests passed (request expiry, phase polling, active-job
+  exclusion, checksum failure, bounded history and shutdown drain).
+- `geode-6300-jobs-final`: 38/38 steps and 17/17 tests passed, adding synchronous
+  completion/stable timestamps and actual protobuf request/response round trips.
+- `geode-6300-server-build`: 58/58 native Debug build steps passed, including the
+  real geode and gql executables. The resulting binary's help exposes both new
+  flags, and it rejects zero, malformed and excessive timeouts and conflicting
+  job/source options. This build preceded the final timestamp/audit/CLI cleanup
+  additions; a fresh native build on the final source remains required.
+
+Shared transport and CLI polling markers remain IMPL until their real runtime
+qualification. Actual QUIC/gRPC progress/resume/auth/cluster behavior, an actual
+S3 transport round-trip, final source CI and merge remain outstanding. This
+receipt does not substitute job-manager tests or a successful build for those
+runtime checks.

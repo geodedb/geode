@@ -1277,15 +1277,20 @@ pub const BackupResponse = struct {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-6300; FEATURE="Restore jobs"; ASPECT=JobWire; STATUS=TESTED; TEST=tests/test_sonny6300_restore_jobs.zig; OWNER=storage; UPDATED=2026-11-11
 pub const RestoreRequest = struct {
     target_time: []const u8 = "",
     confirm: bool = false,
     session_id: []const u8 = "",
+    async_restore: bool = false,
+    job_id: []const u8 = "",
 
     pub const _desc_table = .{
         .target_time = fd(1, .{ .scalar = .string }),
         .confirm = fd(2, .{ .scalar = .bool }),
         .session_id = fd(3, .{ .scalar = .string }),
+        .async_restore = fd(4, .{ .scalar = .bool }),
+        .job_id = fd(5, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *RestoreRequest, allocator: std.mem.Allocator) void {
@@ -1299,6 +1304,11 @@ pub const RestoreResponse = struct {
     restore_dir: []const u8 = "",
     target_time: []const u8 = "",
     restore_timestamp: u64 = 0,
+    job_id: []const u8 = "",
+    job_state: []const u8 = "",
+    phase: []const u8 = "",
+    completed_files: u64 = 0,
+    total_files: u64 = 0,
 
     pub const _desc_table = .{
         .success = fd(1, .{ .scalar = .bool }),
@@ -1306,6 +1316,11 @@ pub const RestoreResponse = struct {
         .restore_dir = fd(3, .{ .scalar = .string }),
         .target_time = fd(4, .{ .scalar = .string }),
         .restore_timestamp = fd(5, .{ .scalar = .uint64 }),
+        .job_id = fd(6, .{ .scalar = .string }),
+        .job_state = fd(7, .{ .scalar = .string }),
+        .phase = fd(8, .{ .scalar = .string }),
+        .completed_files = fd(9, .{ .scalar = .uint64 }),
+        .total_files = fd(10, .{ .scalar = .uint64 }),
     };
 
     pub fn deinit(self: *RestoreResponse, allocator: std.mem.Allocator) void {
