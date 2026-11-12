@@ -3304,12 +3304,71 @@ pub const AuditLogger = struct {
             try writer.writeAll("\"");
         }
 
+        // CANARY: REQ=REQ-SONNY-3147-AUDIT-HASH-COVERAGE; FEATURE="AuditDurability"; ASPECT=CanonicalRecordHash; STATUS=TESTED; TEST=tests/test_sonny3147_audit_hash_coverage.zig; OWNER=security; UPDATED=2026-11-12
+        /// SONNY-3147: the hash format the writer emits (`"hash_v":2` in
+        /// every record). Format 1 (records without `hash_v`) hashed only
+        /// the previous hash, event_type, resource.id and action.
+        pub const hash_format_version: u32 = 2;
+        /// The domain-separation prefix of a format-2 event hash.
+        pub const hash_v2_domain = "geode.audit.event_hash.v2\x00";
+
+        /// SONNY-3147: the record kinds, each hashed under its own tag so a
+        /// record of one kind cannot be passed off as another.
+        pub const RecordKind = enum {
+            event,
+            digest,
+            key_epoch,
+
+            pub fn tag(self: RecordKind) []const u8 {
+                return switch (self) {
+                    .event => "event",
+                    .digest => "digest",
+                    .key_epoch => "key_epoch",
+                };
+            }
+        };
+
+        /// SONNY-3147: the format-2 event hash:
+        ///   SHA-256(hash_v2_domain || kind tag || 0x00 || prev_hash (32 raw bytes) || body)
+        /// where `body` is the record's exact canonical bytes from `{` up to
+        /// and including the `,` before `"prev_hash"` (writeCanonicalBody):
+        /// every field the record carries, in a fixed order, JSON-escaped one
+        /// way only, an absent optional field omitted and an empty one
+        /// written, so absent and empty hash differently. Hashed in one pass
+        /// over the already-serialized bytes (no extra allocation).
+        pub fn eventHashV2(kind: RecordKind, prev_hash: *const [32]u8, body: []const u8) [32]u8 {
+            var h = std.crypto.hash.sha2.Sha256.init(.{});
+            h.update(hash_v2_domain);
+            h.update(kind.tag());
+            h.update(&[_]u8{0});
+            h.update(prev_hash);
+            h.update(body);
+            var out: [32]u8 = undefined;
+            h.final(&out);
+            return out;
+        }
+
+        /// The full record line (no newline): writeCanonicalBody, then
+        /// writeHashSuffix with the hash and signature already in `ev`.
         pub fn writeCanonicalJson(writer: anytype, stream: []const u8, ev: *const AuditEvent) !void {
+            try writeCanonicalBody(writer, stream, ev);
+            try writeHashSuffix(writer, ev);
+        }
+
+        /// SONNY-3147: the part of the record the event hash covers: from
+        /// `{` through `details` and the comma after it. Field order:
+        /// stream, hash_v, seq_no, timestamp, event_type, tenant?, actor,
+        /// origin, resource {type, id, graph?}, action, result (the last
+        /// three not for DIGEST), session?, reason?, policy_id?,
+        /// ip_address?, query_hash?, details. `?` = written only when set.
+        pub fn writeCanonicalBody(writer: anytype, stream: []const u8, ev: *const AuditEvent) !void {
             try writer.writeAll("{");
             // 1. stream
             try writer.writeAll("\"stream\":");
             try writeJsonString(writer, stream);
             try writer.writeAll(",");
+            // 1.5 hash format (SONNY-3147)
+            try writer.print("\"hash_v\":{d},", .{hash_format_version});
             // 2. seq_no
             // 2. seq_no
             try writer.print("\"seq_no\":{d},", .{ev.seq_no});
@@ -3415,6 +3474,11 @@ pub const AuditLogger = struct {
                 try writeJsonString(writer, ev.resource.type);
                 try writer.writeAll(",\"id\":");
                 try writeJsonString(writer, ev.resource.id);
+                // SONNY-3147: the graph the event is about, when set.
+                if (ev.resource.graph) |g| {
+                    try writer.writeAll(",\"graph\":");
+                    try writeJsonString(writer, g);
+                }
                 try writer.writeAll("},");
 
                 // 8. action
@@ -3519,7 +3583,12 @@ pub const AuditLogger = struct {
                 try writer.writeAll("null");
             }
             try writer.writeAll(",");
+        }
 
+        /// The uncovered tail of a record: prev_hash, event_hash, signature
+        /// and the closing brace. Fixed shape, so a verifier splits a line
+        /// into body and tail from the end.
+        pub fn writeHashSuffix(writer: anytype, ev: *const AuditEvent) !void {
             // 11. prev_hash
             try writer.writeAll("\"prev_hash\":\"");
             for (ev.prev_hash) |b| try writer.print("{x:0>2}", .{b});

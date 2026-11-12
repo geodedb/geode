@@ -4,6 +4,32 @@
 
 ### Security
 
+- **BREAKING: the audit `event_hash` covers the whole record; old logs
+  verify as format 1 (SONNY-3147).** A record's `event_hash` covered only
+  the previous hash, the event type, `resource.id` and the action: the
+  timestamp, actor, tenant, session, client address, reason, result,
+  resource type and details could be edited in the log without breaking
+  the chain, and `geode audit verify` never recomputed `event_hash` for an
+  ordinary record at all. Every record now carries `"hash_v":2` (and
+  `resource.graph` when set) and its `event_hash` is
+  `SHA-256("geode.audit.event_hash.v2" 0x00 || kind || 0x00 || prev_hash ||
+  body)`, `body` being the record's exact canonical bytes up to
+  `"prev_hash"` and `kind` separating ordinary, DIGEST and KEY_EPOCH
+  records. The verifier recomputes every record's hash (format 1 for
+  records without `hash_v`, counted and reported in a `NOTICE` as not
+  covering those fields), refuses a format-1 record after a format-2 one,
+  reads `prev_hash`/`event_hash`/`signature` from the fixed record tail,
+  rejects duplicate keys, returns an error instead of exiting the process
+  on a broken chain link, and prints one verdict: `OK chain` only when
+  everything verified (it was printed before a signature failure), else
+  the first failing record and class and `FAILED`, exit 3 for a broken
+  chain link and 1 otherwise, no record contents. A clean close and a
+  rotation append a DIGEST when records were written since the last one.
+  `CALL audit.verify_hash_chain()` is refused as unsupported: it reported
+  `valid=true` for any log. Records after the last signed DIGEST, and a
+  truncation back to a DIGEST, stay undetectable from the log alone (see
+  docs/AUDIT_LOGGING.md). Regression:
+  `zig build test-sonny3147-audit-hash-coverage`.
 - **BREAKING: a server without `--data-dir` keeps its auth state and data
   (SONNY-6339).** A server resolves and locks its data directory from
   `--data-dir`, else `GEODE_DATA_DIR`, else the per-user default

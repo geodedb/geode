@@ -519,74 +519,16 @@ fn handleAuditGetRecentEvents(allocator: std.mem.Allocator, call_stmt: ast.CallP
 }
 
 fn handleAuditVerifyHashChain(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-005; FEATURE="AuditProcedures"; ASPECT=HashChainVerification; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.verify_hash_chain() -> valid, events_checked, issues_found
-
-    // Simulate verifying a hash chain of audit events
-    // In a real implementation, this would read the audit log and verify each hash
-    var events_checked: i64 = 0;
-    const issues_found: i64 = 0;
-    var valid = true;
-
-    // Read audit log file if it exists
-    const io_ad1 = std.Io.Threaded.global_single_threaded.io();
-    if (std.Io.Dir.cwd().openFile(io_ad1, global_audit_file_path, .{})) |file| {
-        defer file.close(io_ad1);
-
-        var prev_hash: [32]u8 = [_]u8{0} ** 32; // Genesis hash
-
-        // Read lines and verify hash chain
-        // Use simpler approach - read entire file and split by lines
-        const file_content = blk: {
-            const stat1 = file.stat(io_ad1) catch break :blk @as([]const u8, &[_]u8{});
-            const sz: usize = @intCast(@min(stat1.size, 1024 * 1024));
-            const buf1 = allocator.alloc(u8, sz) catch break :blk @as([]const u8, &[_]u8{});
-            _ = file.readPositionalAll(io_ad1, buf1, 0) catch {
-                allocator.free(buf1);
-                break :blk @as([]const u8, &[_]u8{});
-            };
-            break :blk @as([]const u8, buf1);
-        };
-        defer if (file_content.len > 0) allocator.free(file_content);
-
-        var line_iter = std.mem.splitSequence(u8, file_content, "\n");
-        while (line_iter.next()) |line| {
-            if (line.len == 0) continue;
-
-            events_checked += 1;
-
-            // Compute hash of current event + previous hash
-            var hasher = try cb.Hash.Stream.init(.sha256);
-            defer hasher.deinit();
-            try hasher.update(&prev_hash);
-            try hasher.update(line);
-            _ = try hasher.final(&prev_hash);
-
-            // In a real implementation, we would compare with stored hash
-            // For now, just verify we can compute hashes
-        }
-    } else |_| {
-        // No audit log file yet, which is valid
-        valid = true;
-    }
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "valid");
-    columns[1] = try allocator.dupe(u8, "events_checked");
-    columns[2] = try allocator.dupe(u8, "issues_found");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = valid };
-    row[1] = Value{ .Int = events_checked };
-    row[2] = Value{ .Int = issues_found };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
+    // CANARY: REQ=REQ-SONNY-3147-AUDIT-HASH-COVERAGE; FEATURE="AuditProcedures"; ASPECT=NoFabricatedVerify; STATUS=TESTED; TEST=tests/test_sonny3147_audit_hash_coverage.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-3147: this procedure reported valid=true, issues_found=0 for any
+    // input: it hashed the lines of a fixed path (not the server's audit log)
+    // and compared nothing. A server-side check cannot attest the log either:
+    // the signatures need the trusted public keys, which must not come from
+    // beside the log. It refuses; verify offline with
+    // `geode audit verify --file <log> --pubkey <key>` (one per key epoch).
+    _ = allocator;
+    log.warn("audit.verify_hash_chain is not supported: verify the audit log offline with `geode audit verify --file <log> --pubkey <trusted key>`", .{});
+    return error.Unsupported;
 }
 
 fn handleAuditTestSignatureVerification(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
