@@ -13466,6 +13466,25 @@ pub fn build(b: *std.Build) void {
     const sonny6352_step = b.step("test-sonny6352-auth-verify-locking", "Run the SONNY-6352 regression (the periodic HMAC chain verification and canUserAccessGraph wait for auth_ddl_lock, and race GRANT / REVOKE safely)");
     sonny6352_step.dependOn(&run_sonny6352_tests.step);
 
+    // SONNY-6358: the offline `geode user create` / `geode user update
+    // --password` store an Argon2id hash and seal the chain, so the server
+    // starts and logs the user in. Spawns the CLI and a server.
+    const sonny6358_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6358_offline_password_hash.zig"), .target = target, .optimize = optimize });
+    sonny6358_test_mod.link_libc = true;
+    sonny6358_test_mod.addImport("geode", root_mod);
+    sonny6358_test_mod.addImport("schema", schema_mod);
+    sonny6358_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6358_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6358_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6358_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    sonny6358_test_mod.addImport("geode_auth", auth_mod);
+    const sonny6358_tests = b.addTest(.{ .root_module = sonny6358_test_mod });
+    const run_sonny6358_tests = b.addRunArtifact(sonny6358_tests);
+    run_sonny6358_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6358_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6358_step = b.step("test-sonny6358-offline-password-hash", "Run the SONNY-6358 regression (offline geode user create / update --password store an Argon2id hash, never the password, and seal the __geode_security chain, also on a store with no auth records; the server then starts and logs the user in; spawns the CLI and a server)");
+    sonny6358_step.dependOn(&run_sonny6358_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
