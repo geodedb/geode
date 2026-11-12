@@ -13593,6 +13593,29 @@ pub fn build(b: *std.Build) void {
     const sonny3034_step = b.step("test-sonny3034-rls-restrictions-durable", "Run the SONNY-3034 regression (geode.rls.add_deny_policy / add_attribute_policy restrictions and their removal survive a server restart; spawns a server)");
     sonny3034_step.dependOn(&run_sonny3034_tests.step);
 
+    // SONNY-6369: geode query exits 1 on a failed query; a superuser keeps
+    // admin; geode.rls / attribute procedure failures are GQLSTATUS errors
+    // and their results own their rows; stale docs; EXPLAIN POLICY reports
+    // the executor's own checks; BLAKE2b hashes become Argon2id at login and
+    // the legacy check takes Argon2id's time. Spawns the CLI and a server.
+    const sonny6369_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6369_query_exit_and_auth_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6369_test_mod.link_libc = true;
+    sonny6369_test_mod.addImport("geode", root_mod);
+    sonny6369_test_mod.addImport("schema", schema_mod);
+    sonny6369_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6369_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6369_test_mod.addImport("logging", logging_mod);
+    sonny6369_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6369_test_mod.addImport("rls_types", rls_types_mod);
+    sonny6369_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6369_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sonny6369_tests = b.addTest(.{ .root_module = sonny6369_test_mod });
+    const run_sonny6369_tests = b.addRunArtifact(sonny6369_tests);
+    run_sonny6369_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6369_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6369_step = b.step("test-sonny6369-query-exit-auth-residuals", "Run the SONNY-6369 regression (geode query exits 1 when the query fails; a superuser cannot be given another role; geode.rls add / remove and user_remove_attribute failures are GQLSTATUS errors and the attribute results own their rows; GQL_AUTH_DDL / gql_conformance docs; EXPLAIN POLICY reports the procedure gate, the DDL schema gates and the USE GRAPH bind check; BLAKE2b hashes become Argon2id at login, the legacy check takes Argon2id's time; spawns the CLI and a server)");
+    sonny6369_step.dependOn(&run_sonny6369_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
