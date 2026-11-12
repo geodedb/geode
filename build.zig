@@ -12806,6 +12806,15 @@ pub fn build(b: *std.Build) void {
     const sonny6281_step = b.step("test-sonny6281-existence-constraints", "Run SONNY-6281 regression (NOT NULL, EXISTS and the existence half of NODE KEY are enforced at statement end on CREATE, MERGE, SET, REMOVE and label SET, 23502; CREATE CONSTRAINT over nodes lacking the property is refused; the bulk fast paths decline such a graph, across a reopen, until DROP CONSTRAINT; CREATE UNIQUE INDEX is refused with 0A000)");
     sonny6281_step.dependOn(&run_sonny6281_tests.step);
 
+    const sonny3056_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3056_lean_merge_evicted_holder.zig"), .target = target, .optimize = optimize });
+    sonny3056_test_mod.link_libc = true; // setenv/unsetenv
+    sonny3056_test_mod.addImport("geode", root_mod);
+    const sonny3056_tests = b.addTest(.{ .root_module = sonny3056_test_mod });
+    const run_sonny3056_tests = b.addRunArtifact(sonny3056_tests);
+    shardDep(test_step, &run_sonny3056_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3056_step = b.step("test-sonny3056-lean-merge-evicted-holder", "Run SONNY-3056 regression (lean index mode, a small node cache: the executor's MERGE and the server's bulk MERGE helpers match a holder written before its MERGE key was registered and evicted since, also for a key registered through another label and after a reopen)");
+    sonny3056_step.dependOn(&run_sonny3056_tests.step);
+
     const sonny6268_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6268_graph_store_failure_atomicity.zig"), .target = target, .optimize = optimize });
     sonny6268_test_mod.addImport("geode", root_mod);
     const sonny6268_tests = b.addTest(.{ .root_module = sonny6268_test_mod });
