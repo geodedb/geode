@@ -75,51 +75,6 @@ pub var g_custom_roles: std.StringHashMap([]const u8) = undefined;
 pub var g_custom_roles_init: bool = false;
 pub var g_custom_roles_mu: std.Io.Mutex = std.Io.Mutex.init;
 
-// #826: Custom-role membership store (username -> list of custom role names).
-// Built-in role lives in user_management.User.role (a fixed Role enum); custom
-// roles cannot fit there, so this side-table carries the assignment. Session-
-// bind code consults getCustomRolesForUser at authenticate-time and merges the
-// custom-role privileges with the built-in role's. Without this store the
-// "assigned" message in handleUserAssignRole was misleading -- the user's
-// effective role silently stayed at whatever built-in value they had
-// (typically .User by default).
-pub var g_custom_role_members: std.StringHashMap(std.ArrayList([]const u8)) = undefined;
-pub var g_custom_role_members_init: bool = false;
-pub var g_custom_role_members_mu: std.Io.Mutex = std.Io.Mutex.init;
-
-fn ensureCustomRoleMembersInit(allocator: std.mem.Allocator) void {
-    if (!g_custom_role_members_init) {
-        g_custom_role_members = std.StringHashMap(std.ArrayList([]const u8)).init(allocator);
-        g_custom_role_members_init = true;
-    }
-}
-
-/// Record a custom-role assignment. Idempotent: re-assigning the same role
-/// to the same user is a no-op. Caller must hold g_custom_role_members_mu.
-fn recordCustomRoleMemberLocked(allocator: std.mem.Allocator, username: []const u8, role_name: []const u8) !void {
-    ensureCustomRoleMembersInit(allocator);
-    const entry = try g_custom_role_members.getOrPut(username);
-    if (!entry.found_existing) {
-        entry.key_ptr.* = try allocator.dupe(u8, username);
-        entry.value_ptr.* = std.ArrayList([]const u8).empty;
-    }
-    // Idempotent: skip if already a member.
-    for (entry.value_ptr.items) |existing| {
-        if (std.mem.eql(u8, existing, role_name)) return;
-    }
-    try entry.value_ptr.append(allocator, try allocator.dupe(u8, role_name));
-}
-
-/// Return the list of custom roles assigned to `username`, or null if none.
-/// Returned slice is owned by the membership store -- do NOT free.
-pub fn getCustomRolesForUser(username: []const u8) ?[]const []const u8 {
-    g_custom_role_members_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_custom_role_members_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (!g_custom_role_members_init) return null;
-    const entry = g_custom_role_members.get(username) orelse return null;
-    if (entry.items.len == 0) return null;
-    return entry.items;
-}
 // GAP-0270 / GPS Phase 4 (Task 4-4): g_policies replaced by policy_catalog.PolicyCatalog.
 // The geode.auth.policy_* procedure handlers below now delegate to the global
 // PolicyCatalog singleton (bootstrapped in server/main.zig at startup).
@@ -751,8 +706,8 @@ fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, 
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
+// CANARY: REQ=REQ-SONNY-6292-CUSTOM-ROLE-MEMBERSHIP; FEATURE="Custom role membership refusal"; ASPECT=Assignment; STATUS=TESTED; TEST=tests/test_sonny6292_custom_role_refusal.zig; OWNER=security; UPDATED=2026-11-11
 fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    // geode.auth.user_assign_role(username, role) -> status
     var username: []const u8 = "";
     var role_name: []const u8 = "";
     if (call_stmt.procedure == .Call) {
@@ -760,53 +715,31 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
         if (args.len >= 1 and args[0].* == .String) username = args[0].String;
         if (args.len >= 2 and args[1].* == .String) role_name = args[1].String;
     }
+    if (username.len == 0 or role_name.len == 0) return error.InvalidArgs;
 
+    const role = user_mgmt.Role.fromString(role_name) orelse {
+        g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        ensureRolesInit(allocator);
+        if (g_custom_roles.contains(role_name)) return error.CustomRoleMembershipUnsupported;
+        return error.UnknownRole;
+    };
+
+    // Allocate the complete reply before changing the user's built-in role.
+    const status = try std.fmt.allocPrint(allocator, "assigned {s} to {s}", .{ role_name, username });
+    errdefer allocator.free(status);
     const columns = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(columns);
     columns[0] = try allocator.dupe(u8, "status");
+    errdefer allocator.free(columns[0]);
     const row = try allocator.alloc(Value, 1);
+    errdefer allocator.free(row);
+    row[0] = .{ .Str = status };
     const rows = try allocator.alloc([]Value, 1);
+    errdefer allocator.free(rows);
     rows[0] = row;
-
-    if (username.len == 0 or role_name.len == 0) {
-        row[0] = Value{ .Str = try allocator.dupe(u8, "error: username and role required") };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
-
-    // Try built-in roles first.
-    if (user_mgmt.Role.fromString(role_name)) |builtin_role| {
-        user_mgmt.assignRole(allocator, username, builtin_role) catch |err| {
-            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
-            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-        };
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "assigned {s} to {s}", .{ role_name, username }) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
-
-    // Custom roles: persist the membership in the side-table so
-    // getCustomRolesForUser returns it later (#826). Built-in
-    // .User.role stays at its current value; downstream privilege
-    // computation merges built-in + custom-role grants.
-    g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureRolesInit(allocator);
-    if (g_custom_roles.contains(role_name)) {
-        g_custom_role_members_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer g_custom_role_members_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-        recordCustomRoleMemberLocked(allocator, username, role_name) catch |err| {
-            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: failed to record custom-role membership: {s}", .{@errorName(err)}) };
-            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-        };
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "assigned custom role {s} to {s}", .{ role_name, username }) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
-    // #835: unknown role must NOT silently retain the prior role. Free the
-    // pre-allocated success-row scaffolding and return a Zig error so the
-    // CLI exits non-zero and any caller's transactional logic aborts.
-    allocator.free(row);
-    allocator.free(rows);
-    allocator.free(columns[0]);
-    allocator.free(columns);
-    return error.UnknownRole;
+    try user_mgmt.assignRole(allocator, username, role);
+    return .{ .columns = columns, .rows = rows, .flags = .empty, .owns_value_memory = true };
 }
 
 // #832 / GAP-0284: ABAC user-attribute store. Storage lives in

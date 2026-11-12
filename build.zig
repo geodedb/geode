@@ -12530,6 +12530,16 @@ pub fn build(b: *std.Build) void {
     const sonny6291_step = b.step("test-sonny6291-auth-procedures", "Run SONNY-6291 authenticated procedure refusal, profile authorization and missing-user regressions");
     sonny6291_step.dependOn(&run_sonny6291_tests.step);
 
+    const sonny6292_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6292_custom_role_refusal.zig"), .target = target, .optimize = optimize });
+    sonny6292_test_mod.addImport("geode", root_mod);
+    sonny6292_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6292_test_mod.link_libc = true;
+    const sonny6292_tests = b.addTest(.{ .root_module = sonny6292_test_mod });
+    const run_sonny6292_tests = b.addRunArtifact(sonny6292_tests);
+    shardDep(test_step, &run_sonny6292_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny6292_step = b.step("test-sonny6292-custom-role-refusal", "Run SONNY-6292 custom-role assignment refusal, drop/recreate and startup rehydration regressions");
+    sonny6292_step.dependOn(&run_sonny6292_tests.step);
+
     // GAP-0918: vector index validation — dimension-mismatch write rejection,
     // DDL metric validation, malformed vector literal type error.
     const gap0918_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0918_vector_validation.zig"), .target = target, .optimize = optimize });

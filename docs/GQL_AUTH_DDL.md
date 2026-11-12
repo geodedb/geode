@@ -128,7 +128,8 @@ resolves to `none`:
 
 `none` is the absence of a role, not a built-in role: `Role.fromString`
 does not parse it, so `ALTER USER … SET ROLE none` does not assign it (it is
-refused as an unknown role unless a custom role of that name exists). `SHOW USERS`
+refused as an unknown role, or as unsupported custom membership if a catalogued
+role has that name). `SHOW USERS`
 lists such a user with the role `none`. To give the user access, assign a
 built-in role (`ALTER USER u SET ROLE readonly`) or grant per graph
 (`GRANT READ ON GRAPH g TO u`).
@@ -255,8 +256,13 @@ create/revoke) are wired at startup in `server_init`.
    Roles created via `CREATE ROLE <custom-name>` are stored in the role catalog,
    but the user record's `role` field only tracks the four built-in roles.
    Assigning a custom role via `ALTER USER ... SET ROLE` or `GRANT ROLE ... TO ...`
-   returns an acknowledgement noting the assignment is not yet structurally
-   tracked on the user record.
+   or direct `geode.auth.user_assign_role` now fails with SQLSTATE `0A000`.
+   No membership is created and the user's effective permissions are unchanged.
+   The former ephemeral membership table and borrowed-slice accessor are removed:
+   a dropped/recreated role or startup rehydration cannot restore an acknowledged
+   assignment. Built-in role assignments continue to work. Custom memberships
+   must gain persistence and actual authorization support before they can be
+   enabled.
 
 3. **Policy DDL persistence is implemented (GAP-0858, closed 2026-06-09).**
    `CREATE POLICY` / `ALTER POLICY ... SET ENABLED true|false` /

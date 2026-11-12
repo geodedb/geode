@@ -397,6 +397,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DivisionByZero => .{ .code = "22012", .message = "Division by zero" },
         error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
         error.ApiKeysUnsupported => .{ .code = "0A000", .message = "API key procedures are unsupported: geode.auth.apikey_* is not connected to the API key manager" },
+        error.CustomRoleMembershipUnsupported => .{ .code = "0A000", .message = "Custom role membership is unsupported: persistent custom-role authorization is not implemented" },
         error.UserNotFound => .{ .code = "42704", .message = "User does not exist" },
         // GAP-0856: distributed EXPLAIN/PROFILE is intentionally node-local only.
         error.DistributedExplainUnsupported => .{ .code = "0A000", .message = @import("../distributed/distributed_explain.zig").unsupported_message },
