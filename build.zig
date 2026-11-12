@@ -10270,6 +10270,16 @@ pub fn build(b: *std.Build) void {
     const sonny2707_count_step = b.step("test-sonny2707-count-direction", "Run SONNY-2707 parts (2) and (3) regression (COUNT {}, EXISTS {} and pattern comprehensions over an unbound relationship, a variable-length relationship in every direction, and a multi-hop chain agree with the equivalent MATCH and a walk of the seeded edges: in-memory, persisted, tenant-scoped and RLS-policy sessions, warm and reloaded)");
     sonny2707_count_step.dependOn(&run_sonny2707_count_tests.step);
 
+    const sonny6295_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6295_create_path_middle_node.zig"), .target = target, .optimize = optimize });
+    sonny6295_test_mod.addImport("geode", root_mod);
+    sonny6295_test_mod.addImport("logging", logging_mod);
+    sonny6295_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6295_tests = b.addTest(.{ .root_module = sonny6295_test_mod });
+    const run_sonny6295_tests = b.addRunArtifact(sonny6295_tests);
+    shardDep(test_step, &run_sonny6295_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6295_step = b.step("test-sonny6295-create-path-middle-node", "Run SONNY-6295 regression (each node of a multi-hop CREATE, INSERT, MATCH ... CREATE, MERGE, UNWIND ... CREATE and PROFILE CREATE path is created once and every hop joins it, with its direction; the fast paths decline the shape and the cluster leader's spec has one node between two hops: in-memory, persisted (warm and reloaded), tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny6295_step.dependOn(&run_sonny6295_tests.step);
+
     // SONNY-738 Task W fix round: the one write step (a SET, REMOVE, CREATE,
     // MERGE or DELETE applied over the rows the pattern binds, after the WITH
     // and its WHERE) and the structural guard that refuses a write clause an

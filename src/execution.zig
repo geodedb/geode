@@ -213,6 +213,8 @@ pub const CreateBatchResult = crud_operations.CreateBatchResult;
 pub const executeCreateQuery = crud_operations.executeCreateQuery;
 pub const executeReturnClauseWithNodes = crud_operations.executeReturnClauseWithNodes;
 pub const executeCreate = crud_operations.executeCreate;
+/// SONNY-6295: the cluster leader's GNC2 spec builder for a CREATE chain (tests).
+pub const buildEdgeCreateSpecs = crud_operations.buildEdgeCreateSpecs;
 pub const ensureAutoIndexes = crud_operations.ensureAutoIndexes;
 pub const executeInsert = crud_operations.executeInsert;
 pub const executeMerge = crud_operations.executeMerge;

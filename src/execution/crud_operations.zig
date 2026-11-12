@@ -2313,7 +2313,7 @@ fn clusterReplicateNodeCreate(
 /// `node_specs`/`edge_specs`/their backing label & prop arrays are arena-style
 /// allocations off `allocator` (the per-statement allocator); the serializer
 /// deep-copies into the payload, so they can be freed by the caller's arena.
-fn buildEdgeCreateSpecs(
+pub fn buildEdgeCreateSpecs(
     allocator: std.mem.Allocator,
     chain: ast.Chain,
     env: Env,
