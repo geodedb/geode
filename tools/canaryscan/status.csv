@@ -5094,6 +5094,7 @@ REQ-SONNY-6374-SERVER-RESIDUALS,Server Hygiene,HelpAbacArgonCanaryDeadCode,TESTE
 REQ-SONNY-6378-SERVER-EXIT-HYGIENE,Server Hygiene,ExitLeaksArgonBoundsLoggerDocker,TESTED,tests/test_sonny6378_server_exit_and_hygiene.zig,tests/test_sonny6378_server_exit_and_hygiene.zig,,server,2026-11-12
 REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED,FieldLevelEncryption,RotateKeyRefusedAsUnsupported,TESTED,src/admin/fle_commands.zig,tests/test_sonny6386_fle_rotate_key_unsupported.zig,,security,2026-11-12
 REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED,FieldLevelEncryption,RotateKeyRefusedAsUnsupported,TESTED,tests/test_sonny6386_fle_rotate_key_unsupported.zig,,,security,2026-11-12
+REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,tests/test_sonny6386_remote_backup_atomic_output.zig,tests/test_sonny6386_remote_backup_atomic_output.zig,,cli,2026-11-12
 REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED,TDE baseline,MalformedKeyRefusesStartup,TESTED,tests/test_sonny6386_tde_key_fail_closed.zig,tests/test_sonny6386_tde_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED,TDE baseline,ServerStartupRefusal,TESTED,src/server/server_init.zig,tests/test_sonny6386_tde_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

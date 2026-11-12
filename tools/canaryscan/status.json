@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:37:48.335801749Z",
+  "generated_at": "2026-11-12T18:40:56.405843704Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79347,6 +79347,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC",
+      "features": [
+        {
+          "feature": "CLI Backup",
+          "aspect": "RemoteOutputAtomicDurable",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_remote_backup_atomic_output.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_remote_backup_atomic_output.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED",
       "features": [
         {
@@ -87035,7 +87054,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4475
+      "TESTED": 4476
     },
     "by_aspect": {
       "2PC": 3,
@@ -89962,6 +89981,7 @@
       "RemainingCategories": 1,
       "RemoteBackup": 1,
       "RemoteFailureIsAnError": 1,
+      "RemoteOutputAtomicDurable": 1,
       "RemoteQuery": 1,
       "RemoteRestore": 1,
       "Remove": 2,
