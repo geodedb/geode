@@ -454,9 +454,9 @@ test "PERF-C / GAP-0863b: FLE-encrypted property write keeps the index correct a
     _ = setenv("GEODE_MASTER_KEY", TEST_MASTER_KEY_HEX, 1);
 
     // Isolate the PERSISTED FLE catalog to a per-test temp dir so configuring
-    // ('User','email') below never writes the process-shared
-    // `{GEODE_DATA_DIR or /tmp}/geode_fle_catalog.dat` (the contamination
-    // vector this regression exists to pin down).
+    // ('User','email') below never writes a shared geode_fle_catalog.dat
+    // (the contamination vector this regression exists to pin down; before
+    // SONNY-6274 the catalog fell back to /tmp when no data dir was set).
     var catalog_tmp = std.testing.tmpDir(.{});
     defer catalog_tmp.cleanup();
     const data_dir = try tmpDirRealpathAlloc(allocator, &catalog_tmp.sub_path);

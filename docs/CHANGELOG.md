@@ -41,6 +41,28 @@
   policy that relied on a single-graph scope to allow writes everywhere must
   be re-created `ON GRAPH *`. See docs/GQL_AUTH_DDL.md, "Per-graph grant
   semantics". Regression: `zig build test-per-graph-grants`.
+- **The FLE catalog is no longer kept in /tmp (SONNY-6274):** the
+  field-level-encryption catalog (which fields are encrypted, their
+  algorithm, key scope and blind-index setting, and the roles that may read
+  them in plaintext; no key material) was saved to and loaded from
+  `{GEODE_DATA_DIR or /tmp}/geode_fle_catalog.dat`. With no data directory
+  every session, test and process shared `/tmp/geode_fle_catalog.dat`, so a
+  fresh session took its encrypted-field set from whatever an earlier run
+  left there; and only `GEODE_DATA_DIR` counted, so a server started with
+  `--data-dir` alone also kept its FLE catalog in `/tmp`. The file was
+  opened `O_CREAT|O_TRUNC` with the default mode (0644 under the usual
+  umask), and a symbolic link planted at the path was followed on read and
+  write. The FLE catalog now lives in the store's data directory (the
+  `--data-dir` override, else `GEODE_DATA_DIR`); with neither it is in
+  memory, as the index catalog is. It is written to a new
+  `O_EXCL|O_NOFOLLOW` 0600 file renamed over the path, and a link at the
+  path is refused on read. **Upgrade note:** a server that ran with
+  `--data-dir` and no `GEODE_DATA_DIR` had its FLE catalog in
+  `/tmp/geode_fle_catalog.dat`; it is not read from there any more. Copy
+  that file into the data directory (after checking it is yours) before
+  restarting. `geode fle grant-plaintext` refuses to run without
+  `GEODE_DATA_DIR`, where it used to write the grant to `/tmp`.
+  Regression: `zig build test-sonny6274-fle-catalog-no-tmp`.
 
 ### Added
 

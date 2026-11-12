@@ -468,11 +468,12 @@ test "I-1 REPRO: adapterless count(n) counts resident nodes, not the empty IdMap
     const allocator = std.testing.allocator;
 
     // Adapterless setup, in two steps so the test stays hermetic:
-    //  1. Create the CATALOG with a tmpDir data dir. Without an override,
-    //     ensureCatalogInstance falls back to a data dir of "/tmp" and
-    //     PERSISTS the created graph into /tmp/geode_catalog.dat — shared
-    //     cross-run state that makes the second run fail with
-    //     error.DuplicateGraph.
+    //  1. Create the CATALOG with a tmpDir data dir, so the created graph
+    //     persists into this test's own directory. (Before SONNY-2795 a
+    //     catalog with no data dir fell back to /tmp/geode_catalog.dat,
+    //     shared cross-run state that failed a second run with
+    //     error.DuplicateGraph; with no data dir it is now in memory, and
+    //     since SONNY-6274 so is the FLE catalog.)
     //  2. THEN clear the override and (re)create the global STORE:
     //     getPrimaryGlobalStore resolves data_dir == null and
     //     syncGlobalAdapterForDataDir tears the adapter down

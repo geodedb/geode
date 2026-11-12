@@ -837,6 +837,9 @@ var g_data_dir_mutex: std.Io.Mutex = std.Io.Mutex.init;
 /// Pass null to clear the override and revert to env var behavior
 pub fn setDataDirOverride(allocator: std.mem.Allocator, dir: ?[]const u8) void {
     _ = allocator; // Not needed with fixed buffer
+    // SONNY-6274: the FLE catalog file lives in the same data directory (or,
+    // with none, the FLE catalog is in memory). Both mutexes are leaves.
+    fle_integration.catalog_mod.setDataDirOverride(if (dir) |path| path[0..@min(path.len, g_override_data_dir_buf.len)] else null);
     g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_data_dir_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (dir) |path| {

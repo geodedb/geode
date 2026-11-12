@@ -220,6 +220,68 @@ pub fn writeEncryptedFile(allocator: std.mem.Allocator, path: []const u8, data: 
     try file.writeStreamingAll(io, encrypted);
 }
 
+// CANARY: REQ=REQ-SONNY-6274-FLE-CATALOG-NO-TMP; FEATURE="FieldLevelEncryption"; ASPECT=PrivateFileWrite; STATUS=TESTED; TEST=tests/test_sonny6274_fle_catalog_no_tmp.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6274: write (encrypted when TDE is on) data to `path` through a new
+/// file created O_CREAT | O_EXCL | O_NOFOLLOW, mode 0600 (set again once
+/// open, so no umask changes it), synced, then renamed over `path`. The
+/// rename replaces whatever is at `path`, a symbolic link included, and never
+/// writes through it; a reader sees the old file or the new one, not a torn
+/// one. `writeEncryptedFile` opened `path` itself with O_CREAT | O_TRUNC and
+/// the default mode: an existing file kept its mode and owner and a link
+/// planted at the path was followed. The temporary name is random, so a name
+/// planted in advance cannot be guessed; a temporary that cannot be completed
+/// is removed.
+pub fn writeEncryptedFilePrivate(allocator: std.mem.Allocator, path: []const u8, data: []const u8) !void {
+    const encrypted = try encrypt(allocator, data);
+    defer allocator.free(encrypted);
+
+    var rnd: [8]u8 = undefined;
+    try cb.Csprng.bytes(&rnd);
+    const rnd_hex = std.fmt.bytesToHex(rnd, .lower);
+    const tmp_path = try std.fmt.allocPrint(allocator, "{s}.tmp-{s}", .{ path, &rnd_hex });
+    defer allocator.free(tmp_path);
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, tmp_path, .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .EXCL = true,
+        .NOFOLLOW = true,
+        .CLOEXEC = true,
+    }, 0o600);
+    const file = std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    var renamed = false;
+    defer if (!renamed) std.Io.Dir.cwd().deleteFile(io, tmp_path) catch {};
+    {
+        defer file.close(io);
+        try file.setPermissions(io, std.Io.File.Permissions.fromMode(0o600));
+        try file.writeStreamingAll(io, encrypted);
+        try file.sync(io);
+    }
+    try std.Io.Dir.cwd().rename(tmp_path, std.Io.Dir.cwd(), path, io);
+    renamed = true;
+}
+
+/// SONNY-6274: `readDecryptedFile`, but a symbolic link at `path` is refused
+/// (O_NOFOLLOW: error.SymLinkLoop) instead of followed.
+pub fn readDecryptedFileNoFollow(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .RDONLY,
+        .NOFOLLOW = true,
+        .CLOEXEC = true,
+    }, 0);
+    const file = std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer file.close(io);
+
+    const file_size = try file.length(io);
+    const raw_data = try allocator.alloc(u8, @intCast(file_size));
+    defer allocator.free(raw_data);
+
+    const read_bytes = try file.readPositionalAll(io, raw_data, 0);
+    return try decrypt(allocator, raw_data[0..read_bytes]);
+}
+
 /// Read and decrypt file
 /// If file is not encrypted, returns plaintext
 pub fn readDecryptedFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {

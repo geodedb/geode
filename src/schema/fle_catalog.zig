@@ -383,20 +383,66 @@ pub fn resetGlobalCatalog(allocator: std.mem.Allocator) void {
     }
 }
 
-/// Save catalog to disk with TDE encryption
+pub const catalog_file_name = "geode_fle_catalog.dat";
+
+// CANARY: REQ=REQ-SONNY-6274-FLE-CATALOG-NO-TMP; FEATURE="FieldLevelEncryption"; ASPECT=CatalogPath; STATUS=TESTED; TEST=tests/test_sonny6274_fle_catalog_no_tmp.zig; OWNER=security; UPDATED=2026-11-11
+// SONNY-6274: the catalog file lives in the data directory: the store's
+// override (`graph_store.setDataDirOverride`, which forwards it here; this
+// module cannot import graph_store) or else GEODE_DATA_DIR. With neither the
+// session is in memory and so is the FLE catalog, as the index catalog
+// (`Catalog.isPersisted`). It fell back to /tmp, so every such session in
+// every process shared /tmp/geode_fle_catalog.dat and a fresh one took its
+// encrypted-field set from whatever an earlier run left there; a server
+// started with --data-dir but no GEODE_DATA_DIR also kept it there.
+var g_data_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+var g_data_dir_len: usize = 0;
+var g_data_dir_mutex: std.Io.Mutex = std.Io.Mutex.init;
+
+/// Set (or with null, clear) the data directory the catalog file lives in.
+pub fn setDataDirOverride(dir: ?[]const u8) void {
+    g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_data_dir_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const path = dir orelse "";
+    const n = @min(path.len, g_data_dir_buf.len);
+    @memcpy(g_data_dir_buf[0..n], path[0..n]);
+    g_data_dir_len = n;
+}
+
+/// The catalog file path, or null when the catalog is memory-only (no data
+/// directory). The caller frees the path.
+pub fn catalogFilePath(allocator: std.mem.Allocator) !?[]u8 {
+    {
+        g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer g_data_dir_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (g_data_dir_len > 0) {
+            return try std.fs.path.join(allocator, &.{ g_data_dir_buf[0..g_data_dir_len], catalog_file_name });
+        }
+    }
+    const env = getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return null,
+        else => return err,
+    };
+    defer allocator.free(env);
+    if (env.len == 0) return null;
+    return try std.fs.path.join(allocator, &.{ env, catalog_file_name });
+}
+
+/// Whether the catalog is saved to and loaded from a file.
+pub fn isPersisted() bool {
+    const path = catalogFilePath(std.heap.smp_allocator) catch return true;
+    if (path) |p| {
+        std.heap.smp_allocator.free(p);
+        return true;
+    }
+    return false;
+}
+
+/// Save catalog to disk with TDE encryption. A memory-only catalog (no data
+/// directory) saves nothing.
 pub fn saveCatalog(catalog: *SchemaCatalog) !void {
     const allocator = catalog.allocator;
 
-    // Get catalog path from GEODE_DATA_DIR or use default
-    const data_dir = getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
-        if (err == error.EnvironmentVariableNotFound) {
-            break :blk try allocator.dupe(u8, "/tmp");
-        }
-        return err;
-    };
-    defer allocator.free(data_dir);
-
-    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_fle_catalog.dat", .{data_dir});
+    const catalog_path = (try catalogFilePath(allocator)) orelse return;
     defer allocator.free(catalog_path);
 
     // Buffer all data to memory first for TDE encryption
@@ -464,35 +510,24 @@ pub fn saveCatalog(catalog: *SchemaCatalog) !void {
         }
     }
 
-    // Encrypt and write to file
-    try tde.writeEncryptedFile(allocator, catalog_path, buffer.items);
+    // Encrypt and write to file: a new 0600 file, then renamed over the
+    // catalog (never written through a link planted at the path).
+    try tde.writeEncryptedFilePrivate(allocator, catalog_path, buffer.items);
 }
 
-/// Load catalog from disk with TDE decryption
+/// Load catalog from disk with TDE decryption. A memory-only catalog (no
+/// data directory) loads nothing. A symbolic link at the path is refused.
 pub fn loadCatalog(catalog: *SchemaCatalog) !void {
     const allocator = catalog.allocator;
 
-    // Get catalog path from GEODE_DATA_DIR or use default
-    const data_dir = getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
-        if (err == error.EnvironmentVariableNotFound) {
-            break :blk try allocator.dupe(u8, "/tmp");
-        }
-        return err;
-    };
-    defer allocator.free(data_dir);
-
-    const catalog_path = try std.fmt.allocPrint(allocator, "{s}/geode_fle_catalog.dat", .{data_dir});
+    const catalog_path = (try catalogFilePath(allocator)) orelse return;
     defer allocator.free(catalog_path);
 
-    // Check if file exists first
-    const io = std.Io.Threaded.global_single_threaded.io();
-    std.Io.Dir.cwd().access(io, catalog_path, .{}) catch |err| {
-        if (err == error.FileNotFound) return; // No catalog file yet
-        return err;
-    };
-
     // Read and decrypt file using TDE
-    const data = try tde.readDecryptedFile(allocator, catalog_path);
+    const data = tde.readDecryptedFileNoFollow(allocator, catalog_path) catch |err| switch (err) {
+        error.FileNotFound => return, // No catalog file yet
+        else => return err,
+    };
     defer allocator.free(data);
 
     // Create reader from decrypted data

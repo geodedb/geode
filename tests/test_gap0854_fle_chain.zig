@@ -129,9 +129,9 @@ test "GAP-0854: configureField on a colliding label does not corrupt the auth HM
     _ = setenv("GEODE_MASTER_KEY", TEST_MASTER_KEY_HEX, 1);
 
     // Isolate the PERSISTED FLE catalog to a per-test temp dir. Without this,
-    // `configureField('User','email')` persists to `{GEODE_DATA_DIR or
-    // /tmp}/geode_fle_catalog.dat` (fle_catalog.saveCatalog) — a process- and
-    // run-shared file. A later, otherwise-unrelated test (e.g.
+    // `configureField('User','email')` persists to the data directory's
+    // geode_fle_catalog.dat (fle_catalog.saveCatalog; before SONNY-6274 a
+    // process- and run-shared /tmp file when none was set). A later, otherwise-unrelated test (e.g.
     // tests/bulk_ingest/test_simple_merge_fastpath.zig) that lazily loads the
     // global catalog would then inherit this `User.email` encryption config and
     // FLE-encrypt its `email` property, breaking its plaintext assertion. Point
