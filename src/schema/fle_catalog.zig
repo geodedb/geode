@@ -278,6 +278,19 @@ pub const SchemaCatalog = struct {
         return false;
     }
 
+    /// SONNY-6362: is `field_name` encrypted in any type? (MERGE refuses to
+    /// match on such a field, `fle_integration.fieldEncryptedInAnyType`.)
+    pub fn isFieldEncryptedInAnyType(self: *SchemaCatalog, field_name: []const u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        var it = self.schemas.valueIterator();
+        while (it.next()) |type_meta_ptr| {
+            if (type_meta_ptr.*.isFieldEncrypted(field_name)) return true;
+        }
+        return false;
+    }
+
     /// Check if a field in a type is searchable (has blind index)
     /// Thread-safe operation
     pub fn isFieldSearchable(

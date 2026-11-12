@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const fle_integration = @import("../fle_integration.zig"); // SONNY-6362
 const property_codec = @import("../property_value_codec.zig");
 const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
@@ -3633,7 +3634,37 @@ fn mergeRelationshipHop(
 // CANARY: REQ=REQ-MULTI-GRAPH-020; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteMerge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
+// CANARY: REQ=REQ-SONNY-6362-MERGE-FLE-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=MergeOnEncryptedFieldRefused; STATUS=TESTED; TEST=tests/test_sonny6362_merge_index_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6362: MERGE matches its pattern's property values against the
+/// stored ones (`nodeMatchesEvaluatedProps`, `edgeMatchesEvaluatedProps`,
+/// MERGE's index), and an FLE-encrypted value is stored as randomized AEAD
+/// ciphertext: a plaintext pattern value never equals it, so MERGE never
+/// matched and created a duplicate every time. Until matching on an
+/// encrypted value exists (deterministic or blind-index encryption,
+/// SONNY-6350), a MERGE whose pattern names a property FLE-encrypted in any
+/// type is refused (0A000), before anything is written. The internal
+/// security graph is never encrypted (GAP-0854) and is exempt.
+fn refuseMergeOnEncryptedField(pattern: ast.GraphPattern, graph_name: []const u8) error{MergeOnEncryptedField}!void {
+    if (!fle_integration.hasEncryptedFields()) return;
+    if (std.mem.eql(u8, graph_name, graph_store.SECURITY_GRAPH_NAME)) return;
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| try refuseEncryptedKeys(head.props);
+        for (chain.hops) |hop| {
+            try refuseEncryptedKeys(hop.left.props);
+            try refuseEncryptedKeys(hop.rel.props);
+            try refuseEncryptedKeys(hop.right.props);
+        }
+    }
+}
+
+fn refuseEncryptedKeys(props: ?[]ast.Property) error{MergeOnEncryptedField}!void {
+    for (props orelse return) |prop| {
+        if (fle_integration.fieldEncryptedInAnyType(prop.key)) return error.MergeOnEncryptedField;
+    }
+}
+
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
+    try refuseMergeOnEncryptedField(m.pattern, current_graph orelse graph_store.DEFAULT_GRAPH_NAME); // SONNY-6362
     // SONNY-2686: run the statement under its own context. Row-level security
     // reads the ACTIVE context (`passesRLSFilter`), while the tenant filter
     // below comes from `context`; `executeStatementWithContext` installs the

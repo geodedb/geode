@@ -202,6 +202,32 @@
 
 ### Fixed
 
+- **MERGE's indexes answer only what the store holds (SONNY-6362, items
+  2-5).** (2) A node could be created with an id whose bit 63 is set (a
+  reserved or replicated id); MERGE's index keeps a flag in that bit, so the
+  node was never an entry (a MERGE of a value it alone held created a
+  duplicate) and the loader refuses such an id (the node vanished at
+  restart). Creating one is now refused (`graph_store.refuseFlaggedNodeId`:
+  the reserved-id creates, `createNodeWithId`, the adapter's bulk insert and
+  MERGE). (3) `StorageAdapter.lookupNodeIdByLabelAndAllProps` (bulk edge
+  endpoint resolution) trusted the exact index's posting for its seed filter
+  unchecked; the posting is a value hash, so a collision or a stale posting
+  returned a node holding another value. Every filter is now checked against
+  the node, and the public-id resolver checks the seed too. (4)
+  **BEHAVIOUR CHANGE:** MERGE on a property that is FLE-encrypted in any type
+  is refused (0A000) with nothing written; it compared the stored randomized
+  ciphertext with the plaintext pattern value, never matched, and created a
+  duplicate every time. MERGE on an unencrypted key and `SET` the encrypted
+  field instead; matching on encrypted values needs deterministic or
+  blind-index encryption (SONNY-6350). `docs/FIELD_LEVEL_ENCRYPTION.md` no
+  longer lists blind-index equality search as available (it is not wired to
+  any query). (5) The MERGE index writers that cannot fail their write
+  (hydration, the full rebuild, the label-add and composite helpers, the
+  streaming load's merge stage) swallowed every error, out of memory
+  included, and MERGE trusted the miss; a failed add now marks the index
+  untrusted, so lookups answer "unable to tell" and the caller scans, until a
+  full rebuild adds every entry. Regression:
+  `zig build test-sonny6362-merge-index-residuals`.
 - **Full-text and vector indexes follow SET n:L, REMOVE n.prop and every
   label; a repeated SET target answers 22G0M (SONNY-6368).** (1) **BEHAVIOUR
   CHANGE:** one SET clause assigning one property of an element twice

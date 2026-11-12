@@ -2001,6 +2001,23 @@ const merge_property_index_shard_count: usize = 256;
 /// Round 8: a node id never has this bit set (`parsePersistedPublicId`).
 const merge_entry_shared: u64 = @as(u64, 1) << 63;
 
+// CANARY: REQ=REQ-SONNY-6362-FLAGGED-ID-REFUSED; FEATURE="MergeIdempotency"; ASPECT=CreateRefusesFlaggedId; STATUS=TESTED; TEST=tests/test_sonny6362_merge_index_residuals.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6362: no node is created with an id that has bit 63 set. MERGE's
+/// index keeps a flag in that bit, so such a node is never an entry
+/// (`MergePropertyIndex.putOrUpdate`) and a MERGE of a value it alone holds
+/// created a duplicate; and the loader refuses a persisted id with it
+/// (`parsePersistedPublicId`), so the node vanished at the next restart.
+/// Time-based and raft-derived ids never have it; a reserved or replicated
+/// id is the only way in, and is refused here, before anything is written.
+pub fn refuseFlaggedNodeId(node_id: u64) error{NodeIdFlagged}!void {
+    if (node_id & merge_entry_shared != 0) {
+        log.err("refusing to create a node whose id has bit 63 set: no id has it, and MERGE's index flags entries with it", &.{
+            Attr.uint("node_id", node_id),
+        });
+        return error.NodeIdFlagged;
+    }
+}
+
 /// The entry after `node_id` is recorded as a holder of its key.
 /// `node_id` never has bit 63 set: `MergePropertyIndex.putOrUpdate` refuses
 /// one.
@@ -2471,6 +2488,14 @@ pub const GraphStore = struct {
     // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
     // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
     merge_prop_index: MergePropertyIndex,
+    // SONNY-6362: an entry could not be added to `merge_prop_index` (out of
+    // memory) on a path that cannot fail its write, so a miss is no longer
+    // authoritative: every lookup answers `.not_indexable` (its caller
+    // scans) until a full rebuild (`rebuildIndexes`) adds every entry with
+    // no failure. `merge_index_add_failures` counts them (diagnostics, and
+    // the rebuild's test that none happened while it ran).
+    merge_index_untrusted: std.atomic.Value(bool) = .init(false),
+    merge_index_add_failures: std.atomic.Value(u64) = .init(0),
     // SONNY-3056: "graph\x00label\x00key" -> the registration generation
     // of a runtime-registered lean key (`leanLateKeyGen`) whose holders of
     // that label were backfilled into `merge_prop_index`
@@ -5149,6 +5174,7 @@ pub const GraphStore = struct {
         graph_name: []const u8,
         tenant: []const u8,
     ) !void {
+        try refuseFlaggedNodeId(reserved_id); // SONNY-6362
         try statementWriteFence(); // SONNY-3348
         try statement_undo.reserve(1); // SONNY-3348 (round 18): room to record the node
         // PHASE 1b chokepoint: build the graph's resident indexes BEFORE this
@@ -5197,6 +5223,7 @@ pub const GraphStore = struct {
         graph_name: []const u8,
         tenant: []const u8,
     ) !void {
+        try refuseFlaggedNodeId(reserved_id); // SONNY-6362
         try statementWriteFence(); // SONNY-3348
         try statement_undo.reserve(1); // SONNY-3348 (round 18): room to record the node
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
@@ -5884,6 +5911,7 @@ pub const GraphStore = struct {
         mark_dirty: bool,
         persist_adapter: bool,
     ) !void {
+        try refuseFlaggedNodeId(node_id); // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
         // Existence check BEFORE any storage-adapter slot creation: an
         // idempotent re-create (e.g. a restarted Raft node replaying a
@@ -6726,6 +6754,24 @@ pub const GraphStore = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-6362-MERGE-ADD-FAILURE; FEATURE="MergeIdempotency"; ASPECT=FailedAddUntrustsIndex; STATUS=TESTED; TEST=tests/test_sonny6362_merge_index_residuals.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6362: a MERGE index entry was not added on a path that cannot
+    /// fail its write (hydration, the full rebuild, the label-add and
+    /// composite helpers, the streaming load's merge stage). The index no
+    /// longer knows every holder, so it stops answering misses
+    /// (`merge_index_untrusted`). These paths swallowed every error,
+    /// out of memory included, and MERGE trusted the miss and created a
+    /// duplicate. `MergeHolderIdFlagged` is no failure: such an id is never
+    /// an entry (and no node is created with one, `refuseFlaggedNodeId`).
+    fn noteMergeIndexAddFailure(self: *GraphStore, err: anyerror) void {
+        if (err == error.MergeHolderIdFlagged) return;
+        _ = self.merge_index_add_failures.fetchAdd(1, .acq_rel);
+        self.merge_index_untrusted.store(true, .release);
+        log.err("a MERGE index entry could not be added; MERGE lookups scan until the index is rebuilt", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    }
+
     /// SONNY-6268: `addToMergePropertyIndex` that undoes its own entries when
     /// one fails, so on error the index is as it was. `old` is the value the
     /// node held under `prop_key` (null for none): an entry the old value
@@ -6937,6 +6983,7 @@ pub const GraphStore = struct {
     /// bulk MERGE, edge endpoint resolution) gets the same authoritative
     /// answer.
     pub fn lookupMergeCandidate(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
+        if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
         // SONNY-3056: a lean key registered at runtime is complete for this
         // label only after its backfill; a failed one leaves the index unable
@@ -6964,6 +7011,7 @@ pub const GraphStore = struct {
     /// (Round 8: a settle that finds a single holder records it alone again,
     /// so such a key answers here once more.)
     pub fn lookupOnlyMergeHolder(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
+        if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable; // SONNY-3056
         var buf: [1024]u8 = undefined;
@@ -7256,6 +7304,7 @@ pub const GraphStore = struct {
         filters: []const graph_storage_adapter.StorageAdapter.PropKV,
         out_node_id: *u64,
     ) MergeLookupResult {
+        if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
         const spec = blk: {
             g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -7349,7 +7398,7 @@ pub const GraphStore = struct {
             var buf: [1024]u8 = undefined;
             for (labels) |label| {
                 const probe = buildCompositeMergeIndexKey(&buf, node.graph_name, label, &spec_copy, values[0..spec_copy.prop_count]) orelse continue;
-                self.merge_prop_index.putOrUpdate(probe, node.id) catch {};
+                self.merge_prop_index.putOrUpdate(probe, node.id) catch |err| self.noteMergeIndexAddFailure(err);
             }
         }
     }
@@ -7673,6 +7722,9 @@ pub const GraphStore = struct {
 
         self.merge_prop_index.reset();
         self.clearLeanBackfilled();
+        // SONNY-6362: the index is trusted again once this rebuild has added
+        // every entry and no add failed meanwhile (here or elsewhere).
+        const merge_failures_before = self.merge_index_add_failures.load(.acquire);
 
         // PERF-P0-001: Reset edge-type index (SONNY-3233: under its lock).
         {
@@ -7720,12 +7772,13 @@ pub const GraphStore = struct {
             // Rebuild merge property index entries for this node
             var prop_iter = node.properties.iterator();
             while (prop_iter.next()) |prop_entry| {
-                self.addToMergePropertyIndex(node.graph_name, node.labels, prop_entry.key_ptr.*, prop_entry.value_ptr.*, node.id) catch {};
+                self.addToMergePropertyIndex(node.graph_name, node.labels, prop_entry.key_ptr.*, prop_entry.value_ptr.*, node.id) catch |err| self.noteMergeIndexAddFailure(err);
             }
             // Rebuild COMPOSITE merge entries too (caveat "B") so endpoint
             // resolution stays zero-read after a reopen/rebuild.
             self.addNodeCompositeMergeEntries(node);
         }
+        if (self.merge_index_add_failures.load(.acquire) == merge_failures_before) self.merge_index_untrusted.store(false, .release);
 
         // Rebuild adjacency index, edge-type index, and ensure graph registry entries for edges
         var edge_iter = self.edges.iterator();
@@ -8523,7 +8576,7 @@ pub const GraphStore = struct {
         const labels = [_][]const u8{label};
         var it = node.properties.iterator();
         while (it.next()) |p| {
-            self.addToMergePropertyIndex(node.graph_name, &labels, p.key_ptr.*, p.value_ptr.*, node.id) catch {};
+            self.addToMergePropertyIndex(node.graph_name, &labels, p.key_ptr.*, p.value_ptr.*, node.id) catch |err| self.noteMergeIndexAddFailure(err);
         }
         self.addNodeCompositeMergeEntriesForLabels(node, &labels);
     }
@@ -13985,7 +14038,7 @@ pub const GraphStore = struct {
                         prop_entry.key_ptr.*,
                         prop_entry.value_ptr.*,
                         node.id,
-                    ) catch {};
+                    ) catch |err| p.store.noteMergeIndexAddFailure(err);
                 }
                 p.store.addNodeCompositeMergeEntries(node);
             }
@@ -14336,7 +14389,7 @@ pub const GraphStore = struct {
                                 prop_entry.key_ptr.*,
                                 prop_entry.value_ptr.*,
                                 copy.id,
-                            ) catch {};
+                            ) catch |err| self.noteMergeIndexAddFailure(err);
                         }
                         self.addNodeCompositeMergeEntries(&copy);
                     }
@@ -14893,7 +14946,7 @@ pub const GraphStore = struct {
                                 prop_entry.key_ptr.*,
                                 prop_entry.value_ptr.*,
                                 stored_node_ptr.id,
-                            ) catch {};
+                            ) catch |err| self.noteMergeIndexAddFailure(err);
                         }
                         // Caveat "B": rebuild the COMPOSITE merge entry for this
                         // hydrated node so the from-dump EDGE phase (which runs as a

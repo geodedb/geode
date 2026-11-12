@@ -515,6 +515,16 @@ pub fn getRotationStatus(
     };
 }
 
+/// SONNY-6362: is `field_name` FLE-encrypted in any type? A stored value is
+/// encrypted under the first label of its node (or its edge type), so a
+/// pattern naming another label, or none, can still meet one. Fail-secure:
+/// true when the catalog cannot be read.
+pub fn fieldEncryptedInAnyType(field_name: []const u8) bool {
+    if (!hasEncryptedFields()) return false;
+    const catalog = fle_catalog.globalCatalog(std.heap.c_allocator) catch return true;
+    return catalog.isFieldEncryptedInAnyType(field_name);
+}
+
 /// Check if a field requires encryption according to the FLE catalog
 /// This is used by fail-secure logic to determine if encryption failure should abort writes
 /// CANARY: REQ=REQ-FLE-FAILSECURE-004; FEATURE="FLEFailSecure"; ASPECT=EncryptionCheck; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28

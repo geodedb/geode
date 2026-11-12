@@ -9,7 +9,9 @@ Geode implements **native, application-level field-level encryption** that provi
 
 - **Transparent encryption/decryption** for authorized users
 - **RBAC/ABAC-gated access** to plaintext values
-- **Equality search** on encrypted fields via blind indexes
+- **Blind-index keys** for equality search on encrypted fields (designed,
+  not yet wired to queries: see "Searchable (blind-index) fields" below;
+  `MERGE` on an encrypted field is refused, SONNY-6362)
 - **Online key rotation** with zero downtime
 - **Hierarchical key management** (TRK → SK → FEK/BIK)
 - **AEAD encryption** using Zig `std.crypto` (AES-256-GCM, ChaCha20-Poly1305)
@@ -345,6 +347,17 @@ An inline property map on an encrypted field (`MATCH (n:L {ssn: '...'})`,
 `-[:R {p: '...'}]->`) compares the stored envelope and never matches; use
 `WHERE` (SONNY-6335 item 3, open). While any FLE field is configured the QUIC
 write fast paths and the aggregate pushdowns decline to the executor.
+
+`MERGE` whose pattern names a property that is FLE-encrypted in any type
+(`MERGE (n:L {ssn: '...'})`, `MERGE (n {ssn: '...'})`, a relationship
+property) is refused (0A000, SONNY-6362) before anything is written: the
+stored value is randomized ciphertext, so the pattern value never matched
+it and MERGE created a duplicate every time. Any type, because a value is
+encrypted under its node's first label, which the pattern may not name.
+MERGE on an unencrypted key and set the encrypted field with `ON CREATE
+SET` / `SET`. Matching on an encrypted value needs deterministic or
+blind-index encryption (SONNY-6350). The internal `__geode_security` graph
+is never encrypted and is exempt.
 
 #### Encryption identity (SONNY-6335)
 

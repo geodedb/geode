@@ -4161,6 +4161,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        try graph_store.refuseFlaggedNodeId(reserved_id); // SONNY-6362
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkInsertPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
         for (props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
@@ -4909,6 +4910,7 @@ pub const StorageAdapter = struct {
         apply_on_match: bool,
         request_tenant: []const u8,
     ) !MergeResult {
+        try graph_store.refuseFlaggedNodeId(reserved_id); // SONNY-6362
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkMergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
         try self.checkPropertyEntryWritable(merge_key, merge_value);
@@ -5089,6 +5091,7 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !MergeResult {
         if (merge_props.len == 0) return error.InvalidMergePattern;
+        try graph_store.refuseFlaggedNodeId(reserved_id); // SONNY-6362
 
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkMergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
@@ -7285,8 +7288,11 @@ pub const StorageAdapter = struct {
         for (candidates) |node_id| {
             _ = g_lookup_all_props_candidates_scanned.fetchAdd(1, .monotonic);
             var all_match = true;
-            for (filters, 0..) |f, i| {
-                if (i == seed_idx) continue; // seed already matched via the index
+            // CANARY: REQ=REQ-SONNY-6362-SEED-RECHECK; FEATURE="MergeIdempotency"; ASPECT=SeedFilterVerified; STATUS=TESTED; TEST=tests/test_sonny6362_merge_index_residuals.zig; OWNER=storage; UPDATED=2026-11-12
+            // SONNY-6362: every filter, the seed's included. The seed's
+            // posting is a value HASH (a collision names a node holding
+            // another value) and may be stale; it was trusted unchecked.
+            for (filters) |f| {
                 // getNodeProperty returns a STORAGE-domain PropertyValue (owns
                 // .string/.ext bytes); convert to the high-level domain to
                 // compare with the filter (a graph_store.PropertyValue).
@@ -7430,7 +7436,7 @@ pub const StorageAdapter = struct {
             var seed_id: u64 = 0;
             switch (store.lookupMergeCandidate(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, &seed_id)) {
                 .found => {
-                    if (try self.publicNodeMatchesRemaining(graph_name, store, seed_id, filters, seed_idx)) return seed_id;
+                    if (try self.publicNodeMatchesAll(graph_name, store, seed_id, filters)) return seed_id;
                     return missing_err;
                 },
                 // Merge index miss but the exact index has it (best_len==1) ⇒ a
@@ -7508,19 +7514,18 @@ pub const StorageAdapter = struct {
         return propertyValuesEqual(actual, f.value);
     }
 
-    /// Verify every filter EXCEPT `seed_idx` against the public-id node's stored
-    /// properties (the seed already matched via the index/merge probe). Reads
-    /// each property engine-direct by slot — NO full-node hydration (Phase 2).
-    fn publicNodeMatchesRemaining(
+    /// Verify every filter against the public-id node's stored properties.
+    /// Reads each property engine-direct by slot — NO full-node hydration
+    /// (Phase 2). SONNY-6362: the seed's filter too; the merge probe that
+    /// named the node checks only that it exists in the graph.
+    fn publicNodeMatchesAll(
         self: *StorageAdapter,
         graph_name: []const u8,
         store: *graph_store.GraphStore,
         node_id: u64,
         filters: []const PropKV,
-        seed_idx: usize,
     ) !bool {
-        for (filters, 0..) |f, i| {
-            if (i == seed_idx) continue;
+        for (filters) |f| {
             if (!self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) return false;
         }
         return true;

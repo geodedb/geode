@@ -6,6 +6,7 @@
 //    label add propagate that refusal, so the write itself failed. And a
 //    removal for such an id compared equal to the entry "shared, lowest
 //    holder <the id without bit 63>" and dropped another node's entry.
+//    SONNY-6362: such an id is now refused when a node is created with it.
 // 2. Lean index mode (GEODE_INDEX_MERGE_KEYS_ONLY=1): the exact node-property
 //    index holds a key only once it is registered (the first MERGE on it).
 //    Nodes written before carried it unindexed and nothing added them, yet
@@ -184,24 +185,25 @@ fn tOf(id: u64) []const u8 {
 
 const flag: u64 = @as(u64, 1) << 63;
 
-test "SONNY-6354: a node whose reserved id has bit 63 set takes property SETs and labels, and is no MERGE entry" {
+// SONNY-6362: a node is no longer created with such an id
+// (`graph_store.refuseFlaggedNodeId`): it was never a MERGE entry, so a MERGE
+// of a value it alone held created a duplicate, and the loader refuses a
+// persisted id with bit 63 (`parsePersistedPublicId`), so it vanished at
+// restart. The SETs, the label add and the removals still pass a flagged id
+// by (SONNY-6354) as defence; no path creates one to reach them.
+test "SONNY-6354: a node whose reserved id has bit 63 set is refused at creation (it took SETs and labels, and was no MERGE entry)" {
     var gs = try graph_store.GraphStore.init(testing.allocator);
     defer gs.deinit();
     try gs.createGraph("g");
     var id: u64 = 0;
 
-    try gs.createNodeWithReservedIdAndGraph(flag | 3, &[_][]const u8{"F"}, "g");
-    try gs.setNodeProperty(flag | 3, "x", .{ .Int = 1 });
-    try gs.setNodePropertyNoSave(flag | 3, "y", .{ .Int = 2 });
-    try gs.addNodeLabel(flag | 3, "F2");
-    try testing.expectEqual(@as(i64, 1), gs.getNodeProperty(flag | 3, "x").?.Int);
-    try testing.expectEqual(@as(i64, 2), gs.getNodeProperty(flag | 3, "y").?.Int);
-    try testing.expectEqual(@as(usize, 2), (gs.nodes.get(flag | 3) orelse return error.NoNode).labels.len);
+    try testing.expectError(error.NodeIdFlagged, gs.createNodeWithReservedIdAndGraph(flag | 3, &[_][]const u8{"F"}, "g"));
+    try testing.expectError(error.NodeIdFlagged, gs.createNodeWithId(flag | 3, &[_][]const u8{"F"}, "g"));
+    try testing.expect(gs.nodes.get(flag | 3) == null);
     try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.not_found, gs.lookupOnlyMergeHolder("g", "F", "x", .{ .Int = 1 }, &id));
-    try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.not_found, gs.lookupOnlyMergeHolder("g", "F2", "y", .{ .Int = 2 }, &id));
 }
 
-test "SONNY-6354: removing a bit-63 node's value keeps the entry of the node whose id has the same low bits" {
+test "SONNY-6354: a bit-63 id with a holder's low bits is refused, and the holders' entry stays" {
     var gs = try graph_store.GraphStore.init(testing.allocator);
     defer gs.deinit();
     try gs.createGraph("g");
@@ -212,15 +214,14 @@ test "SONNY-6354: removing a bit-63 node's value keeps the entry of the node who
     try gs.setNodeProperty(5, "x", .{ .Int = 7 });
     try gs.createNodeWithReservedIdAndGraph(6, &[_][]const u8{"B"}, "g");
     try gs.setNodeProperty(6, "x", .{ .Int = 7 });
-    // A third holder whose id is 5 with bit 63 set: no entry of its own.
-    try gs.createNodeWithReservedIdAndGraph(flag | 5, &[_][]const u8{"B"}, "g");
-    try gs.setNodeProperty(flag | 5, "x", .{ .Int = 7 });
+    // A third holder whose id is 5 with bit 63 set is not created, so its
+    // removal and delete touch nothing.
+    try testing.expectError(error.NodeIdFlagged, gs.createNodeWithReservedIdAndGraph(flag | 5, &[_][]const u8{"B"}, "g"));
 
     gs.removeNodeProperty(flag | 5, "x");
     try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.found, gs.lookupMergeCandidate("g", "B", "x", .{ .Int = 7 }, &id));
     try testing.expectEqual(@as(u64, 5), id);
 
-    try gs.setNodeProperty(flag | 5, "x", .{ .Int = 7 });
     gs.deleteNode(flag | 5);
     try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.found, gs.lookupMergeCandidate("g", "B", "x", .{ .Int = 7 }, &id));
     try testing.expectEqual(@as(u64, 5), id);

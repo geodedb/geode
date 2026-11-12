@@ -223,6 +223,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.FleRevokeNotPersisted => .{ .code = "58030", .message = "The plaintext-access revoke is in effect but could not be saved to the FLE catalog; the role regains access at the next start unless the revoke is retried and saved. Retry it" },
         // CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
         // SONNY-6335: no index or UNIQUE constraint over an encrypted field.
+        // SONNY-6362: MERGE cannot match a randomized FLE ciphertext.
+        error.MergeOnEncryptedField => .{ .code = "0A000", .message = "MERGE on an FLE-encrypted property is not supported: the stored value is randomized ciphertext, so a pattern value never matches it and MERGE would create a duplicate. MERGE on an unencrypted key and set the encrypted property with ON CREATE SET / SET" },
         error.IndexOnEncryptedField => .{ .code = "0A000", .message = "The field is FLE-encrypted: an index or UNIQUE / NODE KEY constraint over it would hold ciphertext (or plaintext); none can be created. Use a searchable (blind-index) field for equality" },
         error.EncryptedFieldIndexed => .{ .code = "0A000", .message = "The field has an index or a UNIQUE / NODE KEY constraint over it; drop it before encrypting the field" },
         // SONNY-6341: CALL geode.fle.grantRole / revokeRole.
