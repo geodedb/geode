@@ -26,6 +26,16 @@ const sonny2698 = [_]Case{
     .{ .q = "MATCH (q:Q)-[:R]->(x:X) WITH q, x WHERE x.k >= 1 RETURN q.f AS f, count(*) AS c GROUP BY q.f", .want = &.{ "1, 1", "null, 2" } },
     .{ .q = "MATCH (q:Q) OPTIONAL MATCH (q)-[:S]->(t) RETURN q.f AS f, count(t) AS c GROUP BY q.f HAVING sum(q.k) > 2", .want = &.{"null, 1"} },
     .{ .q = "MATCH (q:Q) OPTIONAL MATCH (q)-[:S]->(t) RETURN q.f AS f, count(t) AS c GROUP BY q.f HAVING count(*) = 2", .want = &.{ "1, 1", "null, 1" } },
+    // A GROUP BY after the RETURN of a part with an initial WITH is the
+    // RETURN's too.
+    .{ .q = "WITH 1 AS one MATCH (z:Z) RETURN z.g AS g, count(*) AS c GROUP BY z.g HAVING sum(z.k) > 10", .want = &.{"1, 4"} },
+    // A GROUP BY written between the WITH and the RETURN stays the WITH's.
+    .{ .q = "MATCH (z:Z) WITH z.g AS g, count(*) AS c GROUP BY g RETURN g, c", .want = &.{ "0, 4", "1, 4" } },
+    .{ .q = "MATCH (z:Z) WITH z.g AS g, sum(z.k) AS s GROUP BY g HAVING sum(z.k) > 10 RETURN g, s", .want = &.{"1, 22"} },
+    // One grouping per stage is all a part records: a second one is refused,
+    // not dropped (the RETURN's replaced the WITH's).
+    .{ .q = "MATCH (z:Z) WITH z.g AS g, count(*) AS c GROUP BY g RETURN c, count(*) AS n GROUP BY c", .err = error.UnexpectedToken },
+    .{ .q = "MATCH (z:Z) WITH z.g AS g, count(*) AS c GROUP BY g HAVING count(*) > 9 RETURN g, c WHERE g = 1", .err = error.UnexpectedToken },
 };
 
 // SONNY-2699: a pattern or subquery predicate in a grouped HAVING is refused
@@ -39,6 +49,20 @@ const sonny2699 = [_]Case{
     .{ .q = "MATCH (q:Q) RETURN q.k AS k, count(*) AS c GROUP BY q HAVING EXISTS { (q)-[:R]->(:X) } AND count(*) = 1", .want = &.{ "0, 1", "1, 1", "2, 1", "3, 1" } },
     // A free variable that is no grouping key stays refused.
     .{ .q = "MATCH (q:Q)-[:R]->(x) RETURN q.f AS f, count(*) AS c GROUP BY q.f HAVING EXISTS { (x)-[:S]->() }", .err = error.UnsupportedGroupedHavingPredicate },
+    .{ .q = "MATCH (q:Q)-[:R]->(x) RETURN q.k AS k GROUP BY q HAVING EXISTS { (q)-[:S]->(t) WHERE t.k >= x.k }", .err = error.UnsupportedGroupedHavingPredicate },
+    // A pattern variable named like an output column would be constrained
+    // by the column's value: refused.
+    .{ .q = "MATCH (q:Q)-[:R]->(x) RETURN q.k AS k, count(*) AS c GROUP BY q HAVING EXISTS { (q)-[:S]->(k) }", .err = error.UnsupportedGroupedHavingPredicate },
+    // The session's tenant scope and RLS policies apply inside the pattern:
+    // the foreign or hidden `:X {k: 99}` off Q0 is neither found nor counted.
+    .{ .q = "MATCH (q:Q) RETURN q.k AS k GROUP BY q HAVING EXISTS { (q)-[:R]->(:X {k: 99}) }", .want = &.{} },
+    .{ .q = "MATCH (q:Q) RETURN q.k AS k GROUP BY q HAVING COUNT { (q)-[:R]->() } = 1", .want = &.{ "0", "1", "2", "3" } },
+    // After a WITH, through the RETURN's own GROUP BY (SONNY-2698), and in a
+    // WITH stage's HAVING.
+    .{ .q = "MATCH (q:Q)-[:R]->(x) WITH q, x RETURN q.k AS k, count(*) AS c GROUP BY q HAVING EXISTS { (q)-[:S]->() }", .want = &.{ "0, 1", "3, 1" } },
+    .{ .q = "MATCH (q:Q)-[:R]->(x) WITH q, count(*) AS c GROUP BY q HAVING NOT EXISTS { (q)-[:S]->() } RETURN q.k AS k, c", .want = &.{ "1, 1", "2, 1" } },
+    // In an item with an aggregate inside it.
+    .{ .q = "MATCH (q:Q)-[:R]->(x) RETURN q.k AS k, count(*) + COUNT { (q)-[:S]->() } AS c GROUP BY q", .want = &.{ "0, 2", "1, 1", "2, 1", "3, 2" } },
 };
 
 // SONNY-2779: the standalone CALL ignores its RETURN clause (and so a YIELD
