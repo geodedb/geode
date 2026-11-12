@@ -105,6 +105,8 @@ test "SONNY-6433: MERGE on a list-valued key matches the node it created" {
 
     inline for (0..3) |_| try fx.expectRuns(ga, s, "MERGE (n:ML6433 {k: [1, 2]})");
     try expectInt(ga, s, "MATCH (n:ML6433) RETURN count(n) AS c", 1);
+    // An inline list property in MATCH compares the same way.
+    try expectInt(ga, s, "MATCH (n:ML6433 {k: [1, 2]}) RETURN count(n) AS c", 1);
     try fx.expectRuns(ga, s, "MERGE (n:ML6433 {k: [2, 1]})");
     try expectInt(ga, s, "MATCH (n:ML6433) RETURN count(n) AS c", 2);
 

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:51:31.535297923Z",
+  "generated_at": "2026-11-12T23:58:26.187951243Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84347,6 +84347,20 @@
       "features": [
         {
           "feature": "MergeStatement",
+          "aspect": "BulkNullKeyRefused",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_merge_null_key_quic.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_merge_null_key_quic.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeStatement",
           "aspect": "NullAndListKeys",
           "status": "TESTED",
           "files": [
@@ -92047,7 +92061,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4784
+      "TESTED": 4785
     },
     "by_aspect": {
       "2PC": 3,
@@ -92388,6 +92402,7 @@
       "BulkMergeTenantScope": 1,
       "BulkNodeAccess": 1,
       "BulkNodeSlots": 1,
+      "BulkNullKeyRefused": 1,
       "BypassDetection": 1,
       "ByteBoundedEviction": 1,
       "ByteaHex": 1,
