@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T16:48:03.562310404Z",
+  "generated_at": "2026-11-12T16:58:38.7940578Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79221,6 +79221,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6378-SERVER-EXIT-HYGIENE",
+      "features": [
+        {
+          "feature": "Server Hygiene",
+          "aspect": "ExitLeaksArgonBoundsLoggerDocker",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6378_server_exit_and_hygiene.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6378_server_exit_and_hygiene.zig"
+          ],
+          "benches": [],
+          "owner": "server",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -86874,7 +86893,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 173,
-      "TESTED": 4632
+      "TESTED": 4633
     },
     "by_aspect": {
       "2PC": 3,
@@ -88048,6 +88067,7 @@
       "ExistsCheck": 1,
       "ExistsPredicateIsolation": 1,
       "ExitCode": 2,
+      "ExitLeaksArgonBoundsLoggerDocker": 1,
       "ExpandPathsAndLists": 1,
       "ExpansionPoll": 1,
       "ExpiredAttestation": 1,

@@ -9526,6 +9526,27 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6374-server-residuals", "Run SONNY-6374 items 3-8 regression (serve --help gives no gRPC example on the LSP port and documents --lsp-port; no log claims ABAC is enforced; a corrupt Argon2id parameter is refused, not a panic; no always-true assertions in the GAP-0193 batch 2 suites, which are built; every CANARY TEST= file exists; the dead modules are gone)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6378: server exit leaks, the startup log, rotateWithRemoteKms,
+    // Argon2id t/m bounds, e2e_security_tde_mfa, parse-only TESTED markers
+    // and the Zig pins of the Dockerfiles.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6378_server_exit_and_hygiene.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("build_options", build_options_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("sonny6378_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        spawnsBuiltGeode(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6378-server-exit-and-hygiene", "Run SONNY-6378 regression (a debug server logs its startup log.info lines and frees the GraphRBACPolicy and proto-reader registry at exit; rotateWithRemoteKms is gone; Argon2id t/m are bounded; e2e_security_tde_mfa runs; no parse-only TESTED markers in the GAP-0193 batch 2 suites; no stale Zig pin)").dependOn(&run_tests.step);
+    }
+
     // SONNY-3379: the I-4 vector case over in-process gRPC (the shared
     // round-12 fixture), in two fixture lifetimes; the fixture leaves no
     // index manager pointing into its freed request arena.
