@@ -58,7 +58,10 @@ fn runQuery(allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
 /// `query` on a fresh server, after the `seeds` (each a request of its own on
 /// the same connection, each required to succeed).
 fn runQuerySeeded(allocator: std.mem.Allocator, seeds: []const []const u8, query: []const u8) !util.ExecResult {
-    const addr = "127.0.0.1:3181";
+    // SONNY-6301: a free port per server. A fixed 127.0.0.1:3181 let two
+    // runs on one host reach each other's server.
+    const addr = try util.formatAddr(allocator, try util.getRandomPort());
+    defer allocator.free(addr);
     // Removed after the server below stops (defers run in reverse).
     var data_dir = try test_scratch.ScratchDir.create("gqlconf");
     defer data_dir.remove();
@@ -104,7 +107,10 @@ fn runQuerySeeded(allocator: std.mem.Allocator, seeds: []const []const u8, query
 /// (geode#for-in-param): the FOR collection env must resolve `$param` to the
 /// bound list, not Null.
 fn runQueryParams(allocator: std.mem.Allocator, query: []const u8, params: std.ArrayList(schema.Param)) !util.ExecResult {
-    const addr = "127.0.0.1:3181";
+    // SONNY-6301: a free port per server. A fixed 127.0.0.1:3181 let two
+    // runs on one host reach each other's server.
+    const addr = try util.formatAddr(allocator, try util.getRandomPort());
+    defer allocator.free(addr);
     // Removed after the server below stops (defers run in reverse).
     var data_dir = try test_scratch.ScratchDir.create("gqlconf");
     defer data_dir.remove();

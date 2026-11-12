@@ -1,6 +1,7 @@
 const std = @import("std");
 const geode_test_bin = @import("geode_test_bin");
 const test_scratch = @import("test_scratch.zig");
+const test_ports = @import("test_ports.zig");
 const builtin = @import("builtin");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
@@ -50,18 +51,16 @@ pub fn progress(comptime fmt: []const u8, args: anytype) void {
 // Port Randomization
 // ============================================================================
 
-/// Get a random available port by binding to port 0 and reading the assigned port.
-/// This uses UDP to avoid leaving a connection in TIME_WAIT state.
-///
-/// Use Zig's target-specific network backend for the ephemeral UDP bind.
+/// A free UDP port for a QUIC listener (`--listen`): bind port 0, read the
+/// port the kernel chose, release it. See tests/test_ports.zig (SONNY-6301);
+/// a gRPC, metrics or LSP listener is TCP: use `getRandomTcpPort`.
 pub fn getRandomPort() !u16 {
-    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-    const addr = try std.Io.net.IpAddress.parse("0.0.0.0", 0);
-    const socket = try addr.bind(io, .{ .mode = .dgram, .protocol = .udp });
-    defer socket.close(io);
-    return socket.address.getPort();
+    return test_ports.freeUdpPort();
+}
+
+/// A free TCP port for a gRPC (`--listen-grpc`), metrics or LSP listener.
+pub fn getRandomTcpPort() !u16 {
+    return test_ports.freeTcpPort();
 }
 
 /// Format an address string with the given port
@@ -709,8 +708,14 @@ pub const QuicProtoClient = struct {
     read_wait_misses: u32 = 0,
     post_write_poll: bool = true,
     /// SONNY-2394 (GAP-0203): the spawned server this client talks to (see
-    /// `watchServerLiveness`). null = plain fixed per-reply deadlines.
+    /// `watchServerLiveness`).
     server_pid: ?posix.pid_t = null,
+    /// SONNY-6301: the loopback address the server listens on, set by
+    /// `connect`. With no `server_pid`, whether a socket still holds this
+    /// UDP port is the liveness signal (the kernel releases a process's
+    /// ports when it exits). null (not a loopback IP literal) = plain fixed
+    /// per-reply deadlines.
+    server_addr: ?std.Io.net.IpAddress = null,
     slow_server_reported: bool = false,
     liveness_checked_ns: u64 = 0,
 
@@ -756,7 +761,18 @@ pub const QuicProtoClient = struct {
         };
         try client.waitForHandshake(@max(handshake_timeout_secs, 1));
         const stream = try client.getStream();
-        return .{ .allocator = allocator, .client = client, .stream = stream };
+        return .{ .allocator = allocator, .client = client, .stream = stream, .server_addr = livenessAddr(parsed) };
+    }
+
+    /// SONNY-6301: the server address to probe for liveness, when it is a
+    /// loopback IP literal (or `localhost`): every reply wait on such a
+    /// client then waits for a live server past its deadline.
+    fn livenessAddr(parsed: Addr) ?std.Io.net.IpAddress {
+        const ip = if (std.mem.eql(u8, parsed.host, "localhost"))
+            std.Io.net.IpAddress{ .ip4 = std.Io.net.Ip4Address.loopback(parsed.port) }
+        else
+            std.Io.net.IpAddress.parse(parsed.host, parsed.port) catch return null;
+        return if (test_ports.isLoopback(ip)) ip else null;
     }
 
     pub fn deinit(self: *QuicProtoClient) void {
@@ -893,11 +909,33 @@ pub const QuicProtoClient = struct {
     /// parallel test load -- is waited for instead of failing at a fixed 5 s;
     /// a server that EXITED fails immediately with error.ServerExited; a
     /// genuine hang still fails at the cap.
+    ///
+    /// SONNY-6301: a client `connect`ed to a loopback address gets the same
+    /// behaviour without this call, probing whether the server still holds
+    /// its UDP port (`server_addr`). The pid is the more precise signal (a
+    /// port can be held by a process other than the server); bind it when
+    /// the test has it.
     pub fn watchServerLiveness(self: *QuicProtoClient, pid: posix.pid_t) void {
         self.server_pid = pid;
     }
 
-    pub const liveness_cap_ns: u64 = 60 * std.time.ns_per_s;
+    /// The longest a reply wait extends past its deadline for a live server.
+    /// SONNY-6301: 120 s (was 60 s); minutes, because a loaded Debug server
+    /// running Argon2id, CREATE GRAPH or a backup's per-file fsyncs answers
+    /// in tens of seconds, and a dead one fails at once regardless.
+    pub const liveness_cap_ns: u64 = 120 * std.time.ns_per_s;
+
+    fn livenessBound(self: *const QuicProtoClient) bool {
+        return self.server_pid != null or self.server_addr != null;
+    }
+
+    /// The bound server is gone: its pid exited or, with no pid, nothing
+    /// holds its port any more. An inconclusive port probe is not "gone".
+    fn serverGone(self: *const QuicProtoClient) bool {
+        if (self.server_pid) |pid| return !processAlive(pid);
+        if (self.server_addr) |addr| return test_ports.udpPortHeld(addr) == .free;
+        return false;
+    }
 
     const ReadDeadline = struct {
         soft_ns: u64,
@@ -906,20 +944,27 @@ pub const QuicProtoClient = struct {
         fn init(self: *const QuicProtoClient, timeout_ms: u32) ReadDeadline {
             const now = compat_monoNs();
             const soft = now + @as(u64, timeout_ms) * std.time.ns_per_ms;
-            return .{ .soft_ns = soft, .hard_ns = if (self.server_pid != null) @max(soft, now + liveness_cap_ns) else soft };
+            return .{ .soft_ns = soft, .hard_ns = if (self.livenessBound()) @max(soft, now + liveness_cap_ns) else soft };
         }
     };
 
     /// The soft deadline expired: extend it by one slice if the bound server is
     /// still alive and the liveness cap has not been reached.
     fn extendReadDeadline(self: *QuicProtoClient, deadline: *ReadDeadline) !void {
-        const pid = self.server_pid orelse return error.Timeout;
-        if (!processAlive(pid)) return error.ServerExited;
+        if (!self.livenessBound()) return error.Timeout;
+        if (self.serverGone()) return error.ServerExited;
         const now = compat_monoNs();
-        if (now >= deadline.hard_ns) return error.Timeout;
+        if (now >= deadline.hard_ns) {
+            std.debug.print("QuicProtoClient: no reply from a live server within the {d} s liveness cap\n", .{liveness_cap_ns / std.time.ns_per_s});
+            return error.Timeout;
+        }
         if (!self.slow_server_reported) {
             self.slow_server_reported = true;
-            std.debug.print("QuicProtoClient: server pid {d} is alive but slow; waiting past the reply deadline (cap {d} s)\n", .{ pid, liveness_cap_ns / std.time.ns_per_s });
+            if (self.server_pid) |pid| {
+                std.debug.print("QuicProtoClient: server pid {d} is alive but slow; waiting past the reply deadline (cap {d} s)\n", .{ pid, liveness_cap_ns / std.time.ns_per_s });
+            } else {
+                std.debug.print("QuicProtoClient: server on port {d} is alive but slow; waiting past the reply deadline (cap {d} s)\n", .{ self.server_addr.?.getPort(), liveness_cap_ns / std.time.ns_per_s });
+            }
         }
         deadline.soft_ns = @min(now + std.time.ns_per_s, deadline.hard_ns);
     }
@@ -927,11 +972,11 @@ pub const QuicProtoClient = struct {
     fn waitForReadProgress(self: *QuicProtoClient, deadline: *ReadDeadline) !void {
         // A bound server that has EXITED fails the wait at once (probed at most
         // every 100 ms) instead of burning the rest of the reply deadline.
-        if (self.server_pid) |pid| {
+        if (self.livenessBound()) {
             const now = compat_monoNs();
             if (now -| self.liveness_checked_ns >= 100 * std.time.ns_per_ms) {
                 self.liveness_checked_ns = now;
-                if (!processAlive(pid)) return error.ServerExited;
+                if (self.serverGone()) return error.ServerExited;
             }
         }
         if (compat_monoNs() >= deadline.soft_ns) try self.extendReadDeadline(deadline);
@@ -1527,12 +1572,19 @@ pub const GrpcProtoClient = struct {
     stream: std.Io.net.Stream,
     session_id: []const u8 = "",
 
+    /// SONNY-6301: the socket read/write timeout. It was 5 s, so a loaded
+    /// server answering in 6 s failed the test. TCP reports a server that
+    /// exited at once (the kernel closes its connections: EOF or reset), so
+    /// a long timeout waits only for a live server, the same contract as
+    /// `QuicProtoClient.liveness_cap_ns`.
+    pub const read_timeout_secs: u32 = @intCast(QuicProtoClient.liveness_cap_ns / std.time.ns_per_s);
+
     pub fn connect(allocator: std.mem.Allocator, addr: []const u8) !GrpcProtoClient {
         const parsed = try parseAddr(addr);
         const deadline = compat_milliTimestamp() + 10_000;
         var last_err: anyerror = error.ConnectionRefused;
         while (compat_milliTimestamp() < deadline) {
-            const stream = grpc_query_transport.connectPlaintext(allocator, parsed.host, parsed.port, 5, .{}) catch |err| {
+            const stream = grpc_query_transport.connectPlaintext(allocator, parsed.host, parsed.port, read_timeout_secs, .{}) catch |err| {
                 last_err = err;
                 compat_sleep(100 * std.time.ns_per_ms);
                 continue;

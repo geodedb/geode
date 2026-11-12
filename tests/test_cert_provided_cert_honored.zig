@@ -50,6 +50,7 @@
 const std = @import("std");
 const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
+const test_ports = @import("test_ports.zig");
 const cert_gen = @import("cert_gen");
 
 const BINARY_PATH = geode_test_bin.geode_exe;
@@ -207,10 +208,12 @@ test "explicit --cert pointing at a missing file refuses to start (no silent sel
     const data_arg = try std.fmt.allocPrint(aa, "--data-dir={s}", .{data_dir});
     const cert_arg = try std.fmt.allocPrint(aa, "--cert={s}", .{missing_crt});
     const key_arg = try std.fmt.allocPrint(aa, "--key={s}", .{missing_key});
+    // SONNY-6301: free ports, not constants: another run on the host held them.
+    const listen_arg = try std.fmt.allocPrint(aa, "--listen=127.0.0.1:{d}", .{try test_ports.freeUdpPort()});
     const args = [_][]const u8{
         BINARY_PATH,
         "serve",
-        "--listen=127.0.0.1:31581",
+        listen_arg,
         data_arg,
         cert_arg,
         key_arg,
@@ -370,10 +373,12 @@ test "explicit --cert pointing at a real cert is loaded as-is (not discarded)" {
     const data_arg = try std.fmt.allocPrint(aa, "--data-dir={s}", .{data_dir});
     const cert_arg = try std.fmt.allocPrint(aa, "--cert={s}", .{provided.crt});
     const key_arg = try std.fmt.allocPrint(aa, "--key={s}", .{provided.key});
+    // SONNY-6301: free ports, not constants: another run on the host held them.
+    const listen_arg = try std.fmt.allocPrint(aa, "--listen=127.0.0.1:{d}", .{try test_ports.freeUdpPort()});
     const args = [_][]const u8{
         BINARY_PATH,
         "serve",
-        "--listen=127.0.0.1:31582",
+        listen_arg,
         data_arg,
         cert_arg,
         key_arg,

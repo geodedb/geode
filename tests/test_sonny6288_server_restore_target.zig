@@ -144,8 +144,9 @@ const Server = struct {
         var grpc_addr: ?[]u8 = null;
         errdefer if (grpc_addr) |g| allocator.free(g);
         if (with_grpc) {
-            var port = try util.getRandomPort();
-            while (port == quic_port) port = try util.getRandomPort();
+            // SONNY-6301: the gRPC listener is TCP; probe TCP, not UDP.
+            var port = try util.getRandomTcpPort();
+            while (port == quic_port) port = try util.getRandomTcpPort();
             grpc_addr = try util.formatAddr(allocator, port);
         }
 

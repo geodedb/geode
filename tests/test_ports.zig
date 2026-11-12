@@ -82,11 +82,10 @@ pub const Held = enum { held, free, unknown };
 /// any other socket holds it. `unknown` when the probe itself failed (the
 /// address is not local, descriptors exhausted), which callers must not read
 /// as "gone".
+/// Called every 100 ms by a waiting client, so it uses the process-global
+/// `Io` rather than building one per call.
 pub fn udpPortHeld(address: std.Io.net.IpAddress) Held {
-    return withIo(udpPortHeldIo, .{address});
-}
-
-fn udpPortHeldIo(io: std.Io, address: std.Io.net.IpAddress) Held {
+    const io = std.Io.Threaded.global_single_threaded.io();
     const socket = address.bind(io, .{ .mode = .dgram, .protocol = .udp }) catch |err| return switch (err) {
         error.AddressInUse => .held,
         else => .unknown,
