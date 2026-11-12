@@ -725,6 +725,22 @@
 
 ### Fixed
 
+- **The phantom check looks a transaction's read ranges up once per commit
+  (SONNY-6422 item 7).** `Manager.detectPhantoms` called
+  `RangeTracker.keyInRanges` for every write committed since the transaction
+  began, and each call looked the transaction's range list up in the
+  tracker's hash map again, so a transaction with no range reads paid one
+  hash lookup per concurrent write. The list is now looked up once
+  (`RangeTracker.rangesFor`), and with no ranges no write is checked.
+  Measured with `zig build test-sonny6422-phantom-check-once-per-commit`
+  (Debug, perf_gate interleaved medians, 4096 committed writes in the
+  history): the no-range check went from 738,793 ns to 220 ns and stays flat
+  from 64 to 4096 writes (64.8x growth before, 0.97x after); the per-write
+  cost of a check with two read ranges went from 334.6 ns to 90.9 ns. The
+  `test-canary-txn-phantom-range` / `-anomaly` benchmarks commit no
+  concurrent writes, so their overhead figures are unchanged within noise
+  (0.61 / 0.60 before, 0.68 / 0.67 after on the same loaded host).
+  Detection is unchanged: a write inside a read range still fails the commit.
 - **A CLI command fails on a data directory it cannot open instead of
   working on an empty in-memory store (SONNY-6422 item 6).** A command that
   reached the store through `getGlobalStore` with a data directory
