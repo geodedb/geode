@@ -242,6 +242,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // POLICY): nothing was removed, the record is still stored and in
         // force.
         error.SecurityRecordDeleteFailed => .{ .code = "58030", .message = "A record could not be deleted from the security graph; nothing was removed and it is still in force. Retry it" },
+        // SONNY-3034: a geode.rls.* restriction change that could not be
+        // stored in the security graph.
+        error.RlsRestrictionNotPersisted => .{ .code = "58030", .message = "The RLS restriction change could not be saved to the security graph and was not made (an add is taken out again; a removal leaves the restriction in force). Retry it" },
         error.RoleNotPersisted => .{ .code = "58030", .message = "The role change could not be saved to the security graph: CREATE ROLE created nothing; DROP ROLE removed the role now but it returns at the next start. Retry it" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
         // SONNY-3134: or another session's open transaction.

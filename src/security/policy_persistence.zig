@@ -166,6 +166,9 @@ pub fn hydrateCatalog(
         // property the policy needs, is refused: it is not loaded (it grants
         // nothing), and the refusal is audited. It is never reinterpreted.
         const kind = record.effectiveKind();
+        // SONNY-3034: the geode.rls.* restrictions are loaded into the RLS
+        // engines (server/main.zig), not into the GPS catalog.
+        if (kind == .rls_deny or kind == .rls_attribute) continue;
         if (kind != .gps or record.malformed) {
             const reason: []const u8 = if (kind == .rls)
                 "not a GPS policy: an RLS policy record"

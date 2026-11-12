@@ -4,6 +4,34 @@
 
 ### Security
 
+- **`geode.rls.*` restrictions survive a restart and are refused in
+  cluster mode (SONNY-3034).** (1) **Behaviour change:** the label denies
+  `geode.rls.add_deny_policy` adds and the attribute policies
+  `geode.rls.add_attribute_policy` adds, and their removal, changed the
+  in-memory RLS engines only: a restart dropped every restriction without
+  a word (the v0.8.23 known limitation). They are now stored in
+  `__geode_security` as policy records of their own kinds (`rls_deny`,
+  `rls_attribute`; GPS hydration skips them), signed and sealed into the
+  HMAC chain like the other security records
+  (`AuthGraphManager.persistRlsRestriction` / `removeRlsRestriction`),
+  and put back in force at startup before any listener starts
+  (`[startup] geode.rls restrictions loaded: N of M`; one that cannot be
+  applied is logged as an error and the rest still load). An add that
+  cannot be stored is taken out of the engines again, and a removal that
+  cannot be stored leaves the restriction in force; both fail with 58030
+  (`RlsRestrictionNotPersisted`). A server whose auth graph manager is not
+  active refuses them the same way. An executor with no security graph
+  wired (embedded, unit tests) keeps them in memory only, as before.
+  Records written by this release are not understood by older releases,
+  which refuse to load them (the restriction is then not in force there).
+  (2) **Behaviour change:** in cluster mode the four changes
+  (`add_deny_policy`, `remove_deny_policy`, `add_attribute_policy`,
+  `remove_attribute_policy`) are refused like the other unreplicated
+  security changes (`cluster.gateUnreplicatedWrite`: follower 40001
+  `ClusterNotLeader`, leader 40001 `ClusterWriteNotReplicable`); they
+  applied on one node only. The user ABAC attributes
+  (`geode.auth.user_set_attribute`) the attribute policies compare against
+  are still memory-only.
 - **The expression RLS engine frees what it owns of a policy
   (SONNY-2773).** `RLSEngine.deletePolicy` and `deinit` freed neither the
   bytecode the engine compiles for a policy's USING / CHECK expression nor

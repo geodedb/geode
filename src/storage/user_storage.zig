@@ -225,6 +225,16 @@ pub const UserStorageBackend = struct {
         /// A `kind` property that is neither "gps" nor "rls". No loader
         /// accepts it.
         invalid = 3,
+        // CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=RecordKinds; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+        /// SONNY-3034: a `geode.rls.add_deny_policy` label deny: `graph`,
+        /// `table` (the label), and the user in the USING text (none: every
+        /// user). Loaded at startup into both label engines.
+        rls_deny = 4,
+        /// SONNY-3034: a `geode.rls.add_attribute_policy` restriction:
+        /// `graph`, `table` (the label), the row property in the USING text
+        /// and the ABAC attribute key in the CHECK text. Loaded at startup
+        /// into the expression engine.
+        rls_attribute = 5,
 
         /// Strict decoding of a stored `kind` property: exactly "gps" or
         /// "rls"; any other value, or another type, is `.invalid`; a missing
@@ -234,6 +244,8 @@ pub const UserStorageBackend = struct {
             if (v != .String) return .invalid;
             if (std.mem.eql(u8, v.String, "gps")) return .gps;
             if (std.mem.eql(u8, v.String, "rls")) return .rls;
+            if (std.mem.eql(u8, v.String, "rls_deny")) return .rls_deny;
+            if (std.mem.eql(u8, v.String, "rls_attribute")) return .rls_attribute;
             return .invalid;
         }
 
@@ -242,6 +254,8 @@ pub const UserStorageBackend = struct {
             return switch (self) {
                 .gps => "gps",
                 .rls => "rls",
+                .rls_deny => "rls_deny",
+                .rls_attribute => "rls_attribute",
                 .legacy, .invalid => null,
             };
         }

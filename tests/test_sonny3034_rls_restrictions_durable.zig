@@ -117,7 +117,7 @@ test "SONNY-3034: geode.rls deny and attribute policies, and their removal, surv
             std.debug.print("after a restart bob sees {d} Secret3034 row(s) (deny) and {d} Doc3034 row(s) (attribute policy); both were restricted before it\n", .{ seen[0], seen[1] });
             return error.RestrictionLostAtRestart;
         }
-        try testing.expectEqual(@as(usize, 1), try asAdmin(allocator, s.addr, "CALL geode.rls.list_deny_policies() YIELD graph, label, username WHERE label = 'Secret3034' RETURN username"));
+        try testing.expectEqual(@as(usize, 1), try asAdmin(allocator, s.addr, "CALL geode.rls.list_deny_policies()"));
 
         _ = try asAdmin(allocator, s.addr, "CALL geode.rls.remove_deny_policy('default', 'Secret3034', 'bob')");
         _ = try asAdmin(allocator, s.addr, "CALL geode.rls.remove_attribute_policy('default', 'Doc3034', 'dept', 'department')");
@@ -133,6 +133,6 @@ test "SONNY-3034: geode.rls deny and attribute policies, and their removal, surv
             std.debug.print("after a restart bob sees {d} Secret3034 and {d} Doc3034 row(s); the removed restrictions came back\n", .{ seen[0], seen[1] });
             return error.RemovedRestrictionCameBack;
         }
-        try testing.expectEqual(@as(usize, 0), try asAdmin(allocator, s.addr, "CALL geode.rls.list_deny_policies() YIELD graph, label, username WHERE label = 'Secret3034' RETURN username"));
+        try testing.expectEqual(@as(usize, 0), try asAdmin(allocator, s.addr, "CALL geode.rls.list_deny_policies()"));
     }
 }

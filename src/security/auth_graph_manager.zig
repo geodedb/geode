@@ -1673,6 +1673,159 @@ pub const AuthGraphManager = struct {
         self.logSecurityGraphMutation(.configuration_change, "ALTER_POLICY", policy_id, new_name, null);
     }
 
+    // -- geode.rls.* restrictions (SONNY-3034) --
+
+    /// SONNY-3034: a restriction `geode.rls.*` adds, as stored: a label deny
+    /// (`kind = .rls_deny`; `subject` is the user, empty for every user) or
+    /// an attribute policy (`kind = .rls_attribute`; `subject` is the row
+    /// property, `attribute` the ABAC attribute key).
+    pub const RlsRestriction = struct {
+        kind: UserStorageBackend.PolicyKind,
+        graph: []const u8,
+        label: []const u8,
+        subject: []const u8,
+        attribute: []const u8 = "",
+    };
+
+    fn rlsRestrictionMatches(record: *const UserStorageBackend.PolicyRecord, r: RlsRestriction) bool {
+        return record.kind == r.kind and
+            std.mem.eql(u8, record.getGraph(), r.graph) and
+            std.mem.eql(u8, record.getTable(), r.label) and
+            std.mem.eql(u8, record.getUsingClause() orelse "", r.subject) and
+            std.mem.eql(u8, record.getCheckClause() orelse "", r.attribute);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=PersistRestriction; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-3034: store `r` in the security graph, signed and sealed: all of
+    /// it or none of it. Already stored: nothing to do. The restrictions
+    /// lived in the RLS engines only and were lost at every restart.
+    pub fn persistRlsRestriction(self: *Self, hmac_key: *const [32]u8, r: RlsRestriction) !void {
+        if (r.kind != .rls_deny and r.kind != .rls_attribute) return error.InvalidPolicyKind;
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        {
+            var it = self.storage.policyIterator();
+            while (it.next()) |record| {
+                if (rlsRestrictionMatches(record, r)) return;
+            }
+        }
+        const policy_id = self.storage.nextPolicyId();
+        errdefer {
+            self.storage.removePolicy(policy_id) catch |err| logRestoreFailure("policy record", err);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
+        try self.storage.persistPolicy(.{
+            .policy_id = policy_id,
+            .name = r.kind.property().?,
+            .description = "",
+            .graph = r.graph,
+            .table = r.label,
+            .operation = 0,
+            .permissive = false,
+            .enabled = true,
+            .using_clause = if (r.subject.len > 0) r.subject else null,
+            .check_clause = if (r.attribute.len > 0) r.attribute else null,
+            .audit_level = 0,
+            .created_by = 0,
+            .kind = r.kind,
+            .mode = .create,
+        });
+        try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "ADD_RLS_RESTRICTION", policy_id, r.kind.property().?, null);
+    }
+
+    /// SONNY-3034: remove every stored record of `r` and reseal (one step,
+    /// as `dropPolicy`). Nothing stored: nothing to do. An error means the
+    /// records are still stored.
+    pub fn removeRlsRestriction(self: *Self, hmac_key: *const [32]u8, r: RlsRestriction) !void {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.policyIterator();
+            while (it.next()) |record| {
+                if (rlsRestrictionMatches(record, r)) try ids.append(self.allocator, record.id);
+            }
+        }
+        if (ids.items.len == 0) return;
+
+        var removal_failure: ?anyerror = null;
+        var sealed = false;
+        {
+            self.seal_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.seal_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            const seal = try self.computeSealLocked(hmac_key, .{}, ids.items);
+            for (ids.items) |policy_id| {
+                self.storage.removePolicy(policy_id) catch |err| {
+                    removal_failure = err;
+                    break;
+                };
+            }
+            if (removal_failure == null) {
+                if (self.persistSealLocked(seal)) |_| {
+                    sealed = true;
+                } else |err| log.warn("geode.rls remove: the graph store did not take the chain seal; sealing again", &.{Attr.string("error", @errorName(err))});
+            }
+        }
+        if (!sealed) self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
+        if (removal_failure) |err| return err;
+        for (ids.items) |policy_id| self.logSecurityGraphMutation(.configuration_change, "REMOVE_RLS_RESTRICTION", policy_id, r.kind.property().?, null);
+    }
+
+    /// SONNY-3034: every stored restriction, for startup hydration, copied
+    /// with `allocator` (free with `freeRlsRestrictions`). A malformed
+    /// record is left out, and logged.
+    pub fn listRlsRestrictions(self: *Self, allocator: std.mem.Allocator) ![]RlsRestriction {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        var out: std.ArrayList(RlsRestriction) = .empty;
+        errdefer {
+            freeRlsRestrictionItems(allocator, out.items);
+            out.deinit(allocator);
+        }
+        var it = self.storage.policyIterator();
+        while (it.next()) |record| {
+            if (record.kind != .rls_deny and record.kind != .rls_attribute) continue;
+            if (record.malformed) {
+                log.err("a stored geode.rls restriction is malformed and is not loaded", &.{
+                    Attr.uint("policy_id", record.id),
+                    Attr.string("kind", @tagName(record.kind)),
+                });
+                continue;
+            }
+            const graph = try allocator.dupe(u8, record.getGraph());
+            errdefer allocator.free(graph);
+            const label = try allocator.dupe(u8, record.getTable());
+            errdefer allocator.free(label);
+            const subject = try allocator.dupe(u8, record.getUsingClause() orelse "");
+            errdefer allocator.free(subject);
+            const attribute = try allocator.dupe(u8, record.getCheckClause() orelse "");
+            errdefer allocator.free(attribute);
+            try out.append(allocator, .{ .kind = record.kind, .graph = graph, .label = label, .subject = subject, .attribute = attribute });
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn freeRlsRestrictions(allocator: std.mem.Allocator, items: []RlsRestriction) void {
+        freeRlsRestrictionItems(allocator, items);
+        allocator.free(items);
+    }
+
+    fn freeRlsRestrictionItems(allocator: std.mem.Allocator, items: []const RlsRestriction) void {
+        for (items) |r| {
+            allocator.free(r.graph);
+            allocator.free(r.label);
+            allocator.free(r.subject);
+            allocator.free(r.attribute);
+        }
+    }
+
     fn recomputeAndStorePolicyHmac(self: *Self, policy_id: u64, hmac_key: *const [32]u8) !void {
         const record = self.storage.getPolicy(policy_id) orelse return error.PolicyNotFound;
         const computed = computePolicyHmac(hmac_key, &record);
@@ -2242,7 +2395,7 @@ fn computePolicyHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.
 
     const kind_value: ?[]const u8 = switch (record.kind) {
         .legacy => null,
-        .gps, .rls => record.kind.property().?,
+        .gps, .rls, .rls_deny, .rls_attribute => record.kind.property().?,
         // Not a value any writer stores: it can only match a record signed
         // with it, and no loader uses an `.invalid` record anyway.
         .invalid => "<invalid>",

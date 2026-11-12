@@ -45,6 +45,7 @@ const audit_mod = @import("../security/audit.zig");
 const rls_core = @import("rls");
 const rls_types = @import("rls_types");
 const RLSEngine = rls_core.RLSEngine;
+const cluster_mod = @import("../distributed/cluster.zig");
 
 // ---------------------------------------------------------------------------
 // Callback / hooks pattern. The server wires these at startup; CLI / test
@@ -57,8 +58,25 @@ pub const ListedPolicy = struct {
     username: []const u8,
 };
 
+/// SONNY-3034: the kinds of restriction `geode.rls.*` adds.
+pub const RestrictionKind = enum {
+    /// `add_deny_policy`: `subject` is the user (empty: every user).
+    deny,
+    /// `add_attribute_policy`: `subject` is the row property, `attribute`
+    /// the ABAC attribute key.
+    attribute,
+};
+
 pub const RLSFilterCallbacks = struct {
     ctx: ?*anyopaque = null,
+    // CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=PersistCallbacks; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-3034: store a restriction in `__geode_security` (the server
+    /// wires `AuthGraphManager.persistRlsRestriction`). An error: not
+    /// stored. Null (an executor with no security graph, e.g. an embedded
+    /// one or a unit test): restrictions stay in memory only.
+    persist_fn: ?*const fn (ctx: ?*anyopaque, kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) anyerror!void = null,
+    /// SONNY-3034: remove its stored records. An error: still stored.
+    unpersist_fn: ?*const fn (ctx: ?*anyopaque, kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) anyerror!void = null,
     add_deny_fn: ?*const fn (ctx: ?*anyopaque, graph: []const u8, label: []const u8, username: []const u8) anyerror!void = null,
     /// Returns the number of policies removed.
     remove_deny_fn: ?*const fn (ctx: ?*anyopaque, graph: []const u8, label: []const u8, username: []const u8) usize = null,
@@ -176,7 +194,17 @@ fn handleAddDenyPolicy(
         return try singleStatusRow(allocator, "error: RLS filter engine not initialized (server started with no RLS support)");
     };
 
+    // SONNY-3034: no replication slice: refused in cluster mode, as the other
+    // security changes are (it applied on one node only).
+    try cluster_mod.gateUnreplicatedWrite();
     try add_fn(g_callbacks.ctx, graph, label, username);
+    // SONNY-3034: stored, or taken out again and refused (it was lost at
+    // the next restart). Taking it out removes every entry of the triple,
+    // as remove_deny_policy does.
+    persistRestriction(.deny, graph, label, username, "") catch |err| {
+        if (g_callbacks.remove_deny_fn) |remove_fn| _ = remove_fn(g_callbacks.ctx, graph, label, username);
+        return err;
+    };
 
     log.info("RLS deny policy added", &.{
         Attr.string("graph", graph),
@@ -230,6 +258,11 @@ fn handleRemoveDenyPolicy(
         return try singleStatusRow(allocator, "error: RLS filter engine not initialized");
     };
 
+    // SONNY-3034: refused in cluster mode; the stored records go first, so a
+    // removal that cannot be saved keeps the deny in force (it would return
+    // at the next restart otherwise).
+    try cluster_mod.gateUnreplicatedWrite();
+    try unpersistRestriction(.deny, graph, label, username, "");
     const removed = remove_fn(g_callbacks.ctx, graph, label, username);
 
     log.info("RLS deny policy removed", &.{
@@ -339,6 +372,48 @@ fn attributePolicyId(graph: []const u8, label: []const u8, row_property: []const
     return hasher.final();
 }
 
+/// SONNY-3034: store a restriction through the wired hook, if any.
+fn persistRestriction(kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) !void {
+    const f = g_callbacks.persist_fn orelse return;
+    f(g_callbacks.ctx, kind, graph, label, subject, attribute) catch |err| {
+        log.warn("geode.rls restriction could not be stored; refused", &.{
+            Attr.string("kind", @tagName(kind)),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.RlsRestrictionNotPersisted;
+    };
+}
+
+fn unpersistRestriction(kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) !void {
+    const f = g_callbacks.unpersist_fn orelse return;
+    f(g_callbacks.ctx, kind, graph, label, subject, attribute) catch |err| {
+        log.warn("geode.rls restriction removal could not be stored; nothing removed", &.{
+            Attr.string("kind", @tagName(kind)),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.RlsRestrictionNotPersisted;
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=StartupHydration; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-3034: put a stored restriction back in force at startup, as the
+/// procedure that added it did (both label engines for a deny, the
+/// expression engine for an attribute policy). Nothing is stored again.
+pub fn applyStoredRestriction(kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) !void {
+    switch (kind) {
+        .deny => {
+            const add_fn = g_callbacks.add_deny_fn orelse return error.RlsEngineNotInitialized;
+            try add_fn(g_callbacks.ctx, graph, label, subject);
+        },
+        .attribute => {
+            if (!isPolicyIdentifier(subject) or !isPolicyIdentifier(attribute)) return error.InvalidPolicyIdentifier;
+            const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return error.RlsEngineNotInitialized;
+            const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
+            try installAttributePolicy(engine, graph, label, subject, attribute);
+        },
+    }
+}
+
 /// CALL geode.rls.add_attribute_policy(graph, label, row_property, attribute_key)
 ///
 /// Installs a restrictive expression RLS policy on (graph, label) that, per
@@ -384,7 +459,13 @@ fn handleAddAttributePolicy(
     var reply = try singleStatusRow(allocator, msg);
     errdefer reply.deinit(allocator);
 
+    // SONNY-3034: refused in cluster mode; stored, or taken out and refused.
+    try cluster_mod.gateUnreplicatedWrite();
     try installAttributePolicy(engine, graph, label, row_property, attribute_key);
+    persistRestriction(.attribute, graph, label, row_property, attribute_key) catch |err| {
+        engine.deletePolicy(attributePolicyId(graph, label, row_property, attribute_key)) catch {};
+        return err;
+    };
 
     log.info("RLS attribute policy added", &.{
         Attr.string("graph", graph),
@@ -498,6 +579,9 @@ fn handleRemoveAttributePolicy(
     };
     const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
 
+    // SONNY-3034: refused in cluster mode; the stored records go first.
+    try cluster_mod.gateUnreplicatedWrite();
+    try unpersistRestriction(.attribute, graph, label, row_property, attribute_key);
     const policy_id = attributePolicyId(graph, label, row_property, attribute_key);
     var removed = true;
     engine.deletePolicy(policy_id) catch {
