@@ -1684,6 +1684,88 @@
   (`initCliAuthManager`) fell back the same way when `initGlobalStore`
   failed; they now report the directory and the error and change nothing.
   Regression: `zig build test-sonny6422-cli-data-dir-fail-closed`.
+- **BREAKING (query): invalid CREATE / INSERT patterns are refused, a path's
+  unnamed middle node is one node, `<-[:R]-` after a MATCH points left, and
+  a null property value is absent (SONNY-3245).** Per ISO/IEC 39075:2024
+  16.5, these now fail with `42000` (`InvalidInsertPattern`) and change
+  nothing: a MATCH-bound variable given a label or property in CREATE
+  (`MATCH (n) CREATE (n:Extra)` did nothing; `CREATE (n {extra: 1})`
+  changed the matched node; use `SET`), a later occurrence of a variable
+  given a label or property (`CREATE (a:R), (a:R)` made two nodes), an
+  undirected inserted edge `-[:T]-` (stored a directed one) and several
+  types `[:T|U]` (stored a T edge). `CREATE (a)-[:R]->(:M)-[:S]->(b)` made
+  two M nodes, so the path did not exist; it makes one (standalone CREATE,
+  INSERT, MATCH ... CREATE and the cluster-replicated CREATE). After a
+  MATCH, `(a)<-[:R]-(b)` was stored a -> b; it is stored b -> a. `CREATE (n
+  {p: null})` stored p and `SET n.p = null` kept it with a null value; a
+  null value now leaves the property absent (nodes and relationships).
+  Still open: MERGE on a null key creates a node, MERGE on a list key
+  never matches, and `FOR u IN [...] CREATE ... RETURN u` returns null for
+  `u`. Regression: `zig build test-sonny3245-create-merge-forms`.
+- **An index-served read no longer waits for an exact-index build
+  (SONNY-6362 item 6).** While a deferred build or a late-key catch-up of a
+  graph's exact node-property index held its build mutex (an O(graph)
+  scan), every property-equality seek on the graph
+  (`getCandidateNodesByLabelAndProperty`, `countCandidateNodesByLabelAndProperty`,
+  `collectPropertyPostingSummaries`) parked on it. They now answer
+  `ExactIndexBusy` at once and their callers serve the read from a scan; a
+  read finding the mutex free still builds the index itself. The MERGE
+  resolver and the write paths still wait for the build. Regression:
+  `zig build test-sonny6362-exact-index-read-fallback`.
+- **Full-text and vector indexes follow `REMOVE n:L` and a `SET` that
+  replaces indexed text; an undo repair survives a background vector
+  rebuild (SONNY-6421).** `REMOVE n:L` called the store alone, so a
+  full-text search still found the node by L's index and L's vector index
+  still held it: it now rebuilds the vector indexes on L and queues every
+  full-text index on L holding text of the node for a rebuild at the end of
+  the statement, and `geode.fts.search` / `phrase` / `proximity` answer only
+  nodes that carry the index's label. A `SET` that replaces a non-empty
+  indexed string (by another value, a non-string, or `SET n = {map}`
+  dropping or changing it) left the old words findable (the documented
+  residual): it now queues the covering indexes for the same statement-end
+  rebuild as `REMOVE n.prop`. A ROLLBACK whose vector-index repair landed
+  while a non-blocking background rebuild was building from an earlier
+  snapshot was overwritten by that rebuild's swap; an in-place rebuild or
+  an overwrite of an indexed id during the window now makes the background
+  rebuild run again from the store after its swap. The `IndexOnEncryptedField`
+  refusal no longer tells users to "use a searchable (blind-index) field",
+  which cannot be declared. On a store with no storage engine,
+  `GraphStore.setNodeProperty` on an id that names no node answers
+  `NodeNotFound` instead of succeeding. `docs/FULLTEXT_SEARCH.md` updated.
+  Regression: `zig build test-sonny6421-index-maintenance`.
+- **`ORDER BY <indexed> LIMIT` served from the value-ordered index no
+  longer reads a freed or changing tree (SONNY-6375, geode side).**
+  graph_storage's `OrderedBTree` has no locking of its own, and its cursor
+  must not be iterated across a mutation. `StorageAdapter.orderedScan` read
+  each shard's tree under that shard's lock only, while write statements
+  change the tree under the graph's EXCLUSIVE lock with no shard lock, and
+  the engine-direct and snapshot reads that reach it hold no graph lock;
+  it also kept each shard's cursor across the lock release between two
+  256-entry batches, so an ordered-index rebuild in that gap (the full
+  checkpoint's refresh, `createOrderedIndex`, the ORDER BY auto-build)
+  freed the nodes the cursor pointed into, and the next batch crashed. Each
+  batch now holds `mg.rwlock` SHARED and then the shard lock (the order
+  `createOrderedIndex` uses), opens a fresh cursor and resumes strictly
+  after the last key it visited, and checks node liveness under that hold.
+  A thread that already holds the graph's read or write lock through the
+  graph-lock API (the point-read and fallback reads, a read statement of a
+  write program) does not take `mg.rwlock` again; the API now records
+  per thread which graphs it holds. `test-ordered-scan-tsan` reported 4
+  ordered-scan races (`OrderedBTree.Cursor.next` / `normalizeForward` /
+  `lowerBound` against `insertIntoLeaf`, `getNode` against `putNode`) and
+  now reports none; its remaining reports are the thread_pool 0.2.9 queue
+  races, fixed in thread_pool 0.2.10. The race test's writer now holds the
+  graph write lock, as production writers do. Regressions:
+  `zig build test-sonny6375-ordered-scan-locking` (and its `-tsan`
+  companion).
+- **`getCurrentGlobalStore` no longer copies the global store (SONNY-6375).**
+  It tested `global_store != null` on the `?GraphStore` value, which copied
+  the store's bytes, live mutexes included; ThreadSanitizer reported it
+  against a concurrent `hydration_build_mutex` lock in
+  `test-startup-lazy-hydrate-tsan`. The persistence loop and
+  `flushForCleanShutdown` did the same. They now test the optional through
+  a pointer capture. Regression: `zig build
+  test-sonny6375-global-store-race` (and its `-tsan` companion).
 - **The long write suites finish in minutes on a loaded host
   (SONNY-6333).** `tests/sonny738_write_harness.zig` opens, writes, reloads
   and closes a persisted store for every case in three sessions; on a

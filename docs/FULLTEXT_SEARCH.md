@@ -189,8 +189,13 @@ graph dir
 After an index exists, ordinary write paths keep it current automatically:
 
 - **Node create** — newly created nodes matching the index label/property are tokenized and indexed (including nodes inserted *after* the index was created).
-- **`SET`** — updating an indexed property re-indexes the node (the old
-  value's postings stay, see the stale-posting residual below).
+- **`SET`** — updating an indexed property re-indexes the node. A `SET`
+  that replaces a non-empty indexed string (with another value, a
+  non-string, or by `SET n = {map}` dropping or changing it) queues every
+  covering index for a rebuild at the end of the statement, as `REMOVE
+  n.prop` does, so the node is no longer found by the old words
+  (SONNY-6421). Cost: one O(nodes of the label) rebuild per index per
+  statement that replaces indexed text.
 - **`SET n:L`** — a node given a label joins the label's fulltext (and
   vector) indexes with the properties it holds (SONNY-6368).
 - **`REMOVE n.prop`** — removing an indexed text property rebuilds every
@@ -199,6 +204,13 @@ After an index exists, ordinary write paths keep it current automatically:
   engine cannot take one property's postings out of a document, and a
   tombstone would hide the node for good (SONNY-6368). Cost: an O(nodes of
   the label) rebuild per statement that removes indexed text.
+- **`REMOVE n:L`** — a node that leaves a label leaves the label's
+  fulltext and vector indexes: a fulltext index holding text of the node is
+  rebuilt at the end of the statement and the vector indexes on the label
+  are rebuilt (SONNY-6421). Search, phrase and proximity answer only nodes
+  that carry the index's label, so a label removed by a path that does no
+  index maintenance (an undo of `SET n:L`, a replicated apply) does not
+  surface the node either.
 - **Delete** — deleting a node removes it from the index.
 - **Bulk-MERGE fast path** — `MERGE` statements shaped for the connection-thread
   fast path (`executeBulkSimpleMerge` in `quic_connection_handler.zig`, and its
@@ -291,9 +303,10 @@ signal that recovery via `CALL geode.fts.rebuild` is needed.
   followers via a callback seam, and snapshot install rebuilds FTS indexes from
   the installed graph data (seam-level — production `reportSnapshot` wiring is
   pending). Test: `tests/test_fts_apply_symmetry.zig`.
-- **Stale-posting residual on `SET` is symmetric:** a re-indexed node can leave
-  a stale posting for the old term (engine tombstone permanence in
-  `fts-storage`), but leader and follower behave identically — no divergence.
+- **Stale postings on `SET` (follower apply):** the raft apply hook appends
+  the re-indexed document and does not queue the statement-end rebuild
+  (SONNY-6421 covers the executor path), so a follower can keep a stale
+  posting for the old term until the index is rebuilt.
 - **`CREATE INDEX` / `DROP INDEX` are refused in cluster mode** (fail-closed
   DDL — no Raft replication slice for index DDL yet): follower →
   `ClusterNotLeader`, leader → `ClusterWriteNotReplicable`. Standalone mode is

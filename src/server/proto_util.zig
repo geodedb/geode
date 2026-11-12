@@ -239,7 +239,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-6335: no index or UNIQUE constraint over an encrypted field.
         // SONNY-6362: MERGE cannot match a randomized FLE ciphertext.
         error.MergeOnEncryptedField => .{ .code = "0A000", .message = "MERGE on an FLE-encrypted property is not supported: the stored value is randomized ciphertext, so a pattern value never matches it and MERGE would create a duplicate. MERGE on an unencrypted key and set the encrypted property with ON CREATE SET / SET" },
-        error.IndexOnEncryptedField => .{ .code = "0A000", .message = "The field is FLE-encrypted: an index or UNIQUE / NODE KEY constraint over it would hold ciphertext (or plaintext); none can be created. Use a searchable (blind-index) field for equality" },
+        error.IndexOnEncryptedField => .{ .code = "0A000", .message = "The field is FLE-encrypted: an index or UNIQUE / NODE KEY constraint over it would hold ciphertext (or plaintext); none can be created. Equality search over an encrypted field is not available; index or constrain an unencrypted property instead" },
         error.EncryptedFieldIndexed => .{ .code = "0A000", .message = "The field has an index or a UNIQUE / NODE KEY constraint over it; drop it before encrypting the field" },
         // SONNY-6341: CALL geode.fle.grantRole / revokeRole.
         error.FleRoleGrantNotPersisted => .{ .code = "58030", .message = "The FLE role grant could not be saved to the security graph; it was not applied. Retry it" },
@@ -397,6 +397,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3367: a pattern names one variable as two kinds of element
         // (a relationship reused as a node pattern bound every node of the
         // graph). A syntax error, refused before anything runs.
+        // SONNY-3245: ISO/IEC 39075:2024 16.5 <insert graph pattern>.
+        error.InvalidInsertPattern => .{ .code = "42000", .message = "Invalid CREATE / INSERT pattern: a variable a MATCH bound, or one declared earlier in the pattern, takes no label or property (use SET), and an inserted relationship points left or right and has one type (ISO/IEC 39075 16.5)" },
         error.VariableKindConflict => .{ .code = "42000", .message = "Variable kind conflict: a pattern names one variable as two kinds of element (a node, a relationship, a variable-length relationship list or a path), or names a variable that holds a value (a WITH expression's alias, a FOR variable); name each element with a variable of its own" },
         // SONNY-3248 (round 4b-1 review m-2): a SKIP or LIMIT parameter that
         // is no non-negative integer read as "no window" (every row).

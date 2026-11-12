@@ -20,6 +20,8 @@
 //!   one kind of element (`queryKindsConflict`).
 //! - SONNY-3248, repeated SET targets (22G0M, `RepeatedSetTarget`): one SET
 //!   clause assigns a property once (`setListRepeatsTarget`).
+//! - SONNY-3245, insert patterns (42000, `InvalidInsertPattern`): a CREATE
+//!   or INSERT pattern follows ISO/IEC 39075:2024 16.5 (`insertPatternInvalid`).
 //! - SONNY-3318, a path variable on an OPTIONAL MATCH after the first
 //!   pattern (0A000, `OptionalPathVariable`): no executor binds it (`count(p)`
 //!   answered 0 of the paths matched).
@@ -37,7 +39,7 @@ const Value = @import("../value_types.zig").Value;
 /// What the checks refuse (the module doc has each one): `MissingParameter`
 /// (42P02), `VariableKindConflict` (42000), `RepeatedSetTarget` (22G0M),
 /// `InvalidWindowParameter` (22G03) and `OptionalPathVariable` (0A000).
-pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable };
+pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable, InvalidInsertPattern };
 
 /// Every statement of `program` names only parameters in `supplied` (or ones
 /// it defines with LET). `values`: the supplied parameters' values (empty:
@@ -85,6 +87,7 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
     if (c.kind_conflict) return error.VariableKindConflict;
     if (c.repeated_set_target) return error.RepeatedSetTarget;
     if (c.optional_path) return error.OptionalPathVariable;
+    if (c.invalid_insert) return error.InvalidInsertPattern;
     for (c.used.items) |u| {
         if (has(supplied, u.name) or c.defines(u.scope, u.name)) continue;
         return error.MissingParameter;
@@ -102,6 +105,70 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
             break;
         }
     };
+}
+
+// CANARY: REQ=REQ-SONNY-3245-INSERT-PATTERN-RULES; FEATURE="CreateStatement"; ASPECT=InsertSyntaxRules; STATUS=TESTED; TEST=tests/test_sonny3245_create_merge_forms.zig; OWNER=engine; UPDATED=2026-11-12
+/// SONNY-3245: does CREATE / INSERT pattern `p` break ISO/IEC 39075:2024
+/// 16.5 <insert graph pattern>? `bound`: the MATCH of the same query part,
+/// whose variables the pattern's bound insert element patterns name. Each
+/// was accepted and did the wrong thing:
+/// - SR 10 a) iii): a bound insert element pattern carries no label or
+///   property specification. `MATCH (n) CREATE (n:Extra)` did nothing and
+///   `CREATE (n {extra: 1})` changed the matched node.
+/// - SR 10 b): only the defining (first) occurrence of a variable carries
+///   them. `CREATE (a:R), (a:R)` made two nodes.
+/// - Format: an inserted edge points left, right, or is `~[ ]~` (Feature
+///   GH02, which Geode does not support: its edges are directed), and has a
+///   <label set specification>, which joins labels with `&`, never `|`.
+///   `-[:T]-` stored a directed edge and `[:T|U]` stored a T edge; a stored
+///   edge has exactly one type, so neither several types nor a quantifier
+///   is accepted.
+fn insertPatternInvalid(p: ast.GraphPattern, bound: ?ast.GraphPattern) bool {
+    var declared_buf: [64][]const u8 = undefined;
+    var declared: usize = 0;
+    for (p.chains) |chain| {
+        // The node positions of the path: the head, or each hop's right
+        // with the first hop's left (a hop's left is the hop before's right).
+        const first: ?ast.NodePattern = if (chain.hops.len == 0) chain.head else chain.hops[0].left;
+        if (first) |n| {
+            if (nodeInvalid(n, bound, declared_buf[0..declared])) return true;
+            if (n.name) |name| if (declared < declared_buf.len) {
+                declared_buf[declared] = name;
+                declared += 1;
+            };
+        }
+        for (chain.hops) |hop| {
+            if (hop.rel.dir == .undirected) return true;
+            if (hop.rel.types.len > 1) return true;
+            if (hop.rel.min_len != null or hop.rel.max_len != null) return true;
+            if (nodeInvalid(hop.right, bound, declared_buf[0..declared])) return true;
+            if (hop.right.name) |name| if (declared < declared_buf.len) {
+                declared_buf[declared] = name;
+                declared += 1;
+            };
+        }
+    }
+    return false;
+}
+
+fn nodeInvalid(n: ast.NodePattern, bound: ?ast.GraphPattern, declared: []const []const u8) bool {
+    const name = n.name orelse return false;
+    const specified = n.labels.len > 0 or n.props != null;
+    if (!specified) return false;
+    if (has(declared, name)) return true;
+    const b = bound orelse return false;
+    return patternNames(b, name);
+}
+
+fn patternNames(p: ast.GraphPattern, name: []const u8) bool {
+    for (p.chains) |chain| {
+        if (chain.head) |h| if (h.name) |n| if (std.mem.eql(u8, n, name)) return true;
+        for (chain.hops) |hop| {
+            if (hop.left.name) |n| if (std.mem.eql(u8, n, name)) return true;
+            if (hop.right.name) |n| if (std.mem.eql(u8, n, name)) return true;
+        }
+    }
+    return false;
 }
 
 /// A SKIP or LIMIT value: a non-negative integer.
@@ -156,6 +223,8 @@ const Collector = struct {
     repeated_set_target: bool = false,
     /// SONNY-3318: an OPTIONAL MATCH after the first pattern names a path.
     optional_path: bool = false,
+    /// SONNY-3245: a CREATE or INSERT pattern breaks ISO 16.5.
+    invalid_insert: bool = false,
 
     fn deinit(c: *Collector) void {
         c.stack.deinit(c.alloc);
@@ -194,6 +263,9 @@ const Collector = struct {
             if (patternKindsConflict(c.alloc, &.{v.*}, null, &.{})) |conflict| {
                 if (conflict) c.kind_conflict = true;
             } else |_| c.failed = true;
+        }
+        if (T == ast.CreateStatement or T == ast.InsertStatement) {
+            if (insertPatternInvalid(v.pattern, null)) c.invalid_insert = true;
         }
         if (T == ast.ForStatement) {
             // SONNY-3367 (round 4b-1b review I-A): a FOR's variables are
@@ -252,6 +324,9 @@ const Collector = struct {
                 if (conflict) c.kind_conflict = true;
             } else |_| c.failed = true;
             if (setListRepeatsTarget(v.set_clauses, v.set_clause_ends)) c.repeated_set_target = true;
+            if (v.create_pattern) |cp| {
+                if (insertPatternInvalid(cp, v.match)) c.invalid_insert = true;
+            }
             if (v.match.chains.len > 1) for (v.match.chains[1..]) |chain| {
                 if (chain.is_optional and chain.name != null) c.optional_path = true;
             };

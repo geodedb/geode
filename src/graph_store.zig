@@ -8058,10 +8058,9 @@ pub const GraphStore = struct {
         // adapter's left the engine and the node disagreeing; and a failed
         // merge-index or counter insert was swallowed, so MERGE trusted a
         // miss for a value the node holds.)
-        const node_meta = self.nodes.get(node_id) orelse {
-            if (global_vtable != null) return error.NodeNotFound;
-            return;
-        };
+        // SONNY-6421: also without a storage engine; a write to an id that
+        // names no node succeeded silently there.
+        const node_meta = self.nodes.get(node_id) orelse return error.NodeNotFound;
         const prep = try self.preparePropertyPut(&node_meta.properties, key, effective_value);
         var committed = false;
         errdefer if (!committed) self.cancelPropertyPut(&node_meta.properties, prep);
@@ -17439,6 +17438,16 @@ fn syncGlobalAdapterForDataDir(data_dir: ?[]const u8) void {
 
 // Global instance that persists across queries
 var global_store: ?GraphStore = null;
+
+/// SONNY-6375: the global store, or null. Tests the optional through a
+/// pointer capture, which reads only its tag: `global_store != null` copied
+/// the whole GraphStore (its live mutexes included) to compare it, a data
+/// race with every thread locking one of them (ThreadSanitizer,
+/// `test-sonny6375-global-store-race-tsan`).
+fn globalStorePtr() ?*GraphStore {
+    if (global_store) |*s| return s;
+    return null;
+}
 // The global store is shared across transport threads, so its allocator must be
 // safe for cross-thread alloc/free traffic. A long-lived arena hid leaks but
 // left the backing allocator outside the thread-safe path used elsewhere.
@@ -18101,8 +18110,7 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
     // Final flush — no worker threads should be running at this point
     // but take the lock for safety. Use split-phase for consistency with
     // the persistence loop (P3: avoid holding lock during TDE finalization).
-    if (global_store != null) {
-        const store_ptr: *GraphStore = &(global_store.?);
+    if (globalStorePtr()) |store_ptr| {
         // GAP-0268: Final WAL sync + checkpoint to ensure all mutations are persisted
         // and the WAL is truncated before shutdown.
         if (g_wal_sync_fn) |sync_fn| {
@@ -18143,8 +18151,7 @@ fn persistenceLoop() void {
             error.Canceled => return,
         };
         if (g_persist_shutdown.load(.acquire) != 0) break;
-        if (global_store != null) {
-            const store_ptr: *GraphStore = &(global_store.?);
+        if (globalStorePtr()) |store_ptr| {
 
             // GAP-0268: Sync the WAL (fsync) on every persistence loop tick
             // so that committed mutations reach stable storage promptly.
@@ -18556,7 +18563,7 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 
     // Reinitialize if data dir changed or not initialized yet
     // Clean up previous instance if it exists
-    if (initialized.load(.monotonic) and global_store != null) {
+    if (initialized.load(.monotonic) and globalStorePtr() != null) {
         global_store.?.clearNodes();
         global_store.?.deinit();
         global_store = null;
@@ -18673,10 +18680,8 @@ pub fn initGlobalStore(allocator: std.mem.Allocator, data_dir: []const u8) !*Gra
 
 /// Get the current global store without initializing (returns null if not initialized)
 pub fn getCurrentGlobalStore() ?*GraphStore {
-    if (initialized.load(.acquire) and global_store != null) {
-        return &global_store.?;
-    }
-    return null;
+    if (!initialized.load(.acquire)) return null;
+    return globalStorePtr();
 }
 
 // CANARY: REQ=REQ-STARTUP-IDMAP-SNAPSHOT-001; FEATURE="FastRestartIdMapSnapshot"; ASPECT=ShutdownSnapshotWrite; STATUS=TESTED; TEST=tests/test_startup_lazy_hydrate.zig; OWNER=storage; UPDATED=2026-06-29
@@ -18772,7 +18777,7 @@ var g_clean_shutdown_flushed: std.atomic.Value(bool) = std.atomic.Value(bool).in
 /// correctly REJECTS the (now-uncovered) snapshots and safely re-scans, with no
 /// data loss (G1/G3 — never serve a snapshot across a committed tail).
 pub fn flushForCleanShutdown() void {
-    if (!(initialized.load(.acquire) and global_store != null)) return;
+    if (!(initialized.load(.acquire) and globalStorePtr() != null)) return;
     if (getGlobalAdapter() == null or global_store.?.data_dir.len == 0) return;
     global_store.?.saveToFileEx(false) catch |err| {
         // Do NOT set the latch: leave the (retryable) checkpoint for the deinit
@@ -18793,7 +18798,7 @@ fn deinitGlobalStoreEx(clean: bool) void {
     // use-after-free -> ReleaseSafe GPE; see txn_undo_log.deinitGlobalUndoLog,
     // GAP-0917). The undo log is coupled to the store's lifetime.
     @import("txn_undo_log.zig").deinitGlobalUndoLog();
-    if (initialized.load(.acquire) and global_store != null) {
+    if (initialized.load(.acquire) and globalStorePtr() != null) {
         // CLEAN shutdown: persist the IdMap snapshot (final checkpoint + snapshot
         // at the matching counter) BEFORE the store and adapter are destroyed.
         //

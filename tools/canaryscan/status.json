@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T21:14:06.228012916Z",
+  "generated_at": "2026-11-12T22:27:40.617028084Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -76856,6 +76856,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3125-SHARED-NODE-SET",
+      "features": [
+        {
+          "feature": "SetClauseSemantics",
+          "aspect": "PerRowReread",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3125_shared_node_set.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3125_shared_node_set.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3130-GRAPH-DDL-ALONE",
       "features": [
         {
@@ -78471,6 +78490,63 @@
           "benches": [],
           "owner": "parser",
           "updated": "2026-09-28"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3245-CREATE-FORMS",
+      "features": [
+        {
+          "feature": "CreateStatement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3245_create_merge_forms.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3245_create_merge_forms.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3245-INSERT-PATTERN-RULES",
+      "features": [
+        {
+          "feature": "CreateStatement",
+          "aspect": "InsertSyntaxRules",
+          "status": "TESTED",
+          "files": [
+            "src/execution/param_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3245_create_merge_forms.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3245-NULL-PROPERTY-ABSENT",
+      "features": [
+        {
+          "feature": "SetClauseSemantics",
+          "aspect": "NullRemovesProperty",
+          "status": "TESTED",
+          "files": [
+            "src/execution/property_mutation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3245_create_merge_forms.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -83080,6 +83156,26 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6362-READ-NO-BUILD-WAIT",
+      "features": [
+        {
+          "feature": "ExactPropertyIndex",
+          "aspect": "ReadFallsBackDuringBuild",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig",
+            "tests/test_sonny6362_exact_index_read_fallback.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6362_exact_index_read_fallback.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6362-SEED-RECHECK",
       "features": [
         {
@@ -83572,6 +83668,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6375-GLOBAL-STORE-NO-COPY",
+      "features": [
+        {
+          "feature": "GraphStore",
+          "aspect": "GlobalStorePointerCheck",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6375_global_store_race.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6375_global_store_race.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6377-ATTR-STORE-OOM",
       "features": [
         {
@@ -83929,6 +84044,96 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6421-FTS-LABEL-FILTER",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "SearchLabelFilter",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6421-INDEX-MAINTENANCE",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "IndexMaintenanceRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6421-REMOVE-LABEL-MAINTENANCE",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "RemoveLabel",
+          "status": "TESTED",
+          "files": [
+            "src/execution/property_mutation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FullText",
+          "aspect": "RemovedLabelRebuildQueue",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_index_ops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6421-VECTOR-REBUILD-AGAIN",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "RebuildAgainAfterSwap",
+          "status": "TESTED",
+          "files": [
+            "src/index/index_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "index",
           "updated": "2026-11-12"
         }
       ]
@@ -91790,7 +91995,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4770
+      "TESTED": 4781
     },
     "by_aspect": {
       "2PC": 3,
@@ -93264,6 +93469,7 @@
       "GlobalProvider": 1,
       "GlobalSingleton": 1,
       "GlobalStore": 2,
+      "GlobalStorePointerCheck": 1,
       "GoldenParity": 1,
       "GoldenParityJson": 1,
       "GoldenParityTextFormats": 1,
@@ -93525,7 +93731,7 @@
       "IndexKeyGate": 1,
       "IndexLookup": 1,
       "IndexMaintenance": 4,
-      "IndexMaintenanceRegression": 1,
+      "IndexMaintenanceRegression": 2,
       "IndexManagement": 1,
       "IndexMetadata": 1,
       "IndexOptimization": 2,
@@ -93566,6 +93772,7 @@
       "InsecureAllowAllDefault": 1,
       "Insert": 1,
       "InsertPrePass": 1,
+      "InsertSyntaxRules": 1,
       "InstallUnderStoreLock": 1,
       "Instrumentation": 1,
       "IntComparison": 1,
@@ -94130,6 +94337,7 @@
       "NullIf": 1,
       "NullOnNoRows": 1,
       "NullPropagation": 1,
+      "NullRemovesProperty": 1,
       "NullSafety": 1,
       "NullSemantics": 1,
       "NullType": 1,
@@ -94377,6 +94585,7 @@
       "PerMapHolders": 1,
       "PerNodeRows": 1,
       "PerRequestInstall": 1,
+      "PerRowReread": 1,
       "PerSession": 1,
       "PerThreadRole": 1,
       "PerThreadTenant": 2,
@@ -94801,6 +95010,7 @@
       "ReExport": 3,
       "ReadBudgetOverGrpc": 1,
       "ReadBudgetPoll": 2,
+      "ReadFallsBackDuringBuild": 1,
       "ReadGateDecide": 1,
       "ReadGraphList": 2,
       "ReadMapPartialFailure": 1,
@@ -94826,6 +95036,7 @@
       "RealityFreshnessGuard": 1,
       "ReasonCodePresent": 1,
       "Rebalance": 1,
+      "RebuildAgainAfterSwap": 1,
       "RebuildAgainRequest": 1,
       "RebuildBackfill": 1,
       "RebuildGuard": 1,
@@ -94862,7 +95073,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 273,
+      "Regression": 274,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -94891,10 +95102,12 @@
       "RemoveExecution": 2,
       "RemoveFiltering": 1,
       "RemoveGraph": 1,
+      "RemoveLabel": 1,
       "RemoveNoReturn": 1,
       "RemoveProperty": 1,
       "RemoveRole": 1,
       "RemoveUser": 1,
+      "RemovedLabelRebuildQueue": 1,
       "RemovedTextRebuildQueue": 1,
       "RenameAndToggleTogether": 1,
       "RenameSurvivesRestartNoStale": 1,
@@ -95078,6 +95291,7 @@
       "SearchHitHydrate": 1,
       "SearchHitHydrateNegativeControl": 1,
       "SearchHitHydrateTenantScoped": 1,
+      "SearchLabelFilter": 1,
       "SearchLatencyGate": 1,
       "SearchRowFilter": 1,
       "SearchSigintCheck": 1,

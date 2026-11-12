@@ -2035,13 +2035,17 @@ fn seekIndexedCandidates(
     const pv = best_pv orelse return null;
     defer property_value_codec.freePropertyValue(allocator, pv);
 
-    return try adapter.getCandidateNodesByLabelAndProperty(
+    // SONNY-6362 item 6: a build of the index in flight -> scan instead.
+    return adapter.getCandidateNodesByLabelAndProperty(
         graph_name,
         pattern.labels[0],
         key,
         pv,
         allocator,
-    );
+    ) catch |err| switch (err) {
+        error.ExactIndexBusy => null,
+        else => err,
+    };
 }
 
 fn nodeMatchesPattern(

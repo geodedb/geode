@@ -167,7 +167,9 @@ fn handleFtsSearch(
     // ids -> resolve under database-enforced authorization -> discard
     // unauthorized rows BEFORE results leave the engine.
     // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=SearchRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
-    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant);
+    var label_arena = std.heap.ArenaAllocator.init(allocator);
+    defer label_arena.deinit();
+    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant, try indexLabels(label_arena.allocator(), context, index_name));
     defer authorized.deinit(allocator);
 
     // Build the (node, score) binding table. Column names are dupe'd so they own
@@ -244,7 +246,9 @@ fn handleFtsPhrase(
     // ids -> resolve under database-enforced authorization -> discard
     // unauthorized rows BEFORE results leave the engine.
     // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=PhraseRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
-    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant);
+    var label_arena = std.heap.ArenaAllocator.init(allocator);
+    defer label_arena.deinit();
+    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant, try indexLabels(label_arena.allocator(), context, index_name));
     defer authorized.deinit(allocator);
 
     return try buildNodeScoreResult(allocator, call_stmt, authorized.items);
@@ -301,7 +305,9 @@ fn handleFtsProximity(
     // ids -> resolve under database-enforced authorization -> discard
     // unauthorized rows BEFORE results leave the engine.
     // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=ProximityRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
-    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant);
+    var label_arena = std.heap.ArenaAllocator.init(allocator);
+    defer label_arena.deinit();
+    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant, try indexLabels(label_arena.allocator(), context, index_name));
     defer authorized.deinit(allocator);
 
     return try buildNodeScoreResult(allocator, call_stmt, authorized.items);
@@ -437,6 +443,7 @@ fn filterAuthorizedHits(
     allocator: std.mem.Allocator,
     hits: []const fulltext.FullTextIndex.SearchResult,
     filter_tenant: ?[]const u8,
+    index_labels: []const []const u8,
 ) !std.ArrayList(fulltext.FullTextIndex.SearchResult) {
     const store = graph_store.getGlobalStore(graph_store.global_allocator());
     var reusable_row = std.StringHashMap(rls.Value).init(allocator);
@@ -460,11 +467,48 @@ fn filterAuthorizedHits(
             // lock here (the block above already released it).
             (store.nodes.getOrHydrate(hit.doc_id) catch null) orelse continue; // genuinely gone — no fallback possible
 
+        // SONNY-6421: a node that no longer carries the index's label is not
+        // in the index, whatever postings it left: the engine cannot take a
+        // document out, and a label can go by a path that does no index
+        // maintenance (an undo of SET n:L, a replicated apply).
+        if (index_labels.len > 0 and !carriesAnyLabel(node.labels, index_labels)) continue;
         if (match_operations.passesRowVisibilityFilters(&reusable_row, node, filter_tenant)) {
             authorized.appendAssumeCapacity(hit);
         }
     }
     return authorized;
+}
+
+fn carriesAnyLabel(node_labels: []const []const u8, wanted: []const []const u8) bool {
+    for (node_labels) |have| {
+        for (wanted) |w| if (std.mem.eql(u8, have, w)) return true;
+    }
+    return false;
+}
+
+// CANARY: REQ=REQ-SONNY-6421-FTS-LABEL-FILTER; FEATURE="FullText"; ASPECT=SearchLabelFilter; STATUS=TESTED; TEST=tests/test_sonny6421_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6421: the labels whose nodes `index_name` indexes (its catalog row's
+/// `FOR (n:Label)`, else the fulltext label registry), copied into
+/// `allocator`. Empty when neither knows the index; the search then filters
+/// by visibility only, as before.
+fn indexLabels(allocator: std.mem.Allocator, context: ExecutionContext, index_name: []const u8) ![]const []const u8 {
+    var out: std.ArrayListUnmanaged([]const u8) = .empty;
+    {
+        const rows = try context.catalog.listIndexesForGraph(allocator, graph_store.DEFAULT_GRAPH_NAME);
+        defer allocator.free(rows);
+        for (rows) |row| {
+            if (!std.mem.eql(u8, row.name, index_name)) continue;
+            try out.append(allocator, try allocator.dupe(u8, row.table_name));
+        }
+    }
+    if (out.items.len == 0) {
+        const adapter = graph_store.getGlobalAdapter() orelse return out.toOwnedSlice(allocator);
+        const mg = adapter.lookupManagedGraph(graph_store.DEFAULT_GRAPH_NAME) catch return out.toOwnedSlice(allocator);
+        for (try mg.snapshotFtsLabelIndex(allocator)) |entry| {
+            if (std.mem.eql(u8, entry.name, index_name)) try out.append(allocator, entry.label);
+        }
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 /// Build the `(node, score)` binding table from facade SearchResults, applying

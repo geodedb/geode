@@ -2869,13 +2869,32 @@ fn scanExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFlags
 /// checkpoint can never lose its non-blocking `tryLock` to the very build it is
 /// persisting (the lost persist).
 fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
+    return ensureExactIndex(adapter, mg, .wait);
+}
+
+// CANARY: REQ=REQ-SONNY-6362-READ-NO-BUILD-WAIT; FEATURE="ExactPropertyIndex"; ASPECT=ReadFallsBackDuringBuild; STATUS=TESTED; TEST=tests/test_sonny6362_exact_index_read_fallback.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6362 item 6: `ensureExactNodePropertyIndexBuilt` for an index-served
+/// READ. While another thread holds `exact_index_build_mutex` (a deferred
+/// build or a late-key catch-up, O(graph)) a read parked on it for the whole
+/// build; it now answers `error.ExactIndexBusy` at once, and every read
+/// caller treats an error as "no index answer" and scans. With the mutex
+/// free the read builds (or catches up) the index itself, as before. Write
+/// paths and the MERGE resolver keep waiting: they must see a complete index.
+fn ensureExactIndexForRead(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
+    return ensureExactIndex(adapter, mg, .no_wait);
+}
+
+fn ensureExactIndex(adapter: *StorageAdapter, mg: *ManagedGraph, comptime mode: enum { wait, no_wait }) !void {
     // SONNY-6354: built AND complete for every lean key registered so far.
     if (exactIndexCurrent(mg)) return;
     const io = std.Io.Threaded.global_single_threaded.io();
     // SONNY-1574: the build runs in an INNER scope so `exact_index_build_mutex`
     // is released BEFORE the persist worker is spawned (see the spawn below).
     const built_here = blk: {
-        mg.exact_index_build_mutex.lockUncancelable(io);
+        switch (mode) {
+            .wait => mg.exact_index_build_mutex.lockUncancelable(io),
+            .no_wait => if (!mg.exact_index_build_mutex.tryLock()) return error.ExactIndexBusy,
+        }
         defer mg.exact_index_build_mutex.unlock(io);
         // Double-check under the mutex: a peer first-accessor may have built it
         // while we waited for the lock. A built index may still lack a lean
@@ -3333,51 +3352,82 @@ pub fn sessionEngineTxnGraph() ?[]const u8 {
 pub const OrderedScanDir = enum { asc, desc };
 
 const OrderedDir = gs.ordered_property_index.OrderedPropertyIndex.Direction;
-const OrderedCursor = gs.ordered_property_index.OrderedPropertyIndex.Cursor;
 
-/// Max (key,node_id) pairs pulled from one shard cursor per SHARED-lock hold.
-/// Bounds how long a single batch fences a queued EXCLUSIVE checkpoint/apply on
-/// that shard (wedge-avoidance), mirroring `label_scan_batch_slots`.
+/// Max ordered-tree entries one shard batch visits per lock hold. Bounds how
+/// long a single batch fences a queued EXCLUSIVE checkpoint/apply on that
+/// shard (wedge-avoidance), mirroring `label_scan_batch_slots`.
 const ordered_scan_batch_slots: usize = 256;
 
-/// One copied-out head from a shard cursor. `key` is an OWNED dup of the tree's
-/// (order-preserving) encoded key bytes — copied under the shard lock because
-/// the borrowed `OrderedBTree.Entry.key` is only valid under the lock and until
-/// the next mutation of that tree.
+/// One copied-out head from a shard's ordered tree. `key` is an OWNED dup of
+/// the tree's (order-preserving) encoded key bytes — copied under the locks
+/// because the borrowed `OrderedBTree.Entry.key` is only valid under them and
+/// until the next mutation of that tree.
 const OrderedScanHead = struct { key: []u8, node_id: u64 };
 
-/// Per-shard cursor + current bounded batch for the k-way merge.
+/// Per-shard resume point + current bounded batch for the k-way merge.
 const OrderedShardState = struct {
-    cursor: ?OrderedCursor = null,
-    opened: bool = false,
+    /// OWNED copy of the last tree key the previous batch visited (live or
+    /// not); null before the first batch. The next batch starts strictly
+    /// after it in scan order.
+    resume_key: ?[]u8 = null,
     exhausted: bool = false,
     buf: std.ArrayList(OrderedScanHead) = .empty,
     pos: usize = 0,
 };
 
-/// Advance shard `i`'s ordered cursor by a BOUNDED batch, copying (key,node_id)
-/// out into owned buffers, then release the shard lock.
-///
-/// -- LOCK SAFETY (the subtle part) --
-///   * Only this shard's adapter SHARED lock is held while reading the tree;
-///     `mg.rwlock` is NEVER held across the scan (no checkpoint wedge).
-///   * At most `ordered_scan_batch_slots` entries are pulled per acquire, then
-///     the lock is released so a queued EXCLUSIVE checkpoint/apply on this shard
-///     wins before the next batch.
-///   * `exclusiveWaitingBackoff(mg)` parks BEFORE each (re)acquire so a waiting
-///     EXCLUSIVE drains the reader set first (mirrors appendLiveNodesForLabelShard).
-///   * `OrderedBTree.Entry.key` borrows tree-owned bytes valid only under the
-///     lock and until the next tree mutation, so we `dupe` them out here.
-///   * The Cursor is HELD ACROSS lock releases (between batches). This is
-///     memory-safe under concurrent node insert/update/delete: OrderedBTree
-///     insert/remove never free B-tree nodes (a split only shrinks+links leaves;
-///     remove frees the key copy, not the node), and Cursor.next()/prev()
-///     dereference only the leaf node + its prev/next back-pointers, never the
-///     (possibly-relocated) tree handle. A mutation across the gap can yield a
-///     torn read (a valid prefix of a consistent order), never a use-after-free.
-///     The one unsafe concurrent op is a full ordered-index rebuild
-///     (clearTrees) — that is DDL, takes this shard's EXCLUSIVE lock in
-///     `createOrderedIndex`, and does not run during a live scan.
+/// SONNY-6375: the graphs whose `rwlock` this thread holds through the
+/// graph-lock API (`acquireGraphReadLock`, `acquireGraphWriteLock`,
+/// `acquireGraphWriteLockCancelable`, and the `graph_store` handles built on
+/// them), so a reader that takes `mg.rwlock` SHARED itself (`orderedScan`)
+/// skips it when its own thread already holds the lock. `std.Io.RwLock` is not
+/// reentrant: SHARED under this thread's EXCLUSIVE never returns, and a
+/// second SHARED behind a waiting writer can wedge. A lock beyond the table
+/// is counted in `t_untracked_graph_locks`, and while one is held every graph
+/// counts as held (the reader then takes no `rwlock`, as before this fix,
+/// instead of risking a self-deadlock).
+const max_tracked_graph_locks = 16;
+threadlocal var t_held_graph_locks: [max_tracked_graph_locks]?*const ManagedGraph = @splat(null);
+threadlocal var t_untracked_graph_locks: u32 = 0;
+
+fn noteGraphLockTaken(mg: *const ManagedGraph) void {
+    for (&t_held_graph_locks) |*slot| {
+        if (slot.* == null) {
+            slot.* = mg;
+            return;
+        }
+    }
+    t_untracked_graph_locks += 1;
+}
+
+fn noteGraphLockReleased(mg: *const ManagedGraph) void {
+    for (&t_held_graph_locks) |*slot| {
+        if (slot.* == mg) {
+            slot.* = null;
+            return;
+        }
+    }
+    if (t_untracked_graph_locks > 0) t_untracked_graph_locks -= 1;
+}
+
+/// SONNY-6375: does this thread hold `mg.rwlock` (SHARED or EXCLUSIVE) through
+/// the graph-lock API? See `t_held_graph_locks`.
+pub fn threadHoldsGraphLock(mg: *const ManagedGraph) bool {
+    if (t_untracked_graph_locks > 0) return true;
+    for (t_held_graph_locks) |held| {
+        if (held == mg) return true;
+    }
+    return false;
+}
+
+/// SONNY-6375 test seam (test builds only): runs on the scanning thread
+/// between two batches of one `orderedScan`, when it holds no graph or shard
+/// lock — the window a concurrent write or ordered-index rebuild can use.
+pub const OrderedScanBatchHook = struct { ctx: *anyopaque, run: *const fn (*anyopaque) void };
+pub threadlocal var test_ordered_scan_between_batches: ?OrderedScanBatchHook = null;
+
+/// Refill shard `i`'s batch with at least one live head, or mark the shard
+/// exhausted. A batch whose visited entries were all deleted nodes comes back
+/// empty; an empty, non-exhausted shard would otherwise drop out of the merge.
 fn orderedScanRefill(
     mg: *ManagedGraph,
     i: usize,
@@ -3385,6 +3435,57 @@ fn orderedScanRefill(
     key: []const u8,
     dir: OrderedDir,
     st: *OrderedShardState,
+    holds_graph_lock: bool,
+    allocator: Allocator,
+    io: std.Io,
+) !void {
+    while (true) {
+        try orderedScanBatch(mg, i, label_id, key, dir, st, holds_graph_lock, allocator, io);
+        if (st.buf.items.len > 0 or st.exhausted) return;
+    }
+}
+
+/// Read shard `i`'s next BOUNDED batch of its ordered tree for `(label_id,
+/// key)`, copying the (key, node_id) of every live node out into owned
+/// buffers, then release the locks.
+///
+/// -- LOCK SAFETY (SONNY-6375) --
+///   graph_storage's `OrderedBTree` has no internal locking, and
+///   `openOrderedCursor` documents that the cursor borrows the live tree, which
+///   must not be mutated while it is iterated. Its writers are:
+///   * the online label/delete hooks (`addLabel`, `removeLabel`, `deleteNode`),
+///     run by write statements under `mg.rwlock` EXCLUSIVE and by the bulk
+///     paths under `mg.rwlock` SHARED + this shard's `shard_locks[i]`
+///     EXCLUSIVE;
+///   * the rebuilds (`clearTrees` + rescan, which FREES the tree nodes):
+///     `createOrderedIndex` (`mg.rwlock` SHARED + `shard_locks[i]` EXCLUSIVE)
+///     and the full checkpoint / close (`mg.rwlock` EXCLUSIVE).
+///   So each batch holds `mg.rwlock` SHARED and then `shard_locks[i]` SHARED
+///   (tier 1, rwlock before shard lock, the order `createOrderedIndex` uses),
+///   which excludes all of them. When this thread already holds `mg.rwlock`
+///   (`holds_graph_lock`: a point-read / fallback read under SHARED, or a read
+///   statement of a write program under EXCLUSIVE) it is not taken again —
+///   `std.Io.RwLock` is not reentrant — and the exclusive-waiting back-off is
+///   skipped (a waiting writer cannot get in while this thread holds the lock).
+///   * Both locks are released after at most `ordered_scan_batch_slots`
+///     visited entries, so a queued EXCLUSIVE checkpoint/apply wins before the
+///     next batch; `exclusiveWaitingBackoff(mg)` parks BEFORE each acquire so a
+///     waiting EXCLUSIVE drains the reader set first.
+///   * NO cursor survives a release: a rebuild in the gap frees the nodes a
+///     held cursor points into. Each batch opens a fresh cursor and re-seeks
+///     strictly past `st.resume_key` (keys are unique: the ordered encoding
+///     embeds node_id). A mutation in the gap can still give a torn read (a
+///     valid prefix of a consistent order), never a use-after-free.
+///   * The liveness check (`getNode`) of each visited node runs under the same
+///     hold; the ordered tree keeps deleted-but-still-posted nodes.
+fn orderedScanBatch(
+    mg: *ManagedGraph,
+    i: usize,
+    label_id: gs.LabelId,
+    key: []const u8,
+    dir: OrderedDir,
+    st: *OrderedShardState,
+    holds_graph_lock: bool,
     allocator: Allocator,
     io: std.Io,
 ) !void {
@@ -3395,33 +3496,54 @@ fn orderedScanRefill(
     st.buf.clearRetainingCapacity();
     st.pos = 0;
 
-    exclusiveWaitingBackoff(mg);
+    if (!holds_graph_lock) {
+        exclusiveWaitingBackoff(mg);
+        mg.rwlock.lockSharedUncancelable(io);
+    }
+    defer if (!holds_graph_lock) mg.rwlock.unlockShared(io);
     mg.shard_locks[i].lockSharedUncancelable(io);
     defer mg.shard_locks[i].unlockShared(io);
 
-    const shard = mg.engine.shards[i];
-    if (!st.opened) {
-        st.opened = true;
-        // openOrderedCursor descends the tree (findLeaf + seek); read it under
-        // the SHARED lock. Null => no ordered index registered on this shard.
-        st.cursor = shard.openOrderedCursor(label_id, key, dir);
-        if (st.cursor == null) {
-            st.exhausted = true;
-            return;
-        }
+    // Null => no ordered index registered on this shard.
+    var cursor = mg.engine.shards[i].openOrderedCursor(label_id, key, dir) orelse {
+        st.exhausted = true;
+        return;
+    };
+    if (st.resume_key) |rk| {
+        // Park at the first key >= rk; DESC then steps backward from there,
+        // or from the last key when every key is < rk.
+        cursor.inner.seek(rk);
+        if (dir == .desc and cursor.inner.leaf == null) cursor.inner.seekToLast();
     }
 
-    var n: usize = 0;
-    while (n < ordered_scan_batch_slots) : (n += 1) {
-        const e = st.cursor.?.next() orelse {
+    var last_visited: ?[]const u8 = null;
+    var visited: usize = 0;
+    while (visited < ordered_scan_batch_slots) {
+        const e = cursor.next() orelse {
             st.exhausted = true;
             break;
         };
+        if (st.resume_key) |rk| {
+            const ord = std.mem.order(u8, e.key, rk);
+            const already_visited = switch (dir) {
+                .asc => ord != .gt,
+                .desc => ord != .lt,
+            };
+            if (already_visited) continue;
+        }
+        visited += 1;
+        last_visited = e.key;
+        if ((try mg.engine.getNode(e.node_id)) == null) continue;
         const kc = try allocator.dupe(u8, e.key);
         st.buf.append(allocator, .{ .key = kc, .node_id = e.node_id }) catch |err| {
             allocator.free(kc);
             return err;
         };
+    }
+    if (last_visited) |lk| {
+        const owned = try allocator.dupe(u8, lk);
+        if (st.resume_key) |old| allocator.free(old);
+        st.resume_key = owned;
     }
 }
 
@@ -6846,6 +6968,8 @@ pub const StorageAdapter = struct {
     /// Return node candidates for an exact `(label, property = value)` probe.
     /// Hash collisions are tolerated because higher layers still verify the
     /// full property map before treating a candidate as a MERGE match.
+    /// Index-served read: `error.ExactIndexBusy` while a build of the index
+    /// is in flight (SONNY-6362 item 6; the caller scans instead).
     pub fn getCandidateNodesByLabelAndProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -6853,6 +6977,18 @@ pub const StorageAdapter = struct {
         property_key: []const u8,
         value: graph_store.PropertyValue,
         allocator: Allocator,
+    ) ![]u64 {
+        return self.getCandidateNodesImpl(graph_name, label, property_key, value, allocator, false);
+    }
+
+    fn getCandidateNodesImpl(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        value: graph_store.PropertyValue,
+        allocator: Allocator,
+        comptime wait_for_build: bool,
     ) ![]u64 {
         _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
 
@@ -6862,7 +6998,7 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         // H4: build the exact index on first access if it was deferred at open.
-        try ensureExactNodePropertyIndexBuilt(self, mg);
+        if (wait_for_build) try ensureExactNodePropertyIndexBuilt(self, mg) else try ensureExactIndexForRead(self, mg);
         const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
 
         const storage_value = try toStorageProperty(allocator, value);
@@ -6960,10 +7096,12 @@ pub const StorageAdapter = struct {
     /// Returns an empty slice when the label is unknown or no ordered index is
     /// registered for `(label,key)` on any shard.
     ///
-    /// LOCK DISCIPLINE: see `orderedScanRefill` — bounded SHARED batches per
-    /// shard, `exclusiveWaitingBackoff` before each (re)acquire, keys copied out
-    /// under the lock, `mg.rwlock` never held across the scan, and the liveness
-    /// `getNode` runs OUTSIDE any shard lock (it takes only its own brief lock).
+    /// LOCK DISCIPLINE: see `orderedScanBatch` (SONNY-6375) — bounded batches
+    /// per shard, each under `mg.rwlock` SHARED (skipped when this thread
+    /// already holds the graph lock) then `shard_locks[i]` SHARED,
+    /// `exclusiveWaitingBackoff` before each acquire, keys copied out and the
+    /// liveness `getNode` run under that hold, no lock and no cursor kept
+    /// between batches.
     pub fn orderedScan(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -6989,21 +7127,26 @@ pub const StorageAdapter = struct {
         var states: [sharded_store.SHARD_COUNT]OrderedShardState =
             [_]OrderedShardState{.{}} ** sharded_store.SHARD_COUNT;
 
-        // Free every copied key buffer + per-shard batch list on exit (success
-        // or error). Cursors need no teardown (no deinit / no buffer-pool pins).
+        // Free every copied key buffer, resume key and per-shard batch list on
+        // exit (success or error).
         defer {
             for (states[0..shard_count]) |*st| {
                 for (st.buf.items) |h| allocator.free(h.key);
                 st.buf.deinit(allocator);
+                if (st.resume_key) |rk| allocator.free(rk);
             }
         }
+
+        // SONNY-6375: a caller that already holds this graph's lock (SHARED
+        // or EXCLUSIVE) on this thread must not take `mg.rwlock` again.
+        const holds_graph_lock = threadHoldsGraphLock(mg);
 
         var result = std.ArrayList(u64).empty;
         errdefer result.deinit(allocator);
 
         // Prime every shard's cursor + first batch.
         for (states[0..shard_count], 0..) |*st, i| {
-            try orderedScanRefill(mg, i, label_id, key, eng_dir, st, allocator, io);
+            try orderedScanRefill(mg, i, label_id, key, eng_dir, st, holds_graph_lock, allocator, io);
         }
 
         // k-way merge: repeatedly emit the extreme head across the (<=16) shards.
@@ -7029,18 +7172,16 @@ pub const StorageAdapter = struct {
             }
             const bi = best orelse break; // every shard exhausted
 
-            const head = states[bi].buf.items[states[bi].pos];
-            // Liveness: a node deleted after it was posted is still in the
-            // ordered tree; skip it but keep pulling so we can still reach
-            // `limit`. getNode takes only its own brief internal lock — NO shard
-            // lock is held here.
-            if ((try mg.engine.getNode(head.node_id)) != null) {
-                try result.append(allocator, head.node_id);
-            }
+            // Batches hold only live heads (deleted-but-still-posted nodes
+            // were skipped under the batch's locks).
+            try result.append(allocator, states[bi].buf.items[states[bi].pos].node_id);
 
             states[bi].pos += 1;
             if (states[bi].pos >= states[bi].buf.items.len and !states[bi].exhausted) {
-                try orderedScanRefill(mg, bi, label_id, key, eng_dir, &states[bi], allocator, io);
+                if (comptime @import("builtin").is_test) {
+                    if (test_ordered_scan_between_batches) |h| h.run(h.ctx);
+                }
+                try orderedScanRefill(mg, bi, label_id, key, eng_dir, &states[bi], holds_graph_lock, allocator, io);
             }
         }
 
@@ -7393,7 +7534,7 @@ pub const StorageAdapter = struct {
         var seed_idx: usize = 0;
         var best_len: usize = std.math.maxInt(usize);
         for (filters, 0..) |f, i| {
-            const len = self.countCandidateNodesByLabelAndProperty(graph_name, label, f.key, f.value) catch continue;
+            const len = self.countCandidateNodesImpl(graph_name, label, f.key, f.value, true) catch continue;
             if (len == 0) {
                 // Authoritative miss only when the exact index covers this key.
                 if (graph_store.shouldIndexProperty(f.key)) return missing_err;
@@ -7405,7 +7546,8 @@ pub const StorageAdapter = struct {
             }
         }
 
-        const candidates = try self.getCandidateNodesByLabelAndProperty(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, self.allocator);
+        // SONNY-6362 item 6: a MERGE lookup waits for an in-flight build.
+        const candidates = try self.getCandidateNodesImpl(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, self.allocator, true);
         defer self.allocator.free(candidates);
 
         for (candidates) |node_id| {
@@ -7541,7 +7683,7 @@ pub const StorageAdapter = struct {
         var seed_idx: usize = 0;
         var best_len: usize = std.math.maxInt(usize);
         for (filters, 0..) |f, i| {
-            const len = self.countCandidateNodesByLabelAndProperty(graph_name, label, f.key, f.value) catch continue;
+            const len = self.countCandidateNodesImpl(graph_name, label, f.key, f.value, true) catch continue;
             if (len == 0) {
                 if (graph_store.shouldIndexProperty(f.key)) return missing_err;
                 continue;
@@ -7659,12 +7801,25 @@ pub const StorageAdapter = struct {
     /// copying the list or touching the engine — used by the read fast path to
     /// pick the most selective indexed inline property before the real seek.
     /// Returns 0 when the label is unknown or the posting is absent.
+    /// Index-served read: `error.ExactIndexBusy` while a build of the index
+    /// is in flight (SONNY-6362 item 6; the caller scans instead).
     pub fn countCandidateNodesByLabelAndProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
         label: []const u8,
         property_key: []const u8,
         value: graph_store.PropertyValue,
+    ) !usize {
+        return self.countCandidateNodesImpl(graph_name, label, property_key, value, false);
+    }
+
+    fn countCandidateNodesImpl(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        value: graph_store.PropertyValue,
+        comptime wait_for_build: bool,
     ) !usize {
         // This probes the exact node-property index by value hash exactly like
         // getCandidateNodesByLabelAndProperty — count it as an exact-index lookup
@@ -7676,7 +7831,7 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         // H4: build the exact index on first access if it was deferred at open.
-        try ensureExactNodePropertyIndexBuilt(self, mg);
+        if (wait_for_build) try ensureExactNodePropertyIndexBuilt(self, mg) else try ensureExactIndexForRead(self, mg);
         const label_id = mg.label_dict.getId(label) orelse return 0;
 
         const storage_value = try toStorageProperty(self.allocator, value);
@@ -7730,7 +7885,7 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         // H4: build the exact index on first access if it was deferred at open.
-        try ensureExactNodePropertyIndexBuilt(self, mg);
+        try ensureExactIndexForRead(self, mg); // SONNY-6362 item 6
         const label_id = mg.label_dict.getId(label) orelse
             return try allocator.alloc(PropertyPostingSummary, 0);
 
@@ -11067,6 +11222,7 @@ pub const StorageAdapter = struct {
             return error.GraphNotFound;
         }
         const hold_start_ns = monoNanosNow();
+        noteGraphLockTaken(mg); // SONNY-6375
         return .{ .mg = mg, .hold_start_ns = hold_start_ns };
     }
 
@@ -11087,6 +11243,7 @@ pub const StorageAdapter = struct {
             .fallback => _ = mg.rwlock_shared_hold_fallback_ns_total.fetchAdd(_hold_ns, .monotonic),
             .misc => {}, // intentionally not decomposed
         }
+        noteGraphLockReleased(mg); // SONNY-6375
         mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
     }
 
@@ -11199,6 +11356,7 @@ pub const StorageAdapter = struct {
             return error.GraphNotFound;
         }
         mg.write_holder.store(currentThreadTag(), .release);
+        noteGraphLockTaken(mg); // SONNY-6375
         return mg;
     }
 
@@ -11358,6 +11516,7 @@ pub const StorageAdapter = struct {
 
     pub fn releaseGraphWriteLock(self: *StorageAdapter, mg: *ManagedGraph) void {
         mg.write_holder.store(0, .release);
+        noteGraphLockReleased(mg); // SONNY-6375
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         unclaimWriteLock(mg);
         // SONNY-3028: and the pin the acquire took. A graph this thread

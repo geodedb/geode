@@ -255,42 +255,42 @@ const WriterCtx = struct {
 
 /// Writer thread body.  Runs 200 insert→(remove|delete) cycles, each with a
 /// unique, deterministic property value (1000..1199).
+///
+/// SONNY-6375: each cycle runs under the graph's EXCLUSIVE write lock, as a
+/// production write statement does (the QUIC/gRPC handler holds
+/// `acquireGraphWriteLockCancelable` across the whole write statement). The
+/// adapter write methods take no lock of their own; a writer that held none
+/// raced every reader, locked or not.
 fn concurrentWriter(ctx: *WriterCtx) void {
     var i: usize = 0;
     while (i < 200) : (i += 1) {
         if (ctx.stop.load(.acquire)) break;
-
-        // Deterministic value — unique per iteration, no randomness.
-        const value: i64 = @intCast(1000 + i);
-
-        // INSERT path: createNode (no label) → setNodeProperty → addNodeLabel.
-        const node_id = ctx.adapter.createNode(ctx.graph, &[_][]const u8{}) catch |e| {
+        writerCycle(ctx, i) catch |e| {
             ctx.err = e;
             return;
         };
-        ctx.adapter.setNodeProperty(ctx.graph, node_id, "k", .{ .Int = value }) catch |e| {
-            ctx.err = e;
-            return;
-        };
-        ctx.adapter.addNodeLabel(ctx.graph, node_id, "T") catch |e| {
-            ctx.err = e;
-            return;
-        };
+    }
+}
 
-        // REMOVE (even) / DELETE (odd) — alternating so both paths fire.
-        if (i % 2 == 0) {
-            // REMOVE: node stays alive but leaves label T (and the ordered index).
-            ctx.adapter.removeNodeLabel(ctx.graph, node_id, "T") catch |e| {
-                ctx.err = e;
-                return;
-            };
-        } else {
-            // DELETE: hard-delete; the liveness check in orderedScan skips it.
-            ctx.adapter.deleteNode(ctx.graph, node_id) catch |e| {
-                ctx.err = e;
-                return;
-            };
-        }
+fn writerCycle(ctx: *WriterCtx, i: usize) !void {
+    const mg = try ctx.adapter.acquireGraphWriteLock(ctx.graph);
+    defer ctx.adapter.releaseGraphWriteLock(mg);
+
+    // Deterministic value — unique per iteration, no randomness.
+    const value: i64 = @intCast(1000 + i);
+
+    // INSERT path: createNode (no label) → setNodeProperty → addNodeLabel.
+    const node_id = try ctx.adapter.createNode(ctx.graph, &[_][]const u8{});
+    try ctx.adapter.setNodeProperty(ctx.graph, node_id, "k", .{ .Int = value });
+    try ctx.adapter.addNodeLabel(ctx.graph, node_id, "T");
+
+    // REMOVE (even) / DELETE (odd) — alternating so both paths fire.
+    if (i % 2 == 0) {
+        // REMOVE: node stays alive but leaves label T (and the ordered index).
+        try ctx.adapter.removeNodeLabel(ctx.graph, node_id, "T");
+    } else {
+        // DELETE: hard-delete; the liveness check in orderedScan skips it.
+        try ctx.adapter.deleteNode(ctx.graph, node_id);
     }
 }
 

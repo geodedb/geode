@@ -360,6 +360,15 @@ pub fn setNodePropertyFromValue(
     key: []const u8,
     value: Value,
 ) !void {
+    // CANARY: REQ=REQ-SONNY-3245-NULL-PROPERTY-ABSENT; FEATURE="SetClauseSemantics"; ASPECT=NullRemovesProperty; STATUS=TESTED; TEST=tests/test_sonny3245_create_merge_forms.zig; OWNER=engine; UPDATED=2026-11-12
+    // SONNY-3245: a property whose value is null is absent (GQL; the NOT NULL
+    // constraint already reads it so). `SET n.p = null` kept p with a null
+    // value and `CREATE (n {p: null})` stored it, so `keys(n)` named p.
+    if (value == .Null) {
+        const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+        if (node.properties.contains(key)) removeNodeProperty(store, node, key);
+        return;
+    }
     // GAP-0854 follow-up: resolve the node's graph so the FLE hook can exclude
     // the internal __geode_security graph. Cheap pointer lookup; the security
     // graph must never receive an FLE envelope (its records feed the auth HMAC
@@ -437,7 +446,17 @@ pub fn setNodePropertyFromValue(
         try adapter.checkPropertyEntryWritable(key, prop_value);
     }
 
+    // SONNY-6421: the fulltext engine cannot take the old words out of the
+    // node's document, so a replaced non-empty string queues every covering
+    // index for a rebuild at the statement's end (as REMOVE n.prop does).
+    const replaced_text = replacesText(store, node_id, key, prop_value);
+
     try store.setNodeProperty(node_id, key, prop_value);
+
+    if (replaced_text) {
+        const graph_name = node_graph orelse if (store.getNodePtr(node_id)) |n| n.graph_name else graph_store.DEFAULT_GRAPH_NAME;
+        fts_index_ops.queueRebuildForRemovedText(graph_name, labels, key);
+    }
 
     // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DimAdoptAfterCommit; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
     // ENG-3912(a): establish the vector-dimension pin only AFTER the write has
@@ -481,13 +500,10 @@ pub fn setNodePropertyFromValue(
     // "zero results" bug for live CREATE/SET. `.upsert` skips the tombstone so
     // the document is immediately searchable.
     //
-    // KNOWN RESIDUAL (tracked, not self-healing): a TRUE value change via SET on
-    // an already-indexed node leaves the OLD value's postings in place (no
-    // tombstone), so the node stays findable by the stale old value, and
-    // repeated SETs append-grow the index. Search-for-current-value is correct;
-    // reclaiming stale postings needs an engine-level un-tombstone-on-reindex
-    // (or a compaction trigger) — see
-    // docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md.
+    // SONNY-6421: a TRUE value change leaves the OLD value's postings in this
+    // append; the rebuild queued above (`replaced_text`) takes them out at the
+    // statement's end, so the node is not found by the old words after the
+    // statement.
     fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, labels, .upsert) catch |err| {
         log.warn("fts maintain (SET) failed for node {d} prop '{s}': {}", .{ node_id, key, err });
     };
@@ -501,6 +517,12 @@ pub fn setEdgePropertyFromValue(
     key: []const u8,
     value: Value,
 ) !void {
+    // SONNY-3245: a null value makes the property absent, as on a node.
+    if (value == .Null) {
+        const edge = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
+        if (edge.properties.contains(key)) removeEdgeProperty(store, edge, key);
+        return;
+    }
     // GAP-0854 follow-up: resolve the edge's graph so the FLE hook can exclude
     // the internal __geode_security graph (HAS_ROLE etc. feed the auth chain).
     const edge_graph: ?[]const u8 = if (store.getEdgePtr(edge_id)) |e| e.graph_name else null;
@@ -537,6 +559,10 @@ pub fn replaceNodeProperties(
     node: *graph_store.Node,
     props_value: Value,
 ) !void {
+    // SONNY-6421: an indexed string the map drops or changes leaves its words
+    // in the fulltext index (the clear below and the SETs after it see no old
+    // value): queue its covering indexes for a rebuild at the statement's end.
+    queueRebuildsForReplacedText(node, props_value);
     clearNodeProperties(store, node);
 
     if (props_value != .Map) return;
@@ -554,6 +580,21 @@ pub fn replaceNodeProperties(
     }
 
     for (node.labels) |label| rebuildAdvancedIndexesForLabel(store, label); // SONNY-6368: every label
+}
+
+fn queueRebuildsForReplacedText(node: *graph_store.Node, props_value: Value) void {
+    var it = node.properties.iterator();
+    while (it.next()) |entry| {
+        const old = entry.value_ptr.*;
+        if (old != .String or old.String.len == 0) continue;
+        const key = entry.key_ptr.*;
+        const new_value: ?Value = if (props_value == .Map) props_value.Map.get(key) else null;
+        const kept = if (new_value) |v| switch (v) {
+            .Str => |s| std.mem.eql(u8, s, old.String),
+            else => false,
+        } else false;
+        if (!kept) fts_index_ops.queueRebuildForRemovedText(node.graph_name, node.labels, key);
+    }
 }
 
 pub fn replaceEdgeProperties(
@@ -616,6 +657,42 @@ pub fn addNodeLabel(
     fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, &.{label}, .create) catch |err| {
         log.warn("fts maintain (SET label) failed for node {d} label '{s}': {}", .{ node_id, label, err });
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6421-REMOVE-LABEL-MAINTENANCE; FEATURE="Execution"; ASPECT=RemoveLabel; STATUS=TESTED; TEST=tests/test_sonny6421_index_maintenance.zig; OWNER=engine; UPDATED=2026-11-12
+/// REMOVE n:L. SONNY-6421: the node leaves `label`, so it leaves the
+/// full-text and advanced (vector, ...) indexes on `label`. The executors
+/// called `store.removeNodeLabel` alone, so a full-text search still found
+/// the node by L's index and the vector index still ranked it. The advanced
+/// indexes on the label are rebuilt (queued to the statement's end like any
+/// advanced rebuild; HNSW has no remove), and a full-text index holding text
+/// of the node is queued for a rebuild at the statement's end
+/// (`fts_index_ops.queueRebuildForRemovedLabel`).
+pub fn removeNodeLabel(
+    store: *graph_store.GraphStore,
+    node_id: u64,
+    label: []const u8,
+) !void {
+    const carried = if (store.getNodePtr(node_id)) |n| hasLabel(n.labels, label) else true;
+    try store.removeNodeLabel(node_id, label);
+    if (!carried) return;
+    rebuildAdvancedIndexesForLabel(store, label);
+    const graph_name = if (store.getNodePtr(node_id)) |n| n.graph_name else graph_store.DEFAULT_GRAPH_NAME;
+    fts_index_ops.queueRebuildForRemovedLabel(store, graph_name, node_id, label);
+}
+
+fn hasLabel(labels: []const []const u8, label: []const u8) bool {
+    for (labels) |l| if (std.mem.eql(u8, l, label)) return true;
+    return false;
+}
+
+/// SONNY-6421: does writing `new` to `key` of `node_id` take indexed-able
+/// text away (the old value a non-empty string the new one does not equal)?
+fn replacesText(store: *graph_store.GraphStore, node_id: u64, key: []const u8, new: ?graph_store.PropertyValue) bool {
+    const old = store.getNodeProperty(node_id, key) orelse return false;
+    if (old != .String or old.String.len == 0) return false;
+    const n = new orelse return true;
+    return n != .String or !std.mem.eql(u8, n.String, old.String);
 }
 
 /// The advanced indexes on `label` over a property the node holds: an

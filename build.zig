@@ -482,6 +482,8 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-startup-lazy-hydrate-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-scan-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-index-autobuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-sonny6375-global-store-race-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-sonny6375-ordered-scan-locking-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-parallel-index-rebuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     // Members of the end-to-end lane (test-e2e).
     .{ .name = "test-gap0203", .reason = "e2e lane (test-e2e): QUIC pipeline suite with a 5 s read deadline, flaky under load (KNOWN_TEST_ISSUES)" },
@@ -10867,6 +10869,48 @@ pub fn build(b: *std.Build) void {
     const sonny6368_step = b.step("test-sonny6368-index-maintenance", "Run SONNY-6368 regression (a repeated SET target answers 22G0M; geode.fts.rebuild from another graph rebuilds the default graph's index; a live SET n:L and a committed REMOVE n.prop maintain the full-text and vector indexes; vector maintenance covers every label; an undo repair colliding with a running fulltext rebuild runs after it; gRPC in process)");
     sonny6368_step.dependOn(&run_sonny6368_tests.step);
 
+    const sonny3125_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3125_shared_node_set.zig"), .target = target, .optimize = optimize });
+    sonny3125_test_mod.link_libc = true;
+    sonny3125_test_mod.addImport("geode", root_mod);
+    sonny3125_test_mod.addImport("schema", schema_mod);
+    sonny3125_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3125_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3125_test_mod.addImport("logging", logging_mod);
+    sonny3125_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3125_tests = b.addTest(.{ .root_module = sonny3125_test_mod });
+    const run_sonny3125_tests = b.addRunArtifact(sonny3125_tests);
+    shardDep(test_step, &run_sonny3125_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3125_step = b.step("test-sonny3125-shared-node-set", "Run SONNY-3125 regression (a SET reading a node that N matched rows share is applied N times: hop, two-hop, multi-chain; gRPC in process)");
+    sonny3125_step.dependOn(&run_sonny3125_tests.step);
+
+    const sonny3245_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3245_create_merge_forms.zig"), .target = target, .optimize = optimize });
+    sonny3245_test_mod.link_libc = true;
+    sonny3245_test_mod.addImport("geode", root_mod);
+    sonny3245_test_mod.addImport("schema", schema_mod);
+    sonny3245_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3245_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3245_test_mod.addImport("logging", logging_mod);
+    sonny3245_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3245_tests = b.addTest(.{ .root_module = sonny3245_test_mod });
+    const run_sonny3245_tests = b.addRunArtifact(sonny3245_tests);
+    shardDep(test_step, &run_sonny3245_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3245_step = b.step("test-sonny3245-create-merge-forms", "Run SONNY-3245 regression (invalid CREATE forms refused per ISO/IEC 39075 16.5; null and list property semantics for CREATE, SET and MERGE; RETURN after UNWIND CREATE and chained MERGE; gRPC in process)");
+    sonny3245_step.dependOn(&run_sonny3245_tests.step);
+
+    const sonny6421_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6421_index_maintenance.zig"), .target = target, .optimize = optimize });
+    sonny6421_test_mod.link_libc = true;
+    sonny6421_test_mod.addImport("geode", root_mod);
+    sonny6421_test_mod.addImport("schema", schema_mod);
+    sonny6421_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6421_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6421_test_mod.addImport("logging", logging_mod);
+    sonny6421_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6421_tests = b.addTest(.{ .root_module = sonny6421_test_mod });
+    const run_sonny6421_tests = b.addRunArtifact(sonny6421_tests);
+    shardDep(test_step, &run_sonny6421_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6421_step = b.step("test-sonny6421-index-maintenance", "Run SONNY-6421 regression (REMOVE n:L leaves L's full-text and vector indexes; a full-text search answers only nodes carrying the index's label; a SET that replaces or drops indexed text leaves the old words unfindable; a vector undo repair survives a background rebuild's swap; the IndexOnEncryptedField message; an engine-less setNodeProperty on a missing node; gRPC in process)");
+    sonny6421_step.dependOn(&run_sonny6421_tests.step);
+
     const sonny6362_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6362_statement_undo_threads.zig"), .target = target, .optimize = optimize });
     sonny6362_test_mod.link_libc = true;
     sonny6362_test_mod.addImport("geode", root_mod);
@@ -12432,6 +12476,70 @@ pub fn build(b: *std.Build) void {
     );
     ordered_scan_tsan_step.dependOn(&run_ordered_scan_tsan_tests.step);
 
+    // SONNY-6375: orderedScan honours the ordered-index cursor contract — no
+    // cursor carried across a lock release (an ordered-index rebuild between
+    // two batches freed the tree under it), `mg.rwlock` SHARED around each
+    // batch, and no self-deadlock for a caller already holding the graph
+    // lock. See tests/test_sonny6375_ordered_scan_locking.zig.
+    const sonny6375_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6375_ordered_scan_locking.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6375_mod.addImport("geode", root_mod);
+    sonny6375_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6375_tests = b.addTest(.{ .root_module = sonny6375_mod });
+    const run_sonny6375_tests = b.addRunArtifact(sonny6375_tests);
+    shardDep(test_step, &run_sonny6375_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6375_step = b.step("test-sonny6375-ordered-scan-locking", "SONNY-6375: orderedScan never resumes a cursor across a lock release and holds the graph lock while it reads");
+    sonny6375_step.dependOn(&run_sonny6375_tests.step);
+
+    // SONNY-6375: TSan companion (tsanTest, LLVM backend; opt-in, not in the
+    // aggregate — the same file runs uninstrumented there).
+    const sonny6375_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6375_ordered_scan_locking.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    sonny6375_tsan_mod.addImport("geode", root_mod);
+    sonny6375_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6375_tsan_tests = tsanTest(b, sonny6375_tsan_mod);
+    const run_sonny6375_tsan_tests = b.addRunArtifact(sonny6375_tsan_tests);
+    const sonny6375_tsan_step = b.step("test-sonny6375-ordered-scan-locking-tsan", "SONNY-6375 TSan: orderedScan locking under -fsanitize-thread");
+    sonny6375_tsan_step.dependOn(&run_sonny6375_tsan_tests.step);
+
+    // SONNY-6375: getCurrentGlobalStore must not copy the stored GraphStore
+    // (its live mutexes) to test the optional; found by
+    // test-startup-lazy-hydrate-tsan. Uninstrumented here, TSan below.
+    const sonny6375_gs_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6375_global_store_race.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6375_gs_mod.addImport("geode", root_mod);
+    const sonny6375_gs_tests = b.addTest(.{ .root_module = sonny6375_gs_mod });
+    const run_sonny6375_gs_tests = b.addRunArtifact(sonny6375_gs_tests);
+    shardDep(test_step, &run_sonny6375_gs_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6375_gs_step = b.step("test-sonny6375-global-store-race", "SONNY-6375: getCurrentGlobalStore reads the store's optional tag, never a copy of the store, while another thread locks its mutexes");
+    sonny6375_gs_step.dependOn(&run_sonny6375_gs_tests.step);
+
+    const sonny6375_gs_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6375_global_store_race.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    sonny6375_gs_tsan_mod.addImport("geode", root_mod);
+    const sonny6375_gs_tsan_tests = tsanTest(b, sonny6375_gs_tsan_mod);
+    const run_sonny6375_gs_tsan_tests = b.addRunArtifact(sonny6375_gs_tsan_tests);
+    const sonny6375_gs_tsan_step = b.step("test-sonny6375-global-store-race-tsan", "SONNY-6375 TSan: getCurrentGlobalStore against a concurrent store-mutex lock under -fsanitize-thread");
+    sonny6375_gs_tsan_step.dependOn(&run_sonny6375_gs_tsan_tests.step);
+
     // H3-P3: planner orderedScanFastPath — `ORDER BY <eligible-indexed> LIMIT`
     // served from the value-ordered index (slots ~0), with a strict heap
     // fallback for non-indexed / ineligible columns. See
@@ -12540,6 +12648,23 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_exact_index_deferred_tests.step, 1, test_shard_loads, test_shard_index);
     const exact_index_deferred_step = b.step("test-exact-index-deferred-build", "H4: defer exact node-property index rebuild to lazy first-access (cold-open phase 1)");
     exact_index_deferred_step.dependOn(&run_exact_index_deferred_tests.step);
+
+    // SONNY-6362 item 6: index-served reads answer ExactIndexBusy (and their
+    // callers scan) instead of waiting for an in-flight exact-index build;
+    // the MERGE resolver still waits.
+    const sonny6362_read_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6362_exact_index_read_fallback.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6362_read_mod.addImport("geode", root_mod);
+    sonny6362_read_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6362_read_tests = b.addTest(.{ .root_module = sonny6362_read_mod });
+    const run_sonny6362_read_tests = b.addRunArtifact(sonny6362_read_tests);
+    shardDep(test_step, &run_sonny6362_read_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6362_read_step = b.step("test-sonny6362-exact-index-read-fallback", "SONNY-6362 item 6: index-served reads do not wait for an in-flight exact-index build (they answer ExactIndexBusy and their callers scan); the MERGE resolver waits");
+    sonny6362_read_step.dependOn(&run_sonny6362_read_tests.step);
 
     // SONNY-1574: the exact-index persist must never report a persist it
     // SKIPPED, and the persist-on-build spawn must happen OUTSIDE the build

@@ -1068,7 +1068,13 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
         }
 
         // Handle relationship creation
-        for (chain.hops) |hop| {
+        // SONNY-3245: an unnamed node between two hops of one path is ONE node
+        // (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed filler one
+        // system-generated variable); the parser copies it into both hops, and
+        // each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two
+        // M nodes and the path did not exist.
+        var prev_right_id: ?u64 = null;
+        for (chain.hops, 0..) |hop, hop_i| {
             // Resolve BOTH endpoints' skip-status BEFORE creating either node:
             // if one endpoint is a MATCH variable that failed to bind for this
             // row, the whole hop is skipped and no orphan endpoint node may be
@@ -1076,6 +1082,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             if (hopEndpointSkips(hop.left, &created_nodes, &matched_bindings, match_var_names) or
                 hopEndpointSkips(hop.right, &created_nodes, &matched_bindings, match_var_names))
             {
+                prev_right_id = null;
                 continue;
             }
 
@@ -1092,6 +1099,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                     break :blk new_id;
                 }
             } else blk: {
+                if (hop_i > 0) if (prev_right_id) |shared| break :blk shared;
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 created_nodes_count += 1;
                 ensureAutoIndexes(allocator, hop.left.labels);
@@ -1117,10 +1125,16 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
                 try applyEndpointProps(allocator, store, hop.right, new_id, chain_env);
                 break :blk new_id;
             };
+            prev_right_id = right_id;
 
             // Create the relationship in target graph
             const edge_label = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATED";
-            const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
+            // SONNY-3245: `<-[:R]-` points from the right node to the left one;
+            // the edge was stored left -> right whatever the arrow.
+            const edge_id = if (hop.rel.dir == .left)
+                try store.createEdgeWithGraph(right_id, left_id, edge_label, target_graph)
+            else
+                try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
             // Log edge creation for rollback support
             const undo_log2 = txn_undo_log.getGlobalUndoLog(allocator);
             undo_log2.logCreateEdge(edge_id, current_graph) catch |err| {
@@ -1558,7 +1572,13 @@ pub fn executeCreateQuery(
         }
 
         // Handle relationship creation
-        for (chain.hops) |hop| {
+        // SONNY-3245: an unnamed node between two hops of one path is ONE node
+        // (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed filler one
+        // system-generated variable); the parser copies it into both hops, and
+        // each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two
+        // M nodes and the path did not exist.
+        var prev_right_id: ?u64 = null;
+        for (chain.hops, 0..) |hop, hop_i| {
             // GAP-0930: evaluate ALL property-value expressions (left endpoint,
             // right endpoint, and the relationship) BEFORE creating any node or
             // edge, so a mid-property eval error aborts the whole relationship
@@ -1587,7 +1607,7 @@ pub fn executeCreateQuery(
                     if (created_nodes.get(var_name)) |node_id| {
                         break :blk node_id;
                     }
-                }
+                } else if (hop_i > 0) if (prev_right_id) |shared| break :blk shared;
                 // Variable not bound - create new node in target graph
                 const new_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 total_created_count += 1;
@@ -1614,6 +1634,7 @@ pub fn executeCreateQuery(
                 }
                 break :blk new_id;
             };
+            prev_right_id = right_id;
 
             // Set properties for left node (pre-evaluated above for atomicity)
             if (hop.left.props) |props| {
@@ -1631,7 +1652,11 @@ pub fn executeCreateQuery(
 
             // Create the relationship in target graph
             const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
-            const edge_id = try store.createEdgeWithGraph(left_id, right_id, rel_type, target_graph);
+            // SONNY-3245: `<-[:R]-` points from the right node to the left one.
+            const edge_id = if (hop.rel.dir == .left)
+                try store.createEdgeWithGraph(right_id, left_id, rel_type, target_graph)
+            else
+                try store.createEdgeWithGraph(left_id, right_id, rel_type, target_graph);
             total_created_count += 1;
             // Log edge creation for rollback support
             const undo_log3 = txn_undo_log.getGlobalUndoLog(allocator);
@@ -1814,7 +1839,7 @@ pub fn executeCreateQuery(
             .Labels => |label_removal| {
                 if (created_nodes.get(label_removal.node)) |node_id| {
                     for (label_removal.labels) |label| {
-                        try store.removeNodeLabel(node_id, label);
+                        try property_mutation.removeNodeLabel(store, node_id, label);
                     }
                 }
             },
@@ -2277,13 +2302,19 @@ fn buildEdgeCreateSpecs(
         }
     };
 
-    for (chain.hops) |hop| {
+    // SONNY-3245: an unnamed node between two hops is one node (see executeCreate).
+    var prev_right_pos: ?u32 = null;
+    for (chain.hops, 0..) |hop, hop_i| {
         // Variable-length / quantified hops are not replicable in this slice.
         if (hop.rel.min_len != null or hop.rel.max_len != null)
             return error.ClusterWriteNotReplicable;
 
-        const left_pos = try Register.run(allocator, env, hop.left, node_specs, &name_to_pos);
+        const left_pos = if (hop_i > 0 and hop.left.name == null and prev_right_pos != null)
+            prev_right_pos.?
+        else
+            try Register.run(allocator, env, hop.left, node_specs, &name_to_pos);
         const right_pos = try Register.run(allocator, env, hop.right, node_specs, &name_to_pos);
+        prev_right_pos = right_pos;
 
         if (node_specs.items.len > cluster_replication.MAX_MULTI_NODES)
             return error.ClusterWriteNotReplicable;
@@ -2620,7 +2651,13 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
         }
 
         // Handle chains with relationships
-        for (chain.hops) |hop| {
+        // SONNY-3245: an unnamed node between two hops of one path is ONE node
+        // (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed filler one
+        // system-generated variable); the parser copies it into both hops, and
+        // each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two
+        // M nodes and the path did not exist.
+        var prev_right_id: ?u64 = null;
+        for (chain.hops, 0..) |hop, hop_i| {
             // GAP-0930: evaluate ALL property-value expressions (left endpoint,
             // right endpoint, and the relationship) BEFORE creating any node or
             // edge, so a mid-property eval error aborts the whole relationship
@@ -2658,6 +2695,8 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                     try created_nodes.put(left_name, left_node_id);
                     ensureAutoIndexes(allocator, hop.left.labels);
                 }
+            } else if (hop_i > 0 and prev_right_id != null) {
+                left_node_id = prev_right_id.?;
             } else {
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 // Log left node creation for rollback support (unnamed node)
@@ -2699,6 +2738,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 };
                 ensureAutoIndexes(allocator, hop.right.labels);
             }
+            prev_right_id = right_node_id;
 
             // Set properties on right node (pre-evaluated above for atomicity)
             if (hop.right.props) |props| {
@@ -2909,7 +2949,13 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
         }
 
         // Handle chains with relationships
-        for (chain.hops) |hop| {
+        // SONNY-3245: an unnamed node between two hops of one path is ONE node
+        // (ISO/IEC 39075:2024 16.5 Syntax Rule 2 gives each unnamed filler one
+        // system-generated variable); the parser copies it into both hops, and
+        // each copy was created, so `CREATE (a)-[:R]->(:M)-[:S]->(b)` made two
+        // M nodes and the path did not exist.
+        var prev_right_id: ?u64 = null;
+        for (chain.hops, 0..) |hop, hop_i| {
             // GAP-0930: pre-evaluate all endpoint + relationship property
             // expressions before creating any node/edge so an eval error aborts
             // the INSERT atomically instead of committing partial endpoints.
@@ -2945,6 +2991,8 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     try created_nodes.put(left_name, left_node_id);
                     ensureAutoIndexes(allocator, hop.left.labels);
                 }
+            } else if (hop_i > 0 and prev_right_id != null) {
+                left_node_id = prev_right_id.?;
             } else {
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 // Log left node creation for rollback support (unnamed node)
@@ -2986,6 +3034,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                 };
                 ensureAutoIndexes(allocator, hop.right.labels);
             }
+            prev_right_id = right_node_id;
 
             // Set properties on right node (pre-evaluated above for atomicity)
             if (hop.right.props) |props| {
