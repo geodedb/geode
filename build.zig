@@ -12814,6 +12814,19 @@ pub fn build(b: *std.Build) void {
     const sonny6324_step = b.step("test-sonny6324-fle-catalog-fail-closed", "Run SONNY-6324 regression (a failed FLE catalog save is an error: configureField and grants roll back, a revoke stays applied in memory and is reported; a catalog file that cannot be loaded is an error and never an empty catalog, and string writes and reads are refused until it is resolved; no leaks under allocation failure)");
     sonny6324_step.dependOn(&run_sonny6324_tests.step);
 
+    const sonny6294_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6294_drop_index_rules.zig"), .target = target, .optimize = optimize });
+    sonny6294_test_mod.link_libc = true;
+    sonny6294_test_mod.addImport("geode", root_mod);
+    sonny6294_test_mod.addImport("schema", schema_mod);
+    sonny6294_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6294_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6294_test_mod.addImport("logging", logging_mod);
+    const sonny6294_tests = b.addTest(.{ .root_module = sonny6294_test_mod });
+    const run_sonny6294_tests = b.addRunArtifact(sonny6294_tests);
+    shardDep(test_step, &run_sonny6294_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6294_step = b.step("test-sonny6294-drop-index-rules", "Run SONNY-6294 regression (an index or constraint name is one object per graph: a second CREATE with the name on another label is refused, and DROP INDEX drops every row a legacy catalog holds under the name in its scope, the same way in every run; DROP INDEX locks the session's graph, not default's, and a fulltext index is dropped from the default graph; IndexNotFound and ConstraintNotFound are 42704)");
+    sonny6294_step.dependOn(&run_sonny6294_tests.step);
+
     const sonny6302_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6302_edge_write_and_delete_errors.zig"), .target = target, .optimize = optimize });
     sonny6302_test_mod.addImport("geode", root_mod);
     sonny6302_test_mod.link_libc = true; // setenv/unsetenv
