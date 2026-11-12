@@ -4,6 +4,34 @@
 
 ### Security
 
+- **BREAKING: audit and TDE procedures that reported work they did not do
+  are refused (SONNY-6340).** 30 `audit.*` procedures answered with made-up
+  rows: `audit.compliance_verification` said `compliant` with no check,
+  `export_for_verification`, `prepare_forensic_package` and
+  `generate_compliance_report` named `/tmp` files never written,
+  `log_lifecycle_event` said `logged=true` without logging, the anomaly,
+  threat-indicator, SIEM and privilege-escalation procedures counted
+  hard-coded patterns, `performance_test` and `memory_usage_test` wrote
+  synthetic events into the server's real audit log and reported constant
+  memory figures, and `configure`, `configure_rotation` and
+  `configure_retention` set up a logger of their own in the working
+  directory (on the query's allocator, kept after the query ended). The
+  `tde.*` backup family (`create_encrypted_backup`, `restore_with_keys`,
+  `backup_encrypted`, `encrypt_backup`, `verify_backup_encryption`,
+  `generate_key_manifest`, `restore_with_historical_keys`) reported backups,
+  manifests and 1000 restored records that were never written or read. All
+  of them now fail with SQLSTATE `0A000` (unsupported); the list is in
+  docs/AUDIT_LOGGING.md. `audit.get_merkle_digests` hashes the server's
+  audit log (it hashed the fixed `/etc/geode/geode_audit.jsonl`, and only
+  its first MiB) and `audit.cleanup_log_files` cleans the server's log, both
+  refused when the server writes no audit log; `tde.test_encryption` and
+  `tde.test_decryption` report `success=false` when TDE is off or no key is
+  loaded (they reported `true`); `audit.cleanup_test_artifacts` no longer
+  reports `logs_archived=true`. The diagnostic audit logger is made with the
+  process allocator. The server never rotated its audit log (nothing acts
+  on `rotation_size_mb`); the rotation code, reachable only from the
+  refused procedures, was removed. Regression:
+  `zig build test-sonny6340-no-fabricated-procedures`.
 - **BREAKING: the audit `event_hash` covers the whole record; old logs
   verify as format 1 (SONNY-3147).** A record's `event_hash` covered only
   the previous hash, the event type, `resource.id` and the action: the

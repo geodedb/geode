@@ -17,28 +17,6 @@ fn compat_milliTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
-fn compat_timestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec);
-}
-fn compat_microTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
-}
 const ast = @import("../gql/ast.zig");
 const value_types = @import("../value_types.zig");
 
@@ -51,8 +29,6 @@ const audit_mod = @import("../security/audit.zig");
 
 const log = std.log.scoped(.audit_dispatch);
 
-// CANARY: REQ=REQ-AUDIT-PROC-001; FEATURE="AuditProcedures"; ASPECT=EventID; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-pub var audit_event_id_counter: std.atomic.Value(u32) = std.atomic.Value(u32).init(1001);
 const graph_store = @import("../graph_store.zig");
 
 // CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=AuditDiagnosticsPrivateFiles; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
@@ -107,9 +83,12 @@ var diagnostic_logger_path: ?[]u8 = null;
 
 /// Initialize the dispatch module's diagnostic logger on `name` in the
 /// diagnostics directory when there is none. Caller holds
-/// global_audit_logger_mutex.
-fn initDiagnosticLoggerLocked(allocator: std.mem.Allocator, name: []const u8, redact_pii: bool) void {
+/// global_audit_logger_mutex. SONNY-6340: the logger lives for the process,
+/// so it is made with the process allocator, never a query's (it was handed
+/// the per-query allocator and kept it after the query ended).
+fn initDiagnosticLoggerLocked(name: []const u8, redact_pii: bool) void {
     if (global_audit_logger != null) return;
+    const gpa = std.heap.smp_allocator;
     const path = diagnosticPath(name) catch |err| {
         log.warn("audit diagnostics directory unavailable: {s}", .{@errorName(err)});
         return;
@@ -120,95 +99,97 @@ fn initDiagnosticLoggerLocked(allocator: std.mem.Allocator, name: []const u8, re
         f.close(std.Io.Threaded.global_single_threaded.io());
     } else |err| {
         log.warn("audit diagnostic file refused: {s}", .{@errorName(err)});
-        std.heap.smp_allocator.free(path);
+        gpa.free(path);
         return;
     }
-    global_audit_logger = audit_mod.AuditLogger.init(allocator, .{
+    global_audit_logger = audit_mod.AuditLogger.init(gpa, .{
         .enabled = true,
         .file_path = path,
         .redact_pii = redact_pii,
         .log_denies_only = false,
     }) catch null;
     if (global_audit_logger == null) {
-        std.heap.smp_allocator.free(path);
+        gpa.free(path);
         return;
     }
     diagnostic_logger_path = path;
 }
 
+/// The diagnostic logger of the audit test procedures (never the server's
+/// audit log).
 pub var global_audit_logger: ?audit_mod.AuditLogger = null;
 pub var global_audit_logger_mutex: std.Io.Mutex = std.Io.Mutex.init;
-pub var global_audit_file_path: []const u8 = "/etc/geode/geode_audit.jsonl";
 
-/// Get or create an audit logger suitable for test procedures.
-/// Prefers the server's existing audit logger (audit_mod.global_audit_logger) to avoid
-/// creating conflicting file handles and mutex state. Falls back to the dispatch module's
-/// own logger only if the server logger is unavailable.
-fn getOrCreateTestLogger(allocator: std.mem.Allocator) !*audit_mod.AuditLogger {
-    // First, try the server's global audit logger — this is the preferred path
-    // because the server already owns the audit file and mutex.
+/// The server's audit logger (the process-global logger main.zig opens on
+/// GEODE_AUDIT_LOG_PATH or `<data dir>/audit.jsonl`), when it writes a log.
+/// SONNY-6340 / SONNY-6346: the procedures that read or manage "the" audit
+/// log used a fixed /etc/geode/geode_audit.jsonl, or a logger of their own
+/// in the working directory, unrelated to the log the server writes.
+fn serverAuditLogger() ?*audit_mod.AuditLogger {
     audit_mod.global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    const server_logger = audit_mod.global_audit_logger;
-    audit_mod.global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (server_logger) |logger| {
-        return logger;
-    }
-
-    // Fall back to dispatch module's own logger (e.g., in unit test or standalone mode)
-    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    // SONNY-6325: in the diagnostics directory, not the working directory.
-    initDiagnosticLoggerLocked(allocator, "audit_test.jsonl", true);
-    if (global_audit_logger == null) return error.AuditDiagnosticsUnavailable;
-    // Return a pointer to the optional's payload — safe because global_audit_logger
-    // is a module-level var and remains alive for the process lifetime.
-    return &global_audit_logger.?;
+    defer audit_mod.global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const logger = audit_mod.global_audit_logger orelse return null;
+    if (!logger.config.enabled) return null;
+    return logger;
 }
 
-/// Execute an audit.* procedure. Returns null if not recognized.
+// CANARY: REQ=REQ-SONNY-6340-NO-FABRICATED-PROCEDURES; FEATURE="AuditProcedures"; ASPECT=RefuseFabricated; STATUS=TESTED; TEST=tests/test_sonny6340_no_fabricated_procedures.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6340: audit.* procedures that reported work they did not do are
+/// refused with error.Unsupported (SQLSTATE 0A000). They returned
+/// `compliant` / `passed` / `valid` with no check, named report and export
+/// files under /tmp that were never written, said `logged=true` without
+/// logging, counted hard-coded "anomalies", "threat indicators", "SIEM
+/// alerts" and "privilege escalations", reported disk space and memory
+/// figures that were constants, wrote synthetic events (one second of them,
+/// or 1000) into the server's real audit log, or "configured" a logger of
+/// their own in the working directory that the server never used. None of
+/// them is implemented; verify the audit log offline with `geode audit
+/// verify --file <log> --pubkey <trusted key>`.
+const refused_procedures = std.StaticStringMap(void).initComptime(.{
+    .{ "audit.configure", {} },
+    .{ "audit.log_auth_event", {} },
+    .{ "audit.log_lifecycle_event", {} },
+    .{ "audit.get_recent_events", {} },
+    .{ "audit.verify_hash_chain", {} },
+    .{ "audit.comprehensive_integrity_check", {} },
+    .{ "audit.test_command_categories", {} },
+    .{ "audit.test_data_access_categories", {} },
+    .{ "audit.configure_rotation", {} },
+    .{ "audit.simulate_windows_eventlog", {} },
+    .{ "audit.simulate_syslog_output", {} },
+    .{ "audit.test_combined_output", {} },
+    .{ "audit.test_siem_correlation", {} },
+    .{ "audit.test_siem_alerts", {} },
+    .{ "audit.generate_compliance_report", {} },
+    .{ "audit.test_powershell_compatibility", {} },
+    .{ "audit.test_rotation_continuity", {} },
+    .{ "audit.configure_retention", {} },
+    .{ "audit.detect_anomalies", {} },
+    .{ "audit.extract_threat_indicators", {} },
+    .{ "audit.detect_privilege_escalation", {} },
+    .{ "audit.performance_test", {} },
+    .{ "audit.memory_usage_test", {} },
+    .{ "audit.concurrent_access_test", {} },
+    .{ "audit.test_disk_space_handling", {} },
+    .{ "audit.test_corruption_handling", {} },
+    .{ "audit.test_invalid_config", {} },
+    .{ "audit.export_for_verification", {} },
+    .{ "audit.prepare_forensic_package", {} },
+    .{ "audit.compliance_verification", {} },
+});
 
 // ---------------------------------------------------------------------------
-// StaticStringMap dispatch table — O(1) lookup replaces sequential if-else chain.
-// All handlers share a uniform signature: (allocator, call_stmt) -> !?ExecutionResult.
+// StaticStringMap dispatch table — O(1) lookup.
+// All handlers share a uniform signature: (allocator, call_stmt) -> !ExecutionResult.
 // ---------------------------------------------------------------------------
 const AuditHandler = *const fn (std.mem.Allocator, ast.CallProcedure) anyerror!ExecutionResult;
 
 const dispatch_table = std.StaticStringMap(AuditHandler).initComptime(.{
-    .{ "audit.configure", handleAuditConfigure },
-    .{ "audit.log_auth_event", handleAuditLogAuthEvent },
-    .{ "audit.log_lifecycle_event", handleAuditLogLifecycleEvent },
-    .{ "audit.get_recent_events", handleAuditGetRecentEvents },
-    .{ "audit.verify_hash_chain", handleAuditVerifyHashChain },
     .{ "audit.test_signature_verification", handleAuditTestSignatureVerification },
     .{ "audit.get_merkle_digests", handleAuditGetMerkleDigests },
-    .{ "audit.comprehensive_integrity_check", handleAuditComprehensiveIntegrityCheck },
     .{ "audit.test_file_output", handleAuditTestFileOutput },
     .{ "audit.test_auth_categories", handleAuditTestAuthCategories },
-    .{ "audit.test_command_categories", handleAuditTestCommandCategories },
-    .{ "audit.test_data_access_categories", handleAuditTestDataAccessCategories },
-    .{ "audit.configure_rotation", handleAuditConfigureRotation },
-    .{ "audit.simulate_windows_eventlog", handleAuditSimulateWindowsEventlog },
-    .{ "audit.simulate_syslog_output", handleAuditSimulateSyslogOutput },
-    .{ "audit.test_combined_output", handleAuditTestCombinedOutput },
-    .{ "audit.test_siem_correlation", handleAuditTestSiemCorrelation },
-    .{ "audit.test_siem_alerts", handleAuditTestSiemAlerts },
-    .{ "audit.generate_compliance_report", handleAuditGenerateComplianceReport },
-    .{ "audit.test_powershell_compatibility", handleAuditTestPowershellCompatibility },
-    .{ "audit.test_rotation_continuity", handleAuditTestRotationContinuity },
-    .{ "audit.configure_retention", handleAuditConfigureRetention },
     .{ "audit.cleanup_log_files", handleAuditCleanupLogFiles },
-    .{ "audit.detect_anomalies", handleAuditDetectAnomalies },
-    .{ "audit.extract_threat_indicators", handleAuditExtractThreatIndicators },
-    .{ "audit.detect_privilege_escalation", handleAuditDetectPrivilegeEscalation },
-    .{ "audit.performance_test", handleAuditPerformanceTest },
-    .{ "audit.memory_usage_test", handleAuditMemoryUsageTest },
-    .{ "audit.concurrent_access_test", handleAuditConcurrentAccessTest },
-    .{ "audit.test_disk_space_handling", handleAuditTestDiskSpaceHandling },
-    .{ "audit.test_corruption_handling", handleAuditTestCorruptionHandling },
-    .{ "audit.test_invalid_config", handleAuditTestInvalidConfig },
-    .{ "audit.export_for_verification", handleAuditExportForVerification },
-    .{ "audit.prepare_forensic_package", handleAuditPrepareForensicPackage },
-    .{ "audit.compliance_verification", handleAuditComplianceVerification },
     .{ "audit.cleanup_test_artifacts", handleAuditCleanupTestArtifacts },
 });
 
@@ -218,6 +199,10 @@ pub fn execute(
     proc_name: []const u8,
     call_stmt: ast.CallProcedure,
 ) !?ExecutionResult {
+    if (refused_procedures.has(proc_name)) {
+        log.warn("{s} is not supported: it reported results it did not produce (SONNY-6340); verify the audit log offline with `geode audit verify --file <log> --pubkey <trusted key>`", .{proc_name});
+        return error.Unsupported;
+    }
     if (dispatch_table.get(proc_name)) |handler| {
         return try handler(allocator, call_stmt);
     }
@@ -227,309 +212,8 @@ pub fn execute(
 }
 
 // ===========================================================================
-// Handler functions — extracted from the former if-else dispatch chain.
+// Handler functions
 // ===========================================================================
-
-fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-001; FEATURE="AuditLogging"; ASPECT=Configuration; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
-    // Real audit configuration with comprehensive settings
-
-    // Extract arguments from call statement
-    const args = switch (call_stmt.procedure) {
-        .Call => |call| call.args,
-        else => &[_]*ast.Expr{},
-    };
-
-    // Parse configuration parameters
-    var log_level: []const u8 = "info";
-    var output_format: []const u8 = "jsonl";
-    var max_file_size: usize = 100 * 1024 * 1024; // 100MB default
-    const rotation_interval: u64 = 24 * 60 * 60 * 1000; // 24 hours in ms
-    const retention_days: u32 = 30;
-    var enable_compression: bool = true;
-    var enable_encryption: bool = false;
-    const enable_signatures: bool = true;
-
-    // Parse parameters if provided
-    if (args.len > 0) {
-        // Parse first argument as log level
-        if (args[0].* == .String) {
-            const level_str = args[0].String;
-            if (std.mem.eql(u8, level_str, "debug")) {
-                log_level = "debug";
-            } else if (std.mem.eql(u8, level_str, "info")) {
-                log_level = "info";
-            } else if (std.mem.eql(u8, level_str, "warn")) {
-                log_level = "warn";
-            } else if (std.mem.eql(u8, level_str, "error")) {
-                log_level = "error";
-            }
-        }
-
-        // Parse second argument as output format
-        if (args.len > 1 and args[1].* == .String) {
-            output_format = args[1].String;
-        }
-
-        // Parse third argument as max file size
-        // SONNY-2769: a size outside usize, or one whose MiB count passes
-        // u32 below, aborted the server in the casts; it is InvalidArgs.
-        if (args.len > 2 and args[2].* == .Int) {
-            max_file_size = std.math.cast(usize, args[2].Int) orelse return error.InvalidArgs;
-        }
-        if (std.math.cast(u32, max_file_size / (1024 * 1024)) == null) return error.InvalidArgs;
-
-        // Parse fourth argument as compression flag
-        if (args.len > 3 and args[3].* == .Bool) {
-            enable_compression = args[3].Bool;
-        }
-
-        // Parse fifth argument as encryption flag
-        if (args.len > 4 and args[4].* == .Bool) {
-            enable_encryption = args[4].Bool;
-        }
-    }
-
-    // Initialize or reconfigure the global audit logger (double-checked locking)
-    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    if (global_audit_logger == null) {
-        const config = audit_mod.AuditLogger.Config{
-            .enabled = true,
-            .file_path = output_format,
-            .redact_pii = true,
-            .log_denies_only = false,
-            .rotation_size_mb = @intCast(max_file_size / (1024 * 1024)),
-            .retention_days = @intCast(retention_days),
-            .tamper_protected = enable_signatures,
-            .encrypted = enable_encryption,
-            .log_access_events = true,
-        };
-
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, config);
-    } else {
-        // Update existing configuration
-        global_audit_logger.?.config.file_path = output_format;
-        global_audit_logger.?.config.rotation_size_mb = @intCast(max_file_size / (1024 * 1024));
-        global_audit_logger.?.config.retention_days = @intCast(retention_days);
-        global_audit_logger.?.config.tamper_protected = enable_signatures;
-        global_audit_logger.?.config.encrypted = enable_encryption;
-    }
-
-    // Write configuration to disk for persistence
-    const config_path = "audit_config.json";
-    const io_ac2 = std.Io.Threaded.global_single_threaded.io();
-    const config_file = try std.Io.Dir.cwd().createFile(io_ac2, config_path, .{});
-    defer config_file.close(io_ac2);
-
-    var aw_ac: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
-    defer aw_ac.deinit();
-    const writer = &aw_ac.writer;
-
-    try writer.writeAll("{{");
-    try writer.print("\"log_level\":\"{s}\",", .{log_level});
-    try writer.print("\"output_format\":\"{s}\",", .{output_format});
-    try writer.print("\"max_file_size\":{d},", .{max_file_size});
-    try writer.print("\"rotation_interval\":{d},", .{rotation_interval});
-    try writer.print("\"retention_days\":{d},", .{retention_days});
-    try writer.print("\"enable_compression\":{},", .{enable_compression});
-    try writer.print("\"enable_encryption\":{},", .{enable_encryption});
-    try writer.print("\"enable_signatures\":{},", .{enable_signatures});
-    try writer.print("\"timestamp\":{d}", .{compat_milliTimestamp()});
-    try writer.writeAll("}}");
-
-    var json_buf_ac = aw_ac.toArrayList();
-    const config_json = try json_buf_ac.toOwnedSlice(allocator);
-    defer allocator.free(config_json);
-    try config_file.writeStreamingAll(io_ac2, config_json);
-
-    // Verify configuration is active
-    const status = if (global_audit_logger != null) "active" else "inactive";
-
-    // Return comprehensive configuration details
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "config_path");
-    columns[2] = try allocator.dupe(u8, "settings");
-    columns[3] = try allocator.dupe(u8, "timestamp");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Str = try allocator.dupe(u8, status) };
-    row[1] = Value{ .Str = try allocator.dupe(u8, config_path) };
-    row[2] = Value{ .Str = try allocator.dupe(u8, config_json) };
-    row[3] = Value{ .Int = compat_milliTimestamp() };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditLogAuthEvent(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-002; FEATURE="AuditProcedures"; ASPECT=AuthEventLogging; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.log_auth_event(action, actor, result, method) -> event_id, timestamp, logged
-    const args = switch (call_stmt.procedure) {
-        .Call => |call| call.args,
-        else => &[_]*ast.Expr{},
-    };
-
-    // Extract parameters directly from AST
-    const action = if (args.len > 0 and args[0].* == .String) args[0].String else "unknown";
-    const actor = if (args.len > 1 and args[1].* == .String) args[1].String else "unknown";
-    const result = if (args.len > 2 and args[2].* == .String) args[2].String else "unknown";
-    const method = if (args.len > 3 and args[3].* == .String) args[3].String else "unknown";
-
-    // Generate event ID and timestamp
-    const event_id = audit_event_id_counter.fetchAdd(1, .monotonic);
-    const timestamp = compat_milliTimestamp();
-
-    // Initialize audit logger if not already initialized
-    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    if (global_audit_logger == null) {
-        global_audit_logger = audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = global_audit_file_path,
-            .redact_pii = false,
-            .log_denies_only = false,
-        }) catch null;
-    }
-
-    // Log the authentication event
-    var logged = false;
-    if (global_audit_logger) |*logger| {
-        const event_type: audit_mod.AuditEventType = if (std.mem.eql(u8, result, "success"))
-            .access_granted
-        else if (std.mem.eql(u8, result, "failure") or std.mem.eql(u8, result, "failed"))
-            .authentication_failure
-        else
-            .access_denied;
-
-        if (logger.logEvent(.{
-            .timestamp = timestamp,
-            .event_type = event_type,
-            .user_id = null,
-            .tenant_id = null,
-            .resource = action,
-            .action = method,
-            .policy_id = null,
-            .reason = actor,
-            .ip_address = null,
-            .session_id = null,
-            .query_hash = null,
-            .additional_context = null,
-        })) |_| {
-            logged = true;
-        } else |err| {
-            // error-policy: C — the procedure surfaces a `logged` column; it
-            // must report false (and warn) when the audit write failed rather
-            // than claim the event was recorded.
-            log.warn("audit logEvent failed; reporting logged=false: {s}", .{@errorName(err)});
-        }
-    }
-
-    // Create result columns
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "event_id");
-    columns[1] = try allocator.dupe(u8, "timestamp");
-    columns[2] = try allocator.dupe(u8, "logged");
-
-    // Create result row
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Int = @intCast(event_id) };
-    row[1] = Value{ .Int = @intCast(timestamp) };
-    row[2] = Value{ .Bool = logged };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditLogLifecycleEvent(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-003; FEATURE="AuditProcedures"; ASPECT=LifecycleEventLogging; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.log_lifecycle_event(event_type, details) -> event_id, timestamp, logged
-    const args = switch (call_stmt.procedure) {
-        .Call => |call| call.args,
-        else => &[_]*ast.Expr{},
-    };
-
-    const event_type = if (args.len > 0 and args[0].* == .String) args[0].String else "unknown";
-    const details = if (args.len > 1 and args[1].* == .String) args[1].String else "";
-
-    const event_id = audit_event_id_counter.fetchAdd(1, .monotonic);
-    const timestamp = compat_timestamp();
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "event_id");
-    columns[1] = try allocator.dupe(u8, "timestamp");
-    columns[2] = try allocator.dupe(u8, "logged");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Int = @intCast(event_id) };
-    row[1] = Value{ .Int = timestamp };
-    row[2] = Value{ .Bool = true };
-    rows[0] = row;
-
-    _ = event_type;
-    _ = details;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditGetRecentEvents(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-004; FEATURE="AuditProcedures"; ASPECT=RecentEventsQuery; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.get_recent_events(limit) -> event_id, timestamp, category, action, outcome
-    const args = switch (call_stmt.procedure) {
-        .Call => |call| call.args,
-        else => &[_]*ast.Expr{},
-    };
-
-    const limit = if (args.len > 0 and args[0].* == .Int) std.math.cast(usize, args[0].Int) orelse return error.InvalidArgs else 10; // SONNY-2769
-
-    const columns = try allocator.alloc([]const u8, 5);
-    columns[0] = try allocator.dupe(u8, "event_id");
-    columns[1] = try allocator.dupe(u8, "timestamp");
-    columns[2] = try allocator.dupe(u8, "category");
-    columns[3] = try allocator.dupe(u8, "action");
-    columns[4] = try allocator.dupe(u8, "outcome");
-
-    // Return empty result set for now (would read from audit log file)
-    const rows = try allocator.alloc([]Value, 0);
-    _ = limit;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditVerifyHashChain(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-SONNY-3147-AUDIT-HASH-COVERAGE; FEATURE="AuditProcedures"; ASPECT=NoFabricatedVerify; STATUS=TESTED; TEST=tests/test_sonny3147_audit_hash_coverage.zig; OWNER=security; UPDATED=2026-11-12
-    // SONNY-3147: this procedure reported valid=true, issues_found=0 for any
-    // input: it hashed the lines of a fixed path (not the server's audit log)
-    // and compared nothing. A server-side check cannot attest the log either:
-    // the signatures need the trusted public keys, which must not come from
-    // beside the log. It refuses; verify offline with
-    // `geode audit verify --file <log> --pubkey <key>` (one per key epoch).
-    _ = allocator;
-    log.warn("audit.verify_hash_chain is not supported: verify the audit log offline with `geode audit verify --file <log> --pubkey <trusted key>`", .{});
-    return error.Unsupported;
-}
 
 fn handleAuditTestSignatureVerification(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-AUDIT-PROC-006; FEATURE="AuditProcedures"; ASPECT=SignatureVerification; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
@@ -622,35 +306,34 @@ fn handleAuditTestSignatureVerification(allocator: std.mem.Allocator, _: ast.Cal
 }
 
 fn handleAuditGetMerkleDigests(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-007; FEATURE="AuditProcedures"; ASPECT=MerkleDigests; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-SONNY-6340-NO-FABRICATED-PROCEDURES; FEATURE="AuditProcedures"; ASPECT=MerkleOfServerLog; STATUS=TESTED; TEST=tests/test_sonny6340_no_fabricated_procedures.zig; OWNER=security; UPDATED=2026-11-12
     // audit.get_merkle_digests() -> root_hash, leaf_count, tree_height
+    // A Merkle tree over the lines of the server's audit log: SHA-256 of each
+    // non-empty line as the leaves, pairs hashed level by level, an odd node
+    // paired with itself. SONNY-6340 / SONNY-6346 item 4: it read the fixed
+    // /etc/geode/geode_audit.jsonl (empty tree when absent) and only its
+    // first MiB. The whole file is read under the logger's mutex, so no
+    // half-written record is hashed. Without a server audit log it refuses.
+    const logger = serverAuditLogger() orelse {
+        log.warn("audit.get_merkle_digests: the server writes no audit log (enable it with GEODE_AUDIT_ENABLED=1)", .{});
+        return error.Unsupported;
+    };
 
-    // Build a Merkle tree from audit events
-    var leaves = try std.ArrayList([32]u8).initCapacity(allocator, 10);
+    var leaves = try std.ArrayList([32]u8).initCapacity(allocator, 16);
     defer leaves.deinit(allocator);
-
-    // Read audit events and create leaf hashes
-    const io_ad2 = std.Io.Threaded.global_single_threaded.io();
-    if (std.Io.Dir.cwd().openFile(io_ad2, global_audit_file_path, .{})) |file| {
-        defer file.close(io_ad2);
-
-        const stat_ad2 = try file.stat(io_ad2);
-        const size_ad2: usize = @intCast(@min(stat_ad2.size, 1024 * 1024));
-        const content = try allocator.alloc(u8, size_ad2);
+    {
+        const io_ad2 = std.Io.Threaded.global_single_threaded.io();
+        logger.mutex.lockUncancelable(io_ad2);
+        defer logger.mutex.unlock(io_ad2);
+        const content = try std.Io.Dir.cwd().readFileAlloc(io_ad2, logger.config.file_path, allocator, .unlimited);
         defer allocator.free(content);
-        _ = try file.readPositionalAll(io_ad2, content, 0);
-
-        var lines_iter = std.mem.splitSequence(u8, content, "\n");
+        var lines_iter = std.mem.splitScalar(u8, content, '\n');
         while (lines_iter.next()) |line| {
             if (line.len == 0) continue;
-
-            // Hash each event to create a leaf via the FIPS seam
             var leaf_hash: [32]u8 = undefined;
             _ = try cb.Hash.digest(.sha256, line, &leaf_hash);
             try leaves.append(allocator, leaf_hash);
         }
-    } else |_| {
-        // No audit file yet - create an empty tree
     }
 
     // Calculate tree height
@@ -700,12 +383,7 @@ fn handleAuditGetMerkleDigests(allocator: std.mem.Allocator, _: ast.CallProcedur
         root_hash = current_level[0];
     }
 
-    // Convert root hash to hex string
-    var hex_buf: [64]u8 = undefined;
-    for (root_hash, 0..) |byte, i| {
-        // error-policy: D — "{x:0>2}" of a u8 is exactly 2 bytes into a 2-byte slice.
-        _ = std.fmt.bufPrint(hex_buf[i * 2 .. i * 2 + 2], "{x:0>2}", .{byte}) catch unreachable;
-    }
+    const hex_buf = std.fmt.bytesToHex(root_hash, .lower);
 
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "root_hash");
@@ -717,28 +395,6 @@ fn handleAuditGetMerkleDigests(allocator: std.mem.Allocator, _: ast.CallProcedur
     row[0] = Value{ .Str = try allocator.dupe(u8, &hex_buf) };
     row[1] = Value{ .Int = @intCast(leaf_count) };
     row[2] = Value{ .Int = tree_height };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditComprehensiveIntegrityCheck(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-008; FEATURE="AuditProcedures"; ASPECT=IntegrityCheck; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.comprehensive_integrity_check() -> status, checks_performed, issues_found
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "checks_performed");
-    columns[2] = try allocator.dupe(u8, "issues_found");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Str = try allocator.dupe(u8, "passed") };
-    row[1] = Value{ .Int = 0 };
-    row[2] = Value{ .Int = 0 };
     rows[0] = row;
 
     return ExecutionResult{
@@ -786,7 +442,7 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
         global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        initDiagnosticLoggerLocked(allocator, "audit_diagnostics.jsonl", false);
+        initDiagnosticLoggerLocked("audit_diagnostics.jsonl", false);
 
         if (global_audit_logger) |*logger| {
             // Log additional test event
@@ -856,7 +512,7 @@ fn handleAuditTestAuthCategories(allocator: std.mem.Allocator, _: ast.CallProced
     global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-    initDiagnosticLoggerLocked(allocator, "audit_diagnostics.jsonl", false);
+    initDiagnosticLoggerLocked("audit_diagnostics.jsonl", false);
 
     // Create result rows for multiple categories
     const rows = try allocator.alloc([]Value, auth_categories.len);
@@ -909,448 +565,18 @@ fn handleAuditTestAuthCategories(allocator: std.mem.Allocator, _: ast.CallProced
     };
 }
 
-fn handleAuditTestCommandCategories(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-011; FEATURE="AuditProcedures"; ASPECT=CommandCategories; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.test_command_categories() -> category, events_logged, success
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "category");
-    columns[1] = try allocator.dupe(u8, "events_logged");
-    columns[2] = try allocator.dupe(u8, "success");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Str = try allocator.dupe(u8, "command_execution") };
-    row[1] = Value{ .Int = 0 };
-    row[2] = Value{ .Bool = true };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditTestDataAccessCategories(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-012; FEATURE="AuditProcedures"; ASPECT=DataAccessCategories; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Test various data access event categories with real audit logging
-
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "audit_data_access.jsonl",
-        });
-    }
-
-    // Test different data access categories
-    const categories = [_][]const u8{ "read", "write", "schema" };
-    const test_resources = [_][]const u8{ "users_table", "orders_table", "schema_info" };
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "category");
-    columns[1] = try allocator.dupe(u8, "events_logged");
-    columns[2] = try allocator.dupe(u8, "success");
-
-    // Return multiple rows showing each category tested
-    const rows = try allocator.alloc([]Value, categories.len);
-    for (categories, test_resources, 0..) |category, resource, i| {
-        // Log real events for each category
-        try global_audit_logger.?.logDataAccessEvent(category, resource, 1001);
-
-        const row = try allocator.alloc(Value, 3);
-        row[0] = Value{ .Str = try allocator.dupe(u8, category) };
-        row[1] = Value{ .Int = 1 };
-        row[2] = Value{ .Bool = true };
-        rows[i] = row;
-    }
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditConfigureRotation(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-013; FEATURE="AuditProcedures"; ASPECT=LogRotation; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Configure log rotation policies with real settings
-
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "audit_rotation.jsonl",
-            .rotation_size_mb = 50, // Start with 50MB rotation threshold
-        });
-    }
-
-    // Configure rotation settings
-    const rotation_size_mb: u32 = 100;
-    const retention_days: u32 = 30;
-    global_audit_logger.?.updateConfig(rotation_size_mb, retention_days);
-
-    // Actually trigger rotation if needed
-    try global_audit_logger.?.rotateLogFile();
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "configured");
-    columns[1] = try allocator.dupe(u8, "rotation_policy");
-    columns[2] = try allocator.dupe(u8, "max_size_mb");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Str = try allocator.dupe(u8, "size_based") };
-    row[2] = Value{ .Int = @intCast(rotation_size_mb) };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditSimulateWindowsEventlog(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-014; FEATURE="AuditProcedures"; ASPECT=WindowsEventLog; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Simulate Windows Event Log output with real XML formatting
-
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "audit_windows.jsonl",
-        });
-    }
-
-    // Write events in Windows Event Log format
-    const events_written = try global_audit_logger.?.writeToWindowsEventLog(allocator);
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "events_written");
-    columns[2] = try allocator.dupe(u8, "log_name");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Int = @intCast(events_written) };
-    row[2] = Value{ .Str = try allocator.dupe(u8, "Application") };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditSimulateSyslogOutput(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-015; FEATURE="AuditProcedures"; ASPECT=SyslogOutput; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Simulate syslog output with RFC3164/RFC5424 formatting
-
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "audit_syslog.jsonl",
-        });
-    }
-
-    // Write events in syslog format
-    const events_sent = try global_audit_logger.?.writeToSyslog(allocator);
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "events_sent");
-    columns[2] = try allocator.dupe(u8, "facility");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Int = @intCast(events_sent) };
-    row[2] = Value{ .Str = try allocator.dupe(u8, "local0") };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditTestCombinedOutput(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-016; FEATURE="AuditProcedures"; ASPECT=CombinedOutput; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Test combined output to multiple formats simultaneously
-
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "audit_combined.jsonl",
-        });
-    }
-
-    // Test outputting to multiple formats
-    const outputs_tested = try global_audit_logger.?.testCombinedOutput(allocator);
-    const all_functional = outputs_tested >= 3; // JSON + Windows + Syslog
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "outputs_tested");
-    columns[2] = try allocator.dupe(u8, "all_functional");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Int = @intCast(outputs_tested) };
-    row[2] = Value{ .Bool = all_functional };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditTestSiemCorrelation(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-017; FEATURE="AuditProcedures"; ASPECT=SIEMCorrelation; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        if (global_audit_logger == null) {
-            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                .enabled = true,
-                .file_path = "audit_siem.jsonl",
-            });
-        }
-    }
-
-    // Perform real SIEM event correlation
-    const result = try global_audit_logger.?.correlateEvents(allocator);
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "events_correlated");
-    columns[2] = try allocator.dupe(u8, "correlation_rules_tested");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = result.alert_generated };
-    row[1] = Value{ .Int = @intCast(result.correlated_count) };
-    row[2] = Value{ .Int = 6 }; // Number of event patterns tested
-    rows[0] = row;
-
-    // Free the correlation_id string
-    defer allocator.free(result.correlation_id);
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditTestSiemAlerts(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-018; FEATURE="AuditProcedures"; ASPECT=SIEMAlerts; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        if (global_audit_logger == null) {
-            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                .enabled = true,
-                .file_path = "audit_alerts.jsonl",
-            });
-        }
-    }
-
-    // Generate real SIEM alerts
-    const result = try global_audit_logger.?.generateAlerts(allocator);
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "alerts_generated");
-    columns[2] = try allocator.dupe(u8, "alert_types_tested");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = result.alerts_generated > 0 };
-    row[1] = Value{ .Int = @intCast(result.alerts_generated) };
-    row[2] = Value{ .Int = 5 }; // Number of alert rule types tested
-    rows[0] = row;
-
-    // Free the destinations string
-    defer allocator.free(result.destinations);
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditGenerateComplianceReport(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-019; FEATURE="AuditProcedures"; ASPECT=ComplianceReporting; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.generate_compliance_report() -> success, report_path, events_included
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "report_path");
-    columns[2] = try allocator.dupe(u8, "events_included");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Str = "/tmp/compliance_report.json" };
-    row[2] = Value{ .Int = 0 };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditTestPowershellCompatibility(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-020; FEATURE="AuditProcedures"; ASPECT=PowerShellCompatibility; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.test_powershell_compatibility() -> success, scripts_tested, all_compatible
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "scripts_tested");
-    columns[2] = try allocator.dupe(u8, "all_compatible");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Int = 0 };
-    row[2] = Value{ .Bool = true };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditTestRotationContinuity(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-021; FEATURE="AuditProcedures"; ASPECT=RotationContinuity; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Test that log rotation maintains hash chain continuity
-
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "audit_continuity_test.jsonl",
-            .rotation_size_mb = 1, // Small size to trigger rotation
-        });
-    }
-
-    // Test rotation continuity
-    var rotations_tested: i64 = 0;
-    var continuity_maintained = true;
-
-    // Perform multiple rotations to test
-    var i: usize = 0;
-    while (i < 3) : (i += 1) {
-        const result = try global_audit_logger.?.testRotationContinuity();
-        if (result) {
-            rotations_tested += 1;
-        } else {
-            continuity_maintained = false;
-        }
-    }
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "rotations_tested");
-    columns[2] = try allocator.dupe(u8, "continuity_maintained");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = continuity_maintained };
-    row[1] = Value{ .Int = rotations_tested };
-    row[2] = Value{ .Bool = continuity_maintained };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditConfigureRetention(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-022; FEATURE="AuditProcedures"; ASPECT=RetentionPolicy; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Configure retention policies with real settings
-
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "audit_retention.jsonl",
-            .retention_days = 90,
-        });
-    }
-
-    // Update retention configuration
-    const retention_days: u32 = 90;
-    global_audit_logger.?.updateConfig(global_audit_logger.?.config.rotation_size_mb, retention_days);
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "retention_days");
-    columns[2] = try allocator.dupe(u8, "policy_enabled");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Str = try allocator.dupe(u8, "success") };
-    row[1] = Value{ .Int = @intCast(retention_days) };
-    row[2] = Value{ .Bool = true };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
 fn handleAuditCleanupLogFiles(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-AUDIT-PROC-023; FEATURE="AuditProcedures"; ASPECT=LogCleanup; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Clean up old log files based on retention policy
-
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "audit_cleanup.jsonl",
-            .retention_days = 30, // Cleanup files older than 30 days
-        });
-    }
-
-    // Perform actual cleanup
-    const cleanup_result = try global_audit_logger.?.cleanupOldLogs();
+    // audit.cleanup_log_files() -> success, files_deleted, space_freed_bytes
+    // Deletes the server audit log's rotated files older than its retention.
+    // SONNY-6340: it opened a logger of its own (on the query's allocator) in
+    // the working directory when the dispatch module had none, and cleaned
+    // that, not the server's log. Without a server audit log it refuses.
+    const logger = serverAuditLogger() orelse {
+        log.warn("audit.cleanup_log_files: the server writes no audit log (enable it with GEODE_AUDIT_ENABLED=1)", .{});
+        return error.Unsupported;
+    };
+    const cleanup_result = try logger.cleanupOldLogs();
 
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "success");
@@ -1371,373 +597,6 @@ fn handleAuditCleanupLogFiles(allocator: std.mem.Allocator, _: ast.CallProcedure
     };
 }
 
-fn handleAuditDetectAnomalies(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-024; FEATURE="AuditProcedures"; ASPECT=AnomalyDetection; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        if (global_audit_logger == null) {
-            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                .enabled = true,
-                .file_path = "audit_anomalies.jsonl",
-            });
-        }
-    }
-
-    // Perform real anomaly detection
-    const result = try global_audit_logger.?.detectAnomalies(allocator);
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "anomalies_detected");
-    columns[2] = try allocator.dupe(u8, "severity_levels");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = result.anomalies_detected > 0 };
-    row[1] = Value{ .Int = @intCast(result.anomalies_detected) };
-    // SONNY-2739: measurements saturate (NaN is 0) instead of aborting.
-    row[2] = Value{ .Int = std.math.lossyCast(i64, result.risk_score) }; // Convert risk score to severity level
-    rows[0] = row;
-
-    // Free the patterns string
-    defer allocator.free(result.patterns);
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditExtractThreatIndicators(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-025; FEATURE="AuditProcedures"; ASPECT=ThreatIndicators; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        if (global_audit_logger == null) {
-            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                .enabled = true,
-                .file_path = "audit_threats.jsonl",
-            });
-        }
-    }
-
-    // Extract real threat indicators
-    const result = try global_audit_logger.?.extractThreatIndicators(allocator);
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "indicators_found");
-    columns[2] = try allocator.dupe(u8, "threat_level");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = result.ioc_count > 0 };
-    row[1] = Value{ .Int = @intCast(result.ioc_count) };
-
-    // Determine threat level based on confidence
-    const threat_level = if (result.confidence >= 80.0) "HIGH" else if (result.confidence >= 50.0) "MEDIUM" else "LOW";
-    row[2] = Value{ .Str = threat_level };
-    rows[0] = row;
-
-    // Free the threat_types string
-    defer allocator.free(result.threat_types);
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditDetectPrivilegeEscalation(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-026; FEATURE="AuditProcedures"; ASPECT=PrivilegeEscalation; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        if (global_audit_logger == null) {
-            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                .enabled = true,
-                .file_path = "audit_privilege.jsonl",
-            });
-        }
-    }
-
-    // Detect real privilege escalation attempts
-    const result = try global_audit_logger.?.detectPrivilegeEscalation(allocator);
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "escalations_detected");
-    columns[2] = try allocator.dupe(u8, "users_affected");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = result.escalation_attempts > 0 };
-    row[1] = Value{ .Int = @intCast(result.escalation_attempts) };
-    row[2] = Value{ .Int = @intCast(result.blocked) }; // Users affected approximated by blocked attempts
-    rows[0] = row;
-
-    // Note: risk_level is a string literal, no need to free
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditPerformanceTest(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-027; FEATURE="AuditProcedures"; ASPECT=PerformanceTesting; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Use the server's existing audit logger to avoid conflicting file handles
-    const logger = try getOrCreateTestLogger(allocator);
-    // Perform real performance testing
-    const result = try logger.performanceTest(allocator);
-    const columns = try allocator.alloc([]const u8, 5);
-    columns[0] = try allocator.dupe(u8, "events_per_second");
-    columns[1] = try allocator.dupe(u8, "avg_latency_ms");
-    columns[2] = try allocator.dupe(u8, "max_latency_ms");
-    columns[3] = try allocator.dupe(u8, "memory_used_mb");
-    columns[4] = try allocator.dupe(u8, "cpu_percent");
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 5);
-    row[0] = Value{ .Int = @intCast(result.events_per_second) };
-    // SONNY-2739: measurements saturate (NaN is 0) instead of aborting.
-    row[1] = Value{ .Int = std.math.lossyCast(i64, result.avg_latency_ms) };
-    row[2] = Value{ .Int = std.math.lossyCast(i64, result.max_latency_ms) };
-    row[3] = Value{ .Int = std.math.lossyCast(i64, result.memory_used_mb) };
-    row[4] = Value{ .Int = std.math.lossyCast(i64, result.cpu_percent) };
-    rows[0] = row;
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditMemoryUsageTest(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-028; FEATURE="AuditProcedures"; ASPECT=MemoryUsage; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Use the server's existing audit logger to avoid conflicting file handles
-    const logger = try getOrCreateTestLogger(allocator);
-    // Perform real memory usage testing
-    const result = try logger.memoryUsageTest(allocator);
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "baseline_mb");
-    columns[1] = try allocator.dupe(u8, "peak_mb");
-    columns[2] = try allocator.dupe(u8, "current_mb");
-    columns[3] = try allocator.dupe(u8, "leak_detected");
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 4);
-    // SONNY-2739: measurements saturate (NaN is 0) instead of aborting.
-    row[0] = Value{ .Int = std.math.lossyCast(i64, result.baseline_mb) };
-    row[1] = Value{ .Int = std.math.lossyCast(i64, result.peak_mb) };
-    row[2] = Value{ .Int = std.math.lossyCast(i64, result.current_mb) };
-    row[3] = Value{ .Bool = result.leak_detected };
-    rows[0] = row;
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditConcurrentAccessTest(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-029; FEATURE="AuditProcedures"; ASPECT=ConcurrentAccess; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Use the server's existing audit logger to avoid conflicting file handles
-    const logger = try getOrCreateTestLogger(allocator);
-    // Perform real concurrent access testing
-    const result = try logger.concurrentAccessTest(allocator);
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "threads_tested");
-    columns[1] = try allocator.dupe(u8, "race_conditions");
-    columns[2] = try allocator.dupe(u8, "deadlocks");
-    columns[3] = try allocator.dupe(u8, "successful_ops");
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Int = @intCast(result.threads_tested) };
-    row[1] = Value{ .Int = @intCast(result.race_conditions) };
-    row[2] = Value{ .Int = @intCast(result.deadlocks) };
-    row[3] = Value{ .Int = @intCast(result.successful_ops) };
-    rows[0] = row;
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditTestDiskSpaceHandling(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-030; FEATURE="AuditProcedures"; ASPECT=DiskSpaceHandling; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        if (global_audit_logger == null) {
-            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                .enabled = true,
-                .file_path = "audit_disk.jsonl",
-            });
-        }
-    }
-    // Test real disk space handling
-    const result = try global_audit_logger.?.testDiskSpaceHandling(allocator);
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "disk_full_handled");
-    columns[1] = try allocator.dupe(u8, "fallback_used");
-    columns[2] = try allocator.dupe(u8, "events_dropped");
-    columns[3] = try allocator.dupe(u8, "compression_enabled");
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Bool = result.disk_full_handled };
-    row[1] = Value{ .Bool = result.fallback_used };
-    row[2] = Value{ .Int = @intCast(result.events_dropped) };
-    row[3] = Value{ .Bool = result.compression_enabled };
-    rows[0] = row;
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditTestCorruptionHandling(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-031; FEATURE="AuditProcedures"; ASPECT=CorruptionHandling; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        if (global_audit_logger == null) {
-            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                .enabled = true,
-                .file_path = "audit_corruption.jsonl",
-            });
-        }
-    }
-    // Test real corruption handling
-    const result = try global_audit_logger.?.testCorruptionHandling(allocator);
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "corruption_detected");
-    columns[1] = try allocator.dupe(u8, "recovery_attempted");
-    columns[2] = try allocator.dupe(u8, "data_salvaged");
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = result.corruption_detected };
-    row[1] = Value{ .Bool = result.recovery_attempted };
-    // data_salvaged = number of valid lines recovered (total - data_loss)
-    const data_salvaged = if (result.data_loss > 0) 9 - result.data_loss else 9;
-    row[2] = Value{ .Int = @intCast(data_salvaged) };
-    rows[0] = row;
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditTestInvalidConfig(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-032; FEATURE="AuditProcedures"; ASPECT=InvalidConfig; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-    // Initialize audit logger if needed
-    if (global_audit_logger == null) {
-        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        if (global_audit_logger == null) {
-            global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                .enabled = true,
-                .file_path = "audit_config.jsonl",
-            });
-        }
-    }
-    // Test real invalid config handling
-    const result = try global_audit_logger.?.testInvalidConfig(allocator);
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "config_validated");
-    columns[1] = try allocator.dupe(u8, "errors_found");
-    columns[2] = try allocator.dupe(u8, "warnings_found");
-    columns[3] = try allocator.dupe(u8, "auto_fixed");
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Bool = result.config_validated };
-    row[1] = Value{ .Int = @intCast(result.errors_found) };
-    row[2] = Value{ .Int = @intCast(result.warnings_found) };
-    row[3] = Value{ .Int = @intCast(result.auto_fixed) };
-    rows[0] = row;
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditExportForVerification(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-033; FEATURE="AuditProcedures"; ASPECT=ExportVerification; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.export_for_verification() -> success, export_path, events_exported
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "export_path");
-    columns[2] = try allocator.dupe(u8, "events_exported");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Str = "/tmp/audit_export.json" };
-    row[2] = Value{ .Int = 0 };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditPrepareForensicPackage(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-034; FEATURE="AuditProcedures"; ASPECT=ForensicPackage; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.prepare_forensic_package() -> success, package_path, integrity_verified
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "package_path");
-    columns[2] = try allocator.dupe(u8, "integrity_verified");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Str = "/tmp/forensic_package.tar.gz" };
-    row[2] = Value{ .Bool = true };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleAuditComplianceVerification(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-035; FEATURE="AuditProcedures"; ASPECT=ComplianceVerification; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
-    // audit.compliance_verification() -> success, compliance_level, violations_found
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "compliance_level");
-    columns[2] = try allocator.dupe(u8, "violations_found");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Str = "compliant" };
-    row[2] = Value{ .Int = 0 };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
 fn handleAuditCleanupTestArtifacts(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-AUDIT-PROC-036; FEATURE="AuditProcedures"; ASPECT=TestCleanup; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
     // audit.cleanup_test_artifacts() -> files_cleaned, logs_archived, test_data_removed
@@ -1747,6 +606,7 @@ fn handleAuditCleanupTestArtifacts(allocator: std.mem.Allocator, _: ast.CallProc
     // /tmp paths and /etc/geode/geode_audit.jsonl. The diagnostic logger's
     // own file and keys stay while the logger is open.
     var files_cleaned: i64 = 0;
+    var removed_all = true;
     global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const io_ct = std.Io.Threaded.global_single_threaded.io();
@@ -1760,11 +620,17 @@ fn handleAuditCleanupTestArtifacts(allocator: std.mem.Allocator, _: ast.CallProc
             while (it.next(io_ct) catch null) |entry| {
                 if (entry.kind != .file and entry.kind != .sym_link) continue;
                 if (keep.len > 0 and std.mem.startsWith(u8, entry.name, keep)) continue;
-                dir.deleteFile(io_ct, entry.name) catch continue;
+                dir.deleteFile(io_ct, entry.name) catch {
+                    removed_all = false;
+                    continue;
+                };
                 files_cleaned += 1;
             }
-        } else |_| {}
+        } else |_| {
+            removed_all = false;
+        }
     } else |err| {
+        removed_all = false;
         log.warn("audit diagnostics directory unavailable: {s}", .{@errorName(err)});
     }
 
@@ -1776,8 +642,10 @@ fn handleAuditCleanupTestArtifacts(allocator: std.mem.Allocator, _: ast.CallProc
     const rows = try allocator.alloc([]Value, 1);
     const row = try allocator.alloc(Value, 3);
     row[0] = Value{ .Int = files_cleaned };
-    row[1] = Value{ .Bool = true }; // logs_archived
-    row[2] = Value{ .Bool = true }; // test_data_removed
+    // SONNY-6340: nothing is archived, and the data was removed only if
+    // every file could be deleted (both were a constant true).
+    row[1] = Value{ .Bool = false }; // logs_archived
+    row[2] = Value{ .Bool = removed_all }; // test_data_removed
     rows[0] = row;
 
     return ExecutionResult{

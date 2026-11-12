@@ -51,19 +51,36 @@ var sandbox_ready = false;
 var data_dir_buf: [256]u8 = undefined;
 var data_dir_len: usize = 0;
 
+var root_z_buf: [256:0]u8 = undefined;
+var root_z: [:0]const u8 = "";
+
+/// Enter the sandbox: the working directory becomes the scratch root until
+/// `leaveSandbox` (the test runner itself works relative to the original
+/// one). Returns the data directory.
 fn sandbox() ![]const u8 {
     if (!sandbox_ready) {
         const root = try test_scratch.processRoot();
-        var zbuf: [256:0]u8 = undefined;
-        const z = try std.fmt.bufPrintZ(&zbuf, "{s}", .{root});
-        if (std.os.linux.chdir(z.ptr) != 0) return error.ChdirFailed;
+        root_z = try std.fmt.bufPrintZ(&root_z_buf, "{s}", .{root});
         const dd = try std.fmt.bufPrint(&data_dir_buf, "{s}/data", .{root});
         try std.Io.Dir.cwd().createDirPath(fsIo(), dd);
         data_dir_len = dd.len;
         geode.graph_store.setDataDirOverride(testing.allocator, dd);
         sandbox_ready = true;
     }
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const n = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    if (@as(isize, @bitCast(n)) <= 0) return error.GetCwdFailed;
+    const len = std.mem.indexOfScalar(u8, &cwd_buf, 0) orelse return error.GetCwdFailed;
+    saved_cwd = try std.fmt.bufPrintZ(&saved_cwd_buf, "{s}", .{cwd_buf[0..len]});
+    if (std.os.linux.chdir(root_z.ptr) != 0) return error.ChdirFailed;
     return data_dir_buf[0..data_dir_len];
+}
+
+var saved_cwd_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+var saved_cwd: [:0]const u8 = "";
+
+fn leaveSandbox() void {
+    _ = std.os.linux.chdir(saved_cwd.ptr);
 }
 
 fn noArgCall(arena: std.mem.Allocator, name: []const u8) !ast.CallProcedure {
@@ -96,6 +113,7 @@ fn freeResult(allocator: std.mem.Allocator, res: geode.execution.ExecutionResult
 
 test "SONNY-6340 the diagnostic audit logger does not keep the query's allocator" {
     _ = try sandbox();
+    defer leaveSandbox();
     // A query's allocator: everything it hands out must be returned once the
     // result is freed. Before the fix the diagnostic logger, which lives for
     // the process, was created with it (its digest buffer, its key paths).
@@ -168,6 +186,7 @@ const refused_tde_backup = [_][]const u8{
 
 test "SONNY-6340 audit procedures that cannot do what they report are refused as unsupported, never answered with a made-up row" {
     _ = try sandbox();
+    defer leaveSandbox();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -192,6 +211,7 @@ test "SONNY-6340 audit procedures that cannot do what they report are refused as
 
 test "SONNY-6340 tde backup and restore procedures that never write or read a backup are refused, even with TDE on and a key loaded" {
     _ = try sandbox();
+    defer leaveSandbox();
     runtime_flags.global().tde.enableForTests();
     _ = setenv("GEODE_TDE_KEY", tde_key_hex, 1);
     defer {
@@ -222,6 +242,7 @@ test "SONNY-6340 tde backup and restore procedures that never write or read a ba
 
 test "SONNY-6340 tde.test_encryption and tde.test_decryption report success=false when nothing was encrypted" {
     _ = try sandbox();
+    defer leaveSandbox();
     runtime_flags.global().tde.disableForTests();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -274,6 +295,7 @@ fn merkleRoot(allocator: std.mem.Allocator, content: []const u8) !struct { root:
 
 test "SONNY-6340 audit.get_merkle_digests hashes the server's audit log, and refuses when the server writes none" {
     const data_dir = try sandbox();
+    defer leaveSandbox();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();

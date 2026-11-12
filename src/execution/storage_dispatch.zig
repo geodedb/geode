@@ -94,11 +94,6 @@ const tde_mutating_set = std.StaticStringMap(void).initComptime(.{
     .{ "tde.configure_external_kms", {} },
     .{ "tde.zeroize_keys", {} },
     .{ "tde.cleanup_key_hierarchy", {} },
-    .{ "tde.backup_encrypted", {} },
-    .{ "tde.encrypt_backup", {} },
-    .{ "tde.create_encrypted_backup", {} },
-    .{ "tde.restore_with_keys", {} },
-    .{ "tde.restore_with_historical_keys", {} },
 });
 
 const cdc_mutating_set = std.StaticStringMap(void).initComptime(.{
@@ -150,7 +145,6 @@ const tde_table = std.StaticStringMap(TdeHandler).initComptime(.{
     .{ "tde.verify_encrypted_state", handleTdeVerifyEncryptedState },
     .{ "tde.benchmark_encryption", handleTdeBenchmarkEncryption },
     .{ "tde.test_key_rotation", handleTdeTestKeyRotation },
-    .{ "tde.backup_encrypted", handleTdeBackupEncrypted },
     .{ "tde.configure_key_provider", handleTdeConfigureKeyProvider },
     .{ "tde.configure_mock_kms", handleTdeConfigureMockKms },
     .{ "tde.derive_data_key", handleTdeDeriveDataKey },
@@ -158,7 +152,6 @@ const tde_table = std.StaticStringMap(TdeHandler).initComptime(.{
     .{ "tde.test_key_escrow", handleTdeTestKeyEscrow },
     .{ "tde.test_transparent_encryption", handleTdeTestTransparentEncryption },
     .{ "tde.encrypt_page", handleTdeEncryptPage },
-    .{ "tde.encrypt_backup", handleTdeEncryptBackup },
     .{ "tde.test_roundtrip", handleTdeTestRoundtrip },
     .{ "tde.zeroize_keys", handleTdeZeroizeKeys },
     .{ "tde.verify_no_plaintext", handleTdeVerifyNoPlaintext },
@@ -166,9 +159,6 @@ const tde_table = std.StaticStringMap(TdeHandler).initComptime(.{
     .{ "tde.configure_rotation_schedule", handleTdeConfigureRotationSchedule },
     .{ "tde.test_rotation_state_persistence", handleTdeTestRotationStatePersistence },
     .{ "tde.configure_adaptive_rotation", handleTdeConfigureAdaptiveRotation },
-    .{ "tde.verify_backup_encryption", handleTdeVerifyBackupEncryption },
-    .{ "tde.generate_key_manifest", handleTdeGenerateKeyManifest },
-    .{ "tde.restore_with_historical_keys", handleTdeRestoreWithHistoricalKeys },
     .{ "tde.validate_overhead", handleTdeValidateOverhead },
     .{ "tde.benchmark_aead", handleTdeBenchmarkAead },
     .{ "tde.simulate_oltp", handleTdeSimulateOltp },
@@ -180,8 +170,6 @@ const tde_table = std.StaticStringMap(TdeHandler).initComptime(.{
     .{ "tde.encrypt_page_test", handleTdeEncryptPageTest },
     .{ "tde.encrypt_backup_test", handleTdeEncryptBackupTest },
     .{ "tde.roundtrip_test", handleTdeRoundtripTest },
-    .{ "tde.create_encrypted_backup", handleTdeCreateEncryptedBackup },
-    .{ "tde.restore_with_keys", handleTdeRestoreWithKeys },
     .{ "tde.measure_overhead", handleTdeMeasureOverhead },
     .{ "tde.simulate_oltp_workload", handleTdeSimulateOltpWorkload },
     .{ "tde.test_key_zeroization", handleTdeTestKeyZeroization },
@@ -198,12 +186,34 @@ const tde_table = std.StaticStringMap(TdeHandler).initComptime(.{
     .{ "tde.cleanup_key_hierarchy", handleTdeCleanupKeyHierarchy },
 });
 
+// CANARY: REQ=REQ-SONNY-6340-NO-FABRICATED-PROCEDURES; FEATURE="TDEProcedures"; ASPECT=RefuseFabricated; STATUS=TESTED; TEST=tests/test_sonny6340_no_fabricated_procedures.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6340: TDE procedures that reported work they did not do are
+/// refused with error.Unsupported (SQLSTATE 0A000). The backup family
+/// encrypted random bytes in memory (or nothing) and reported a backup at a
+/// path that was never written, a key manifest that was never made, and a
+/// restore of 1000 records that read nothing. Backups are made and
+/// restored with the `geode backup create` / `geode restore` CLI, not by
+/// these procedures.
+const tde_refused_set = std.StaticStringMap(void).initComptime(.{
+    .{ "tde.backup_encrypted", {} },
+    .{ "tde.encrypt_backup", {} },
+    .{ "tde.create_encrypted_backup", {} },
+    .{ "tde.verify_backup_encryption", {} },
+    .{ "tde.generate_key_manifest", {} },
+    .{ "tde.restore_with_keys", {} },
+    .{ "tde.restore_with_historical_keys", {} },
+});
+
 /// Execute a TDE procedure. Returns null if not recognized.
 pub fn executeTde(
     allocator: std.mem.Allocator,
     proc_name: []const u8,
     call_stmt: ast.CallProcedure,
 ) !?ExecutionResult {
+    if (tde_refused_set.has(proc_name)) {
+        log.warn("TDE procedure not supported: it reported work it did not do", &.{Attr.string("procedure", proc_name)});
+        return error.Unsupported;
+    }
     if (tde_table.get(proc_name)) |handler| {
         // Cluster fail-closed: see GateStorageProcs (mutating procs only).
         if (tde_mutating_set.has(proc_name)) try cluster_mod.gateUnreplicatedWrite();
@@ -328,9 +338,10 @@ fn handleTdeTestEncryption(allocator: std.mem.Allocator, _: ast.CallProcedure) a
             success = false;
         }
     } else |err| {
-        // If encryption failed due to missing key, still report as test success
-        // but with 0 bytes encrypted
-        success = (err == error.KeyNotLoaded or err == error.FeatureDisabled);
+        // SONNY-6340: TDE off or no key means nothing was encrypted: report
+        // success=false (it reported success=true with 0 bytes).
+        if (err != error.KeyNotLoaded and err != error.FeatureDisabled) return err;
+        success = false;
     }
 
     encryption_time_ms = compat_milliTimestamp() - start_time;
@@ -383,9 +394,10 @@ fn handleTdeTestDecryption(allocator: std.mem.Allocator, _: ast.CallProcedure) a
 
         decryption_time_ms = compat_milliTimestamp() - start_time;
     } else |err| {
-        // If encryption failed due to missing key, still report as test success
-        // but with 0 bytes decrypted
-        success = (err == error.KeyNotLoaded or err == error.FeatureDisabled);
+        // SONNY-6340: TDE off or no key means nothing was decrypted: report
+        // success=false (it reported success=true with 0 bytes).
+        if (err != error.KeyNotLoaded and err != error.FeatureDisabled) return err;
+        success = false;
     }
 
     const columns = try allocator.alloc([]const u8, 3);
@@ -517,28 +529,6 @@ fn handleTdeTestKeyRotation(allocator: std.mem.Allocator, _: ast.CallProcedure) 
     row[0] = Value{ .Bool = success };
     row[1] = Value{ .Bool = rotation_successful };
     row[2] = Value{ .Bool = data_integrity_verified };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleTdeBackupEncrypted(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-010; FEATURE="TDEProcedures"; ASPECT=EncryptedBackup; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
-    // tde.backup_encrypted() -> success, backup_path, backup_encrypted
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "backup_path");
-    columns[2] = try allocator.dupe(u8, "backup_encrypted");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Str = "/tmp/backup_encrypted.tde" };
-    row[2] = Value{ .Bool = true };
     rows[0] = row;
 
     return ExecutionResult{
@@ -1076,27 +1066,6 @@ fn handleTdeEncryptPage(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
     };
 }
 
-fn handleTdeEncryptBackup(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // REQ-TDE-PROC-016
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "backup_id");
-    columns[2] = try allocator.dupe(u8, "encrypted_size");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Int = 0 };
-    row[2] = Value{ .Int = 0 };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
 fn handleTdeTestRoundtrip(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // REQ-TDE-PROC-017
     const columns = try allocator.alloc([]const u8, 3);
@@ -1235,69 +1204,6 @@ fn handleTdeConfigureAdaptiveRotation(allocator: std.mem.Allocator, _: ast.CallP
     row[0] = Value{ .Bool = true };
     row[1] = Value{ .Bool = true };
     row[2] = Value{ .Int = 1000000 };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleTdeVerifyBackupEncryption(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // REQ-TDE-PROC-024
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "verified");
-    columns[1] = try allocator.dupe(u8, "backup_path");
-    columns[2] = try allocator.dupe(u8, "encryption_confirmed");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Str = "/tmp/backup_encrypted.tde" };
-    row[2] = Value{ .Bool = true };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleTdeGenerateKeyManifest(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // REQ-TDE-PROC-025
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "manifest_path");
-    columns[2] = try allocator.dupe(u8, "keys_included");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Str = "/tmp/key_manifest.json" };
-    row[2] = Value{ .Int = 0 };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleTdeRestoreWithHistoricalKeys(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // REQ-TDE-PROC-026
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "success");
-    columns[1] = try allocator.dupe(u8, "keys_restored");
-    columns[2] = try allocator.dupe(u8, "data_verified");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Bool = true };
-    row[1] = Value{ .Int = 0 };
-    row[2] = Value{ .Bool = true };
     rows[0] = row;
 
     return ExecutionResult{
@@ -1620,108 +1526,6 @@ fn handleTdeRoundtripTest(allocator: std.mem.Allocator, call_stmt: ast.CallProce
     row[0] = Value{ .Str = result.original_data };
     row[1] = Value{ .Str = result.decrypted_data };
     row[2] = Value{ .Bool = result.roundtrip_success };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleTdeCreateEncryptedBackup(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-043; FEATURE="TDETestProcedures"; ASPECT=CreateEncryptedBackup; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
-    // tde.create_encrypted_backup(path) -> backup_path, encryption_key_id, backup_size, integrity_hash
-
-    // Extract backup path parameter
-    const args = switch (call_stmt.procedure) {
-        .Call => |call| call.args,
-        else => &[_]*ast.Expr{},
-    };
-
-    const backup_path = if (args.len > 0) blk: {
-        const arg_val = switch (args[0].*) {
-            .String => |s| Value{ .Str = s },
-            .Int => |i| Value{ .Int = i },
-            else => Value{ .Null = {} },
-        };
-        break :blk switch (arg_val) {
-            .Str => |s| s,
-            else => "/tmp/tde_test_backup.enc",
-        };
-    } else "/tmp/tde_test_backup.enc";
-
-    // Call real TDE function
-    const result = try tde_mod.createEncryptedBackup(allocator, backup_path);
-
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "backup_path");
-    columns[1] = try allocator.dupe(u8, "encryption_key_id");
-    columns[2] = try allocator.dupe(u8, "backup_size");
-    columns[3] = try allocator.dupe(u8, "integrity_hash");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 4);
-    row[0] = Value{ .Str = result.backup_path };
-    row[1] = Value{ .Str = result.encryption_key_id };
-    row[2] = Value{ .Int = result.backup_size };
-    row[3] = Value{ .Str = result.integrity_hash };
-    rows[0] = row;
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = std.ArrayList([]const u8).empty,
-    };
-}
-
-fn handleTdeRestoreWithKeys(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-044; FEATURE="TDETestProcedures"; ASPECT=RestoreWithKeys; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
-    // tde.restore_with_keys(backup_path, manifest_path) -> restore_status, records_restored, keys_verified
-
-    // Extract parameters
-    const args = switch (call_stmt.procedure) {
-        .Call => |call| call.args,
-        else => &[_]*ast.Expr{},
-    };
-
-    const backup_path = if (args.len > 0) blk: {
-        const arg_val = switch (args[0].*) {
-            .String => |s| Value{ .Str = s },
-            .Int => |i| Value{ .Int = i },
-            else => Value{ .Null = {} },
-        };
-        break :blk switch (arg_val) {
-            .Str => |s| s,
-            else => "/tmp/tde_test_backup.enc",
-        };
-    } else "/tmp/tde_test_backup.enc";
-
-    const manifest_path = if (args.len > 1) blk: {
-        const arg_val = switch (args[1].*) {
-            .String => |s| Value{ .Str = s },
-            .Int => |i| Value{ .Int = i },
-            else => Value{ .Null = {} },
-        };
-        break :blk switch (arg_val) {
-            .Str => |s| s,
-            else => "/tmp/tde_test_manifest.json",
-        };
-    } else "/tmp/tde_test_manifest.json";
-
-    // Call real TDE function
-    const result = try tde_mod.restoreWithKeys(allocator, backup_path, manifest_path);
-
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "restore_status");
-    columns[1] = try allocator.dupe(u8, "records_restored");
-    columns[2] = try allocator.dupe(u8, "keys_verified");
-
-    const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Str = result.restore_status };
-    row[1] = Value{ .Int = result.records_restored };
-    row[2] = Value{ .Bool = result.keys_verified };
     rows[0] = row;
 
     return ExecutionResult{
