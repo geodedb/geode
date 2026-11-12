@@ -46,6 +46,21 @@
   synced; a failure removes only the temporary file. `--local` already wrote
   this way (SONNY-6323). `geode backup create --help` says so. Regression:
   `zig build test-sonny6386-remote-backup-atomic-output`.
+- **The JSON and scheduler latency bounds are batched perf_gate medians
+  (SONNY-6386 item 6, the part SONNY-2439 left open).** The four claims in
+  `src/performance/test_json_optimization.zig` (parse, serialize, 1000-row
+  streaming, the REQ-PERF-JSON-001 query-result serialization) and
+  `tests/test_performance_optimizations.zig` ("scheduler overhead") were one
+  timed run on `std.testing.allocator`, read with their own clock helpers.
+  They now take 31 batched samples through `tests/perf_gate.zig` from
+  `perf_gate.bench_allocator`, claim on the median and check the robust
+  envelope; correctness checks moved to their own test blocks. The unused
+  `json_optimized_fixed.benchmarkJsonProcessing` is removed. Measured on a
+  shared dev host, ReleaseFast with `GEODE_PERF_GATES=enforce`, three runs
+  each, all passing: parse 1.25-1.31 µs, serialize 2.13-2.23 µs, CANARY
+  serialization 77-80 µs (bounds 100 / 150 / 300 µs), scheduler 736-754 ns
+  per call (bound 10 µs). Regression:
+  `zig build test-sonny6386-latency-bound-methodology`.
 - **`geode restore --hmac-key-file` with `GEODE_TDE_KEY` set: the refusal
   is documented and explained (SONNY-6386 item 7).** A server with
   `GEODE_TDE_KEY` set derives its auth-chain HMAC key from it

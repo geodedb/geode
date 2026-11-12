@@ -22,10 +22,11 @@
 //   (6) the phantom-range baseline enables phantom prevention, so the two
 //       arms differ only in the range reads.
 //
-// Still open (SONNY-2439): thresholds calibrated on the quiet CI runner, the
-// latency bounds of src/performance/test_json_optimization.zig and
-// tests/test_performance_optimizations.zig (single-shot timings on the
-// testing allocator), and the GitLab schedule for the enforced job.
+// Still open (SONNY-2439): thresholds calibrated on the quiet CI runner and
+// the GitLab schedule for the enforced job. The latency bounds of
+// src/performance/test_json_optimization.zig and
+// tests/test_performance_optimizations.zig were converted by SONNY-6386
+// (tests/test_sonny6386_latency_bound_methodology.zig).
 //
 // CANARY: REQ=REQ-SONNY-2439-PERF-METHODOLOGY; FEATURE="Perf Gates"; ASPECT=MonotonicClockNoTestLocalBenchmarks; STATUS=TESTED; TEST=tests/test_sonny2439_perf_methodology.zig; OWNER=performance; UPDATED=2026-11-12
 const std = @import("std");

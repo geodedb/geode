@@ -3815,7 +3815,7 @@ REQ-PERF-JSON-001,JSONPerformanceImprovement,Benchmarking,EXEMPT,tests/benchmark
 REQ-PERF-JSON-001,JSONPerformanceImprovement,Integration,TESTED,tests/benchmark_json_improvement.zig,TestCANARY_REQ_PERF_JSON_001,,performance,2025-10-04
 REQ-PERF-JSON-001,JSONPerformanceValidation,Integration,TESTED,tests/json_perf_validation.zig,TestCANARY_REQ_PERF_JSON_001,,performance,2025-10-04
 REQ-PERF-JSON-001,JSONPerformanceValidation,Testing,TESTED,tests/json_perf_validation.zig,TestCANARY_JSONPerfValidation,,performance,2025-10-04
-REQ-PERF-JSON-001,OptimizedJSON,Integration,TESTED,src/performance/test_json_optimization.zig,TestCANARY_REQ_PERF_JSON_001,,performance,2025-10-04
+REQ-PERF-JSON-001,OptimizedJSON,Integration,TESTED,src/performance/test_json_optimization.zig,TestCANARY_REQ_PERF_JSON_001,,performance,2026-11-12
 REQ-PERF-JSON-001,OptimizedJSON,Performance,TESTED,src/performance/json_optimized_fixed.zig,TestCANARY_OptimizedJSON,,performance,2025-10-04
 REQ-PERF-JSON-001,OptimizedJSON,Testing,TESTED,src/performance/test_json_optimization.zig,TestCANARY_OptimizedJSON,,performance,2025-10-04
 REQ-PERF-LABEL-INDEX-001,LabelBasedIndex,NodeLookup,TESTED,src/graph_store.zig,tests/test_match_set_label_scan_regression.zig,,perf,2026-04-23

@@ -1,19 +1,6 @@
 const std = @import("std");
 const perf_gate = @import("perf_gate");
 
-// Zig 0.16 compat: std.time.Timer removed; use clock_gettime.
-// Cross-platform: Linux uses vDSO-accelerated std.os.linux.*; macOS/BSD
-// go through libc via std.c.*. Matches the pattern in src/admin/fle_commands.zig.
-const builtin = @import("builtin");
-fn compat_getNanos() u64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime builtin.os.tag == .linux) {
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-    } else {
-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
-    }
-    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
-}
 const testing = std.testing;
 const json_opt = @import("json_optimized_fixed.zig");
 
@@ -211,41 +198,78 @@ test "escapeJsonStringOptimized performance" {
     try testing.expect(std.mem.eql(u8, escaped_complex, expected));
 }
 
+// SONNY-6386 (6): the latency bounds below are measured through
+// tests/perf_gate.zig: batched samples (each result passed to
+// doNotOptimizeAway, CLOCK_MONOTONIC), allocated from perf_gate.bench_allocator
+// (the server's C allocator, not DebugAllocator), claimed on the median with a
+// robust envelope. They used to be one timed run on std.testing.allocator.
+const bench_samples = 31;
+const bench_max_rel_iqr = 0.30;
+const bench_max_p95_over_median = 2.55;
+
+const parse_sample_json =
+    \\{"name":"John Doe","age":30,"city":"New York","skills":["programming","design","management"],"active":true}
+;
+const parse_sample_schema = [_]json_opt.SchemaColumn{
+    .{ .name = "name", .type = "STRING" },
+    .{ .name = "age", .type = "INT" },
+    .{ .name = "active", .type = "BOOL" },
+};
+const parse_sample_rows = [_][]const u8{parse_sample_json};
+
+const ParseSerializeBench = struct {
+    processor: json_opt.OptimizedJsonProcessor,
+
+    fn parse(self: *ParseSerializeBench) !usize {
+        const parsed = try self.processor.parseJsonValue(parse_sample_json);
+        const n = parsed.value.object.count();
+        parsed.deinit();
+        self.processor.reset();
+        return n;
+    }
+
+    fn serialize(self: *ParseSerializeBench) !usize {
+        const out = try self.processor.serializeQueryResult(&parse_sample_schema, &parse_sample_rows);
+        const n = out.len;
+        self.processor.reset();
+        return n;
+    }
+};
+
 test "JSON processing performance benchmark" {
-    const allocator = testing.allocator;
+    var bench: ParseSerializeBench = .{ .processor = try json_opt.OptimizedJsonProcessor.init(perf_gate.bench_allocator) };
+    defer bench.processor.deinit();
 
-    const results = try json_opt.benchmarkJsonProcessing(allocator, 100);
+    // Warm-up batch (arena and buffer growth) outside the samples.
+    _ = try perf_gate.timeBatch(&bench, ParseSerializeBench.parse, 1000);
+    _ = try perf_gate.timeBatch(&bench, ParseSerializeBench.serialize, 1000);
 
-    std.debug.print("\nJSON Optimization Benchmark Results:\n", .{});
-    std.debug.print("  Parse time: {d}ns\n", .{results.parse_ns});
-    std.debug.print("  Serialize time: {d}ns\n", .{results.serialize_ns});
+    var parse_samples: [bench_samples]f64 = undefined;
+    var serialize_samples: [bench_samples]f64 = undefined;
+    try perf_gate.sampleBatches(&bench, ParseSerializeBench.parse, 1000, &parse_samples);
+    try perf_gate.sampleBatches(&bench, ParseSerializeBench.serialize, 1000, &serialize_samples);
+    const parse_r = perf_gate.robust(&parse_samples);
+    const serialize_r = perf_gate.robust(&serialize_samples);
 
-    // Performance expectations (should be significantly better than baseline 630μs)
+    std.debug.print("\nJSON Optimization Benchmark Results ({d} batches of 1000):\n", .{bench_samples});
+    std.debug.print("  Parse: median {d:.1}ns rel_iqr {d:.3}\n", .{ parse_r.median, parse_r.rel_iqr });
+    std.debug.print("  Serialize: median {d:.1}ns rel_iqr {d:.3}\n", .{ serialize_r.median, serialize_r.rel_iqr });
+
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
-    // Correctness assertions in this file are not gated.
-    try perf_gate.check("JSON parse < 100us", results.parse_ns < 100_000, "parse_ns={d}", .{results.parse_ns});
-    try perf_gate.check("JSON serialize < 150us", results.serialize_ns < 150_000, "serialize_ns={d}", .{results.serialize_ns});
+    try perf_gate.robustEnvelope("JSON parse", parse_r, bench_max_rel_iqr, bench_max_p95_over_median);
+    try perf_gate.robustEnvelope("JSON serialize", serialize_r, bench_max_rel_iqr, bench_max_p95_over_median);
+    try perf_gate.check("JSON parse median < 100us", parse_r.median < 100_000, "median_ns={d:.1}", .{parse_r.median});
+    try perf_gate.check("JSON serialize median < 150us", serialize_r.median < 150_000, "median_ns={d:.1}", .{serialize_r.median});
 }
 
-test "Large result set streaming performance" {
-    const allocator = testing.allocator;
-
-    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
-    defer processor.deinit();
-
-    // Pre-allocate for large result set
-    try processor.reserveCapacity(1024 * 1024); // 1MB
-
+/// Streams the 1000-element result document into `processor` (reset first).
+fn streamLargeResult(processor: *json_opt.OptimizedJsonProcessor) !usize {
+    processor.reset();
     var writer = processor.getStreamingWriter();
-
-    const timer_start = compat_getNanos();
-
     try writer.writeObjectStart();
     try writer.writeFieldName("large_array");
     try writer.writeArrayStart();
-
-    // Simulate large result set
     for (0..1000) |i| {
         try writer.writeObjectStart();
         try writer.writeFieldName("id");
@@ -254,17 +278,18 @@ test "Large result set streaming performance" {
         try writer.writeString("test_value");
         try writer.writeObjectEnd();
     }
-
     try writer.writeArrayEnd();
     try writer.writeObjectEnd();
+    return processor.getResult().len;
+}
 
-    const elapsed = compat_getNanos() - timer_start;
+test "Large result set streaming output is well-formed" {
+    const allocator = testing.allocator;
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
+    defer processor.deinit();
+    try processor.reserveCapacity(1024 * 1024); // 1MB
+    _ = try streamLargeResult(&processor);
     const result = processor.getResult();
-
-    std.debug.print("\nLarge Result Set Streaming:\n", .{});
-    std.debug.print("  Time: {d}μs\n", .{elapsed / 1000});
-    std.debug.print("  Size: {d} bytes\n", .{result.len});
-    std.debug.print("  Rate: {d:.2} MB/s\n", .{(@as(f64, @floatFromInt(result.len)) / 1024.0 / 1024.0) / (@as(f64, @floatFromInt(elapsed)) / 1_000_000_000.0)});
 
     // SONNY-2394: the old `result.len > 50_000` could never hold -- 1000
     // `{"id":N,"value":"test_value"}` elements serialize to ~32 KB. Validate
@@ -276,10 +301,36 @@ test "Large result set streaming performance" {
     try testing.expectEqual(@as(usize, 1000), large_array.items.len);
     try testing.expectEqual(@as(i64, 0), large_array.items[0].object.get("id").?.integer);
     try testing.expectEqual(@as(i64, 999), large_array.items[999].object.get("id").?.integer);
+}
+
+const LargeStreamBench = struct {
+    processor: json_opt.OptimizedJsonProcessor,
+
+    fn stream(self: *LargeStreamBench) !usize {
+        return streamLargeResult(&self.processor);
+    }
+};
+
+test "Large result set streaming performance" {
+    var bench: LargeStreamBench = .{ .processor = try json_opt.OptimizedJsonProcessor.init(perf_gate.bench_allocator) };
+    defer bench.processor.deinit();
+    try bench.processor.reserveCapacity(1024 * 1024); // 1MB
+
+    _ = try perf_gate.timeBatch(&bench, LargeStreamBench.stream, 4);
+    var samples: [bench_samples]f64 = undefined;
+    try perf_gate.sampleBatches(&bench, LargeStreamBench.stream, 4, &samples);
+    const r = perf_gate.robust(&samples);
+    const size = bench.processor.getResult().len;
+
+    std.debug.print("\nLarge Result Set Streaming ({d} batches of 4):\n", .{bench_samples});
+    std.debug.print("  Median: {d:.1}us rel_iqr {d:.3}\n", .{ r.median / 1000.0, r.rel_iqr });
+    std.debug.print("  Size: {d} bytes\n", .{size});
+    std.debug.print("  Rate: {d:.2} MB/s\n", .{(@as(f64, @floatFromInt(size)) / 1024.0 / 1024.0) / (r.median / 1_000_000_000.0)});
 
     // Should be much faster than 5.37ms file I/O baseline
     // (perf claim: shared gate, SONNY-2394 -- see tests/perf_gate.zig)
-    try perf_gate.check("large result streaming < 5ms", elapsed < 5_000_000, "elapsed_ns={d}", .{elapsed});
+    try perf_gate.robustEnvelope("large result streaming", r, bench_max_rel_iqr, bench_max_p95_over_median);
+    try perf_gate.check("large result streaming median < 5ms", r.median < 5_000_000, "median_ns={d:.1}", .{r.median});
 }
 
 test "Memory usage optimization validation" {
@@ -304,32 +355,14 @@ test "Memory usage optimization validation" {
     try testing.expect(true); // If we get here without OOM, arena is working
 }
 
-// Integration test validating JSON optimization against baseline performance
-test "CANARY: REQ=REQ-PERF-JSON-001" {
-    // CANARY: REQ=REQ-PERF-JSON-001; FEATURE="OptimizedJSON"; ASPECT=Integration; STATUS=TESTED; TEST=TestCANARY_REQ_PERF_JSON_001; OWNER=performance; UPDATED=2025-10-04
-    const allocator = testing.allocator;
-
-    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
-    defer processor.deinit();
-
-    // Test comprehensive JSON processing pipeline
-    const schema = [_]json_opt.SchemaColumn{
-        .{ .name = "user_id", .type = "INT" },
-        .{ .name = "username", .type = "STRING" },
-        .{ .name = "email", .type = "STRING" },
-        .{ .name = "active", .type = "BOOL" },
-        .{ .name = "last_login", .type = "DATETIME" },
-    };
-
+/// The 50 user rows of the CANARY query-result benchmark. Caller frees each
+/// row and the list.
+fn canaryUserRows(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
     var rows = try std.ArrayList([]const u8).initCapacity(allocator, 50);
-    defer {
-        for (rows.items) |row| {
-            allocator.free(row);
-        }
+    errdefer {
+        for (rows.items) |row| allocator.free(row);
         rows.deinit(allocator);
     }
-
-    // Generate test data
     for (0..50) |i| {
         const username = try std.fmt.allocPrint(allocator, "user{d}", .{i});
         defer allocator.free(username);
@@ -345,32 +378,76 @@ test "CANARY: REQ=REQ-PERF-JSON-001" {
         const row = try json_lib.encode(allocator, user_data, .{});
         try rows.append(allocator, row);
     }
+    return rows;
+}
 
-    const timer2_start = compat_getNanos();
-    const result = try processor.serializeQueryResult(&schema, rows.items);
-    const processing_time = compat_getNanos() - timer2_start;
+fn freeRows(allocator: std.mem.Allocator, rows: *std.ArrayList([]const u8)) void {
+    for (rows.items) |row| allocator.free(row);
+    rows.deinit(allocator);
+}
 
-    // Validate result structure
+const canary_schema = [_]json_opt.SchemaColumn{
+    .{ .name = "user_id", .type = "INT" },
+    .{ .name = "username", .type = "STRING" },
+    .{ .name = "email", .type = "STRING" },
+    .{ .name = "active", .type = "BOOL" },
+    .{ .name = "last_login", .type = "DATETIME" },
+};
+
+test "CANARY REQ-PERF-JSON-001 query-result serialization is well-formed" {
+    const allocator = testing.allocator;
+    var processor = try json_opt.OptimizedJsonProcessor.init(allocator);
+    defer processor.deinit();
+    var rows = try canaryUserRows(allocator);
+    defer freeRows(allocator, &rows);
+
+    const result = try processor.serializeQueryResult(&canary_schema, rows.items);
     try testing.expect(std.mem.indexOf(u8, result, "\"schema\":[") != null);
     try testing.expect(std.mem.indexOf(u8, result, "\"rows\":[") != null);
-    try testing.expect(std.mem.indexOf(u8, result, "user_id") != null);
     try testing.expect(result.len > 1000); // Should generate substantial JSON
-
-    std.debug.print("\nCANARY Performance Validation:\n", .{});
-    std.debug.print("  Processing time: {d}μs\n", .{processing_time / 1000});
-    std.debug.print("  Result size: {d} bytes\n", .{result.len});
-    std.debug.print("  Throughput: {d:.2} MB/s\n", .{(@as(f64, @floatFromInt(result.len)) / 1024.0 / 1024.0) / (@as(f64, @floatFromInt(processing_time)) / 1_000_000_000.0)});
-
-    // Correctness validation (runs before the timing gate). SONNY-2394: the
-    // schema lists the "user_id" column once and every row carries it once,
-    // so the count is 1 + rows -- the old `schema.len + rows.items.len`
-    // (5 + 50) could never match. The result must also be well-formed JSON.
+    // SONNY-2394: the schema lists the "user_id" column once and every row
+    // carries it once, so the count is 1 + rows -- the old
+    // `schema.len + rows.items.len` (5 + 50) could never match. The result
+    // must also be well-formed JSON.
     try testing.expectEqual(1 + rows.items.len, std.mem.count(u8, result, "user_id"));
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, result, .{});
     defer parsed.deinit();
     try testing.expectEqual(rows.items.len, parsed.value.object.get("rows").?.array.items.len);
+}
+
+const CanarySerializeBench = struct {
+    processor: json_opt.OptimizedJsonProcessor,
+    rows: []const []const u8,
+
+    fn serialize(self: *CanarySerializeBench) !usize {
+        self.processor.reset();
+        const out = try self.processor.serializeQueryResult(&canary_schema, self.rows);
+        return out.len;
+    }
+};
+
+// Integration test validating JSON optimization against baseline performance
+test "CANARY: REQ=REQ-PERF-JSON-001" {
+    // CANARY: REQ=REQ-PERF-JSON-001; FEATURE="OptimizedJSON"; ASPECT=Integration; STATUS=TESTED; TEST=TestCANARY_REQ_PERF_JSON_001; OWNER=performance; UPDATED=2026-11-12
+    const alloc = perf_gate.bench_allocator;
+    var rows = try canaryUserRows(alloc);
+    defer freeRows(alloc, &rows);
+    var bench: CanarySerializeBench = .{ .processor = try json_opt.OptimizedJsonProcessor.init(alloc), .rows = rows.items };
+    defer bench.processor.deinit();
+
+    _ = try perf_gate.timeBatch(&bench, CanarySerializeBench.serialize, 16);
+    var samples: [bench_samples]f64 = undefined;
+    try perf_gate.sampleBatches(&bench, CanarySerializeBench.serialize, 16, &samples);
+    const r = perf_gate.robust(&samples);
+    const size = bench.processor.getResult().len;
+
+    std.debug.print("\nCANARY Performance Validation ({d} batches of 16):\n", .{bench_samples});
+    std.debug.print("  Processing time: median {d:.1}us rel_iqr {d:.3}\n", .{ r.median / 1000.0, r.rel_iqr });
+    std.debug.print("  Result size: {d} bytes\n", .{size});
+    std.debug.print("  Throughput: {d:.2} MB/s\n", .{(@as(f64, @floatFromInt(size)) / 1024.0 / 1024.0) / (r.median / 1_000_000_000.0)});
 
     // Performance regression test: should be significantly faster than 630μs baseline
     // (perf claim: shared gate, SONNY-2394 -- see tests/perf_gate.zig)
-    try perf_gate.check("CANARY query-result serialization < 300us", processing_time < 300_000, "processing_ns={d}", .{processing_time});
+    try perf_gate.robustEnvelope("CANARY query-result serialization", r, bench_max_rel_iqr, bench_max_p95_over_median);
+    try perf_gate.check("CANARY query-result serialization median < 300us", r.median < 300_000, "median_ns={d:.1}", .{r.median});
 }
