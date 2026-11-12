@@ -347,7 +347,7 @@ const Fixture = struct {
         _ = self;
         var admin = try server.connect(allocator);
         defer admin.deinit();
-        try exec(&admin, allocator, "CREATE USER sonny6322a SET PASSWORD 'Sonny6322-First-pw1'");
+        try exec(&admin, allocator, "CREATE USER sonny6322a SET PASSWORD 'Sonny 6322 First Passphrase 1'");
         try exec(&admin, allocator, "INSERT (:P {n: 1})");
         var b = try admin.backup(allocator, "full", false);
         defer b.deinit(allocator);
@@ -431,7 +431,7 @@ test "SONNY-6322 (1) a server backup holds the audit log and public key but not 
         defer server.stop(allocator);
         var admin = try server.connect(allocator);
         defer admin.deinit();
-        try exec(&admin, allocator, "CREATE USER sonny6322b SET PASSWORD 'Sonny6322-Second-pw2'");
+        try exec(&admin, allocator, "CREATE USER sonny6322b SET PASSWORD 'Sonny 6322 Second Passphrase 2'");
     }
 
     const gdir = try auditGraphDir(allocator, restore_dir);
@@ -712,7 +712,7 @@ test "SONNY-6322 (2) startup with auth records and no HMAC key refuses with 'HMA
         defer server.stop(allocator);
         var admin = try server.connect(allocator);
         defer admin.deinit();
-        try exec(&admin, allocator, "CREATE USER sonny6322c SET PASSWORD 'Sonny6322-Third-pw3'");
+        try exec(&admin, allocator, "CREATE USER sonny6322c SET PASSWORD 'Sonny 6322 Third Passphrase 3'");
     }
     const hk = try join(allocator, fx.x, ".geode_hmac_key");
     defer allocator.free(hk);

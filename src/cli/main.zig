@@ -287,7 +287,9 @@ fn printQueryUsage() void {
         "                         On expiry the CLI exits 4 and the statement may still be\n" ++
         "                         executing server-side — raise this for long-running DDL\n" ++
         "                         such as CREATE INDEX over a large label\n" ++
-        "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
+        "  --retry <count>        Number of retry attempts on a connection failure before the\n" ++
+        "                         query is sent (default: 0); a query that was sent is never\n" ++
+        "                         sent again\n" ++
         "  --read-only            Reject mutating statements with GQLSTATE 42501,\n" ++
         "                         independent of the authenticated user's role\n" ++
         "  --begin                Start transaction\n" ++
@@ -512,7 +514,7 @@ fn printAuthUsage() void {
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Offline Options (init, reseal, verify):\n" ++
-        "  --data-dir <path>      Data directory (default: GEODE_DATA_DIR env or ./data)\n" ++
+        "  --data-dir <path>      Data directory (default: GEODE_DATA_DIR, else the server's default: $XDG_STATE_HOME/geode or ~/.local/state/geode)\n" ++
         "\n" ++
         "Session Management:\n" ++
         "  Sessions are issued by the server and stored in ~/.geode/credentials.json\n" ++
@@ -1637,6 +1639,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 );
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             },
+            // SONNY-6377: a chunk that was sent and got no answer stops the
+            // run (executeChunkedQueries said why). A client timeout exits
+            // timeout_error, as a single query's does.
+            error.ChunkTimedOut => std.process.exit(@intFromEnum(ExitCode.timeout_error)),
+            error.ChunkOutcomeUnknown => std.process.exit(@intFromEnum(ExitCode.general_error)),
             else => return err,
         };
         if (chunk_errors > 0) std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1735,6 +1742,13 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
     startDeadlineWatchdogTask(allocator, timeout_secs, &query_deadline_state);
 
+    // CANARY: REQ=REQ-SONNY-6369-QUERY-EXIT-CODE; FEATURE="QueryExitCode"; ASPECT=FailedQueryExitsNonZero; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=cli; UPDATED=2026-11-12
+    // SONNY-6369: a query the server answers with an error (a non-00000
+    // GQLSTATUS) exits 1, as --batch and --file do. It exited 0: only a
+    // transport failure was visible in the exit code, so a script could not
+    // tell a failed query from a successful one.
+    var query_failed = false;
+
     // Execute query via QUIC or gRPC connection
     params_owned = false;
     if (use_grpc) {
@@ -1751,6 +1765,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .page_size = page_size,
             .params = params,
             .read_only = read_only,
+            .failed_out = &query_failed,
         });
     } else {
         // GAP-0113: Execute query via QUIC connection with optional certificate verification
@@ -1774,6 +1789,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .role = role,
             .principal_envelope_bytes = forward_envelope_bytes,
             .read_only = read_only,
+            .failed_out = &query_failed,
         }) catch |err| {
             if (err == error.AuthenticationFailed)
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
@@ -1800,6 +1816,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
     }
+    if (query_failed) std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 /// Escape a string for safe embedding in JSON
@@ -1933,6 +1950,11 @@ const QuicQueryOptions = struct {
     // never see it.  When set, the render verdict is written here so a caller
     // (the chunked driver) can react to a rejected program.
     failed_out: ?*bool = null,
+    // CANARY: REQ=REQ-SONNY-6377-QUERY-NO-RESEND; FEATURE="ChunkedExecution"; ASPECT=SentSignal; STATUS=TESTED; TEST=tests/test_sonny6377_query_no_resend.zig; OWNER=cli; UPDATED=2026-11-12
+    // SONNY-6377: set true once the Execute request has been handed to the
+    // transport. After that the server may have applied the statement, so an
+    // error is an unknown outcome and the statement must never be sent again.
+    sent_out: ?*bool = null,
 };
 
 const GrpcQueryOptions = struct {
@@ -1952,6 +1974,12 @@ const GrpcQueryOptions = struct {
     read_only: bool = false,
     // 2c: see QuicQueryOptions.failed_out — same contract on the gRPC path.
     failed_out: ?*bool = null,
+    // SONNY-6377: see QuicQueryOptions.sent_out.
+    sent_out: ?*bool = null,
+    // SONNY-6384 item 6: a timeout, or a failure after the query was sent, is
+    // returned (after its message) instead of exiting the process, so the
+    // chunked driver stops the run and still prints its summary.
+    return_unknown_outcome: bool = false,
 };
 
 /// Issue #424: Set SO_RCVTIMEO and SO_SNDTIMEO on a TCP socket so that
@@ -2006,6 +2034,12 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     // fail whole specs unless it persists across retries.
     const max_attempts = @max(retry_count + 1, 3);
     var last_error: ?[]const u8 = null;
+    // SONNY-6377: once the ExecuteRequest has been handed to the transport,
+    // the server may have applied it; see the post-send branch below.
+    var query_sent = false;
+    defer if (opts.sent_out) |out| {
+        out.* = query_sent;
+    };
 
     while (attempts < max_attempts) : (attempts += 1) {
         // Connect via raw TCP
@@ -2026,7 +2060,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
 
         // Execute query on the gRPC connection
         params_transferred = true;
-        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, opts.read_only, opts.failed_out) catch |err| {
+        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, opts.read_only, opts.failed_out, &query_sent) catch |err| {
             // CANARY: REQ=REQ-CLI-TIMEOUT-EXIT-CODE-002; FEATURE="QueryTimeoutClassification"; ASPECT=GrpcTransportTimeout; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
             // CANARY: REQ=REQ-CLI-TIMEOUT-NO-RESUBMIT-001; FEATURE="QueryTimeoutClassification"; ASPECT=NoSilentResubmission; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
             //
@@ -2056,6 +2090,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
                     .{timeout_secs},
                 ) catch "Error: query timed out; the statement may still be executing on the server\n";
                 stderr.writeStreamingAll(io_t, timeout_msg) catch {};
+                if (opts.return_unknown_outcome) return error.Timeout;
                 std.process.exit(@intFromEnum(ExitCode.timeout_error));
             }
             // REQ-TRANSPORT-GRPC-SHUTDOWN-002: the server closed the stream
@@ -2071,6 +2106,25 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
                     io_t,
                     "Error: the server closed the connection before the query completed; it may have been shutting down, and the statement may or may not have executed\n",
                 ) catch {};
+                if (opts.return_unknown_outcome) return err;
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            // CANARY: REQ=REQ-SONNY-6377-QUERY-NO-RESEND; FEATURE="ChunkedExecution"; ASPECT=GrpcNoRetryAfterSend; STATUS=TESTED; TEST=tests/test_sonny6377_query_no_resend.zig; OWNER=cli; UPDATED=2026-11-12
+            // SONNY-6377: any other failure after the ExecuteRequest was sent
+            // (a reset connection, a broken pipe) is TERMINAL too. The retry
+            // below re-sent the query on a fresh connection, so a CREATE the
+            // server had applied ran again on every attempt (up to three
+            // times). Only a failure before the request was sent is retried.
+            if (query_sent) {
+                const io_t = std.Io.Threaded.global_single_threaded.io();
+                var sent_msg_buf: [256]u8 = undefined;
+                const sent_msg = std.fmt.bufPrint(
+                    &sent_msg_buf,
+                    "Error: the connection failed after the query was sent ({t}); the statement may or may not have executed, so it was not sent again\n",
+                    .{err},
+                ) catch "Error: the connection failed after the query was sent; the statement may or may not have executed, so it was not sent again\n";
+                stderr.writeStreamingAll(io_t, sent_msg) catch {};
+                if (opts.return_unknown_outcome) return err;
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
             last_error = @errorName(err);
@@ -2161,6 +2215,7 @@ fn executeQueryOnGrpc(
     timeout_secs: u32,
     read_only: bool,
     failed_out: ?*bool,
+    sent_out: *bool,
 ) !void {
     // Issue #424: timeout_secs is now enforced at two levels:
     // 1. TCP socket SO_RCVTIMEO/SO_SNDTIMEO set by the caller (executeGrpcQuery)
@@ -2236,6 +2291,9 @@ fn executeQueryOnGrpc(
     // an exec-phase timeout (exit 4), not a connect-phase failure (exit 1).
     // Mirrors the QUIC path so the watchdog classifies both transports alike.
     markActiveQuerySent();
+    // SONNY-6377: marked before the write, since a partly written request may
+    // already have reached the server.
+    sent_out.* = true;
 
     var result = try query_runner.collectQueryWithTransport(allocator, &grpc_transport, .{
         .session_id = session_id,
@@ -2393,6 +2451,7 @@ fn executeBatchQueries(
             timeout_secs,
             null,
             read_only,
+            null,
         ) catch |err| {
             // A transport failure kills the shared stream, so continuing
             // would only produce a cascade of misleading timeouts. Report
@@ -2618,8 +2677,13 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
         // 2c: the server answers a rejected program with a NORMAL response
         // carrying a GQLSTATE, so `catch |err|` alone can never see it.  The
         // render verdict comes back through `failed_out`; a Zig (transport)
-        // error still counts as a failed chunk.
+        // error before the chunk was sent still counts as a failed chunk
+        // (after it was sent, see SONNY-6377 below).
         var chunk_failed = false;
+        // SONNY-6377: whether the chunk's ExecuteRequest was handed to the
+        // transport; a Zig error after that is an unknown outcome.
+        var chunk_sent = false;
+        var unknown_outcome: ?anyerror = null;
         const empty_params = std.ArrayList(schema.Param).empty;
         if (opts.use_grpc) {
             executeGrpcQuery(allocator, .{
@@ -2635,9 +2699,12 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .page_size = default_stream_page_size,
                 .params = empty_params,
                 .failed_out = &chunk_failed,
+                .sent_out = &chunk_sent,
+                .return_unknown_outcome = true,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
                 chunk_failed = true;
+                if (chunk_sent) unknown_outcome = err;
             };
         } else {
             executeQuicQuery(allocator, .{
@@ -2658,10 +2725,34 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .params = empty_params,
                 .role = opts.role,
                 .failed_out = &chunk_failed,
+                .sent_out = &chunk_sent,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
                 chunk_failed = true;
+                if (chunk_sent) unknown_outcome = err;
             };
+        }
+
+        // CANARY: REQ=REQ-SONNY-6377-QUERY-NO-RESEND; FEATURE="ChunkedExecution"; ASPECT=NoReplayAfterSend; STATUS=TESTED; TEST=tests/test_sonny6377_query_no_resend.zig; OWNER=cli; UPDATED=2026-11-12
+        // SONNY-6377: a chunk that was sent and got no answer (a client
+        // timeout, a dropped connection) is NOT a rejected chunk. The server
+        // may still be applying it, or may have applied it: replaying its
+        // statements one by one applied every one of them twice (400 CREATEs
+        // became 800). It is not sent again, and the run stops, since a later
+        // chunk may depend on this one.
+        if (unknown_outcome) |err| {
+            error_count += 1;
+            var not_run: usize = 0;
+            for (chunk_end..statements.len) |idx| {
+                if (!txn_strip.items[idx]) not_run += 1;
+            }
+            std.debug.print(
+                "Error: chunk {d}-{d} got no answer after it was sent ({t}); its statements may still be executing on the server or may have been applied, so they were not sent again.\n" ++
+                    "Stopping: the {d} statement(s) after it were not executed.\n",
+                .{ chunk_start + 1, chunk_end, err, not_run },
+            );
+            printChunkedSummary(executed, error_count);
+            return if (err == error.Timeout) error.ChunkTimedOut else error.ChunkOutcomeUnknown;
         }
 
         if (!chunk_failed) {
@@ -2694,14 +2785,16 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
         chunk_start = chunk_end;
     }
 
-    // Print summary
+    printChunkedSummary(executed, error_count);
+    return error_count;
+}
+
+fn printChunkedSummary(executed: usize, error_count: usize) void {
     std.debug.print("\nChunked execution complete:\n", .{});
     std.debug.print("  Statements executed: {d}\n", .{executed});
     if (error_count > 0) {
         std.debug.print("  Errors: {d}\n", .{error_count});
     }
-
-    return error_count;
 }
 
 const ChunkRetryOutcome = struct {
@@ -2852,6 +2945,7 @@ fn retryChunkStatementByStatement(
             opts.timeout_secs,
             null,
             false,
+            null,
         ) catch |err| {
             // A transport failure kills the shared stream; continuing would
             // only produce a cascade of misleading timeouts.
@@ -2967,6 +3061,10 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     // failures after first retry under rapid connection cycling.
     const max_attempts = @max(retry_count + 1, 3);
     var last_error: ?[]const u8 = null;
+    var query_sent = false;
+    defer if (opts.sent_out) |out| {
+        out.* = query_sent;
+    };
 
     while (attempts < max_attempts) : (attempts += 1) {
         var raw_client = zig_quic_bridge.initClient(
@@ -2999,12 +3097,15 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         };
 
         params_transferred = true;
-        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role, principal_envelope_bytes, read_only, opts.failed_out) catch |err| {
+        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role, principal_envelope_bytes, read_only, opts.failed_out, &query_sent) catch |err| {
             // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
             // transport can drop messages under rapid sequential
             // connections; retries resolve most transient failures
             // without requiring explicit --retry flag.
-            if (err == error.ConnectionFailed and attempts + 1 < max_attempts) {
+            // SONNY-6377: only while the query has not been sent (the HELLO
+            // exchange failed). After the ExecuteRequest the server may have
+            // applied it, and sending it again would apply it twice.
+            if (err == error.ConnectionFailed and !query_sent and attempts + 1 < max_attempts) {
                 last_error = "connection dropped, retrying";
                 // GAP-0263/GAP-0272: Brief delay between retries to let the
                 // server finish processing the previous connection's cleanup.
@@ -3173,6 +3274,7 @@ fn executeQueryOnConnection(
     principal_envelope_bytes: ?[]const u8,
     read_only: bool,
     failed_out: ?*bool,
+    sent_out: *bool,
 ) !void {
     const binding = resolveQueryGraphBinding(query_text, graph, graph_for_hello);
 
@@ -3203,6 +3305,7 @@ fn executeQueryOnConnection(
         timeout_secs,
         principal_envelope_bytes,
         read_only,
+        sent_out,
     );
     if (failed_out) |out| out.* = failed;
 }
@@ -3227,6 +3330,7 @@ fn runQueryOnHelloedStream(
     timeout_secs: u32,
     principal_envelope_bytes: ?[]const u8,
     read_only: bool,
+    sent_out: ?*bool,
 ) !bool {
     // Get stdout and stderr handles for output
     const stdout = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
@@ -3250,6 +3354,7 @@ fn runQueryOnHelloedStream(
     const QuicProtocolAdapter = struct {
         raw_client: *zig_client.GeodeClient,
         timeout_secs: u32,
+        sent_out: ?*bool = null,
         hooks: struct { on_progress: ?*const fn () void = null } = .{},
 
         fn notifyProgress(self: *const @This()) void {
@@ -3259,6 +3364,11 @@ fn runQueryOnHelloedStream(
         fn sendClientMessage(proto: *query_runner.ProtocolClient, alloc: std.mem.Allocator, msg: schema.QuicClientMessage) !void {
             const self: *@This() = @ptrCast(@alignCast(proto.context));
             self.notifyProgress();
+            // SONNY-6377: marked before the write, since a partly written
+            // request may already have reached the server.
+            if (msg == .execute) {
+                if (self.sent_out) |out| out.* = true;
+            }
             try writeProtoMessageViaZigClient(alloc, self.raw_client, msg);
             self.notifyProgress();
             // REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001: the HELLO handshake has
@@ -3282,6 +3392,7 @@ fn runQueryOnHelloedStream(
     var adapter = QuicProtocolAdapter{
         .raw_client = raw_client,
         .timeout_secs = timeout_secs,
+        .sent_out = sent_out,
         .hooks = .{ .on_progress = touchActiveQueryDeadlineWatchdog },
     };
     var protocol_client = query_runner.ProtocolClient{
@@ -3307,12 +3418,9 @@ fn runQueryOnHelloedStream(
     defer finishActiveQueryDeadlineWatchdog();
 
     // GAP-0272: Server-side errors (parse errors, execution errors) are
-    // rendered to stdout with the error status. The SINGLE-query CLI path
-    // exits 0 because the transport layer worked correctly — only
-    // connection/transport failures cause non-zero exit codes. `--batch`
-    // reads the returned flag instead so a failed statement inside a long
-    // batch is still visible in the process exit code (see
-    // REQ-CLI-BATCH-MODE-004).
+    // rendered with the error status, and the verdict is returned: every
+    // caller (single query, --batch, --file) exits non-zero on it
+    // (SONNY-6369 for the single query; REQ-CLI-BATCH-MODE-004).
     return try result.render(stdout, stderr_handle);
 }
 

@@ -81,7 +81,7 @@ fi
 
 DATA_DIR="$(mktemp -d /tmp/geode-count-nodes-flake-XXXXXX)"
 SRV_LOG="${DATA_DIR}/server.log"
-ADMIN_PASSWORD="GeodeTestPassword123!"
+ADMIN_PASSWORD="Geode Test Admin Passphrase"
 
 cleanup() {
     if [ -n "${SRV_PID:-}" ]; then

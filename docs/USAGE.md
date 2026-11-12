@@ -27,7 +27,10 @@
 # Execute from file (max 16 MiB / 16777216 bytes; split larger files, or
 # stream them with `--batch`, one statement per line).  Files over ~16 KB are
 # executed in chunks: a statement the server rejects is retried on its own so
-# only that statement is lost, and the process exits non-zero.
+# only that statement is lost, and the process exits non-zero.  A chunk that
+# was sent and got no answer (a `--timeout` expiry, a dropped connection) is
+# never sent again: the run stops there and exits non-zero (4 for a timeout),
+# since the server may still be applying it.
 ./geode query -f queries.gql
 
 # JSON output (default)

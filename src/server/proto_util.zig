@@ -174,6 +174,19 @@ fn checkedCharLen(len: usize) error{InvalidParams}!u16 {
     return std.math.cast(u16, len) orelse error.InvalidParams;
 }
 
+// CANARY: REQ=REQ-SONNY-6359-ALTER-USER-OTHER-PASSWORD; FEATURE="GQL Auth DDL"; ASPECT=AdminResetOverWire; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6359: whether the QUIC / gRPC password intercept handles `ALTER
+/// USER <target> SET PASSWORD`: the session's own password (it also runs
+/// during a forced reset), and any request with no authenticated user (the
+/// intercept refuses it). Another user's goes to the parser, which runs it
+/// as `geode.auth.user_reset_password` (Admin only, the password policy,
+/// audited), as docs/GQL_AUTH_DDL.md maps it; the intercept refused it with
+/// 42501 for everyone, Admin included.
+pub fn passwordInterceptApplies(authenticated_user: ?[]const u8, target: []const u8) bool {
+    const user = authenticated_user orelse return true;
+    return std.mem.eql(u8, user, target);
+}
+
 pub fn mapError(err: anyerror) ErrorInfo {
     return switch (err) {
         // SONNY-2675: grouping_error (42803), the class every other grouping
@@ -215,7 +228,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // SONNY-3038: geode.auth.revoke could not save the revoke.
-        error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph; the privilege may return at the next start. Retry it" },
+        // SONNY-1333: the privilege is taken away in memory first.
+        error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph: the privilege is removed now but returns at the next start. Retry it" },
         // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
         // SONNY-6324: the FLE catalog fails closed (58030 io_error, as the
         // other "could not be saved / read" refusals).
@@ -237,6 +251,27 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // decrypt (damaged, or written under another key or identity).
         error.FleDecryptionFailed => .{ .code = "58030", .message = "An encrypted property value could not be decrypted (damaged, or written under another FLE key); the read is refused (see the server log)" },
         error.EncryptionRequired => .{ .code = "58030", .message = "The value must be stored encrypted and could not be encrypted (FLE catalog or keys unavailable); nothing was written" },
+        // SONNY-1333: geode.auth.grant could not save the grant.
+        error.GrantNotPersisted => .{ .code = "58030", .message = "The grant could not be saved to the security graph; nothing was granted. Retry it" },
+        // SONNY-3038: DROP USER, ALTER USER (password, role, ENABLE/DISABLE),
+        // geode.auth.user_import could not save the change. The stored user
+        // is unchanged; a delete, a disable, a password change or a role
+        // downgrade locks the user out until a change to it is saved or the
+        // next start.
+        error.UserNotPersisted => .{ .code = "58030", .message = "The change to the user could not be saved to the security graph and was not made; a delete, disable, password change or role downgrade locks the user out until a change to it is saved. Retry it" },
+        // SONNY-3038: CREATE ROLE (not created) or DROP ROLE (removed now,
+        // but its stored record returns at the next start).
+        // SONNY-6293: a security record's node could not be deleted (DROP
+        // POLICY): nothing was removed, the record is still stored and in
+        // force.
+        error.SecurityRecordDeleteFailed => .{ .code = "58030", .message = "A record could not be deleted from the security graph; nothing was removed and it is still in force. Retry it" },
+        // SONNY-3034: a geode.rls.* restriction change that could not be
+        // stored in the security graph.
+        // SONNY-6369: a geode.rls add / remove procedure in a process with no
+        // RLS filter or expression engine (it answered 00000 "error:" rows).
+        error.RlsEngineNotInitialized => .{ .code = "55000", .message = "The row-level security engine is not initialized in this process (the server was started without RLS support), so the restriction was not changed" },
+        error.RlsRestrictionNotPersisted => .{ .code = "58030", .message = "The RLS restriction change could not be saved to the security graph and was not made (an add is taken out again; a removal leaves the restriction in force). Retry it" },
+        error.RoleNotPersisted => .{ .code = "58030", .message = "The role change could not be saved to the security graph: CREATE ROLE created nothing; DROP ROLE removed the role now but it returns at the next start. Retry it" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
         // SONNY-3134: or another session's open transaction.
         error.ObjectInUse => .{ .code = "55006", .message = "Object in use: an open transaction (this session's or another's) changed the graph; it can be dropped or replaced once that transaction commits or rolls back" },
@@ -411,7 +446,23 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },
-        error.PasswordPolicyViolation => .{ .code = "22000", .message = "password does not meet policy requirements (min 8 chars, letters and numbers)" },
+        // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6331: a password the policy refuses (CREATE USER, ALTER USER
+        // SET PASSWORD, geode.auth.user_create / user_reset_password /
+        // user_change_password), with the rule it broke and the configured
+        // limit; never the password. It named an older 8-character rule.
+        error.PasswordTooShort,
+        error.PasswordTooLong,
+        error.PasswordMissingUppercase,
+        error.PasswordMissingLowercase,
+        error.PasswordMissingDigit,
+        error.PasswordContainsSpaces,
+        error.PasswordNotPassphrase,
+        => blk: {
+            const PasswordPolicy = @import("geode_auth").PasswordPolicy;
+            break :blk .{ .code = "22000", .message = PasswordPolicy.geodeSecure().message(PasswordPolicy.violationOf(err).?) };
+        },
+        error.PasswordReuse => .{ .code = "22000", .message = "New password must not match the current password" },
         error.UnknownProcedure => .{ .code = "42883", .message = "Unknown procedure" },
         // docs/@BUGS_731.md bug 8b: an unresolved scalar function used to
         // silently evaluate to NULL; surface it with the same
@@ -444,6 +495,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // rather than binding the hidden node or creating a duplicate of it.
         // CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
         error.MergeMatchNotVisible => .{ .code = "42501", .message = "MergeMatchNotVisible: the MERGE pattern matches an existing node that row-level security hides from this session; the statement was refused, and nothing was bound, updated or created" },
+        // SONNY-2817: the per-session, per-label limit on those refusals.
+        error.MergeRefusalRateLimited => .{ .code = "53400", .message = "MergeRefusalRateLimited: this session was refused too many MERGEs for rows row-level security hides on a label of this graph; every MERGE naming that label is refused for 5 minutes, and nothing was bound, updated or created" },
         // SONNY-2691 item 5: the evaluator's row visibility was never
         // installed in this process; the statement is refused rather than
         // answered without the session's RLS policies.
@@ -452,6 +505,37 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
         error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },
         error.DivisionByZero => .{ .code = "22012", .message = "Division by zero" },
+        // SONNY-6291: the geode.auth.apikey_* procedures (no server-side
+        // API-key store).
+        // SONNY-6292: GRANT ROLE / ALTER USER SET ROLE / user_assign_role
+        // of a custom role (it answered "assigned" and conferred nothing).
+        error.CustomRoleMembershipNotSupported => .{ .code = "0A000", .message = "A custom role cannot be granted to a user: custom roles carry no privileges, so the grant would confer nothing. Grant a built-in role (admin, readwrite, user, readonly) or per-graph privileges (GRANT READ | WRITE | SCHEMA | ALL ON GRAPH <g> TO <user>)" },
+        // SONNY-6369: ALTER USER SET ROLE / user_assign_role of a role other
+        // than admin to a superuser (it answered "assigned" and changed nothing).
+        error.SuperuserRoleFixed => .{ .code = "0A000", .message = "The user is a superuser: a superuser always holds the admin role, so another role would never take effect; nothing was changed" },
+        error.ApiKeysNotSupported => .{ .code = "0A000", .message = "API keys are not supported by the server: the geode.auth.apikey_* procedures create, list, check and revoke nothing, and the handshake does not authenticate by key" },
+        // SONNY-6291: user_show / user_permissions (SHOW PERMISSIONS FOR) of
+        // a user that does not exist, for an Admin.
+        error.UserNotFound => .{ .code = "42704", .message = "User does not exist" },
+        // SONNY-6369: user_remove_attribute of an attribute the user does not
+        // have (it answered 00000 "attribute ... not set").
+        error.UserAttributeNotSet => .{ .code = "42704", .message = "The user has no such attribute; nothing was removed" },
+        // SONNY-6359: auth procedure failures that answered 00000 with a
+        // status row starting "error:" or "note:".
+        error.UserAlreadyExists => .{ .code = "42710", .message = "User already exists" },
+        error.ReservedUsername => .{ .code = "42939", .message = "Reserved user name: geode-cluster is the federation node identity and cannot be a user" },
+        error.UnknownPrivilege => .{ .code = "22023", .message = "Unknown privilege: expected READ, WRITE, SCHEMA or ALL" },
+        // SONNY-6367: geode.auth.mfa_verify / mfa_enable / user_import
+        // refusals that answered 00000 with a status row.
+        error.InvalidMfaCode => .{ .code = "28000", .message = "invalid token: the MFA code does not verify against the user's TOTP secret" },
+        error.MfaNotEnrolled => .{ .code = "55000", .message = "mfa_not_enrolled: the user has no TOTP secret; run geode.auth.mfa_setup first" },
+        error.MfaRateLimited => .{ .code = "53400", .message = "Too many failed MFA verifications for the user: locked out for 5 minutes" },
+        error.FeatureDisabled => .{ .code = "0A000", .message = "Feature disabled on this server: the operation needs a feature that is turned off (MFA: start the server with GEODE_ENABLE_MFA=1)" },
+        error.FipsUnsupported => .{ .code = "0A000", .message = "Not available under FIPS mode: the operation needs a primitive that is not FIPS-approved (Argon2id, BLAKE2b)" },
+        // SONNY-3135 (N7d): geode.auth.grant(..., '*') (it stored a grant on a
+        // graph named '*', which no request matches).
+        error.GrantWildcardNotSupported => .{ .code = "0A000", .message = "A per-graph grant needs one graph: there is no grant on every graph ('*'). Give the user a built-in role, or create an allow policy for every graph (CREATE POLICY ... ON GRAPH *); nothing was changed" },
+        error.GlobalPrivilegeNotSupported => .{ .code = "0A000", .message = "GRANT / REVOKE of a privilege needs ON GRAPH <graph>: there are no global per-privilege grants (global privilege is the user's role: admin, readwrite, user, readonly); nothing was changed" },
         error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
         // GAP-0856: distributed EXPLAIN/PROFILE is intentionally node-local only.
         error.DistributedExplainUnsupported => .{ .code = "0A000", .message = @import("../distributed/distributed_explain.zig").unsupported_message },

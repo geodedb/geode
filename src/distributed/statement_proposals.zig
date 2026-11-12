@@ -38,6 +38,7 @@ const builtin = @import("builtin");
 const cluster_mod = @import("cluster.zig");
 const raft_consensus = @import("raft_consensus.zig");
 const cluster_replication = @import("cluster_replication.zig");
+const fle_integration = @import("../fle_integration.zig");
 
 pub const Prop = cluster_replication.Prop;
 pub const MutationType = @FieldType(raft_consensus.GraphMutation, "mutation_type");
@@ -331,7 +332,29 @@ fn discard() void {
     backing.destroy(b);
 }
 
-fn proposeNow(cmd: raft_consensus.Command) Error!void {
+fn proposeNow(cmd_in: raft_consensus.Command) Error!void {
+    // CANARY: REQ=REQ-SONNY-2726-REPLICATED-TENANT; FEATURE="DistributedCluster"; ASPECT=ProposeWithTenant; STATUS=TESTED; TEST=tests/test_sonny2726_replicated_tenant.zig; OWNER=distributed; UPDATED=2026-11-12
+    // SONNY-2726: the entry carries the writing session's tenant (a GTN1
+    // envelope, cluster_replication.wrapWithTenant), so every node applies
+    // its creates under it; the apply thread has no request context and
+    // tagged them all with the default tenant. A default-tenant write is
+    // proposed unchanged.
+    var cmd = cmd_in;
+    var wrapped: ?[]u8 = null;
+    defer if (wrapped) |w| backing.free(w);
+    switch (cmd) {
+        .graph_mutation => |*gm| {
+            const tenant = fle_integration.tenantPreferringActiveContext();
+            if (!std.mem.eql(u8, tenant, "default")) {
+                wrapped = cluster_replication.wrapWithTenant(backing, tenant, gm.data) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ClusterWriteNotReplicable,
+                };
+                gm.data = wrapped.?;
+            }
+        },
+        else => {},
+    }
     if (builtin.is_test) {
         if (test_propose_hook) |hook| {
             hook(cmd) catch |err| return narrow(err);

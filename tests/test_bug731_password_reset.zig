@@ -255,7 +255,7 @@ test "env-seeded admin is never flagged: password change keeps password_reset_re
 
     clearBootstrapEnv();
     defer clearBootstrapEnv();
-    try setEnv(ADMIN_PASSWORD_ENV, "bug731-seeded-admin-pw");
+    try setEnv(ADMIN_PASSWORD_ENV, "Bug731 Seeded Admin Passphrase");
 
     const hmac_key = [_]u8{0x73} ** 32;
 

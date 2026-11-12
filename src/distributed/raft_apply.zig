@@ -24,6 +24,7 @@ const TxnCoordinator = @import("txn_coordinator.zig").TxnCoordinator;
 const graph_store_mod = @import("../graph_store.zig");
 const GraphStore = graph_store_mod.GraphStore;
 const cluster_replication = @import("cluster_replication.zig");
+const fle_integration = @import("../fle_integration.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("raft_apply");
@@ -399,7 +400,24 @@ fn applyTxnDecide(allocator: Allocator, td: TxnDecide) ![]u8 {
 // Graph mutation handler
 // ---------------------------------------------------------------------------
 
+// CANARY: REQ=REQ-SONNY-2726-REPLICATED-TENANT; FEATURE="DistributedCluster"; ASPECT=ApplyUnderTenant; STATUS=TESTED; TEST=tests/test_sonny2726_replicated_tenant.zig; OWNER=distributed; UPDATED=2026-11-12
+/// SONNY-2726: an entry in a GTN1 tenant envelope is applied as that tenant:
+/// the apply thread has no request context, so the creates take the tenant
+/// from the thread's FLE tenant (`fle_integration.tenantPreferringActiveContext`),
+/// set here for the entry and restored after it. An entry without the
+/// envelope applies as before (the default tenant).
 fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMutation, raft_index: u64) ![]u8 {
+    if (!cluster_replication.isTenantPayload(gm.data)) return applyGraphMutationInner(allocator, store_opt, gm, raft_index);
+    const split = try cluster_replication.splitTenant(gm.data);
+    const prev = fle_integration.getCurrentTenantId();
+    fle_integration.setCurrentTenantId(split.tenant);
+    defer fle_integration.setCurrentTenantId(if (std.mem.eql(u8, prev, "default")) null else prev);
+    var inner = gm;
+    inner.data = split.inner;
+    return applyGraphMutationInner(allocator, store_opt, inner, raft_index);
+}
+
+fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMutation, raft_index: u64) ![]u8 {
     const store = store_opt orelse {
         log.err("raft apply: graph_mutation received but no store registered", &.{});
         return error.StoreNotAvailable;
@@ -642,16 +660,19 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
             // apply thread dropped it with no lock, and freed the graph under
             // requests holding it. A graph that is not there is not locked
             // (the lock would create it); the drop is idempotent.
-            if (!store.graphExists(sc.graph)) {
-                log.info("raft apply: drop_graph of a graph that is not there (idempotent)", &.{
-                    Attr.string("graph", sc.graph),
-                });
-                return allocator.alloc(u8, 0);
-            }
-            const lock = graph_store_mod.acquireGraphWriteLock(sc.graph);
-            defer graph_store_mod.releaseGraphLock(lock);
+            // SONNY-6384 (item 4): `GraphStore.dropGraph` takes the graph's
+            // write lock itself (SONNY-3135) and reports a graph that is not
+            // there as GraphNotFound without locking it. The apply checked
+            // `graphExists` first and then took `acquireGraphWriteLock`; a
+            // drop in between sent that lock to its global-exclusive
+            // fallback for a graph that no longer existed.
             store.dropGraph(sc.graph) catch |err| switch (err) {
-                error.GraphNotFound => {}, // idempotent
+                error.GraphNotFound => {
+                    log.info("raft apply: drop_graph of a graph that is not there (idempotent)", &.{
+                        Attr.string("graph", sc.graph),
+                    });
+                    return allocator.alloc(u8, 0);
+                },
                 error.CannotDropDefaultGraph => {
                     log.warn("raft apply: attempted to drop default graph, ignoring", &.{});
                 },

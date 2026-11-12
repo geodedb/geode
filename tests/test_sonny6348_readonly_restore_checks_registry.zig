@@ -376,7 +376,7 @@ test "SONNY-6348 (3) a server restore and geode restore commit exactly the backu
         defer server.stop(allocator);
         var admin = try server.connect(allocator);
         defer admin.deinit();
-        try exec(&admin, allocator, "CREATE USER sonny6348a SET PASSWORD 'Sonny6348-First-pw1'");
+        try exec(&admin, allocator, "CREATE USER sonny6348a SET PASSWORD 'Sonny 6348 First Passphrase 1'");
         try exec(&admin, allocator, "INSERT (:P {n: 1})");
         var b = try admin.backup(allocator, "full", false);
         defer b.deinit(allocator);

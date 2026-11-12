@@ -39,7 +39,7 @@ const geode_binary = geode_test_bin.geode_exe;
 const admin_pw = util.DefaultAuth.password;
 
 const user_name = "sonny6339u";
-const user_pw = "Sonny6339-User-pw1x";
+const user_pw = "Sonny 6339 User Passphrase 1";
 const role_name = "sonny6339role";
 const policy_name = "sonny6339pol";
 const graph_name = "sonny6339g";

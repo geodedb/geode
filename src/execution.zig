@@ -82,6 +82,8 @@ pub const procedure_registry = @import("execution/procedure_registry.zig");
 // hard dependency on src/server/rls_filter.zig (which lives in the `root`
 // module and would otherwise create a diamond-dep with the `geode` module).
 pub const rls_dispatch = @import("execution/rls_dispatch.zig");
+// SONNY-2817: the per-session limit on MERGE visibility refusals.
+pub const merge_refusal_limiter = @import("execution/merge_refusal_limiter.zig");
 // Task 9: fire schema-change notifications after CREATE/DROP GRAPH so LSP
 // SchemaProviders drop their per-session label/edge-type caches.
 const schema_change_notifier = @import("execution/schema_change_notifier.zig");
@@ -521,15 +523,21 @@ pub const SessionState = struct {
     timezone: ?[]const u8 = null,
     parameters: std.StringHashMap([]const u8),
     allocator: std.mem.Allocator,
+    /// SONNY-2817: the session's MERGE visibility refusals, per graph and
+    /// label (execution/merge_refusal_limiter.zig). SESSION RESET and SESSION
+    /// CLOSE do not clear it.
+    merge_refusal_limiter: merge_refusal_limiter.MergeRefusalLimiter,
 
     pub fn init(allocator: std.mem.Allocator) SessionState {
         return .{
             .parameters = std.StringHashMap([]const u8).init(allocator),
             .allocator = allocator,
+            .merge_refusal_limiter = merge_refusal_limiter.MergeRefusalLimiter.init(allocator),
         };
     }
 
     pub fn deinit(self: *SessionState) void {
+        self.merge_refusal_limiter.deinit();
         if (self.schema) |s| self.allocator.free(s);
         if (self.graph) |g| self.allocator.free(g);
         if (self.timezone) |tz| self.allocator.free(tz);
@@ -679,8 +687,8 @@ pub const ExecutionContext = struct {
     timeseries_store: ?*@import("timeseries/timeseries.zig").Store = null,
     // CANARY: REQ=REQ-GPS-PRINCIPAL-003; FEATURE="GPS Canonical Principal"; ASPECT=ExecutionContextField; STATUS=TESTED; TEST=tests/test_gps_principal.zig; OWNER=security; UPDATED=2026-05-20
     // Phase 1: canonical Principal constructed once at the request boundary.
-    // Null in legacy/test paths during migration. Phase 2 makes decide() the
-    // sole consumer; checkPermission() does NOT read this field yet.
+    // Null in legacy/test paths during migration. decide() reads it through
+    // the handlers' and executor's gates.
     principal: ?*const @import("security/principal.zig").Principal = null,
     // CANARY: REQ=REQ-MULTI-TENANT-FLE-001; FEATURE="FLE Multi-Tenancy"; ASPECT=ExecutionContext; STATUS=TESTED; TEST=src/fle_integration.zig; OWNER=security; UPDATED=2026-04-11
     // GAP-0281: Session tenant_id threaded through to FLE encryption hooks.
@@ -1163,14 +1171,6 @@ fn validateHopBounds(pattern: ast.GraphPattern) !void {
 /// Returns true if `username` has been granted `action` on `graph_name`. Null in CLI/test contexts.
 pub var graph_grant_check_fn: ?*const fn (username: []const u8, graph_name: []const u8, action: u8) bool = null;
 
-fn permissionToActionCode(p: @import("security/user_management.zig").Permission) u8 {
-    return switch (p) {
-        .Read => 0,
-        .Write => 1,
-        .Schema => 2,
-    };
-}
-
 /// SONNY-6334: GPS `decide(decrypt_field)` on `graph` for a principal, the
 /// second half of the FLE plaintext decision (`fle_integration`
 /// `readStoredString`; the first is the field's role list). Anything but
@@ -1189,84 +1189,10 @@ pub fn installDecryptDecider() void {
     fle_integration.setDecryptDecider(decideDecryptField);
 }
 
-/// Check if user has required permission for operation.
-/// Phase 2 adapter: constructs a DecisionRequest and delegates to gps.decide().
-/// Behavior is bit-identical to the previous implementation:
-///   - auth-disabled short-circuit is preserved (Task 2-9 will remove it).
-///   - legacy callers with no Principal synthesize one from context.role + context.user.
-///   - graph-grant widening is now inside decide() (added in Task 2-5).
-pub fn checkPermission(context: ExecutionContext, permission: @import("security/user_management.zig").Permission) !void {
-    const user_mgmt = @import("security/user_management.zig");
-    const gps = @import("security/gps.zig");
-    const principal_mod = @import("security/principal.zig");
-
-    // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
-    // Phase 2 Task 2-9: explicit --insecure-allow-all flag is now the
-    // canonical bypass (see gps.setInsecureAllowAll). This legacy
-    // short-circuit is preserved as a Phase 1 compatibility path until
-    // Phase 3 removes auth-disabled defaults entirely. When the new flag is
-    // set, decide() will allow everything at the first check, so callers that
-    // reach this branch while auth is disabled continue to get identical behavior.
-    if (!user_mgmt.isAuthEnabled()) {
-        return;
-    }
-
-    // Use the canonical Principal if one is attached to the context; otherwise
-    // synthesize a temporary one from the legacy context fields so callers that
-    // haven't yet been upgraded continue to receive correct enforcement.
-    var synth_principal: principal_mod.Principal = undefined;
-    const principal_ptr: *const principal_mod.Principal = if (context.principal) |p| p else blk: {
-        if (context.role == null) return error.Unauthenticated;
-        const role_name = @tagName(context.role.?);
-        synth_principal = principal_mod.Principal{
-            .user_id = null,
-            .username = context.user,
-            .session_id = null,
-            .tenant_id = context.tenant_id,
-            .active_graph = if (context.session_state) |ss| ss.graph else null,
-            .roles = &[_][]const u8{role_name},
-            .custom_roles = &.{},
-            .auth_method = .password,
-            .auth_version = 0,
-            .mfa_state = .none,
-            .elevation_until = null,
-            .api_key_id = null,
-            .certificate_subject = null,
-            .risk_context = principal_mod.RiskContext.unknown,
-            .attributes = principal_mod.AttributeMap.emptySentinel(),
-            .source = .unattributed,
-        };
-        break :blk &synth_principal;
-    };
-
-    if (principal_ptr.username == null) return error.Unauthenticated;
-
-    const action: gps.Action = switch (permission) {
-        .Read => .read,
-        .Write => .write,
-        .Schema => .schema,
-    };
-
-    // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-003; FEATURE="GQL Auth DDL Persistence"; ASPECT=Enforcement; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
-    // A GRANT on the active graph widens access beyond the user's global role
-    // there (gps.decide reads the live grant table). REQ-SEC-PER-GRAPH-GRANTS:
-    // the request names the active graph, so a grant or a graph-scoped policy
-    // counts on that graph only; with no active graph it is database-wide and
-    // only a global permission (or a `*` policy) allows it.
-    const req = gps.DecisionRequest{
-        .principal = principal_ptr,
-        .action = action,
-        .resource = if (principal_ptr.active_graph) |g| .{ .graph = g } else .{ .database = {} },
-    };
-    // smp_allocator is the governance-approved global allocator for src/ (page_allocator is banned).
-    const decision = try gps.decide(std.heap.smp_allocator, &req);
-
-    switch (decision.kind) {
-        .allow => return,
-        .unauthenticated => return error.Unauthenticated,
-        else => return error.Unauthorized,
-    }
-}
+// SONNY-2781: `checkPermission` (decide read, write or schema on the active
+// graph for a statement) had no callers since the handlers' gates
+// (`gps.changePermittedOn`, `session_graph.programReadPermitted`, the DDL
+// gates) replaced it, and was removed.
 
 // CANARY: REQ=REQ-GAP-0911-POLICY-DDL-AUTHZ; FEATURE="GPS Policy DDL"; ASPECT=Authorization; STATUS=TESTED; TEST=tests/test_gap0911_policy_ddl_authz.zig; OWNER=security; UPDATED=2026-07-10
 /// GAP-0911: GPS policy DDL (CREATE/DROP/ALTER POLICY) is admin-only — the

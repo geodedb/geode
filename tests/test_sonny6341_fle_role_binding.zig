@@ -128,7 +128,7 @@ const Env = struct {
 
         try user_mgmt.initUserStore(std.heap.c_allocator);
         for ([_]Who{ admin, rw, ro }) |w| {
-            user_mgmt.createUser(std.heap.c_allocator, w.user, "pass-6341-xyz", "", w.role, false) catch |err| switch (err) {
+            user_mgmt.createUser(std.heap.c_allocator, w.user, "Pass 6341 Fixture Passphrase", "", w.role, false) catch |err| switch (err) {
                 error.UserAlreadyExists => {},
                 else => return err,
             };
@@ -539,7 +539,7 @@ test "SONNY-6341: over QUIC and the CLI an Admin naming an FLE role it does not 
         defer a.deinit();
         // docs/FIELD_LEVEL_ENCRYPTION.md, "End-to-end example", steps 1-3.
         try quicOk(&a, "CALL geode.fle.configureField('Person', 'ssn', { algorithm: 'AES-256-GCM', visibility: ['admin'] })");
-        try quicOk(&a, "CREATE USER pii_reader SET PASSWORD 'reader-pass-123' ROLE readonly");
+        try quicOk(&a, "CREATE USER pii_reader SET PASSWORD 'Pii Reader 6341 Passphrase' ROLE readonly");
         try quicOk(&a, "CREATE (p:Person { user_id: 'P001', ssn: '" ++ secret ++ "', city: 'Denver' })");
 
         // The attack: the Admin (GPS allows it decrypt_field) names 'admin',
@@ -562,12 +562,12 @@ test "SONNY-6341: over QUIC and the CLI an Admin naming an FLE role it does not 
         defer allocator.free(no_role);
         try testing.expect(!contains(no_role, secret));
         // Step 4b: the readonly user naming 'admin' reads the row, not the value.
-        const reader = try server.cliQuery("pii_reader", "reader-pass-123", "admin", "MATCH (p:Person {user_id:'P001'}) RETURN p.ssn AS ssn, p.city AS city");
+        const reader = try server.cliQuery("pii_reader", "Pii Reader 6341 Passphrase", "admin", "MATCH (p:Person {user_id:'P001'}) RETURN p.ssn AS ssn, p.city AS city");
         defer allocator.free(reader);
         try testing.expect(!contains(reader, secret));
         try testing.expect(contains(reader, "Denver"));
         // A non-admin cannot grant.
-        var r = try server.client("pii_reader", "reader-pass-123", "admin");
+        var r = try server.client("pii_reader", "Pii Reader 6341 Passphrase", "admin");
         defer r.deinit();
         var res = try r.executeAndCollect(allocator, "CALL geode.fle.grantRole('pii_reader', 'admin')", util.emptyParams(), 10);
         defer res.deinit(allocator);

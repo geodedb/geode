@@ -102,7 +102,7 @@ test "SONNY-2776: over QUIC the label-deny post-filter applies the policies of t
     defer admin.deinit();
     try expectOk(&admin, allocator, "CREATE GRAPH g2");
     try expectOk(&admin, allocator, "USE GRAPH g2; CREATE (a:Secret {v: 1}), (b:Open {v: 2}), (a)-[:R]->(b)");
-    try expectOk(&admin, allocator, "CREATE USER alice SET PASSWORD 'Alice123!' ROLE readwrite");
+    try expectOk(&admin, allocator, "CREATE USER alice SET PASSWORD 'Alice Graph Uses Passphrase' ROLE readwrite");
     try expectOk(&admin, allocator, "CALL geode.rls.add_deny_policy('g2', 'Secret', 'alice')");
     try expectOk(&admin, allocator, "USE GRAPH default");
 
@@ -123,7 +123,7 @@ test "SONNY-2776: over QUIC the label-deny post-filter applies the policies of t
         try testing.expect(std.mem.indexOfScalar(i64, ids.items, secret_id) != null);
     }
 
-    var alice = try s.connect(allocator, "alice", "Alice123!");
+    var alice = try s.connect(allocator, "alice", "Alice Graph Uses Passphrase");
     defer alice.deinit();
     // alice's session starts on `default`; the request moves it to g2.
     {

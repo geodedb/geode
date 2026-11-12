@@ -64,7 +64,7 @@ The following critical security gaps were identified and fixed:
 - **Local Test Baseline**: see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for the current canonical per-step baseline (expected ~175/179 named `zig build test-*` steps pass; exact counts rebaselined after each round's final sweep)
 - **Integration Tests (geodetestlab)**: fresh `../geode-test-harness` run owed; prior ~97% / 1644-1688 kept as a dated historical snapshot
 - **ISO Conformance Suite**: 96/96 named cases pass (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope)
-- **Executed-Query Conformance** (`gql_conformance`): 20/20 after GAP-0892 (`zig build test-gql-conformance`)
+- **Executed-Query Conformance** (`gql_conformance`): 21/21 after GAP-0892 (T1–T20 plus the `ZZ_cleanup` teardown) (`zig build test-gql-conformance`)
 - **CANARY Status**: 5,937 markers — 257 IMPL (4.3%), 88.1% TESTED (2026-11-11). GAP-0514 closed 2026-06-11 at 223 IMPL; IMPL is now above its ≤250 target because SONNY-6298 downgraded 42 markers whose cited test never compiled (run `make status-generate` for current counts)
 
 ## Build Verification

@@ -250,10 +250,17 @@ test "SONNY-2778: geode auth init writes a 0600 file, and refuses to write over 
         try testing.expectEqual(@as(?u8, 0), run.code);
         const path = try std.fmt.allocPrintSentinel(aa, "{s}/" ++ file_name, .{dir}, 0);
         try testing.expectEqual(@as(?u32, 0o600), modeOf(path));
-        // The bootstrap password: 16 random bytes, as 32 hex digits.
+        // The bootstrap password: SONNY-6331, a generated passphrase that
+        // meets the password policy (20+ characters, upper and lower case,
+        // 3+ space-separated words); it was 32 hex digits.
         const written = try readAll(aa, path);
-        try testing.expectEqual(@as(usize, 32), written.len);
-        for (written) |c| try testing.expect(std.ascii.isHex(c));
+        try testing.expect(written.len >= 20);
+        var words = std.mem.tokenizeScalar(u8, written, ' ');
+        var n_words: usize = 0;
+        while (words.next()) |_| n_words += 1;
+        try testing.expect(n_words >= 3);
+        try testing.expect(std.mem.indexOfAny(u8, written, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != null);
+        try testing.expect(std.mem.indexOfAny(u8, written, "abcdefghijklmnopqrstuvwxyz") != null);
     }
     {
         const dir = try freshDir(aa, "init-planted");

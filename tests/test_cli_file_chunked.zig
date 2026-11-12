@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-CLI-FILE-CHUNKED-001; FEATURE="QueryFileChunkedExecution"; ASPECT=SubprocessE2E; STATUS=IMPL; TEST=self; OWNER=cli; UPDATED=2026-08-31
+// CANARY: REQ=REQ-CLI-FILE-CHUNKED-001; FEATURE="QueryFileChunkedExecution"; ASPECT=SubprocessE2E; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-11-12
 //
 // `geode query --file` reproduction lane.  Three verified defects, all
 // live-reproduced at HEAD (e46ece27, this worktree, ./zig-out/bin/geode,
@@ -83,7 +83,7 @@ const posix = std.posix;
 const binary_path = geode_test_bin.geode_exe;
 const ready_marker = "[startup] server ready";
 const admin_username = "geode";
-const admin_password = "GeodeTestPassword123!";
+const admin_password = "Geode Test Password Passphrase 123";
 
 const ready_deadline_ms: i64 = 120_000;
 const cli_deadline_ms: i64 = 180_000;
@@ -286,10 +286,18 @@ const Fixture = struct {
     }
 
     /// Run `geode query <extra_args>` against the fixture server.
+    ///
+    /// SONNY-6377: `--timeout 300`. A 32 KiB chunk of ~400 CREATEs takes
+    /// ~38 s in a Debug server, past the default 30 s. Before SONNY-6377 the
+    /// client timed out and replayed the chunk statement by statement, so
+    /// every statement landed twice (400 expected, 800 found). A chunk that
+    /// times out now stops the run with exit 4 and is never replayed
+    /// (tests/test_sonny6377_query_no_resend.zig); these cases are about
+    /// chunking, so they give each chunk room to finish.
     fn runQuery(self: *Fixture, extra_args: []const u8) !Proc {
         const cmd = try std.fmt.allocPrint(
             self.aa(),
-            "{s} query --server {s} --insecure-tls-skip-verify --format json -U {s} -P '{s}' {s} < /dev/null",
+            "{s} query --server {s} --insecure-tls-skip-verify --timeout 300 --format json -U {s} -P '{s}' {s} < /dev/null",
             .{ binary_path, self.listen, admin_username, admin_password, extra_args },
         );
         const argv = try self.aa().alloc([]const u8, 3);

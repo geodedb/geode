@@ -553,7 +553,7 @@ test "SONNY-6334 (1)(2)(3): over QUIC a ReadWrite user naming the listed FLE rol
     try testing.expect(h.success);
     try quicOk(&admin, "CALL geode.fle.configureField('Q6334', 'ssn', {visibility: ['pii']})");
     try quicOk(&admin, "CREATE (:Q6334 {k: 1, ssn: '" ++ secret ++ "'})");
-    try quicOk(&admin, "CREATE USER rw6334 SET PASSWORD 'rw6334-pass-123' ROLE readwrite");
+    try quicOk(&admin, "CREATE USER rw6334 SET PASSWORD 'Read Write 6334 Passphrase' ROLE readwrite");
     // SONNY-6341: the admin acts under 'pii' once granted it; rw6334 names
     // 'pii' below without a grant.
     try quicOk(&admin, "CALL geode.fle.grantRole('geode', 'pii')");
@@ -563,7 +563,7 @@ test "SONNY-6334 (1)(2)(3): over QUIC a ReadWrite user naming the listed FLE rol
 
     var rw = try util.QuicProtoClient.connect(allocator, addr);
     defer rw.deinit();
-    var h2 = try rw.helloAs(allocator, "rw6334", "rw6334-pass-123", "pii");
+    var h2 = try rw.helloAs(allocator, "rw6334", "Read Write 6334 Passphrase", "pii");
     defer h2.deinit(allocator);
     try testing.expect(h2.success);
     const as_rw = try quicStr(&rw, "MATCH (n:Q6334 {k: 1}) RETURN n.ssn AS v");

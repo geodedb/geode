@@ -68,6 +68,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 
 const build_options = @import("build_options");
 const geode_auth = @import("geode_auth");
+const auth_ddl_lock = @import("auth_ddl_lock.zig");
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
@@ -151,6 +152,10 @@ pub const User = struct {
     active: bool,
     password_reset_required: bool = false,
     auth_version: u64 = 1,
+    /// SONNY-6369: a superuser (the stored `is_superuser` flag) always
+    /// resolves to `.Admin` (`role_resolver`), so `assignRole` refuses any
+    /// other role for it. Set by the persistent resolver.
+    is_superuser: bool = false,
 
     pub fn deinit(self: *User, allocator: std.mem.Allocator) void {
         allocator.free(self.username);
@@ -158,6 +163,39 @@ pub const User = struct {
         allocator.free(self.email);
     }
 };
+
+// CANARY: REQ=REQ-SONNY-6312-USER-LIST-OWNERSHIP; FEATURE="GQL Auth DDL"; ASPECT=CallerOwnedUserCopies; STATUS=TESTED; TEST=tests/test_sonny6312_user_list_ownership.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6312: what SHOW USERS and `geode.auth.user_show` answer about a
+/// user, copied under `user_store_mutex` with the caller's allocator: nothing
+/// in it points into the user store, so a DROP USER cannot free it. Free with
+/// `deinit` (or `freeUserSummaries`).
+pub const UserSummary = struct {
+    username: []const u8,
+    email: []const u8,
+    role: Role,
+    active: bool,
+
+    fn copyOf(allocator: std.mem.Allocator, user: User) !UserSummary {
+        const username = try allocator.dupe(u8, user.username);
+        errdefer allocator.free(username);
+        return .{
+            .username = username,
+            .email = try allocator.dupe(u8, user.email),
+            .role = user.role,
+            .active = user.active,
+        };
+    }
+
+    pub fn deinit(self: UserSummary, allocator: std.mem.Allocator) void {
+        allocator.free(self.username);
+        allocator.free(self.email);
+    }
+};
+
+pub fn freeUserSummaries(allocator: std.mem.Allocator, users: []const UserSummary) void {
+    for (users) |u| u.deinit(allocator);
+    allocator.free(users);
+}
 
 pub const AuthResult = struct {
     role: Role,
@@ -175,13 +213,20 @@ pub const PersistentUserResolver = struct {
 
 // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-002; FEATURE="GQL Auth DDL Persistence"; ASPECT=WriteThrough; STATUS=TESTED; TEST=tests/test_auth_persistence.zig; OWNER=security; UPDATED=2026-05-12
 /// Write-through callback set for persisting auth DDL mutations to the __geode_security graph.
-/// All callbacks are optional and best-effort: a writer error is logged but never propagates
-/// to the caller — the in-memory mutation is always committed first.
+/// All callbacks are optional. SONNY-1333 / SONNY-3038: a writer error fails the mutation
+/// (`error.UserNotPersisted`) and the in-memory user stays as stored; a security-reducing
+/// change that could not be saved (a delete, a disable, a password change, a role
+/// downgrade) is enforced in memory instead (`UnsavedRestriction`). Each callback stores
+/// all of its change or none of it.
 pub const PersistentUserWriter = struct {
     ctx: ?*anyopaque = null,
     create_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, email: []const u8, password_hash: []const u8, role: Role) anyerror!void = null,
     delete_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8) anyerror!void = null,
     update_password_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, new_password_hash: []const u8) anyerror!void = null,
+    /// SONNY-6369: replace a stored legacy hash with the Argon2id hash of the
+    /// same password (no auth version bump: the password is unchanged); an
+    /// error when the stored hash is no longer `old_hash`.
+    rehash_password_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, old_hash: []const u8, new_hash: []const u8) anyerror!void = null,
     set_role_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, role: Role) anyerror!void = null,
     set_active_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, active: bool) anyerror!void = null,
 };
@@ -240,6 +285,7 @@ const UserCache = struct {
             existing.user.active = user.active;
             existing.user.password_reset_required = user.password_reset_required;
             existing.user.auth_version = user.auth_version;
+            existing.user.is_superuser = user.is_superuser;
             return existing;
         }
 
@@ -262,16 +308,17 @@ const UserCache = struct {
         return true;
     }
 
-    fn snapshot(self: *UserCache) ![]const User {
-        if (self.entries.count() == 0) return &[_]User{};
-
-        const result = try self.allocator.alloc(User, self.entries.count());
-        var i: usize = 0;
+    /// SONNY-6312: a copy of every cached user's listed fields, made with
+    /// `allocator` (the caller's), owned by the caller. Caller holds
+    /// `user_store_mutex`.
+    fn snapshot(self: *UserCache, allocator: std.mem.Allocator) ![]UserSummary {
+        const result = try allocator.alloc(UserSummary, self.entries.count());
+        var made: usize = 0;
+        errdefer freeUserSummaries(allocator, result[0..made]);
         var node = self.head;
-        while (node) |current| {
-            result[i] = current.user;
-            i += 1;
-            node = current.next;
+        while (node) |current| : (node = current.next) {
+            result[made] = try UserSummary.copyOf(allocator, current.user);
+            made += 1;
         }
         return result;
     }
@@ -382,6 +429,96 @@ var auth_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var auth_invalidation_epoch: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
 var persistent_resolver: ?PersistentUserResolver = null;
 var persistent_writer: ?PersistentUserWriter = null;
+
+// CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=UnsavedRestrictions; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-3038: a security-reducing change to a user that could not be saved
+/// to `__geode_security`. The statement fails, the stored user is as it was,
+/// and the change is enforced here instead (fail closed, as a REVOKE whose
+/// save failed takes the privilege away in memory): the user cannot
+/// authenticate and its sessions are no longer current. The in-memory user
+/// record cannot carry the change itself: it is reloaded from the store
+/// whenever its auth_version differs, and on a cache miss. The restriction
+/// lasts until a later change to the user is saved (see `clearUnsaved`) or
+/// the process restarts, when the stored user is what applies.
+pub const UnsavedRestriction = enum(u8) {
+    deleted = 1,
+    disabled = 2,
+    password = 4,
+    role = 8,
+};
+
+/// Users with unsaved restrictions: username (owned, c_allocator) -> mask of
+/// `UnsavedRestriction`. Guarded by `user_store_mutex`.
+var unsaved_restrictions: ?std.StringHashMap(u8) = null;
+
+/// Record an unsaved restriction for `username`. Caller holds
+/// `user_store_mutex`. If even this cannot be recorded (no memory), the
+/// failure is logged; the statement still fails.
+fn recordUnsavedLocked(username: []const u8, what: UnsavedRestriction) void {
+    if (unsaved_restrictions == null) unsaved_restrictions = std.StringHashMap(u8).init(std.heap.c_allocator);
+    const map = &unsaved_restrictions.?;
+    if (map.getPtr(username)) |mask| {
+        mask.* |= @intFromEnum(what);
+    } else {
+        const key = std.heap.c_allocator.dupe(u8, username) catch {
+            log.err("SONNY-3038: an unsaved security-reducing user change could not be enforced in memory", &.{Attr.string("user", username)});
+            return;
+        };
+        map.put(key, @intFromEnum(what)) catch {
+            std.heap.c_allocator.free(key);
+            log.err("SONNY-3038: an unsaved security-reducing user change could not be enforced in memory", &.{Attr.string("user", username)});
+            return;
+        };
+    }
+    bumpAuthInvalidationEpoch();
+}
+
+/// Drop the unsaved restrictions in `mask` for `username` (a later change
+/// that was saved supersedes them). Caller holds `user_store_mutex`.
+fn clearUnsavedLocked(username: []const u8, mask: u8) void {
+    const map = &(unsaved_restrictions orelse return);
+    const entry = map.getEntry(username) orelse return;
+    entry.value_ptr.* &= ~mask;
+    if (entry.value_ptr.* != 0) return;
+    const key = entry.key_ptr.*;
+    _ = map.remove(username);
+    std.heap.c_allocator.free(key);
+}
+
+/// Every unsaved restriction: a saved delete, create, enable or disable
+/// leaves the stored user as the one that applies.
+const all_unsaved: u8 = 0xff;
+
+fn hasUnsavedLocked(username: []const u8) bool {
+    const map = &(unsaved_restrictions orelse return false);
+    return map.contains(username);
+}
+
+/// SONNY-3038: whether `username` has a security-reducing change that could
+/// not be saved and is enforced in memory (`UnsavedRestriction`).
+pub fn hasUnsavedRestriction(username: []const u8) bool {
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    return hasUnsavedLocked(username);
+}
+
+fn deinitUnsavedLocked() void {
+    const map = &(unsaved_restrictions orelse return);
+    var it = map.keyIterator();
+    while (it.next()) |key| std.heap.c_allocator.free(key.*);
+    map.deinit();
+    unsaved_restrictions = null;
+}
+
+/// How much a built-in role allows, for telling a downgrade (SONNY-3038).
+fn roleRank(role: Role) u8 {
+    return switch (role) {
+        .Admin => 3,
+        .ReadWrite => 2,
+        .User, .ReadOnly => 1,
+        .None => 0,
+    };
+}
 var auth_flight_mutex = std.Io.Mutex.init;
 var auth_flights: ?std.AutoHashMap(AuthFlightKey, *AuthFlight) = null;
 var auth_flight_lane: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
@@ -467,6 +604,7 @@ pub fn deinitUserStore() void {
     }
     persistent_resolver = null;
     persistent_writer = null;
+    deinitUnsavedLocked();
     publishPasswordPersistenceOwnership();
     auth_invalidation_epoch.store(1, .release);
     auth_flight_lane.store(0, .release);
@@ -516,8 +654,25 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![]const
 
 /// Verify password against stored hash using the canonical Argon2id verification.
 /// Delegates to geode_auth.verifyPasswordArgon2id (single source of truth).
+/// SONNY-6367: a stored hash in the legacy BLAKE2b format (what `user import
+/// --algorithm blake2b` stores) is verified with
+/// geode_auth.verifyPasswordBlake2bLegacy; such a user could never log in.
 // CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-02-24
+// CANARY: REQ=REQ-SONNY-6369-LEGACY-HASH-TIMING; FEATURE="SecurePasswordVerify"; ASPECT=LegacyCheckTimingEqualised; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6369: the legacy check does the Argon2id work an Argon2id check
+/// does (it hashes the password and discards the hash), so the time a login
+/// takes does not tell an account with a legacy hash from one with an
+/// Argon2id hash (the BLAKE2b check alone takes microseconds).
 pub fn verifyPassword(password: []const u8, stored_hash: []const u8) !bool {
+    if (geode_auth.isLegacyBlake2bHash(stored_hash)) {
+        if (hashPassword(std.heap.c_allocator, password)) |equaliser| {
+            std.heap.c_allocator.free(equaliser);
+        } else |_| {}
+        return geode_auth.verifyPasswordBlake2bLegacy(password, stored_hash) catch |err| {
+            if (err == error.FipsUnsupported) return err;
+            return false;
+        };
+    }
     // Use c_allocator for Argon2id scratch buffers in verification hot paths.
     // This avoids untracked page allocator usage in production runtime paths.
     const allocator = std.heap.c_allocator;
@@ -725,18 +880,28 @@ fn finishRefreshFlight(key: RefreshFlightKey, flight: *RefreshFlight, result: Re
     }
 }
 
-/// Create a new user
+// CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=ServerUserStore; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6331: the password policy every path that sets a password through
+/// the server's user store applies (CREATE USER, ALTER USER SET PASSWORD,
+/// geode.auth.user_create / user_reset_password / user_change_password, the
+/// forced reset). `PasswordPolicy.geodeSecure()`, as the offline CLI and
+/// the forced reset use. CREATE USER applied an older rule (8 characters, a
+/// letter and a digit) and a password change none.
+pub fn enforcePasswordPolicy(password: []const u8) geode_auth.PasswordPolicy.PolicyError!void {
+    return geode_auth.PasswordPolicy.geodeSecure().enforce(password);
+}
+
+/// Create a new user. The password must meet the policy
+/// (`enforcePasswordPolicy`; a `PasswordPolicy.PolicyError` otherwise).
 pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
-    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    try enforcePasswordPolicy(password);
+    return createUserUnchecked(allocator, username, password, email, role, password_reset_required);
+}
 
-    if (user_store == null) {
-        user_store = UserCache.init(allocator, authCacheCapacity(allocator));
-    }
-
-    var store = &user_store.?;
-    const store_allocator = store.allocator;
-
+/// `createUser` without the policy check: only for the first-boot admin,
+/// whose operator-supplied seed is taken with a forced reset when it does
+/// not meet the policy (`ensureDefaultUser`).
+fn createUserUnchecked(allocator: std.mem.Allocator, username: []const u8, password: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
     // NEW-8 / #860: Reject reserved usernames. "geode-cluster" is the federation
     // node identity and the SOLE discriminant for the envelope trust gate; allowing
     // it as a regular user credential would let an attacker bypass the gate entirely.
@@ -744,17 +909,107 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
         if (std.mem.eql(u8, username, reserved)) return error.ReservedUsername;
     }
 
-    // Check if user already exists
-    if (store.entries.contains(username)) {
-        return error.UserAlreadyExists;
+    // SONNY-6352: see `beginUserChange`.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
+    const change = try beginUserChange(allocator, username, .must_be_absent) orelse return error.UserAlreadyExists;
+
+    // Hash password (Argon2id, outside the user store's mutex)
+    var user = try newUser(change.store_allocator, username, try hashPassword(change.store_allocator, password), email, role, password_reset_required);
+    errdefer user.deinit(change.store_allocator);
+
+    if (change.writer) |w| {
+        if (w.create_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=CreateUserFailureReported; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-1333: a user that could not be saved is not created. It
+            // was kept in memory and reported created: it could log in until
+            // the next start, then was gone. SONNY-6352: it is cached only
+            // once it is saved.
+            f(w.ctx, username, email, user.password_hash, role) catch |err| {
+                log.warn("persistent user writer failed; the user was not created", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
+                return error.UserNotPersisted;
+            };
+        }
+    }
+    // SONNY-3038: a new user, stored: nothing unsaved applies to it.
+    cacheNewUser(allocator, change, username, user);
+}
+
+/// Create a user with a pre-hashed password (for syncing from auth graph store).
+/// Skips if the user already exists in the in-memory store.
+pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, password_hash: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
+    // NEW-8 / #860: Reject reserved usernames (see createUser for rationale).
+    for (RESERVED_USERNAMES) |reserved| {
+        if (std.mem.eql(u8, username, reserved)) return error.ReservedUsername;
     }
 
-    // Hash password
-    const password_hash = try hashPassword(store_allocator, password);
+    // SONNY-6352: see `beginUserChange`.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
+    // Skip if user already exists
+    const change = try beginUserChange(allocator, username, .must_be_absent) orelse return;
 
-    // Create user
-    const user = User{
-        .username = try store_allocator.dupe(u8, username),
+    var user = try newUser(change.store_allocator, username, try change.store_allocator.dupe(u8, password_hash), email, role, password_reset_required);
+    errdefer user.deinit(change.store_allocator);
+
+    if (change.writer) |w| {
+        if (w.create_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserImportFailureReported; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: as createUser (SONNY-1333): a user that could not
+            // be saved is not imported. It was kept in memory and reported
+            // imported (geode.auth.user_import), and was gone at the restart.
+            f(w.ctx, username, email, user.password_hash, role) catch |err| {
+                log.warn("persistent user writer failed; the user was not imported", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
+                return error.UserNotPersisted;
+            };
+        }
+    }
+    cacheNewUser(allocator, change, username, user);
+}
+
+// CANARY: REQ=REQ-SONNY-6352-WRITER-OUTSIDE-USER-STORE-MUTEX; FEATURE="GQL Auth DDL Persistence"; ASPECT=WriterOutsideUserStoreMutex; STATUS=TESTED; TEST=tests/test_sonny6352_auth_writer_and_removals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6352: what a change to a user reads under `user_store_mutex` before
+/// its persistent write-through. The six changes (create, import, delete,
+/// password, role, active flag) held `user_store_mutex` (tier 5) while the
+/// writer callback wrote `__geode_security` (tier 1 graph locks), a lock
+/// order reversal. Each now holds `auth_ddl_lock` (re-entrant; the auth DDL
+/// already holds it) for the whole change, so changes to users stay
+/// serialized against each other and against the rest of the auth DDL, and
+/// takes `user_store_mutex` only to read the cache here and to apply the
+/// saved change to it afterwards; the writer and the Argon2id work run with
+/// it released. A reader (a login, a session check) may reload the user
+/// from the store in between; the apply step changes the cached user only
+/// if it is still as it was read.
+const UserChange = struct {
+    store_allocator: std.mem.Allocator,
+    writer: ?PersistentUserWriter,
+};
+
+const UserPresence = enum { must_be_absent, must_be_present };
+
+/// `UserChange` for `username`, or null when `presence` does not hold (the
+/// user is cached, for `.must_be_absent`; not cached, for
+/// `.must_be_present`). Caller holds `auth_ddl_lock`.
+fn beginUserChange(allocator: std.mem.Allocator, username: []const u8, presence: UserPresence) !?UserChange {
+    std.debug.assert(auth_ddl_lock.heldByThisThread());
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (user_store == null) {
+        if (presence == .must_be_present) return null;
+        user_store = UserCache.init(allocator, authCacheCapacity(allocator));
+    }
+    const cached = user_store.?.entries.contains(username);
+    if (cached != (presence == .must_be_present)) return null;
+    return .{ .store_allocator = user_store.?.allocator, .writer = persistent_writer };
+}
+
+/// A new `User` owning `password_hash` (allocated with `store_allocator`).
+fn newUser(store_allocator: std.mem.Allocator, username: []const u8, password_hash: []const u8, email: []const u8, role: Role, password_reset_required: bool) !User {
+    errdefer store_allocator.free(password_hash);
+    const owned_username = try store_allocator.dupe(u8, username);
+    errdefer store_allocator.free(owned_username);
+    return .{
+        .username = owned_username,
         .password_hash = password_hash,
         .email = try store_allocator.dupe(u8, email),
         .role = role,
@@ -764,62 +1019,27 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
         .password_reset_required = password_reset_required,
         .auth_version = 1,
     };
-
-    const inserted = try store.putOrUpdate(user);
-    bumpAuthInvalidationEpoch();
-    if (persistent_writer) |w| {
-        if (w.create_fn) |f| {
-            f(w.ctx, username, email, inserted.user.password_hash, role) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
-            };
-        }
-    }
 }
 
-/// Create a user with a pre-hashed password (for syncing from auth graph store).
-/// Skips if the user already exists in the in-memory store.
-pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, password_hash: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
+/// Put a created (and saved) user in the cache, taking ownership of `user`.
+/// The user is stored, so a cache that cannot take it is not an error: the
+/// persistent resolver loads it at its first use.
+fn cacheNewUser(allocator: std.mem.Allocator, change: UserChange, username: []const u8, user: User) void {
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    if (user_store == null) {
-        user_store = UserCache.init(allocator, authCacheCapacity(allocator));
+    var owned = user;
+    if (user_store == null) user_store = UserCache.init(allocator, authCacheCapacity(allocator));
+    if (user_store.?.allocator.ptr != change.store_allocator.ptr) {
+        // The store was replaced while the change ran (tests only).
+        owned.deinit(change.store_allocator);
+    } else {
+        _ = user_store.?.putOrUpdate(owned) catch |err| {
+            log.warn("a created user could not be cached; it is loaded from the store at first use", &.{Attr.string("error", @errorName(err))});
+            owned.deinit(change.store_allocator);
+        };
     }
-
-    var store = &user_store.?;
-    const store_allocator = store.allocator;
-
-    // NEW-8 / #860: Reject reserved usernames (see createUser for rationale).
-    for (RESERVED_USERNAMES) |reserved| {
-        if (std.mem.eql(u8, username, reserved)) return error.ReservedUsername;
-    }
-
-    // Skip if user already exists
-    if (store.entries.contains(username)) {
-        return;
-    }
-
-    const user = User{
-        .username = try store_allocator.dupe(u8, username),
-        .password_hash = try store_allocator.dupe(u8, password_hash),
-        .email = try store_allocator.dupe(u8, email),
-        .role = role,
-        .created_at = compat_timestamp(),
-        .last_login = null,
-        .active = true,
-        .password_reset_required = password_reset_required,
-        .auth_version = 1,
-    };
-
-    const inserted2 = try store.putOrUpdate(user);
     bumpAuthInvalidationEpoch();
-    if (persistent_writer) |w| {
-        if (w.create_fn) |f| {
-            f(w.ctx, username, email, inserted2.user.password_hash, role) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
-            };
-        }
-    }
+    clearUnsavedLocked(username, all_unsaved);
 }
 
 /// Authenticate user with username and password.
@@ -904,8 +1124,60 @@ fn authenticateChecked(username: []const u8, password: []const u8) !AuthResult {
             };
             finishAuthFlight(flight_key, flight, .{ .ok = true, .result = result });
             published = true;
+            if (geode_auth.isLegacyBlake2bHash(user_data.password_hash)) {
+                upgradeLegacyHash(username, password, user_data.password_hash);
+            }
             return result;
         },
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6369-LEGACY-HASH-UPGRADE; FEATURE="SecurePasswordVerify"; ASPECT=UpgradeAtLogin; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6369: after `username` logged in with `password` against its
+/// legacy BLAKE2b hash `legacy_hash`, store the Argon2id hash of the same
+/// password in its place (saved first through the persistent writer's
+/// `rehash_password_fn`, then cached). The password is unchanged, so the
+/// auth version is not bumped and the session the login opens stays
+/// current. Best effort: a failure (no rehash writer, a save that fails,
+/// cluster mode, FIPS, a hash changed meanwhile) is logged and the legacy
+/// hash stays; the login has already succeeded. A legacy hash used to be
+/// kept for ever.
+fn upgradeLegacyHash(username: []const u8, password: []const u8, legacy_hash: []const u8) void {
+    // SONNY-6352: serialized with the other user changes; user_store_mutex
+    // is never held across the write-through.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
+    const store_allocator, const writer = blk: {
+        user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (user_store == null) return;
+        const user_ptr = user_store.?.entries.get(username) orelse return;
+        if (!std.mem.eql(u8, user_ptr.user.password_hash, legacy_hash)) return;
+        break :blk .{ user_store.?.allocator, persistent_writer };
+    };
+    const new_hash = hashPassword(store_allocator, password) catch |err| {
+        log.warn("legacy password hash not upgraded", &.{ Attr.string("op", "hash"), Attr.string("error", @errorName(err)) });
+        return;
+    };
+    var new_hash_cached = false;
+    defer if (!new_hash_cached) store_allocator.free(new_hash);
+    if (writer) |w| {
+        // A writer that cannot store the upgrade: the cache must not carry
+        // a hash the store does not have.
+        const f = w.rehash_password_fn orelse return;
+        f(w.ctx, username, legacy_hash, new_hash) catch |err| {
+            log.warn("legacy password hash not upgraded", &.{ Attr.string("op", "rehash_password_fn"), Attr.string("error", @errorName(err)) });
+            return;
+        };
+    }
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (cachedUserForChange(username, store_allocator)) |user_ptr| {
+        if (std.mem.eql(u8, user_ptr.user.password_hash, legacy_hash)) {
+            store_allocator.free(user_ptr.user.password_hash);
+            user_ptr.user.password_hash = new_hash;
+            new_hash_cached = true;
+        }
     }
 }
 
@@ -920,40 +1192,85 @@ pub fn hasPermission(role: Role, permission: Permission) bool {
     return false;
 }
 
-/// Get user by username
+/// Get user by username. SONNY-6312: the returned `User`'s strings point
+/// into the user store and are freed by a DROP USER or an eviction on any
+/// connection: use it for existence and the scalar fields only, and
+/// `getUserSummary` for anything that keeps or returns a string.
 pub fn getUser(username: []const u8) ?User {
     return getUserInternal(username) catch null;
 }
 
-/// GAP-0270: List all users in the in-memory store
-pub fn listUsers() ![]const User {
+/// GAP-0270: List all users in the in-memory store. SONNY-6312: a copy,
+/// made under the lock with `allocator` and owned by the caller
+/// (`freeUserSummaries`). It returned an array allocated with the store's
+/// allocator that no caller freed (every SHOW USERS leaked it), and its
+/// rows borrowed the cached users' strings past the lock, which a DROP USER
+/// on another connection freed.
+pub fn listUsers(allocator: std.mem.Allocator) ![]UserSummary {
     try loadAllUsersFromResolver();
 
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-    if (user_store == null) return &[_]User{};
-    return user_store.?.snapshot();
+    if (user_store == null) return allocator.alloc(UserSummary, 0);
+    return user_store.?.snapshot(allocator);
+}
+
+/// SONNY-6312: one user's listed fields, copied under the lock with
+/// `allocator` (caller frees with `UserSummary.deinit`); null if no such
+/// user. Unlike `getUser`, nothing returned points into the store, and a
+/// failed lookup is an error, not "no such user".
+pub fn getUserSummary(allocator: std.mem.Allocator, username: []const u8) !?UserSummary {
+    if (!try refreshCachedUserIfStale(username)) return null;
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    if (user_store == null) return null;
+    const cached = user_store.?.entries.get(username) orelse return null;
+    return try UserSummary.copyOf(allocator, cached.user);
 }
 
 /// GAP-0270: Delete a user from the in-memory store
 pub fn deleteUser(username: []const u8) !void {
-    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    // SONNY-3038: a stored user need not be cached (users are loaded at
+    // their first login after a start, and evicted). An uncached user
+    // answered Unauthenticated, which DROP USER reported as deleted, and the
+    // stored user stayed.
+    // SONNY-6352: see `beginUserChange`.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
+    if (!try ensureUserCached(username)) return error.Unauthenticated;
+    const change = try beginUserChange(std.heap.c_allocator, username, .must_be_present) orelse return error.Unauthenticated;
 
-    if (user_store == null) return error.Unauthenticated;
-    if (!user_store.?.remove(username)) return error.Unauthenticated;
-    bumpAuthInvalidationEpoch();
-    // SONNY-6341: a dropped user acts under no FLE role (leaf lock).
-    @import("fle_role_grants.zig").forgetUser(username);
-
-    if (persistent_writer) |w| {
+    if (change.writer) |w| {
         if (w.delete_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=DropUserFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: a delete that could not be saved fails, and the
+            // user stays stored; it is locked out now (fail closed). It was
+            // logged and reported deleted, and the next lookup reloaded the
+            // stored user, so it could still log in.
             f(w.ctx, username) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "delete_fn"), Attr.string("error", @errorName(err)) });
+                log.warn("persistent user writer failed; the user was not deleted and is locked out until a change to it is saved or the restart", &.{ Attr.string("op", "delete_fn"), Attr.string("error", @errorName(err)) });
+                recordUnsaved(username, .deleted);
+                return error.UserNotPersisted;
             };
         }
     }
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (user_store) |*store| _ = store.remove(username);
+    clearUnsavedLocked(username, all_unsaved);
+    bumpAuthInvalidationEpoch();
+    // SONNY-6341: a dropped user acts under no FLE role (leaf lock).
+    @import("fle_role_grants.zig").forgetUser(username);
+}
+
+/// `recordUnsavedLocked`, taking `user_store_mutex` (SONNY-6352: a failed
+/// write-through runs with it released).
+fn recordUnsaved(username: []const u8, what: UnsavedRestriction) void {
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    recordUnsavedLocked(username, what);
 }
 
 /// Check if any users exist
@@ -976,34 +1293,72 @@ pub fn hasUsers() bool {
 /// The new password must not match the current password (prevents reuse).
 pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, new_password: []const u8) !void {
     _ = allocator;
+    // SONNY-6331: checked before the user is looked up (no existence oracle).
+    try enforcePasswordPolicy(new_password);
+    // SONNY-6352: see `beginUserChange`.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
     if (!try ensureUserCached(username)) return error.Unauthenticated;
 
-    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    if (user_store == null) return error.Unauthenticated;
-    const store_allocator = user_store.?.allocator;
-    const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
+    const store_allocator, const current_hash, const writer = blk: {
+        user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (user_store == null) return error.Unauthenticated;
+        const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
+        break :blk .{ user_store.?.allocator, try std.heap.c_allocator.dupe(u8, user_ptr.user.password_hash), persistent_writer };
+    };
+    defer std.heap.c_allocator.free(current_hash);
 
     // Reject if new password matches current password
-    if (try verifyPassword(new_password, user_ptr.user.password_hash)) {
+    if (try verifyPassword(new_password, current_hash)) {
         return error.PasswordReuse;
     }
 
-    // Free the old password hash before replacing
-    store_allocator.free(user_ptr.user.password_hash);
-    user_ptr.user.password_hash = try hashPassword(store_allocator, new_password);
-    user_ptr.user.password_reset_required = false;
-    user_ptr.user.auth_version += 1;
-    bumpAuthInvalidationEpoch();
-
-    if (persistent_writer) |w| {
+    const new_hash = try hashPassword(store_allocator, new_password);
+    var new_hash_cached = false;
+    defer if (!new_hash_cached) store_allocator.free(new_hash);
+    if (writer) |w| {
         if (w.update_password_fn) |f| {
-            f(w.ctx, username, user_ptr.user.password_hash) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "update_password_fn"), Attr.string("error", @errorName(err)) });
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=PasswordChangeFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: saved first. A change that could not be saved fails,
+            // the stored password stays, and the user is locked out (fail
+            // closed: a password is often changed because the old one leaked).
+            // It was logged and reported changed; the next lookup reloaded the
+            // stored record, so the old password worked again.
+            f(w.ctx, username, new_hash) catch |err| {
+                log.warn("persistent user writer failed; the password was not changed and the user is locked out until a change to it is saved or the restart", &.{ Attr.string("op", "update_password_fn"), Attr.string("error", @errorName(err)) });
+                recordUnsaved(username, .password);
+                return error.UserNotPersisted;
             };
         }
     }
+
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    // Applied to the cached user if it is still the one read above; one
+    // reloaded from the store meanwhile already carries the change.
+    if (cachedUserForChange(username, store_allocator)) |user_ptr| {
+        if (std.mem.eql(u8, user_ptr.user.password_hash, current_hash)) {
+            // Free the old password hash before replacing
+            store_allocator.free(user_ptr.user.password_hash);
+            user_ptr.user.password_hash = new_hash;
+            new_hash_cached = true;
+            user_ptr.user.password_reset_required = false;
+            user_ptr.user.auth_version += 1;
+        }
+    }
+    clearUnsavedLocked(username, @intFromEnum(UnsavedRestriction.password));
+    bumpAuthInvalidationEpoch();
+}
+
+/// The cached `username` a change read with `store_allocator`, if the store
+/// is still that one (SONNY-6352). Caller holds `user_store_mutex`.
+fn cachedUserForChange(username: []const u8, store_allocator: std.mem.Allocator) ?*CachedUserNode {
+    if (user_store) |*store| {
+        if (store.allocator.ptr != store_allocator.ptr) return null;
+        return store.entries.get(username);
+    }
+    return null;
 }
 
 /// Change a user's role. Idempotent: re-assigning the current role is a no-op
@@ -1014,25 +1369,48 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
 // CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Mutation; STATUS=TESTED; TEST=assignRole_changes_role_and_bumps_version; OWNER=security; UPDATED=2026-05-11
 pub fn assignRole(allocator: std.mem.Allocator, username: []const u8, role: Role) !void {
     _ = allocator;
+    // SONNY-6352: see `beginUserChange`.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
     if (!try ensureUserCached(username)) return error.Unauthenticated;
 
-    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const store_allocator, const old_role, const writer = blk: {
+        user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (user_store == null) return error.Unauthenticated;
+        const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
+        // CANARY: REQ=REQ-SONNY-6369-SUPERUSER-ROLE-FIXED; FEATURE="RoleAssignment"; ASPECT=SuperuserKeepsAdmin; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6369: a superuser always resolves to Admin, so another role
+        // would never take effect; refused, nothing changed. It was stored
+        // and reported assigned, and the next login resolved Admin again.
+        if (user_ptr.user.is_superuser and role != .Admin) return error.SuperuserRoleFixed;
+        if (user_ptr.user.role == role) return; // no-op, no version bump
+        break :blk .{ user_store.?.allocator, user_ptr.user.role, persistent_writer };
+    };
 
-    if (user_store == null) return error.Unauthenticated;
-    const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
-    if (user_ptr.user.role == role) return; // no-op, no version bump
-    user_ptr.user.role = role;
-    user_ptr.user.auth_version += 1;
-    bumpAuthInvalidationEpoch();
-
-    if (persistent_writer) |w| {
+    if (writer) |w| {
         if (w.set_role_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=RoleChangeFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: saved first. A change that could not be saved fails
+            // and the stored role stays; a downgrade is enforced by locking
+            // the user out (fail closed). It was logged and reported assigned.
             f(w.ctx, username, role) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "set_role_fn"), Attr.string("error", @errorName(err)) });
+                log.warn("persistent user writer failed; the role was not changed", &.{ Attr.string("op", "set_role_fn"), Attr.string("error", @errorName(err)) });
+                if (roleRank(role) < roleRank(old_role)) recordUnsaved(username, .role);
+                return error.UserNotPersisted;
             };
         }
     }
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (cachedUserForChange(username, store_allocator)) |user_ptr| {
+        if (user_ptr.user.role == old_role) {
+            user_ptr.user.role = role;
+            user_ptr.user.auth_version += 1;
+        }
+    }
+    clearUnsavedLocked(username, @intFromEnum(UnsavedRestriction.role));
+    bumpAuthInvalidationEpoch();
 }
 
 /// Enable or disable a user account. Idempotent: re-setting the same active state is a no-op.
@@ -1041,25 +1419,44 @@ pub fn assignRole(allocator: std.mem.Allocator, username: []const u8, role: Role
 // CANARY: REQ=REQ-GQL-AUTH-DDL-004; FEATURE="GQL Auth DDL"; ASPECT=SetUserActive; STATUS=IMPL; OWNER=auth; UPDATED=2026-05-11
 pub fn setUserActive(allocator: std.mem.Allocator, username: []const u8, active: bool) !void {
     _ = allocator;
+    // SONNY-6352: see `beginUserChange`.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
     if (!try ensureUserCached(username)) return error.Unauthenticated;
 
-    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const store_allocator, const writer = blk: {
+        user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (user_store == null) return error.Unauthenticated;
+        const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
+        if (user_ptr.user.active == active) return; // no-op
+        break :blk .{ user_store.?.allocator, persistent_writer };
+    };
 
-    if (user_store == null) return error.Unauthenticated;
-    const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
-    if (user_ptr.user.active == active) return; // no-op
-    user_ptr.user.active = active;
-    user_ptr.user.auth_version += 1;
-    bumpAuthInvalidationEpoch();
-
-    if (persistent_writer) |w| {
+    if (writer) |w| {
         if (w.set_active_fn) |f| {
+            // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=DisableFailClosed; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: saved first. A change that could not be saved fails
+            // and the stored flag stays; a disable is enforced by locking the
+            // user out (fail closed). It was logged and reported disabled, and
+            // the next lookup reloaded the stored, active, user.
             f(w.ctx, username, active) catch |err| {
-                log.warn("persistent user writer failed", &.{ Attr.string("op", "set_active_fn"), Attr.string("error", @errorName(err)) });
+                log.warn("persistent user writer failed; the active flag was not changed", &.{ Attr.string("op", "set_active_fn"), Attr.string("error", @errorName(err)) });
+                if (!active) recordUnsaved(username, .disabled);
+                return error.UserNotPersisted;
             };
         }
     }
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (cachedUserForChange(username, store_allocator)) |user_ptr| {
+        if (user_ptr.user.active != active) {
+            user_ptr.user.active = active;
+            user_ptr.user.auth_version += 1;
+        }
+    }
+    clearUnsavedLocked(username, all_unsaved);
+    bumpAuthInvalidationEpoch();
 }
 
 pub fn invalidateCachedUser(username: []const u8) void {
@@ -1073,18 +1470,11 @@ pub fn invalidateCachedUser(username: []const u8) void {
 }
 
 /// Generate a cryptographically secure random password
-/// GAP-0104/GAP-0108 SECURITY FIX: Use crypto random for initial passwords
+/// GAP-0104/GAP-0108 SECURITY FIX: Use crypto random for initial passwords.
+/// SONNY-6331: one that meets the password policy.
 fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
-    const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
-    var password: [24]u8 = undefined;
-    var random_bytes: [24]u8 = undefined;
-    try cb.Csprng.bytes(&random_bytes);
-
-    for (&password, random_bytes) |*p, r| {
-        p.* = charset[r % charset.len];
-    }
-
-    return try allocator.dupe(u8, &password);
+    var buf: [geode_auth.max_password_length]u8 = undefined;
+    return try allocator.dupe(u8, try geode_auth.PasswordPolicy.geodeSecure().generate(&buf));
 }
 
 /// Create default admin user if no users exist
@@ -1120,8 +1510,17 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
         };
         defer allocator.free(admin_password);
 
-        // Create admin user (force password reset only for auto-generated passwords)
-        try createUser(allocator, admin_user, admin_password, admin_email, .Admin, generated_password);
+        // Create admin user. A reset is forced for a generated password and
+        // (SONNY-6331, docs/USER_AUTH.md "Reset Triggers") for a seed that
+        // does not meet the password policy: it is taken, so an existing
+        // deployment still boots, but it only lets the admin set a new one.
+        const seed_violation = if (generated_password) null else geode_auth.PasswordPolicy.geodeSecure().check(admin_password);
+        if (seed_violation) |v| {
+            log.warn("GEODE_ADMIN_PASSWORD does not meet the password policy; the admin must set a new password at first login", &.{
+                Attr.string("reason", geode_auth.PasswordPolicy.geodeSecure().message(v)),
+            });
+        }
+        try createUserUnchecked(allocator, admin_user, admin_password, admin_email, .Admin, generated_password or seed_violation != null);
 
         // Log that a password was generated (without the password itself — S3 security fix).
         // The actual password is printed to stderr via std.debug.print in server_init.zig
@@ -1306,6 +1705,8 @@ pub fn currentAuthVersion(username: []const u8) !?u64 {
 }
 
 pub fn isSessionAuthCurrent(username: []const u8, session_auth_version: u64) !bool {
+    // SONNY-3038: a security-reducing change that could not be saved.
+    if (hasUnsavedRestriction(username)) return false;
     const current_version = try currentAuthVersion(username) orelse return false;
     return current_version == session_auth_version;
 }
@@ -1323,6 +1724,10 @@ pub fn isSessionAuthCurrentCached(username: []const u8, session_auth_version: u6
 
     const current_epoch = authInvalidationEpoch();
     if (observed_epoch.* == current_epoch) return true;
+
+    // SONNY-3038: a security-reducing change that could not be saved
+    // (recording it moved the epoch, so every session comes here).
+    if (hasUnsavedRestriction(username)) return false;
 
     // Local user-management mutations update the in-memory auth_version before
     // their persistent write-through completes, so check the cache first and
@@ -1361,7 +1766,8 @@ fn getAuthSnapshot(username: []const u8) !?AuthSnapshot {
         .password_hash = try std.heap.c_allocator.dupe(u8, cached.user.password_hash),
         .role = cached.user.role,
         .password_reset_required = cached.user.password_reset_required,
-        .active = cached.user.active,
+        // SONNY-3038: an unsaved security-reducing change locks the user out.
+        .active = cached.user.active and !hasUnsavedLocked(username),
         .auth_version = cached.user.auth_version,
     };
 }
@@ -1864,7 +2270,7 @@ test "assignRole_changes_role_and_bumps_version" {
 
     try initUserStore(testing.allocator);
 
-    try createUser(testing.allocator, "ru", "Passw0rd1!", "ru@x.com", .User, false);
+    try createUser(testing.allocator, "ru", "Persistence Test Passphrase", "ru@x.com", .User, false);
 
     const before = getUser("ru") orelse return error.TestSetupFailed;
     try testing.expectEqual(Role.User, before.role);
@@ -1885,7 +2291,7 @@ test "assignRole_same_role_is_noop" {
 
     try initUserStore(testing.allocator);
 
-    try createUser(testing.allocator, "ru2", "Passw0rd1!", "ru2@x.com", .Admin, false);
+    try createUser(testing.allocator, "ru2", "Persistence Test Passphrase", "ru2@x.com", .Admin, false);
 
     try assignRole(testing.allocator, "ru2", .Admin);
 

@@ -34,6 +34,9 @@ const user_management = geode.user_management;
 // `db.labels` correctly refused it — the same silent-widening footgun
 // GAP-0840 closed for the executor.
 const tenancy = geode.tenancy;
+// SONNY-6344: the listings see what the session's MATCH sees (a parent tenant
+// also its descendants' rows).
+const tenant_visibility = geode.execution.tenant_visibility;
 
 /// Per-call introspection context bound to the LSP session.
 ///
@@ -153,7 +156,7 @@ pub fn listLabelsForUser(
 ) ![][]const u8 {
     if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
-    const all = try store.listNodeLabels(allocator, filter_tenant);
+    const all = try tenant_visibility.listNodeLabelsVisible(allocator, store, filter_tenant);
     return filterLabelsByPermission(allocator, ctx, all);
 }
 
@@ -173,7 +176,7 @@ pub fn listEdgeTypesForUser(
 ) ![][]const u8 {
     if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
-    const all = try store.listEdgeTypes(allocator, filter_tenant);
+    const all = try tenant_visibility.listEdgeTypesVisible(allocator, store, filter_tenant);
     return filterLabelsByPermission(allocator, ctx, all);
 }
 
@@ -197,7 +200,7 @@ pub fn listPropertiesForLabelForUser(
     if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     if (!labelVisible(ctx, label)) return try allocator.alloc([]const u8, 0);
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
-    return store.listPropertiesForLabel(allocator, filter_tenant, label);
+    return tenant_visibility.listPropertiesForLabelVisible(allocator, store, filter_tenant, label);
 }
 
 /// Returns the graph-name list the caller can see.

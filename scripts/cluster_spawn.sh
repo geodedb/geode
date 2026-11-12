@@ -8,7 +8,7 @@ BASE_PORT=${BASE_PORT:-8443}
 BASE_DIR=${BASE_DIR:-"/tmp/geode_cluster"}
 BINARY=${BINARY:-"./zig-out/bin/geode"}
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 LEADER_NODE=${LEADER_NODE:-1}
 FOLLOWER_NODE=${FOLLOWER_NODE:-2}
 

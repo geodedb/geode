@@ -17,7 +17,7 @@ pub const ResolvedProcedureName = struct {
 };
 
 // CANARY: REQ=REQ-GRAPH-STORAGE-CALL-001; FEATURE="ProcedureAccessClassification"; ASPECT=Execution; STATUS=IMPL; OWNER=execution; UPDATED=2026-04-01
-const read_only_procedure_names = [_][]const u8{
+pub const read_only_procedure_names = [_][]const u8{
     "algo.degree.stream",
     "degree",
     "algo.betweenness.stream",
@@ -67,9 +67,21 @@ const read_only_procedure_names = [_][]const u8{
     "geode.auth.user_permissions",
     "geode.auth.role_list",
     "geode.auth.policy_list",
+    // CANARY: REQ=REQ-SONNY-2751-READ-ONLY-SECURITY-DDL; FEATURE="ReadOnlyExecute"; ASPECT=GrantListReadOnly; STATUS=TESTED; TEST=tests/test_sonny2751_readonly_security_ddl.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-2751: SHOW GRANTS' procedure (SONNY-1333) only reads; it was
+    // missing here, so a CALL of it counted as a change (refused on a
+    // read-only request, and gated as a write). auth_dispatch checks at
+    // compile time that its read-only set and this list agree.
+    "geode.auth.grant_list",
     "geode.auth.apikey_list",
     "geode.auth.apikey_check_scope",
     // CANARY: REQ=REQ-RLS-DDL-001; FEATURE="RLS deny-policy procedure"; ASPECT=ReadOnlyClassification; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/rls_cross_tenant_query_shapes.yml; OWNER=security; UPDATED=2026-05-22
+    // CANARY: REQ=REQ-SONNY-6313-TENANT-LIST-READ-ONLY; FEATURE="PerTenantIsolation"; ASPECT=ReadOnlyClassification; STATUS=TESTED; TEST=tests/test_sonny6313_explain_policy_gates.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6313: the tenant listings only read the registry; unlisted, they
+    // counted as changes (a read-only request could not list tenants). They
+    // still need admin_tenant (tenant_dispatch.requireAdminTenant).
+    "geode.tenant.list",
+    "geode.tenant.show",
     "geode.rls.list_deny_policies",
     "geode.rls.policy_count",
     // CANARY: REQ=REQ-GQL-FTS-PROC-001; FEATURE="CALL geode.fts.search YIELD node,score"; ASPECT=ReadOnlyClassification; STATUS=TESTED; TEST=tests/test_fts_e2e.zig; OWNER=index; UPDATED=2026-05-31

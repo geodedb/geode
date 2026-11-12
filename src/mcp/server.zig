@@ -212,7 +212,7 @@ pub const GeodeMcpServer = struct {
         // CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=OptionDefinition; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
         // Task 6 (hybrid-RAG audit spec): defense-in-depth read-only mode.
         // When true, the `query` tool classifies each statement in-process
-        // (real parser + query_traits.isMutatingProgram) and refuses
+        // (real parser + query_traits.changesStoredState) and refuses
         // mutating or unparseable programs before they reach the wire.
         // Defaults to false to preserve existing behavior.
         read_only: bool = false,

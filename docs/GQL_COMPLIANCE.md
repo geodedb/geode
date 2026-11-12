@@ -7,7 +7,7 @@ Geode passes **96/96 cases of its ISO/IEC 39075:2024 GQL conformance suite** (pa
 - **Conformance suite**: 96/96 cases pass (the named `tests/gql_iso_conformance.zig` suite; parse-only scope — it asserts the parser accepts/rejects each form, not executed-query results)
 - **Standard**: ISO/IEC 39075:2024 Graph Query Language
 - **Scope**: this is the curated conformance suite, not exhaustive ISO coverage; see residual limits in this guide
-- **How to run**: `zig build test-iso-conformance --summary all` (dedicated named step; 96/96 verified 2026-06-11). The executed-query `gql_conformance` harness suite is 20/20 after GAP-0892 (`zig build test-gql-conformance`)
+- **How to run**: `zig build test-iso-conformance --summary all` (dedicated named step; 96/96 verified 2026-06-11). The executed-query `gql_conformance` harness suite is 21/21 after GAP-0892 (T1–T20 plus the `ZZ_cleanup` teardown) (`zig build test-gql-conformance`)
 - **Last Updated**: 2026-06-10 (GAP-0861 claim rebaseline)
 
 ## ✅ Fully Supported Features

@@ -26,7 +26,7 @@ const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 const rw_user = "rw2824";
-const rw_pass = "ReadWrite2824!";
+const rw_pass = "ReadWrite 2824 Hello Passphrase";
 
 fn expectOk(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query: []const u8) !void {
     var r = try client.executeAndCollect(allocator, query, util.emptyParams(), 1000);

@@ -2421,7 +2421,12 @@ test "quic non-transactional simple mutations use default fast paths" {
     // the SONNY-2724 regression pins the behaviour over QUIC.
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_create_edge and key_resolved_writes_ok") != null);
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_merge_edge and key_resolved_writes_ok") != null);
-    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge and key_resolved_writes_ok") != null);
+    // SONNY-2724 (3c812b52): the node MERGE shape has its own gate,
+    // nodeMergeFastPathServes, which also serves a tenant-scoped session
+    // since the bulk MERGE matches only within the session's tenant
+    // (SONNY-2976). It must not fall back to the key-resolved gate.
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge and node_merge_writes_ok") != null);
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge and key_resolved_writes_ok") == null);
 }
 
 test "quic session auth validation uses epoch fast path" {

@@ -565,11 +565,14 @@ pub const ShardedCoordinator = struct {
                 // SONNY-3241: the key's only holder, or
                 // `error.MergeKeyNotUnique` (returned before anything is
                 // queued; the handler declines to the executor).
-                if (self.adapter.lookupSoleNodeByMergeKey(
+                // SONNY-2976: an endpoint is found only in the request's
+                // tenant (stamped above), never another tenant's node.
+                if (self.adapter.lookupSoleNodeByMergeKeyForTenant(
                     self.graph_name,
                     p.src_label,
                     p.src_filter_key,
                     p.src_filter_value,
+                    p.tenant,
                     error.SourceNodeNotFound,
                 )) |sid| {
                     p.source_id = sid;
@@ -913,11 +916,12 @@ pub const ShardedCoordinator = struct {
                         // SONNY-3241: as the source at submit; a key more
                         // nodes may hold reports `error.MergeKeyNotUnique`
                         // and writes nothing.
-                        if (self.adapter.lookupSoleNodeByMergeKey(
+                        if (self.adapter.lookupSoleNodeByMergeKeyForTenant(
                             self.graph_name,
                             p.dst_label,
                             p.dst_filter_key,
                             p.dst_filter_value,
+                            p.tenant,
                             error.TargetNodeNotFound,
                         )) |tid| {
                             target_id = tid;

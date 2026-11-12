@@ -86,7 +86,7 @@ const locked_by_pid_marker = "locked by pid";
 /// 15s default budget.  Either this progress line or the final refusal has
 /// to reach the operator early.
 const waiting_marker = "waiting for data-dir lock";
-const admin_password = "GeodeTestPassword123!";
+const admin_password = "Geode Test Password Passphrase 123";
 /// 64 hex chars: a VALID GEODE_AUTH_HMAC_KEY, so `auth reseal` would
 /// otherwise succeed.  Without this the CLI case could pass for the wrong
 /// reason (non-zero exit from an unresolvable HMAC key).

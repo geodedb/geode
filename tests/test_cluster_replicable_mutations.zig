@@ -49,7 +49,7 @@ const BINARY_PATH = geode_test_bin.geode_exe;
 const NODE_IPS = [_][]const u8{ "127.0.0.11", "127.0.0.12", "127.0.0.13" };
 const CLUSTER_PORT_STR = "4242";
 const STARTUP_DEADLINE_MS: i64 = 45_000;
-const ADMIN_PW = "ReplicableMutPw123!";
+const ADMIN_PW = "Replicable Mutations Admin Passphrase";
 
 // ---------------------------------------------------------------------------
 // Zig 0.16 compat shims (mirrored from test_cluster_3node_steady_state.zig so
@@ -925,7 +925,7 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
     const Surface = struct { name: []const u8, query: []const u8 };
     const surfaces = [_]Surface{
         .{ .name = "timeseries-insert", .query = "CALL geode.ts.insert(1, 'temp', 100, 42)" },
-        .{ .name = "auth-ddl-create-user", .query = "CREATE USER fcuser SET PASSWORD 'Str0ng!Pass1'" },
+        .{ .name = "auth-ddl-create-user", .query = "CREATE USER fcuser SET PASSWORD 'Str0ng Cluster User Passphrase 1'" },
         .{ .name = "graph-ddl-create-graph", .query = "CREATE GRAPH fcgraph" },
         .{ .name = "index-ddl-fulltext", .query = "CREATE INDEX fcidx FOR (n:FcDoc) ON (n.body) USING fulltext" },
         // fulltext rebuild (src/execution/fts_dispatch.zig handleFtsRebuild):
@@ -935,6 +935,12 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
         .{ .name = "fulltext-rebuild", .query = "CALL geode.fts.rebuild('fcidx')" },
         .{ .name = "tenant-create", .query = "CALL geode.tenant.create('fctenant')" },
         .{ .name = "policy-ddl-create-policy", .query = "CREATE POLICY fcpol ON GRAPH * FOR READ" },
+        // SONNY-3034: the geode.rls.* restrictions are stored in
+        // __geode_security, which has no replication slice.
+        .{ .name = "rls-add-deny-policy", .query = "CALL geode.rls.add_deny_policy('default', 'FcSecret', 'fcuser')" },
+        .{ .name = "rls-remove-deny-policy", .query = "CALL geode.rls.remove_deny_policy('default', 'FcSecret', 'fcuser')" },
+        .{ .name = "rls-add-attribute-policy", .query = "CALL geode.rls.add_attribute_policy('default', 'FcDoc', 'dept', 'department')" },
+        .{ .name = "rls-remove-attribute-policy", .query = "CALL geode.rls.remove_attribute_policy('default', 'FcDoc', 'dept', 'department')" },
     };
 
     var failures: std.ArrayList([]const u8) = .empty;

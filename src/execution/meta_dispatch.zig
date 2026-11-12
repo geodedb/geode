@@ -27,6 +27,7 @@ const language_metadata = @import("../gql/language_metadata.zig");
 const tenancy = @import("tenancy.zig");
 const session_graph = @import("session_graph.zig");
 const catalog_mod = @import("../schema/catalog.zig");
+const tenant_visibility = @import("tenant_visibility.zig");
 
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -116,7 +117,8 @@ fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
     // error.TenantScopeRequired (propagated to the wire via the !ExecutionResult).
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
     // Use the tenant-indexed helper; filter_tenant == null → admin all-tenant view.
-    const labels = try store.listNodeLabels(allocator, filter_tenant);
+    // SONNY-6344: a parent tenant also sees its descendants' labels, as its MATCH does.
+    const labels = try tenant_visibility.listNodeLabelsVisible(allocator, store, filter_tenant);
     defer {
         for (labels) |lbl| allocator.free(lbl);
         allocator.free(labels);
@@ -161,7 +163,8 @@ fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.
     // GAP-0840: route through the shared strict-tenancy decision (see executeDbLabels).
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
     // Use the tenant-indexed helper; filter_tenant == null → admin all-tenant view.
-    const types = try store.listEdgeTypes(allocator, filter_tenant);
+    // SONNY-6344: hierarchy-aware, as executeDbLabels.
+    const types = try tenant_visibility.listEdgeTypesVisible(allocator, store, filter_tenant);
     defer {
         for (types) |t| allocator.free(t);
         allocator.free(types);
@@ -227,7 +230,8 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
 
     // --- Node property keys via the tenant-indexed PERF-C structures ---
     // 1. Get the labels visible to this tenant (or all if admin).
-    const labels = try store.listNodeLabels(allocator, filter_tenant);
+    // SONNY-6344: hierarchy-aware (a parent also sees its descendants' rows).
+    const labels = try tenant_visibility.listNodeLabelsVisible(allocator, store, filter_tenant);
     defer {
         for (labels) |lbl| allocator.free(lbl);
         allocator.free(labels);
@@ -235,7 +239,7 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
 
     // 2. For each label, collect the property keys indexed under that label+tenant.
     for (labels) |label| {
-        const keys = try store.listPropertiesForLabel(allocator, filter_tenant, label);
+        const keys = try tenant_visibility.listPropertiesForLabelVisible(allocator, store, filter_tenant, label);
         defer {
             for (keys) |k| allocator.free(k);
             allocator.free(keys);
@@ -260,10 +264,10 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     defer allocator.free(edge_ids_for_keys);
     for (edge_ids_for_keys) |__eid| {
         const edge = store.getEdgePtrHydrated(__eid) orelse continue;
-        // Honour tenant filter; null means admin sees everything.
-        if (filter_tenant) |tid| {
-            if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
-        }
+        // Honour tenant filter; null means admin sees everything. SONNY-6344:
+        // the edge's own tag by the MATCH rule (a parent sees its
+        // descendants' edges), not the exact tag.
+        if (!tenant_visibility.passesTenantFilterSlice(edge.tenant_id, filter_tenant)) continue;
         var prop_iter = edge.properties.iterator();
         while (prop_iter.next()) |p| {
             const key = p.key_ptr.*;

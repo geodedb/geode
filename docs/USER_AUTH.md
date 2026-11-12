@@ -30,9 +30,10 @@ For enterprise SSO requirements today, use mTLS certificate-based authentication
 ### Basic Setup
 
 - **Default Username**: `geode` (configurable)
-- **Default Password**: generated (16 random bytes, 32 hex characters) unless
-  `GEODE_ADMIN_PASSWORD` or `GEODE_DEFAULT_PASSWORD` is set. There is no
-  fixed default password.
+- **Default Password**: generated unless `GEODE_ADMIN_PASSWORD` or
+  `GEODE_DEFAULT_PASSWORD` is set: a random passphrase that meets the
+  password policy (section 2), words of eight characters, with a reset forced
+  at first login. There is no fixed default password.
 - **Privileges**: Full superuser access
 - **Auto-Creation**: Created automatically on first system initialization
 
@@ -46,8 +47,24 @@ password, it is written once to a file in the data directory:
 ```
 
 `<data-dir>` is the directory the command runs on: `geode serve
---data-dir`, `geode auth init --data-dir`, or `GEODE_DATA_DIR`. `geode auth
-init` defaults to `/var/lib/geode`.
+--data-dir`, `geode auth init --data-dir`, or `GEODE_DATA_DIR`. With neither,
+`geode auth init` (like every offline `geode auth`, `geode user` and `geode
+role` command, SONNY-6345) uses the directory `geode serve` uses:
+`$XDG_STATE_HOME/geode`, else `~/.local/state/geode`, else
+`/tmp/geode-<uid>`. It used to default to `/var/lib/geode`, a different
+store than the server's.
+
+`geode auth verify` on a directory with no `__geode_security` graph (or no
+store at all) reports that there is no auth state and exits 1, creating
+nothing; it used to create the security graph and report `0 records,
+integrity OK` (SONNY-6345).
+
+On a store with auth state `geode auth verify` seals and saves nothing
+(SONNY-6359). It still takes the data-directory lock and opens the store, and
+opening the store writes: the storage engine checkpoints and truncates each
+graph's WAL, rewrites the graph registry and the timeseries WAL, and records
+the lock holder in `.geode.lock`. There is no read-only open of the store yet;
+run it with the server stopped, as it refuses a locked directory.
 
 - The file is created with `O_CREAT | O_EXCL | O_NOFOLLOW` and mode 0600, set
   again after the open, so the umask cannot widen it.
@@ -81,6 +98,14 @@ cat /var/lib/geode/.geode_admin_password && rm /var/lib/geode/.geode_admin_passw
   `geode user reset-password geode --new-password '...' --data-dir <data-dir>`.
   This verifies the security graph's HMAC chain first (SONNY-2798).
 
+An offline `geode user` or `geode role` change on a store with no auth
+records yet (nothing to verify) is sealed with the key the server would use
+there: `GEODE_AUTH_HMAC_KEY`, else `GEODE_TDE_KEY`, else
+`<data-dir>/.geode_hmac_key`, which is generated, as at the server's first
+start, when there is none. It used to be left unsealed, and the server then
+refused to start (SONNY-6358). Set the same key variables for the offline
+command as for `geode serve`.
+
 The file is not read again after bootstrap; deleting it changes nothing.
 
 ### Users with no stored role (fail-closed default, 2026-10)
@@ -93,6 +118,22 @@ gets that grant's privileges. Before 2026-10 such a user fell back to
 `readwrite` (fail-open). The bootstrap admin above and users with an
 assigned role are unaffected. See
 [GQL_AUTH_DDL.md](GQL_AUTH_DDL.md#users-with-no-stored-role-fail-closed-default).
+
+The offline `geode user create | import | update --role <role>` and `geode
+user assign-role <user> <role>` give the user a built-in role (`admin`,
+`readwrite`, `user`, `readonly`) as `ALTER USER ... SET ROLE` does: its other
+built-in role is replaced. `create` and `import` with no `--role` give
+`user`, as `CREATE USER` does. Any other role name is refused before
+anything is changed (a custom role carries no privileges), as is
+`assign-role` of a user that does not exist. Until SONNY-6367 these
+commands stored a role node, never gave it to the user, and reported
+success, so the user had no role. A user created offline before that holds
+no role: give it one. `geode user list` and `geode user show` print the
+role the server resolves at login (they printed `user` for everyone), and
+`geode user show | enable | disable` of a user that does not exist fail.
+`geode role create` stores the role under a new role id (it took the next
+user id, which could overwrite an existing role and move its users to the
+new name).
 
 ### Environment Configuration
 
@@ -129,6 +170,33 @@ export GEODE_ADMIN_USERNAME="test_user"
 - ✅ **Character Support**: Spaces, numbers, and symbols allowed
 - ✅ **No Exceptions**: Admin and regular users follow identical standards
 
+### Where It Applies (SONNY-6331)
+
+One policy (`PasswordPolicy.geodeSecure()`), on every path that sets a
+password:
+
+- `CREATE USER ... SET PASSWORD` and `CALL geode.auth.user_create(...)`
+- `ALTER USER ... SET PASSWORD` (the transport's own-password intercept and
+  the GQL route), `CALL geode.auth.user_reset_password(...)` and
+  `CALL geode.auth.user_change_password(...)`
+- the forced reset at first login
+- the offline `geode user create | update | change-password | reset-password`
+- the first-boot admin: a generated password meets the policy; a
+  `GEODE_ADMIN_PASSWORD` / `GEODE_DEFAULT_PASSWORD` seed that does not is
+  accepted with a forced reset (section 3)
+
+A password the policy refuses is an error, SQLSTATE `22000` on the server,
+whose message names the first rule it breaks with the configured limit, for
+example `Password too short (minimum 25 characters)` or `Password must be a
+passphrase with at least 4 words`. The message never contains the password.
+Words are separated by spaces. `GEODE_PASSWORD_MIN_LENGTH` above 256 (the
+longest password accepted) is read as 256.
+
+Passwords stored before the policy applied to a path (for example a user
+created with an 8-character password by an older server) keep working: the
+policy is checked when a password is set, not at login. The user is held to
+it at the next password change.
+
 ### Policy Configuration
 
 ```bash
@@ -161,11 +229,10 @@ export GEODE_PASSWORD_MIN_WORDS=1          # Becomes 2
 
 Password reset is **automatically required** when:
 
-- ✅ Using default password `"geodesic"`
-- ✅ Environment password < configured minimum length
-- ✅ Environment password lacks uppercase AND lowercase letters  
-- ✅ Environment password doesn't meet passphrase word requirements
-- ✅ Administrator manually forces reset via API
+- ✅ The first-boot admin password was generated
+- ✅ The first-boot `GEODE_ADMIN_PASSWORD` / `GEODE_DEFAULT_PASSWORD` seed
+  does not meet the password policy (shorter than the configured minimum, no
+  upper or no lower case letter, or fewer words than required)
 
 ### Reset Flow Process
 
@@ -281,14 +348,28 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
 
 ### Password Hashing
 
-- **Algorithm**: Argon2id with the OWASP minimum parameters (m=19456 KiB,
-  t=2, p=1), stored as a PHC string (`hashPasswordArgon2id` in
-  `src/security/geode_auth_lib.zig`)
+- **Current**: Argon2id with OWASP parameters (`m=19456,t=2,p=1`), stored
+  as a PHC string (`$argon2id$v=19$...`) by every path that sets a password:
+  CREATE USER, ALTER USER SET PASSWORD, the `geode.auth.*` procedures, the
+  first-boot admin, and the offline `geode user create | update | change-password | reset-password`
+  (`geode_auth.hashPasswordArgon2id`). The offline `geode user create` and
+  `geode user update --password` stored the password itself until
+  SONNY-6358; such a record cannot log in: set its password again.
 - **Stored hash bounds**: a stored hash with other parameters still
   verifies, within 1 <= t <= 10, 8*p <= m <= 262144 KiB (256 MiB) and
   1 <= p <= 16; outside them, or unparseable, verification fails without
   running Argon2, so a corrupt stored hash cannot burn CPU or memory on
   every login (SONNY-6378)
+- **Legacy**: an imported BLAKE2b hash (`geode user import --algorithm blake2b`,
+  `geode.auth.user_import(..., 'blake2b')`) is accepted for migration only:
+  64 hex digits of BLAKE2b-256 over the password followed by the static salt
+  `geode-salt-secure-v2`. The login verifies it (SONNY-6367; such a user
+  could not log in before). It is a fast hash with a fixed salt, far weaker
+  than Argon2id: have the user change its password (`ALTER USER <user> SET
+  PASSWORD`), which stores an Argon2id hash. FIPS builds refuse the import
+  and the verification.
+- **FIPS builds**: Argon2id is not FIPS-approved, so setting a password fails
+  closed (`FipsUnsupported`).
 - **Validation**: All passwords validated before hashing
 
 ### Session Management
@@ -388,11 +469,11 @@ Successfully authenticated as 'cluster_admin' on server 'cluster-01.geode.intern
 
 ### Mandatory Policy Enforcement
 
-- **Non-Bypassable Validation**: Password policy violations cannot be circumvented
-- **Real-Time Enforcement**: Policy changes immediately affect all existing users
-- **Pre and Post Validation**: Passwords validated before hashing AND after authentication
-- **Dynamic Compliance**: Users with policy-violating passwords must reset immediately
-- **Zero Exceptions**: No user can maintain a password that violates current policy
+- **One Policy on Every Path**: every path that sets a password applies the
+  same policy before hashing (section 2)
+- **Set-Time Enforcement**: the policy is checked when a password is set. A
+  stored password that predates it (or a stricter configured limit) keeps
+  working until it is next changed; it does not force a reset at login
 
 ### Post-Quantum Readiness
 
@@ -524,21 +605,23 @@ This authentication system provides **enterprise-grade security** with **complet
 | **Username/Password** | ✅ Implemented | Interactive login | High | `src/security/user_management.zig` |
 | **MFA (TOTP)** | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
 | **Session Tokens** | ✅ Implemented | Session continuity with rotation | High | `src/security/authn.zig` |
-| **API Keys** | ✅ Implemented | Service accounts, automation | Medium-High | `src/security/api_keys.zig` |
+| **API Keys** | ❌ Not on the server wire | Service accounts, automation | — | Library `auth_lib.api_keys` and the offline `geode apikey` CLI (local state file) only; see below |
 | **mTLS (Certificate)** | ✅ Implemented | Zero-trust, service mesh | Very High | `src/security/mtls_provider.zig` |
 
-### API Key Authentication
+### API Key Authentication (not implemented on the server)
 
-For programmatic access (CI/CD pipelines, automation, service accounts):
-
-```bash
-# API keys follow format: gk1.<token_id>.<secret>
-# Generate via CLI:
-geode admin create-api-key --user service_account --name "ci-pipeline" --scope "read,write"
-
-# Use in requests:
-curl -H "Authorization: Bearer gk1.XXXX.YYYY" https://geode.example.com:3141/api/query
-```
+**API keys are not implemented end to end (SONNY-6291).** A `geode serve`
+server has no API-key store, and its QUIC and gRPC handshakes authenticate
+by username and password (or mTLS), never by key. The
+`geode.auth.apikey_*` procedures (`apikey_create`, `apikey_list`,
+`apikey_revoke`, `apikey_check_scope`) answer SQLSTATE 0A000 (not
+supported); before SONNY-6291 they were stubs that answered `scope
+granted` for any key and `revoked` without revoking anything. What exists:
+the `auth_lib.api_keys` library (key format `gk1.<token_id>.<secret>`,
+SHA-256 digests, constant-time comparison), used in process by the MCP and
+LSP verifiers, and the offline `geode apikey` CLI, which keeps keys in a
+local state file the server never reads. Use service-account users with
+passwords, or mTLS, for programmatic access.
 
 ### mTLS Certificate Authentication
 

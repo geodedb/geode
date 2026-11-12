@@ -22,7 +22,7 @@ const std = @import("std");
 // Process-stable allocator. `std.heap.c_allocator` is backed by libc malloc and
 // is valid for the entire process lifetime — exactly the contract a global
 // side-table needs.
-const store_alloc: std.mem.Allocator = std.heap.c_allocator;
+var store_alloc: std.mem.Allocator = std.heap.c_allocator;
 
 var g_attrs: std.StringHashMap(std.StringHashMap([]const u8)) = undefined;
 var g_attrs_init: bool = false;
@@ -48,16 +48,33 @@ pub fn setAttribute(
     g_attrs_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_attrs_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureInit();
+    // CANARY: REQ=REQ-SONNY-6377-ATTR-STORE-OOM; FEATURE="ABAC user attribute store"; ASPECT=AllOrNothingSet; STATUS=TESTED; TEST=tests/test_sonny6377_security_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6377: every allocation that can fail happens before the store
+    // changes. An allocation failure after a new user's entry was inserted
+    // left it with the caller's (borrowed) username as its key and an
+    // undefined attribute map; one after the old value was removed lost it.
+    const key_copy = try store_alloc.dupe(u8, key);
+    errdefer store_alloc.free(key_copy);
+    const value_copy = try store_alloc.dupe(u8, value);
+    errdefer store_alloc.free(value_copy);
+
     const entry = try g_attrs.getOrPut(username);
     if (!entry.found_existing) {
-        entry.key_ptr.* = try store_alloc.dupe(u8, username);
+        const username_copy = store_alloc.dupe(u8, username) catch |err| {
+            g_attrs.removeByPtr(entry.key_ptr);
+            return err;
+        };
+        entry.key_ptr.* = username_copy;
         entry.value_ptr.* = std.StringHashMap([]const u8).init(store_alloc);
     }
-    if (entry.value_ptr.fetchRemove(key)) |old| {
-        store_alloc.free(old.key);
-        store_alloc.free(old.value);
+    // A failure here leaves the user's entry whole (possibly empty).
+    const attr = try entry.value_ptr.getOrPut(key);
+    if (attr.found_existing) {
+        store_alloc.free(attr.key_ptr.*);
+        store_alloc.free(attr.value_ptr.*);
     }
-    try entry.value_ptr.put(try store_alloc.dupe(u8, key), try store_alloc.dupe(u8, value));
+    attr.key_ptr.* = key_copy;
+    attr.value_ptr.* = value_copy;
 }
 
 /// Remove attribute key from username. Returns true if removed.
@@ -110,4 +127,34 @@ pub fn snapshotEntries(
         };
     }
     return out;
+}
+
+/// Tests only (SONNY-6377): route the store's allocations through `a`, e.g.
+/// a `std.testing.FailingAllocator`. Production never calls this.
+pub fn setAllocatorForTesting(a: std.mem.Allocator) void {
+    g_attrs_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_attrs_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    store_alloc = a;
+}
+
+/// Tests only (SONNY-6377): free every entry with `a` (the allocator the
+/// entries came from, or the one under it) and empty the store; `a` stays
+/// the store's allocator.
+pub fn resetForTesting(a: std.mem.Allocator) void {
+    g_attrs_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_attrs_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    store_alloc = a;
+    if (!g_attrs_init) return;
+    var it = g_attrs.iterator();
+    while (it.next()) |entry| {
+        var attr_it = entry.value_ptr.iterator();
+        while (attr_it.next()) |kv| {
+            a.free(kv.key_ptr.*);
+            a.free(kv.value_ptr.*);
+        }
+        entry.value_ptr.deinit();
+        a.free(entry.key_ptr.*);
+    }
+    g_attrs.deinit();
+    g_attrs_init = false;
 }

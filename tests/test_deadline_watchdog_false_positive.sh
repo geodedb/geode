@@ -51,7 +51,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[watchdog-false-positive] starting geode serve on 127.0.0.1:${PORT}"
-GEODE_ADMIN_PASSWORD="GeodeTestPassword123!" "${GEODE_BIN}" serve \
+GEODE_ADMIN_PASSWORD="Geode Test Admin Passphrase" "${GEODE_BIN}" serve \
     --data-dir "${DATA_DIR}" \
     --listen "127.0.0.1:${PORT}" \
     --log-level error \
@@ -81,7 +81,7 @@ START_NS=$(date +%s%N)
 timeout 8s "${GEODE_BIN}" query \
     --server "127.0.0.1:${PORT}" \
     --insecure-tls-skip-verify \
-    -U geode -P GeodeTestPassword123! \
+    -U geode -P "Geode Test Admin Passphrase" \
     --timeout 10 \
     "RETURN 1 AS x" \
     > "${CLI_STDOUT}" 2> "${CLI_STDERR}"

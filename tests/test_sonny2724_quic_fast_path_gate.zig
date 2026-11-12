@@ -18,8 +18,16 @@
 // Each must take the general executor and give its correct answer.
 //
 // Spawns the real geode this build emitted (SONNY-2697) and
-// speaks the real protobuf protocol. The ticket stays open: making the fast
-// paths themselves tenant- and RLS-correct is future work.
+// speaks the real protobuf protocol.
+//
+// SONNY-2976 then made the node MERGE primitives match only within the
+// request's tenant, as the executor's MERGE does, and the node MERGE shapes
+// (node, graph-selector and /*+BATCH*/ MERGE) serve a tenant-scoped session
+// again, under strict tenancy too. The last two tests pin that they are
+// TAKEN for such a session (the server's merge tuple-lock counter, which only
+// the bulk MERGE primitives move, scraped from /metrics) and give the
+// executor's rows, while an RLS session still declines. The relationship
+// MERGE and MATCH ... CREATE edge shapes keep the stricter gate.
 //
 // CANARY: REQ=REQ-SONNY-2724-QUIC-FAST-PATH-GATE; FEATURE="MergeRowVisibility"; ASPECT=QuicFastPathGateBehaviour; STATUS=TESTED; TEST=tests/test_sonny2724_quic_fast_path_gate.zig; OWNER=security; UPDATED=2026-09-26
 
@@ -243,4 +251,153 @@ test "SONNY-2724: while an RLS policy is installed a user's fast-path shapes tak
     try expectRows(aa, &failures, &c, "after", "MATCH (n:K2724) RETURN n.k, n.v ORDER BY n.k", "1|orig;2|orig");
     try expectRows(aa, &failures, &c, "after", "MATCH (x)-[r]->(y) RETURN count(r)", "0");
     try finish(failures.items, "RLS policy");
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-2724 / SONNY-2976: the node MERGE fast paths serve tenant sessions.
+// ---------------------------------------------------------------------------
+
+fn writeAll(fd: i32, bytes: []const u8) !void {
+    var offset: usize = 0;
+    while (offset < bytes.len) {
+        const rc = std.os.linux.write(fd, bytes[offset..].ptr, bytes.len - offset);
+        const signed: isize = @bitCast(rc);
+        if (signed <= 0) return error.WriteFailed;
+        offset += @intCast(signed);
+    }
+}
+
+/// GET /metrics from the server's loopback metrics port (HTTP/1.1,
+/// `Connection: close`, read to EOF).
+fn scrapeMetrics(aa: std.mem.Allocator, port: u16) ![]const u8 {
+    const linux = std.os.linux;
+    const fd_raw = linux.socket(linux.AF.INET, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, linux.IPPROTO.TCP);
+    if (linux.errno(fd_raw) != .SUCCESS) return error.SocketCreateFailed;
+    const fd: i32 = @intCast(fd_raw);
+    defer _ = linux.close(fd);
+    const sa = linux.sockaddr.in{
+        .family = linux.AF.INET,
+        .port = std.mem.nativeToBig(u16, port),
+        .addr = std.mem.nativeToBig(u32, 0x7F000001),
+        .zero = .{0} ** 8,
+    };
+    if (@as(isize, @bitCast(linux.connect(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in)))) < 0) return error.ConnectFailed;
+    try writeAll(fd, try std.fmt.allocPrint(aa, "GET /metrics HTTP/1.1\r\nHost: 127.0.0.1:{d}\r\nConnection: close\r\n\r\n", .{port}));
+    var out: std.ArrayList(u8) = .empty;
+    var chunk: [8192]u8 = undefined;
+    while (out.items.len < 4 * 1024 * 1024) {
+        const signed: isize = @bitCast(linux.read(fd, &chunk, chunk.len));
+        if (signed < 0) return error.ReadFailed;
+        if (signed == 0) break;
+        try out.appendSlice(aa, chunk[0..@intCast(signed)]);
+    }
+    return out.items;
+}
+
+/// The bulk MERGE primitives' tuple-lock acquisitions, summed over graphs.
+/// The general executor's MERGE takes no tuple lock (CLAUDE.md, tier 0.5),
+/// so this counter moves only when a node MERGE fast path served a request.
+fn tupleLocks(aa: std.mem.Allocator, port: u16) !u64 {
+    const name = "mg_merge_tuple_lock_acquired_total";
+    const metrics = try scrapeMetrics(aa, port);
+    var total: u64 = 0;
+    var seen = false;
+    var lines = std.mem.splitScalar(u8, metrics, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, "\r");
+        if (!std.mem.startsWith(u8, line, name) or line.len <= name.len or !std.ascii.isWhitespace(line[name.len])) continue;
+        const rest = std.mem.trim(u8, line[name.len..], " \t");
+        const end = std.mem.indexOfAny(u8, rest, " \t") orelse rest.len;
+        total += std.fmt.parseUnsigned(u64, rest[0..end], 10) catch continue;
+        seen = true;
+    }
+    if (!seen) return error.MetricMissing;
+    return total;
+}
+
+/// Run `stmt` and record whether a node MERGE fast path served it (`want_fast`)
+/// and that it answered `want`.
+fn expectRoute(aa: std.mem.Allocator, failures: *std.ArrayList([]const u8), client: *util.QuicProtoClient, metrics_port: u16, label: []const u8, stmt: []const u8, want: []const u8, want_fast: bool) !void {
+    const before = try tupleLocks(aa, metrics_port);
+    try expectRows(aa, failures, client, label, stmt, want);
+    const after = try tupleLocks(aa, metrics_port);
+    if ((after > before) != want_fast) {
+        try failures.append(aa, try std.fmt.allocPrint(aa, "[{s}] {s}: expected the {s}, but the tuple-lock counter went {d} -> {d}", .{ label, stmt, if (want_fast) "fast path" else "executor", before, after }));
+    }
+}
+
+test "SONNY-2724: a tenant-scoped session's node MERGEs take the fast path and write only its own rows" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var failures: std.ArrayList([]const u8) = .empty;
+    var dir_buf: [64]u8 = undefined;
+    const metrics_port = try util.getRandomPort();
+    const metrics_env = try std.fmt.allocPrint(aa, "GEODE_METRICS_PORT={d}", .{metrics_port});
+    var server = try Server.start(&dir_buf, &.{ metrics_env, "GEODE_METRICS_BIND=127.0.0.1" });
+    defer server.stop();
+
+    var b = try server.connect("t2724b");
+    defer b.deinit();
+    try expectRows(aa, &failures, &b, "tenant_b", "CREATE (:K2724 {k: 1, v: 'b'})", "");
+    try expectRows(aa, &failures, &b, "tenant_b", "CREATE (:K2724 {k: 2, v: 'b'})", "");
+
+    var a = try server.connect("t2724a");
+    defer a.deinit();
+    // Served by the fast paths, each creating tenant_a's own node.
+    try expectRoute(aa, &failures, &a, metrics_port, "tenant_a", node_merge, "", true);
+    try expectRoute(aa, &failures, &a, metrics_port, "tenant_a", selector_merge, "", true);
+    try expectRoute(aa, &failures, &a, metrics_port, "tenant_a", batch_merge, "", true);
+    // Repeats match tenant_a's nodes (idempotent), again on the fast path.
+    for (0..3) |_| try expectRoute(aa, &failures, &a, metrics_port, "tenant_a, repeat", node_merge, "", true);
+    try expectRoute(aa, &failures, &a, metrics_port, "tenant_a, repeat", batch_merge, "", true);
+    // tenant_b merges a key both tenants hold: its own row, never tenant_a's.
+    try expectRoute(aa, &failures, &b, metrics_port, "tenant_b", "MERGE (n:K2724 {k: 2}) SET n.v = 'b2'", "", true);
+    // The edge shapes still take the executor (no tuple lock either way);
+    // tenant_a's MATCH joins its own two nodes.
+    const edge_rows = try rowsOf(aa, &a, edge_create);
+    if (std.mem.startsWith(u8, edge_rows, "error:")) try failures.append(aa, try std.fmt.allocPrint(aa, "[tenant_a] {s}: {s}", .{ edge_create, edge_rows }));
+
+    try expectRows(aa, &failures, &b, "tenant_b", "MATCH (n:K2724) RETURN n.k, n.v ORDER BY n.k", "1|b;2|b2");
+    try expectRows(aa, &failures, &b, "tenant_b", "MATCH (x)-[r]->(y) RETURN count(r)", "0");
+    try expectRows(aa, &failures, &a, "tenant_a", "MATCH (n:K2724) RETURN n.k, n.v ORDER BY n.k", "1|written;2|written");
+    try expectRows(aa, &failures, &a, "tenant_a", "MATCH (x)-[r]->(y) RETURN count(r)", "1");
+    var admin = try server.connect(null);
+    defer admin.deinit();
+    try expectRows(aa, &failures, &admin, "unscoped", "MATCH (n:K2724) RETURN count(n)", "4");
+
+    // While an RLS policy is installed, the admin's node MERGE takes the
+    // executor (which applies the policy), on a label the policy leaves
+    // visible.
+    const deny = try std.fmt.allocPrint(aa, "CALL geode.rls.add_deny_policy('default', 'H2724', '{s}')", .{util.defaultUsername()});
+    _ = try rowsOf(aa, &admin, deny);
+    try expectRoute(aa, &failures, &admin, metrics_port, "unscoped, policy", "MERGE (n:V2724 {k: 5}) SET n.v = 'written'", "", false);
+    try expectRows(aa, &failures, &admin, "unscoped, policy", "MATCH (n:V2724) RETURN n.v", "written");
+    try finish(failures.items, "tenant-scoped node MERGE fast path");
+}
+
+test "SONNY-2724: under strict tenancy a tenant-scoped session's node MERGE takes the fast path; an unscoped one is still refused" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var failures: std.ArrayList([]const u8) = .empty;
+    var dir_buf: [64]u8 = undefined;
+    const metrics_port = try util.getRandomPort();
+    const metrics_env = try std.fmt.allocPrint(aa, "GEODE_METRICS_PORT={d}", .{metrics_port});
+    var server = try Server.start(&dir_buf, &.{ "GEODE_STRICT_TENANCY=1", metrics_env, "GEODE_METRICS_BIND=127.0.0.1" });
+    defer server.stop();
+
+    var b = try server.connect("t2724b");
+    defer b.deinit();
+    try expectRows(aa, &failures, &b, "strict, tenant_b", "CREATE (:K2724 {k: 1, v: 'b'})", "");
+    var a = try server.connect("t2724a");
+    defer a.deinit();
+    try expectRoute(aa, &failures, &a, metrics_port, "strict, tenant_a", node_merge, "", true);
+    try expectRoute(aa, &failures, &a, metrics_port, "strict, tenant_a", batch_merge, "", true);
+    var c = try server.connect(null);
+    defer c.deinit();
+    try expectRoute(aa, &failures, &c, metrics_port, "strict, unscoped", node_merge, "error:42501", false);
+    try expectRows(aa, &failures, &a, "strict, tenant_a", "MATCH (n:K2724) RETURN n.k, n.v ORDER BY n.k", "1|written;2|written");
+    try expectRows(aa, &failures, &b, "strict, tenant_b", "MATCH (n:K2724) RETURN n.k, n.v ORDER BY n.k", "1|b");
+    try finish(failures.items, "strict tenancy, tenant-scoped node MERGE");
 }

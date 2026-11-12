@@ -38,6 +38,7 @@ fn duplicatePersistentUser(allocator: std.mem.Allocator, store: *geode.graph_sto
         .active = record.is_active,
         .password_reset_required = record.password_reset_required,
         .auth_version = record.auth_version,
+        .is_superuser = record.is_superuser,
     };
 }
 

@@ -101,12 +101,12 @@ test "persistent_writer_all_callbacks" {
     });
 
     // --- create ---
-    try user_mgmt.createUser(testing.allocator, "ptu", "Passw0rd1!", "p@x", .User, false);
+    try user_mgmt.createUser(testing.allocator, "ptu", "Persistence Test Passphrase", "p@x", .User, false);
     try testing.expectEqual(@as(u32, 1), state.creates);
     try testing.expectEqualStrings("ptu", state.lastUsernameSlice());
 
     // --- update password (new != old, so should succeed) ---
-    try user_mgmt.updateUserPassword(testing.allocator, "ptu", "NewPassw0rd2!");
+    try user_mgmt.updateUserPassword(testing.allocator, "ptu", "New Persistence Test Passphrase");
     try testing.expectEqual(@as(u32, 1), state.pw_updates);
 
     // --- assign role (User -> Admin: real change) ---
@@ -141,7 +141,7 @@ test "set_user_active_semantics" {
     try user_mgmt.initUserStore(testing.allocator);
 
     // Create a user (active=true, auth_version=1)
-    try user_mgmt.createUser(testing.allocator, "suat", "Passw0rd1!", "suat@x.com", .User, false);
+    try user_mgmt.createUser(testing.allocator, "suat", "Persistence Test Passphrase", "suat@x.com", .User, false);
     {
         const u = user_mgmt.getUser("suat") orelse return error.TestSetupFailed;
         try testing.expect(u.active);

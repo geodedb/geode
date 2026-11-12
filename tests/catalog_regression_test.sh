@@ -26,7 +26,7 @@ fi
 
 SERVER_PORT=8454
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 DATA_DIR=$(mktemp -d /tmp/geode_catalog_regression_XXXXXX)
 GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
     "$GEODE_BIN" serve --listen 127.0.0.1:${SERVER_PORT} --data-dir "${DATA_DIR}" > /tmp/geode_catalog_regression.log 2>&1 &

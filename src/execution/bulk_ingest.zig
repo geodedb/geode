@@ -25,6 +25,7 @@ const ast = @import("../gql/ast.zig");
 // SONNY-2686: the session gate below (`sessionAllowsKeyResolvedWrites`).
 const execution = @import("../execution.zig");
 const tenancy = @import("tenancy.zig");
+const tenant_visibility = @import("tenant_visibility.zig");
 const write_shape = @import("write_shape.zig");
 
 // ----------------------------------------------------------------------
@@ -79,6 +80,11 @@ pub fn isEnabled() bool {
 // tenant scope or an RLS policy restricts must take the general executor, or a
 // key lookup binds, updates or attaches an edge to a row the session may not
 // see. `simple_node_create` finds nothing and is not gated.
+//
+// SONNY-2976 / SONNY-2724: the node MERGE primitives now match only within the
+// request's tenant, so the node MERGE shapes also serve a tenant-scoped
+// session (`sessionAllowsTenantScopedNodeMerges`); the edge shapes keep the
+// stricter gate, and RLS still declines every shape.
 // ----------------------------------------------------------------------
 
 /// SONNY-2686: may the key-resolved write fast paths serve a request that runs
@@ -87,7 +93,8 @@ pub fn isEnabled() bool {
 ///     request in the general executor, so the fast path must not serve it);
 ///   * no RLS policy that could apply: none installed, or no user for one to
 ///     apply to (the identity `passesRLSFilter` evaluates under).
-/// The QUIC handler also checks its own server-side label engine.
+/// The QUIC handler also checks the label-deny engine (the same one since
+/// SONNY-2729).
 pub fn sessionAllowsKeyResolvedWrites(ctx: *const execution.ExecutionContext) bool {
     if (tenancy.isStrictTenancy()) return false;
     const tenant = tenancy.resolveTenantFilter(ctx.tenant_id) catch return false;
@@ -111,6 +118,39 @@ pub fn sessionAllowsKeyResolvedWrites(ctx: *const execution.ExecutionContext) bo
 /// again under the graph lock (`graph_store.refuseIfUniqueFenced`).
 pub fn uniqueConstraintsDeclineFastPath(graph: []const u8) bool {
     return @import("unique_constraints.zig").graphFenced(graph);
+}
+
+// CANARY: REQ=REQ-SONNY-2724-NODE-MERGE-TENANT-FAST-PATH; FEATURE="MergeRowVisibility"; ASPECT=SessionGate; STATUS=TESTED; TEST=tests/test_sonny2724_quic_fast_path_gate.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2724: may the NODE MERGE fast paths (`simple_node_merge`, the
+/// graph-selector MERGE and the `/*+BATCH*/` batch) serve a request under
+/// `ctx`? As `sessionAllowsKeyResolvedWrites`, except that a concrete tenant
+/// scope is allowed, under strict tenancy too: the adapter primitives they
+/// call match a node only of the request's own tenant and tag what they
+/// create with it (SONNY-2976), which is what the executor's MERGE does for
+/// such a session (`crud_operations.findMergeMatch` matches the exact tenant).
+/// Still refused:
+///   * an unscoped request under strict tenancy (the executor refuses it,
+///     42501);
+///   * SONNY-6338: a tenant with descendants in the tenant hierarchy. Such a
+///     session sees its descendants' rows too (GAP-0846), and the executor's
+///     MERGE matches them, while the adapter primitives match the exact tag;
+///     for every other tenant the two sets are the same;
+///   * a user while an RLS policy is installed (the executor applies the
+///     policy to the match, and refuses a hidden one);
+/// The relationship MERGE and the MATCH … CREATE edge fast paths keep the
+/// stricter gate: their endpoint and edge resolution is not the executor's
+/// for a tenant-scoped session (MATCH is tenant-hierarchy aware, and an edge
+/// must be visible with both endpoints, SONNY-2693).
+pub fn sessionAllowsTenantScopedNodeMerges(ctx: *const execution.ExecutionContext) bool {
+    const filter_tenant = tenancy.resolveTenantFilter(ctx.tenant_id) catch return false;
+    if (tenant_visibility.tenantHasDescendants(filter_tenant)) return false;
+    const has_user = blk: {
+        if (ctx.principal) |p| {
+            if (p.username != null) break :blk true;
+        }
+        break :blk ctx.user != null;
+    };
+    return !(has_user and execution.activeRlsPoliciesConfigured());
 }
 
 /// The set of bulk-ingest shapes we know how to fast-path.  `none` means

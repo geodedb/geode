@@ -17,8 +17,10 @@ mode). Source findings: [`docs/CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md`](../CAA
 1. **Never set `--insecure-allow-all` in production.** It bypasses ALL
    authorization (see below). It exists only for local development / debugging.
 2. **Authentication must be enabled.** It is on by default (fail-closed);
-   `--no-auth` is only available in debug builds and must never be used in
-   production.
+   `geode serve --no-auth` is refused at startup in every build mode
+   (SONNY-6329). The authentication-disabled mode, in which every request
+   runs with full access on every transport, exists only in process: see
+   `docs/security/gps-decide.md`, "Authentication disabled".
 3. **Every session must present a concrete `tenant_id`.** A `Principal` with a
    real tenant scope is required for tenant isolation to apply. A session with
    no tenant scope — unset, empty, or the literal `"default"` — is treated as
@@ -280,7 +282,7 @@ Treat `CALL geode.tenant.*` as the standard, supported tenant DDL surface.
 |---|---|
 | `CALL geode.tenant.create(id[, parent])` | Register a tenant (durable) and add it to the hierarchy under `parent`. |
 | `CALL geode.tenant.list()` | One row per registered tenant (id, parent, active, effective quota). |
-| `CALL geode.tenant.show(id)` | 0 or 1 row for `id`. |
+| `CALL geode.tenant.show(id)` | 0 or 1 row for `id`. `list` and `show` are read-only procedures (SONNY-6313): a read-only request may run them. |
 | `CALL geode.tenant.set_quota(id, max_connections, max_concurrent_queries, max_graphs, max_nodes_per_graph)` | Set a per-tenant quota override (durable + live quota manager). |
 | `CALL geode.tenant.drop(id[, cascade])` | Drop a tenant — see safe drop semantics below. |
 | `CALL geode.tenant.backfill_edge_tags([dry_run])` | Re-tag legacy `default` edges from their endpoints and list mixed-tenant edges — see edge tenant tags below. |
@@ -372,9 +374,13 @@ multi-hop patterns, pattern comprehensions, `COUNT {}`, `EXISTS {}`,
 `shortestPath()` and the `CALL algo.*` procedures. An unscoped (admin) session
 sees every edge.
 
-There is **no exception for a `default` tag**. Unscoped and admin writes, and
-follower replication, write `default`, and a `default` node is already hidden
-from every tenant; a `default` edge is hidden the same way. Before SONNY-2693
+There is **no exception for a `default` tag**. Unscoped and admin writes
+write `default`, and a `default` node is already hidden from every tenant; a
+`default` edge is hidden the same way. In a cluster, a write's raft entry
+carries the writing session's tenant (SONNY-2726), so every node applies it
+under that tenant; data replicated before that change was applied as
+`default` on every node and is still tagged so (no replicated re-tag exists
+yet). Before SONNY-2693
 some read paths admitted an edge whose endpoints were visible whatever its tag
 (the GAP-0891 "endpoint bridge"). That showed a tenant another tenant's edge
 between its own nodes, with its properties. It also kept legacy edges visible

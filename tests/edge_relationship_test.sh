@@ -13,7 +13,7 @@ make build > /dev/null 2>&1
 
 SERVER_PORT=8455
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 DATA_DIR=$(mktemp -d /tmp/geode_edge_test_XXXXXX)
 GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
     ./zig-out/bin/geode serve --listen 127.0.0.1:${SERVER_PORT} --data-dir "${DATA_DIR}" > /tmp/geode_edge_test.log 2>&1 &
@@ -21,6 +21,7 @@ SERVER_PID=$!
 sleep 2
 
 cleanup() {
+    rm -rf "${GEODE_CLI_WRAPPER_DIR:-}"
     kill $SERVER_PID 2>/dev/null || true
     wait $SERVER_PID 2>/dev/null || true
     rm -rf "${DATA_DIR}"
@@ -28,7 +29,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-QUERY_CMD="./zig-out/bin/geode query --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+# SONNY-6359: the admin password is a passphrase; the wrapper keeps it one argument.
+# shellcheck source=lib/geode_cli_wrapper.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/geode_cli_wrapper.sh"
+QUERY_CMD="$(geode_cli_wrapper ./zig-out/bin/geode query --server 127.0.0.1:${SERVER_PORT} --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}")"
 
 echo "Testing edge creation patterns..."
 

@@ -459,6 +459,520 @@
   `fle_hooks.decryptPropertyIfNeeded`, `planner/rewrite.performFLERewrite`.
   Regression: `zig build test-sonny6334-fle-authorization`.
 
+- **A cluster leader's MATCH ... SET updates only the rows the session's
+  MATCH sees (SONNY-3246).** On a single node a MATCH ... SET reads through
+  the RLS row filters, so a row a policy hides is never updated; the
+  leader's replicated MATCH ... SET (`clusterReplicateMatchSet`) matched
+  on graph, tenant, labels and properties only, and proposed updates of
+  hidden rows to every node. It now drops a candidate the session's RLS
+  policies hide (the row-visibility check MERGE's match phase uses,
+  SONNY-2686) before evaluating its WHERE and SET. SET clause ordering
+  already matched (SONNY-3242). **Not fixed:** WHERE truthiness still
+  differs: the leader keeps a row only when its WHERE is true (SONNY-3184),
+  while the single-node MATCH paths take a non-zero integer as true, so
+  `MATCH (n) WHERE n.a SET ...` with an integer `a` writes on a single node
+  and not on a leader; and a WHERE or SET expression that fails to
+  evaluate answers 40001 (ClusterWriteNotReplicable) on a leader instead of
+  its own error. `test-sonny3246-cluster-set-rls`.
+- **A cluster applies a write under the writing session's tenant
+  (SONNY-2726).** In cluster mode a write reaches the store only through
+  the raft apply, whose thread has no request context, and the replicated
+  payloads carried no tenant, so every node and edge written through raft
+  was tagged `default` on every node; since SONNY-2693 a tenant's
+  replicated edges, and its nodes, were hidden from it. The leader now
+  wraps the entry of a session whose tenant is not `default` in a GTN1
+  envelope naming the tenant (`cluster_replication.wrapWithTenant`, in
+  `statement_proposals.proposeNow`, for every graph mutation: create,
+  batch, delete, merge, update), and the apply sets that tenant for the
+  entry (`raft_apply.applyGraphMutation`). A default-tenant write and
+  every entry already in a log are unchanged. **Operator-visible:**
+  upgrade every node of a cluster before tenant-scoped sessions write; a
+  node running an older build skips a tenant-enveloped create (its
+  unknown-payload arm) and cannot decode an enveloped delete, merge or
+  update. **Not fixed:** data replicated before this change is still
+  tagged `default`; a leader-driven re-tag replicated through raft does
+  not exist yet (`geode.tenant.backfill_edge_tags` is refused in a
+  cluster). `test-sonny2726-replicated-tenant`.
+- **Tenant schema listings show what the session's MATCH sees; COUNT { hop }
+  counts paths (SONNY-6344 items 1-2).** (2) `CALL db.labels()`,
+  `db.relationshipTypes()`, `db.propertyKeys()`, SHOW TABLES and the LSP's
+  schema completion read per-tenant structures by exact tag, and the edge
+  property keys compared each edge's tag exactly, so a parent tenant listed
+  only the labels, types and keys of rows tagged with its own tenant while
+  its MATCH returns its descendants' rows too (GAP-0846). They now union
+  the session's tenant and, when it is registered in the hierarchy, every
+  descendant (`tenant_visibility.visibleTenantTagsAlloc`); a child and an
+  unrelated tenant are unchanged. (1) An uncorrelated `COUNT { (a:S)-[:T]->(b) }`
+  (and `EXISTS { ... }`) whose start node no outer variable binds counted
+  the start nodes matching its head and ignored the relationship; it now
+  counts the matching paths from every visible start node, as the
+  correlated form does. **Behaviour change:** `RETURN COUNT { ()-[:L]->() }`
+  answers the number of `:L` paths the session can walk, not the number of
+  visible nodes. `test-sonny6344-tenant-schema-listings`; the two
+  `test-sonny1326-expression-tenancy` assertions that pinned the node count
+  now pin the path count.
+- **Writes made after a checkpoint and a crash survive the next crash
+  (SONNY-6384).** After an offline `geode user` change on a data directory,
+  the server's later writes to `__geode_security` (CREATE USER, ALTER USER)
+  were lost to a SIGKILL, and with enough of them the next start could fail
+  to load the security graph (`admin bootstrap SKIPPED`,
+  `hydration-time exact-index build failed … error.DataCorruption`). The
+  cause was in graph persistence, for any graph, not in security code or in
+  the CLI's hydration snapshots (the writes were lost with every snapshot
+  removed). A full checkpoint compacts a shard WAL to empty and the WAL
+  library deletes its `graph.wal.ckpt` sidecar, the only record of an empty
+  WAL's LSN. A process that ended there without closing the engine (the
+  offline CLI always did; so does a SIGKILL after any checkpoint) left the
+  next open numbering the WAL from 0 while recovery replayed from the
+  manifest's `last_checkpoint_lsn`: every later record was skipped after a
+  crash, or past that many records only a torn tail was replayed. Opening a
+  graph now appends a no-op checkpoint marker at the manifest's checkpoint
+  LSN, and fsyncs it, when a shard WAL numbers below it (logged as "healed
+  shard WAL LSN anchor"); an open whose marker cannot be written fails.
+  Records an earlier recovery already skipped are not recovered.
+  `test-sonny6384-offline-change-crash-durability`.
+- **A gRPC chunked run that stops early still prints its summary; the Raft
+  drop of a graph has no check-then-lock window (SONNY-6384 items 3, 4,
+  6).** (6) `geode query --grpc --file`: when a chunk's connection failed
+  after the chunk was sent, or the client timed out on it,
+  `executeGrpcQuery` exited the process itself, so the run printed no
+  "Chunked execution complete" summary and did not say how many statements
+  were not run (the QUIC path did). It now returns to the chunked driver,
+  which stops the run there (the chunk is still not sent again,
+  SONNY-6377), prints the summary and exits 4 for a timeout, 1 otherwise.
+  The statement-by-statement retry of a rejected chunk still exits inside
+  `executeGrpcQuery` on those failures. (4) The Raft apply of `drop_graph`
+  checked `graphExists` and then took the graph's write lock; a drop in
+  between sent that lock to its global-exclusive fallback. It now calls
+  `GraphStore.dropGraph`, which takes the write lock itself and reports a
+  graph that is not there without locking it. (3)
+  `tests/test_cli_file_chunked.zig`'s CANARY is TESTED (12/12 pass).
+  `test-sonny6384-grpc-chunk-summary`.
+- **`geode query` never sends a write again once the server may have
+  applied it (SONNY-6377).** `geode query --file` on a file over 16 KiB
+  ships each 32 KiB chunk as one program. A chunk of ~400 CREATEs takes
+  ~38 s in a Debug server, past the default 30 s `--timeout`; the client's
+  read timed out while the server was applying the chunk, and
+  `executeChunkedQueries` took any transport error for a rejected chunk and
+  replayed its statements one by one, so each landed twice (400 nodes
+  became 800; `test-cli-file-chunked` failed 2 of 12). Over gRPC,
+  `executeGrpcQuery` retried any error but a timeout or an incomplete
+  response on a new connection, even after the Execute request was sent, so
+  a connection reset after the server applied a CREATE ran it up to three
+  times. The QUIC auto-retry in `executeQuicQuery` was not a cause (it
+  retries only a failed HELLO); it now also checks that the query was not
+  sent. **Behaviour change:** a chunk that was sent and got no answer is not
+  sent again; the run stops there, says its statements may still be
+  executing, and exits 4 for a timeout (as a single query does) or 1
+  otherwise; the chunks after it are not run. A gRPC query whose connection
+  fails after it was sent exits 1 with "may or may not have executed" and is
+  not retried. `--retry` retries only before the query is sent.
+  `test-sonny6377-query-no-resend`.
+- **RLS row decisions, procedure results and the ABAC attribute store
+  (SONNY-6377 items 3-5).** (3) `RLSEngine.checkRowAccess` cached its
+  verdict under (graph, table, user, operation), a key with no row in it,
+  and returned a cached deny before evaluating, so once one row was denied
+  every later row of the table was denied to that user until the entry
+  expired (fail closed, wrong results). A row-level decision is no longer
+  cached, as `checkRowAccessByUsernameSeeded` already did (GAP-0284), and
+  the evaluation holds the policy lock shared. (4) `geode.auth.user_import`
+  and `geode.rls.list_deny_policies` results now own their rows (their
+  strings leaked). **Behaviour change:** `geode.rls.policy_count()` and
+  `list_deny_policies()` with no filter engine answer 55000, as the other
+  `geode.rls` procedures do since SONNY-6369, instead of 0 and an empty
+  list. (5) `user_attribute_store.setAttribute` allocates everything before
+  it changes the store: an allocation failure after it inserted a new
+  user's entry left that entry with the caller's username as its key and an
+  undefined attribute map, and one after it removed the old value lost the
+  attribute. (Item 6, security-graph writes outside a statement, did not
+  reproduce: the login's hash upgrade and the ALTER USER intercepts survive
+  a SIGKILL; the test pins it.) `test-sonny6377-security-residuals`.
+- **One label-deny engine for the executor and the transport post-filter
+  (SONNY-2729 part 2).** The post-filter (`server/rls_filter.zig`) had an
+  engine type and global of its own, beside the executor's
+  (`rls_types.RLSFilterEngine`), and `server/main.zig` kept the two in step
+  (`addDenyToEngines` wrote each deny to both; remove, list and count used
+  one of them), so a change that reached one engine and not the other, or a
+  process that installed one, left the post-filter and the executor
+  disagreeing about which labels a user may see. `rls_filter.RLSFilterEngine`
+  and `LabelPolicy` are now rls_types' types, its global is rls_types'
+  global, and the server creates one engine; `removeOneDenyPolicy` and
+  `hasPoliciesForGraph` moved to rls_types' engine and `addDenyToEngines` is
+  gone. Part 1 (the post-filters fail closed when they cannot run, 53200) was
+  in v0.8.23.
+- **Every `SecurityManager` method that touches shared state is locked
+  (SONNY-2410).** One `SecurityManager` is shared by every connection
+  thread. SONNY-2394 locked `authenticate`, `authenticateWithMFA` and
+  `updatePassword`; the other methods read and changed the users, roles,
+  permissions, role memberships, sessions, policies, MFA cache and audit log
+  with no lock (`getUserIdByUsername`, which the QUIC and gRPC password
+  change call, walked the users map while it could change; concurrent
+  `createSession` / `hydrateUser` / `createRole` corrupted the maps and
+  handed out one role id twice). Every public method but `init`,
+  `initEmpty` and `deinit` now holds the manager's lock, which is
+  re-entrant on one thread (`ReentrantMutex`). The pointers `createRole` and
+  `createPermission` answer still point into the manager's maps and are
+  moved by the next create.
+- **The RLS policy cache owns its keys; no grant on graph `*` (SONNY-3135
+  N6, N7d).** (N6) `RLSEngine.checkRowAccess` cached each decision under
+  the graph and table strings its caller passed (`PolicyCache.put` kept the
+  borrowed slices), so a library caller that freed them left every later
+  cache lookup, invalidation and eviction reading freed memory (a crash in
+  the eviction scan). The cache now keeps its own copy of each key and frees
+  it with the entry. (N7d) **Behaviour change:** `geode.auth.grant(<priv>,
+  <user>, '*')` answers 0A000 (`GrantWildcardNotSupported`) and stores
+  nothing; it stored a grant on a graph named `*`, which no request matches,
+  and reported it granted. A revoke of `*` still removes one an older
+  release stored. N7c: see the next entry.
+- **A graph drop waits for the graph's lock holders, whoever drops it
+  (SONNY-3135 N7c).** DROP GRAPH's handlers take the graph's write lock
+  before the executor drops it (SONNY-3028); every other caller of
+  `GraphStore.dropGraph` held none: the executor's DROP GRAPH and CREATE OR
+  REPLACE GRAPH of a graph created after the handler's lock attempt (or run
+  by an embedded executor), the CREATE GRAPH rollback, the QUIC and gRPC
+  HELLO auto-create rollbacks and `SchemaManager.createGraph`'s rollback.
+  `StorageAdapter.dropGraph` only marks a pinned graph dropped (the pins
+  kept its holders memory-safe), so such a drop returned while another
+  request read or wrote the graph, and that request's writes went to a
+  dropped graph while it reported success. `GraphStore.dropGraph` now takes
+  the graph's write lock itself unless the calling thread holds it
+  (`ManagedGraph.write_holder`, `StorageAdapter.threadHoldsGraphWriteLock`),
+  first and released last; a missing graph is not locked (and not
+  created). The raft apply already took the lock (SONNY-3350).
+  `test-sonny3135-lockless-drop-waits`.
+- **A write never creates a dropped graph again (SONNY-3122).** A session
+  left on a graph another session dropped took the graph's write lock for
+  its next write; the adapter no longer had the graph, and
+  `materializeGraphForWriteLock` created it again so the write could go
+  ahead, bringing the graph back for a principal without the schema
+  permission (the SONNY-3033 class). A writer waiting for the lock while the
+  drop ran was told the graph was gone and then created it the same way
+  (review probe V12). The write lock now materializes only a graph the
+  engine knows but has not opened (in its registry) and the default graph
+  (ENG-3914 RC-3); for any other it answers GraphNotFound, also when the
+  graph goes between its two attempts. **Behaviour change:** a write (or
+  MERGE) from a session whose graph was dropped fails with GraphNotFound,
+  over gRPC and over QUIC's general and fast paths alike; only CREATE GRAPH
+  (and a HELLO allowed to create its graph) creates a graph.
+  `test-sonny3122-dropped-graph-not-recreated`.
+- **MERGE visibility refusals are rate-limited per session and label
+  (SONNY-2817).** A MERGE refused for a row row-level security hides
+  (`MergeMatchNotVisible`, 42501, SONNY-2686) is an equality oracle over
+  any property its pattern names; SONNY-2728 audited each refusal, and
+  nothing limited how fast a session could guess. **Behaviour change:** a
+  session's fifth refusal within 60 s on one label of one graph starts a
+  5-minute cooldown in which every MERGE naming that label there is refused
+  with `MergeRefusalRateLimited` (SQLSTATE 53400), before what it would
+  match is looked at, so the cooldown answers nothing. The cooldown's start
+  (`MERGE_REFUSAL_RATE_LIMIT_ENGAGED`) and each refusal in it
+  (`MERGE_REFUSAL_RATE_LIMITED`) are audited with the user, graph and
+  labels, never a value. Other labels, other sessions and an embedded
+  executor with no session are not limited
+  (`src/execution/merge_refusal_limiter.zig`, `SessionState`; see
+  `docs/kb/RLS_IMPLEMENTATION.md`). `test-sonny2817-merge-refusal-limit`.
+- **`geode query` exit code, superuser roles, procedure errors, EXPLAIN
+  POLICY's executor checks, legacy hashes (SONNY-6369).** (1) **Behaviour
+  change:** `geode query` exits 1 when the server answers the query with an
+  error (any non-00000 GQLSTATUS), on QUIC and gRPC, as `--batch` and
+  `--file` already did; it exited 0 and only a transport failure was
+  visible in the exit code. (2) **Behaviour change:** giving a superuser
+  (the bootstrap admin, or any user stored with `is_superuser`) a role other
+  than admin is refused: `ALTER USER ... SET ROLE` /
+  `geode.auth.user_assign_role` answer 0A000 (`SuperuserRoleFixed`) and the
+  offline `geode user assign-role` / `user update --role` exit 1, before
+  anything is changed. A superuser always resolves to admin, so the role was
+  stored, reported assigned and never took effect. (3) `geode.rls.add_deny_policy`,
+  `remove_deny_policy`, `add_attribute_policy` and `remove_attribute_policy`
+  answer missing arguments with 22023 and a process with no RLS engine with
+  55000 (`RlsEngineNotInitialized`); they answered 00000 with an `error:`
+  status row. (4) `geode.auth.user_set_attribute` / `user_remove_attribute`
+  results own their rows (a caller freeing them leaked); removing an
+  attribute the user does not have answers 42704 (`UserAttributeNotSet`)
+  instead of a 00000 row, and `user_remove_attribute` checks its arguments
+  (22023) and the user (42704 for an Admin) as `user_set_attribute` does.
+  (5) EXPLAIN POLICY also reports the checks the executor makes itself:
+  `bind_graph` for USE GRAPH, the procedure gate (`read` / `write` on
+  `procedure:<name>`, refused too by a deny on the graph it runs on), and
+  the DDL schema gates (`schema` and `bind_graph` on the graph, `schema` on
+  `graph:*` for index, constraint and schema DDL). (6) A user whose stored
+  hash is a legacy BLAKE2b hash (`user import --algorithm blake2b`) gets an
+  Argon2id hash of the same password at its first successful login (saved
+  to `__geode_security`, sealed; its auth version, sessions and reset flag
+  are kept; not in cluster mode, where the legacy hash stays). Checking a
+  password against a legacy hash now does Argon2id's work too, so the login
+  time no longer tells which accounts hold a legacy hash. (7) Docs:
+  `GQL_AUTH_DDL.md` gives a CREATE USER whose save fails as 58030;
+  `ENTERPRISE_GAPS.md` and `KNOWN_TEST_ISSUES.md` give `gql_conformance` as
+  21/21.
+- **`geode.rls.*` restrictions survive a restart and are refused in
+  cluster mode (SONNY-3034).** (1) **Behaviour change:** the label denies
+  `geode.rls.add_deny_policy` adds and the attribute policies
+  `geode.rls.add_attribute_policy` adds, and their removal, changed the
+  in-memory RLS engines only: a restart dropped every restriction without
+  a word (the v0.8.23 known limitation). They are now stored in
+  `__geode_security` as policy records of their own kinds (`rls_deny`,
+  `rls_attribute`; GPS hydration skips them), signed and sealed into the
+  HMAC chain like the other security records
+  (`AuthGraphManager.persistRlsRestriction` / `removeRlsRestriction`),
+  and put back in force at startup before any listener starts
+  (`[startup] geode.rls restrictions loaded: N of M`; one that cannot be
+  applied is logged as an error and the rest still load). An add that
+  cannot be stored is taken out of the engines again, and a removal that
+  cannot be stored leaves the restriction in force; both fail with 58030
+  (`RlsRestrictionNotPersisted`). A server whose auth graph manager is not
+  active refuses them the same way. An executor with no security graph
+  wired (embedded, unit tests) keeps them in memory only, as before.
+  Records written by this release are not understood by older releases,
+  which refuse to load them (the restriction is then not in force there).
+  (2) **Behaviour change:** in cluster mode the four changes
+  (`add_deny_policy`, `remove_deny_policy`, `add_attribute_policy`,
+  `remove_attribute_policy`) are refused like the other unreplicated
+  security changes (`cluster.gateUnreplicatedWrite`: follower 40001
+  `ClusterNotLeader`, leader 40001 `ClusterWriteNotReplicable`); they
+  applied on one node only. The user ABAC attributes
+  (`geode.auth.user_set_attribute`) the attribute policies compare against
+  are still memory-only.
+- **The expression RLS engine frees what it owns of a policy
+  (SONNY-2773).** `RLSEngine.deletePolicy` and `deinit` freed neither the
+  bytecode the engine compiles for a policy's USING / CHECK expression nor
+  the strings `geode.rls.add_attribute_policy` hands to it, and
+  `updatePolicy` dropped the bytecode it replaced: every
+  `geode.rls.remove_attribute_policy`, every geode-auth policy delete or
+  expression change, and every engine teardown leaked them for the server's
+  life. The engine now records what it owns (`Policy.owns_using_compiled` /
+  `owns_check_compiled`, set when it compiles; `owns_strings`, set by an
+  installer that hands its strings over, as `add_attribute_policy` does)
+  and frees exactly that on delete, on replace (keeping what the
+  replacement still points at) and at deinit. A pre-compiled expression a
+  caller pins, and strings a caller keeps (UserManager's, SONNY-2778), stay
+  the caller's.
+- **EXPLAIN POLICY asks what the gates ask; tenant listings are read-only
+  (SONNY-6313).** (1) **Behaviour change:** `EXPLAIN POLICY FOR <statement>`
+  derived one action and asked `gps.decide` about it on the resource
+  `database`, which no graph-scoped policy matches since SONNY-2753, so a
+  graph-scoped deny or allow was reported as not applying, and it did not
+  know the per-action write gate (SONNY-2781). It now reports one row per
+  question the QUIC and gRPC handlers' gates ask, for the session's graph:
+  the read gate's `decide(match_, graph)` on every graph the statement reads
+  (`query_traits.programReadGraphList`), and the write gate's actions on the
+  graph it changes (`write_walk.statementActions`: CREATE, UPDATE, DELETE;
+  WRITE and SCHEMA for DDL; WRITE, CREATE, UPDATE and DELETE for a change
+  no finer action names; for a self-locking procedure `gps.writePermitted`
+  on the database). The `resource` column is `graph:<name>`, or `database`
+  for a statement neither gate asks about (the security DDL, SHOW, session
+  statements), which still reports the one action it names. A change now
+  has two or more rows (its read, then its write). It still enforces
+  nothing. (2) `geode.tenant.list` and `geode.tenant.show` were not on the
+  read-only procedure list, so they counted as changes: a read-only request
+  (`ExecuteRequest.read_only`, the MCP read-only mode) could not list
+  tenants. They are read-only now and still need `admin_tenant` (Admin).
+- **Offline user CLI and the remaining auth procedure failures
+  (SONNY-6367).** (1) **Behaviour change:** `geode user create --role`,
+  `user update --role`, `user import --role` and `user assign-role` stored a
+  role node and never gave it to the user, then reported success: the user
+  had no role. They now assign the built-in role as `ALTER USER ... SET
+  ROLE` does (`cli_auth_helpers.assignBuiltinRole`); `create` / `import`
+  with no `--role` give `user`. A role name that is not built in, and
+  `assign-role` of a missing user, are refused before anything changes.
+  Users created offline before this hold no role. `geode role create` used
+  the next user id as the role id and could overwrite an existing role; it
+  now goes through `AuthGraphManager.createRole`. (2) `geode user list`
+  printed `(role: user)` for everyone and `geode user show` of a missing
+  user printed made-up details and exited 0; they print the role the server
+  resolves, and `show` of a missing user fails. (3) **Behaviour change:**
+  `geode user enable | disable` of a missing user, and
+  `geode.auth.user_enable` / `user_disable`, answered success; they fail
+  (42704 for an Admin over the wire). (4) **Behaviour change:**
+  `geode.auth.user_set_attribute`, `role_create`, `user_import`,
+  `mfa_setup`, `mfa_verify`, `mfa_enable` and `mfa_disable` failures are
+  GQLSTATUS errors (42704, 22023, 42710, 0A000, 55000 not enrolled, 28000
+  invalid code, 53400 locked out) instead of 00000 status rows; a failed
+  `mfa_verify` no longer reads as a pass to a caller that checks the status.
+  Scripts and harness specs that matched those rows must match the error.
+  (5) A user imported with `--algorithm blake2b` could never log in (the
+  login verified only Argon2id); the login now verifies the legacy BLAKE2b
+  format (`geode_auth.verifyPasswordBlake2bLegacy`, constant time, refused
+  under FIPS). (6) The unreferenced `src/cli/user_storage_simple.zig` and
+  `user_storage_secure.zig` were removed. (7) `tests/simple_stdio_test.sh`
+  test 3 read only the first output line (a warning) and always failed.
+  (8) The `gql_conformance` suite count in CLAUDE.md and the status docs is
+  21/21 (T1–T20 and the `ZZ_cleanup` teardown), not 20/20.
+- **Auth residuals (SONNY-6359).** (1) **Behaviour change:** an Admin's
+  `ALTER USER <other> SET PASSWORD` over QUIC and gRPC was refused 42501 by
+  the password intercept before the parser, although
+  `docs/GQL_AUTH_DDL.md` maps the statement to
+  `geode.auth.user_reset_password`. The intercept now handles only the
+  session's own password (and refuses a request with no authenticated
+  user); another user's goes to the parser and runs as
+  `user_reset_password`: Admin only (42501 otherwise), the password policy
+  (22000), audited (`proto_util.passwordInterceptApplies`). (2) **Behaviour
+  change:** `geode.auth.user_change_password` skipped the old-password check
+  when the old password was empty; it always checks it now (28000 and
+  nothing changed). (3) **Behaviour change:** failures that answered SQLSTATE
+  00000 with a status row starting `error:` or `note:` are GQLSTATUS errors:
+  `user_create` / `CREATE USER` of an existing user 42710 and of the reserved
+  `geode-cluster` 42939 (any other failure its own status);
+  `user_enable` / `user_disable` and `user_assign_role` failures (e.g. an
+  unreadable security graph, 58000); `user_assign_role` without arguments
+  22023 and of a missing user 42704 for an Admin; an unknown privilege 22023;
+  `GRANT` / `REVOKE` without `ON GRAPH` (and `geode.auth.grant` / `revoke`
+  with an empty resource) 0A000, changing nothing. (4)
+  `SecurityManager.validatePassword` counted runs of letters and digits as
+  words while `PasswordPolicy` counts space-separated words, so
+  `Alpha-Beta-Gamma-Delta-Epsilon` passed one and not the other; both use
+  `PasswordPolicy.countPassphraseWords`. (5) `UserStorageBackend.hasGraphGrant`
+  and `AuthGraphManager.listGraphGrants` / `listGraphGrantsForUser` (SHOW
+  GRANTS, startup hydration) read the grant records without `auth_ddl_lock`,
+  under which GRANT / REVOKE change them; they hold it now, and the GRANT /
+  REVOKE write-throughs take it themselves (re-entrant). (6) `geode auth
+  verify` ran the save path of a changing command and leaked the resolved
+  data directory; it now tears down without sealing or saving
+  (`cli_auth_helpers.deinitCliAuthWithoutSaving`) and leaks nothing.
+  **Remaining (not fixed):** opening the store still writes: each graph's
+  WAL is checkpointed (`graph.wal.ckpt`) and truncated, the graph registry
+  and the timeseries WAL are rewritten, and `.geode.lock` records the
+  holder; the storage engine has no read-only open, so a verify that
+  writes nothing at all needs one. (7) The in-repo scripts (`tests/*.sh`,
+  `scripts/cluster_spawn.sh`) seeded admin passwords that break the password
+  policy (a forced reset at the first login, so every query failed with
+  08P01); they seed the passphrase `Geode Test Admin Passphrase` (the
+  backup scripts their own passphrases), and the scripts that built a
+  command string with the password use `tests/lib/geode_cli_wrapper.sh` so
+  the passphrase stays one argument.
+  Regression: `zig build test-sonny6359-auth-residuals`.
+- **User changes no longer hold the user store's mutex across the
+  security-graph write; offline removals report a failed delete (SONNY-6352,
+  items 3 to 5).** (3) `user_management`'s createUser, createUserWithHash,
+  deleteUser, updateUserPassword, assignRole and setUserActive held
+  `user_store_mutex` (lock tier 5) while the persistent writer wrote the
+  `__geode_security` graph (tier 1), a lock-order reversal. Each now holds
+  `auth_ddl_lock` (tier 1.7, re-entrant) for the whole change, so user
+  changes stay serialized (the QUIC and gRPC `ALTER USER ... SET PASSWORD`
+  intercepts, which did not take it, included), and takes `user_store_mutex`
+  only to read the cache before the write-through and to apply the saved
+  change after it; a created user is cached only once it is saved. The
+  Argon2id work of CREATE USER and a password change (the reuse check and the
+  new hash) now runs with the mutex released too. (4) **Behaviour change:**
+  `geode user delete`, `geode role delete` and `geode policy delete`
+  dropped the removal's error and reported the record deleted while it
+  stayed stored; they now print the error, say nothing was deleted and exit
+  1. `geode policy delete` of a name with no RLS policy said `deleted`; it
+  now says `not found (noop)`, as `geode role delete` does. (5) DROP USER
+  whose node delete fails (58030, the user stays stored and is locked out,
+  its sessions stale, the chain verifies, the retry drops it) now has an
+  end-to-end test. The lock-order table in `CLAUDE.md` lists
+  `auth_ddl_lock`.
+  Regression: `zig build test-sonny6352-auth-writer-and-removals`.
+- **Offline `geode user create` and `geode user update --password` store an
+  Argon2id hash, not the password, and seal the chain (SONNY-6358).** Both
+  wrote the supplied password into the user record's `password_hash` as it
+  was (`src/cli/user_mgmt_cli.zig`), so the credential sat in the clear in
+  `__geode_security` and no login with it could succeed (the server checks
+  an Argon2id PHC string). They now hash with the server's
+  `geode_auth.hashPasswordArgon2id`; a password set on an existing user goes
+  through `AuthGraphManager.updateUserPassword` (record HMAC, chain seal,
+  forced-reset flag cleared, auth version moved on), as `change-password` /
+  `reset-password` already did. On a store with no auth records the change
+  was not sealed at all and the server refused to start (no chain root); it
+  is now sealed with the key the server would use there
+  (`cli_auth_helpers.changeKey`: `GEODE_AUTH_HMAC_KEY`, `GEODE_TDE_KEY`, else
+  `.geode_hmac_key`, generated as at the server's first start). **Operator
+  action:** a user created or updated offline before this fix has its
+  password stored in the clear and cannot log in; set it again (`geode user
+  reset-password`). FIPS builds refuse to set a password offline
+  (`FipsUnsupported`), as on the server. `docs/USER_AUTH.md` no longer
+  claims BLAKE2b is the current password hash.
+  Regression: `zig build test-sonny6358-offline-password-hash`.
+- **The periodic auth chain verification and `canUserAccessGraph` hold the
+  auth DDL lock (SONNY-6352, items 1 and 2).** `AuthGraphManager.runVerifyRound`
+  -> `verifyChain` read the role, policy and permission caches and the
+  per-graph grant map, and `canUserAccessGraph` (LSP / schema visibility)
+  iterated the grant map, without `auth_ddl_lock`, under which CREATE /
+  DROP ROLE, CREATE / DROP POLICY, GRANT and REVOKE change them (SONNY-6329).
+  A verification racing one of them could read a map mid-rehash, or count
+  records that changed before it read them; the count mismatch reached a
+  `catch unreachable` and crashed the verifying thread. Both now hold
+  `auth_ddl_lock` (the round takes it before the store lock), and
+  `verifyChain` fails with `RecordCountMismatch` instead of crashing when
+  the records read do not match the count. A verification round now waits
+  for an auth change in progress (and delays one for at most its bounded
+  store-lock wait).
+  Regression: `zig build test-sonny6352-auth-verify-locking`.
+- **Offline auth CLI uses the server's data directory; `geode auth verify`
+  no longer passes a store with no auth state; GRANT of a missing user is an
+  error; auth DDL results own their rows (SONNY-6345).** (1) **Behaviour
+  change:** with no `--data-dir` and no `GEODE_DATA_DIR`, `geode auth init |
+  reseal | verify | policy | grant`, `geode user` and `geode role` opened
+  `/var/lib/geode` (their help said `./data`) while `geode serve` opens the
+  per-user default (`$XDG_STATE_HOME/geode`, `~/.local/state/geode`,
+  `/tmp/geode-<uid>`), so they inspected and changed another store. They now
+  resolve the directory as the store does
+  (`cli_auth_helpers.resolveCliDataDir` over
+  `graph_store.getPersistenceFilePath`); `geode auth init` creates it, and
+  the HMAC key is looked up in the resolved directory (it was looked up only
+  under an explicit `--data-dir`). Operators who relied on the
+  `/var/lib/geode` default must pass `--data-dir /var/lib/geode` or set
+  `GEODE_DATA_DIR`. (2) **Behaviour change:** `geode auth verify` on a
+  directory with no `__geode_security` graph created the directory, the
+  registry, a lock file and the security graph and printed `0 records,
+  integrity OK` with exit 0; it now reads the registry only, creates
+  nothing, and reports that there is no auth state with exit 1. (3)
+  **Behaviour change:** `GRANT` / `REVOKE ... ON GRAPH` (and
+  `geode.auth.grant` / `revoke`) of a user that does not exist answered
+  00000 with a row `error: user not found`; it is now 42704 (`User does not
+  exist`), and with no security graph wired 58030. (4) The status rows of
+  `CREATE` / `ALTER` / `DROP USER`, `GRANT` and `REVOKE` are owned by their
+  result (they leaked when the caller freed the result with a
+  general-purpose allocator).
+  Regression: `zig build test-sonny6345-auth-cli-and-grant`.
+- **`GRANT ROLE <custom role>` is refused instead of reporting a grant that
+  confers nothing (SONNY-6292).** A custom role (`CREATE ROLE`) carries no
+  privileges. `GRANT ROLE <custom> TO <user>`, `ALTER USER <user> SET ROLE
+  <custom>` and `geode.auth.user_assign_role(<user>, <custom>)` answered
+  `assigned custom role ...` and kept the name in an in-memory table that was
+  never saved (gone at restart), was not cleared by `DROP ROLE` (a role
+  re-created under the same name went back to its old members), was read by
+  no authorization path, and was read through a slice returned after its
+  lock was released. **Behaviour change:** they now fail with SQLSTATE 0A000
+  and change nothing; the table and `auth_dispatch.getCustomRolesForUser` are
+  removed. Built-in roles are granted as before; an unknown role is still an
+  error. Privileged custom roles with persisted membership remain
+  unimplemented (docs/GQL_AUTH_DDL.md, Known Limitations).
+  Regression: `zig build test-sonny6292-custom-role-membership`.
+- **BREAKING: one password policy on every path that sets a password
+  (SONNY-6331).** The documented policy (docs/USER_AUTH.md section 2: at
+  least 20 characters, an upper and a lower case letter, at least 3
+  space-separated words, the limits raised by `GEODE_PASSWORD_MIN_LENGTH` /
+  `GEODE_PASSWORD_MIN_WORDS`) was applied by the offline `geode user` CLI and
+  the forced reset only. On the server `CREATE USER` /
+  `geode.auth.user_create` applied an older rule (8 characters, a letter and
+  a digit) and `ALTER USER ... SET PASSWORD` / `geode.auth.user_reset_password`
+  / `user_change_password` none (an empty password was accepted). They now
+  apply the policy (`user_management.createUser` / `updateUserPassword`). A
+  refused password answers SQLSTATE 22000 with the first rule it breaks and
+  the configured limit (for example `Password too short (minimum 25
+  characters)`; the policy's messages always said 20 characters and 3
+  words), never the password, and nothing is created or changed.
+  **Behaviour changes:** (1) clients that create users or set passwords with
+  short or one-word passwords (`Alice123!`) are refused and must use
+  passphrases; (2) a first-boot `GEODE_ADMIN_PASSWORD` /
+  `GEODE_DEFAULT_PASSWORD` seed that does not meet the policy is still
+  accepted, but the admin now has to set a compliant password at first login
+  (a forced reset, as docs/USER_AUTH.md "Reset Triggers" states; it was
+  accepted with a warning only), so deployments and test rigs that seed a
+  one-word admin password (`GeodeTestPassword123!`) must seed a passphrase
+  to avoid the reset; (3) generated passwords (the first-boot admin and its
+  `.geode_admin_password` file, `geode user ... --generate-password`,
+  `user_create`'s generated password) are passphrases of 8-character words
+  that meet the policy instead of 32 hex characters, which it refused (so
+  `geode user change-password --generate-password` failed its own check).
+  Existing users are not locked out: a stored password that predates the
+  policy keeps working, and the policy applies at its next change.
+  `GEODE_PASSWORD_MIN_LENGTH` above 256 (the longest accepted password) is
+  read as 256, and `GEODE_PASSWORD_MIN_WORDS` above 128 as 128 (no password
+  could be set). docs/USER_AUTH.md no longer claims the server re-checks
+  stored passwords at login (it does not).
+  Regression: `zig build test-sonny6331-password-policy-paths`.
 - **BREAKING: fail-closed default role.** A user with no stored built-in
   role (not a superuser, no `HAS_ROLE` edge to `admin`, `user`, `readwrite`
   or `readonly`) used to fall back to `readwrite` and could read and write
@@ -692,6 +1206,399 @@
   directory has no catalog and that file exists. Copy it over (after
   checking it is yours) before serving traffic.
   Regression: `zig build test-sonny6324-fle-catalog-fail-closed`.
+- **Retiring the `auto_migrated_grant_*` policies fails closed
+  (SONNY-4877).** Startup collected the policy names and deleted the stored
+  rows before touching the live catalog; if either step failed (out of
+  memory, a failed `__geode_security` write), startup logged the error and
+  carried on with the migrated allow policies still enabled, so a revoked
+  grant kept authorizing. Every migrated allow policy is now disabled in the
+  live catalog, and cached decisions invalidated, before any step that can
+  fail; migrated deny policies stay in force until dropped; the next startup
+  drops the rows left. A retry that finds a row already removed by a failed
+  run reseals the auth chain, so it verifies again.
+  Regression: `zig build test-sonny4877-grant-retire-fail-closed`.
+- **A `GRANT`, `REVOKE` or `CREATE USER` whose save fails answers an error
+  and leaves nothing in force that is not stored (SONNY-1333).** A per-graph
+  `GRANT` (and `geode.auth.grant`) logged a failed write to
+  `__geode_security` and answered `Granted ...`: when the store write failed
+  nothing was granted, and when the live-table insert failed the stored
+  grant appeared at the next start. It now answers 58030
+  (`GrantNotPersisted`) and grants nothing: every privilege of the statement
+  (all three for `ALL`) is stored and live, or none is, and a grant held
+  before is kept. A `REVOKE` takes the privilege away in memory first, so a
+  failed save (58030, as since SONNY-3038) no longer leaves it usable until
+  the restart; the retry removes the stored record. A revoke whose record
+  delete failed inside the store used to count as done (the store's delete
+  reports nothing) and the grant came back at the next start; the delete is
+  now checked. `CREATE USER` whose save fails answers `error:
+  UserNotPersisted` and creates no user (it could log in until the restart),
+  and a user stored without its role edge is removed again, so the retry
+  succeeds. With no persistence installed a `GRANT` or `REVOKE` fails rather
+  than reporting success. A user or role record whose node could not be
+  written no longer stays cached: the next auth-chain seal panicked
+  (`RecordCountMismatch`). These write-throughs undo themselves and are not
+  replayed by the statement undo (SONNY-3348), which reverted the security
+  graph behind the auth manager's record maps; behaviour change: a `GRANT`,
+  `REVOKE` or `CREATE USER` inside an explicit transaction is not undone by
+  `ROLLBACK` (its in-memory effect never was).
+- **`SHOW GRANTS [ FOR <user> ]` lists per-graph grants (SONNY-1333).**
+  After the GPS policies that apply to the user, one row per graph the user
+  holds grants on, as stored in `__geode_security` (null `policy_name`, the
+  privileges in `actions`). `FOR` is optional (the current user). A user may
+  list its own grants; another user's need the Admin role (42501 otherwise,
+  audited). The new read-only `geode.auth.grant_list([username])` procedure
+  returns one row per stored grant with the same rule. Behaviour change:
+  `SHOW GRANTS FOR <other user>`, which listed policies for any caller, is
+  refused for a non-admin, and an unauthenticated one (auth on) answers
+  28000 like the other auth `SHOW` statements.
+  Regression: `zig build test-sonny1333-grant-persist-show-grants`.
+- **The other auth write-throughs answer an error when the save fails, and
+  fail closed (SONNY-3038).** `DROP USER`, `ALTER USER ... SET PASSWORD`,
+  `... SET ROLE`, `... ENABLE` / `DISABLE` (and their `geode.auth.*`
+  procedures), `CREATE ROLE`, `DROP ROLE` and `geode.auth.user_import`
+  logged a failed write to `__geode_security` and reported success. The
+  in-memory user is reloaded from the store whenever its auth version
+  differs, so a dropped user could still log in, the old password worked
+  again, a disabled user was active again and a downgraded role came back,
+  right away; a role or imported user lived in memory only until the
+  restart. Each is now saved first and answers 58030
+  (`UserNotPersisted`, `RoleNotPersisted`) when it cannot be, with the
+  stored user or role as it was. A delete, a disable, a password change or
+  a role downgrade that could not be saved locks the user out instead
+  (no login, sessions no longer current) until a later change to the user
+  is saved or the next start, as a failed `REVOKE` takes the privilege away
+  at once; `DROP ROLE` removes the role from memory and fails, and the
+  retry removes the stored record. Inside the auth manager, a password,
+  active-flag, role (a role change is several edge writes), role-record or
+  policy change that failed part way, the chain seal included, is undone,
+  so the stored record and the chain agree and the next start verifies;
+  `CREATE POLICY` and `ALTER POLICY` no longer leave a stored change behind
+  the catalog they put back. `CREATE USER` keeps its status-row error
+  (SONNY-1333). Also, `DROP USER` of a user not in the in-memory cache
+  (users are loaded at their first login after a start, and evicted)
+  answered `deleted` and deleted nothing; it now loads and deletes the
+  stored user. See docs/GQL_AUTH_DDL.md, "When a save fails".
+  Regression: `zig build test-sonny3038-auth-rls-low-findings`.
+- **A dropped policy no longer comes back at the next start (SONNY-3038):**
+  `DROP POLICY` removed the first stored GPS record of the name; a second
+  one (written before names were unique, or by another writer) was loaded
+  at the next start. It removes every one.
+- **A label deny is in both RLS engines or in neither (SONNY-3038):**
+  `geode.rls.add_deny` added the deny to the post-filter and, when the
+  executor's engine could not add it, logged that and reported success, so
+  aggregates and projected properties still counted the denied rows. The
+  call now fails and the post-filter entry is taken out again.
+- **The algorithm post-filter checks evicted nodes (SONNY-3038):** a node id
+  in a `CALL algo.*` row was looked up in the bounded resident node cache
+  only, and a node evicted from it was taken for a deleted one, so the row
+  of a denied node was returned. It is read from the storage engine.
+- **Federation post-merge filter and cache (SONNY-3038):** the rows the
+  filter removed were not freed, and the shortened row list was freed with
+  the wrong length; the federation query cache was keyed on the query text
+  only, so one user's RLS-filtered results could be served to another. The
+  filter frees what it removes; the cache key includes the user, graph and
+  tenant. (The federation manager is not wired into the server; SONNY-6279
+  and SONNY-6298 then removed it and `rls_filter.applyRLSToFederatedResults`,
+  so only the removal is left to test.)
+- **Removed the unused RLS `QueryRewriter` (SONNY-3038):**
+  `rls_core.QueryRewriter` and `RLSEngine.rewriteQuery` built query text
+  from policy text and combined policies the old way; nothing called them.
+- **`SHOW PERMISSIONS FOR <user>` needs Admin for another user
+  (SONNY-6269).** The docs said so, but `geode.auth.user_permissions` did
+  not check it, so any authenticated user could list any other user's
+  permissions. It now applies the `SHOW GRANTS` rule (SONNY-1333), through
+  the same check: a user may list its own permissions (no `FOR`, or `FOR`
+  its own name); another user's, a user that does not exist included, need
+  the Admin role, and a refusal answers 42501 and is audited
+  (`access_denied`). `CALL geode.auth.user_permissions()` with no argument
+  now lists the caller's permissions, as `geode.auth.grant_list()` does,
+  instead of an unnamed user's. Behaviour change: a non-admin's
+  `SHOW PERMISSIONS FOR <other user>` is refused.
+  Regression: `zig build test-sonny6269-permissions-admin-gate`.
+- **A failed `DROP POLICY` no longer leaves the auth chain stale
+  (SONNY-6273).** The auth manager removed the policy's records and then
+  sealed the `__geode_security` HMAC chain; a seal that failed twice (no
+  memory, say) left the records gone and the chain still counting them,
+  while the statement failed and the policy stayed in force in memory. The
+  chain did not verify (`RecordCountMismatch`), so a restart before the next
+  auth change refused to start (`AuthChainTampered`), and after a reseal the
+  policy the failed statement had kept was gone at the next start. Now the
+  new seal is computed, every allocation of it, while the records are still
+  stored, and only then are the records removed and the seal stored: a
+  failure answers an error with the records, the catalog entry and the
+  chain as they were (a deny keeps denying, an allow keeps allowing, after a
+  restart too), and the retry drops it. A failure of the graph store's own
+  seal write is sealed again, as before.
+  Regression: `zig build test-sonny6273-drop-policy-atomic`.
+- **Custom roles are no longer kept in a request's freed memory
+  (SONNY-6278).** `CREATE ROLE`, `GRANT ROLE <custom role> TO <user>` and
+  the startup hydration of stored roles copied the role name, description
+  and member names into the process-wide custom-role store with the
+  allocator of the request running them (the statement's arena). Once the
+  request ended the store pointed at freed memory: `SHOW ROLES` could list a
+  garbage name, and a role lookup, `GRANT ROLE` or `DROP ROLE` read freed
+  memory (a use after free). The store and its membership table now own
+  their copies with a process-lifetime allocator, as the ABAC attribute
+  store does (GAP-0284); `DROP ROLE` frees the role's copies (they leaked),
+  re-creating a role frees its old description, and
+  `auth_dispatch.deinitCustomRoleStore` frees the rest.
+  Regression: `zig build test-sonny6278-custom-role-lifetime`.
+- **`SHOW USERS` no longer leaks on every call, and user and role listings
+  no longer read freed memory (SONNY-6312).** `geode.auth.user_list` (and
+  `SHOW USERS`) took a snapshot allocated with the user store's allocator
+  that nothing freed, so every call leaked for the life of the server; and
+  its rows pointed at the cached users' names and email addresses after the
+  store lock was released, so a `DROP USER` on another connection could
+  free them while the response was built (a use after free).
+  `geode.auth.user_show` and `SHOW ROLES` borrowed the store's strings the
+  same way. Each now answers a copy made under the store's lock with the
+  request's allocator, which the request frees
+  (`user_management.listUsers(allocator)` / `getUserSummary`); a listing
+  that cannot be made is now an error instead of an empty list. The
+  status rows of `CREATE ROLE` / `DROP ROLE` and the permission rows of
+  `SHOW PERMISSIONS` are freed with their result (they leaked).
+  Regression: `zig build test-sonny6312-user-list-ownership`.
+- **Auth user lookups and auth DDL are serialized; `geode serve --no-auth`
+  fails (SONNY-6329).** (1) The auth manager's user cache had no lock:
+  `graphGrantCheck` resolved the user on every policy decision the decision
+  cache missed by walking it while `CREATE` / `DROP` / `ALTER USER` on other
+  connections changed it (a reader in a rehashed or freed map, in an
+  authorization path). It now has a leaf reader-writer lock: lookups hold
+  it shared and copy the id or record, writers hold it exclusively for the
+  map change only. (2) An auth or policy change (the change in memory, the
+  write-through to `__geode_security`, the undo when that fails) was not
+  serialized across connections: a `CREATE POLICY x` and a `DROP POLICY x`
+  could interleave and leave the catalog and the security graph
+  disagreeing (or the chain unverifiable) until the next start. Every
+  `geode.auth.*` procedure that changes state (and so `CREATE` / `ALTER` /
+  `DROP USER`, `CREATE` / `DROP ROLE`, `GRANT`, `REVOKE`) and `CREATE` /
+  `ALTER` / `DROP POLICY` now run one at a time under one lock
+  (`security/auth_ddl_lock.zig`, which states its lock order). (3)
+  **Behaviour change:** `geode serve --no-auth` now fails at startup in
+  every build mode. It was refused outside Debug builds, and in a Debug
+  build it logged "Authentication disabled" while authentication stayed
+  on. The unused `ServerConfig.enable_auth` field is removed;
+  `--enable-auth` is still accepted and does nothing (authentication is
+  always on). `geode lsp --no-auth` and `geode mcp --no-auth` are
+  unchanged.
+  Regression: `zig build test-sonny6329-user-cache-and-ddl-serialization`.
+- **A security record whose node delete fails stays stored and in force
+  (SONNY-6293).** `UserStorageBackend.removePolicy`, `removeRole`,
+  `removeUser` and `removePermission` took the record out of memory first
+  and then deleted its `__geode_security` node without checking it (the
+  `HAS_ROLE` edge delete of a role revocation likewise). A delete that
+  failed left the node stored while the record was gone from memory: the
+  chain was sealed without it, the next start loaded the policy or role
+  again with a sealed record count that no longer matched, and DROP POLICY
+  reported success. The node now goes first through the checked delete
+  (grant removal's since SONNY-1333), and the record leaves memory only once
+  it is gone. DROP POLICY of a policy whose node cannot be deleted answers
+  58030 (`SecurityRecordDeleteFailed`) with the record stored, the catalog
+  entry kept (a DENY keeps denying, an ALLOW keeps allowing) and the chain
+  verifying; DROP ROLE answers 58030 (`RoleNotPersisted`, as before: the
+  role is out of memory now and returns at the next start unless retried;
+  a role only grants, so this fails closed); a DROP USER whose delete fails
+  answers 58030 (`UserNotPersisted`) and the user stays locked out
+  (SONNY-3038). A retry succeeds.
+  Regression: `zig build test-sonny6293-checked-auth-deletes`.
+- **The `geode.auth.apikey_*` procedures answer "not supported", and
+  `user_show` no longer shows other users or invents rows (SONNY-6291).**
+  The server has no API-key store: nothing creates, stores, hashes or
+  revokes a key, and the QUIC / gRPC handshake does not authenticate by one
+  (the `geode apikey` CLI keeps its own local state file). The procedures
+  were stubs: `apikey_check_scope` answered `scope granted` for any key,
+  `apikey_revoke` answered `revoked` and revoked nothing, `apikey_create`
+  printed a key built from its arguments, and `apikey_list` /
+  `apikey_check_scope` told any caller whether a user exists. **Behaviour
+  change:** every `geode.auth.apikey_*` procedure now answers 0A000
+  (`apikey_create` / `apikey_revoke` / any other mutating name still need
+  Admin first: 42501 for anyone else). docs/USER_AUTH.md no longer lists
+  API keys as implemented. **Behaviour change:** `geode.auth.user_show`
+  follows the SONNY-6269 rule: a user may show itself (with no argument,
+  itself); another user needs Admin (42501, audited `access_denied`). A
+  missing user is an error, not a made-up `unknown` / `user` / `active`
+  row: 42704 (`User does not exist`) for an Admin, and the same 42501 as a
+  forbidden user for anyone else (no existence oracle).
+  `geode.auth.user_permissions` / `SHOW PERMISSIONS FOR` of a missing user
+  is 42704 for an Admin (it listed the `user` role's permissions).
+  `error.UserNotFound` now maps to 42704 on every path.
+  Regression: `zig build test-sonny6291-apikey-user-show`.
+- **A read-only request refuses the security DDL (SONNY-2751).** The
+  statement classifier behind the per-request read-only floor
+  (`ExecuteRequest.read_only`, QUIC and gRPC) and the MCP read-only mode
+  counted `CREATE` / `ALTER` / `DROP USER`, `CREATE` / `DROP ROLE`, `GRANT`,
+  `REVOKE` and `CREATE` / `ALTER` / `DROP POLICY` as reads, so a read-only
+  request ran them (each kept its own Admin check, so an Admin connection
+  marked read-only created users and granted privileges). A user's own
+  `ALTER USER <self> SET PASSWORD`, which both handlers take from the raw
+  text before the parser, skipped the floor too. The one write walk
+  (`execution/write_walk.zig`) now records which changes a statement makes
+  (`Actions`); the floors refuse any of them (`StatementPlan.changes_state`,
+  `query_traits.changesStoredState`), the security DDL included, and the
+  password intercepts check the floor first. Procedures were already
+  classified fail-closed (anything not on the read-only list counts as a
+  change), and every statement kind is classified at compile time.
+  `CALL geode.auth.grant_list`, which only reads, was missing from the
+  read-only procedure list and is now on it; a compile-time check keeps that
+  list and the auth dispatcher's read-only set in step. The security DDL
+  still takes no graph write lock and no write gate. Behaviour changes: a
+  read-only request refuses the security DDL and password changes (42501);
+  `CALL geode.auth.grant_list` runs on a read-only request and for a
+  read-only user; the `read_only_covers_admin_ddl` capability is now `true`.
+  Regression: `zig build test-sonny2751-readonly-security-ddl`.
+- **A GPS deny scoped to one graph applies to that graph only
+  (SONNY-2753).** `gps.decide` matched deny policies with a rule under which
+  a policy scoped to graph `g` also matched every non-graph resource: a DENY
+  READ on `g` refused every read-only procedure on every graph, a DENY WRITE
+  on `g` every procedure that changes data, a deny on `g` a node or edge of
+  any graph, and a DENY DECRYPT_FIELD on `g` every decryption. Allow and
+  deny policies now cover resources by one rule: `*` covers everything; a
+  graph-scoped policy covers its graph and the nodes and edges in it. A
+  procedure is refused by a deny on the graph it runs on (or `*`); field
+  decryption asks on the node in the graph being read. A change of every
+  graph at once (a self-locking procedure CALL; index, constraint and schema
+  DDL, which bind every graph) is refused by a deny on any graph, since it
+  changes that graph too. (Plain writes to another graph were already
+  allowed: the write gate asks on the graph a program changes since
+  REQ-SEC-PER-GRAPH-GRANTS.) Behaviour changes: a graph-scoped deny no
+  longer refuses procedures, nodes, edges or decryption on other graphs; a
+  DENY SCHEMA on any graph now refuses `CREATE` / `DROP INDEX`,
+  constraint and `CREATE` / `DROP SCHEMA` DDL from every graph; a
+  graph-scoped allow of DECRYPT_FIELD now allows decryption on its graph
+  (it never applied before).
+  Regression: `zig build test-sonny2753-graph-scoped-deny`.
+- **Every GPS action a policy can name is enforced (SONNY-2781).**
+  Enforcement asked `gps.decide` about `write` (one gate for all DML and
+  DDL), `read` / `write` on procedures and `decrypt_field` only, and the
+  handlers' read gate skipped `decide` for every principal whose builtin
+  role holds Read: a DENY READ or MATCH did not stop a plain MATCH, a DENY
+  CREATE, UPDATE or DELETE stopped nothing, and an allow naming one of
+  those allowed nothing (v0.8.23 documented them as accepted but not
+  enforced). Now the handlers' write gate (`gps.changePermittedOn`) asks
+  by what the program does, from the same write walk that decides the lock
+  and the read-only floor: CREATE for CREATE / INSERT / MERGE, UPDATE for
+  SET / REMOVE / a MERGE's ON MATCH SET, DELETE for DELETE, WRITE and
+  SCHEMA for DDL, and WRITE with CREATE, UPDATE and DELETE for a procedure
+  that changes data, BACKUP and RESTORE. WRITE is the umbrella (a DENY WRITE
+  still stops every change; an ALLOW WRITE allows every data change). The
+  read gate asks MATCH (matched by a READ or MATCH policy) for every
+  principal, on every graph the program reads, an EXPLAIN'd statement's
+  graph included. A deny naming UNWRAP_KEY, which nothing asks for, is
+  refused when added (`error.PolicyActionNotEnforced`); an allow naming it
+  is still accepted. `execution.checkPermission`, which had no callers, is
+  removed. The security DDL no longer counts as touching the session's
+  graph. Behaviour changes: a DENY READ / MATCH on a graph refuses every
+  read of it, writes included (a change reads the graph it changes), and
+  EXPLAIN of a statement on it; a DENY CREATE, UPDATE or DELETE refuses the
+  matching statements; an allow naming CREATE, UPDATE or DELETE (with READ
+  on the graph) now allows them; a DENY SCHEMA now also refuses CREATE /
+  DROP GRAPH TYPE; adding a deny naming UNWRAP_KEY fails. See
+  docs/security/gps-decide.md, "What each action enforces".
+  Regression: `zig build test-sonny2781-gps-action-enforcement`.
+- **The GPS policy catalog has a lock (SONNY-2756).** `gps.decide` walks
+  the policy catalog on every read and write the handlers gate, and SHOW
+  POLICIES, SHOW GRANTS FOR and `geode.auth.policy_list` list it, while
+  CREATE, ALTER (RENAME, SET ENABLED) and DROP POLICY on other connections
+  appended to, renamed in and freed from it with no lock: a reader could
+  walk a list being reallocated or read a dropped policy's freed strings
+  (SHOW POLICIES crashed under concurrent policy DDL), and a decision's deny
+  scan and allow scan could see two different catalogs, so it could allow
+  what no catalog allowed. The catalog now has a reader-writer lock: a
+  decision holds it shared from its deny scan to its allow scan, listings
+  copy their rows under it, and each change holds it exclusively for the
+  change alone (never across the `__geode_security` write-through), with
+  the policy version bumped and cached decisions invalidated under the same
+  hold. Behaviour change: a policy change waits for the decisions and
+  listings in progress (microseconds) and they wait for it. The DROP GRAPH
+  half of the ticket was closed by SONNY-3028 (pinned graphs, DROP GRAPH
+  waits for the graph's lock holders).
+  Regression: `zig build test-sonny2756-policy-catalog-concurrency`.
+- **With authentication disabled QUIC and gRPC treat a request the same
+  (SONNY-2782).** The QUIC handler ran its write and read gates only for a
+  session with a role, so with authentication disabled nothing was gated;
+  the gRPC handler skipped its read gate likewise but ran its write gate for
+  every session, and refused every change (42501) unless
+  `--insecure-allow-all` was set, while it ran reads and every admin
+  procedure. Both handled DDL and changing procedures by handing the
+  executor an anonymous principal, which refused them. Now both handlers
+  authorize through one function (`session_graph.requestPrincipal`,
+  `requestChangePermitted`, `requestReadPermitted`): with authentication
+  enabled every session is gated, whatever its role (one with none is
+  refused); with it disabled there is no principal and every request runs
+  as if by an administrator, on both transports, `--insecure-allow-all` or
+  not. Authentication disabled is an in-process mode (embedders, tests):
+  `geode serve` always enables authentication. Behaviour changes, with
+  authentication disabled only: gRPC runs changes, DDL and changing
+  procedures without `--insecure-allow-all`, and QUIC runs DDL and changing
+  procedures; with authentication enabled, a QUIC session with no role is
+  now gated (it was not; no such session arises today). See
+  docs/security/gps-decide.md, "Authentication disabled".
+  Regression: `zig build test-sonny2782-auth-disabled-transport-parity`.
+- **The server's bulk MERGE matches a node only in the session's tenant
+  (SONNY-2976, SONNY-2724).** MERGE's property index has no tenant in its
+  key and names one node per key, the lowest id in any tenant, and the
+  storage adapter's bulk MERGE (`bulkMergeNodeWithReservedIdForTenant`,
+  the multi-property variant, `bulkMergeNode`) took that node as the match.
+  A MERGE run for tenant B matched tenant A's node with the same key,
+  rewrote its properties (`ON MATCH SET`, bare `SET`) and answered its id,
+  and tenant B got no node of its own. **Security fix for v0.8.22 users:**
+  v0.8.22 let any tenant-scoped QUIC client reach this through a simple
+  MERGE; v0.8.23 refused tenant sessions at the QUIC dispatcher (SONNY-2686)
+  but left the adapter wrong. The adapter now matches as the general
+  executor's MERGE does: a request with a concrete tenant matches only a
+  node tagged with exactly that tenant (the lowest such id, found through
+  the exact node-property index or a label scan when the index names
+  another tenant's node), and otherwise creates its own node tagged with
+  it; an unscoped request (`default`) still matches the lowest holder in
+  any tenant. The bulk edge paths' endpoint lookups and the bulk MERGE's
+  first probe are confined the same way. **Behaviour change:** the node
+  MERGE fast paths (node, graph-selector and `/*+BATCH*/` MERGE) serve
+  tenant-scoped sessions again, under strict tenancy too, so bulk ingest
+  from them is fast again; the relationship MERGE and MATCH … CREATE edge
+  fast paths, and every fast path for a user while an RLS policy is
+  installed, still take the executor. A tenant MERGE of a key whose lowest
+  holder belongs to another tenant now searches that key's holders (the
+  exact node-property index, or in lean mode a label scan) on each call.
+  Regressions: `zig build test-sonny2976-merge-fast-path-tenant-scope`,
+  `zig build test-sonny2724-quic-fast-path-gate`.
+- **MERGE matches the rows the session's MATCH sees, with a tenant
+  hierarchy too (SONNY-6338).** The executor's MERGE compared tenant tags
+  exactly, while MATCH lets a parent tenant see its descendants' rows
+  (GAP-0846). A parent's `MERGE (:L {k: 1})` of a key its child holds found
+  no match and created a second node, and the parent's MATCH then returned
+  both. Node, multi-property and relationship MERGE (the endpoints and the
+  edge's own tag) now use the MATCH path's tenant predicate
+  (`tenant_visibility.passesTenantFilterSlice` / `passesTenantFilterEdge`),
+  so the parent binds the child's node. `ON MATCH SET` then writes it as the
+  parent's `MATCH ... SET` already could, and never changes its tenant tag;
+  `ON CREATE` still tags the new node with the session's tenant. A child
+  still does not see, or match, its parent's rows, and unrelated tenants
+  and unscoped sessions are unchanged. **Behaviour change:** the node MERGE
+  fast paths (node, graph-selector and `/*+BATCH*/` MERGE) match the exact
+  tenant tag, so they now decline a session whose tenant has descendants;
+  its MERGEs take the executor (correct, slower). Sessions of a tenant with
+  no descendants are served exactly as before. The cluster leader's
+  MATCH ... SET and MATCH ... CREATE target resolution uses the same
+  predicate and so also sees a parent's descendants' rows, as MATCH does.
+  Regression: `zig build test-sonny6338-tenant-visibility-consistency`.
+- **knn() ranks the rows the session's MATCH sees, with a tenant hierarchy
+  too (SONNY-2820).** knn() compared tenant tags exactly, so a parent
+  tenant missed every row of its descendants that MATCH returns. Both the
+  scan and the vector-index path now use the MATCH path's tenant predicate,
+  and still filter before cutting to k (the index path asks the index for
+  twice as many rows until it has k visible ones or the index runs out), so
+  a hidden row never takes a slot. Whether the index may answer alone is now
+  decided over every tenant's carriers when the hierarchy lets the session
+  see more than its own tag (it falls back to the scan more often for such
+  a session). **Behaviour change:** for a session whose scope can hide rows
+  (a concrete tenant scope, or a user an RLS policy may deny a row), a knn()
+  property no visible row carries now answers an empty list, as MATCH
+  answers an empty result, instead of `UnknownProperty` (42703). That
+  includes a misspelled property: telling the two apart would reveal that a
+  hidden row carries the property. Unscoped sessions with no policy keep the
+  `UnknownProperty` diagnostic.
+  Regressions: `zig build test-sonny6338-tenant-visibility-consistency`,
+  `zig build test-sonny2692-knn-rls`.
 
 ### Added
 

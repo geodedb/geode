@@ -38,7 +38,7 @@ const posix = std.posix;
 const admin_user = util.DefaultAuth.username;
 const admin_pw = util.DefaultAuth.password;
 const reader_user = "reader6288";
-const reader_pw = "Reader6288!pw";
+const reader_pw = "Reader 6288 Restore Passphrase";
 
 fn fsIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();

@@ -154,7 +154,6 @@ pub const RLSEngine = struct {
     policies_lock: std.Io.RwLock = std.Io.RwLock.init,
     policy_cache: PolicyCache,
     context_evaluator: ContextEvaluator,
-    query_rewriter: QueryRewriter,
     hierarchy_manager: HierarchyManager,
     attribute_controller: AttributeBasedAccessControl,
     audit_logger: AuditLogger,
@@ -210,6 +209,23 @@ pub const RLSEngine = struct {
         /// compiles. The policy is kept, and denies every row, until an
         /// operator rewrites it; `createPolicy` never installs one.
         invalid: bool = false,
+
+        // CANARY: REQ=REQ-SONNY-2773-RLS-POLICY-FREE; FEATURE="RLSExpressionCompilation"; ASPECT=Ownership; STATUS=TESTED; TEST=tests/test_sonny2773_rls_policy_free.zig; OWNER=security; UPDATED=2026-11-12
+        /// SONNY-2773: the installer hands the policy's strings (`name`,
+        /// `description`, `graph`, `table`, and the USING / CHECK text) to
+        /// the engine: they were allocated with the engine's allocator, and
+        /// `deletePolicy`, `updatePolicy` (for strings the replacement does
+        /// not reuse) and `deinit` free them. False: the caller keeps them
+        /// (UserManager owns its copies, SONNY-2778). `roles` is always the
+        /// caller's.
+        owns_strings: bool = false,
+        /// SONNY-2773: set by the engine when it compiled the USING (CHECK)
+        /// bytecode, which it then frees; a pre-compiled expression the
+        /// caller pins is the caller's. What a caller sets is ignored. Both
+        /// were never freed: every delete, replaced expression and engine
+        /// teardown leaked them.
+        owns_using_compiled: bool = false,
+        owns_check_compiled: bool = false,
     };
 
     pub const Operation = enum {
@@ -402,7 +418,6 @@ pub const RLSEngine = struct {
             .policies = std.HashMap(PolicyKey, std.ArrayList(Policy), PolicyKey.HashContext, 80).init(allocator),
             .policy_cache = try PolicyCache.init(allocator),
             .context_evaluator = try ContextEvaluator.init(allocator),
-            .query_rewriter = try QueryRewriter.init(allocator),
             .hierarchy_manager = try HierarchyManager.init(allocator),
             .attribute_controller = try AttributeBasedAccessControl.init(allocator),
             .audit_logger = try AuditLogger.init(allocator, .{ .custom = dummyLogWriter }),
@@ -412,13 +427,14 @@ pub const RLSEngine = struct {
     pub fn deinit(self: *Self) void {
         var it = self.policies.iterator();
         while (it.next()) |entry| {
+            // SONNY-2773: what each policy left installed owns.
+            for (entry.value_ptr.items) |policy| self.freeOwned(policy, null);
             entry.value_ptr.deinit(self.allocator);
             self.freePolicyKey(entry.key_ptr.*);
         }
         self.policies.deinit();
         self.policy_cache.deinit();
         self.context_evaluator.deinit();
-        self.query_rewriter.deinit();
         self.hierarchy_manager.deinit();
         self.attribute_controller.deinit();
         self.audit_logger.deinit();
@@ -482,6 +498,43 @@ pub const RLSEngine = struct {
         self.allocator.free(c.constants);
         self.allocator.free(c.jump_table);
         self.allocator.destroy(c);
+    }
+
+    /// SONNY-2773: free what the engine owns of `policy` (its compiled
+    /// bytecode, and its strings when `owns_strings`), except what `kept`
+    /// (the policy replacing it, in `updatePolicy`) still points at.
+    fn freeOwned(self: *Self, policy: Policy, kept: ?*const Policy) void {
+        if (policy.owns_using_compiled) {
+            if (exprCompiled(policy.using_expr)) |c| {
+                if (!(if (kept) |k| exprCompiled(k.using_expr) == c else false)) self.freeCompiledExpression(c);
+            }
+        }
+        if (policy.owns_check_compiled) {
+            if (exprCompiled(policy.check_expr)) |c| {
+                if (!(if (kept) |k| exprCompiled(k.check_expr) == c else false)) self.freeCompiledExpression(c);
+            }
+        }
+        if (!policy.owns_strings) return;
+        const k_using: ?[]const u8 = if (kept) |k| (if (k.using_expr) |e| e.raw else null) else null;
+        const k_check: ?[]const u8 = if (kept) |k| (if (k.check_expr) |e| e.raw else null) else null;
+        self.freeUnlessKept(policy.name, if (kept) |k| k.name else null);
+        self.freeUnlessKept(policy.description, if (kept) |k| k.description else null);
+        self.freeUnlessKept(policy.graph, if (kept) |k| k.graph else null);
+        self.freeUnlessKept(policy.table, if (kept) |k| k.table else null);
+        if (policy.using_expr) |e| self.freeUnlessKept(e.raw, k_using);
+        if (policy.check_expr) |e| self.freeUnlessKept(e.raw, k_check);
+    }
+
+    fn exprCompiled(expr: ?Expression) ?*CompiledExpression {
+        const e = expr orelse return null;
+        return e.compiled;
+    }
+
+    fn freeUnlessKept(self: *Self, s: []const u8, kept: ?[]const u8) void {
+        if (kept) |k| {
+            if (k.ptr == s.ptr and k.len == s.len) return;
+        }
+        self.allocator.free(s);
     }
 
     /// Compile every expression of `policy` that has no bytecode yet, per
@@ -560,6 +613,9 @@ pub const RLSEngine = struct {
         var compiled_policy = policy;
         const made = try self.compilePolicyExpressions(&compiled_policy, mode);
         errdefer made.free(self);
+        // SONNY-2773: the engine frees what it compiled.
+        compiled_policy.owns_using_compiled = made.using != null;
+        compiled_policy.owns_check_compiled = made.check != null;
 
         self.lockPoliciesExclusive();
         defer self.unlockPoliciesExclusive();
@@ -643,7 +699,17 @@ pub const RLSEngine = struct {
                 if (!PolicyKey.HashContext.eql(.{}, entry.key_ptr.*, new_key)) return error.PolicyKeyChange;
                 // Invalidate first: after the store nothing may fail.
                 try self.policy_cache.invalidate(entry.key_ptr.*);
+                // SONNY-2773: the replacement owns what the engine compiled
+                // for it, and the old bytecode it still points at (a caller
+                // that copied the installed policy and changed `enabled`);
+                // the rest of what the old policy owned is freed.
+                const old = policy.*;
+                replacement.owns_using_compiled = made.using != null or
+                    (old.owns_using_compiled and exprCompiled(old.using_expr) != null and exprCompiled(old.using_expr) == exprCompiled(replacement.using_expr));
+                replacement.owns_check_compiled = made.check != null or
+                    (old.owns_check_compiled and exprCompiled(old.check_expr) != null and exprCompiled(old.check_expr) == exprCompiled(replacement.check_expr));
                 policy.* = replacement;
+                self.freeOwned(old, &replacement);
                 return;
             }
         }
@@ -661,13 +727,16 @@ pub const RLSEngine = struct {
             for (entry.value_ptr.items, 0..) |policy, i| {
                 if (policy.id == policy_id) {
                     try self.policy_cache.invalidate(entry.key_ptr.*);
-                    _ = entry.value_ptr.swapRemove(i);
+                    const removed = entry.value_ptr.swapRemove(i);
                     if (entry.value_ptr.items.len == 0) {
                         const owned = entry.key_ptr.*;
                         entry.value_ptr.deinit(self.allocator);
                         self.policies.removeByPtr(entry.key_ptr);
                         self.freePolicyKey(owned);
                     }
+                    // SONNY-2773: under the exclusive lock, so no reader is
+                    // evaluating its bytecode.
+                    self.freeOwned(removed, null);
                     return;
                 }
             }
@@ -686,30 +755,6 @@ pub const RLSEngine = struct {
         self.allocator.free(key.table);
     }
 
-    // Query Rewriting
-    pub fn rewriteQuery(
-        self: *Self,
-        query: []const u8,
-        context: *auth.SecurityContext,
-        graph: []const u8,
-    ) ![]const u8 {
-
-        // Find applicable policies
-        const policies = try self.findApplicablePolicies(
-            graph,
-            context.user.id,
-            context.roles,
-        );
-
-        if (policies.items.len == 0) {
-            // No policies, allow full access or deny based on configuration
-            return query;
-        }
-
-        // Rewrite the query with security predicates
-        return try self.query_rewriter.rewrite(query, policies, context);
-    }
-
     pub fn checkRowAccess(
         self: *Self,
         row: *const std.StringHashMap(Value),
@@ -720,14 +765,15 @@ pub const RLSEngine = struct {
     ) !bool {
         const key = PolicyKey{ .graph = graph, .table = table };
 
-        // Exclusive: this path also writes `policy_cache`.
-        self.lockPoliciesExclusive();
-        defer self.unlockPoliciesExclusive();
-
-        // Check cache first
-        if (self.policy_cache.get(key, context.user.id, operation)) |allowed| {
-            if (!allowed) return false;
-        }
+        // CANARY: REQ=REQ-SONNY-6377-RLS-ROW-DECISION-UNCACHED; FEATURE="RLS Expression Wiring"; ASPECT=NoPerTableCacheOfRowVerdict; STATUS=TESTED; TEST=tests/test_sonny6377_security_residuals.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6377: the verdict depends on `row`, and `policy_cache` is keyed
+        // by (graph, table, user, operation), with no row in it. Caching it
+        // returned one row's deny for every later row of the table (fail
+        // closed, wrong results), so a row-level decision is neither read
+        // from nor written to the cache (as checkRowAccessByUsernameSeeded,
+        // GAP-0284). Shared: the evaluation only reads the policy list.
+        self.lockPoliciesShared();
+        defer self.unlockPoliciesShared();
 
         const policies = self.policies.get(key) orelse return true; // No policies
 
@@ -768,12 +814,7 @@ pub const RLSEngine = struct {
             }
         }
 
-        const allowed = verdict.allows(no_permissive_policy_allows);
-
-        // Cache the result
-        try self.policy_cache.put(key, context.user.id, operation, allowed);
-
-        return allowed;
+        return verdict.allows(no_permissive_policy_allows);
     }
 
     fn findApplicablePolicies(
@@ -2136,7 +2177,14 @@ pub const RLSEngine = struct {
     }
 };
 
-// Policy Cache for performance
+// CANARY: REQ=REQ-SONNY-3135-POLICY-CACHE-OWNED-KEYS; FEATURE="RLS Expression Wiring"; ASPECT=CacheOwnsKeys; STATUS=TESTED; TEST=tests/test_sonny3135_policy_cache_keys_grant_wildcard.zig; OWNER=security; UPDATED=2026-11-12
+// Policy Cache for performance.
+//
+// SONNY-3135 (N6): each entry's key holds the cache's own copy of the graph
+// and table strings, freed when the entry is removed (expiry, invalidation,
+// eviction, deinit). `put` stored the caller's slices: `checkRowAccess`
+// passes the strings its caller gave it, so once a library caller freed them
+// every later `get`, `invalidate` or eviction read freed memory.
 pub const PolicyCache = struct {
     allocator: Allocator,
     cache: std.HashMap(CacheKey, CacheEntry, CacheKey.HashContext, 80),
@@ -2181,7 +2229,19 @@ pub const PolicyCache = struct {
     }
 
     pub fn deinit(self: *PolicyCache) void {
+        var it = self.cache.keyIterator();
+        while (it.next()) |key| self.freeKey(key.*);
         self.cache.deinit();
+    }
+
+    fn freeKey(self: *PolicyCache, key: CacheKey) void {
+        self.allocator.free(key.policy_key.graph);
+        self.allocator.free(key.policy_key.table);
+    }
+
+    /// Remove the entry for `key` (any equal key), freeing its strings.
+    fn removeEntry(self: *PolicyCache, key: CacheKey) void {
+        if (self.cache.fetchRemove(key)) |kv| self.freeKey(kv.key);
     }
 
     pub fn get(
@@ -2202,7 +2262,7 @@ pub const PolicyCache = struct {
                 return entry.allowed;
             }
             // Entry expired
-            _ = self.cache.remove(key);
+            self.removeEntry(key);
         }
 
         return null;
@@ -2226,10 +2286,24 @@ pub const PolicyCache = struct {
             .operation = operation,
         };
 
-        try self.cache.put(key, CacheEntry{
+        const entry = try self.cache.getOrPut(key);
+        if (!entry.found_existing) {
+            // The entry holds copies of the caller's strings (equal, so the
+            // hash is unchanged); on failure it is removed again.
+            errdefer self.cache.removeByPtr(entry.key_ptr);
+            const graph = try self.allocator.dupe(u8, policy_key.graph);
+            errdefer self.allocator.free(graph);
+            const table = try self.allocator.dupe(u8, policy_key.table);
+            entry.key_ptr.* = .{
+                .policy_key = .{ .graph = graph, .table = table },
+                .user_id = user_id,
+                .operation = operation,
+            };
+        }
+        entry.value_ptr.* = CacheEntry{
             .allowed = allowed,
             .timestamp = compat_milliTimestamp(),
-        });
+        };
     }
 
     pub fn invalidate(self: *PolicyCache, policy_key: RLSEngine.PolicyKey) !void {
@@ -2243,9 +2317,7 @@ pub const PolicyCache = struct {
             }
         }
 
-        for (to_remove.items) |key| {
-            _ = self.cache.remove(key);
-        }
+        for (to_remove.items) |key| self.removeEntry(key);
     }
 
     fn evictOldest(self: *PolicyCache) !void {
@@ -2260,9 +2332,7 @@ pub const PolicyCache = struct {
             }
         }
 
-        if (oldest_key) |key| {
-            _ = self.cache.remove(key);
-        }
+        if (oldest_key) |key| self.removeEntry(key);
     }
 };
 
@@ -2642,104 +2712,6 @@ pub const ContextEvaluator = struct {
         return Value{
             .boolean = cidrMatch(context.environment.ip_address, range),
         };
-    }
-};
-
-// Query Rewriter for applying RLS policies
-pub const QueryRewriter = struct {
-    allocator: Allocator,
-
-    pub fn init(allocator: Allocator) !QueryRewriter {
-        return QueryRewriter{ .allocator = allocator };
-    }
-
-    pub fn deinit(self: *QueryRewriter) void {
-        _ = self;
-    }
-
-    /// Returns true if c is a GQL/SQL identifier character (alphanumeric or underscore).
-    inline fn isIdentChar(c: u8) bool {
-        return std.ascii.isAlphanumeric(c) or c == '_';
-    }
-
-    /// Validate a policy expression string for injection safety before it is
-    /// interpolated into a GQL predicate.  GAP-0496 (CWE-943): raw policy
-    /// expressions must not contain statement terminators, comment sequences,
-    /// or set operators that could escape the predicate context.
-    fn validatePolicyExpression(expr: []const u8) error{InvalidPolicyExpression}!void {
-        // Reject statement terminator
-        if (std.mem.indexOfScalar(u8, expr, ';') != null)
-            return error.InvalidPolicyExpression;
-        // Reject SQL/GQL line comments
-        if (std.mem.indexOf(u8, expr, "--") != null)
-            return error.InvalidPolicyExpression;
-        // Reject block comments
-        if (std.mem.indexOf(u8, expr, "/*") != null)
-            return error.InvalidPolicyExpression;
-        // Reject set operators (case-insensitive, whole-word only).
-        // A keyword is a whole word when not preceded or followed by an identifier char.
-        var i: usize = 0;
-        while (i < expr.len) : (i += 1) {
-            const rest = expr[i..];
-            // Check for identifier char immediately before this position
-            const prev_ident = i > 0 and isIdentChar(expr[i - 1]);
-            if (prev_ident) continue;
-            if (std.ascii.startsWithIgnoreCase(rest, "UNION")) {
-                const after_ident = rest.len > 5 and isIdentChar(rest[5]);
-                if (!after_ident) return error.InvalidPolicyExpression;
-            } else if (std.ascii.startsWithIgnoreCase(rest, "INTERSECT")) {
-                const after_ident = rest.len > 9 and isIdentChar(rest[9]);
-                if (!after_ident) return error.InvalidPolicyExpression;
-            } else if (std.ascii.startsWithIgnoreCase(rest, "EXCEPT")) {
-                const after_ident = rest.len > 6 and isIdentChar(rest[6]);
-                if (!after_ident) return error.InvalidPolicyExpression;
-            }
-        }
-    }
-
-    pub fn rewrite(
-        self: *QueryRewriter,
-        query: []const u8,
-        policies: std.ArrayList(RLSEngine.Policy),
-        context: *auth.SecurityContext,
-    ) ![]const u8 {
-        _ = query;
-        _ = context;
-
-        // CANARY: REQ=REQ-GAP-0496-RLS-INJECTION-GUARD; FEATURE="RLSSecurity"; ASPECT=InjectionPrevention; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
-        var result = std.ArrayList(u8).empty;
-        errdefer result.deinit(self.allocator);
-
-        // Build security predicate from policies
-        try result.appendSlice(self.allocator, "(");
-
-        var first = true;
-        for (policies.items) |policy| {
-            if (!policy.enabled) continue;
-
-            if (policy.using_expr) |expr| {
-                // GAP-0496: validate before interpolation to prevent GQL injection
-                try validatePolicyExpression(expr.raw);
-
-                if (!first) {
-                    if (policy.permissive) {
-                        try result.appendSlice(self.allocator, " OR ");
-                    } else {
-                        try result.appendSlice(self.allocator, " AND ");
-                    }
-                }
-
-                try result.appendSlice(self.allocator, "(");
-                try result.appendSlice(self.allocator, expr.raw);
-                try result.appendSlice(self.allocator, ")");
-
-                first = false;
-            }
-        }
-
-        try result.appendSlice(self.allocator, ")");
-
-        return try result.toOwnedSlice(self.allocator);
     }
 };
 
@@ -3989,7 +3961,6 @@ test "TestCANARY_REQ_RLS_TEMPORAL_001_TimeRangeConstraint" {
         .policies = std.HashMap(RLSEngine.PolicyKey, std.ArrayList(RLSEngine.Policy), RLSEngine.PolicyKey.HashContext, 80).init(allocator),
         .policy_cache = try PolicyCache.init(allocator),
         .context_evaluator = try ContextEvaluator.init(allocator),
-        .query_rewriter = try QueryRewriter.init(allocator),
         .hierarchy_manager = try HierarchyManager.init(allocator),
         .attribute_controller = try AttributeBasedAccessControl.init(allocator),
         .audit_logger = try AuditLogger.init(allocator, .{ .custom = RLSEngine.dummyLogWriter }),
@@ -3998,7 +3969,6 @@ test "TestCANARY_REQ_RLS_TEMPORAL_001_TimeRangeConstraint" {
         engine.policies.deinit();
         engine.policy_cache.deinit();
         engine.context_evaluator.deinit();
-        engine.query_rewriter.deinit();
         engine.hierarchy_manager.deinit();
         engine.attribute_controller.deinit();
         engine.audit_logger.deinit();
@@ -4308,20 +4278,9 @@ fn sonny2709Engine(allocator: Allocator, expr: []const u8) !RLSEngine {
 
 /// Free the compiled expressions `createPolicy` built (the engine's `deinit`
 /// leaves a policy's expressions to its owner).
+/// SONNY-2773: the engine frees the bytecode it compiled (this helper used
+/// to free it by hand, working around the leak).
 fn sonny2709Deinit(engine: *RLSEngine) void {
-    var it = engine.policies.iterator();
-    while (it.next()) |entry| {
-        for (entry.value_ptr.items) |policy| {
-            if (policy.using_expr) |e| {
-                if (e.compiled) |c| {
-                    engine.allocator.free(c.bytecode);
-                    engine.allocator.free(c.constants);
-                    engine.allocator.free(c.jump_table);
-                    engine.allocator.destroy(c);
-                }
-            }
-        }
-    }
     engine.deinit();
 }
 
@@ -5084,7 +5043,8 @@ test "SONNY-2732: updatePolicy compiles first, then swaps the policy in one stor
     // The new expression takes effect; the stored policy carries its own
     // bytecode (it used to keep the old one, compiled into a copy).
     try engine.updatePolicy(7, sonny2732Policy(7, "T", "row.cls = 'b'"));
-    sonny2730FreeCompiled(allocator, first);
+    // SONNY-2773: updatePolicy freed `first` (the test used to).
+    try std.testing.expect(sonny2732Compiled(&engine, "T") != first);
     try std.testing.expect(try sonny2709Sees(&engine, "u", "cls", .{ .string = "b" }));
     try std.testing.expect(!try sonny2709Sees(&engine, "u", "cls", .{ .string = "a" }));
     try std.testing.expect(sonny2732Compiled(&engine, "T").bytecode.len > 0);

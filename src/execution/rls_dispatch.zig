@@ -45,6 +45,7 @@ const audit_mod = @import("../security/audit.zig");
 const rls_core = @import("rls");
 const rls_types = @import("rls_types");
 const RLSEngine = rls_core.RLSEngine;
+const cluster_mod = @import("../distributed/cluster.zig");
 
 // ---------------------------------------------------------------------------
 // Callback / hooks pattern. The server wires these at startup; CLI / test
@@ -57,8 +58,25 @@ pub const ListedPolicy = struct {
     username: []const u8,
 };
 
+/// SONNY-3034: the kinds of restriction `geode.rls.*` adds.
+pub const RestrictionKind = enum {
+    /// `add_deny_policy`: `subject` is the user (empty: every user).
+    deny,
+    /// `add_attribute_policy`: `subject` is the row property, `attribute`
+    /// the ABAC attribute key.
+    attribute,
+};
+
 pub const RLSFilterCallbacks = struct {
     ctx: ?*anyopaque = null,
+    // CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=PersistCallbacks; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-3034: store a restriction in `__geode_security` (the server
+    /// wires `AuthGraphManager.persistRlsRestriction`). An error: not
+    /// stored. Null (an executor with no security graph, e.g. an embedded
+    /// one or a unit test): restrictions stay in memory only.
+    persist_fn: ?*const fn (ctx: ?*anyopaque, kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) anyerror!void = null,
+    /// SONNY-3034: remove its stored records. An error: still stored.
+    unpersist_fn: ?*const fn (ctx: ?*anyopaque, kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) anyerror!void = null,
     add_deny_fn: ?*const fn (ctx: ?*anyopaque, graph: []const u8, label: []const u8, username: []const u8) anyerror!void = null,
     /// Returns the number of policies removed.
     remove_deny_fn: ?*const fn (ctx: ?*anyopaque, graph: []const u8, label: []const u8, username: []const u8) usize = null,
@@ -167,16 +185,28 @@ fn handleAddDenyPolicy(
     const label = argStr(call_stmt, 1);
     const username = argStr(call_stmt, 2);
 
-    if (graph.len == 0 or label.len == 0) {
-        return try singleStatusRow(allocator, "error: graph and label are required (positional args: graph, label, username)");
-    }
+    // CANARY: REQ=REQ-SONNY-6369-RLS-PROCEDURE-ERRORS; FEATURE="RLS deny-policy procedure"; ASPECT=FailuresAreErrors; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6369: missing arguments (22023) and no filter engine (55000)
+    // are error statuses here and in the other add / remove handlers; they
+    // answered 00000 with a status row starting "error:".
+    if (graph.len == 0 or label.len == 0) return error.InvalidArgs;
 
     const add_fn = g_callbacks.add_deny_fn orelse {
         log.warn("RLS deny-policy callback not installed — server started without RLS dispatch wiring", &.{});
-        return try singleStatusRow(allocator, "error: RLS filter engine not initialized (server started with no RLS support)");
+        return error.RlsEngineNotInitialized;
     };
 
+    // SONNY-3034: no replication slice: refused in cluster mode, as the other
+    // security changes are (it applied on one node only).
+    try cluster_mod.gateUnreplicatedWrite();
     try add_fn(g_callbacks.ctx, graph, label, username);
+    // SONNY-3034: stored, or taken out again and refused (it was lost at
+    // the next restart). Taking it out removes every entry of the triple,
+    // as remove_deny_policy does.
+    persistRestriction(.deny, graph, label, username, "") catch |err| {
+        if (g_callbacks.remove_deny_fn) |remove_fn| _ = remove_fn(g_callbacks.ctx, graph, label, username);
+        return err;
+    };
 
     log.info("RLS deny policy added", &.{
         Attr.string("graph", graph),
@@ -222,14 +252,15 @@ fn handleRemoveDenyPolicy(
     const label = argStr(call_stmt, 1);
     const username = argStr(call_stmt, 2);
 
-    if (graph.len == 0 or label.len == 0) {
-        return try singleStatusRow(allocator, "error: graph and label are required (positional args: graph, label, username)");
-    }
+    if (graph.len == 0 or label.len == 0) return error.InvalidArgs;
 
-    const remove_fn = g_callbacks.remove_deny_fn orelse {
-        return try singleStatusRow(allocator, "error: RLS filter engine not initialized");
-    };
+    const remove_fn = g_callbacks.remove_deny_fn orelse return error.RlsEngineNotInitialized;
 
+    // SONNY-3034: refused in cluster mode; the stored records go first, so a
+    // removal that cannot be saved keeps the deny in force (it would return
+    // at the next restart otherwise).
+    try cluster_mod.gateUnreplicatedWrite();
+    try unpersistRestriction(.deny, graph, label, username, "");
     const removed = remove_fn(g_callbacks.ctx, graph, label, username);
 
     log.info("RLS deny policy removed", &.{
@@ -273,35 +304,40 @@ fn handleListDenyPolicies(
     _: ast.CallProcedure,
     _: ExecutionContext,
 ) anyerror!ExecutionResult {
+    // SONNY-6377: no filter engine in this process is 55000, as for the
+    // other geode.rls procedures (SONNY-6369); it answered an empty list,
+    // which reads as "no deny policies".
+    const list_fn = g_callbacks.list_deny_fn orelse return error.RlsEngineNotInitialized;
+    const listed = try list_fn(g_callbacks.ctx, allocator);
+    defer {
+        for (listed) |p| {
+            allocator.free(p.graph);
+            allocator.free(p.label);
+            allocator.free(p.username);
+        }
+        allocator.free(listed);
+    }
+
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "graph");
     columns[1] = try allocator.dupe(u8, "label");
     columns[2] = try allocator.dupe(u8, "username");
 
     var rows_list = std.ArrayList([]Value).empty;
-    if (g_callbacks.list_deny_fn) |list_fn| {
-        const listed = try list_fn(g_callbacks.ctx, allocator);
-        defer {
-            for (listed) |p| {
-                allocator.free(p.graph);
-                allocator.free(p.label);
-                allocator.free(p.username);
-            }
-            allocator.free(listed);
-        }
-        for (listed) |p| {
-            const row = try allocator.alloc(Value, 3);
-            row[0] = Value{ .Str = try allocator.dupe(u8, p.graph) };
-            row[1] = Value{ .Str = try allocator.dupe(u8, p.label) };
-            row[2] = Value{ .Str = try allocator.dupe(u8, if (p.username.len == 0) "*" else p.username) };
-            try rows_list.append(allocator, row);
-        }
+    for (listed) |p| {
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try allocator.dupe(u8, p.graph) };
+        row[1] = Value{ .Str = try allocator.dupe(u8, p.label) };
+        row[2] = Value{ .Str = try allocator.dupe(u8, if (p.username.len == 0) "*" else p.username) };
+        try rows_list.append(allocator, row);
     }
 
+    // SONNY-6377: the result owns the strings it copied (they leaked).
     return .{
         .columns = columns,
         .rows = try rows_list.toOwnedSlice(allocator),
         .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
     };
 }
 
@@ -339,6 +375,48 @@ fn attributePolicyId(graph: []const u8, label: []const u8, row_property: []const
     return hasher.final();
 }
 
+/// SONNY-3034: store a restriction through the wired hook, if any.
+fn persistRestriction(kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) !void {
+    const f = g_callbacks.persist_fn orelse return;
+    f(g_callbacks.ctx, kind, graph, label, subject, attribute) catch |err| {
+        log.warn("geode.rls restriction could not be stored; refused", &.{
+            Attr.string("kind", @tagName(kind)),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.RlsRestrictionNotPersisted;
+    };
+}
+
+fn unpersistRestriction(kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) !void {
+    const f = g_callbacks.unpersist_fn orelse return;
+    f(g_callbacks.ctx, kind, graph, label, subject, attribute) catch |err| {
+        log.warn("geode.rls restriction removal could not be stored; nothing removed", &.{
+            Attr.string("kind", @tagName(kind)),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.RlsRestrictionNotPersisted;
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=StartupHydration; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-3034: put a stored restriction back in force at startup, as the
+/// procedure that added it did (both label engines for a deny, the
+/// expression engine for an attribute policy). Nothing is stored again.
+pub fn applyStoredRestriction(kind: RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) !void {
+    switch (kind) {
+        .deny => {
+            const add_fn = g_callbacks.add_deny_fn orelse return error.RlsEngineNotInitialized;
+            try add_fn(g_callbacks.ctx, graph, label, subject);
+        },
+        .attribute => {
+            if (!isPolicyIdentifier(subject) or !isPolicyIdentifier(attribute)) return error.InvalidPolicyIdentifier;
+            const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return error.RlsEngineNotInitialized;
+            const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
+            try installAttributePolicy(engine, graph, label, subject, attribute);
+        },
+    }
+}
+
 /// CALL geode.rls.add_attribute_policy(graph, label, row_property, attribute_key)
 ///
 /// Installs a restrictive expression RLS policy on (graph, label) that, per
@@ -357,9 +435,7 @@ fn handleAddAttributePolicy(
     const row_property = argStr(call_stmt, 2);
     const attribute_key = argStr(call_stmt, 3);
 
-    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) {
-        return try singleStatusRow(allocator, "error: graph, label, row_property and attribute_key are required");
-    }
+    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) return error.InvalidArgs;
     // SONNY-2732: both are pasted into the policy text; refuse anything but
     // an identifier, and install nothing.
     if (!isPolicyIdentifier(row_property) or !isPolicyIdentifier(attribute_key)) {
@@ -368,7 +444,7 @@ fn handleAddAttributePolicy(
 
     const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse {
         log.warn("RLS attribute-policy: expr engine not initialized — server started without RLS support", &.{});
-        return try singleStatusRow(allocator, "error: RLS expression engine not initialized");
+        return error.RlsEngineNotInitialized;
     };
     const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
 
@@ -384,7 +460,13 @@ fn handleAddAttributePolicy(
     var reply = try singleStatusRow(allocator, msg);
     errdefer reply.deinit(allocator);
 
+    // SONNY-3034: refused in cluster mode; stored, or taken out and refused.
+    try cluster_mod.gateUnreplicatedWrite();
     try installAttributePolicy(engine, graph, label, row_property, attribute_key);
+    persistRestriction(.attribute, graph, label, row_property, attribute_key) catch |err| {
+        engine.deletePolicy(attributePolicyId(graph, label, row_property, attribute_key)) catch {};
+        return err;
+    };
 
     log.info("RLS attribute policy added", &.{
         Attr.string("graph", graph),
@@ -417,7 +499,8 @@ fn handleAddAttributePolicy(
 // CANARY: REQ=REQ-SONNY-2746-RLS-ATTRIBUTE-POLICY-OOM; FEATURE="RLS deny-policy procedure"; ASPECT=AttributePolicyOomCleanup; STATUS=TESTED; TEST=tests/test_sonny2746_rls_attribute_policy_oom.zig; OWNER=security; UPDATED=2026-09-25
 /// SONNY-2746: copy the attribute policy into the expression engine's
 /// allocator and install it. Once `createPolicy` accepts the policy its
-/// strings are the engine's, for as long as the server runs; until then they
+/// strings are the engine's (`owns_strings`, SONNY-2773: freed when the
+/// policy is removed and at the engine's deinit); until then they
 /// are this function's, and an error (OutOfMemory at any copy or inside
 /// `createPolicy`) frees every one of them. They used to leak. On failure the
 /// engine keeps no pointer to them either (`RLSEngine.installPolicy`).
@@ -470,6 +553,9 @@ fn installAttributePolicy(
         .temporal = null,
         .data_classification = null,
         .audit_level = .denials,
+        // SONNY-2773: the engine frees them on remove_attribute_policy and
+        // at deinit (they leaked for the server's life).
+        .owns_strings = true,
     });
 }
 
@@ -485,15 +571,14 @@ fn handleRemoveAttributePolicy(
     const row_property = argStr(call_stmt, 2);
     const attribute_key = argStr(call_stmt, 3);
 
-    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) {
-        return try singleStatusRow(allocator, "error: graph, label, row_property and attribute_key are required");
-    }
+    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) return error.InvalidArgs;
 
-    const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse {
-        return try singleStatusRow(allocator, "error: RLS expression engine not initialized");
-    };
+    const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return error.RlsEngineNotInitialized;
     const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
 
+    // SONNY-3034: refused in cluster mode; the stored records go first.
+    try cluster_mod.gateUnreplicatedWrite();
+    try unpersistRestriction(.attribute, graph, label, row_property, attribute_key);
     const policy_id = attributePolicyId(graph, label, row_property, attribute_key);
     var removed = true;
     engine.deletePolicy(policy_id) catch {
@@ -540,11 +625,12 @@ fn handlePolicyCount(
     _: ast.CallProcedure,
     _: ExecutionContext,
 ) anyerror!ExecutionResult {
+    // SONNY-6377: no filter engine is 55000, not a count of 0.
+    const cnt = g_callbacks.policy_count_fn orelse return error.RlsEngineNotInitialized;
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "count");
     const row = try allocator.alloc(Value, 1);
-    const count: i64 = if (g_callbacks.policy_count_fn) |cnt| @intCast(cnt(g_callbacks.ctx)) else 0;
-    row[0] = Value{ .Int = count };
+    row[0] = Value{ .Int = @intCast(cnt(g_callbacks.ctx)) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };

@@ -2998,7 +2998,20 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
     // CANARY: REQ=REQ-GAP-0284-ALTER-USER-GRPC-WIRE; FEATURE="PasswordResetEnforcement"; ASPECT=GrpcExecuteIntercept; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
     {
         const trimmed = std.mem.trim(u8, req.query, " \t\r\n");
-        if (parseAlterUserSetPassword(trimmed)) |parsed| {
+        const parsed_password = parseAlterUserSetPassword(trimmed);
+        // SONNY-6359: another user's password goes to the parser
+        // (geode.auth.user_reset_password: Admin only, the policy).
+        const intercepted = if (parsed_password) |p| proto_util.passwordInterceptApplies(state.authenticated_user, p.username) else false;
+        if (intercepted) {
+            const parsed = parsed_password.?;
+            // SONNY-2751: a read-only request refuses a password change, as
+            // the read-only floor refuses the rest of the security DDL (see
+            // the QUIC handler).
+            if (req.read_only) {
+                var resp = try buildErrorResponse(allocator, "42501", "Read-only request: data modification rejected", &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            }
             // Verify the user is changing their own password
             if (state.authenticated_user) |auth_user| {
                 if (!std.mem.eql(u8, auth_user, parsed.username)) {
@@ -3015,16 +3028,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // Validate password against SecurityManager policy BEFORE updating
             if (state.security_manager) |sm| {
                 sm.validatePassword(parsed.new_password) catch |err| {
-                    const msg = switch (err) {
-                        error.PasswordTooShort => "Password too short (minimum 20 characters)",
-                        error.PasswordTooLong => "Password too long (maximum 256 characters)",
-                        error.PasswordMissingUppercase => "Password must contain at least one uppercase letter",
-                        error.PasswordMissingLowercase => "Password must contain at least one lowercase letter",
-                        error.PasswordMissingDigit => "Password must contain at least one digit",
-                        error.PasswordContainsSpaces => "Password must not contain spaces",
-                        error.PasswordNotPassphrase => "Password must be a passphrase with at least 3 words",
-                        else => "Password does not meet security policy requirements",
-                    };
+                    // SONNY-6331: the rule that failed, with the configured limit.
+                    const msg = if (geode_auth.PasswordPolicy.violationOf(err)) |v| sm.password_policy.message(v) else "Password does not meet security policy requirements";
                     var resp = try buildErrorResponse(allocator, "28P01", msg, &.{}, &.{});
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
@@ -3039,11 +3044,12 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             }
 
             user_mgmt.updateUserPassword(allocator, parsed.username, parsed.new_password) catch |err| {
-                const msg = switch (err) {
+                // SONNY-3038: not saved (58030); the user is locked out.
+                const info: proto_util.ErrorInfo = if (err == error.UserNotPersisted) proto_util.mapError(err) else .{ .code = "28P01", .message = switch (err) {
                     error.PasswordReuse => "New password must not match the current password",
-                    else => "Failed to update password",
-                };
-                var resp = try buildErrorResponse(allocator, "28P01", msg, &.{}, &.{});
+                    else => if (geode_auth.PasswordPolicy.violationOf(err)) |v| geode_auth.PasswordPolicy.geodeSecure().message(v) else "Failed to update password",
+                } };
+                var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                 defer resp.deinit(allocator);
                 return encodeMessage(allocator, resp);
             };
@@ -3255,6 +3261,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     .source = .grpc_handler,
                 });
             };
+            // SONNY-2782: the principal every gate below and the executor
+            // authorize as; null with authentication disabled (the QUIC
+            // handler decides the same way).
+            const request_principal = execution.session_graph.requestPrincipal(&principal_for_request);
 
             var exec_context = execution.ExecutionContext{
                 .catalog = catalog,
@@ -3274,7 +3284,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 // one its HELLO named (`SessionStore.setSessionFleRole`), when
                 // the authenticated user holds it (SONNY-6341).
                 .fle_role = state.effectiveFleRole(),
-                .principal = &principal_for_request,
+                .principal = request_principal,
                 .pending_index_rebuilds = null,
                 // SONNY-2799: see `abortFailedTransaction`.
                 .defer_failed_txn_rollback = true,
@@ -3368,7 +3378,6 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             const lock_graph = txn_end_graph orelse stmt_plan.lock_graph;
             const self_locking = stmt_plan.self_locking;
             const needs_store_lock = stmt_plan.needs_store_lock or txn_end_graph != null;
-            const program_is_mutating = stmt_plan.is_mutation;
             const is_mutation = stmt_plan.is_mutation;
             // The write lock: for a change, or for the end of a transaction.
             const write_locked = is_mutation or txn_end_graph != null;
@@ -3380,7 +3389,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // orchestrator sets ExecuteRequest.read_only=true to guarantee no
             // mutation reaches the store no matter what role the connection holds.
             // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=GrpcGate; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
-            if (req.read_only and program_is_mutating) {
+            // SONNY-2751: any change of stored state, the security DDL
+            // included (see the QUIC handler).
+            if (req.read_only and stmt_plan.changes_state) {
                 var resp = try buildErrorResponse(allocator, "42501", "Read-only request: data modification rejected", &.{}, &.{});
                 defer resp.deinit(allocator);
                 return encodeMessage(allocator, resp);
@@ -3395,13 +3406,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GrpcWriteGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
             // REQ-SEC-PER-GRAPH-GRANTS: write on the graph the program
             // changes, for every principal; a self-locking CALL needs
-            // database-wide write. See the QUIC handler.
+            // database-wide write. SONNY-2781: by the actions the program
+            // needs (`changePermittedOn`). See the QUIC handler.
+            // SONNY-2782: the shared gate (`session_graph.requestChangePermitted`):
+            // with authentication disabled there is no principal and nothing
+            // is refused, as on QUIC. It refused every change (42501:
+            // decide answered unauthenticated) unless --insecure-allow-all.
             if (is_mutation) {
-                const write_ok = if (stmt_plan.self_locking)
-                    geode.security.gps.writePermitted(std.heap.smp_allocator, &principal_for_request)
-                else
-                    geode.security.gps.writePermittedOn(std.heap.smp_allocator, &principal_for_request, lock_graph);
-                if (!write_ok) {
+                if (!execution.session_graph.requestChangePermitted(std.heap.smp_allocator, request_principal, stmt_plan.self_locking, lock_graph, stmt_plan.actions)) {
                     var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
@@ -3410,14 +3422,12 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrpcReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
             // A principal with no global Read (a user with no stored role)
             // reads only graphs it holds a READ grant on, the default graph
-            // included. A session with no role (auth disabled) is not gated,
-            // as on QUIC: it has no principal for `gps.decide` to allow.
-            if (role != null) {
-                if (!try execution.session_graph.programReadPermitted(allocator, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
-                    var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
-                    defer resp.deinit(allocator);
-                    return encodeMessage(allocator, resp);
-                }
+            // included. SONNY-2782: the shared gate, as on QUIC: every
+            // session with authentication enabled, none with it disabled.
+            if (!try execution.session_graph.requestReadPermitted(allocator, request_principal, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
+                var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
             }
 
             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26

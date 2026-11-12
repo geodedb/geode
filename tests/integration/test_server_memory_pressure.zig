@@ -133,7 +133,7 @@ test "server RSS stays bounded across 60 connections" {
             }
         }
     }
-    try env_map.put("GEODE_ADMIN_PASSWORD", "GeodeTestPassword123!");
+    try env_map.put("GEODE_ADMIN_PASSWORD", "Geode Test Password Passphrase 123");
 
     // Zig 0.16: std.process.Child.init/spawn retired in favor of
     // std.process.spawn(io, SpawnOptions).
@@ -200,11 +200,11 @@ test "server RSS stays bounded across 60 connections" {
 
 fn runOneQuery(alloc: std.mem.Allocator, listen: []const u8, query: []const u8) !void {
     const argv = [_][]const u8{
-        geode_test_bin.geode_exe, "query",
-        "--insecure",             "--server",
-        listen,                   "-U",
-        "geode",                  "-P",
-        "GeodeTestPassword123!",  query,
+        geode_test_bin.geode_exe,             "query",
+        "--insecure",                         "--server",
+        listen,                               "-U",
+        "geode",                              "-P",
+        "Geode Test Password Passphrase 123", query,
     };
     _ = alloc;
     const io = testIo();

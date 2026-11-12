@@ -352,6 +352,8 @@ const RowScope = struct {
         nodeVisibleOnCopy: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
         stepAllowed: *const fn (ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
         edgeVisible: *const fn (ptr: *anyopaque, edge: *const graph_store.Edge) bool,
+        tenantVisible: *const fn (ptr: *anyopaque, tag: []const u8) bool,
+        storageTenant: *const fn (ptr: *anyopaque) ?[]const u8,
         deinit: *const fn (ptr: *anyopaque) void,
     };
 
@@ -399,6 +401,20 @@ const RowScope = struct {
         return self.vtable.edgeVisible(self.ptr, edge);
     }
 
+    /// SONNY-2820: may the session see a row tagged `tag`? The MATCH path's
+    /// tenant predicate (`tenant_visibility.passesTenantFilterSlice`,
+    /// hierarchy-aware: a parent sees its descendants' rows).
+    fn tenantVisible(self: RowScope, tag: []const u8) bool {
+        return self.vtable.tenantVisible(self.ptr, tag);
+    }
+
+    /// SONNY-2820: the tenant to hand a storage primitive that filters by
+    /// exact tag (`tenant_visibility.storageTenantFilter`): null when the
+    /// hierarchy lets the session see more than its own tag.
+    fn storageTenant(self: RowScope) ?[]const u8 {
+        return self.vtable.storageTenant(self.ptr);
+    }
+
     fn deinit(self: RowScope) void {
         self.vtable.deinit(self.ptr);
     }
@@ -442,6 +458,7 @@ fn activeContextHasIdentity() bool {
 /// compiles it (and the RLS modules it needs).
 fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]const u8) std.mem.Allocator.Error!RowScope {
     const match_operations = @import("execution/match_operations.zig");
+    const tenant_visibility = @import("execution/tenant_visibility.zig");
     const Impl = struct {
         allocator: std.mem.Allocator,
         rls_row: std.StringHashMap(@import("rls").Value),
@@ -477,6 +494,12 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
             defer self.rls_row.clearRetainingCapacity();
             return self.hop.edgeVisible(edge);
         }
+        fn tenantVisible(ptr: *anyopaque, tag: []const u8) bool {
+            return tenant_visibility.passesTenantFilterSlice(tag, from(ptr).hop.filter_tenant);
+        }
+        fn storageTenant(ptr: *anyopaque) ?[]const u8 {
+            return tenant_visibility.storageTenantFilter(from(ptr).hop.filter_tenant);
+        }
         fn deinit(ptr: *anyopaque) void {
             const self = from(ptr);
             // The scope's teardown first: it frees the verdict cache and ends
@@ -493,6 +516,8 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
             .nodeVisibleOnCopy = nodeVisibleOnCopy,
             .stepAllowed = stepAllowed,
             .edgeVisible = edgeVisible,
+            .tenantVisible = tenantVisible,
+            .storageTenant = storageTenant,
             .deinit = deinit,
         };
     };
@@ -2888,10 +2913,20 @@ const KnnScanScope = struct {
     /// exactly as before.
     rls_may_deny: bool = false,
 
+    // CANARY: REQ=REQ-SONNY-2820-KNN-TENANT-HIERARCHY; FEATURE="VectorKnn"; ASPECT=HierarchyAwareTenantScope; STATUS=TESTED; TEST=tests/test_sonny6338_tenant_visibility_consistency.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-2820: the tenant half is the MATCH path's predicate. An exact
+    /// tag admits at once (no hierarchy lookup, the common case); any other
+    /// tag is asked of the row scope (`passesTenantFilterSlice`: a parent
+    /// sees its descendants' rows). knn() compared the tags exactly, so a
+    /// parent tenant missed every child row MATCH returns. Without a row
+    /// scope (the evaluator was never set up) the hierarchy is out of reach,
+    /// and the exact test stands (it can only under-fetch).
     fn admits(self: KnnScanScope, entry_graph: []const u8, entry_tenant: []const u8) bool {
         if (!std.mem.eql(u8, entry_graph, self.graph)) return false;
         const tid = self.tenant orelse return true;
-        return std.mem.eql(u8, entry_tenant, tid);
+        if (std.mem.eql(u8, entry_tenant, tid)) return true;
+        const row = self.row orelse return false;
+        return row.tenantVisible(entry_tenant);
     }
 
     fn admitsNode(self: KnnScanScope, node: *const graph_store.Node) bool {
@@ -3016,6 +3051,9 @@ const KnnScanResult = struct {
     /// True when at least one IN-SCOPE row supplied the property (whether or
     /// not it coerced to a vector). See geode#877 (c).
     property_seen: bool,
+    /// SONNY-2820: may the session's scope hide a row (a tenant scope, or an
+    /// RLS policy that may deny it one)? See `evalVectorKnn`.
+    scope_restricts: bool = false,
 };
 
 // geode#875 RC-6: a test-only counter of how many times the brute-force
@@ -3178,6 +3216,7 @@ fn scanVectorKnn(
     return .{
         .value = try vectorCandidatesToList(allocator, candidates.items, k),
         .property_seen = property_seen,
+        .scope_restricts = scope.restrictsNodes(),
     };
 }
 
@@ -3359,7 +3398,18 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // when nothing in scope knows the property: no advanced index is registered
     // for it AND no in-scope row supplies it. "Property known, zero scoreable
     // neighbours" stays a clean empty list.
-    if (!index_consulted and !scanned.property_seen) return error.UnknownProperty;
+    //
+    // CANARY: REQ=REQ-SONNY-2820-KNN-HIDDEN-PROPERTY-EMPTY; FEATURE="VectorKnn"; ASPECT=HiddenOnlyPropertyEmptyList; STATUS=TESTED; TEST=tests/test_sonny6338_tenant_visibility_consistency.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-2820: a session whose scope can hide rows (a tenant scope, or an
+    // RLS policy that may deny it one) gets an empty list instead, as MATCH
+    // gives it an empty result: a property only hidden rows carry used to
+    // raise UnknownProperty. The diagnostic is not raised for such a session
+    // even when no row at all carries the property, because telling the two
+    // apart would reveal that a hidden row carries it.
+    if (!index_consulted and !scanned.property_seen) {
+        if (scanned.scope_restricts) return .{ .List = &.{} };
+        return error.UnknownProperty;
+    }
     return scanned.value;
 }
 
@@ -3453,9 +3503,14 @@ fn advancedVectorIndexIsAuthoritative(
     // longest metadata exposure on the knn path.
     const label = (manager.advancedIndexLabelAlloc(allocator, index_name) catch return false) orelse return false;
     defer allocator.free(label);
-    const scope = currentKnnScanScope() catch return false;
+    const scope = currentKnnRowScope(allocator) catch return false;
+    defer scope.deinit();
     const store = graph_store.getGlobalStore(allocator);
-    return store.labelSolelyCarriesProperty(scope.graph, scope.tenant, label, property_name);
+    // SONNY-2820: the carriers are counted over the rows the session sees.
+    // With a tenant hierarchy that is more than its own tag, so every
+    // tenant's carriers count (the storage filter is exact).
+    const tenant = if (scope.row) |row| row.storageTenant() else scope.tenant;
+    return store.labelSolelyCarriesProperty(scope.graph, tenant, label, property_name);
 }
 
 /// Which adjacency `indegree()` / `outdegree()` count.

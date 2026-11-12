@@ -5102,6 +5102,32 @@ pub const GraphStore = struct {
         if (std.mem.eql(u8, graph_name, DEFAULT_GRAPH_NAME)) {
             return error.CannotDropDefaultGraph;
         }
+        // CANARY: REQ=REQ-SONNY-3135-LOCKLESS-DROP-WAITS; FEATURE="MultiGraphIsolation"; ASPECT=DropTakesWriteLock; STATUS=TESTED; TEST=tests/test_sonny3135_lockless_drop_waits.zig; OWNER=storage; UPDATED=2026-11-12
+        // SONNY-3135 (N7c): the drop runs under the graph's write lock, so it
+        // waits for the graph's readers and writers and none starts during
+        // it. DROP GRAPH's handlers take the lock before the executor gets
+        // here; every other caller held none (an executor DROP / CREATE OR
+        // REPLACE GRAPH of a graph created after the handler's lock attempt,
+        // an embedded executor, the CREATE GRAPH, HELLO auto-create and
+        // SchemaManager rollbacks), and the adapter's drop only marks a
+        // pinned graph dropped, so it returned under another request's
+        // writes. Taken first and released last (tier 1, before
+        // `graphs_mutex`, the hydration entry and the adapter's `mutex`, the
+        // order the handlers' drops already have). A missing graph is not
+        // locked: the adapter's lock never creates one. The writer-preferring
+        // acquire (readers back off while it waits) with no deadline: the
+        // plain one is starved by a steady stream of readers.
+        const drop_lock_adapter = global_adapter;
+        var drop_lock: ?*graph_storage_adapter.ManagedGraph = null;
+        if (drop_lock_adapter) |adapter| {
+            if (!adapter.threadHoldsGraphWriteLock(graph_name)) {
+                drop_lock = adapter.acquireGraphWriteLockCancelable(graph_name, std.math.maxInt(u64)) catch |err| switch (err) {
+                    error.GraphNotFound => null,
+                    error.Deadline => unreachable, // no deadline
+                };
+            }
+        }
+        defer if (drop_lock) |mg| drop_lock_adapter.?.releaseGraphWriteLock(mg);
         // CANARY: REQ=REQ-SONNY-3134-DROP-GRAPH-OTHER-TXN; FEATURE="MultiGraphIsolation"; ASPECT=DropRefusedWhileTxnHolds; STATUS=TESTED; TEST=tests/test_sonny3134_drop_graph_other_txn.zig; OWNER=storage; UPDATED=2026-09-27
         // SONNY-3134: nor a graph an open session transaction changed, any
         // session's (`graphHeldByTxn`). Only the calling thread's was refused
@@ -7100,6 +7126,32 @@ pub const GraphStore = struct {
         return .found;
     }
 
+    /// SONNY-3241 with SONNY-2976: `lookupOnlyMergeHolder` among the nodes
+    /// tagged exactly `tenant` (null: every tenant, `lookupOnlyMergeHolder`),
+    /// for a MATCH run by a tenant-scoped session on the edge fast path.
+    /// MERGE's index has no tenant in its key, so the tenant's holders are
+    /// read as `lookupMergeCandidateForTenant` reads them
+    /// (`findMergeHolders`). `.found`: the tenant's only holder.
+    /// `.not_found`: no node of the tenant holds the key. `.not_indexable`:
+    /// more of its nodes hold it, or the holders were found by a label scan,
+    /// which stops at the first (the caller declines to the executor). The
+    /// index entry is never settled from a tenant-filtered answer.
+    pub fn lookupOnlyMergeHolderForTenant(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, tenant: ?[]const u8, out_node_id: *u64) MergeLookupResult {
+        const tid = tenant orelse return self.lookupOnlyMergeHolder(graph_name, label, prop_key, prop_value, out_node_id);
+        if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
+        self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
+        self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable; // SONNY-3056
+        var buf: [1024]u8 = undefined;
+        const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
+        // No entry: no node holds the key in any tenant.
+        if (self.merge_prop_index.get(probe) == null) return .not_found;
+        // The value's bytes end the key (`buildMergeIndexKey`).
+        const value_key = probe[graph_name.len + label.len + prop_key.len + 3 ..];
+        const found = self.findMergeHolders(graph_name, label, .{ .property = .{ .key = prop_key, .value = prop_value, .value_key = value_key } }, tid) catch return .not_indexable;
+        out_node_id.* = found.lowest orelse return .not_found;
+        return if (found.sole) .found else .not_indexable;
+    }
+
     /// The node an entry names, if it still exists in `graph_name`.
     ///
     /// The resident cache is a BOUNDED view: an evicted-but-live node misses
@@ -7152,7 +7204,7 @@ pub const GraphStore = struct {
     ) MergeLookupResult {
         // A failed read leaves the entry as it is: the index cannot answer,
         // and the caller falls back as for a value it cannot key.
-        const found = self.findMergeHolders(graph_name, label, source) catch return .not_indexable;
+        const found = self.findMergeHolders(graph_name, label, source, null) catch return .not_indexable;
         _ = self.merge_prop_index.settle(probe, seen, found);
         out_node_id.* = found.lowest orelse return .not_found;
         return .found;
@@ -7166,11 +7218,61 @@ pub const GraphStore = struct {
     /// index when it can answer and otherwise by a label scan (lean mode, or
     /// the index deferred or rebuilding; `findMergeHolders`).
     pub fn lowestMergeHolderByValue(self: *GraphStore, graph_name: []const u8, label: []const u8, key: []const u8, value: PropertyValue) !?u64 {
+        return self.lowestMergeHolderByValueForTenant(graph_name, label, key, value, null);
+    }
+
+    /// SONNY-2976: `lowestMergeHolderByValue` among the nodes tagged `tenant`
+    /// only (null: every tenant), for a MERGE run by a tenant-scoped session.
+    pub fn lowestMergeHolderByValueForTenant(self: *GraphStore, graph_name: []const u8, label: []const u8, key: []const u8, value: PropertyValue, tenant: ?[]const u8) !?u64 {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         var buf: [1024]u8 = undefined;
         const len = writeMergeValue(&buf, value) orelse return error.MergeValueNotIndexable;
-        const found = try self.findMergeHolders(graph_name, label, .{ .property = .{ .key = key, .value = value, .value_key = buf[0..len] } });
+        const found = try self.findMergeHolders(graph_name, label, .{ .property = .{ .key = key, .value = value, .value_key = buf[0..len] } }, tenant);
         return found.lowest;
+    }
+
+    // CANARY: REQ=REQ-SONNY-2976-MERGE-TENANT-SCOPE; FEATURE="MergeRowVisibility"; ASPECT=TenantScopedMergeLookup; STATUS=TESTED; TEST=tests/test_sonny2976_merge_fast_path_tenant_scope.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-2976: `lookupMergeCandidate` for a MERGE run by a session whose
+    /// tenant scope is `tenant` (null: unscoped, every tenant): the lowest
+    /// node holding the key AND tagged exactly `tenant`, the node the general
+    /// executor's MERGE matches (`crud_operations.findMergeMatch` confines a
+    /// candidate to the session's exact tenant).
+    ///
+    /// MERGE's index has no tenant in its key and names ONE node, the lowest
+    /// holder in ANY tenant, so its answer alone is wrong for a scoped
+    /// session: another tenant's node hit is not this session's match, and it
+    /// does not prove that the session has none. When the index names a node
+    /// of another tenant, the session's holders are searched as an
+    /// unresolved entry's are (`findMergeHolders`: the exact node-property
+    /// index, or a scan of the label's postings where it cannot answer), with
+    /// the tenant tag checked on each candidate (hydrated when evicted). An
+    /// authoritative miss stays a miss: no node holds the key in any tenant.
+    /// The index entry itself is never settled from a tenant-filtered answer.
+    pub fn lookupMergeCandidateForTenant(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, tenant: ?[]const u8, out_node_id: *u64) MergeLookupResult {
+        const result = self.lookupMergeCandidate(graph_name, label, prop_key, prop_value, out_node_id);
+        const tid = tenant orelse return result;
+        if (result != .found) return result;
+        if (self.nodeTaggedTenant(out_node_id.*, tid) catch return .not_indexable) return .found;
+        var buf: [1024]u8 = undefined;
+        const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
+        // The value's bytes end the key (`buildMergeIndexKey`).
+        const value_key = probe[graph_name.len + label.len + prop_key.len + 3 ..];
+        const found = self.findMergeHolders(graph_name, label, .{ .property = .{ .key = prop_key, .value = prop_value, .value_key = value_key } }, tid) catch return .not_indexable;
+        out_node_id.* = found.lowest orelse return .not_found;
+        return .found;
+    }
+
+    /// SONNY-2976: whether node `id` is tagged exactly `tenant` (false when
+    /// it does not exist). Hydrates an evicted node; see
+    /// `residentNodeSatisfies`.
+    pub fn nodeTaggedTenant(self: *GraphStore, id: u64, tenant: []const u8) !bool {
+        const Check = struct {
+            tenant: []const u8,
+            fn tagged(c: @This(), node: *const Node) bool {
+                return std.mem.eql(u8, node.tenant_id, c.tenant);
+            }
+        };
+        return self.residentNodeSatisfies(id, Check{ .tenant = tenant }, Check.tagged);
     }
 
     /// SONNY-2806 (round 8): the nodes of `label` holding the key `source`
@@ -7193,7 +7295,11 @@ pub const GraphStore = struct {
     /// here would hold the caller's graph lock, and so stall the graph's
     /// writers, for the whole build. Also without a storage adapter (the
     /// in-memory store).
-    fn findMergeHolders(self: *GraphStore, graph_name: []const u8, label: []const u8, source: MergeKeySource) !MergeHolders {
+    ///
+    /// SONNY-2976: with `tenant`, only nodes tagged exactly `tenant` count as
+    /// holders (a tenant-scoped MERGE); such an answer must not settle the
+    /// tenant-blind index entry.
+    fn findMergeHolders(self: *GraphStore, graph_name: []const u8, label: []const u8, source: MergeKeySource, tenant: ?[]const u8) !MergeHolders {
         if (self.exactIndexAdapter()) |adapter| {
             const PropKV = graph_storage_adapter.StorageAdapter.PropKV;
             var props_buf: [composite_index_max_props]PropKV = undefined;
@@ -7213,7 +7319,7 @@ pub const GraphStore = struct {
                 var found: MergeHolders = .{};
                 var holders: usize = 0;
                 for (ids) |id| {
-                    if (!try self.holdsMergeKey(id, graph_name, label, source)) continue;
+                    if (!try self.holdsMergeKey(id, graph_name, label, source, tenant)) continue;
                     holders += 1;
                     if (found.lowest == null or id < found.lowest.?) found.lowest = id;
                 }
@@ -7227,7 +7333,7 @@ pub const GraphStore = struct {
         const ids = (try self.snapshotNodesByLabel(self.allocator, graph_name, label)) orelse return .{};
         defer self.allocator.free(ids);
         for (ids) |id| {
-            if (try self.holdsMergeKey(id, graph_name, label, source)) return .{ .lowest = id };
+            if (try self.holdsMergeKey(id, graph_name, label, source, tenant)) return .{ .lowest = id };
         }
         return .{};
     }
@@ -7261,15 +7367,17 @@ pub const GraphStore = struct {
     }
 
     /// Whether node `id` of `graph_name` carries `label` and holds the key
-    /// `source` describes.
-    fn holdsMergeKey(self: *GraphStore, id: u64, graph_name: []const u8, label: []const u8, source: MergeKeySource) !bool {
+    /// `source` describes (SONNY-2976: and, with `tenant`, is tagged with it).
+    fn holdsMergeKey(self: *GraphStore, id: u64, graph_name: []const u8, label: []const u8, source: MergeKeySource, tenant: ?[]const u8) !bool {
         const Check = struct {
             graph_name: []const u8,
             label: []const u8,
             source: MergeKeySource,
+            tenant: ?[]const u8,
 
             fn holds(c: @This(), node: *const Node) bool {
                 if (!std.mem.eql(u8, node.graph_name, c.graph_name)) return false;
+                if (c.tenant) |t| if (!std.mem.eql(u8, node.tenant_id, t)) return false;
                 // The label's postings and the exact index can still list a
                 // node that no longer carries the label (a rolled-back
                 // `SET n:L`, SONNY-3059), and MERGE matches only a node that
@@ -7293,7 +7401,7 @@ pub const GraphStore = struct {
                 }
             }
         };
-        return self.residentNodeSatisfies(id, Check{ .graph_name = graph_name, .label = label, .source = source }, Check.holds);
+        return self.residentNodeSatisfies(id, Check{ .graph_name = graph_name, .label = label, .source = source, .tenant = tenant }, Check.holds);
     }
 
     /// Whether `pred(context, node)` holds for node `id`, or false when no
@@ -16598,7 +16706,7 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
             // shared global and fall through to the legacy global-only
             // exclusive path below.
             releaseStoreLock();
-            if (err == error.GraphNotFound and materializeGraphForWriteLock(adapter, graph_name)) {
+            if (err == error.GraphNotFound and materializeGraphForWriteLock(adapter, graph_name) == .ready) {
                 acquireStoreLock();
                 if (adapter.acquireGraphWriteLock(graph_name)) |mg| {
                     return .{
@@ -16826,20 +16934,40 @@ pub fn acquireProgramWriteLockCancelable(lock_graph: []const u8, session_graph: 
 fn materializeGraphForWriteLock(
     adapter: *graph_storage_adapter.StorageAdapter,
     graph_name: []const u8,
-) bool {
+) Materialized {
     // SONNY-3191 (N-7): a statement naming a reserved graph name (CREATE or
     // DROP GRAPH CURRENT_GRAPH, which the executor refuses) locks the name
     // first; its lock must not create the graph in the engine.
-    if (isReservedGraphName(graph_name)) return false;
+    if (isReservedGraphName(graph_name)) return .failed;
+    // CANARY: REQ=REQ-SONNY-3122-NO-RECREATE-ON-WRITE; FEATURE="MultiGraphIsolation"; ASPECT=MaterializeKnownOnly; STATUS=TESTED; TEST=tests/test_sonny3122_dropped_graph_not_recreated.zig; OWNER=storage; UPDATED=2026-11-12
+    // SONNY-3122: only a graph the engine knows but has not opened (one in
+    // its registry, its load deferred) or the default graph (a fresh
+    // server's first statements) is materialized. A graph that exists
+    // nowhere, one another session dropped, was created again here, so a
+    // session left on it, or a writer that waited for its lock while the
+    // drop ran (V12), brought it back without the schema permission. Only
+    // CREATE GRAPH (and a HELLO allowed to) creates a graph.
+    if (!std.mem.eql(u8, graph_name, DEFAULT_GRAPH_NAME) and !adapter.graphExists(graph_name)) return .missing;
     _ = adapter.getOrCreateGraph(graph_name) catch |err| {
         log.warn("write-lock graph materialization failed; using legacy global-exclusive lock", &.{
             Attr.string("graph", graph_name),
             Attr.string("error", @errorName(err)),
         });
-        return false;
+        return .failed;
     };
-    return true;
+    return .ready;
 }
+
+/// What `materializeGraphForWriteLock` did.
+const Materialized = enum {
+    /// The graph is open: take its per-graph lock.
+    ready,
+    /// SONNY-3122: it exists nowhere: GraphNotFound.
+    missing,
+    /// It could not be opened (or the name is reserved): the legacy global
+    /// lock is the fail-safe.
+    failed,
+};
 
 /// R2 (2026-04-22): deadline-aware variant of `acquireGraphWriteLock`.
 /// Returns `error.Deadline` if the per-graph write lock cannot be
@@ -16888,7 +17016,10 @@ pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns:
                 // interleaved and duplicated the first contended merge key.
                 // Materialize, then take the normal per-graph path. See
                 // `materializeGraphForWriteLock`.
-                if (err == error.GraphNotFound and materializeGraphForWriteLock(adapter, graph_name)) {
+                const materialized: Materialized = if (err == error.GraphNotFound) materializeGraphForWriteLock(adapter, graph_name) else .failed;
+                // SONNY-3122: a write to a graph that no longer exists fails.
+                if (materialized == .missing) return error.GraphNotFound;
+                if (materialized == .ready) {
                     acquireStoreLock();
                     if (adapter.acquireGraphWriteLockCancelable(graph_name, deadline_mono_ns)) |mg| {
                         return .{
@@ -16902,7 +17033,11 @@ pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns:
                             releaseStoreLock();
                             return error.Deadline;
                         },
-                        else => releaseStoreLock(),
+                        else => {
+                            releaseStoreLock();
+                            // SONNY-3122: dropped between the two attempts.
+                            if (err2 == error.GraphNotFound) return error.GraphNotFound;
+                        },
                     }
                 }
             },

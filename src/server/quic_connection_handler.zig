@@ -650,6 +650,13 @@ fn executeBulkSimpleCreate(
                 try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
                 return;
             }
+            // SONNY-3122: the session's graph was dropped; it is not
+            // created again (GraphNotFound, a GQLSTATUS error).
+            if (err == error.GraphNotFound) {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            }
             return err;
         };
         mut_sample.markLockAcquired();
@@ -856,22 +863,26 @@ fn executeBulkMatchCreateEdge(
         defer graph_store.releaseGraphLock(read_handle);
         // SONNY-3241: each endpoint key's only holder; a key more nodes
         // may hold declines to the executor (an edge per matched pair).
-        const s = adapter.lookupSoleNodeByMergeKey(
+        // SONNY-2976: endpoints only in the request's tenant.
+        const request_tenant = fle_integration.getCurrentTenantIdCtx(&ctx);
+        const s = adapter.lookupSoleNodeByMergeKeyForTenant(
             query_graph_name,
             spec.source.label,
             spec.source.filter_key,
             src_filter_pv,
+            request_tenant,
             error.SourceNodeNotFound,
         ) catch |err| switch (err) {
             error.SourceNodeNotFound => break :blk null,
             error.MergeKeyNotUnique => return false,
             else => return err,
         };
-        const t = adapter.lookupSoleNodeByMergeKey(
+        const t = adapter.lookupSoleNodeByMergeKeyForTenant(
             query_graph_name,
             spec.target.label,
             spec.target.filter_key,
             dst_filter_pv,
+            request_tenant,
             error.TargetNodeNotFound,
         ) catch |err| switch (err) {
             error.TargetNodeNotFound => break :blk null,
@@ -907,6 +918,13 @@ fn executeBulkMatchCreateEdge(
                     Attr.uint("timeout_ns", write_lock_timeout_ns),
                 });
                 try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                return true;
+            }
+            // SONNY-3122: the session's graph was dropped; it is not
+            // created again (GraphNotFound, a GQLSTATUS error).
+            if (err == error.GraphNotFound) {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return true;
             }
             return err;
@@ -1309,11 +1327,15 @@ fn executeBulkSimpleMerge(
     if (!spec.apply_on_match and merge_kvs.len == 1) {
         const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_merge);
         defer graph_store.releaseGraphLock(read_handle);
-        const res = adapter.lookupNodeByMergeKey(
+        // SONNY-2976: a hit counts only in the session's tenant; another
+        // tenant's node with this key would end the MERGE with no node of
+        // the session's own.
+        const res = adapter.lookupNodeByMergeKeyForTenant(
             query_graph_name,
             spec.label,
             spec.merge_key,
             merge_value_pv,
+            fle_integration.getCurrentTenantIdCtx(&ctx),
             error.MergeCandidateMissing,
         );
         if (res) |_| {
@@ -1414,6 +1436,12 @@ fn executeBulkSimpleMerge(
                         Attr.uint("timeout_ns", write_lock_timeout_ns),
                     });
                     try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                    return;
+                }
+                // SONNY-3122: as in executeBulkSimpleCreate.
+                if (err == error.GraphNotFound) {
+                    const info = proto_util.mapError(err);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                     return;
                 }
                 return err;
@@ -6455,16 +6483,8 @@ fn handleAlterUserSetPassword(
     // didn't meet policy — so the change never persisted and reverted on restart.
     if (state.security_manager) |sm| {
         sm.validatePassword(new_password) catch |err| {
-            const msg = switch (err) {
-                error.PasswordTooShort => "Password too short (minimum 20 characters)",
-                error.PasswordTooLong => "Password too long (maximum 256 characters)",
-                error.PasswordMissingUppercase => "Password must contain at least one uppercase letter",
-                error.PasswordMissingLowercase => "Password must contain at least one lowercase letter",
-                error.PasswordMissingDigit => "Password must contain at least one digit",
-                error.PasswordContainsSpaces => "Password must not contain spaces",
-                error.PasswordNotPassphrase => "Password must be a passphrase with at least 3 words",
-                else => "Password does not meet security policy requirements",
-            };
+            // SONNY-6331: the rule that failed, with the configured limit.
+            const msg = if (geode_auth.PasswordPolicy.violationOf(err)) |v| sm.password_policy.message(v) else "Password does not meet security policy requirements";
             try sendExecuteError(gpa, stream, "28P01", msg, &.{}, &.{});
             return;
         };
@@ -6478,11 +6498,12 @@ fn handleAlterUserSetPassword(
     }
 
     user_mgmt.updateUserPassword(gpa, username, new_password) catch |err| {
-        const msg = switch (err) {
+        // SONNY-3038: not saved (58030); the user is locked out.
+        const info: proto_util.ErrorInfo = if (err == error.UserNotPersisted) proto_util.mapError(err) else .{ .code = "28P01", .message = switch (err) {
             error.PasswordReuse => "New password must not match the current password",
-            else => "Failed to update password",
-        };
-        try sendExecuteError(gpa, stream, "28P01", msg, &.{}, &.{});
+            else => if (geode_auth.PasswordPolicy.violationOf(err)) |v| geode_auth.PasswordPolicy.geodeSecure().message(v) else "Failed to update password",
+        } };
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
         return;
     };
 
@@ -6649,12 +6670,11 @@ fn bindScanStreamCancel(stream: *quic_transport.QuicStream, scan: *node_scan_str
 /// engines at startup, so the previous `getGlobalRLSFilterEngine() != null`
 /// test was true for every authenticated session even with no policy — which
 /// disabled engine-side streaming for all authenticated reads and forced them
-/// onto the O(graph) snapshot clone. We check BOTH the server-side label
-/// engine (`rls_filter`, the one the handler actually applies) AND the shared
-/// `rls_types`/expression engines (`execution.activeRlsPoliciesConfigured`), so
-/// a best-effort sync failure between the two engines can never let a streamed
-/// read bypass an installed policy. When any real policy exists, streaming is
-/// disabled and the snapshot path runs `passesRLSFilter` per candidate node.
+/// onto the O(graph) snapshot clone. We check the label-deny engine (one
+/// since SONNY-2729: `rls_filter` re-exports rls_types') AND the expression
+/// engine (`execution.activeRlsPoliciesConfigured`, which also reads the
+/// label engine). When any real policy exists, streaming is disabled and the
+/// snapshot path runs `passesRLSFilter` per candidate node.
 fn authenticatedReadNeedsRlsSnapshot(state: *const ServerState) bool {
     if (state.authenticated_user == null) return false;
     if (rls_filter.getGlobalRLSFilterEngine()) |engine| {
@@ -6674,6 +6694,17 @@ fn authenticatedReadNeedsRlsSnapshot(state: *const ServerState) bool {
 fn keyResolvedWriteFastPathServes(state: *const ServerState, exec_context: *const execution.ExecutionContext) bool {
     if (authenticatedReadNeedsRlsSnapshot(state)) return false;
     return geode.bulk_ingest.sessionAllowsKeyResolvedWrites(exec_context);
+}
+
+// CANARY: REQ=REQ-SONNY-2724-NODE-MERGE-TENANT-FAST-PATH; FEATURE="MergeRowVisibility"; ASPECT=NodeMergeFastPathGate; STATUS=TESTED; TEST=tests/test_sonny2724_quic_fast_path_gate.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2724: may the node MERGE fast paths serve this request? As
+/// `keyResolvedWriteFastPathServes`, except that a concrete tenant scope no
+/// longer declines: their adapter primitives match only within the session's
+/// tenant (SONNY-2976), as the executor's MERGE does (see
+/// `bulk_ingest.sessionAllowsTenantScopedNodeMerges`).
+fn nodeMergeFastPathServes(state: *const ServerState, exec_context: *const execution.ExecutionContext) bool {
+    if (authenticatedReadNeedsRlsSnapshot(state)) return false;
+    return geode.bulk_ingest.sessionAllowsTenantScopedNodeMerges(exec_context);
 }
 
 /// GAP-0900 (scan-no-clone): true iff this read will be served by the
@@ -7269,8 +7300,21 @@ fn handleClientMessage(
             {
                 const trimmed = std.mem.trim(u8, exec_req.query, " \t\r\n");
                 if (parseAlterUserSetPassword(trimmed)) |parsed| {
-                    try handleAlterUserSetPassword(gpa, state, stream, parsed.username, parsed.new_password);
-                    return;
+                    // SONNY-6359: another user's password goes to the parser
+                    // (geode.auth.user_reset_password: Admin only, the policy).
+                    if (proto_util.passwordInterceptApplies(state.authenticated_user, parsed.username)) {
+                        // SONNY-2751: a password change changes stored security
+                        // state; a read-only request refuses it, as the read-only
+                        // floor below refuses the rest of the security DDL. This
+                        // intercept runs before the parser, so the floor never saw
+                        // it.
+                        if (exec_req.read_only) {
+                            try sendExecuteError(gpa, stream, "42501", "Read-only request: data modification rejected", &.{}, &.{});
+                            return;
+                        }
+                        try handleAlterUserSetPassword(gpa, state, stream, parsed.username, parsed.new_password);
+                        return;
+                    }
                 }
             }
 
@@ -7466,7 +7510,10 @@ fn handleClientMessage(
             // orchestrator sets ExecuteRequest.read_only=true to guarantee no
             // mutation reaches the store no matter what role the connection holds.
             // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=QuicGate; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
-            if (exec_req.read_only and program_is_mutating) {
+            // SONNY-2751: any change of stored state (`changes_state`), the
+            // security DDL included; it took data changes only, so a
+            // read-only request ran CREATE USER, GRANT and CREATE POLICY.
+            if (exec_req.read_only and stmt_plan.changes_state) {
                 try sendExecuteError(gpa, stream, "42501", "Read-only request: data modification rejected", &.{}, &.{});
                 return;
             }
@@ -7621,6 +7668,10 @@ fn handleClientMessage(
                     .source = .quic_handler,
                 });
             };
+            // SONNY-2782: the principal every gate below and the executor
+            // authorize as; null with authentication disabled (the gRPC
+            // handler decides the same way).
+            const request_principal = execution.session_graph.requestPrincipal(&principal_for_request);
 
             var exec_context = execution.ExecutionContext{
                 .catalog = catalog,
@@ -7643,7 +7694,7 @@ fn handleClientMessage(
                 // request boundary (per-thread map remains the fallback).
                 // SONNY-6341: only a role the authenticated user holds.
                 .fle_role = state.effectiveFleRole(),
-                .principal = &principal_for_request,
+                .principal = request_principal,
                 // GAP-0511 Task 3b: Wire expression RLS engine pointer into execution context.
                 // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
                 .rls_engine = @import("rls_types").getGlobalExprRLSEngine(),
@@ -7746,12 +7797,16 @@ fn handleClientMessage(
             // WRITE grant or a graph-scoped policy on that graph only. A
             // self-locking CALL writes no one graph and needs database-wide
             // write (`writePermitted`).
-            if (is_mutation and state.authenticated_role != null) {
-                const write_ok = if (self_locking)
-                    geode.security.gps.writePermitted(gpa, &principal_for_request)
-                else
-                    geode.security.gps.writePermittedOn(gpa, &principal_for_request, lock_graph);
-                if (!write_ok) {
+            // SONNY-2781: by the actions the program needs
+            // (`changePermittedOn`: CREATE, UPDATE, DELETE, WRITE+SCHEMA for
+            // DDL, WRITE for the rest), not `write` alone, so a deny or an
+            // allow naming one of them applies.
+            // SONNY-2782: through the gate the gRPC handler runs
+            // (`session_graph.requestChangePermitted`), for every session
+            // with authentication enabled, and for none with it disabled. It
+            // ran only for a session with a role.
+            if (is_mutation) {
+                if (!execution.session_graph.requestChangePermitted(gpa, request_principal, self_locking, lock_graph, stmt_plan.actions)) {
                     try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     return;
                 }
@@ -7759,12 +7814,10 @@ fn handleClientMessage(
             // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=QuicReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
             // A principal with no global Read (a user with no stored role)
             // reads only graphs it holds a READ grant on, the default graph
-            // included.
-            if (state.authenticated_role != null) {
-                if (!try execution.session_graph.programReadPermitted(gpa, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
-                    try sendExecuteError(gpa, stream, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
-                    return;
-                }
+            // included. SONNY-2782: the shared gate, as for writes.
+            if (!try execution.session_graph.requestReadPermitted(gpa, request_principal, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
+                try sendExecuteError(gpa, stream, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
+                return;
             }
 
             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
@@ -7842,6 +7895,10 @@ fn handleClientMessage(
             // applies in and the write takes the executor. The edge fast
             // paths write no node and are not affected.
             const node_fast_paths_ok = fle_fast_paths_ok and !geode.bulk_ingest.uniqueConstraintsDeclineFastPath(query_graph_name);
+            // SONNY-2724: the node MERGE fast paths (node, graph-selector and
+            // /*+BATCH*/ MERGE) match only within the session's tenant
+            // (SONNY-2976), so they also serve a tenant-scoped session.
+            const node_merge_writes_ok = is_mutation and fle_fast_paths_ok and nodeMergeFastPathServes(state, &exec_context);
 
             // GAP-0900 lever (c): opt-in concurrent batch-merge fast path.
             // A client signals "this program is a batch of independent simple
@@ -7861,7 +7918,7 @@ fn handleClientMessage(
             const batch_requested = std.mem.startsWith(u8, query_text, BATCH_SENTINEL);
             if (batch_requested and
                 is_mutation and
-                key_resolved_writes_ok and
+                node_merge_writes_ok and
                 node_fast_paths_ok and
                 !state.in_txn and
                 graph_store.getGlobalAdapter() != null and
@@ -7879,9 +7936,8 @@ fn handleClientMessage(
                 // ops take the graph's lock SHARED, and a writer waits for
                 // them, so holding the write lock across them would deadlock.
                 // No principal with authentication off, as the write gate
-                // above and the HELLO do.
-                const batch_principal: ?*const @TypeOf(principal_for_request) = if (state.authenticated_role != null) &principal_for_request else null;
-                execution.session_graph.requireWritable(batch_principal, catalog, query_graph_name) catch |err| {
+                // above and the HELLO do (SONNY-2782: `request_principal`).
+                execution.session_graph.requireWritable(request_principal, catalog, query_graph_name) catch |err| {
                     const info = proto_util.mapError(err);
                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                     return;
@@ -8089,7 +8145,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok and node_fast_paths_ok) {
+                if (bulk_shape == .simple_node_merge and node_merge_writes_ok and node_fast_paths_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -8143,7 +8199,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok and node_fast_paths_ok) {
+                if (bulk_shape == .simple_node_merge and node_merge_writes_ok and node_fast_paths_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -8168,7 +8224,7 @@ fn handleClientMessage(
             // falls through so the graph-access check + session rebind run in
             // the regular executor. Same gating as the single-statement fast
             // paths: autocommit, non-cluster (cluster writes must reach Raft).
-            if (is_mutation and key_resolved_writes_ok and node_fast_paths_ok and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
+            if (is_mutation and node_merge_writes_ok and node_fast_paths_ok and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
                 if (geode.bulk_ingest.matchGraphSelectorThenMerge(&parse_result.program)) |gs| {
                     if (std.mem.eql(u8, gs.graph_name, query_graph_name)) {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, gs.merge, query_graph_name, exec_context);

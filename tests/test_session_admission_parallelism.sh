@@ -70,7 +70,7 @@ fi
 
 DATA_DIR="$(mktemp -d /tmp/geode-admission-parallel-XXXXXX)"
 SRV_LOG="${DATA_DIR}/server.log"
-ADMIN_PASSWORD="GeodeTestPassword123!"
+ADMIN_PASSWORD="Geode Test Admin Passphrase"
 
 LOAD_PIDS=()
 cleanup() {

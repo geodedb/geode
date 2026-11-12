@@ -65,7 +65,7 @@ fn buildChildEnv(aa: std.mem.Allocator, metrics_port: []const u8) !*std.process.
     if (posixGetenv("LD_LIBRARY_PATH")) |p| try env_ptr.put("LD_LIBRARY_PATH", p);
     try env_ptr.put("GEODE_METRICS_PORT", metrics_port);
     try env_ptr.put("GEODE_METRICS_BIND", "127.0.0.1");
-    try env_ptr.put("GEODE_ADMIN_PASSWORD", "livenesstest123");
+    try env_ptr.put("GEODE_ADMIN_PASSWORD", "Liveness Test Admin Passphrase");
     return env_ptr;
 }
 

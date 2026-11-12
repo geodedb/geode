@@ -1593,6 +1593,62 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
     return out;
 }
 
+// ===========================================================================
+// SONNY-2726 — the writing session's tenant rides the replicated entry
+// ===========================================================================
+//
+// A replicated write is applied by the raft apply thread, which has no
+// request context, so every node and edge it created was tagged with the
+// default tenant on every node, and (since SONNY-2693's strict edge rule) a
+// tenant's replicated edges were hidden from it. The leader now wraps the
+// entry of a session whose tenant is not the default in a GTN1 envelope:
+//
+//   "GTN1" | str16 tenant | the unchanged inner payload (any graph-mutation
+//                           payload: GNC1/GNC2/GN1K/GN2K/GBAT/delete/merge/update)
+//
+// and the apply creates under that tenant. A default-tenant write is not
+// wrapped, so it is byte-identical to before, and entries already in the log
+// (no envelope) still apply as the default tenant. A node running a build
+// without this envelope logs and skips a GTN1 create (its unknown-magic arm)
+// and cannot decode a wrapped delete/merge/update: upgrade every node before
+// tenant-scoped sessions write in a cluster.
+//
+// CANARY: REQ=REQ-SONNY-2726-REPLICATED-TENANT; FEATURE="DistributedCluster"; ASPECT=TenantEnvelope; STATUS=TESTED; TEST=tests/test_sonny2726_replicated_tenant.zig; OWNER=distributed; UPDATED=2026-11-12
+
+/// 4-byte magic prefix of the tenant envelope.
+pub const MAGIC_TENANT = [4]u8{ 'G', 'T', 'N', '1' };
+
+/// True iff `data` is a GTN1 tenant envelope.
+pub fn isTenantPayload(data: []const u8) bool {
+    return data.len >= MAGIC_TENANT.len and std.mem.eql(u8, data[0..MAGIC_TENANT.len], &MAGIC_TENANT);
+}
+
+/// Wrap `inner` in a GTN1 envelope naming `tenant` (non-empty, at most
+/// 65535 bytes, else UnsupportedPropertyType). Caller owns the result.
+pub fn wrapWithTenant(allocator: std.mem.Allocator, tenant: []const u8, inner: []const u8) ![]u8 {
+    if (tenant.len == 0) return CodecError.UnsupportedPropertyType;
+    var list = std.ArrayList(u8).empty;
+    errdefer list.deinit(allocator);
+    try list.appendSlice(allocator, &MAGIC_TENANT);
+    try appendStr16(&list, allocator, tenant);
+    try list.appendSlice(allocator, inner);
+    return list.toOwnedSlice(allocator);
+}
+
+pub const TenantSplit = struct { tenant: []const u8, inner: []const u8 };
+
+/// Split a GTN1 envelope into its tenant and inner payload (both borrowed
+/// from `data`). An empty tenant or a nested envelope is CorruptPayload.
+pub fn splitTenant(data: []const u8) !TenantSplit {
+    if (!isTenantPayload(data)) return CodecError.CorruptPayload;
+    var r = Reader{ .data = data, .pos = MAGIC_TENANT.len };
+    const tenant = try r.str16();
+    if (tenant.len == 0) return CodecError.CorruptPayload;
+    const inner = data[r.pos..];
+    if (isTenantPayload(inner)) return CodecError.CorruptPayload;
+    return .{ .tenant = tenant, .inner = inner };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

@@ -126,13 +126,15 @@ test "SONNY-6320: the verify paths compare digests in constant time (structural,
     try testing.expect(std.mem.indexOf(u8, argon, "std.mem.eql(u8, &computed_hash") == null);
     try testing.expect(std.mem.indexOf(u8, argon, "std.mem.eql(u8, &expected_hash") == null);
 
-    // Legacy Blake2b (migration only): through constantTimeEqual64, which is
-    // timingSafeEql.
+    // Legacy Blake2b (migration only): through the one legacy verifier
+    // (SONNY-6367, `verifyPasswordBlake2bLegacy`), which compares the digests
+    // with timingSafeEql.
     const legacy = try functionBody("fn verifyBlake2bLegacy(");
-    try testing.expect(std.mem.indexOf(u8, legacy, "constantTimeEqual64(&computed_hex, stored_hash)") != null);
+    try testing.expect(std.mem.indexOf(u8, legacy, "verifyPasswordBlake2bLegacy(password, stored_hash)") != null);
     try testing.expect(std.mem.indexOf(u8, legacy, "std.mem.eql") == null);
-    const ct64 = try functionBody("fn constantTimeEqual64(");
-    try testing.expect(std.mem.indexOf(u8, ct64, "crypto_backend.timingSafeEql(") != null);
+    const legacy_verify = try functionBody("pub fn verifyPasswordBlake2bLegacy(");
+    try testing.expect(std.mem.indexOf(u8, legacy_verify, "crypto_backend.timingSafeEql(&digest, &expected)") != null);
+    try testing.expect(std.mem.indexOf(u8, legacy_verify, "std.mem.eql") == null);
 
     // SecurityManager's verify dispatches only to those two.
     const dispatch = try functionBody("fn verifyPassword(self: *Self");

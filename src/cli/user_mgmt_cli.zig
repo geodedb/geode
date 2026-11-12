@@ -44,6 +44,7 @@ const cli_auth = @import("cli_auth_helpers.zig");
 const AuthGraphManager = cli_auth.AuthGraphManager;
 const auth_graph_manager_mod = @import("auth_graph_manager");
 const geode_auth = @import("geode_auth");
+const geode = @import("geode");
 
 // CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=cli; UPDATED=2026-02-24
 // GAP-0154 FIX: Production builds require explicit passwords or generate random ones
@@ -174,10 +175,74 @@ fn requirePasswordPolicy(password: []const u8) void {
     }
 }
 
-/// GAP-0154 FIX: Generate a cryptographically secure random password
-/// Returns a 32-character hex string (16 random bytes converted to hex)
-fn generateSecurePassword() ![32]u8 {
+/// GAP-0154 FIX: Generate a cryptographically secure random password that
+/// meets the password policy (SONNY-6331).
+fn generateSecurePassword() !cli_auth.GeneratedPassword {
     return cli_auth.generateSecurePassword();
+}
+
+// CANARY: REQ=REQ-SONNY-6358-OFFLINE-PASSWORD-HASH; FEATURE="OfflineAuthStoreSafety"; ASPECT=HashBeforeStore; STATUS=TESTED; TEST=tests/test_sonny6358_offline_password_hash.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6358: the `password_hash` an offline command stores for
+/// `password`: the server's Argon2id PHC string
+/// (`geode_auth.hashPasswordArgon2id`). `user create` and `user update
+/// --password` stored the password itself, in the clear, and no login could
+/// match it. Exits when it cannot hash (FIPS builds have no Argon2id).
+/// Caller frees.
+fn hashPasswordOrExit(allocator: std.mem.Allocator, password: []const u8) []const u8 {
+    return geode_auth.hashPasswordArgon2id(allocator, password) catch |err| {
+        std.debug.print("Error: could not hash the password ({s}); nothing was changed\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6358: set an existing user's stored password hash through the seam
+/// the server's password changes use (`AuthGraphManager.updateUserPassword`:
+/// the record, its HMAC and the chain seal, the forced-reset flag cleared and
+/// the auth version moved on), signed with the key the chain verified with.
+fn setStoredPasswordOrExit(allocator: std.mem.Allocator, mgr: *AuthGraphManager, user_id: u64, username: []const u8, password_hash: []const u8) void {
+    const key = cli_auth.changeKey(allocator) catch |err| {
+        std.debug.print("Error: no HMAC key to seal the password change for user '{s}' with ({s}); password NOT changed\n", .{ username, @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    _ = mgr.updateUserPassword(&key, user_id, password_hash) catch |err| {
+        std.debug.print("Error: failed to persist the new password for user '{s}': {s} — password NOT changed\n", .{ username, @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6367: exit, before anything is changed, unless `role` names a
+/// built-in role. A custom role carries no privileges (SONNY-6292), so it
+/// cannot be given to a user; the offline commands stored a role node of any
+/// name and reported it assigned.
+fn requireBuiltinRoleOrExit(role: []const u8) void {
+    if (cli_auth.builtinRoleName(role) != null) return;
+    std.debug.print("Error: '{s}' is not a built-in role (admin, readwrite, user, readonly). A custom role carries no privileges, so it cannot be given to a user; grant per-graph privileges over the wire instead (GRANT READ | WRITE | SCHEMA | ALL ON GRAPH <g> TO <user>). Nothing was changed\n", .{role});
+    std.process.exit(@intFromEnum(ExitCode.general_error));
+}
+
+/// SONNY-6369: exit, before anything is changed, when `username` is a
+/// superuser and `role` is not admin (it would never take effect).
+fn requireRoleTakesEffectOrExit(mgr: *AuthGraphManager, username: []const u8, role: []const u8) void {
+    cli_auth.requireRoleTakesEffect(mgr, username, role) catch {
+        std.debug.print("Error: '{s}' is a superuser: a superuser always holds the admin role, so the role '{s}' would never take effect. Nothing was changed\n", .{ username, role });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6367: give a stored user the built-in role `role` (see
+/// `cli_auth.assignBuiltinRole`), or exit saying it was not given.
+fn assignRoleOrExit(allocator: std.mem.Allocator, mgr: *AuthGraphManager, username: []const u8, role: []const u8) void {
+    cli_auth.assignBuiltinRole(allocator, mgr, username, role) catch |err| {
+        std.debug.print("Error: could not give user '{s}' the role '{s}': {s} — the role was NOT assigned\n", .{ username, role, @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6367: the role the server resolves for `record` at login
+/// (`role_resolver.resolveRoleFromGraph`: its built-in HAS_ROLE edge, admin
+/// for a superuser, else none). `user list` printed "user" for everyone.
+fn storedRoleName(mgr: *AuthGraphManager, record: anytype) []const u8 {
+    return geode.security.role_resolver.resolveRoleFromGraph(mgr.storage.store, record).toString();
 }
 
 /// Extract --data-dir from argv (returns null if not found)
@@ -191,13 +256,15 @@ fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
     return null;
 }
 
-/// Resolve the data dir the offline auth store will be opened from, mirroring
-/// `initCliAuthManager`'s fallback chain (explicit --data-dir, then
-/// GEODE_DATA_DIR, then the packaged default).
-fn resolveDataDir(data_dir: ?[]const u8) []const u8 {
-    if (data_dir) |d| return d;
-    if (std.c.getenv("GEODE_DATA_DIR")) |p| return std.mem.span(p);
-    return "/var/lib/geode";
+/// Resolve the data dir the offline auth store will be opened from:
+/// `initCliAuthManager`'s chain (SONNY-6345: `cli_auth.resolveCliDataDir`,
+/// the server's default directory when there is no --data-dir).
+/// Caller owns the result.
+fn resolveDataDir(allocator: std.mem.Allocator, data_dir: ?[]const u8) []const u8 {
+    return cli_auth.resolveCliDataDir(allocator, data_dir) catch {
+        std.debug.print("Error: out of memory resolving the data directory\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 }
 
 fn hasFlag(argv: [][:0]u8, flag: []const u8) bool {
@@ -300,7 +367,8 @@ fn guardOfflineAuthStoreWrite(
     subcommand: []const u8,
     force: bool,
 ) void {
-    const resolved = resolveDataDir(data_dir);
+    const resolved = resolveDataDir(allocator, data_dir);
+    defer allocator.free(resolved);
     const holder = findDataDirHolderPid(allocator, resolved) orelse return;
 
     std.debug.print(
@@ -389,6 +457,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         var password: ?[]const u8 = null;
         var password_is_default = true;
         var role: []const u8 = "user";
+        var role_given = false;
         var generate_password = false;
 
         var i = subcmd_idx + 3;
@@ -410,6 +479,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                     std.process.exit(@intFromEnum(ExitCode.usage_error));
                 }
                 role = argv[i + 1];
+                role_given = true;
                 i += 1;
             } else if (!std.mem.startsWith(u8, argv[i], "--") and password == null and i == subcmd_idx + 3) {
                 // Allow password as positional 3rd arg for backward compatibility
@@ -418,8 +488,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
 
+        requireBuiltinRoleOrExit(role);
+
         // GAP-0154 FIX: Production build password handling
-        var generated_pw: [32]u8 = undefined;
+        var generated_pw: cli_auth.GeneratedPassword = .{};
         const final_password: []const u8 = blk: {
             if (password) |pw| {
                 // Explicit password provided
@@ -433,35 +505,32 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             if (generate_password) {
                 // Generate random password
                 generated_pw = try generateSecurePassword();
-                std.debug.print("Generated password: {s}\n", .{generated_pw});
-                break :blk &generated_pw;
+                std.debug.print("Generated password: {s}\n", .{generated_pw.slice()});
+                break :blk generated_pw.slice();
             }
             // All builds require explicit password
             std.debug.print("Error: --password or --generate-password is required\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
 
+        // SONNY-6358: stored as the server stores it, never the password.
+        const password_hash = hashPasswordOrExit(allocator, final_password);
+        defer allocator.free(password_hash);
+
         // Check if user already exists
-        if (mgr.storage.getUserByUsername(username) != null) {
+        if (mgr.storage.getUserByUsername(username)) |existing| {
             // Update existing user
-            var it = mgr.storage.user_cache.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.value_ptr.getUsername(), username)) {
-                    try mgr.storage.updateUser(entry.key_ptr.*, email, final_password, null, null, null);
-                    break;
-                }
-            }
+            try mgr.storage.updateUser(existing.id, email, null, null, null, null);
+            setStoredPasswordOrExit(allocator, &mgr, existing.id, username, password_hash);
+            if (role_given) assignRoleOrExit(allocator, &mgr, username, role);
         } else {
             // Create new user via storage
             const user_id = mgr.next_user_id;
             mgr.next_user_id += 1;
-            try mgr.storage.persistUser(user_id, username, email, final_password, "");
-            // Ensure role exists in graph store
-            if (mgr.storage.getRoleByName(role) == null) {
-                const role_id = mgr.next_user_id;
-                mgr.next_user_id += 1;
-                mgr.storage.persistRole(role_id, role, "assigned at user creation", 0, 0, false) catch {};
-            }
+            try mgr.storage.persistUser(user_id, username, email, password_hash, "");
+            // SONNY-6367: the role (`user` when none is given, as CREATE
+            // USER gives); a role node used to be stored and never assigned.
+            assignRoleOrExit(allocator, &mgr, username, role);
         }
         printOut("User '{s}' created successfully\n", .{username});
         return;
@@ -534,6 +603,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
+        requireBuiltinRoleOrExit(role);
+
         if (mgr.storage.getUserByUsername(username) != null) {
             std.debug.print("Error: user '{s}' already exists; import refuses to overwrite\n", .{username});
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -545,11 +616,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.debug.print("Error: failed to import user '{s}': {s}\n", .{ username, @errorName(err) });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        if (mgr.storage.getRoleByName(role) == null) {
-            const role_id = mgr.next_user_id;
-            mgr.next_user_id += 1;
-            mgr.storage.persistRole(role_id, role, "assigned at user import", 0, 0, false) catch {};
-        }
+        assignRoleOrExit(allocator, &mgr, username, role);
         printOut("User '{s}' imported successfully ({s} hash)\n", .{ username, algorithm });
         return;
     }
@@ -562,8 +629,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         printOut("Users:\n", .{});
         var it = mgr.storage.userIterator();
         while (it.next()) |record| {
-            // Find associated role (default to "user")
-            printOut("- {s} (role: user)\n", .{record.getUsername()});
+            printOut("- {s} (role: {s})\n", .{ record.getUsername(), storedRoleName(&mgr, record.*) });
         }
         if (mgr.storage.user_cache.count() == 0) {
             printOut("  (no users)\n", .{});
@@ -585,11 +651,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("User: {s}\nEmail: {s}\nRole: {s}\nStatus: {s}\n", .{
                 u.getUsername(),
                 u.getEmail(),
-                if (u.is_superuser) "admin" else "user",
+                storedRoleName(&mgr, u),
                 if (u.is_active) "active" else "disabled",
             });
         } else {
-            printOut("User: {s}\nEmail: unknown\nRole: user\nStatus: active\n", .{username});
+            // SONNY-6367: it printed made-up details and exited 0.
+            std.debug.print("Error: user '{s}' not found\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         }
         return;
     }
@@ -604,21 +672,18 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("geode user delete - Delete a user\n\nUsage: geode user delete <username>\n\nDeletes the specified user from the local user store.\n", .{});
             return;
         }
-        // Find user by username and remove
-        var found = false;
-        var it = mgr.storage.user_cache.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.getUsername(), username)) {
-                mgr.storage.removeUser(entry.key_ptr.*) catch {};
-                found = true;
-                break;
-            }
-        }
-        if (found) {
-            printOut("User '{s}' deleted\n", .{username});
-        } else {
-            std.debug.print("Error: user '{s}' not found\n", .{username});
+        // SONNY-6352: a removal that fails is reported (it was dropped, and
+        // the user reported deleted while it stayed stored).
+        const outcome = cli_auth.removeUserByName(&mgr, username) catch |err| {
+            std.debug.print("Error: failed to delete user '{s}': {s} — the user was NOT deleted\n", .{ username, @errorName(err) });
             std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        switch (outcome) {
+            .removed => printOut("User '{s}' deleted\n", .{username}),
+            .not_found => {
+                std.debug.print("Error: user '{s}' not found\n", .{username});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            },
         }
         return;
     }
@@ -660,17 +725,23 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
 
         if (new_password) |pw| requirePasswordPolicy(pw);
+        if (new_role) |nr| {
+            requireBuiltinRoleOrExit(nr);
+            // SONNY-6369: before anything is changed.
+            requireRoleTakesEffectOrExit(&mgr, username, nr);
+        }
 
         if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, new_email, new_password, null, null, null);
-            // If role change requested, ensure the new role exists
-            if (new_role) |nr| {
-                if (mgr.storage.getRoleByName(nr) == null) {
-                    const role_id = mgr.next_user_id;
-                    mgr.next_user_id += 1;
-                    mgr.storage.persistRole(role_id, nr, "assigned via user update", 0, 0, false) catch {};
-                }
+            if (new_email != null) try mgr.storage.updateUser(existing.id, new_email, null, null, null, null);
+            // SONNY-6358: the hash, through the resealing seam.
+            if (new_password) |pw| {
+                const password_hash = hashPasswordOrExit(allocator, pw);
+                defer allocator.free(password_hash);
+                setStoredPasswordOrExit(allocator, &mgr, existing.id, username, password_hash);
             }
+            // SONNY-6367: assigned (a role node used to be stored and never
+            // given to the user).
+            if (new_role) |nr| assignRoleOrExit(allocator, &mgr, username, nr);
         } else {
             // User doesn't exist - create
             if (new_password == null) {
@@ -678,9 +749,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             const pw = new_password.?;
+            // SONNY-6358: stored as the server stores it, never the password.
+            const password_hash = hashPasswordOrExit(allocator, pw);
+            defer allocator.free(password_hash);
             const user_id = mgr.next_user_id;
             mgr.next_user_id += 1;
-            try mgr.storage.persistUser(user_id, username, new_email orelse "unknown@example.com", pw, "");
+            try mgr.storage.persistUser(user_id, username, new_email orelse "unknown@example.com", password_hash, "");
+            assignRoleOrExit(allocator, &mgr, username, new_role orelse "user");
         }
         printOut("User '{s}' updated\n", .{username});
         return;
@@ -693,13 +768,14 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
         const username = argv[subcmd_idx + 1];
         const role = argv[subcmd_idx + 2];
-        // Ensure role exists in graph store
-        if (mgr.storage.getRoleByName(role) == null) {
-            const role_id = mgr.next_user_id;
-            mgr.next_user_id += 1;
-            try mgr.storage.persistRole(role_id, role, "custom role", 0, 0, false);
+        requireBuiltinRoleOrExit(role);
+        if (mgr.storage.getUserByUsername(username) == null) {
+            std.debug.print("Error: user '{s}' not found; no role was assigned\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         }
-        // Note: full role assignment via graph edges would need HAS_ROLE edge creation
+        // SONNY-6367: the HAS_ROLE edge, as ALTER USER ... SET ROLE stores
+        // it (only a role node was stored, and success printed).
+        assignRoleOrExit(allocator, &mgr, username, role);
         printOut("Assigned role '{s}' to user '{s}'\n", .{ role, username });
         return;
     }
@@ -749,9 +825,12 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const username = argv[subcmd_idx + 1];
-        if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, null, null, enable, null, null);
-        }
+        // SONNY-6367: a missing user is an error (it printed success).
+        const existing = mgr.storage.getUserByUsername(username) orelse {
+            std.debug.print("Error: user '{s}' not found; nothing was {s}\n", .{ username, if (enable) "enabled" else "disabled" });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        try mgr.storage.updateUser(existing.id, null, null, enable, null, null);
         printOut("User '{s}' {s}\n", .{ username, if (enable) "enabled" else "disabled" });
         return;
     }
@@ -1007,25 +1086,25 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
         // GAP-0154 FIX: Require explicit new password
-        var generated_pw: [32]u8 = undefined;
+        var generated_pw: cli_auth.GeneratedPassword = .{};
         const final_new: []const u8 = blk: {
             if (new_pw) |pw| {
-                requirePasswordPolicy(pw);
                 break :blk pw;
             }
-            // SONNY-6271: a generated secret (128 random bits, hex) is not
-            // checked against the passphrase policy, as in `user create`:
-            // it can never have an uppercase letter or three words, so the
-            // check refused every --generate-password.
+            // SONNY-6271: the generated secret was 32 hex digits, which the
+            // passphrase policy refuses, so the check below refused every
+            // --generate-password. SONNY-6331: it is generated to meet the
+            // policy (`PasswordPolicy.generate`).
             if (generate_password) {
                 generated_pw = try generateSecurePassword();
-                std.debug.print("Generated password: {s}\n", .{generated_pw});
-                break :blk &generated_pw;
+                std.debug.print("Generated password: {s}\n", .{generated_pw.slice()});
+                break :blk generated_pw.slice();
             }
             std.debug.print("Error: --new-password is required\n", .{});
             std.debug.print("Use --new-password <password> or --generate-password\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
+        requirePasswordPolicy(final_new);
         // Verify old password if provided. Bug 731 (adjacent finding): this
         // used to compare Blake2(stored_field) against Blake2(plaintext), which
         // only ever matched when the stored field WAS the plaintext — see the
@@ -1033,7 +1112,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         if (old_pw) |old| {
             if (mgr.storage.getUserByUsername(username)) |existing| {
                 const stored = existing.getPasswordHash();
-                const ok = geode_auth.verifyPasswordArgon2id(allocator, old, stored) catch false;
+                // SONNY-6367: the login's verifier (a BLAKE2b import too).
+                const ok = geode.user_management.verifyPassword(old, stored) catch false;
                 if (!ok) {
                     std.debug.print("Error: old password is incorrect\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1054,7 +1134,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // stale, so the next server start failed `verifyChain` with
         // error.AuthChainTampered. Go through the same resealing seam
         // reset-password uses (which also clears password_reset_required).
-        var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, resolveDataDir(data_dir)) catch {
+        const kr_dir = resolveDataDir(allocator, data_dir);
+        defer allocator.free(kr_dir);
+        var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, kr_dir) catch {
             std.debug.print("Error: could not resolve HMAC key (set GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY or place .geode_hmac_key in the data dir)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1086,25 +1168,25 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
         // GAP-0154 FIX: Require explicit new password
-        var generated_pw: [32]u8 = undefined;
+        var generated_pw: cli_auth.GeneratedPassword = .{};
         const final_new: []const u8 = blk: {
             if (new_pw) |pw| {
-                requirePasswordPolicy(pw);
                 break :blk pw;
             }
-            // SONNY-6271: a generated secret (128 random bits, hex) is not
-            // checked against the passphrase policy, as in `user create`:
-            // it can never have an uppercase letter or three words, so the
-            // check refused every --generate-password.
+            // SONNY-6271: the generated secret was 32 hex digits, which the
+            // passphrase policy refuses, so the check below refused every
+            // --generate-password. SONNY-6331: it is generated to meet the
+            // policy (`PasswordPolicy.generate`).
             if (generate_password) {
                 generated_pw = try generateSecurePassword();
-                std.debug.print("Generated password: {s}\n", .{generated_pw});
-                break :blk &generated_pw;
+                std.debug.print("Generated password: {s}\n", .{generated_pw.slice()});
+                break :blk generated_pw.slice();
             }
             std.debug.print("Error: --new-password is required\n", .{});
             std.debug.print("Use --new-password <password> or --generate-password\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
+        requirePasswordPolicy(final_new);
         // Review-0016 Important-2: `reset-password` is the DOCUMENTED escape
         // hatch for the fail-closed admin-bootstrap refusal (see
         // auth_init_cli.zig and the [startup] breadcrumbs). It used to print
@@ -1131,9 +1213,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // never get re-signed, and the next server start fails with
         // error.AuthChainTampered (verifyChain at server_init.zig:314).
         // `resolveDataDir` mirrors initCliAuthManager's data_dir fallback so
-        // .geode_hmac_key is found at the default /var/lib/geode location when
+        // .geode_hmac_key is found in the default data directory when
         // --data-dir is omitted.
-        const resolved_data_dir: ?[]const u8 = resolveDataDir(data_dir);
+        const resolved_data_dir = resolveDataDir(allocator, data_dir);
+        defer allocator.free(resolved_data_dir);
         var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, resolved_data_dir) catch {
             std.debug.print("Error: could not resolve HMAC key (set GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY or place .geode_hmac_key in the data dir)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1173,8 +1256,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Help / missing-subcommand checks BEFORE opening the auth store —
     // these paths must not require any disk I/O (graph_storage_adapter
-    // would otherwise attempt to open /var/lib/geode and fail noisily
-    // for any user without that path's permissions).
+    // would otherwise open the default data directory).
     if (start_idx + 1 >= argv.len) {
         std.debug.print("Error: missing role subcommand\n", .{});
         printRoleUsage();
@@ -1226,12 +1308,19 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
 
-        // Check if role already exists
-        if (mgr.storage.getRoleByName(rolename) == null) {
-            const role_id = mgr.next_user_id;
-            mgr.next_user_id += 1;
-            try mgr.storage.persistRole(role_id, rolename, description, 0, 0, false);
-        }
+        // SONNY-6367: under a new role id, as CREATE ROLE stores it
+        // (`AuthGraphManager.createRole`, idempotent). It took `next_user_id`
+        // (the next *user* id) as the role id, which can be an existing
+        // role's id: that role's record was overwritten, and the users given
+        // it held the new role instead.
+        const key = cli_auth.changeKey(allocator) catch |err| {
+            std.debug.print("Error: no HMAC key to seal the new role with ({s}); role NOT created\n", .{@errorName(err)});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        _ = mgr.createRole(&key, rolename, description) catch |err| {
+            std.debug.print("Error: failed to create role '{s}': {s} — role NOT created\n", .{ rolename, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
         printOut("Role '{s}' created successfully\n", .{rolename});
         return;
     } else if (std.mem.eql(u8, subcommand, "list")) {
@@ -1260,12 +1349,12 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const rolename = argv[start_idx + 2];
-        var deleted = false;
-        if (mgr.storage.getRoleByName(rolename)) |role| {
-            mgr.storage.removeRole(role.id) catch {};
-            deleted = true;
-        }
-        printOut("Role '{s}' {s}\n", .{ rolename, if (deleted) "deleted" else "not found (noop)" });
+        // SONNY-6352: a removal that fails is reported (it was dropped).
+        const outcome = cli_auth.removeRoleByName(&mgr, rolename) catch |err| {
+            std.debug.print("Error: failed to delete role '{s}': {s} — the role was NOT deleted\n", .{ rolename, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        printOut("Role '{s}' {s}\n", .{ rolename, if (outcome == .removed) "deleted" else "not found (noop)" });
         return;
     } else if (std.mem.eql(u8, subcommand, "show")) {
         if (hasHelpFlag(argv, start_idx + 2)) {

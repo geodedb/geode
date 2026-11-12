@@ -2,10 +2,12 @@
 //
 // Grammar: EXPLAIN POLICY FOR <inner_query> ;
 //
-// Behaviour (Phase 7):
-//   - Classifies the top-level action of the inner query.
-//   - Calls gps.decide() once with the context's Principal.
-//   - Returns one result row: step | action | resource | decision | reason_code
+// Behaviour (SONNY-6313):
+//   - Asks gps.decide() what the handlers' read and write gates ask for the
+//     inner statement, on the session's graph, with the context's Principal.
+//   - Returns one result row per question: step | action | resource |
+//     decision | reason_code (resource `graph:<name>`, or `database` for a
+//     statement no gate asks about).
 //
 // CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=TestSuite; STATUS=TESTED; TEST=self; OWNER=security; UPDATED=2026-05-21
 
@@ -189,7 +191,9 @@ test "E2E: EXPLAIN POLICY FOR MATCH classifies as match_ and Admin gets allow" {
     const row = res.rows[0];
     try std.testing.expectEqual(@as(i64, 1), row[0].Int);
     try std.testing.expectEqualStrings("match_", row[1].Str);
-    try std.testing.expectEqualStrings("database", row[2].Str);
+    // SONNY-6313: the read gate's question, on the session's graph (it was
+    // `database`, which no graph-scoped policy matches).
+    try std.testing.expectEqualStrings("graph:default", row[2].Str);
     try std.testing.expectEqualStrings("allow", row[3].Str);
 }
 
@@ -213,14 +217,20 @@ test "E2E: EXPLAIN POLICY FOR CREATE classifies as create and ReadOnly gets unau
     var res = try h.execWithCtx("EXPLAIN POLICY FOR CREATE (n:Person);", ctx);
     defer res.deinit(allocator);
 
-    try std.testing.expectEqual(@as(usize, 1), res.rows.len);
-    const row = res.rows[0];
+    // SONNY-6313: the read gate's question (a change reads the graph it
+    // changes), then the write gate's.
+    try std.testing.expectEqual(@as(usize, 2), res.rows.len);
+    try std.testing.expectEqualStrings("match_", res.rows[0][1].Str);
+    try std.testing.expectEqualStrings("allow", res.rows[0][3].Str);
+    const row = res.rows[1];
+    try std.testing.expectEqual(@as(i64, 2), row[0].Int);
     try std.testing.expectEqualStrings("create", row[1].Str);
+    try std.testing.expectEqualStrings("graph:default", row[2].Str);
     try std.testing.expectEqualStrings("unauthorized", row[3].Str);
 }
 
 // CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=ShowClassifiedAsShowMetadata; STATUS=TESTED; OWNER=security; UPDATED=2026-05-21
-test "E2E: EXPLAIN POLICY FOR SHOW POLICIES classifies as show_metadata and is allowed" {
+test "E2E: EXPLAIN POLICY FOR SHOW POLICIES reports the read gate's match_ on the session graph and is allowed" {
     test_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -239,8 +249,11 @@ test "E2E: EXPLAIN POLICY FOR SHOW POLICIES classifies as show_metadata and is a
     var res = try h.execWithCtx("EXPLAIN POLICY FOR SHOW POLICIES;", ctx);
     defer res.deinit(allocator);
 
+    // SONNY-6313: SHOW reads the session's graph, so the read gate asks
+    // decide(match_, graph) for it; EXPLAIN POLICY reports that question.
     try std.testing.expectEqual(@as(usize, 1), res.rows.len);
-    try std.testing.expectEqualStrings("show_metadata", res.rows[0][1].Str);
+    try std.testing.expectEqualStrings("match_", res.rows[0][1].Str);
+    try std.testing.expectEqualStrings("graph:default", res.rows[0][2].Str);
     try std.testing.expectEqualStrings("allow", res.rows[0][3].Str);
 }
 

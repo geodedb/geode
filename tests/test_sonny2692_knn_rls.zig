@@ -11,8 +11,9 @@
 // BEFORE the candidates are ranked and cut to k, so a hidden row can never take
 // one of the k slots (the index path over-fetches until it has k visible rows
 // or the index runs out). A hidden row does not make its property "known"
-// either: a property only hidden rows carry is as unknown to the session as a
-// misspelled one (error.UnknownProperty), so the diagnostic is no oracle.
+// either: a property only hidden rows carry answers as a misspelled one does,
+// so the answer is no oracle. SONNY-2820: for a session a policy may restrict
+// both are an empty list (they were error.UnknownProperty), as MATCH answers.
 //
 // An edge's vector is a knn() candidate too: under a policy it counts only where
 // a traversal could return the edge, between two nodes the session may see
@@ -84,12 +85,12 @@ fn checkScan(mode: h.Mode) !void {
     try h.expectRows(&s, &f, "RETURN knn('emb', vectorf32([0.0, 1.0]), 1, 'cosine') AS ids", &.{top1});
     if (eval.knnScanInvocationCount() == 0) try f.add(aa, "[{s}] the scan path never ran", .{@tagName(mode)});
 
-    // A property only hidden rows carry is unknown to the session.
+    // A property only hidden rows carry: an empty list (SONNY-2820).
     if (open) {
         const only_ids = [_]u64{only};
         try h.expectRows(&s, &f, "RETURN knn('emb2', vectorf32([1.0, 1.0]), 5, 'l2') AS ids", &.{try idList(aa, &only_ids)});
     } else {
-        try h.expectError(&s, &f, "RETURN knn('emb2', vectorf32([1.0, 1.0]), 5, 'l2') AS ids", error.UnknownProperty);
+        try h.expectRows(&s, &f, "RETURN knn('emb2', vectorf32([1.0, 1.0]), 5, 'l2') AS ids", &.{"[]"});
     }
 
     try f.finish(@tagName(mode));
@@ -128,7 +129,7 @@ fn checkEdges(mode: h.Mode) !void {
         const f_ids = [_]u64{f_hidden};
         try h.expectRows(&s, &f, "RETURN knn('eonly', vectorf32([1.0, 1.0]), 5, 'l2') AS ids", &.{try idList(aa, &f_ids)});
     } else {
-        try h.expectError(&s, &f, "RETURN knn('eonly', vectorf32([1.0, 1.0]), 5, 'l2') AS ids", error.UnknownProperty);
+        try h.expectRows(&s, &f, "RETURN knn('eonly', vectorf32([1.0, 1.0]), 5, 'l2') AS ids", &.{"[]"});
     }
 
     try f.finish(@tagName(mode));
@@ -253,12 +254,12 @@ fn checkEdgeRls(mode: h.Mode) !void {
     // k = 1: the denied edge is the nearest, and must not take the only slot.
     try h.expectRows(&s, &f, "RETURN knn('eemb', vectorf32([0.0, 1.0]), 1, 'l2') AS ids", &.{try idList(aa, all[0..1])});
     try h.expectRows(&s, &f, "RETURN knn('eemb', vectorf32([0.0, 1.0]), 2, 'cosine') AS ids", &.{try idList(aa, all[0..2])});
-    // A property only the denied edge carries is unknown to the session.
+    // A property only the denied edge carries: an empty list (SONNY-2820).
     if (open) {
         const only = [_]u64{secret};
         try h.expectRows(&s, &f, "RETURN knn('sonly', vectorf32([1.0, 1.0]), 5, 'l2') AS ids", &.{try idList(aa, &only)});
     } else {
-        try h.expectError(&s, &f, "RETURN knn('sonly', vectorf32([1.0, 1.0]), 5, 'l2') AS ids", error.UnknownProperty);
+        try h.expectRows(&s, &f, "RETURN knn('sonly', vectorf32([1.0, 1.0]), 5, 'l2') AS ids", &.{"[]"});
     }
 
     try f.finish(@tagName(mode));

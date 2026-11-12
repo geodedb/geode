@@ -259,7 +259,7 @@ pub fn spawnServerWithAddr(
 
 pub const DefaultAuth = struct {
     pub const username: []const u8 = "geode";
-    pub const password: []const u8 = "geode-test-password";
+    pub const password: []const u8 = "Geode Test Admin Passphrase";
 };
 
 pub fn defaultUsername() []const u8 {

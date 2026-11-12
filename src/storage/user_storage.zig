@@ -36,6 +36,8 @@ fn compat_microTimestamp() i64 {
 }
 const Allocator = std.mem.Allocator;
 const graph_store = @import("geode").graph_store;
+/// SONNY-6329: the io `user_cache_lock` is taken with (as PolicyCatalog's).
+const cache_lock_io = std.Io.Threaded.global_single_threaded.io();
 const auth_hmac = @import("auth_lib").hmac;
 
 // CANARY: REQ=REQ-GQL-202; FEATURE="UserStorage"; ASPECT=PersistentStorage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_202_UserStorage; OWNER=security; UPDATED=2026-02-24
@@ -69,7 +71,23 @@ pub const UserStorageBackend = struct {
     store: *graph_store.GraphStore,
 
     // In-memory cache for fast lookups
+    /// SONNY-6329: guarded by `user_cache_lock`; reach it through the
+    /// methods below (`getUser`, `getUserByUsername`, `findUserIdByUsername`,
+    /// `putCachedUser`, `removeCachedUser`, `cachedUserIds`, ...).
     user_cache: std.AutoHashMap(u64, UserRecord),
+    // CANARY: REQ=REQ-SONNY-6329-USER-CACHE-LOCK; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserCacheRwLock; STATUS=TESTED; TEST=tests/test_sonny6329_user_cache_and_ddl_serialization.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6329: guards `user_cache`. Lookups (`graphGrantCheck` resolving
+    /// a user on every policy decision the decision cache misses, the grant
+    /// procedures, LSP visibility) hold it shared and copy what they return;
+    /// the user writers hold it exclusively for the map change alone. A leaf:
+    /// held for the map operation only, never across a graph-store call,
+    /// I/O, an allocation of anything but the map, or any other lock, so it
+    /// may be taken under any lock (a graph lock, `user_store_mutex`,
+    /// `PolicyCatalog.rwlock` shared inside `gps.decide`). Nothing is ever
+    /// acquired while it is held, and no thread takes it twice. The map had
+    /// no lock: a decision on one connection walked it while CREATE / DROP /
+    /// ALTER USER on another rehashed it.
+    user_cache_lock: std.Io.RwLock = .init,
     role_cache: std.AutoHashMap(u64, RoleRecord),
     permission_cache: std.AutoHashMap(u64, PermissionRecord),
     policy_cache: std.AutoHashMap(u64, PolicyRecord),
@@ -211,6 +229,16 @@ pub const UserStorageBackend = struct {
         /// A `kind` property that is neither "gps" nor "rls". No loader
         /// accepts it.
         invalid = 3,
+        // CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=RecordKinds; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+        /// SONNY-3034: a `geode.rls.add_deny_policy` label deny: `graph`,
+        /// `table` (the label), and the user in the USING text (none: every
+        /// user). Loaded at startup into both label engines.
+        rls_deny = 4,
+        /// SONNY-3034: a `geode.rls.add_attribute_policy` restriction:
+        /// `graph`, `table` (the label), the row property in the USING text
+        /// and the ABAC attribute key in the CHECK text. Loaded at startup
+        /// into the expression engine.
+        rls_attribute = 5,
 
         /// Strict decoding of a stored `kind` property: exactly "gps" or
         /// "rls"; any other value, or another type, is `.invalid`; a missing
@@ -220,6 +248,8 @@ pub const UserStorageBackend = struct {
             if (v != .String) return .invalid;
             if (std.mem.eql(u8, v.String, "gps")) return .gps;
             if (std.mem.eql(u8, v.String, "rls")) return .rls;
+            if (std.mem.eql(u8, v.String, "rls_deny")) return .rls_deny;
+            if (std.mem.eql(u8, v.String, "rls_attribute")) return .rls_attribute;
             return .invalid;
         }
 
@@ -228,6 +258,8 @@ pub const UserStorageBackend = struct {
             return switch (self) {
                 .gps => "gps",
                 .rls => "rls",
+                .rls_deny => "rls_deny",
+                .rls_attribute => "rls_attribute",
                 .legacy, .invalid => null,
             };
         }
@@ -381,7 +413,7 @@ pub const UserStorageBackend = struct {
 
         for (nodes_opt.?) |node_id| {
             const record = loadUserRecordFromNode(self.store, node_id) orelse continue;
-            try self.user_cache.put(record.id, record);
+            try self.putCachedUser(record.id, record);
             try self.user_nodes.put(record.id, node_id);
         }
     }
@@ -883,10 +915,58 @@ pub const UserStorageBackend = struct {
             const stored_graph = getStringProp(self.store, node_id, "graph_name", "");
             if (!std.mem.eql(u8, stored_graph, graph_name)) continue;
 
-            // Found the matching grant
+            // Found the matching grant. SONNY-1333: the node goes first, and
+            // the map entry only once it is gone, so a failed delete leaves
+            // the grant stored and a retry finds it.
+            try self.deleteNodeChecked(node_id);
             _ = self.graph_grant_nodes.remove(grant_id);
-            self.store.deleteNode(node_id);
             return true;
+        }
+        return false;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6359-GRANT-READERS-LOCKED; FEATURE="GQL Auth DDL Persistence"; ASPECT=HasGraphGrantLocked; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-1333: is the grant (user_id, graph_name, action) stored?
+    /// SONNY-6359: under `auth_ddl_lock` (re-entrant: the GRANT / REVOKE
+    /// write-throughs call it holding the lock), under which GRANT / REVOKE
+    /// change `graph_grant_nodes`; it read the map unlocked.
+    pub fn hasGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
+        const ddl_guard = @import("geode").security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        return self.graph_grant_nodes.contains(graphGrantId(user_id, graph_name, action));
+    }
+
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=DiscardGraphGrant; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-1333: take out the record of a grant a failed GRANT stored, found
+    /// by its id, so a record whose fields were only partly written goes too.
+    pub fn discardGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) !void {
+        const grant_id = graphGrantId(user_id, graph_name, action);
+        const node_id = self.graph_grant_nodes.get(grant_id) orelse return;
+        try self.deleteNodeChecked(node_id);
+        _ = self.graph_grant_nodes.remove(grant_id);
+    }
+
+    /// SONNY-1333: delete a record's node and confirm it is gone.
+    /// `GraphStore.deleteNode` reports nothing: when it fails part way (an
+    /// allocation, the storage adapter) the node stays, and a revoked grant
+    /// would be loaded again at the next start. SONNY-6293: every record
+    /// removal (policy, role, user, permission) goes through it.
+    fn deleteNodeChecked(self: *Self, node_id: u64) !void {
+        if (!takeDeleteFault()) self.store.deleteNode(node_id);
+        if (self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
+    }
+
+    /// SONNY-6293: a test-only fault hook. While non-zero, each checked
+    /// delete (`deleteNodeChecked`, the HAS_ROLE edge delete) consumes one
+    /// and skips the graph-store delete, as a delete that failed part way
+    /// leaves the node or edge, so the existence check that follows fails
+    /// it. Production code never sets it.
+    pub var fail_deletes_for_testing: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+    fn takeDeleteFault() bool {
+        var n = fail_deletes_for_testing.load(.acquire);
+        while (n > 0) {
+            n = fail_deletes_for_testing.cmpxchgWeak(n, n - 1, .acq_rel, .acquire) orelse return true;
         }
         return false;
     }
@@ -1034,12 +1114,20 @@ pub const UserStorageBackend = struct {
         record.updated_at = record.created_at;
         record.auth_version = 1;
 
-        try self.user_cache.put(user_id, record);
+        // SONNY-1333: a new record whose node could not be written leaves the
+        // cache again. The chain counts cache entries and seals mapped nodes:
+        // a cached record with no node made the next seal panic
+        // (RecordCountMismatch).
+        const was_cached = self.hasCachedUser(user_id);
+        try self.putCachedUser(user_id, record);
+        errdefer if (!was_cached) {
+            _ = self.removeCachedUser(user_id);
+        };
         try self.upsertUserNode(record);
     }
 
     pub fn updateUser(self: *Self, user_id: u64, email: ?[]const u8, password_hash: ?[]const u8, is_active: ?bool, mfa_enabled: ?bool, mfa_secret: ?[]const u8) !void {
-        var record = self.user_cache.get(user_id) orelse return error.UserNotFound;
+        var record = self.getUser(user_id) orelse return error.UserNotFound;
         var bump_auth_version = false;
 
         if (email) |e| {
@@ -1080,7 +1168,7 @@ pub const UserStorageBackend = struct {
             record.auth_version += 1;
         }
 
-        try self.user_cache.put(user_id, record);
+        try self.putCachedUser(user_id, record);
         try self.upsertUserNode(record);
     }
 
@@ -1109,8 +1197,9 @@ pub const UserStorageBackend = struct {
             if (attrs.len > 2047) return error.FieldTooLong;
         }
 
-        var record = self.user_cache.get(opts.user_id) orelse blankUserRecord(opts.user_id);
-        const is_new_record = self.user_cache.get(opts.user_id) == null;
+        const cached = self.getUser(opts.user_id);
+        var record = cached orelse blankUserRecord(opts.user_id);
+        const is_new_record = cached == null;
 
         record.username_len = copyIntoField(&record.username, opts.username);
         record.email_len = copyIntoField(&record.email, opts.email);
@@ -1141,16 +1230,16 @@ pub const UserStorageBackend = struct {
         }
         record.updated_at = now;
 
-        try self.user_cache.put(opts.user_id, record);
+        try self.putCachedUser(opts.user_id, record);
         try self.upsertUserNode(record);
         return record.auth_version;
     }
 
     pub fn bumpUserAuthVersion(self: *Self, user_id: u64) !u64 {
-        var record = self.user_cache.get(user_id) orelse return error.UserNotFound;
+        var record = self.getUser(user_id) orelse return error.UserNotFound;
         record.auth_version += 1;
         record.updated_at = compat_milliTimestamp();
-        try self.user_cache.put(user_id, record);
+        try self.putCachedUser(user_id, record);
         try self.upsertUserNode(record);
         return record.auth_version;
     }
@@ -1182,7 +1271,9 @@ pub const UserStorageBackend = struct {
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
                 if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
                 if (edge.to_id == role_node_id) {
-                    self.store.deleteEdge(edge_id);
+                    // SONNY-6293: checked, as a record's node delete.
+                    if (!takeDeleteFault()) self.store.deleteEdge(edge_id);
+                    if (self.store.edgeExistsForUndo(edge_id)) return error.SecurityRecordDeleteFailed;
                     return true;
                 }
             }
@@ -1214,18 +1305,33 @@ pub const UserStorageBackend = struct {
         return result.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-6293-CHECKED-AUTH-DELETES; FEATURE="GQL Auth DDL Persistence"; ASPECT=CheckedRecordRemoval; STATUS=TESTED; TEST=tests/test_sonny6293_checked_auth_deletes.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6293: the node goes first (checked), and the cached record and
+    /// node mapping only once it is gone. A delete that fails leaves the
+    /// record in memory and in the store, so the chain still counts and
+    /// seals it and the caller's error path runs. The record used to leave
+    /// memory first and the delete went unchecked: a node left behind was
+    /// loaded again at the next start, and the sealed count did not match.
     pub fn removeUser(self: *Self, user_id: u64) !void {
-        _ = self.user_cache.remove(user_id);
-        if (self.user_nodes.fetchRemove(user_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.user_nodes.get(user_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.user_nodes.remove(user_id);
         }
+        _ = self.removeCachedUser(user_id);
     }
 
+    /// A copy of the cached record (SONNY-6329: under `user_cache_lock`).
     pub fn getUser(self: *Self, user_id: u64) ?UserRecord {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
         return self.user_cache.get(user_id);
     }
 
+    /// A copy of the cached record of `username` (SONNY-6329: under
+    /// `user_cache_lock`).
     pub fn getUserByUsername(self: *Self, username: []const u8) ?UserRecord {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
         var it = self.user_cache.valueIterator();
         while (it.next()) |record| {
             if (std.mem.eql(u8, record.getUsername(), username)) {
@@ -1233,6 +1339,60 @@ pub const UserStorageBackend = struct {
             }
         }
         return null;
+    }
+
+    /// SONNY-6329: the id of `username`'s cached record, the authorization
+    /// hot path's lookup (`graphGrantCheck`): a shared hold for the scan, no
+    /// copy of the record, no allocation.
+    pub fn findUserIdByUsername(self: *Self, username: []const u8) ?u64 {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
+        var it = self.user_cache.valueIterator();
+        while (it.next()) |record| {
+            if (std.mem.eql(u8, record.getUsername(), username)) return record.id;
+        }
+        return null;
+    }
+
+    /// SONNY-6329: put a record in the cache (exclusive `user_cache_lock`,
+    /// for the map change alone).
+    pub fn putCachedUser(self: *Self, user_id: u64, record: UserRecord) !void {
+        self.user_cache_lock.lockUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlock(cache_lock_io);
+        try self.user_cache.put(user_id, record);
+    }
+
+    /// SONNY-6329: take a record out of the cache (exclusive
+    /// `user_cache_lock`). Returns whether it was there.
+    pub fn removeCachedUser(self: *Self, user_id: u64) bool {
+        self.user_cache_lock.lockUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlock(cache_lock_io);
+        return self.user_cache.remove(user_id);
+    }
+
+    pub fn hasCachedUser(self: *Self, user_id: u64) bool {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
+        return self.user_cache.contains(user_id);
+    }
+
+    pub fn cachedUserCount(self: *Self) usize {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
+        return self.user_cache.count();
+    }
+
+    /// SONNY-6329: the cached users' ids, copied under a shared hold (the
+    /// caller frees them), for a walk that does more than read the map (the
+    /// chain seal and verification write and read graph nodes).
+    pub fn cachedUserIds(self: *Self, allocator: Allocator) ![]u64 {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
+        const ids = try allocator.alloc(u64, self.user_cache.count());
+        var it = self.user_cache.keyIterator();
+        var i: usize = 0;
+        while (it.next()) |id| : (i += 1) ids[i] = id.*;
+        return ids;
     }
 
     // HMAC-aware user persist
@@ -1244,7 +1404,7 @@ pub const UserStorageBackend = struct {
         var id_buf: [20]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{user_id}) catch "0";
 
-        const record = self.user_cache.get(user_id) orelse return error.UserNotFound;
+        const record = self.getUser(user_id) orelse return error.UserNotFound;
 
         var created_buf: [20]u8 = undefined;
         const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{record.created_at}) catch "0";
@@ -1378,15 +1538,22 @@ pub const UserStorageBackend = struct {
         record.created_at = compat_milliTimestamp();
         record.updated_at = record.created_at;
 
+        // SONNY-1333: as in persistUser.
+        const was_cached = self.role_cache.contains(role_id);
         try self.role_cache.put(role_id, record);
+        errdefer if (!was_cached) {
+            _ = self.role_cache.remove(role_id);
+        };
         try self.upsertRoleNode(record);
     }
 
+    /// SONNY-6293: as `removeUser`.
     pub fn removeRole(self: *Self, role_id: u64) !void {
-        _ = self.role_cache.remove(role_id);
-        if (self.role_nodes.fetchRemove(role_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.role_nodes.get(role_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.role_nodes.remove(role_id);
         }
+        _ = self.role_cache.remove(role_id);
     }
 
     pub fn getRole(self: *Self, role_id: u64) ?RoleRecord {
@@ -1448,11 +1615,13 @@ pub const UserStorageBackend = struct {
         return max_id + 1;
     }
 
+    /// SONNY-6293: as `removeUser`.
     pub fn removePermission(self: *Self, permission_id: u64) !void {
-        _ = self.permission_cache.remove(permission_id);
-        if (self.permission_nodes.fetchRemove(permission_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.permission_nodes.get(permission_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.permission_nodes.remove(permission_id);
         }
+        _ = self.permission_cache.remove(permission_id);
     }
 
     pub fn getPermission(self: *Self, permission_id: u64) ?PermissionRecord {
@@ -1551,17 +1720,31 @@ pub const UserStorageBackend = struct {
         try self.upsertPolicyNode(record);
     }
 
+    /// SONNY-3038: put a policy record back as it was (its cached record and
+    /// node) after a change that failed part way. The caller recomputes its
+    /// HMAC and seals the chain.
+    pub fn restorePolicyRecord(self: *Self, record: PolicyRecord) !void {
+        try self.policy_cache.put(record.id, record);
+        try self.upsertPolicyNode(record);
+    }
+
+    /// SONNY-6293: as `removeUser`. DROP POLICY (`AuthGraphManager.dropPolicy`)
+    /// then seals what is stored and fails, and the catalog keeps the policy.
     pub fn removePolicy(self: *Self, policy_id: u64) !void {
-        _ = self.policy_cache.remove(policy_id);
-        if (self.policy_nodes.fetchRemove(policy_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.policy_nodes.get(policy_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.policy_nodes.remove(policy_id);
         }
+        _ = self.policy_cache.remove(policy_id);
     }
 
     pub fn getPolicy(self: *Self, policy_id: u64) ?PolicyRecord {
         return self.policy_cache.get(policy_id);
     }
 
+    /// SONNY-6329: unlocked; for a single-threaded owner only (startup
+    /// hydration before the server serves, the offline CLI). A server path
+    /// uses `cachedUserIds` + `getUser`.
     pub fn userIterator(self: *Self) std.AutoHashMap(u64, UserRecord).ValueIterator {
         return self.user_cache.valueIterator();
     }
@@ -1680,7 +1863,11 @@ pub const UserStorageBackend = struct {
     }
 
     fn upsertGraphGrantNode(self: *Self, record: GraphGrantRecord) !void {
-        const node_id = self.graph_grant_nodes.get(record.id) orelse try self.createEntityNode(GRAPH_GRANT_LABEL);
+        const existing = self.graph_grant_nodes.get(record.id);
+        const node_id = existing orelse try self.createEntityNode(GRAPH_GRANT_LABEL);
+        // SONNY-1333: a node made here and left unmapped by a failed put could
+        // not be found to undo; take it out again.
+        errdefer if (existing == null and !self.graph_grant_nodes.contains(record.id)) self.store.deleteNode(node_id);
         try self.graph_grant_nodes.put(record.id, node_id);
 
         // The id is a 64-bit hash: store its bit pattern, not a clamped value.
@@ -1788,7 +1975,10 @@ pub const UserStorageBackend = struct {
     }
 
     pub fn upsertUserNode(self: *Self, record: UserRecord) !void {
-        const node_id = self.user_nodes.get(record.id) orelse try self.createEntityNode(USER_LABEL);
+        const existing = self.user_nodes.get(record.id);
+        const node_id = existing orelse try self.createEntityNode(USER_LABEL);
+        // SONNY-1333: as in upsertGraphGrantNode.
+        errdefer if (existing == null and !self.user_nodes.contains(record.id)) self.store.deleteNode(node_id);
         try self.user_nodes.put(record.id, node_id);
 
         // Build a batch of all property mutations so the underlying
@@ -1859,7 +2049,10 @@ pub const UserStorageBackend = struct {
     }
 
     fn upsertRoleNode(self: *Self, record: RoleRecord) !void {
-        const node_id = self.role_nodes.get(record.id) orelse try self.createEntityNode(ROLE_LABEL);
+        const existing = self.role_nodes.get(record.id);
+        const node_id = existing orelse try self.createEntityNode(ROLE_LABEL);
+        // SONNY-1333: as in upsertGraphGrantNode.
+        errdefer if (existing == null and !self.role_nodes.contains(record.id)) self.store.deleteNode(node_id);
         try self.role_nodes.put(record.id, node_id);
 
         try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(record.id) });

@@ -62,7 +62,7 @@ const linux = std.os.linux;
 
 const binary_path = geode_test_bin.geode_exe;
 const admin_username = "geode";
-const admin_password = "testpass123";
+const admin_password = "Test Pass Admin Passphrase";
 const ready_marker = "server ready";
 const ready_deadline_ms: i64 = 60_000;
 const cli_deadline_ms: i64 = 180_000;

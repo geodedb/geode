@@ -969,23 +969,17 @@ const auth_dispatch = geode.auth_dispatch;
 
 fn writerCreateUser(ctx: ?*anyopaque, username: []const u8, email: []const u8, password_hash: []const u8, role: user_mgmt.Role) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = try agm.createUser(&agm.hmac_key, username, email, password_hash, role == .Admin);
-    if (role != .Admin) {
-        // Ensure the built-in role node exists (createRole is idempotent) then assign.
-        _ = try agm.createRole(&agm.hmac_key, role.toString(), "");
-        if (try agm.findRoleIdByName(role.toString())) |rid| {
-            _ = try agm.assignUserRole(&agm.hmac_key, uid, rid);
-        }
-    }
+    // SONNY-1333: the user and its role edge, or neither (an admin is a
+    // superuser with no role edge).
+    _ = try agm.createUserWithRole(&agm.hmac_key, username, email, password_hash, role == .Admin, if (role == .Admin) null else role.toString());
 }
 
+// SONNY-3038: each write-through is stored or fails with the stored record
+// as it was (AuthGraphManager.*WriteThrough); user_management reports the
+// failure and enforces a security-reducing change in memory.
 fn writerDeleteUser(ctx: ?*anyopaque, username: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = (try agm.findUserIdByName(username)) orelse return;
-    // SONNY-6341: a dropped user's FLE role grants go with it (a user made
-    // later under the name holds none).
-    try agm.revokeAllUserFleRoles(&agm.hmac_key, uid);
-    try agm.removeUser(&agm.hmac_key, uid);
+    try agm.deleteUserWriteThrough(&agm.hmac_key, username);
     user_mgmt.notePersistentAuthMutation();
 }
 
@@ -1027,15 +1021,25 @@ fn hydrateFleRoleGrants(agm: *auth_graph_manager.AuthGraphManager, allocator: st
 
 fn writerUpdatePassword(ctx: ?*anyopaque, username: []const u8, new_password_hash: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = (try agm.findUserIdByName(username)) orelse return;
-    _ = try agm.updateUserPassword(&agm.hmac_key, uid, new_password_hash);
+    try agm.updatePasswordWriteThrough(&agm.hmac_key, username, new_password_hash);
     user_mgmt.notePersistentAuthMutation();
 }
 
+/// SONNY-6369: a legacy BLAKE2b hash replaced at login
+/// (`user_management.upgradeLegacyHash`). Refused in cluster mode (no
+/// replication slice: the user would hold a different hash on each node),
+/// so the legacy hash stays there.
+fn writerRehashPassword(ctx: ?*anyopaque, username: []const u8, old_hash: []const u8, new_hash: []const u8) anyerror!void {
+    try geode.distributed.cluster.gateUnreplicatedWrite();
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    try agm.replaceLegacyPasswordHashWriteThrough(&agm.hmac_key, username, old_hash, new_hash);
+}
+
+/// The built-in role names, for `writerSetRole`.
+const builtin_role_names = [_][]const u8{ "admin", "readwrite", "user", "readonly" };
+
 fn writerSetRole(ctx: ?*anyopaque, username: []const u8, role: user_mgmt.Role) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = (try agm.findUserIdByName(username)) orelse return;
-
     // geode_auth_ddl_persistence.yml regression: storage.assignUserRole
     // only short-circuits when the SAME (uid, rid) edge already exists,
     // so successive ALTER USER ... SET ROLE calls leave one HAS_ROLE
@@ -1046,25 +1050,13 @@ fn writerSetRole(ctx: ?*anyopaque, username: []const u8, role: user_mgmt.Role) a
     // time, so revoke any prior built-in HAS_ROLE edge before assigning
     // the new one.  Custom roles live on their own HAS_ROLE edges and
     // are intentionally NOT touched here.
-    const builtin_roles = [_]user_mgmt.Role{ .Admin, .ReadWrite, .User, .ReadOnly };
-    for (builtin_roles) |old_role| {
-        if (old_role == role) continue;
-        if (try agm.findRoleIdByName(old_role.toString())) |old_rid| {
-            _ = try agm.revokeUserRole(&agm.hmac_key, uid, old_rid);
-        }
-    }
-
-    _ = try agm.createRole(&agm.hmac_key, role.toString(), "");
-    if (try agm.findRoleIdByName(role.toString())) |rid| {
-        _ = try agm.assignUserRole(&agm.hmac_key, uid, rid);
-        user_mgmt.notePersistentAuthMutation();
-    }
+    try agm.setBuiltinRoleWriteThrough(&agm.hmac_key, username, role.toString(), &builtin_role_names);
+    user_mgmt.notePersistentAuthMutation();
 }
 
 fn writerSetActive(ctx: ?*anyopaque, username: []const u8, active: bool) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const uid = (try agm.findUserIdByName(username)) orelse return;
-    _ = try agm.setUserActive(&agm.hmac_key, uid, active);
+    try agm.setActiveWriteThrough(&agm.hmac_key, username, active);
     user_mgmt.notePersistentAuthMutation();
 }
 
@@ -1108,22 +1100,26 @@ fn grantResolveUserId(ctx: ?*anyopaque, username: []const u8) ?u64 {
     return agm.findUserIdByName(username) catch null;
 }
 
-fn grantApply(ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!void {
+/// SONNY-1333: stored and live, every action or none (the in-memory policy
+/// makes the grant take effect without restart).
+fn grantApply(ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, actions: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    try agm.grantUserGraphPermission(&agm.hmac_key, user_id, graph_name, action);
-    // Also update the in-memory policy so the grant takes effect without restart.
-    if (multi_graph_security.getGlobalPolicy()) |pol| {
-        try pol.grantGraphPermission(user_id, graph_name, action);
-    }
+    try agm.grantGraphPermissionsWriteThrough(&agm.hmac_key, multi_graph_security.getGlobalPolicy(), user_id, graph_name, actions);
 }
 
+/// SONNY-1333: live first (the privilege stops at once), then stored.
 fn grantRevoke(ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!bool {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
-    const removed = try agm.revokeUserGraphPermission(&agm.hmac_key, user_id, graph_name, action);
-    if (multi_graph_security.getGlobalPolicy()) |pol| {
-        _ = pol.revokeGraphPermission(user_id, graph_name, action);
-    }
-    return removed;
+    return agm.revokeGraphPermissionWriteThrough(&agm.hmac_key, multi_graph_security.getGlobalPolicy(), user_id, graph_name, action);
+}
+
+/// SONNY-1333: a user's stored grants, for SHOW GRANTS. The caller frees the
+/// entries' graph names and the slice.
+fn grantList(ctx: ?*anyopaque, allocator: std.mem.Allocator, user_id: u64) anyerror![]auth_dispatch.GrantEntry {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const grants = try agm.listGraphGrantsForUser(allocator, user_id);
+    defer allocator.free(grants);
+    return auth_dispatch.grantEntriesFrom(allocator, grants);
 }
 
 // -- graph_grant_check_fn (injected into execution.zig) --
@@ -1153,6 +1149,7 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
         .create_fn = &writerCreateUser,
         .delete_fn = &writerDeleteUser,
         .update_password_fn = &writerUpdatePassword,
+        .rehash_password_fn = &writerRehashPassword,
         .set_role_fn = &writerSetRole,
         .set_active_fn = &writerSetActive,
     });
@@ -1172,6 +1169,7 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
         .resolve_user_id_fn = &grantResolveUserId,
         .grant_fn = &grantApply,
         .revoke_fn = &grantRevoke,
+        .list_fn = &grantList,
     });
 
     // 4b. SONNY-6341: FLE role grants, stored and loaded.
@@ -1308,9 +1306,13 @@ pub fn wireGpsPolicyHooks(
     // wireAuthDDLCallbacks). Drop the rows earlier versions migrated: a
     // stale one kept a revoked grant alive and, scoped to one graph, allowed
     // database-wide writes. Runs after hydrateCatalog, which loaded them.
+    // SONNY-4877: retirement disables every migrated allow in the live
+    // catalog before any step that can fail, so continuing startup after an
+    // error is safe: no migrated allow is in force, and the rows still
+    // stored are dropped at the next startup.
     const grant_migration = @import("grant_migration");
     const retired = grant_migration.retireMigratedGrantPolicies(allocator, agm, &agm.hmac_key, catalog) catch |err| blk: {
-        log.warn("GPS: retiring grant-migrated Policy rows failed; a stale row may keep a revoked grant in force until the next restart", &.{
+        log.warn("GPS: retiring grant-migrated Policy rows did not complete; the migrated allow policies are disabled, and the rows left are dropped at the next startup", &.{
             Attr.string("error", @errorName(err)),
         });
         break :blk 0;

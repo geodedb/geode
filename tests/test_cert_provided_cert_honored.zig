@@ -141,7 +141,7 @@ fn tmpSelfSignedExists(io: std.Io) bool {
 fn buildChildEnv(aa: std.mem.Allocator) !*std.process.Environ.Map {
     const env_ptr = try aa.create(std.process.Environ.Map);
     env_ptr.* = std.process.Environ.Map.init(aa);
-    try env_ptr.put("GEODE_ADMIN_PASSWORD", "GeodeTestPassword123!");
+    try env_ptr.put("GEODE_ADMIN_PASSWORD", "Geode Test Password Passphrase 123");
     if (posixGetenv("PATH")) |p| try env_ptr.put("PATH", p);
     if (posixGetenv("HOME")) |p| try env_ptr.put("HOME", p);
     if (posixGetenv("LD_LIBRARY_PATH")) |p| try env_ptr.put("LD_LIBRARY_PATH", p);

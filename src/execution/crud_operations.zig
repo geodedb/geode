@@ -25,11 +25,14 @@ const txn_undo_log = @import("../txn_undo_log.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
+const merge_refusal_limiter = @import("merge_refusal_limiter.zig");
 const ExecutionResult = execution.ExecutionResult;
 const executeReturnClauseWithEnv = execution.executeReturnClauseWithEnv;
 
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
+// SONNY-6338: the one tenant-visibility rule (hierarchy-aware, GAP-0846).
+const tenant_visibility = @import("tenant_visibility.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
 // SONNY-2686: the RLS scratch row MERGE's match phase hands to
@@ -185,17 +188,21 @@ fn edgeMatchesEvaluatedProps(edge: *const graph_store.Edge, props: ?[]const Eval
     return true;
 }
 
+// CANARY: REQ=REQ-SONNY-6338-TENANT-VISIBILITY-CONSISTENCY; FEATURE="PerTenantIsolation"; ASPECT=MergeMatchesVisibleSet; STATUS=TESTED; TEST=tests/test_sonny6338_tenant_visibility_consistency.zig; OWNER=security; UPDATED=2026-11-12
+/// Does `node` match the pattern, in the statement's graph and among the rows
+/// the session sees? SONNY-6338: `filter_tenant` is tested with the MATCH
+/// path's own predicate (`passesTenantFilterSlice`, hierarchy-aware), not an
+/// exact tag comparison: a parent tenant's MERGE of a key its child holds
+/// matched nothing and created a duplicate its MATCH then returned twice.
 fn nodeMatchesPattern(
     node: *const graph_store.Node,
     graph_name: []const u8,
-    tenant_id: ?[]const u8,
+    filter_tenant: ?[]const u8,
     labels: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
 ) bool {
     if (!std.mem.eql(u8, node.graph_name, graph_name)) return false;
-    if (tenant_id) |tid| {
-        if (!std.mem.eql(u8, node.tenant_id, tid)) return false;
-    }
+    if (!tenant_visibility.passesTenantFilterSlice(node.tenant_id, filter_tenant)) return false;
     if (labels.len > 0 and !nodeHasAllLabels(node, labels)) return false;
     return nodeMatchesEvaluatedProps(node, props);
 }
@@ -253,7 +260,8 @@ pub fn joinAuditText(allocator: std.mem.Allocator, items: []const []const u8) ![
 /// finds, for a node chain and for each relationship endpoint alike.
 ///
 /// The pattern predicate (`nodeMatchesPattern`) confines a candidate to the
-/// statement's graph and the session's exact tenant, and it matched on labels
+/// statement's graph and the session's visible tenants (SONNY-6338: the
+/// hierarchy-aware rule MATCH applies), and it matched on labels
 /// and properties only. It never applied the session's RLS policies, so a MERGE
 /// bound a node the session may not read: RETURN projected it, ON MATCH SET and
 /// a bare SET rewrote it, and a relationship MERGE attached an edge to it. Every
@@ -275,6 +283,9 @@ const MergeVisibility = struct {
     graph: []const u8,
     username: []const u8,
     user_id: u64,
+    /// SONNY-2817: the session's refusal limiter; null with no session (an
+    /// embedded executor), which is not limited.
+    limiter: ?*merge_refusal_limiter.MergeRefusalLimiter,
 
     /// Call with the statement's context active: the RLS half reads it.
     fn init(allocator: std.mem.Allocator, filter_tenant: ?[]const u8, graph: []const u8, context: ExecutionContext) MergeVisibility {
@@ -287,7 +298,62 @@ const MergeVisibility = struct {
             .graph = graph,
             .username = principal_name orelse (context.user orelse ""),
             .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+            .limiter = if (context.session_state) |s| &s.merge_refusal_limiter else null,
         };
+    }
+
+    /// The labels a pattern node or relationship counts under: its own, or
+    /// `no_label` when it has none.
+    fn limitKeys(labels: []const []const u8) []const []const u8 {
+        return if (labels.len == 0) &.{merge_refusal_limiter.no_label} else labels;
+    }
+
+    // CANARY: REQ=REQ-SONNY-2817-MERGE-REFUSAL-LIMIT; FEATURE="MergeRowVisibility"; ASPECT=CooldownRefusal; STATUS=TESTED; TEST=tests/test_sonny2817_merge_refusal_limit.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-2817: refuse a MERGE whose pattern names a label the session is
+    /// cooling down on, before what it matched is looked at, so the answer
+    /// is the same whether it would have matched a hidden row, a visible one
+    /// or none. Audited.
+    fn refuseIfLimited(self: *MergeVisibility, pattern: []const u8, labels: []const []const u8) error{MergeRefusalRateLimited}!void {
+        const limiter = self.limiter orelse return;
+        const now = merge_refusal_limiter.nowMs();
+        for (limitKeys(labels)) |label| {
+            if (!limiter.isLimited(self.graph, label, now)) continue;
+            self.auditLimit("MERGE_REFUSAL_RATE_LIMITED", "MERGE refused (MergeRefusalRateLimited, 53400): the session passed the limit of MERGE visibility refusals on this label and is cooling down", pattern, labels);
+            return error.MergeRefusalRateLimited;
+        }
+    }
+
+    /// SONNY-2817: count a refusal on each of the pattern's labels; one that
+    /// passes the limit starts the cooldown, audited.
+    fn noteRefusal(self: *MergeVisibility, pattern: []const u8, labels: []const []const u8) void {
+        const limiter = self.limiter orelse return;
+        const now = merge_refusal_limiter.nowMs();
+        for (limitKeys(labels)) |label| {
+            if (limiter.noteRefusal(self.graph, label, now)) {
+                self.auditLimit("MERGE_REFUSAL_RATE_LIMIT_ENGAGED", "MERGE refusals rate-limited: the session passed the limit of MERGE visibility refusals on this label; every MERGE naming it is refused during the cooldown", pattern, &.{label});
+            }
+        }
+    }
+
+    fn auditLimit(self: *MergeVisibility, action: []const u8, what: []const u8, pattern: []const u8, labels: []const []const u8) void {
+        const audit_mod = @import("../security/audit.zig");
+        const joined_labels = joinAuditText(self.allocator, labels) catch return;
+        defer self.allocator.free(joined_labels);
+        const details = std.fmt.allocPrint(
+            self.allocator,
+            "{s}; {s} pattern; graph={s} labels=[{s}] limit={d} per {d} ms, cooldown {d} ms (values withheld)",
+            .{ what, pattern, self.graph, joined_labels, merge_refusal_limiter.refusal_limit, merge_refusal_limiter.window_ms, merge_refusal_limiter.cooldown_ms },
+        ) catch return;
+        defer self.allocator.free(details);
+        audit_mod.logSecurityGraphEvent(self.allocator, .{
+            .event_type = .access_denied,
+            .action = action,
+            .user_id = self.user_id,
+            .username = self.username,
+            .details = details,
+            .result_failure = true,
+            .resource_graph = self.graph,
+        });
     }
 
     // CANARY: REQ=REQ-SONNY-2728-MERGE-REFUSAL-AUDIT; FEATURE="MergeRowVisibility"; ASPECT=RefusalAudit; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-26
@@ -297,7 +363,8 @@ const MergeVisibility = struct {
     /// docs/kb/RLS_IMPLEMENTATION.md), so every one is recorded with the
     /// user, the graph, the labels and the property KEYS, never the values
     /// (the values are the secret being guessed).
-    fn bindNode(self: *MergeVisibility, match: MergeMatch, labels: []const []const u8, props: ?[]const EvaluatedPatternProp) error{MergeMatchNotVisible}!?u64 {
+    fn bindNode(self: *MergeVisibility, match: MergeMatch, labels: []const []const u8, props: ?[]const EvaluatedPatternProp) error{ MergeMatchNotVisible, MergeRefusalRateLimited }!?u64 {
+        try self.refuseIfLimited("node", labels);
         return match.bindable() catch |err| {
             var keys: [16][]const u8 = undefined;
             var n: usize = 0;
@@ -307,13 +374,15 @@ const MergeVisibility = struct {
                 n += 1;
             };
             self.auditRefusal("node", labels, keys[0..n]);
+            self.noteRefusal("node", labels);
             return err;
         };
     }
 
     /// SONNY-2728: `bindNode` for the edge of a relationship pattern: its
     /// types and the keys of its inline properties.
-    fn bindEdge(self: *MergeVisibility, match: EdgeMatch, rel: ast.RelPattern) error{MergeMatchNotVisible}!?u64 {
+    fn bindEdge(self: *MergeVisibility, match: EdgeMatch, rel: ast.RelPattern) error{ MergeMatchNotVisible, MergeRefusalRateLimited }!?u64 {
+        try self.refuseIfLimited("relationship", rel.types);
         return match.bindable() catch |err| {
             var keys: [16][]const u8 = undefined;
             var n: usize = 0;
@@ -323,6 +392,7 @@ const MergeVisibility = struct {
                 n += 1;
             };
             self.auditRefusal("relationship", rel.types, keys[0..n]);
+            self.noteRefusal("relationship", rel.types);
             return err;
         };
     }
@@ -409,7 +479,8 @@ const MergeMatch = union(enum) {
 };
 
 /// Find the node MERGE binds for a pattern: the first node in the graph and
-/// the tenant that carries every label and property of the pattern AND that
+/// the session's visible tenants (SONNY-6338) that carries every label and
+/// property of the pattern AND that
 /// the session may see (SONNY-2686). A visible match is preferred over a
 /// hidden one wherever the two sit, so a hidden node found first (for
 /// example, by the merge index) never ends the search.
@@ -529,17 +600,20 @@ fn findMergeMatch(
 
 /// Collect ALL candidate node IDs matching labels (used by relationship MERGE and DELETE).
 /// For single-node MERGE, prefer findMergeMatch which uses the merge property index.
+/// SONNY-6338: a superset of the rows the session sees (with a tenant
+/// hierarchy, every tenant's: `storageTenantFilter`); the callers test each
+/// candidate with `nodeMatchesPattern`.
 fn collectCandidateNodeIds(
     allocator: std.mem.Allocator,
     read_store: *graph_store.GraphStore,
     graph_name: []const u8,
-    tenant_id: ?[]const u8,
+    filter_tenant: ?[]const u8,
     labels: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
 ) ![]u64 {
     _ = props;
     if (labels.len > 0) {
-        var candidates = try read_store.getNodesByLabels(allocator, graph_name, labels, tenant_id);
+        var candidates = try read_store.getNodesByLabels(allocator, graph_name, labels, tenant_visibility.storageTenantFilter(filter_tenant));
         return try candidates.toOwnedSlice(allocator);
     }
 
@@ -550,25 +624,25 @@ fn collectCandidateNodeIds(
     while (iter.next()) |entry| {
         const node = entry.value_ptr;
         if (!std.mem.eql(u8, node.graph_name, graph_name)) continue;
-        if (tenant_id) |tid| {
-            if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-        }
+        if (!tenant_visibility.passesTenantFilterSlice(node.tenant_id, filter_tenant)) continue;
         try candidates.append(allocator, entry.key_ptr.*);
     }
 
     return try candidates.toOwnedSlice(allocator);
 }
 
+/// SONNY-6338: the edge's own tag is tested with the MATCH path's predicate
+/// (`passesTenantFilterEdge`, hierarchy-aware). Its endpoints are the ones
+/// MERGE resolved, each a node the session sees (or one it bound or
+/// created), so the edge satisfies SONNY-2693's whole rule.
 fn edgeMatchesScopeAndType(
     edge: *const graph_store.Edge,
     graph_name: []const u8,
-    tenant_id: ?[]const u8,
+    filter_tenant: ?[]const u8,
     rel_types: []const []const u8,
 ) bool {
     if (!std.mem.eql(u8, edge.graph_name, graph_name)) return false;
-    if (tenant_id) |tid| {
-        if (!std.mem.eql(u8, edge.tenant_id, tid)) return false;
-    }
+    if (!tenant_visibility.passesTenantFilterEdge(edge.*, filter_tenant)) return false;
     if (rel_types.len == 0) return true;
     for (rel_types) |rel_type| {
         if (std.mem.eql(u8, edge.label, rel_type)) return true;
@@ -4131,6 +4205,10 @@ fn clusterReplicateMatchSet(
         updates.deinit(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-3246-CLUSTER-SET-RLS; FEATURE="DistributedCluster"; ASPECT=LeaderSetRowVisibility; STATUS=TESTED; TEST=tests/test_sonny3246_cluster_set_rls.zig; OWNER=distributed; UPDATED=2026-11-12
+    var visibility = MergeVisibility.init(allocator, filter_tenant, filter_graph, context);
+    defer visibility.deinit();
+
     for (candidate_ids) |node_id| {
         // SONNY-1841: the leader's SET/REMOVE candidate loop (an alternate,
         // distributed write executor) can iterate a large match set — poll
@@ -4138,6 +4216,11 @@ fn clusterReplicateMatchSet(
         try write_budget.check();
         const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
         if (!nodeMatchesPattern(node, filter_graph, filter_tenant, node_pattern.labels, evaluated_match_props)) continue;
+        // SONNY-3246: only a node the session's MATCH can see, as on a single
+        // node, where the MATCH reads through the RLS row filters. The leader
+        // matched on graph, tenant, labels and properties only, so a session
+        // updated (and proposed to every node) rows its RLS policies hide.
+        if (!visibility.allows(node)) continue;
 
         // Bind the matched node so SET expressions (`n.v + 1`, `n.k`) evaluate on
         // THIS leader's concrete value — followers never re-evaluate.

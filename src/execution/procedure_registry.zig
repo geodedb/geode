@@ -25,6 +25,7 @@ const ExecutionError = execution.ExecutionError;
 const procedure_access = @import("procedure_access.zig");
 const execution_helpers = @import("execution_helpers.zig");
 const gps = @import("../security/gps.zig");
+const session_graph = @import("session_graph.zig");
 
 // Import recursion handler for member path building
 const recursion_handler = @import("recursion_handler.zig");
@@ -132,13 +133,12 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
             .read_only => .read,
             .mutating => .write,
         };
-        const gate_req = gps.DecisionRequest{
-            .principal = princ,
-            .action = action_for_gate,
-            .resource = .{ .procedure = proc_name },
-        };
-        const decision = try gps.decide(allocator, &gate_req);
-        if (decision.kind != .allow) return error.Unauthorized;
+        // SONNY-2753: and no deny scoped to the graph the procedure runs on
+        // (the default graph for the fulltext procedures, SONNY-2790). A
+        // deny scoped to one graph used to match every procedure, on every
+        // graph.
+        const proc_graph = if (procedure_access.isDefaultGraphProcedure(call_stmt)) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context);
+        if (!try gps.procedurePermitted(allocator, princ, action_for_gate, proc_name, proc_graph)) return error.Unauthorized;
     }
 
     // Get the graph store

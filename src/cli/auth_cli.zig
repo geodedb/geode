@@ -156,17 +156,15 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const name = argv[subcmd_idx + 1];
-        // Find and remove policy by name
-        var it = mgr.storage.policy_cache.iterator();
-        while (it.next()) |entry| {
-            // SONNY-2750: never a GPS policy of the same name.
-            if (entry.value_ptr.effectiveKind() != .rls) continue;
-            if (std.mem.eql(u8, entry.value_ptr.getName(), name)) {
-                mgr.storage.removePolicy(entry.key_ptr.*) catch {};
-                break;
-            }
-        }
-        printOut("Policy '{s}' deleted\n", .{name});
+        // SONNY-2750: never a GPS policy of the same name. SONNY-6352: a
+        // removal that fails is reported (it was dropped, and the policy
+        // reported deleted while it stayed stored), and so is a name with no
+        // RLS policy (it was reported deleted too).
+        const outcome = cli_auth.removeRlsPolicyByName(&mgr, name) catch |err| {
+            std.debug.print("Error: failed to delete policy '{s}': {s} — the policy was NOT deleted\n", .{ name, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        printOut("Policy '{s}' {s}\n", .{ name, if (outcome == .removed) "deleted" else "not found (noop)" });
         return;
     }
 
