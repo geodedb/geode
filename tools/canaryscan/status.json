@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T17:05:39.417857573Z",
+  "generated_at": "2026-11-12T17:13:58.560018438Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79097,6 +79097,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6348-KMS-TMP-SELFTESTS",
+      "features": [
+        {
+          "feature": "TDE Procedures",
+          "aspect": "NoFabricatedKmsSelfTestTruth",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6348_kms_tmp_selftests_stale.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6348_kms_tmp_selftests_stale.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6348-READONLY-RESTORE-CHECKS",
       "features": [
         {
@@ -86892,7 +86911,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 345,
-      "TESTED": 4461
+      "TESTED": 4462
     },
     "by_aspect": {
       "2PC": 3,
@@ -89017,6 +89036,7 @@
       "NoDeadRemotePath": 1,
       "NoEnvOverride": 1,
       "NoFabricatedKeyManagement": 1,
+      "NoFabricatedKmsSelfTestTruth": 1,
       "NoFabricatedResults": 1,
       "NoFalseSuccessOnShutdown": 1,
       "NoFixedListenPorts": 1,

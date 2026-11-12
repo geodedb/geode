@@ -9553,6 +9553,26 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6378-server-exit-and-hygiene", "Run SONNY-6378 regression (a debug server logs its startup log.info lines and frees the GraphRBACPolicy and proto-reader registry at exit; rotateWithRemoteKms is gone; Argon2id t/m are bounded; e2e_security_tde_mfa runs; no parse-only TESTED markers in the GAP-0193 batch 2 suites; no stale Zig pin)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6348 items 1, 4, 5, 6: a symbolic GEODE_KMS_URL, fixed /tmp
+    // names in inline tests, the TDE self-test procedures' reports, and
+    // stale procedure classification / dead FLE and audit code.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6348_kms_tmp_selftests_stale.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("sonny6348_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        spawnsBuiltGeode(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6348-kms-tmp-selftests-stale", "Run SONNY-6348 items 1, 4-6 regression (a symbolic GEODE_KMS_URL is refused, not reported configured; no fixed /tmp path in inline tests; simulate_oltp_workload runs the requested concurrency and the page/backup self tests give each run an id; refused procedures are not read-only; dead FLE lookups and unused audit imports are gone; configureField refuses searchable)").dependOn(&run_tests.step);
+    }
+
     // SONNY-3379: the I-4 vector case over in-process gRPC (the shared
     // round-12 fixture), in two fixture lifetimes; the fixture leaves no
     // index manager pointing into its freed request arena.
