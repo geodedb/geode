@@ -13344,6 +13344,23 @@ pub fn build(b: *std.Build) void {
     const sonny2753_step = b.step("test-sonny2753-graph-scoped-deny", "Run the SONNY-2753 regression (a deny scoped to graph g refuses what happens on g only, procedures, nodes, edges and decryption included; a change of every graph at once is refused by a deny on any graph; graph-scoped allow covers its graph only; deny beats allow; cached verdicts are per graph)");
     sonny2753_step.dependOn(&run_sonny2753_tests.step);
 
+    // SONNY-2781: every action a GPS policy can name is enforced: the write
+    // gate asks CREATE / UPDATE / DELETE / WRITE+SCHEMA per statement, the
+    // read gate asks MATCH on every graph read, for every principal; a deny
+    // naming UNWRAP_KEY (enforced nowhere) is refused.
+    const sonny2781_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2781_gps_action_enforcement.zig"), .target = target, .optimize = optimize });
+    sonny2781_test_mod.link_libc = true;
+    sonny2781_test_mod.addImport("geode", root_mod);
+    sonny2781_test_mod.addImport("schema", schema_mod);
+    sonny2781_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2781_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2781_test_mod.addImport("logging", logging_mod);
+    const sonny2781_tests = b.addTest(.{ .root_module = sonny2781_test_mod });
+    const run_sonny2781_tests = b.addRunArtifact(sonny2781_tests);
+    shardDep(test_step, &run_sonny2781_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2781_step = b.step("test-sonny2781-gps-action-enforcement", "Run the SONNY-2781 regression (a deny naming READ, MATCH, CREATE, UPDATE, DELETE, SCHEMA or WRITE stops exactly the statements that need it, PROFILE and EXPLAIN included, on its graph; an allow naming one action allows exactly that; cached verdicts are per action; a deny naming UNWRAP_KEY is refused)");
+    sonny2781_step.dependOn(&run_sonny2781_tests.step);
+
     // GPS Phase 7 Task 7-1: bounded LRU decision cache tests.
     const gps_decision_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decision_cache.zig"), .target = target, .optimize = optimize });
     gps_decision_cache_test_mod.addImport("geode", root_mod);
