@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T21:14:06.228012916Z",
+  "generated_at": "2026-11-12T21:47:20.298342699Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84105,6 +84105,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6429-SOLE-HOLDER-TENANT",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "SoleHolderTenantRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -91790,7 +91809,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4770
+      "TESTED": 4771
     },
     "by_aspect": {
       "2PC": 3,
@@ -95303,6 +95322,7 @@
       "SnapshotValidation": 1,
       "SoleHolderEndpoint": 1,
       "SoleHolderEndpointTenantScope": 1,
+      "SoleHolderTenantRegression": 1,
       "SortExecution": 1,
       "Sorting": 1,
       "SourceAudit": 2,

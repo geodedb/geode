@@ -14077,6 +14077,25 @@ pub fn build(b: *std.Build) void {
     const sonny3241_step = b.step("test-sonny3241-fast-path-parity-wire", "Run SONNY-3241 wire regression (spawns a server, group commit on and off: node MERGE with ON CREATE / ON MATCH SET beside a bare SET, also /*+BATCH*/ and USE GRAPH; MATCH ... CREATE edges over a key two nodes hold or a non-integer key; MATCH ... MERGE edges with ON CREATE SET and with relationship properties all write what the executor writes)");
     sonny3241_step.dependOn(&run_sonny3241_tests.step);
 
+    // SONNY-6429: the tenant-scoped sole-holder endpoint lookup of the
+    // MATCH ... CREATE edge fast path, in process against the executor's
+    // MATCH, and over QUIC (group commit on and off) the edge statements of
+    // a tenant-scoped or unscoped session answer and write what the executor
+    // does in an explicit transaction.
+    const sonny6429_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6429_sole_holder_tenant_wire.zig"), .target = target, .optimize = optimize });
+    sonny6429_test_mod.link_libc = true;
+    sonny6429_test_mod.addImport("geode", root_mod);
+    sonny6429_test_mod.addImport("schema", schema_mod);
+    sonny6429_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6429_test_mod.addImport("logging", logging_mod);
+    sonny6429_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6429_tests = b.addTest(.{ .root_module = sonny6429_test_mod });
+    const run_sonny6429_tests = b.addRunArtifact(sonny6429_tests);
+    spawnsBuiltGeode(sonny6429_tests);
+    shardDep(test_step, &run_sonny6429_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6429_step = b.step("test-sonny6429-sole-holder-tenant-wire", "Run SONNY-6429 regression (the tenant-scoped sole-holder endpoint lookup answers what the executor's MATCH sees: two holders of the session's tenant, one of it and one of another tenant, only another tenant's, unscoped, persisted / unbounded cache / lean / reopened; over QUIC with group commit on and off, MATCH ... CREATE and MATCH ... MERGE edges of a tenant-scoped or unscoped session answer and write what the executor does)");
+    sonny6429_step.dependOn(&run_sonny6429_tests.step);
+
     const sonny6354_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6354_lean_late_key_indexes.zig"), .target = target, .optimize = optimize });
     sonny6354_test_mod.link_libc = true; // setenv/unsetenv
     sonny6354_test_mod.addImport("geode", root_mod);
