@@ -245,7 +245,7 @@ COMMIT;
 ### **Advanced Types**
 
 - **Vector Types** - VectorF32/VectorI32 with SIMD acceleration
-- **Network Types** - IPv4/IPv6, CIDR, MAC with <1μs parsing
+- **Network Types** - IPv4/IPv6, CIDR, MAC
 - **Geographic** - Point, LineString, Polygon with R-tree indexing
 - **Cryptographic** - Hash types, digital signatures, key management
 

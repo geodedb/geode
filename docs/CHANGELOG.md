@@ -318,6 +318,13 @@
   explicit transactions roll back through an undo log, with no isolation
   levels. `docs/ENHANCED_TRANSACTION_ISOLATION.md` and
   `docs/BM25_INDEX_OPTIMIZER_INTEGRATION.md` are now status notes.
+- **`src/types/network/` (SONNY-6298).** `ipaddr.zig`, `subnet.zig`,
+  `mac.zig` and `mod.zig` were an older copy of the network types that no
+  build artifact compiled; the one consumer, the uncompiled root-level script
+  `validate_current_features.zig`, goes with them. The network types the
+  server uses are `src/types/network.zig` (over the `advanced_types`
+  library), unchanged. The "<1μs parsing" figure is dropped from `CLAUDE.md`
+  and `README.md`: no benchmark in the repository measures it.
 
 ---
 

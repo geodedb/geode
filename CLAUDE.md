@@ -152,7 +152,7 @@ See [docs/TIMESERIES.md](docs/TIMESERIES.md) for the full reference.
 
 ### **Advanced Types** (Complete)
 
-- **Network Types**: IPv4/IPv6, CIDR, MAC with <1μs parsing
+- **Network Types**: IPv4/IPv6, CIDR, MAC (`src/types/network.zig`, over the `advanced_types` library; stored and returned through GQL in `zig build test-advanced-property-ga`). No benchmark in this repository measures their parse time
 - **Geographic**: Point, LineString, Polygon with R-tree spatial indexing
 - **Cryptographic**: Hash types, digital signatures, encryption key management
 - **Temporal**: DateTime with timezone support, intervals, duration arithmetic

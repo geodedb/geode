@@ -2983,16 +2983,11 @@ REQ-GQL-MULTINODE-PROPVARREF-004,PropertyPatternVariableReference,GroupByVerific
 REQ-GQL-NET-FUNC-001,NetworkFunctions,BuiltinFunctions,TESTED,,,types,2025-10-19,src/types/network.zig,50
 REQ-GQL-NET-FUNC-EVAL-001,NetworkFunctionsEvaluation,BuiltinFunctions,TESTED,,,eval,2025-10-19,src/eval_extended.zig,984
 REQ-GQL-NET-TYPES-000,NetTypes,Module,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch2_engine.zig,197
-REQ-GQL-NET-TYPES-000,Network Types Module,Types,TESTED,,,types,2025-01-03,src/types/network/mod.zig,2
-REQ-GQL-NET-TYPES-001,IpAddr Network Type,Types,TESTED,,,types,2025-01-03,src/types/network/ipaddr.zig,3
 REQ-GQL-NET-TYPES-001,NetTypes,IpAddr,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch2_engine.zig,210
 REQ-GQL-NET-TYPES-002,NetTypes,Subnet,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch2_engine.zig,217
-REQ-GQL-NET-TYPES-002,Subnet CIDR Type,Types,TESTED,,,types,2025-01-03,src/types/network/subnet.zig,4
-REQ-GQL-NET-TYPES-003,Mac Address Type,Types,TESTED,,,types,2025-01-03,src/types/network/mac.zig,3
 REQ-GQL-NET-TYPES-003,NetTypes,Mac,TESTED,,,types,2026-01-16,tests/test_gap_0193_batch2_engine.zig,224
 REQ-GQL-NET-TYPES-100,NetworkTypesIntegration,EndToEndTesting,TESTED,,,types,2025-10-03,tests/network_types_integration_test.zig,5
 REQ-GQL-NET-TYPES-REGRESSION,Network Types Regression Tests,Testing,EXEMPT,,,testing,2025-01-03,tests/network_types_regression_test.zig,10
-REQ-GQL-NET-TYPES-VALIDATION,Network Types Validation Script,Testing,EXEMPT,,,testing,2025-01-03,validate_current_features.zig,3
 REQ-GQL-NETWORK-001,Network Index,SubnetKey,TESTED,,,index,2026-01-16,src/index/advanced_types_index.zig,777
 REQ-GQL-NETWORK-002,Network Index,SubnetPrefix,TESTED,,,index,2026-01-16,src/index/advanced_types_index.zig,799
 REQ-GQL-NETWORK-003,Network Index,ValueStorage,TESTED,,,index,2026-01-16,src/index/advanced_types_index.zig,683
