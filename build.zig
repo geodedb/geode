@@ -9552,6 +9552,22 @@ pub fn build(b: *std.Build) void {
     const sonny6323_step = b.step("test-sonny6323-local-backup-written-once", "Run SONNY-6323 regression (geode backup create --local writes the backup once, at --output, 0600, nothing else beside it, and it restores; BackupManager/SimplifiedBackupManager have no runRetention and the unbuilt backup test files are gone; createFullBackup without a data directory is refused)");
     sonny6323_step.dependOn(&run_sonny6323_tests.step);
 
+    // SONNY-6290: every geode backup/restore command in the operator docs
+    // exists in the built binary (subcommand and options) and names no
+    // object-storage location; backup create refuses unknown options and a
+    // URI --output.
+    const sonny6290_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6290_backup_doc_commands.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    spawnsBuiltGeode(sonny6290_tests);
+    const run_sonny6290_tests = b.addRunArtifact(sonny6290_tests);
+    shardDep(test_step, &run_sonny6290_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6290_step = b.step("test-sonny6290-backup-doc-commands", "Run SONNY-6290 regression (every geode backup/restore command in USAGE.md, DEPLOYMENT.md, API_REFERENCE.md, README.md and CLAUDE.md names a real subcommand whose --help lists each option, and no s3:// or http(s):// location; geode backup create refuses an unknown option and a URI --output, writing nothing)");
+    sonny6290_step.dependOn(&run_sonny6290_tests.step);
+
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
     // look inside PROFILE and EXPLAIN. The real gRPC handler in process
