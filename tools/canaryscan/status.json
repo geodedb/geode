@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T21:48:18.882987394Z",
+  "generated_at": "2026-11-12T21:54:09.966578141Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -77517,6 +77517,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3245-CREATE-FORMS",
+      "features": [
+        {
+          "feature": "CreateStatement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3245_create_merge_forms.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3245_create_merge_forms.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3247-MISSING-PARAMETER",
       "features": [
         {
@@ -89086,7 +89105,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4603
+      "TESTED": 4604
     },
     "by_aspect": {
       "2PC": 3,
@@ -92068,7 +92087,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 234,
+      "Regression": 235,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
