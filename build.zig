@@ -13485,6 +13485,27 @@ pub fn build(b: *std.Build) void {
     const sonny6352b_step = b.step("test-sonny6352-auth-writer-and-removals", "Run the SONNY-6352 items 3-5 regression (user_management's persistent writer callbacks run without user_store_mutex and under auth_ddl_lock; the offline user / role / policy removals report a failed node delete; DROP USER whose node delete fails answers 58030 and locks the user out, end to end)");
     sonny6352b_step.dependOn(&run_sonny6352b_tests.step);
 
+    // SONNY-6359: auth residuals (an Admin's ALTER USER <other> SET PASSWORD
+    // over QUIC and gRPC, user_change_password's old password, failures as
+    // GQLSTATUS errors, one word count, grant readers under auth_ddl_lock,
+    // auth verify saves nothing, policy-compliant script seeds). Spawns a
+    // server and the CLI.
+    const sonny6359_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6359_auth_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6359_test_mod.link_libc = true;
+    sonny6359_test_mod.addImport("geode", root_mod);
+    sonny6359_test_mod.addImport("schema", schema_mod);
+    sonny6359_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6359_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6359_test_mod.addImport("logging", logging_mod);
+    sonny6359_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6359_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const sonny6359_tests = b.addTest(.{ .root_module = sonny6359_test_mod });
+    const run_sonny6359_tests = b.addRunArtifact(sonny6359_tests);
+    run_sonny6359_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6359_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6359_step = b.step("test-sonny6359-auth-residuals", "Run the SONNY-6359 regression (an Admin's ALTER USER <other> SET PASSWORD over QUIC and gRPC runs as user_reset_password with the policy; user_change_password always checks the old password; auth procedure failures are GQLSTATUS errors, not 00000 'error:' rows; one passphrase word count; hasGraphGrant and the grant listings wait for auth_ddl_lock; auth verify saves and leaks nothing; in-repo script admin seeds meet the policy; spawns a server and the CLI)");
+    sonny6359_step.dependOn(&run_sonny6359_tests.step);
+
     // SONNY-6358: the offline `geode user create` / `geode user update
     // --password` store an Argon2id hash and seal the chain, so the server
     // starts and logs the user in. Spawns the CLI and a server.
