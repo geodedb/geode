@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T17:22:40.210902254Z",
+  "generated_at": "2026-11-12T17:29:17.236585005Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79168,6 +79168,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6355-BACKUP-ENCRYPT-FSYNC",
+      "features": [
+        {
+          "feature": "Backup",
+          "aspect": "EncryptedUnderTdeKeySyncedOutputDir",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6355_backup_encryption_fsync_output.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6355_backup_encryption_fsync_output.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6355-DEAD-BACKUP-TESTS",
       "features": [
         {
@@ -86911,7 +86930,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 345,
-      "TESTED": 4462
+      "TESTED": 4463
     },
     "by_aspect": {
       "2PC": 3,
@@ -87952,6 +87971,7 @@
       "EncryptPage": 1,
       "EncryptPageTest": 1,
       "EncryptProperty": 1,
+      "EncryptedUnderTdeKeySyncedOutputDir": 1,
       "Encryption": 2,
       "EncryptionAlwaysApplied": 1,
       "EncryptionAtRest": 2,

@@ -9858,6 +9858,24 @@ pub fn build(b: *std.Build) void {
     const sonny6323_step = b.step("test-sonny6323-local-backup-written-once", "Run SONNY-6323 regression (geode backup create --local writes the backup once, at --output, 0600, nothing else beside it, and it restores; BackupManager/SimplifiedBackupManager have no runRetention and the unbuilt backup test files are gone; createFullBackup without a data directory is refused)");
     sonny6323_step.dependOn(&run_sonny6323_tests.step);
 
+    // SONNY-6355 items 1, 2, 5, 6: backups encrypted under GEODE_TDE_KEY
+    // (round trip through backup create --local and geode restore), the
+    // server's backup and metadata synced, no unread retention_days, and a
+    // missing --output directory refused on both paths.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6355_backup_encryption_fsync_output.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("storage/backup", storage_backup_mod);
+        mod.addImport("sonny6355b_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        spawnsBuiltGeode(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6355-backup-encryption-fsync-output", "Run SONNY-6355 items 1, 2, 5, 6 regression (with GEODE_TDE_KEY set a backup is encrypted under it and restores only with it, an unusable key writes no backup; the server's backup and metadata.json are synced; BackupConfig has no unread retention_days; backup create refuses a missing --output directory on the local and remote paths)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6290: every geode backup/restore command in the operator docs
     // exists in the built binary (subcommand and options) and names no
     // object-storage location; backup create refuses unknown options and a

@@ -5084,6 +5084,7 @@ REQ-SONNY-6348-KMS-TMP-SELFTESTS,TDE Procedures,NoFabricatedKmsSelfTestTruth,TES
 REQ-SONNY-6348-READONLY-RESTORE-CHECKS,Backup Restore,ChecksOnThrowawayCopy,TESTED,src/storage/backup.zig,tests/test_sonny6348_readonly_restore_checks_registry.zig,,storage,2026-11-12
 REQ-SONNY-6348-READONLY-RESTORE-CHECKS,Backup Restore,CommittedRestoreIsTheArchive,TESTED,tests/test_sonny6348_readonly_restore_checks_registry.zig,tests/test_sonny6348_readonly_restore_checks_registry.zig,,storage,2026-11-12
 REQ-SONNY-6348-TENANT-REGISTRY-CORRUPT,TenantRegistry,CorruptLineRefused,TESTED,src/security/tenant_registry.zig,tests/test_sonny6348_readonly_restore_checks_registry.zig,,security,2026-11-12
+REQ-SONNY-6355-BACKUP-ENCRYPT-FSYNC,Backup,EncryptedUnderTdeKeySyncedOutputDir,TESTED,tests/test_sonny6355_backup_encryption_fsync_output.zig,tests/test_sonny6355_backup_encryption_fsync_output.zig,,storage,2026-11-12
 REQ-SONNY-6355-DEAD-BACKUP-TESTS,Test Hygiene,NoDeadBackupTestsOrStaleCanaryRows,TESTED,tests/test_sonny6355_dead_backup_tests.zig,tests/test_sonny6355_dead_backup_tests.zig,,storage,2026-11-12
 REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME,Embedded LSP,AuthProviderOutlivesSessions,TESTED,tests/test_sonny6374_lsp_auth_provider_lifetime.zig,tests/test_sonny6374_lsp_auth_provider_lifetime.zig,,lsp,2026-11-12
 REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME,Embedded LSP,ListenerOwnsProviderLifetime,TESTED,src/server/main.zig,tests/test_sonny6374_lsp_auth_provider_lifetime.zig,,lsp,2026-11-12
