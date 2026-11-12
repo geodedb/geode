@@ -44,7 +44,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 }
 
 const cb = @import("crypto_backend");
-const kms = @import("kms.zig");
+pub const kms = @import("kms.zig");
 const tde_hierarchy = @import("tde_hierarchy.zig");
 const flags_mod = @import("feature_flags");
 
