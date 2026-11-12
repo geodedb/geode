@@ -4,6 +4,21 @@
 
 ### Security
 
+- **A cluster leader's MATCH ... SET updates only the rows the session's
+  MATCH sees (SONNY-3246).** On a single node a MATCH ... SET reads through
+  the RLS row filters, so a row a policy hides is never updated; the
+  leader's replicated MATCH ... SET (`clusterReplicateMatchSet`) matched
+  on graph, tenant, labels and properties only, and proposed updates of
+  hidden rows to every node. It now drops a candidate the session's RLS
+  policies hide (the row-visibility check MERGE's match phase uses,
+  SONNY-2686) before evaluating its WHERE and SET. SET clause ordering
+  already matched (SONNY-3242). **Not fixed:** WHERE truthiness still
+  differs: the leader keeps a row only when its WHERE is true (SONNY-3184),
+  while the single-node MATCH paths take a non-zero integer as true, so
+  `MATCH (n) WHERE n.a SET ...` with an integer `a` writes on a single node
+  and not on a leader; and a WHERE or SET expression that fails to
+  evaluate answers 40001 (ClusterWriteNotReplicable) on a leader instead of
+  its own error. `test-sonny3246-cluster-set-rls`.
 - **A cluster applies a write under the writing session's tenant
   (SONNY-2726).** In cluster mode a write reaches the store only through
   the raft apply, whose thread has no request context, and the replicated

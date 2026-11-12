@@ -4330,6 +4330,10 @@ fn clusterReplicateMatchSet(
         updates.deinit(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-3246-CLUSTER-SET-RLS; FEATURE="DistributedCluster"; ASPECT=LeaderSetRowVisibility; STATUS=TESTED; TEST=tests/test_sonny3246_cluster_set_rls.zig; OWNER=distributed; UPDATED=2026-11-12
+    var visibility = MergeVisibility.init(allocator, filter_tenant, filter_graph, context);
+    defer visibility.deinit();
+
     for (candidate_ids) |node_id| {
         // SONNY-1841: the leader's SET/REMOVE candidate loop (an alternate,
         // distributed write executor) can iterate a large match set — poll
@@ -4337,6 +4341,11 @@ fn clusterReplicateMatchSet(
         try write_budget.check();
         const node = (read_store.nodes.getOrHydratePtr(node_id) catch null) orelse continue;
         if (!nodeMatchesPattern(node, filter_graph, filter_tenant, node_pattern.labels, evaluated_match_props)) continue;
+        // SONNY-3246: only a node the session's MATCH can see, as on a single
+        // node, where the MATCH reads through the RLS row filters. The leader
+        // matched on graph, tenant, labels and properties only, so a session
+        // updated (and proposed to every node) rows its RLS policies hide.
+        if (!visibility.allows(node)) continue;
 
         // Bind the matched node so SET expressions (`n.v + 1`, `n.k`) evaluate on
         // THIS leader's concrete value — followers never re-evaluate.
