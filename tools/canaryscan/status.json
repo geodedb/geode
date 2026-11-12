@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T15:46:07.949065205Z",
+  "generated_at": "2026-11-12T15:49:12.464134859Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -19171,16 +19171,14 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "ADMIN",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/admin/fle_commands.zig"
           ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19190,16 +19188,14 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "AST",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/gql/ast.zig"
           ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19262,16 +19258,14 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "SECURITY",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/index/blind_index.zig"
           ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19347,11 +19341,11 @@
             "src/schema/fle_catalog.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "test-fle-online-grant"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19914,6 +19908,18 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "EXECUTION",
+          "status": "IMPL",
+          "files": [
+            "src/execution/fle_hooks.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "EXECUTION",
           "status": "TESTED",
           "files": [
             "src/execution.zig"
@@ -19924,20 +19930,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2025-10-15"
-        },
-        {
-          "feature": "FieldLevelEncryption",
-          "aspect": "EXECUTION",
-          "status": "TESTED",
-          "files": [
-            "src/execution/fle_hooks.zig"
-          ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-28"
         },
         {
           "feature": "FieldLevelEncryption",
@@ -20118,11 +20110,11 @@
             "src/fle_integration.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "test-gap0852"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -20137,11 +20129,11 @@
             "src/keys/types.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "test-fle-lifecycle"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -20182,16 +20174,14 @@
         {
           "feature": "FLEMigrateCLI",
           "aspect": "CLI",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/cli/fle_cli.zig"
           ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -20218,16 +20208,14 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "PARSER",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/gql/parser.zig"
           ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -20439,16 +20427,14 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "SCHEMA",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/schema/annotations.zig"
           ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -20470,16 +20456,14 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "STORAGE",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/graph_store.zig"
           ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -81098,6 +81082,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6321-TDE-FLE-CANARY-EVIDENCE",
+      "features": [
+        {
+          "feature": "TDEProcedures",
+          "aspect": "SelfTestProceduresAndHonestMarkers",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
+          "benches": [],
+          "owner": "tde",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6322-AUDIT-KEY-EPOCH",
       "features": [
         {
@@ -84249,11 +84252,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "tests/test_sonny6321_tde_procedures.zig"
           ],
           "benches": [],
           "owner": "tde",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -84268,11 +84271,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "tests/test_sonny6321_tde_procedures.zig"
           ],
           "benches": [],
           "owner": "tde",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -84320,11 +84323,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "tests/test_sonny6321_tde_procedures.zig"
           ],
           "benches": [],
           "owner": "tde",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -84339,11 +84342,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "tests/test_sonny6321_tde_procedures.zig"
           ],
           "benches": [],
           "owner": "tde",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -84358,11 +84361,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "tests/test_sonny6321_tde_procedures.zig"
           ],
           "benches": [],
           "owner": "tde",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -84377,11 +84380,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "tests/test_sonny6321_tde_procedures.zig"
           ],
           "benches": [],
           "owner": "tde",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -84391,16 +84394,14 @@
         {
           "feature": "TDETestProcedures",
           "aspect": "SimulateOLTPWorkload",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [
-            "tests/test_tde_kms_integration.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "tde",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -84449,11 +84450,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "tests/test_sonny6321_tde_procedures.zig"
           ],
           "benches": [],
           "owner": "tde",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -84468,11 +84469,11 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/test_tde_kms_integration.zig"
+            "tests/test_sonny6321_tde_procedures.zig"
           ],
           "benches": [],
           "owner": "tde",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -89971,8 +89972,8 @@
       "BENCHED": 227,
       "COMPLETE": 2,
       "EXEMPT": 247,
-      "IMPL": 188,
-      "TESTED": 4765
+      "IMPL": 197,
+      "TESTED": 4757
     },
     "by_aspect": {
       "2PC": 3,
@@ -93184,6 +93185,7 @@
       "SelfLockingProcedures": 1,
       "SelfLoop": 1,
       "SelfMatch": 1,
+      "SelfTestProceduresAndHonestMarkers": 1,
       "SemanticQueryMatching": 1,
       "SemanticValidation": 1,
       "Send": 1,

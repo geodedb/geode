@@ -1184,17 +1184,17 @@ REQ-FLE-007,FieldLevelEncryption,RandomizedEncryption,TESTED,tests/test_gap_0193
 REQ-FLE-008,FieldLevelEncryption,KMSIntegration,TESTED,tests/test_gap_0193_high_priority_comprehensive.zig,,,security,2026-01-15
 REQ-FLE-009,FieldLevelEncryption,BulkEncryption,TESTED,tests/test_gap_0193_high_priority_comprehensive.zig,,,security,2026-01-15
 REQ-FLE-010,FieldLevelEncryption,EncryptionMetadata,TESTED,tests/test_gap_0193_high_priority_comprehensive.zig,,,security,2026-01-15
-REQ-FLE-ADMIN-001,FieldLevelEncryption,ADMIN,TESTED,src/admin/fle_commands.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
-REQ-FLE-AST-001,FieldLevelEncryption,AST,TESTED,src/gql/ast.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
+REQ-FLE-ADMIN-001,FieldLevelEncryption,ADMIN,IMPL,src/admin/fle_commands.zig,,,security,2026-11-12
+REQ-FLE-AST-001,FieldLevelEncryption,AST,IMPL,src/gql/ast.zig,,,security,2026-11-12
 REQ-FLE-AUTHCHAIN-001,FLE AuthChain Integrity,ConfigureFieldRestart,TESTED,tests/test_gap0854_fle_chain.zig,,,security,2026-06-09
 REQ-FLE-BATCH-001,FLE Batch Re-encryption,ProgressTracking,TESTED,src/admin/fle_commands.zig,,,security,2026-01-16
 REQ-FLE-BI-001,FieldLevelEncryption,SECURITY,TESTED,src/crypto/hmac.zig,src/crypto/hmac.zig,,security,2026-01-15
-REQ-FLE-BI-002,FieldLevelEncryption,SECURITY,TESTED,src/index/blind_index.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
+REQ-FLE-BI-002,FieldLevelEncryption,SECURITY,IMPL,src/index/blind_index.zig,,,security,2026-11-12
 REQ-FLE-BUILD-001,FieldLevelEncryption,BUILD,TESTED,build.zig,geodetestlab/specs/fle_comprehensive_security.yml,,security,2025-10-15
 REQ-FLE-BUILD-001,FieldLevelEncryption,Build,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,security,2026-01-15
 REQ-FLE-CATALOG-001,FieldLevelEncryption,CATALOG,TESTED,src/execution.zig,geodetestlab/specs/fle_comprehensive_security.yml,,security,2025-10-15
 REQ-FLE-CATALOG-001,FieldLevelEncryption,Catalog,TESTED,tests/test_gap_0193_high_priority.zig,test_gap_0193_high_priority.zig,,security,2026-01-15
-REQ-FLE-CATALOG-001,FieldLevelEncryption,SCHEMA,TESTED,src/schema/fle_catalog.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
+REQ-FLE-CATALOG-001,FieldLevelEncryption,SCHEMA,TESTED,src/schema/fle_catalog.zig,test-fle-online-grant,,security,2026-11-12
 REQ-FLE-CONCURRENT-RECORDID-001,FLEConcurrentSafety,RegressionTest,TESTED,tests/test_fle_allocprint_alias_regression.zig,tests/test_fle_allocprint_alias_regression.zig,,security,2026-04-22
 REQ-FLE-DOC-001,FieldLevelEncryption,Documentation,TESTED,tests/test_gap_0193_high_priority.zig,test_gap_0193_high_priority.zig,,security,2026-01-15
 REQ-FLE-ENFORCE-001,FLEEnforcement,SecurityTests,TESTED,src/security/test_fle_enforcement.zig,,,security,2026-01-28
@@ -1228,8 +1228,8 @@ REQ-FLE-ENFORCE-028,FLEEnforcement,PlaintextSizeLimit,TESTED,src/security/test_f
 REQ-FLE-ENFORCE-029,FLEEnforcement,KeySizeValidation,TESTED,src/security/test_fle_enforcement.zig,,,security,2026-01-28
 REQ-FLE-ENFORCE-030,FLEEnforcement,GlobalFlagSkipDisabled,TESTED,src/fle_integration.zig,src/fle_integration.zig,,security,2026-06-10
 REQ-FLE-ENFORCE-030,FLEEnforcement,GlobalFlagSkipDisabled,TESTED,src/security/test_fle_enforcement.zig,,,security,2026-06-10
+REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,IMPL,src/execution/fle_hooks.zig,,,security,2026-11-12
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,TESTED,src/execution.zig,geodetestlab/specs/fle_comprehensive_security.yml,,security,2025-10-15
-REQ-FLE-EXECUTION-001,FieldLevelEncryption,EXECUTION,TESTED,src/execution/fle_hooks.zig,tests/test_tde_kms_integration.zig,,security,2026-01-28
 REQ-FLE-EXECUTION-001,FieldLevelEncryption,Execution,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,security,2026-01-15
 REQ-FLE-FAILSECURE-001,FLEFailSecure,EncryptionFailureError,TESTED,src/security/test_fle_enforcement.zig,,,security,2026-03-13
 REQ-FLE-FAILSECURE-001,FLEFailSecure,SECURITY,TESTED,src/execution/fle_hooks.zig,src/security/test_fle_enforcement.zig,,security,2026-01-28
@@ -1240,13 +1240,13 @@ REQ-FLE-FAILSECURE-005,FLEFailSecure,EdgePropertyEncryption,TESTED,src/security/
 REQ-FLE-FAILSECURE-006,FLEFailSecure,AllErrorsDeny,TESTED,src/security/test_fle_enforcement.zig,,,security,2026-01-28
 REQ-FLE-FAILSECURE-007,FLEFailSecure,AuditTrail,TESTED,src/security/test_fle_enforcement.zig,,,security,2026-01-28
 REQ-FLE-HKDF-001,FieldLevelEncryption,SECURITY,TESTED,src/crypto/hkdf.zig,src/crypto/hkdf.zig,,security,2026-01-15
-REQ-FLE-INTEGRATION-001,FieldLevelEncryption,INTEGRATION,TESTED,src/fle_integration.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
-REQ-FLE-KEY-001,FieldLevelEncryption,SECURITY,TESTED,src/keys/types.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
+REQ-FLE-INTEGRATION-001,FieldLevelEncryption,INTEGRATION,TESTED,src/fle_integration.zig,test-gap0852,,security,2026-11-12
+REQ-FLE-KEY-001,FieldLevelEncryption,SECURITY,TESTED,src/keys/types.zig,test-fle-lifecycle,,security,2026-11-12
 REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,tests/test_gap_0193_high_priority.zig,test_gap_0193_high_priority.zig,,security,2026-01-15
 REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,src/admin/fle_commands.zig,,,security,2026-01-16
-REQ-FLE-MIGRATE-CLI-001,FLEMigrateCLI,CLI,TESTED,src/cli/fle_cli.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
+REQ-FLE-MIGRATE-CLI-001,FLEMigrateCLI,CLI,IMPL,src/cli/fle_cli.zig,,,security,2026-11-12
 REQ-FLE-ONLINE-GRANT-001,FLEOnlineGrant,GrantPlaintextDispatch,TESTED,tests/test_fle_online_grant.zig,,,security,2026-06-18
-REQ-FLE-PARSER-001,FieldLevelEncryption,PARSER,TESTED,src/gql/parser.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
+REQ-FLE-PARSER-001,FieldLevelEncryption,PARSER,IMPL,src/gql/parser.zig,,,security,2026-11-12
 REQ-FLE-PREDICATE-HELPERS-001,FLE Predicate Rewriting,Helpers,TESTED,src/fle_integration.zig,geodetestlab/specs/fle_comprehensive_security.yml,,security,2026-01-09
 REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,src/execution/storage_dispatch.zig,,,security,2026-01-28
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,src/execution/storage_dispatch.zig,,,security,2026-01-28
@@ -1259,9 +1259,9 @@ REQ-FLE-ROLE-ISOLATION-004,FLERoleIsolation,ContextRole,TESTED,src/execution.zig
 REQ-FLE-ROLE-ISOLATION-004,FLERoleIsolation,GrpcCleanup,IMPL,src/transport/grpc_server.zig,,,security,2026-04-05
 REQ-FLE-ROTATION-001,FLEKeyRotation,Encryption,TESTED,src/fle_integration.zig,geodetestlab/specs/fle_rotation.yml,,security,2026-01-10
 REQ-FLE-ROTATION-002,FLEKeyRotation,KeyManagement,TESTED,src/fle_integration.zig,geodetestlab/specs/fle_rotation.yml,,security,2026-01-10
-REQ-FLE-SCHEMA-001,FieldLevelEncryption,SCHEMA,TESTED,src/schema/annotations.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
+REQ-FLE-SCHEMA-001,FieldLevelEncryption,SCHEMA,IMPL,src/schema/annotations.zig,,,security,2026-11-12
 REQ-FLE-STORAGE-001,FLE Storage Callback,StorageIntegration,TESTED,src/admin/fle_commands.zig,,,security,2026-01-16
-REQ-FLE-STORAGE-001,FieldLevelEncryption,STORAGE,TESTED,src/graph_store.zig,tests/test_tde_kms_integration.zig,,security,2026-01-15
+REQ-FLE-STORAGE-001,FieldLevelEncryption,STORAGE,IMPL,src/graph_store.zig,,,security,2026-11-12
 REQ-FLE-TEST-001,FLE,BasicEncryption,TESTED,tests/test_gap_0193_batch2_testing.zig,,,security,2026-01-16
 REQ-FLE-TEST-001,FieldLevelEncryption,BasicTesting,TESTED,tests/test_gap_0193_high_priority.zig,test_gap_0193_high_priority.zig,,security,2026-01-15
 REQ-FLE-TEST-002,FLE,BlindIndex,TESTED,tests/test_gap_0193_batch2_testing.zig,,,security,2026-01-16
@@ -5218,6 +5218,7 @@ REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,ManagerRestoreIsStaged,TESTED,
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,NoInPlaceRestoreOneSyncTimeouts,TESTED,tests/test_sonny6300_staged_restore_paths.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,S3RestoreIsStaged,IMPL,src/storage/s3_backup.zig,,,storage,2026-11-12
 REQ-SONNY-6320-PASSWORD-HASHING,Argon2id Password Hashing,DeterministicHashAndConstantTimeVerify,TESTED,tests/test_sonny6320_password_hashing.zig,tests/test_sonny6320_password_hashing.zig,,security,2026-11-12
+REQ-SONNY-6321-TDE-FLE-CANARY-EVIDENCE,TDEProcedures,SelfTestProceduresAndHonestMarkers,TESTED,tests/test_sonny6321_tde_procedures.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-SONNY-6322-AUDIT-KEY-EPOCH,Audit Verification,EpochVerification,TESTED,src/cli/geode_audit_verify.zig,tests/test_sonny6322_audit_seed_and_hmac_startup.zig,,security,2026-11-11
 REQ-SONNY-6322-AUDIT-KEY-EPOCH,AuditDurability,KeyEpochs,TESTED,src/security/audit.zig,tests/test_sonny6322_audit_seed_and_hmac_startup.zig,,security,2026-11-11
 REQ-SONNY-6322-AUDIT-KEY-EPOCH,Backup Restore,ExcludeAuditSeed,TESTED,src/storage/backup.zig,tests/test_sonny6322_audit_seed_and_hmac_startup.zig,,storage,2026-11-11
@@ -5408,19 +5409,19 @@ REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SchemaCatalog,TESTED,src/schema/cat
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,SharedUtility,TESTED,src/storage/tde_file_encryption.zig,,,security,2026-01-28
 REQ-TDE-GRAPHSTORE-001,TDEFileLevelEncryption,GraphStorePersistence,EXEMPT,src/graph_store.zig,,,security,2026-03-28
 REQ-TDE-NONCE-001,TDE_AES_GCM_Nonce_Security,Security,EXEMPT,src/security/test_tde_nonce.zig,,,security,2026-01-17
-REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,src/execution/storage_dispatch.zig,tests/test_tde_kms_integration.zig,,tde,2026-01-15
-REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,src/execution/storage_dispatch.zig,tests/test_tde_kms_integration.zig,,tde,2026-01-15
+REQ-TDE-PROC-005,TDEProcedures,EncryptionTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
+REQ-TDE-PROC-006,TDEProcedures,DecryptionTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-TDE-PROC-015,PerTenantTDEKeys,EncryptPage,TESTED,src/execution/storage_dispatch.zig,tests/test_gap0843_tenant_tde.zig,,security,2026-06-08
 REQ-TDE-PROC-015,PerTenantTDEKeys,LibExportStorageDispatch,TESTED,src/lib.zig,tests/test_gap0843_tenant_tde.zig,,security,2026-06-08
-REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,src/execution/storage_dispatch.zig,tests/test_tde_kms_integration.zig,,tde,2026-01-15
-REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,src/execution/storage_dispatch.zig,tests/test_tde_kms_integration.zig,,tde,2026-01-15
-REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,src/execution/storage_dispatch.zig,tests/test_tde_kms_integration.zig,,tde,2026-01-15
-REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,src/execution/storage_dispatch.zig,tests/test_tde_kms_integration.zig,,tde,2026-01-15
-REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,src/execution/storage_dispatch.zig,tests/test_tde_kms_integration.zig,,tde,2026-01-15
+REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
+REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
+REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
+REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
+REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,IMPL,src/execution/storage_dispatch.zig,,,tde,2026-11-12
 REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,src/execution/storage_dispatch.zig,,,tde,2025-10-19
 REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,src/execution/storage_dispatch.zig,,,tde,2025-10-19
-REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,src/execution/storage_dispatch.zig,tests/test_tde_kms_integration.zig,,tde,2026-01-15
-REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,src/execution/storage_dispatch.zig,tests/test_tde_kms_integration.zig,,tde,2026-01-15
+REQ-TDE-PROC-051,TDETestProcedures,TestKMSWrapUnwrap,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
+REQ-TDE-PROC-052,TDETestProcedures,TestKMSAttestation,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-TDE-TENANT-001,PerTenantTDEKeys,KeyDerivation,TESTED,src/security/tde_key_manager.zig,src/security/tde_key_manager.zig,,security,2026-04-01
 REQ-TDE-TENANT-002,PerTenantTDEKeys,EncryptDecrypt,TESTED,src/security/tde.zig,src/security/tde_key_manager.zig,,security,2026-04-01
 REQ-TDE-TENANT-002,PerTenantTDEKeys,KeyIsolation,TESTED,tests/test_gap0843_tenant_tde.zig,tests/test_gap0843_tenant_tde.zig:1,,security,2026-06-08

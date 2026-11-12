@@ -2,7 +2,7 @@ const std = @import("std");
 const fle = @import("fle_lib");
 
 // Key Management Types — thin compatibility layer over external fle library
-// CANARY: REQ=REQ-FLE-KEY-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-FLE-KEY-001; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=test-fle-lifecycle; OWNER=security; UPDATED=2026-11-12
 
 /// Key identifiers for hierarchical key management (re-exported from fle library)
 pub const KeyIds = fle.key_types.KeyIds;

@@ -44,7 +44,7 @@ const fle_hmac = @import("fle_hmac"); // GAP-0207 FIX: Import hmac for blind ind
 const annotations = @import("../schema/annotations.zig");
 
 // Field-Level Encryption Admin Commands
-// CANARY: REQ=REQ-FLE-ADMIN-001; FEATURE="FieldLevelEncryption"; ASPECT=ADMIN; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-FLE-ADMIN-001; FEATURE="FieldLevelEncryption"; ASPECT=ADMIN; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 
 /// Admin CLI commands for Field-Level Encryption management
 /// Provides commands for key rotation, policy management, and migration

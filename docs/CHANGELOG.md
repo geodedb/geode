@@ -362,6 +362,20 @@
 
 ### Fixed
 
+- **The TDE self-test procedure and FLE CANARYs cite tests that exercise
+  them; GAP-0514 is reopened (SONNY-6321).** Twenty markers cited
+  `tests/test_tde_kms_integration.zig`, which tests `TDEKeyManager` only.
+  `test-sonny6321-tde-procedures` now drives `tde.test_encryption`,
+  `test_decryption`, `encrypt_page_test`, `encrypt_backup_test`,
+  `roundtrip_test`, `measure_overhead`, `test_kms_wrap_unwrap` and
+  `test_kms_attestation` through the executor (real success with TDE on and
+  a key; no success claim with TDE off from those that use the key), and
+  their markers cite it. REQ-FLE-CATALOG-001, REQ-FLE-INTEGRATION-001 and
+  REQ-FLE-KEY-001 cite `test-fle-online-grant`, `test-gap0852` and
+  `test-fle-lifecycle`; REQ-TDE-PROC-046 and the FLE AST, PARSER, STORAGE,
+  BI-002, SCHEMA, EXECUTION, ADMIN and MIGRATE-CLI markers are IMPL. IMPL is
+  267 of 6,161 (4.3%), above GAP-0514's 250 target, so GAP-0514 is back in
+  `docs/GAP_ANALYSIS.md` as Partial.
 - **The perf-gated benchmarks time with a monotonic clock, and the two that
   timed only test-local code are removed (SONNY-2439, partial).** Every
   benchmark that makes a claim through `tests/perf_gate.zig` read

@@ -11,7 +11,7 @@ fn compat_fillRandom(buf: []u8) void {
 const fle = @import("fle_lib");
 
 // Blind Index for Searchable Encrypted Fields — thin compatibility layer over external fle library
-// CANARY: REQ=REQ-FLE-BI-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-FLE-BI-002; FEATURE="FieldLevelEncryption"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 
 /// Blind index token type (re-exported from fle library)
 pub const BlindIndexToken = fle.blind_index.BlindIndexToken;
