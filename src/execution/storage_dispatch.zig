@@ -602,7 +602,7 @@ fn handleTdeMeasureOverhead(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 }
 
 fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-046; FEATURE="TDETestProcedures"; ASPECT=SimulateOLTPWorkload; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-12
+    // CANARY: REQ=REQ-TDE-PROC-046; FEATURE="TDETestProcedures"; ASPECT=SimulateOLTPWorkload; STATUS=TESTED; TEST=tests/test_sonny6321_tde_fle_cases.zig; OWNER=tde; UPDATED=2026-11-12
     // tde.simulate_oltp_workload(duration_seconds, concurrent_transactions) -> avg_transaction_time_ms, tps_with_encryption, tps_without_encryption, degradation_percentage, concurrent_transactions, transactions
 
     // Extract parameters

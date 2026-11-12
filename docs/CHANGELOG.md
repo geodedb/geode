@@ -460,6 +460,22 @@
   BI-002, SCHEMA, EXECUTION, ADMIN and MIGRATE-CLI markers are IMPL. IMPL is
   267 of 6,161 (4.3%), above GAP-0514's 250 target, so GAP-0514 is back in
   `docs/GAP_ANALYSIS.md` as Partial.
+- **The TDE procedures' simulate_oltp_workload, GPS gate, argument checks
+  and cluster mode, and six FLE requirements, have tests that execute them
+  (SONNY-6321, remaining parts).** `test-sonny6321-tde-fle-cases` drives
+  `tde.simulate_oltp_workload` through the executor's TDE dispatch, a CALL's
+  GPS gate (a ReadOnly principal is refused the self tests classified as
+  writes and may run `tde.measure_overhead`), out-of-range arguments, and
+  cluster mode (the self tests run on a follower, `geode.fle.configureField`
+  is refused), plus CREATE GRAPH TYPE field annotations in the AST and an FLE
+  field written through the executor (no plaintext on disk, plaintext only
+  for a role it is visible to); `test-sonny6321-fle-schema-blind-index`
+  covers annotation metadata and the blind index. REQ-TDE-PROC-046 and
+  REQ-FLE-AST/PARSER/SCHEMA/BI-002/EXECUTION/STORAGE-001 are TESTED against
+  them. REQ-FLE-ADMIN-001 and REQ-FLE-MIGRATE-CLI-001 stay IMPL:
+  `fle_commands.rotateKey` prints a completed rotation without rotating any
+  key, and the migrate-encrypt CLI has no storage to migrate. GAP-0514: 405
+  IMPL of 5,900 (6.9%).
 - **The canary perf benchmarks take batched samples from the production
   allocator, interleave A/B arms and claim on the median and IQR; the
   phantom-range baseline enables phantom prevention (SONNY-2439, second

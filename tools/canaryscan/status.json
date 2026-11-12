@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:06:54.141942244Z",
+  "generated_at": "2026-11-12T18:07:52.148788567Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -18390,11 +18390,13 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "AST",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/gql/ast.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_fle_cases.zig"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
@@ -18460,11 +18462,13 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "SECURITY",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/index/blind_index.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_fle_schema_blind_index.zig"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
@@ -19110,18 +19114,6 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "EXECUTION",
-          "status": "IMPL",
-          "files": [
-            "src/execution/fle_hooks.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-11-12"
-        },
-        {
-          "feature": "FieldLevelEncryption",
-          "aspect": "EXECUTION",
           "status": "TESTED",
           "files": [
             "src/execution.zig"
@@ -19132,6 +19124,20 @@
           "benches": [],
           "owner": "security",
           "updated": "2025-10-15"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "EXECUTION",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fle_hooks.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6321_tde_fle_cases.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
         },
         {
           "feature": "FieldLevelEncryption",
@@ -19410,11 +19416,13 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "PARSER",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/gql/parser.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_fle_cases.zig"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
@@ -19629,11 +19637,13 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "SCHEMA",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/schema/annotations.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_fle_schema_blind_index.zig"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
@@ -19658,11 +19668,13 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "STORAGE",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/graph_store.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_fle_cases.zig"
+          ],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
@@ -81931,11 +81943,13 @@
         {
           "feature": "TDETestProcedures",
           "aspect": "SimulateOLTPWorkload",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_fle_cases.zig"
+          ],
           "benches": [],
           "owner": "tde",
           "updated": "2026-11-12"
@@ -86967,8 +86981,8 @@
       "BENCHED": 215,
       "COMPLETE": 2,
       "EXEMPT": 217,
-      "IMPL": 345,
-      "TESTED": 4465
+      "IMPL": 338,
+      "TESTED": 4472
     },
     "by_aspect": {
       "2PC": 3,

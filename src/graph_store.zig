@@ -743,7 +743,7 @@ fn generateTimeBasedId() u64 {
 }
 
 // Field-Level Encryption Storage Hooks
-// CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FieldLevelEncryption"; ASPECT=STORAGE; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
+// CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FieldLevelEncryption"; ASPECT=STORAGE; STATUS=TESTED; TEST=tests/test_sonny6321_tde_fle_cases.zig; OWNER=security; UPDATED=2026-11-12
 
 // Simple graph store with file-based persistence for testing
 // Real implementation would use proper storage engine
