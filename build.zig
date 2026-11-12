@@ -9801,6 +9801,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6342_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6342_step = b.step("test-sonny6342-tde-stub-procedures", "Run SONNY-6342 regression (tde.* key-management stubs are refused as unsupported with TDE on or off; the real TDE self tests still answer; the dead blind-index predicate rewrite is removed)");
     sonny6342_step.dependOn(&run_sonny6342_tests.step);
+    const sonny6386_tde_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_tde_key_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6386_tde_test_mod.link_libc = true;
+    sonny6386_tde_test_mod.addImport("geode", root_mod);
+    sonny6386_tde_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const sonny6386_tde_tests = b.addTest(.{ .root_module = sonny6386_tde_test_mod });
+    const run_sonny6386_tde_tests = b.addRunArtifact(sonny6386_tde_tests);
+    spawnsBuiltGeode(sonny6386_tde_tests);
+    shardDep(test_step, &run_sonny6386_tde_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6386_tde_step = b.step("test-sonny6386-tde-key-fail-closed", "Run SONNY-6386 item 1 regression (spawns servers: a set but malformed GEODE_TDE_KEY refuses startup, names the variable, never echoes it and creates nothing; the adapter, WAL and HMAC key loaders refuse a malformed key instead of falling back to no encryption or another key)");
+    sonny6386_tde_step.dependOn(&run_sonny6386_tde_tests.step);
     const sonny6342_authn_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"AuthProvider:"} });
     const run_sonny6342_authn_tests = b.addRunArtifact(sonny6342_authn_tests);
     shardDep(test_step, &run_sonny6342_authn_tests.step, 1, test_shard_loads, test_shard_index);

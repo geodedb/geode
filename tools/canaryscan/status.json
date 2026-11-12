@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:07:52.148788567Z",
+  "generated_at": "2026-11-12T18:20:27.65972258Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79327,6 +79327,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "TDE baseline",
+          "aspect": "MalformedKeyRefusesStartup",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_tde_key_fail_closed.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_tde_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -86982,7 +87001,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4472
+      "TESTED": 4473
     },
     "by_aspect": {
       "2PC": 3,
@@ -88906,6 +88925,7 @@
       "Main": 4,
       "MainImports": 1,
       "MalformedEnvelope": 1,
+      "MalformedKeyRefusesStartup": 1,
       "Management": 1,
       "ManagerRestoreIsStaged": 1,
       "MandatoryEnforcement": 1,
