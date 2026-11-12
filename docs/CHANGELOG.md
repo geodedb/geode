@@ -4,6 +4,35 @@
 
 ### Security
 
+- **BREAKING: the `tde.*` key-management stubs are refused (SONNY-6342).**
+  36 `tde.*` procedures answered with constants: `tde.rotate_keys` reported
+  success and a new master key id `mk-00000002` with nothing rotated,
+  `initialize_key_hierarchy` answered `mk-00000001`,
+  `get_encryption_status` answered `enabled=true` with TDE off,
+  `configure_kms` / `configure_external_kms` reported a configured,
+  connection-verified KMS nothing contacted, `zeroize_keys`,
+  `cleanup_key_hierarchy` and `test_key_zeroization` reported zeroized keys
+  that were never the server's, `audit_plaintext_keys` reported constant
+  counts, and the rotation-schedule, access-control, KMS-failure and
+  corrupted-key procedures returned hard-coded verdicts
+  (`configure_mock_kms` also wrote `mock_kms_config.json` into the working
+  directory). They fail with SQLSTATE `0A000` now (real key management is
+  SONNY-6303). The procedures that run real cryptography on the server's
+  TDE key still answer (`encrypt_page`, `test_encryption`,
+  `test_decryption`, `test_key_escrow`, `test_transparent_encryption`,
+  `encrypt_page_test`, `encrypt_backup_test`, `roundtrip_test`,
+  `measure_overhead`, `simulate_oltp_workload`, `test_kms_wrap_unwrap`,
+  `test_kms_attestation`); `test_transparent_encryption` measures its
+  performance impact against a real unencrypted copy (it used an invented
+  1000 µs). The dead `fle_integration.computeBlindIndex` (it did not
+  compile) and its only caller, the unreferenced FLE predicate rewrite in
+  `planner/rewrite.zig`, are removed; docs/FIELD_LEVEL_ENCRYPTION.md now
+  says that searchable fields cannot be configured through
+  `CALL geode.fle.configureField` and that equality search on encrypted
+  fields is not available. The AuthProvider API-key unit test freed its
+  result (3 leaked allocations) and runs as
+  `zig build test-sonny6342-authn-inline`. Regression:
+  `zig build test-sonny6342-tde-stub-procedures`.
 - **BREAKING: audit and TDE procedures that reported work they did not do
   are refused (SONNY-6340).** 30 `audit.*` procedures answered with made-up
   rows: `audit.compliance_verification` said `compliant` with no check,

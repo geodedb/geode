@@ -504,12 +504,11 @@ fn checkProcedures(s: *Session, f: *Failures) !void {
     // An integer argument outside its type is InvalidArgs; the casts aborted
     // the server. (A negative literal is not an integer literal here, so only
     // the large ones reach the casts.)
-    try expectFail(s, f, "CALL tde.configure_mock_kms(70000)", &.{}, error.InvalidArgs);
-    try expectFail(s, f, "CALL tde.configure_mock_kms(9999, false, false, 5000000000)", &.{}, error.InvalidArgs);
-    try expectFail(s, f, "CALL tde.configure_rotation('x', 5000000000)", &.{}, error.InvalidArgs);
-    // SONNY-6340: audit.configure is refused (0A000) before it reads its
+    // SONNY-6340 / SONNY-6342: audit.configure, tde.configure_mock_kms and
+    // tde.configure_rotation are refused (0A000) before they read their
     // arguments; tde.simulate_oltp_workload still casts its integers.
     try expectFail(s, f, "CALL tde.simulate_oltp_workload(5000000000)", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "CALL tde.simulate_oltp_workload(10, 5000000000)", &.{}, error.InvalidArgs);
     // A BFS depth past u32 is clamped (it aborted the server).
     try expectOk(s, f, "CALL algo.bfs.stream(1, {maxDepth: 5000000000})");
     // knn() through a vector index with a k past u32 (the index takes a u32).
