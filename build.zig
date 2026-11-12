@@ -13670,6 +13670,21 @@ pub fn build(b: *std.Build) void {
     const sonny3135_cache_step = b.step("test-sonny3135-policy-cache-keys-grant-wildcard", "Run the SONNY-3135 N6 / N7d regression (RLSEngine's policy cache keeps its own copy of each key, so a caller may free the graph and table strings it passed to checkRowAccess; geode.auth.grant on graph '*' is refused 0A000 and stores nothing)");
     sonny3135_cache_step.dependOn(&run_sonny3135_cache_tests.step);
 
+    // SONNY-3135 (N7c): a graph drop that holds no lock of the graph's still
+    // waits for its lock holders (GraphStore.dropGraph takes the write lock).
+    const sonny3135_drop_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3135_lockless_drop_waits.zig"), .target = target, .optimize = optimize });
+    sonny3135_drop_test_mod.link_libc = true;
+    sonny3135_drop_test_mod.addImport("geode", root_mod);
+    sonny3135_drop_test_mod.addImport("schema", schema_mod);
+    sonny3135_drop_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3135_drop_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3135_drop_test_mod.addImport("logging", logging_mod);
+    const sonny3135_drop_tests = b.addTest(.{ .root_module = sonny3135_drop_test_mod });
+    const run_sonny3135_drop_tests = b.addRunArtifact(sonny3135_drop_tests);
+    shardDep(test_step, &run_sonny3135_drop_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3135_drop_step = b.step("test-sonny3135-lockless-drop-waits", "Run the SONNY-3135 N7c regression (a graph drop with no lock of the graph's, from the executor, a CREATE GRAPH / HELLO / SchemaManager rollback or GraphStore.dropGraph directly, waits for the graph's read and write lock holders; a caller that holds the write lock does not wait for itself)");
+    sonny3135_drop_step.dependOn(&run_sonny3135_drop_tests.step);
+
     // SONNY-2410: every SecurityManager method that reads or changes shared
     // state takes the manager's lock; mutating methods race readers.
     const sonny2410_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2410_security_manager_locking.zig"), .target = target, .optimize = optimize });
