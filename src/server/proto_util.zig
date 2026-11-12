@@ -221,6 +221,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // other "could not be saved / read" refusals).
         error.FleCatalogNotPersisted => .{ .code = "58030", .message = "The FLE catalog could not be saved; the change was not applied. Retry it" },
         error.FleRevokeNotPersisted => .{ .code = "58030", .message = "The plaintext-access revoke is in effect but could not be saved to the FLE catalog; the role regains access at the next start unless the revoke is retried and saved. Retry it" },
+        // SONNY-6341: CALL geode.fle.grantRole / revokeRole.
+        error.FleRoleGrantNotPersisted => .{ .code = "58030", .message = "The FLE role grant could not be saved to the security graph; it was not applied. Retry it" },
+        error.FleRoleRevokeNotPersisted => .{ .code = "58030", .message = "The FLE role revoke is in effect but could not be saved to the security graph; the role may return at the next start. Retry it" },
+        error.FleRoleUserNotFound => .{ .code = "42704", .message = "User does not exist" },
+        error.InvalidFleRole => .{ .code = "22023", .message = "An FLE role name is non-empty and uses only letters, digits, '_' and '-'" },
         error.FleCatalogUnavailable => .{ .code = "58030", .message = "The FLE catalog could not be loaded, so which fields are encrypted is unknown; string property writes and reads are refused until it is restored (see the server log)" },
         // SONNY-6327: an encrypted value the principal may read does not
         // decrypt (damaged, or written under another key or identity).

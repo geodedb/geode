@@ -201,6 +201,8 @@ may read it in plaintext is not exposed by any procedure.
 | `geode.fle.configureField` | Admin. |
 | `geode.fle.grantPlaintext` | Admin. |
 | `geode.fle.revokePlaintext` | Admin (SONNY-6327). |
+| `geode.fle.grantRole` | Admin (SONNY-6341). |
+| `geode.fle.revokeRole` | Admin (SONNY-6341). |
 | `geode.fle.getFieldConfig` | Any role/policy with `read` on the procedure. |
 | `geode.fle.listEncryptedFields` | Any role/policy with `read` on the procedure. |
 
@@ -209,11 +211,12 @@ The key-affecting `tde.*` procedures (`initialize_key_hierarchy`,
 `backup_encrypted`, `encrypt_backup`, `create_encrypted_backup`,
 `restore_with_keys`, `restore_with_historical_keys`) are Admin only too.
 
-Every `configureField`, `grantPlaintext` and `revokePlaintext` is an audit
-event (`configuration_change`; result `success` or `failure`, a failed
+Every `configureField`, `grantPlaintext`, `revokePlaintext`, `grantRole`
+and `revokeRole` is an audit event (`configuration_change`; result `success` or `failure`, a failed
 save included, with the error name): the caller, the procedure, the field
 as `type.field`, and the role (grant, revoke) or the visibility roles
-(configure). No key material is involved.
+(configure); for `grantRole` / `revokeRole`, `user=<u> role=<r>`. No key
+material is involved.
 
 The offline `geode fle grant-plaintext` / `revoke-plaintext` commands work
 on the data directory with the server stopped; whoever can run them owns
@@ -281,6 +284,36 @@ role regains access at the next start.
 
 Returns one row: `status` (STRING, `"revoked"`).
 
+#### `CALL geode.fle.grantRole(user, role)` / `CALL geode.fle.revokeRole(user, role)`
+
+SONNY-6341. An **FLE role** is a name in a field's `visibility` list (for
+example `'pii'` or `'admin'`); it is not an auth role (`Admin`,
+`ReadWrite`, `ReadOnly`) and not a custom role. A session names the FLE role
+it wants in its HELLO (`role`; the CLI's `geode query --role <r>`). With authentication on, the session acts under
+that role only if its authenticated user **holds** it: `grantRole` gives
+`user` the role, `revokeRole` takes it away. Both are Admin only and audited,
+refused in cluster mode, and stored as `FleRoleGrant` records in the
+HMAC-chained `__geode_security` graph (loaded at startup; a dropped user's
+grants go with it). A grant that cannot be saved is not applied (58030); a
+revoke is in force at once and, if it cannot be saved, reports 58030 (retry
+it). `user` must exist (42704); `role` is non-empty, letters, digits, `_`
+and `-` only (22023). Returns one row: `status` (`granted`, `revoked` or
+`not granted`).
+
+A HELLO naming a role the user does not hold is not refused (clients that
+always send a role keep connecting): the session has **no** FLE role, so
+encrypted fields read as for a role not in their list, and the HELLO is an
+`access_denied` audit event naming the user and the requested role. Grants
+and revokes count from the next request of every live session. The Admin
+builtin holds no FLE role implicitly; an Admin grants one to itself, which
+leaves an audit record. With authentication off (embedded use) the named
+role is used as before; `--insecure-allow-all` bypasses the check as it
+bypasses all authorization.
+
+**Upgrade (BREAKING):** after upgrading no user holds any FLE role, so
+readers that saw plaintext read `[REDACTED]` until an Admin runs
+`CALL geode.fle.grantRole('<user>', '<fle role>')` for each of them.
+
 #### Read semantics (SONNY-6327)
 
 Nodes and edges are read by the same policy, on every read surface
@@ -300,8 +333,8 @@ map projection, `RETURN n` / `RETURN r` / paths over QUIC and gRPC, JSON):
   predicate on the plaintext therefore never matches for that principal;
 - the FLE catalog cannot be loaded: refused (58030).
 
-The FLE role is the one the session's HELLO named (`role`); it is not
-checked against the user's roles, which is why GPS must also allow
+The FLE role is the one the session's HELLO named (`role`), when its user
+holds it (`grantRole` above, SONNY-6341); GPS must also allow
 `decrypt_field`. QUIC and gRPC install the same request context
 (`ServerState.installRequestThreadState`: tenant, FLE role, GPS gate) for
 every request that runs or encodes a statement, and clear it afterwards.
@@ -353,6 +386,10 @@ RETURN 'configured' AS status;
 -- 2. Create a readonly user that is NOT granted decrypt access.
 CREATE USER pii_reader SET PASSWORD 'reader-pass-123' ROLE readonly;
 
+-- 2b. Let the admin user act under the FLE role 'admin' (SONNY-6341: a
+--     session acts under an FLE role only if its user holds it).
+CALL geode.fle.grantRole('geode', 'admin');
+
 -- 3. Write a row (admin). The engine encrypts ssn transparently on write;
 --    the plaintext never lands on disk.
 CREATE (p:Person { user_id: 'P001', ssn: 'SECRET-123-45-6789', city: 'Denver' })
@@ -360,20 +397,25 @@ RETURN p.user_id AS user_id;
 ```
 
 ```bash
-# 4a. Admin reads — sees decrypted plaintext (decrypt authorized).
-geode query -U geode -P "$GEODE_ADMIN_PASSWORD" \
+# 4a. Admin reads under the FLE role 'admin' (--role sends it in HELLO):
+#     plaintext (the Admin builtin passes GPS decrypt_field, and the user
+#     holds the FLE role). Without --role, or before step 2b: [REDACTED].
+geode query -U geode -P "$GEODE_ADMIN_PASSWORD" --role admin \
   "MATCH (p:Person {user_id:'P001'}) RETURN p.ssn AS ssn"
 #   ssn
 #   SECRET-123-45-6789
 
 # 4b. Readonly user reads — the ROW is visible (row_count matches admin), but
-#     the ssn field is REDACTED (e.g. <ENCRYPTED> / null / [REDACTED]).
+#     the ssn field is [REDACTED], even naming --role admin: it does not hold
+#     the FLE role (and GPS does not allow it decrypt_field).
 #     Field visibility != row visibility.
-geode query -U pii_reader -P reader-pass-123 \
+geode query -U pii_reader -P reader-pass-123 --role admin \
   "MATCH (p:Person {user_id:'P001'}) RETURN p.ssn AS ssn, p.city AS city"
 #   ssn          | city
-#   <ENCRYPTED>  | Denver
+#   [REDACTED]   | Denver
 ```
+
+`tests/test_sonny6341_fle_role_binding.zig` runs this example as written.
 
 The unauthorized reader gets a redacted placeholder for `ssn` (never raw
 ciphertext, never plaintext) while still reading the non-encrypted `city`

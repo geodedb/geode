@@ -7024,6 +7024,9 @@ fn handleClientMessage(
             } else if (hello_req.role) |r| {
                 if (r.len > 0) log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
             }
+            // SONNY-6341: a role the user does not hold is audited and not
+            // acted under (`ServerState.effectiveFleRole`, every request).
+            state.auditUnheldFleRole();
             // GAP-0281/0282, SONNY-6334: the session's tenant, FLE role and
             // decrypt_field gate on this thread (the request context).
             state.installRequestThreadState();
@@ -7253,6 +7256,10 @@ fn handleClientMessage(
                     return;
                 },
             }
+            // SONNY-6341: the request context again for this request (the
+            // stream turn installed it once): an FLE role granted or revoked
+            // since counts now, for the executor and the result encoding.
+            state.installRequestThreadState();
 
             // SONNY-1835: refuse an unbound sibling stream with a typed error
             // instead of silently querying the default graph and returning zero
@@ -7646,7 +7653,8 @@ fn handleClientMessage(
                 // FLE read sites that hold this context prefer it via
                 // getCurrentUserRoleCtx, making the context authoritative at the
                 // request boundary (per-thread map remains the fallback).
-                .fle_role = state.fle_user_role,
+                // SONNY-6341: only a role the authenticated user holds.
+                .fle_role = state.effectiveFleRole(),
                 .principal = &principal_for_request,
                 // GAP-0511 Task 3b: Wire expression RLS engine pointer into execution context.
                 // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11

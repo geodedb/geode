@@ -603,8 +603,49 @@ pub const ServerState = struct {
         const tenant = if (self.session_config) |cfg| cfg.tenant_id else null;
         fle_integration.setCurrentTenantId(tenant);
         audit_mod.setCurrentAuditTenantId(tenant);
-        fle_integration.setCurrentUserRole(self.fle_user_role);
+        fle_integration.setCurrentUserRole(self.effectiveFleRole());
         fle_integration.setCurrentPlaintextGate(.{ .ctx = self, .allows = sessionAllowsDecrypt });
+    }
+
+    // CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-BINDING; FEATURE="FieldLevelEncryption"; ASPECT=FleRoleBoundToPrincipal; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6341: the FLE role this session's requests act under: the one
+    /// its HELLO named, when the authenticated user holds it (an Admin's
+    /// `CALL geode.fle.grantRole`, `security/fle_role_grants.zig`); else
+    /// none, and encrypted fields read as for a role not in their list.
+    /// Asked for every request, so a grant or revoke counts from the next
+    /// one. With authentication off every session is an implicit admin and
+    /// keeps the role it named; `--insecure-allow-all` bypasses this as it
+    /// bypasses all authorization. The Admin builtin role holds no FLE role
+    /// implicitly: an Admin grants one to itself, audited, like to anyone.
+    pub fn effectiveFleRole(self: *const ServerState) ?[]const u8 {
+        const role = self.fle_user_role orelse return null;
+        const user_mgmt = @import("../security/user_management.zig");
+        const gps = @import("../security/gps.zig");
+        const fle_role_grants = @import("../security/fle_role_grants.zig");
+        if (!user_mgmt.isAuthEnabled() or gps.isInsecureAllowAll()) return role;
+        const user = self.authenticated_user orelse return null;
+        if (fle_role_grants.holds(user, role)) return role;
+        return null;
+    }
+
+    /// SONNY-6341: at HELLO, a named FLE role the user does not hold is an
+    /// `access_denied` audit event (user, requested role); the session goes
+    /// on with no FLE role, so a client that always sends one still
+    /// connects. Called once per HELLO by both transports.
+    pub fn auditUnheldFleRole(self: *const ServerState) void {
+        const requested = self.fle_user_role orelse return;
+        if (self.effectiveFleRole() != null) return;
+        const audit_mod = @import("../security/audit.zig");
+        var buf: [192]u8 = undefined;
+        const details = std.fmt.bufPrint(&buf, "fle role not held: {s}", .{requested}) catch "fle role not held";
+        audit_mod.logSecurityGraphEvent(self.allocator, .{
+            .event_type = .access_denied,
+            .action = "fle_role",
+            .username = self.authenticated_user orelse "",
+            .details = details,
+            .result_failure = true,
+        });
+        @import("logging").scoped("server_state").warn("HELLO named an FLE role the user does not hold; the session has no FLE role", &.{@import("logging").Attr.string("user", self.authenticated_user orelse "")});
     }
 
     /// SONNY-6334: undoes `installRequestThreadState`.

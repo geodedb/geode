@@ -118,6 +118,13 @@ const Env = struct {
         _ = try fle_integration.getCurrentKeyVersion(.{ .tenant_id = "default", .schema_name = "T6334", .allocator = std.heap.smp_allocator }, "init");
         fle_catalog.resetGlobalCatalog(testing.allocator);
         fle_integration.setHasEncryptedFields(false);
+        // SONNY-6341: a session acts under an FLE role its user holds. The
+        // principals below hold the roles they name (this file tests the
+        // GPS half of the decision; the role binding is SONNY-6341's).
+        geode.security.fle_role_grants.resetForTesting();
+        for ([_]Who{ admin_pii, rw_pii, ro_pii, rw_own }) |w| try geode.security.fle_role_grants.load(w.user, w.fle_role.?);
+        try geode.security.fle_role_grants.load("admin6334", "other");
+        try geode.security.fle_role_grants.load("ro6334", "other");
 
         self.cat = policy_catalog.PolicyCatalog.init(testing.allocator);
         policy_catalog.setGlobalCatalog(&self.cat);
@@ -140,6 +147,7 @@ const Env = struct {
         testing.allocator.free(self.sink_path);
         policy_catalog.clearGlobalCatalog();
         self.cat.deinit();
+        geode.security.fle_role_grants.resetForTesting();
         fle_catalog.resetGlobalCatalog(testing.allocator);
         fle_integration.setHasEncryptedFields(false);
         fle_integration.resetGlobalKeyStateForTesting();
@@ -546,6 +554,9 @@ test "SONNY-6334 (1)(2)(3): over QUIC a ReadWrite user naming the listed FLE rol
     try quicOk(&admin, "CALL geode.fle.configureField('Q6334', 'ssn', {visibility: ['pii']})");
     try quicOk(&admin, "CREATE (:Q6334 {k: 1, ssn: '" ++ secret ++ "'})");
     try quicOk(&admin, "CREATE USER rw6334 SET PASSWORD 'rw6334-pass-123' ROLE readwrite");
+    // SONNY-6341: the admin acts under 'pii' once granted it; rw6334 names
+    // 'pii' below without a grant.
+    try quicOk(&admin, "CALL geode.fle.grantRole('geode', 'pii')");
     const as_admin = try quicStr(&admin, "MATCH (n:Q6334 {k: 1}) RETURN n.ssn AS v");
     defer allocator.free(as_admin);
     try expectStr(secret, as_admin, "quic admin");

@@ -86,7 +86,7 @@ pub fn auditChange(
     const audit_mod = @import("../security/audit.zig");
     var buf: [1024]u8 = undefined;
     var w: std.Io.Writer = .fixed(&buf);
-    describe(&w, call_stmt) catch {};
+    describe(&w, proc_name, call_stmt) catch {};
     if (failure) |err| w.print(" error={s}", .{@errorName(err)}) catch {};
     audit_mod.logSecurityGraphEvent(allocator, .{
         .event_type = .configuration_change,
@@ -106,10 +106,14 @@ fn stringArg(args: []const *ast.Expr, i: usize) []const u8 {
     };
 }
 
-/// `type.field role=<r>` or `type.field visibility=[a,b]`.
-fn describe(w: *std.Io.Writer, call_stmt: ast.CallProcedure) !void {
+/// `type.field role=<r>` or `type.field visibility=[a,b]`; for the FLE
+/// role grants (SONNY-6341) `user=<u> role=<r>`.
+fn describe(w: *std.Io.Writer, proc_name: []const u8, call_stmt: ast.CallProcedure) !void {
     if (call_stmt.procedure != .Call) return;
     const args = call_stmt.procedure.Call.args;
+    if (std.mem.endsWith(u8, proc_name, "role")) {
+        return w.print("user={s} role={s}", .{ stringArg(args, 0), stringArg(args, 1) });
+    }
     try w.print("{s}.{s}", .{ stringArg(args, 0), stringArg(args, 1) });
     if (args.len < 3) return;
     switch (args[2].*) {

@@ -473,11 +473,16 @@ pub const SessionStore = struct {
         };
         const entry = self.acquire(session_id) orelse return error.SessionNotFound;
         defer self.release(entry);
-        entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        const copy = try entry.state.allocator.dupe(u8, role);
-        if (entry.state.fle_user_role) |old| entry.state.allocator.free(old);
-        entry.state.fle_user_role = copy;
+        {
+            entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            const copy = try entry.state.allocator.dupe(u8, role);
+            if (entry.state.fle_user_role) |old| entry.state.allocator.free(old);
+            entry.state.fle_user_role = copy;
+        }
+        // SONNY-6341: a role the user does not hold is audited and not acted
+        // under (`ServerState.effectiveFleRole`, every request).
+        entry.state.auditUnheldFleRole();
     }
 
     /// SONNY-3252: a session for `username`, counted against `principal`.
@@ -3266,8 +3271,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
                 // GAP-0844 (secondary), SONNY-6334: the session's FLE role, the
-                // one its HELLO named (`SessionStore.setSessionFleRole`).
-                .fle_role = state.fle_user_role,
+                // one its HELLO named (`SessionStore.setSessionFleRole`), when
+                // the authenticated user holds it (SONNY-6341).
+                .fle_role = state.effectiveFleRole(),
                 .principal = &principal_for_request,
                 .pending_index_rebuilds = null,
                 // SONNY-2799: see `abortFailedTransaction`.

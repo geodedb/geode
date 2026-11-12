@@ -516,6 +516,8 @@ pub const security = struct {
     pub const authn = @import("security/authn.zig");
     // GPS Phase 2: decision types and central decide() entry point
     pub const gps = @import("security/gps.zig");
+    // SONNY-6341: the FLE roles each user may act under.
+    pub const fle_role_grants = @import("security/fle_role_grants.zig");
     // GPS Phase 2 (Task 2-2): transport-agnostic Principal builder
     pub const principal_derive = @import("security/principal_derive.zig");
     // GPS Phase 4 (Task 4-1): graph-based role resolution (authRoleFromRecord + resolveRoleFromGraph).

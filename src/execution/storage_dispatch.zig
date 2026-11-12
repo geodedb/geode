@@ -106,6 +106,9 @@ const fle_mutating_set = std.StaticStringMap(void).initComptime(.{
     .{ "geode.fle.configurefield", {} },
     .{ "geode.fle.grantplaintext", {} },
     .{ "geode.fle.revokeplaintext", {} },
+    // SONNY-6341: who may act under which FLE role.
+    .{ "geode.fle.grantrole", {} },
+    .{ "geode.fle.revokerole", {} },
 });
 
 /// SONNY-6334: FLE and TDE key administration, Admin only
@@ -2889,6 +2892,8 @@ const fle_table = std.StaticStringMap(FleHandler).initComptime(.{
     .{ "geode.fle.configurefield", handleGeodeFleConfigurefield },
     .{ "geode.fle.grantplaintext", handleGeodeFleGrantplaintext },
     .{ "geode.fle.revokeplaintext", handleGeodeFleRevokeplaintext },
+    .{ "geode.fle.grantrole", handleGeodeFleGrantrole },
+    .{ "geode.fle.revokerole", handleGeodeFleRevokerole },
     .{ "geode.fle.getfieldconfig", handleGeodeFleGetfieldconfig },
     .{ "geode.fle.listencryptedfields", handleGeodeFleListencryptedfields },
 });
@@ -3094,6 +3099,63 @@ fn handleGeodeFleRevokeplaintext(allocator: std.mem.Allocator, call_stmt: ast.Ca
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
+// CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-GRANT-PROC; FEATURE="FieldLevelEncryption"; ASPECT=GrantRevokeFleRole; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6341: the (user, role) arguments of grantRole / revokeRole: two
+/// string literals, the role in the HELLO role alphabet, and (with
+/// authentication on) a user that exists.
+fn fleRoleArgs(call_stmt: ast.CallProcedure) ![2][]const u8 {
+    if (call_stmt.procedure != .Call) return error.InvalidArgs;
+    const args = call_stmt.procedure.Call.args;
+    if (args.len != 2 or args[0].* != .String or args[1].* != .String) return error.InvalidArgs;
+    const user = args[0].String;
+    const role = fle_integration.helloFleRole(args[1].String) orelse return error.InvalidFleRole;
+    const user_mgmt = @import("../security/user_management.zig");
+    if (user.len == 0) return error.FleRoleUserNotFound;
+    if (user_mgmt.isAuthEnabled() and user_mgmt.getUser(user) == null) return error.FleRoleUserNotFound;
+    return .{ user, role };
+}
+
+fn statusResult(allocator: std.mem.Allocator, status: []const u8) !ExecutionResult {
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "status");
+    const row = try allocator.alloc(Value, 1);
+    row[0] = Value{ .Str = status };
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
+fn handleGeodeFleGrantrole(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+    // geode.fle.grantRole(user, role) -> status
+    // SONNY-6341: `user` may act under FLE role `role` (the role its HELLO
+    // names). Admin only and audited (procedure_registry: fle_admin),
+    // refused in cluster mode (executeFle), stored in the security graph
+    // before it takes effect: a failed save applies nothing (58030).
+    const args = try fleRoleArgs(call_stmt);
+    const fle_role_grants = @import("../security/fle_role_grants.zig");
+    fle_role_grants.grant(args[0], args[1]) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            log.warn("FLE role grant not saved", &.{Attr.string("error", @errorName(err))});
+            return error.FleRoleGrantNotPersisted;
+        },
+    };
+    return statusResult(allocator, "granted");
+}
+
+fn handleGeodeFleRevokerole(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+    // geode.fle.revokeRole(user, role) -> status
+    // SONNY-6341: the mirror of grantRole. In force at once (every session
+    // of `user` stops acting under `role` from its next request); a save
+    // that fails leaves it in force and reports 58030.
+    if (call_stmt.procedure != .Call) return error.InvalidArgs;
+    const args = call_stmt.procedure.Call.args;
+    if (args.len != 2 or args[0].* != .String or args[1].* != .String) return error.InvalidArgs;
+    const fle_role_grants = @import("../security/fle_role_grants.zig");
+    const held = try fle_role_grants.revoke(args[0].String, args[1].String);
+    return statusResult(allocator, if (held) "revoked" else "not granted");
 }
 
 fn handleGeodeFleGetfieldconfig(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {

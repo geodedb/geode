@@ -4,6 +4,26 @@
 
 ### Security
 
+- **BREAKING: the FLE role is bound to the authenticated user
+  (SONNY-6341).** The FLE role a session reads encrypted fields with was
+  whatever its client named in HELLO (`role`, the CLI's `--role`), checked
+  for shape only, so every principal GPS lets decrypt (every Admin, any
+  `ALLOW DECRYPT_FIELD`) could name any FLE role and read every field
+  listed for it. With authentication on, a named role now counts only when
+  the user holds it: `CALL geode.fle.grantRole(user, role)` /
+  `CALL geode.fle.revokeRole(user, role)` (Admin only, audited, refused in
+  cluster mode; stored as `FleRoleGrant` records in the HMAC-chained
+  `__geode_security` graph and loaded at startup; a grant that cannot be
+  saved is not applied, 58030; a revoke that cannot be saved stays in force
+  and reports 58030). A HELLO naming a role the user does not hold still
+  connects, with no FLE role (encrypted fields read `[REDACTED]`), and is an
+  `access_denied` audit event. Grants and revokes count from the next
+  request of every live session. The Admin builtin holds no FLE role
+  implicitly. Authentication off and `--insecure-allow-all`: unchanged.
+  **Upgrade note:** after upgrading no user holds any FLE role; each reader
+  of plaintext needs `CALL geode.fle.grantRole('<user>', '<fle role>')` by
+  an Admin (an Admin grants itself too). Regression:
+  `zig build test-sonny6341-fle-role-binding`.
 - **BEHAVIOUR CHANGE: FLE authorization (SONNY-6334).** (1)
   `geode.fle.configureField`, `grantPlaintext`, `revokePlaintext` and the
   key-affecting `tde.*` procedures (`initialize_key_hierarchy`,
