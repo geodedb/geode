@@ -7540,6 +7540,19 @@ pub fn build(b: *std.Build) void {
     s3_backup_sig_mod.addImport("storage/backup", storage_backup_mod);
     s3_backup_sig_mod.addImport("s3_sigv4", s3_sigv4_mod);
     s3_backup_sig_mod.link_libc = true;
+    const sonny6300_restore_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6300_restore_safety.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6300_restore_tests.root_module.addImport("geode", root_mod);
+    sonny6300_restore_tests.root_module.addImport("storage/backup", storage_backup_mod);
+    sonny6300_restore_tests.root_module.addImport("s3_backup", s3_backup_sig_mod);
+    const run_sonny6300_restore_tests = b.addRunArtifact(sonny6300_restore_tests);
+    shardDep(test_step, &run_sonny6300_restore_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6300_restore_step = b.step("test-sonny6300-restore-safety", "Run SONNY-6300 real-store restore safety regressions");
+    sonny6300_restore_step.dependOn(&run_sonny6300_restore_tests.step);
+
     const insecure_tls_gate_mod = b.createModule(.{ .root_source_file = b.path("src/cli/insecure_tls_gate.zig"), .target = target, .optimize = optimize });
     insecure_tls_gate_mod.link_libc = true;
     const s3_sigv4_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_s3_sigv4.zig"), .target = target, .optimize = optimize });

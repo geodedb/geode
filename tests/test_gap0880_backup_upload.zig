@@ -157,6 +157,8 @@ test "GAP-0880 gzip backup compresses for real and round-trips" {
     defer restored.deinit();
     restored.data_dir = restore_dir;
     try restored.loadFromFile();
+    // Opening registers lazy hydration; assert real resident data after first touch.
+    restored.ensureGraphHydrated("default");
 
     try testing.expectEqual(@as(usize, 2), restored.nodes.count());
     try testing.expectEqual(@as(usize, 1), restored.edges.count());
@@ -266,6 +268,8 @@ test "GAP-0880 upload ingestion stores payload bytes and registers durably" {
     defer restored.deinit();
     restored.data_dir = restore_dir;
     try restored.loadFromFile();
+    // Opening registers lazy hydration; assert real resident data after first touch.
+    restored.ensureGraphHydrated("default");
     try testing.expectEqual(@as(usize, 2), restored.nodes.count());
     try testing.expectEqual(@as(usize, 1), restored.edges.count());
     const name = restored.getNodeProperty(seed.alice, "name") orelse return error.NodePropertyMissing;

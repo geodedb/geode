@@ -168,6 +168,9 @@ pub const S3BackupManager = struct {
         target_dir: []const u8,
         store: *graph_store.GraphStore,
     ) !void {
+        // Reject live targets before downloading or creating temporary files.
+        // The engine performs the same check immediately before restoring.
+        try backup.validateRestoreTarget(self.allocator, store, target_dir);
         const start_time = compat_milliTimestamp();
 
         const metadata = try self.downloadMetadata(backup_id);

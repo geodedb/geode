@@ -199,6 +199,8 @@ test "GAP-0862 restore preserves node/edge counts and properties" {
     defer restored.deinit();
     restored.data_dir = restore_dir;
     try restored.loadFromFile();
+    // Opening registers lazy hydration; assert real resident data after first touch.
+    restored.ensureGraphHydrated("default");
 
     try assertRestoredIntegrity(&restored, seed);
 }

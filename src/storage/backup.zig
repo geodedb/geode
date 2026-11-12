@@ -64,6 +64,46 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-BACKUP-HEX-001; FEATURE="SecureHexKeyParsing"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=storage; UPDATED=2026-01-13
 // GAP-0148 SECURITY FIX: Proper error handling for hex key parsing instead of silent catch 0
 
+/// Restores produce an offline directory. Never overwrite any part of an open
+/// store: closing its adapter checkpoints the old resident state, and callers
+/// may still hold graph handles. Resolve aliases before checking overlap.
+// CANARY: REQ=REQ-SONNY-6300; FEATURE="Offline restore safety"; ASPECT=LiveTargetRefusal; STATUS=TESTED; TEST=tests/test_sonny6300_restore_safety.zig; OWNER=storage; UPDATED=2026-11-11
+pub fn validateRestoreTarget(allocator: std.mem.Allocator, store: *graph_store.GraphStore, target: []const u8) !void {
+    if (target.len == 0) return error.InvalidRestoreTarget;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    const resolved = cwd.realPathFileAlloc(io, target, allocator) catch |err| switch (err) {
+        error.FileNotFound => blk: {
+            // A new target still needs a real parent for sibling staging and an
+            // atomic rename. Resolving the parent also catches symlink aliases.
+            const parent = try cwd.realPathFileAlloc(io, std.fs.path.dirname(target) orelse ".", allocator);
+            defer allocator.free(parent);
+            break :blk try std.fs.path.joinZ(allocator, &.{ parent, std.fs.path.basename(target) });
+        },
+        else => return err,
+    };
+    defer allocator.free(resolved);
+    if (store.data_dir.len > 0) try rejectLiveOverlap(allocator, resolved, store.data_dir);
+    if (graph_store.getGlobalAdapter()) |adapter| {
+        try rejectLiveOverlap(allocator, resolved, adapter.data_dir);
+    }
+}
+
+fn rejectLiveOverlap(allocator: std.mem.Allocator, target: []const u8, live: []const u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const resolved_live = try std.Io.Dir.cwd().realPathFileAlloc(io, live, allocator);
+    defer allocator.free(resolved_live);
+    if (pathContains(target, resolved_live) or pathContains(resolved_live, target)) {
+        return error.LiveRestoreRequiresRestart;
+    }
+}
+
+fn pathContains(parent: []const u8, child: []const u8) bool {
+    if (std.mem.eql(u8, parent, child)) return true;
+    if (!std.mem.startsWith(u8, child, parent) or child.len <= parent.len) return false;
+    return std.fs.path.isSep(parent[parent.len - 1]) or std.fs.path.isSep(child[parent.len]);
+}
+
 /// Parse a 64-character hex string into a 32-byte key with proper error handling.
 /// GAP-0148: Replaces unsafe `catch 0` pattern that could corrupt encryption keys.
 fn parseHexKey(hex_str: []const u8) ![32]u8 {
@@ -358,10 +398,10 @@ pub const BackupManager = struct {
 
     /// Restore to a point in time using the latest full backup before the timestamp.
     pub fn restoreToPointInTime(self: *BackupManager, restore_dir: []const u8, target_time: i64) !void {
+        try validateRestoreTarget(self.allocator, self.store, restore_dir);
         if (self.metadata_log.items.len == 0) {
             _ = try self.loadMetadata();
         }
-        const reload_live_store = self.store.data_dir.len > 0 and std.mem.eql(u8, self.store.data_dir, restore_dir);
         const recovery = try self.findRecoveryPoint(target_time);
         defer self.allocator.free(recovery.backup_chain);
 
@@ -399,35 +439,10 @@ pub const BackupManager = struct {
         const decompressed = try decompressData(decrypted, header.compression, self.allocator);
         defer self.allocator.free(decompressed);
 
-        // Write snapshot to restore directory and load store.
-        const prev_override = graph_store.getDataDirOverride();
-        var prev_override_owned: ?[]u8 = null;
-        if (prev_override) |ov| {
-            prev_override_owned = try self.allocator.dupe(u8, ov);
-        }
-        defer {
-            if (prev_override_owned) |ov| {
-                graph_store.setDataDirOverride(self.allocator, ov);
-                self.allocator.free(ov);
-            } else {
-                graph_store.setDataDirOverride(self.allocator, null);
-            }
-        }
-
-        graph_store.setDataDirOverride(self.allocator, restore_dir);
-
         if (decompressed.len >= 8 and std.mem.eql(u8, decompressed[0..8], "GEODBAK1")) {
             try restorePerGraphPayload(self.allocator, restore_dir, decompressed);
         } else {
             return error.UnsupportedBackupFormat;
-        }
-
-        if (reload_live_store) {
-            // Reopen the adapter on the restored directory before rebuilding the
-            // compatibility cache so reads reflect the restored graph-storage files.
-            graph_store.deinitGlobalAdapter();
-            _ = try graph_store.initGlobalAdapter(self.allocator, restore_dir);
-            try self.store.loadFromFile();
         }
     }
 

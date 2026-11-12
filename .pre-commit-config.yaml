@@ -1,4 +1,5 @@
 default_language_version:
+  node: 24.22.1
   golang: 1.27.2
 # Pre-commit configuration for Geode Graph Database
 # https://pre-commit.com/
