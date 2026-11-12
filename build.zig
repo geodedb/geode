@@ -482,6 +482,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-startup-lazy-hydrate-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-scan-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-index-autobuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-sonny6375-global-store-race-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-sonny6375-ordered-scan-locking-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-parallel-index-rebuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     // Members of the end-to-end lane (test-e2e).
@@ -12201,6 +12202,35 @@ pub fn build(b: *std.Build) void {
     const run_sonny6375_tsan_tests = b.addRunArtifact(sonny6375_tsan_tests);
     const sonny6375_tsan_step = b.step("test-sonny6375-ordered-scan-locking-tsan", "SONNY-6375 TSan: orderedScan locking under -fsanitize-thread");
     sonny6375_tsan_step.dependOn(&run_sonny6375_tsan_tests.step);
+
+    // SONNY-6375: getCurrentGlobalStore must not copy the stored GraphStore
+    // (its live mutexes) to test the optional; found by
+    // test-startup-lazy-hydrate-tsan. Uninstrumented here, TSan below.
+    const sonny6375_gs_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6375_global_store_race.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6375_gs_mod.addImport("geode", root_mod);
+    const sonny6375_gs_tests = b.addTest(.{ .root_module = sonny6375_gs_mod });
+    const run_sonny6375_gs_tests = b.addRunArtifact(sonny6375_gs_tests);
+    shardDep(test_step, &run_sonny6375_gs_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6375_gs_step = b.step("test-sonny6375-global-store-race", "SONNY-6375: getCurrentGlobalStore reads the store's optional tag, never a copy of the store, while another thread locks its mutexes");
+    sonny6375_gs_step.dependOn(&run_sonny6375_gs_tests.step);
+
+    const sonny6375_gs_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6375_global_store_race.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    sonny6375_gs_tsan_mod.addImport("geode", root_mod);
+    const sonny6375_gs_tsan_tests = tsanTest(b, sonny6375_gs_tsan_mod);
+    const run_sonny6375_gs_tsan_tests = b.addRunArtifact(sonny6375_gs_tsan_tests);
+    const sonny6375_gs_tsan_step = b.step("test-sonny6375-global-store-race-tsan", "SONNY-6375 TSan: getCurrentGlobalStore against a concurrent store-mutex lock under -fsanitize-thread");
+    sonny6375_gs_tsan_step.dependOn(&run_sonny6375_gs_tsan_tests.step);
 
     // H3-P3: planner orderedScanFastPath — `ORDER BY <eligible-indexed> LIMIT`
     // served from the value-ordered index (slots ~0), with a strict heap

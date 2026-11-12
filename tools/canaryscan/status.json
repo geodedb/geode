@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T21:13:23.032536939Z",
+  "generated_at": "2026-11-12T21:14:49.898646109Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81284,6 +81284,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6375-GLOBAL-STORE-NO-COPY",
+      "features": [
+        {
+          "feature": "GraphStore",
+          "aspect": "GlobalStorePointerCheck",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6375_global_store_race.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6375_global_store_race.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6378-SERVER-EXIT-HYGIENE",
       "features": [
         {
@@ -89048,7 +89067,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4601
+      "TESTED": 4602
     },
     "by_aspect": {
       "2PC": 3,
@@ -90489,6 +90508,7 @@
       "GlobalProvider": 1,
       "GlobalSingleton": 1,
       "GlobalStore": 2,
+      "GlobalStorePointerCheck": 1,
       "GoldenParity": 1,
       "GoldenParityJson": 1,
       "GoldenParityTextFormats": 1,
