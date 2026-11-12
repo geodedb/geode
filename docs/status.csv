@@ -2109,7 +2109,7 @@ REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,TESTED,,,txn,2025-09
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,,,txn,2025-09-26,src/transactions/manager.zig,542
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,,,txn,2025-09-26,src/transactions/range_tracker.zig,19
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,,,txn,2025-09-22,tests/canary_txn_phantom_range.zig,44
-REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,,,txn,2025-09-22,tests/canary_txn_phantom_range.zig,77
+REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,,,txn,2026-11-12,tests/canary_txn_phantom_range.zig,65
 REQ-GQL-024,Conformance Flagger,ImplDefinedCollationAndNullOrdering,TESTED,,,engine,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md,757
 REQ-GQL-024,Conformance Flagger,ImplDefinedCollationAndNullOrdering,TESTED,,,engine,2025-09-21,src/server/flagger_impl_defined.zig,151
 REQ-GQL-024,Conformance Flagger,ImplDefinedFlagsProtocolIntegration,TESTED,,,wire,2025-09-21,tests/test_protocol_impl_defined_flags.zig,5
@@ -2161,9 +2161,9 @@ REQ-GQL-028,SnapshotCompaction,CorruptPageRecoveryLatency,TESTED,,,storage,2026-
 REQ-GQL-028,SnapshotCompaction,CorruptPageRecoveryLatency,BENCHED,,,storage,2026-09-23,tests/canary_recovery_corrupt_latency.zig,35
 REQ-GQL-028,SnapshotCompaction,QuarantinedGraphFailClosed,TESTED,,,storage,2026-10-19,src/execution.zig,1614
 REQ-GQL-028,SnapshotCompaction,QuarantinedGraphFailClosed,TESTED,,,storage,2026-10-19,src/graph_store.zig,2040
-REQ-GQL-028,SnapshotCompaction,QuarantinedGraphFailClosed,TESTED,,,storage,2026-10-19,tests/canary_recovery_corrupt_latency.zig,289
+REQ-GQL-028,SnapshotCompaction,QuarantinedGraphFailClosed,TESTED,,,storage,2026-10-19,tests/canary_recovery_corrupt_latency.zig,283
 REQ-GQL-028,SnapshotCompaction,ZeroedPageRebuildFailClosed,TESTED,,,storage,2026-10-19,src/storage/hydration_scan.zig,362
-REQ-GQL-028,SnapshotCompaction,ZeroedPageRebuildFailClosed,TESTED,,,storage,2026-10-19,tests/canary_recovery_corrupt_latency.zig,328
+REQ-GQL-028,SnapshotCompaction,ZeroedPageRebuildFailClosed,TESTED,,,storage,2026-10-19,tests/canary_recovery_corrupt_latency.zig,322
 REQ-GQL-031,Security Audit,AuditFormatting,TESTED,,,security,2026-09-27,src/security/audit_formatter.zig,9
 REQ-GQL-031,Security Audit,AuditSinks,TESTED,,,security,2025-11-12,src/security/audit_sink.zig,46
 REQ-GQL-032,Constraint Cascading,CascadePerf,BENCHED,,,schema,2025-09-20,tests/benchmark_constraints_cascade_perf.zig,4

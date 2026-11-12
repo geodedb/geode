@@ -191,7 +191,10 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
-    const allocator = std.testing.allocator;
+    // SONNY-2439: the production allocator (not std.testing's debug one),
+    // perf_gate.nowNs and robust statistics (median, IQR): a reopen is I/O
+    // bound, and one slow reopen on a loaded host moved the mean and CV.
+    const allocator = perf_gate.bench_allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
@@ -202,31 +205,22 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
     _ = try damageFiles(data_dir, "nodes.store", .zero_page);
 
     // Each sample: reopen the damaged store until the corruption is DETECTED.
-    const iters: usize = 24;
-    var samples: [iters]f64 = undefined;
+    var samples: [24]f64 = undefined;
     for (&samples) |*sample| {
-        const t0 = monotonicNs();
+        const t0 = perf_gate.nowNs();
         const outcome = try reopenAndReadAll(allocator, data_dir);
-        sample.* = @floatFromInt(monotonicNs() - t0);
+        sample.* = @floatFromInt(perf_gate.nowNs() - t0);
         // Correctness (always enforced): every reopen detects the damage.
         switch (outcome) {
             .rows => return error.CorruptionSilentlyAccepted,
             .failed => |err| try std.testing.expect(isTypedCorruptionError(err)),
         }
     }
-
-    var sum: f64 = 0;
-    for (samples) |s| sum += s;
-    const mean = sum / @as(f64, @floatFromInt(iters));
-    var var_acc: f64 = 0;
-    for (samples) |s| var_acc += (s - mean) * (s - mean);
-    const cv = @sqrt(var_acc / @as(f64, @floatFromInt(iters))) / mean;
-    std.sort.block(f64, &samples, {}, comptime std.sort.asc(f64));
-    const p95 = samples[(iters * 95) / 100 - 1];
-    std.debug.print("CORRUPT_RECOVERY_DETECT mean_ns={d:.0} cv={d:.4} p95/mean={d:.2}\n", .{ mean, cv, p95 / mean });
+    const r = perf_gate.robust(&samples);
+    std.debug.print("CORRUPT_RECOVERY_DETECT median_ns={d:.0} rel_iqr={d:.4} p95/median={d:.2}\n", .{ r.median, r.rel_iqr, r.p95_over_median });
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
-    try perf_gate.envelope("corrupt-page reopen-to-detection", cv, p95 / mean, 0.22, 2.55);
+    try perf_gate.robustEnvelope("corrupt-page reopen-to-detection", r, 0.30, 2.55);
 }
 
 /// Reopen the store, run `hook` against it before any query (it may

@@ -43,18 +43,6 @@ const txn = @import("txn");
 
 // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection; OWNER=txn; UPDATED=2025-09-22
 
-fn mean(samples: []const f64) f64 {
-    var acc: f64 = 0;
-    for (samples) |v| acc += v;
-    return acc / @as(f64, @floatFromInt(samples.len));
-}
-
-fn stddev(samples: []const f64, m: f64) f64 {
-    var acc: f64 = 0;
-    for (samples) |v| acc += (v - m) * (v - m);
-    return @sqrt(acc / @as(f64, @floatFromInt(samples.len)));
-}
-
 test "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection" {
     var mgr: txn.Manager = undefined;
     mgr.init(std.testing.allocator);
@@ -74,14 +62,44 @@ test "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection" {
     try std.testing.expectError(error.SerializationFailure, mgr.commit(&t1));
 }
 
-// CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope; OWNER=txn; UPDATED=2026-11-12
+//
+// SONNY-2439: the baseline manager never enabled phantom prevention, so its
+// predicateRead calls returned at once (manager.zig predicateRead) and the
+// "overhead" divided a full commit by an almost empty one, timed per
+// transaction on a microsecond clock. Both arms now run with phantom
+// prevention on and differ only in the two range reads; each sample is a
+// batch of whole transactions (begin .. commit), the arms are interleaved,
+// the claims use the median and IQR (tests/perf_gate.zig), and the
+// transactions allocate from the production allocator.
+const RangeBench = struct {
+    base: *txn.Manager,
+    range: *txn.Manager,
+
+    fn baseTxn(self: *RangeBench) !u64 {
+        var t = self.base.begin();
+        try self.base.predicateRead(&t, "cust:");
+        try self.base.predicateRead(&t, "order:");
+        _ = self.base.commit(&t) catch {}; // serialization outcomes are not timed separately
+        return t.id;
+    }
+
+    fn rangeTxn(self: *RangeBench) !u64 {
+        var t = self.range.begin();
+        try self.range.predicateRead(&t, "cust:");
+        try self.range.rangeRead(&t, "cust:100", "cust:300");
+        try self.range.rangeRead(&t, "order:050", "order:999");
+        _ = self.range.commit(&t) catch {};
+        return t.id;
+    }
+};
+
 test "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = perf_gate.bench_allocator;
 
     var mgr_base: txn.Manager = undefined;
     mgr_base.init(allocator);
+    mgr_base.enablePhantomPrevention();
     defer mgr_base.deinit();
 
     var mgr_range: txn.Manager = undefined;
@@ -89,54 +107,23 @@ test "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope" {
     mgr_range.enablePhantomPrevention();
     defer mgr_range.deinit();
 
-    const iters: usize = 300; // enough for variance stability but fast
-    var base_samples = try allocator.alloc(f64, iters);
-    defer allocator.free(base_samples);
-    var range_samples = try allocator.alloc(f64, iters);
-    defer allocator.free(range_samples);
+    var bench: RangeBench = .{ .base = &mgr_base, .range = &mgr_range };
+    const samples: usize = 64;
+    const batch: usize = 64;
+    var base_samples: [samples]f64 = undefined;
+    var range_samples: [samples]f64 = undefined;
+    // Warm-up, then the measured interleaved rounds.
+    _ = try perf_gate.timeBatch(&bench, RangeBench.baseTxn, batch);
+    _ = try perf_gate.timeBatch(&bench, RangeBench.rangeTxn, batch);
+    try perf_gate.interleavedAB(&bench, RangeBench.baseTxn, RangeBench.rangeTxn, batch, &base_samples, &range_samples);
 
-    var i: usize = 0;
-    while (i < iters) : (i += 1) {
-        var t = mgr_base.begin();
-        const start = compat_microTimestamp();
-        // simulate a few predicate prefix reads only (baseline already uses prefix list mechanics)
-        try mgr_base.predicateRead(&t, "cust:");
-        try mgr_base.predicateRead(&t, "order:");
-        _ = mgr_base.commit(&t) catch {}; // ignore serialization outcomes here
-        const end = compat_microTimestamp();
-        base_samples[i] = @as(f64, @floatFromInt(end - start));
-    }
-
-    i = 0;
-    while (i < iters) : (i += 1) {
-        var t = mgr_range.begin();
-        const start = compat_microTimestamp();
-        try mgr_range.predicateRead(&t, "cust:");
-        try mgr_range.rangeRead(&t, "cust:100", "cust:300");
-        try mgr_range.rangeRead(&t, "order:050", "order:999");
-        _ = mgr_range.commit(&t) catch {};
-        const end = compat_microTimestamp();
-        range_samples[i] = @as(f64, @floatFromInt(end - start));
-    }
-
-    const m_base = mean(base_samples);
-    const m_range = mean(range_samples);
-    _ = stddev(base_samples, m_base); // discard base stddev (not needed for thresholds)
-    const sd_range = stddev(range_samples, m_range);
-    // base CV currently unused but retained for potential comparative reporting (omit to avoid unused warning)
-    const cv_range = if (m_range == 0) 0 else sd_range / m_range;
-    const p95_idx = (iters * 95) / 100 - 1;
-    std.sort.block(f64, base_samples, {}, comptime std.sort.asc(f64));
-    std.sort.block(f64, range_samples, {}, comptime std.sort.asc(f64));
-    const p95_range = range_samples[p95_idx];
-    const ratio_p95_mean_range = if (m_range == 0) 0 else p95_range / m_range;
-
-    // Envelope thresholds (general CV <=0.22, p95/mean <=2.55) + overhead guard <5%
+    const rb = perf_gate.robust(&base_samples);
+    const rr = perf_gate.robust(&range_samples);
+    const overhead = perf_gate.medianOverhead(rb, rr);
+    std.debug.print("CANARY_RANGE_OVERHEAD median_base={d:.1}ns median_range={d:.1}ns overhead={d:.4} rel_iqr_range={d:.4} p95/median={d:.2}\n", .{ rb.median, rr.median, overhead, rr.rel_iqr, rr.p95_over_median });
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
     // Correctness assertions in this file are not gated.
-    const overhead = if (m_base == 0) 0 else (m_range - m_base) / m_base;
-    std.debug.print("CANARY_RANGE_OVERHEAD mean_base={d:.2} mean_range={d:.2} overhead={d:.4} cv_range={d:.4} p95/mean={d:.2}\n", .{ m_base, m_range, overhead, cv_range, ratio_p95_mean_range });
-    try perf_gate.envelope("range-tracked commit latency", cv_range, ratio_p95_mean_range, 0.22, 2.55);
+    try perf_gate.robustEnvelope("range-tracked transaction latency", rr, 0.30, 2.55);
     try perf_gate.check("range tracking overhead <= 5%", overhead <= 0.05, "overhead={d:.4}", .{overhead});
 }

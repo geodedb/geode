@@ -460,6 +460,29 @@
   BI-002, SCHEMA, EXECUTION, ADMIN and MIGRATE-CLI markers are IMPL. IMPL is
   267 of 6,161 (4.3%), above GAP-0514's 250 target, so GAP-0514 is back in
   `docs/GAP_ANALYSIS.md` as Partial.
+- **The canary perf benchmarks take batched samples from the production
+  allocator, interleave A/B arms and claim on the median and IQR; the
+  phantom-range baseline enables phantom prevention (SONNY-2439, second
+  slice).** `tests/perf_gate.zig` gains the measurement helpers
+  (`nowNs`, `timeBatch` / `sampleBatches` / `interleavedAB`, which pass every
+  result to `doNotOptimizeAway`, `robust` statistics, `robustEnvelope`,
+  `medianOverhead`, and `bench_allocator`, the C allocator the server uses
+  in optimized builds). The nine canary benchmarks with gated claims
+  (phantom-range, phantom-anomaly, prune, enumerator, plan-selection,
+  pipeline-selection, physiological-redo, write-skew, corrupt-recovery) use
+  them instead of one-operation samples on DebugAllocator with mean/CV
+  statistics; the three A/B claims run their arms interleaved. The
+  phantom-range baseline never enabled phantom prevention, so its
+  `predicateRead` returned at once and the overhead divided a full commit by
+  an almost empty one; both arms now run with it on and differ only in the
+  range reads. With the methodology fixed the two overhead claims still
+  miss (reported, not enforced: phantom-range ~59%, phantom-anomaly ~54%
+  against 5% on a loaded host). Still open: thresholds calibrated on the
+  quiet runner (the robust bounds are the former bounds carried over), the
+  single-shot latency bounds of `src/performance/test_json_optimization.zig`
+  and `tests/test_performance_optimizations.zig`, and the GitLab schedule
+  for `test-perf-gates-enforced`. Regression:
+  `zig build test-sonny2439-perf-methodology`.
 - **The perf-gated benchmarks time with a monotonic clock, and the two that
   timed only test-local code are removed (SONNY-2439, partial).** Every
   benchmark that makes a claim through `tests/perf_gate.zig` read

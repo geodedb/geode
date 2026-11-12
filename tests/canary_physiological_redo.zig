@@ -97,9 +97,11 @@ test "TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // SONNY-2439: the production allocator, CLOCK_MONOTONIC through
+    // perf_gate.nowNs and robust statistics (median, IQR). A sample is one
+    // reopen-to-loaded cycle (it is I/O, long enough not to need batching);
+    // the reopen itself is outside the timed span.
+    const allocator = perf_gate.bench_allocator;
 
     var td = std.testing.tmpDir(.{});
     defer td.cleanup();
@@ -110,44 +112,21 @@ test "BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope" {
 
     try buildSnapshot(allocator, base);
 
-    const sample_n: usize = 48;
-    var samples = try allocator.alloc(u64, sample_n);
-    defer allocator.free(samples);
-
-    // Each sample reopens the persisted store and times the load (previously
-    // this timed loadFromFile() on an adapter-less store: a no-op).
-    var i: usize = 0;
-    while (i < sample_n) : (i += 1) {
+    var samples: [48]f64 = undefined;
+    for (&samples) |*sample| {
         const store = try graph_store.initGlobalStore(allocator, base);
         defer graph_store.deinitGlobalStore();
-        const t0 = compat_nanoTimestamp();
+        const t0 = perf_gate.nowNs();
         try store.loadFromFile();
-        const t1 = compat_nanoTimestamp();
-        samples[i] = @intCast(t1 - t0);
+        const t1 = perf_gate.nowNs();
+        sample.* = @floatFromInt(t1 - t0);
         try std.testing.expectEqual(NODE_COUNT, store.getNodeCount());
     }
-
-    var sum: f128 = 0;
-    for (samples) |s| sum += @as(f128, @floatFromInt(s));
-    const mean = sum / @as(f128, @floatFromInt(sample_n));
-    var acc: f128 = 0;
-    for (samples) |s| {
-        const d = @as(f128, @floatFromInt(s)) - mean;
-        acc += d * d;
-    }
-    const variance = acc / @as(f128, @floatFromInt(sample_n));
-    const stddev = @sqrt(variance);
-    const cv = if (mean == 0) 0 else stddev / mean;
-
-    const tmp = try allocator.dupe(u64, samples);
-    defer allocator.free(tmp);
-    std.sort.pdq(u64, tmp, {}, comptime std.sort.asc(u64));
-    const p95 = tmp[@min(tmp.len - 1, (tmp.len * 95) / 100)];
-    const p95_ratio = @as(f128, @floatFromInt(p95)) / mean;
+    const r = perf_gate.robust(&samples);
 
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
     // Correctness assertions in this file are not gated.
-    std.debug.print("GraphStoreLoadVarianceEnvelope cv={d:.4} p95_ratio={d:.2} mean={d:.2}\n", .{ cv, p95_ratio, mean });
-    try perf_gate.envelope("GraphStore reopen+load", cv, p95_ratio, 0.18, 2.3);
+    std.debug.print("GraphStoreLoadVarianceEnvelope median={d:.0}ns rel_iqr={d:.4} p95/median={d:.2}\n", .{ r.median, r.rel_iqr, r.p95_over_median });
+    try perf_gate.robustEnvelope("GraphStore reopen+load", r, 0.25, 2.3);
 }

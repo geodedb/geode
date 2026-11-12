@@ -2016,9 +2016,9 @@ REQ-GQL-022,Storage Snapshot Load,GraphStoreLoadOptimizationDeltaVarianceEnvelop
 REQ-GQL-023,DistributedQueryPlanning,ShardAffinityAnalysis,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_023_ShardAffinityAnalysis,,distributed,2025-10-05
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,BENCHED,tests/canary_txn_phantom_anomaly.zig,TestCANARY_REQ_GQL_023_PhantomDetection,BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope,txn,2025-09-21
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,BENCHED,src/transactions/manager.zig,TestCANARY_REQ_GQL_023_PhantomDetection,BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope,txn,2025-09-26
-REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,tests/canary_txn_phantom_range.zig,,BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope,txn,2025-09-22
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,src/transactions/manager.zig,TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection,BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope,txn,2025-09-26
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,src/transactions/range_tracker.zig,,,txn,2025-09-26
+REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,tests/canary_txn_phantom_range.zig,,BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope,txn,2026-11-12
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,tests/canary_txn_phantom_range.zig,TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection,,txn,2025-09-22
 REQ-GQL-024,Conformance Flagger,ImplDefinedCollationAndNullOrdering,TESTED,src/server/flagger_impl_defined.zig,TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering,,engine,2025-09-21
 REQ-GQL-024,Conformance Flagger,ImplDefinedFlagsProtocolIntegration,TESTED,tests/test_protocol_impl_defined_flags.zig,TestCANARY_REQ_GQL_024_ImplDefinedFlagsProtocolIntegration,,wire,2025-09-21

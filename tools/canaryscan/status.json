@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T17:47:53.096082741Z",
+  "generated_at": "2026-11-12T18:01:52.601084472Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -30706,20 +30706,6 @@
           "aspect": "RangeTracker",
           "status": "BENCHED",
           "files": [
-            "tests/canary_txn_phantom_range.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
-          ],
-          "owner": "txn",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "MVCC Phantom Prevention",
-          "aspect": "RangeTracker",
-          "status": "BENCHED",
-          "files": [
             "src/transactions/manager.zig",
             "src/transactions/range_tracker.zig"
           ],
@@ -30731,6 +30717,20 @@
           ],
           "owner": "txn",
           "updated": "2025-09-26"
+        },
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "RangeTracker",
+          "status": "BENCHED",
+          "files": [
+            "tests/canary_txn_phantom_range.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
+          ],
+          "owner": "txn",
+          "updated": "2026-11-12"
         },
         {
           "feature": "MVCC Phantom Prevention",

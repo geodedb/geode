@@ -76,97 +76,67 @@ test "TestCANARY_REQ_GQL_023_PhantomDetection" {
 }
 
 // Benchmark capturing overhead of phantom prevention tracking vs disabled mode.
-// Helper stats function (top-level so Zig allows declaration outside test scope)
-const Stats = struct { mean: f64, p95: f64, cv: f64 };
-fn stats(data: []const u64) Stats {
-    var sum: f128 = 0;
-    for (data) |v| sum += @as(f128, @floatFromInt(v));
-    const flen = @as(f128, @floatFromInt(data.len));
-    const mean = @as(f64, @floatCast(sum / flen));
-    var var_acc: f128 = 0;
-    for (data) |v| {
-        const dv = @as(f128, @floatFromInt(v)) - @as(f128, mean);
-        var_acc += dv * dv;
-    }
-    const variance = var_acc / flen;
-    const stddev = std.math.sqrt(@as(f64, @floatCast(variance)));
-    const cv = if (mean == 0) 0 else stddev / mean;
-    // Approximate p95 using naive selection (copy into fixed buffer)
-    var buf: [512]u64 = undefined;
-    const n = data.len;
-    var i: usize = 0;
-    while (i < n) : (i += 1) buf[i] = data[i];
-    const target = (n * 95) / 100;
-    // simple partial selection O(n^2) worst-case but fine for n<=200
-    var a: usize = 0;
-    while (a <= target) : (a += 1) {
-        var min_idx = a;
-        var b: usize = a + 1;
-        while (b < n) : (b += 1) {
-            if (buf[b] < buf[min_idx]) min_idx = b;
+//
+// SONNY-2439: one microsecond-clock sample per commit, and the disabled loop
+// ran entirely before the enabled one. Each sample is now a batch of whole
+// transactions (begin, 5 predicate reads, 10 writes, commit) on one manager
+// per arm, the arms are interleaved, the claims use the median and IQR
+// (tests/perf_gate.zig) and the managers allocate from the production
+// allocator. Both arms make the same calls; with prevention disabled
+// predicateRead returns at once, which is the cost being compared.
+const AnomalyBench = struct {
+    disabled: *txn_mod.Manager,
+    enabled: *txn_mod.Manager,
+
+    fn run(mgr: *txn_mod.Manager) !u64 {
+        var t = mgr.begin();
+        var j: usize = 0;
+        while (j < 5) : (j += 1) try mgr.predicateRead(&t, "acct:");
+        var k: usize = 0;
+        while (k < 10) : (k += 1) {
+            var buf: [16]u8 = undefined;
+            const key = try std.fmt.bufPrint(&buf, "acct:{d}", .{k});
+            mgr.recordWrite(key, &t);
         }
-        if (min_idx != a) {
-            const tmpv = buf[a];
-            buf[a] = buf[min_idx];
-            buf[min_idx] = tmpv;
-        }
+        _ = mgr.commit(&t) catch {}; // serialization outcomes are not timed separately
+        return t.id;
     }
-    const p95 = @as(f64, @floatFromInt(buf[target]));
-    return .{ .mean = mean, .p95 = p95, .cv = cv };
-}
+
+    fn disabledTxn(self: *AnomalyBench) !u64 {
+        return run(self.disabled);
+    }
+
+    fn enabledTxn(self: *AnomalyBench) !u64 {
+        return run(self.enabled);
+    }
+};
 
 test "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-    const iters: usize = 200; // keep lightweight
-    var samples_disabled = try allocator.alloc(u64, iters);
-    defer allocator.free(samples_disabled);
-    var samples_enabled = try allocator.alloc(u64, iters);
-    defer allocator.free(samples_enabled);
+    const allocator = perf_gate.bench_allocator;
+    var mgr_disabled: txn_mod.Manager = undefined;
+    mgr_disabled.init(allocator);
+    defer mgr_disabled.deinit();
+    var mgr_enabled: txn_mod.Manager = undefined;
+    mgr_enabled.init(allocator);
+    mgr_enabled.enablePhantomPrevention();
+    defer mgr_enabled.deinit();
 
-    // Helper to run a micro workload
-    inline for (.{ false, true }) |enabled| {
-        const s_ptr = if (enabled) &samples_enabled else &samples_disabled;
-        var i: usize = 0;
-        while (i < iters) : (i += 1) {
-            var mgr: txn_mod.Manager = undefined;
-            mgr.init(allocator);
-            defer mgr.deinit();
-            if (enabled) mgr.enablePhantomPrevention();
-            var t = mgr.begin();
-            // 5 predicate reads
-            var j: usize = 0;
-            while (j < 5) : (j += 1) {
-                if (enabled) mgr.predicateRead(&t, "acct:") catch {};
-            }
-            // 10 writes
-            var k: usize = 0;
-            while (k < 10) : (k += 1) {
-                var buf: [16]u8 = undefined;
-                const key = std.fmt.bufPrint(&buf, "acct:{d}", .{k}) catch "acct:err";
-                mgr.recordWrite(key, &t);
-            }
-            const start = compat_microTimestamp();
-            _ = mgr.commit(&t) catch {}; // ignore serialization failures
-            const end = compat_microTimestamp();
-            const dur: u64 = @intCast(end - start);
-            s_ptr.*[i] = dur;
-        }
-    }
+    var bench: AnomalyBench = .{ .disabled = &mgr_disabled, .enabled = &mgr_enabled };
+    const samples: usize = 64;
+    const batch: usize = 32;
+    var s_disabled: [samples]f64 = undefined;
+    var s_enabled: [samples]f64 = undefined;
+    _ = try perf_gate.timeBatch(&bench, AnomalyBench.disabledTxn, batch);
+    _ = try perf_gate.timeBatch(&bench, AnomalyBench.enabledTxn, batch);
+    try perf_gate.interleavedAB(&bench, AnomalyBench.disabledTxn, AnomalyBench.enabledTxn, batch, &s_disabled, &s_enabled);
 
-    // Compute stats
-    const st_disabled = stats(samples_disabled);
-    const st_enabled = stats(samples_enabled);
+    const rd = perf_gate.robust(&s_disabled);
+    const re = perf_gate.robust(&s_enabled);
+    const overhead = perf_gate.medianOverhead(rd, re);
+    std.debug.print("CANARY_PHANTOM_OVERHEAD median_disabled={d:.1}ns median_enabled={d:.1}ns overhead={d:.4}\n", .{ rd.median, re.median, overhead });
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
     // Correctness assertions in this file are not gated.
-    // Overhead <=5%
-    if (st_disabled.mean > 0) {
-        const overhead = (st_enabled.mean - st_disabled.mean) / st_disabled.mean;
-        try perf_gate.check("phantom prevention commit overhead <= 5%", overhead <= 0.05, "overhead={d:.4}", .{overhead});
-    }
-    // Variance thresholds
-    const p95_mean = if (st_enabled.mean > 0) st_enabled.p95 / st_enabled.mean else 0;
-    try perf_gate.envelope("phantom prevention commit latency", st_enabled.cv, p95_mean, 0.22, 2.55);
+    try perf_gate.check("phantom prevention transaction overhead <= 5%", overhead <= 0.05, "overhead={d:.4}", .{overhead});
+    try perf_gate.robustEnvelope("phantom prevention transaction latency", re, 0.30, 2.55);
 }

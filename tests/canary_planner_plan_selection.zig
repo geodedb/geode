@@ -64,10 +64,24 @@ test "TestCANARY_REQ_GQL_024_PlanSelectionIntegration" {
     buf.deinit(alloc);
 }
 
+const SelectBench = struct {
+    root: enumerator_mod.LogicalPlan,
+    alloc: std.mem.Allocator,
+
+    fn select(self: *SelectBench) !f64 {
+        var enumr = enumerator_mod.PlanEnumerator.init(self.alloc, .{ .max_plans = 128 });
+        defer enumr.deinit();
+        var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+        defer buf.deinit(self.alloc);
+        const best = try enumr.selectBestUnmanaged(self.root, self.alloc, &buf) orelse return error.UnexpectedEmptyEnumeration;
+        return best.cost;
+    }
+};
+
 test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    // SONNY-2439: batched samples (ns per selection) from the production
+    // allocator, robust statistics (median, IQR) -- see tests/perf_gate.zig.
+    const alloc = perf_gate.bench_allocator;
     // Construct deeper plan tree for enumeration
     const leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &[_]enumerator_mod.LogicalPlan{} };
     var c1: [1]enumerator_mod.LogicalPlan = .{leaf};
@@ -79,50 +93,13 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope" {
     var c4: [2]enumerator_mod.LogicalPlan = .{ join1, leaf };
     const join2 = enumerator_mod.LogicalPlan{ .op = .join, .children = c4[0..] };
 
-    const iterations: usize = 64;
-    var samples = try alloc.alloc(u64, iterations);
-    defer alloc.free(samples);
-    var i: usize = 0;
-    while (i < iterations) : (i += 1) {
-        var enumr = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 128 });
-        defer enumr.deinit();
-        var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
-        const start = compat_nanoTimestamp();
-        _ = try enumr.selectBestUnmanaged(join2, alloc, &buf);
-        const end = compat_nanoTimestamp();
-        samples[i] = @as(u64, @intCast(end - start));
-        buf.deinit(alloc);
-    }
-    var sum: f128 = 0;
-    for (samples) |s| sum += @as(f128, @floatFromInt(s));
-    const mean = sum / @as(f128, @floatFromInt(iterations));
-    var var_acc: f128 = 0;
-    for (samples) |s| {
-        const d = @as(f128, @floatFromInt(s)) - mean;
-        var_acc += d * d;
-    }
-    const variance = var_acc / @as(f128, @floatFromInt(iterations));
-    const cv = std.math.sqrt(variance) / mean;
-    var scratch = try alloc.dupe(u64, samples);
-    defer alloc.free(scratch);
-    const rank = (iterations * 95) / 100;
-    var r: usize = 0;
-    while (r <= rank) : (r += 1) {
-        var min_i = r;
-        var j: usize = r + 1;
-        while (j < iterations) : (j += 1) {
-            if (scratch[j] < scratch[min_i]) min_i = j;
-        }
-        if (min_i != r) {
-            const tmp = scratch[r];
-            scratch[r] = scratch[min_i];
-            scratch[min_i] = tmp;
-        }
-    }
-    const p95 = @as(f128, @floatFromInt(scratch[rank]));
-    const p95_mean = p95 / mean;
+    var bench: SelectBench = .{ .root = join2, .alloc = alloc };
+    var samples: [64]f64 = undefined;
+    _ = try perf_gate.timeBatch(&bench, SelectBench.select, 16);
+    try perf_gate.sampleBatches(&bench, SelectBench.select, 16, &samples);
+    const r = perf_gate.robust(&samples);
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
     // Correctness assertions in this file are not gated.
-    try perf_gate.envelope("plan selection", cv, p95_mean, 0.22, 2.55);
+    try perf_gate.robustEnvelope("plan selection", r, 0.30, 2.55);
 }

@@ -68,10 +68,25 @@ test "TestCANARY_REQ_GQL_024_PlanEnumerationEngine" {
 // Variance envelope benchmark (structural enumeration time jitter)
 // We keep this simple: run enumeration multiple times, capture duration stats; enforce CV and p95/mean thresholds.
 // CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanEnumerationVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_024_PlanEnumerationEngine; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+const EnumBench = struct {
+    root: enumerator_mod.LogicalPlan,
+    alloc: std.mem.Allocator,
+
+    fn enumerate(self: *EnumBench) !usize {
+        var enumerator = enumerator_mod.PlanEnumerator.init(self.alloc, .{ .max_plans = 512 });
+        defer enumerator.deinit();
+        var plans = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+        defer plans.deinit(self.alloc);
+        try plans.ensureTotalCapacity(self.alloc, 32);
+        try enumerator.enumerateUnmanaged(self.root, self.alloc, &plans);
+        return plans.items.len;
+    }
+};
+
 test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    // SONNY-2439: batched samples (ns per enumeration) from the production
+    // allocator, robust statistics (median, IQR) -- see tests/perf_gate.zig.
+    const alloc = perf_gate.bench_allocator;
 
     // Build a modest tree: join(project(scan, scan), aggregate(filter(scan))) depth ~3
     const scan_leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &[_]enumerator_mod.LogicalPlan{} };
@@ -84,60 +99,13 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope" {
     var top_join_children: [2]enumerator_mod.LogicalPlan = .{ project_node, agg_node };
     const root = enumerator_mod.LogicalPlan{ .op = .join, .children = top_join_children[0..] };
 
-    const iterations: usize = 64;
-    var samples = try alloc.alloc(u64, iterations);
-    defer alloc.free(samples);
-
-    var i: usize = 0;
-    while (i < iterations) : (i += 1) {
-        var enumerator = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 512 });
-        defer enumerator.deinit();
-        var plans_iter = std.ArrayList(enumerator_mod.CandidatePlan).empty;
-        try plans_iter.ensureTotalCapacity(alloc, 32);
-        const start = compat_nanoTimestamp();
-        try enumerator.enumerateUnmanaged(root, alloc, &plans_iter);
-        const end = compat_nanoTimestamp();
-        samples[i] = @as(u64, @intCast(end - start));
-        plans_iter.deinit(alloc);
-    }
-
-    // compute mean, variance, p95
-    var sum: f128 = 0;
-    for (samples) |s| sum += @as(f128, @floatFromInt(s));
-    const mean = sum / @as(f128, @floatFromInt(iterations));
-    var var_acc: f128 = 0;
-    for (samples) |s| {
-        const diff = @as(f128, @floatFromInt(s)) - mean;
-        var_acc += diff * diff;
-    }
-    const variance = var_acc / @as(f128, @floatFromInt(iterations));
-    // coefficient of variation = sqrt(var) / mean
-    const cv = std.math.sqrt(variance) / mean;
-
-    // approximate p95: select the element at rank floor(0.95*n)
-    var scratch = try alloc.dupe(u64, samples);
-    defer alloc.free(scratch);
-    const rank = (iterations * 95) / 100;
-    // partial selection (naive)
-    var r: usize = 0;
-    while (r <= rank) : (r += 1) {
-        var min_index = r;
-        var j: usize = r + 1;
-        while (j < iterations) : (j += 1) {
-            if (scratch[j] < scratch[min_index]) min_index = j;
-        }
-        if (min_index != r) {
-            const tmp = scratch[r];
-            scratch[r] = scratch[min_index];
-            scratch[min_index] = tmp;
-        }
-    }
-    const p95 = @as(f128, @floatFromInt(scratch[rank]));
-    const p95_mean = p95 / mean;
-
-    // Thresholds: CV≤0.22, p95/mean≤2.55
+    var bench: EnumBench = .{ .root = root, .alloc = alloc };
+    var samples: [64]f64 = undefined;
+    _ = try perf_gate.timeBatch(&bench, EnumBench.enumerate, 16);
+    try perf_gate.sampleBatches(&bench, EnumBench.enumerate, 16, &samples);
+    const r = perf_gate.robust(&samples);
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
     // Correctness assertions in this file are not gated.
-    try perf_gate.envelope("plan enumeration", cv, p95_mean, 0.22, 2.55);
+    try perf_gate.robustEnvelope("plan enumeration", r, 0.30, 2.55);
 }

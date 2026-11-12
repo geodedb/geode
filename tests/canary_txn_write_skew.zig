@@ -80,13 +80,16 @@ test "TestCANARY_REQ_GQL_025_WriteSkewDetection" {
 }
 
 // Variance envelope benchmark: measure overhead of write skew detection scenario across iterations.
-test "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope" {
-    const iterations: usize = 48;
-    var samples: [iterations]u64 = undefined;
-    var i: usize = 0;
-    while (i < iterations) : (i += 1) {
+//
+// SONNY-2439: one scenario (a fresh manager, two transactions that both
+// predicate-read "doc:" and write, both committed) is one operation; each
+// sample is a batch of them, from the production allocator, with robust
+// statistics (median, IQR) -- see tests/perf_gate.zig.
+const SkewBench = struct {
+    fn scenario(_: *SkewBench) !u64 {
         var mgr: txn.Manager = undefined;
-        mgr.init(std.testing.allocator);
+        mgr.init(perf_gate.bench_allocator);
+        defer mgr.deinit();
         mgr.enablePhantomPrevention();
         var t1 = mgr.begin();
         var t2 = mgr.begin();
@@ -96,49 +99,27 @@ test "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope" {
         mgr.predicateRead(&t2, "doc:") catch {};
         mgr.recordWrite("doc:1:off", &t1);
         mgr.recordWrite("doc:2:off", &t2);
-        var t1c = t1;
-        var t2c = t2;
-        const start = compat_nanoTimestamp();
-        _ = mgr.commit(&t1c) catch |e| {
+        var aborted: u64 = 0;
+        mgr.commit(&t1) catch |e| {
             if (e != error.SerializationFailure and e != error.EarlyConflict) return e;
+            aborted += 1;
         };
-        _ = mgr.commit(&t2c) catch |e| {
+        mgr.commit(&t2) catch |e| {
             if (e != error.SerializationFailure and e != error.EarlyConflict) return e;
+            aborted += 1;
         }; // one abort expected sometimes
-        const end = compat_nanoTimestamp();
-        samples[i] = @as(u64, @intCast(end - start));
-        mgr.deinit();
+        return aborted;
     }
-    var sum: f128 = 0;
-    for (samples) |s| sum += @as(f128, @floatFromInt(s));
-    const mean = sum / @as(f128, @floatFromInt(iterations));
-    var var_acc: f128 = 0;
-    for (samples) |s| {
-        const diff = @as(f128, @floatFromInt(s)) - mean;
-        var_acc += diff * diff;
-    }
-    const variance = var_acc / @as(f128, @floatFromInt(iterations));
-    const cv = std.math.sqrt(variance) / mean;
-    // simple selection for p95
-    var scratch = samples; // copy array
-    const rank = (iterations * 95) / 100;
-    var r: usize = 0;
-    while (r <= rank) : (r += 1) {
-        var min_index = r;
-        var j: usize = r + 1;
-        while (j < iterations) : (j += 1) {
-            if (scratch[j] < scratch[min_index]) min_index = j;
-        }
-        if (min_index != r) {
-            const tmp = scratch[r];
-            scratch[r] = scratch[min_index];
-            scratch[min_index] = tmp;
-        }
-    }
-    const p95 = @as(f128, @floatFromInt(scratch[rank]));
-    const p95_mean = p95 / mean;
+};
+
+test "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope" {
+    var bench: SkewBench = .{};
+    var samples: [48]f64 = undefined;
+    _ = try perf_gate.timeBatch(&bench, SkewBench.scenario, 32);
+    try perf_gate.sampleBatches(&bench, SkewBench.scenario, 32, &samples);
+    const r = perf_gate.robust(&samples);
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
     // Correctness assertions in this file are not gated.
-    try perf_gate.envelope("write-skew detection commit", cv, p95_mean, 0.22, 2.55);
+    try perf_gate.robustEnvelope("write-skew detection scenario", r, 0.30, 2.55);
 }
