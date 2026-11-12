@@ -4,6 +4,49 @@
 
 ### Security
 
+- **Auth residuals (SONNY-6359).** (1) **Behaviour change:** an Admin's
+  `ALTER USER <other> SET PASSWORD` over QUIC and gRPC was refused 42501 by
+  the password intercept before the parser, although
+  `docs/GQL_AUTH_DDL.md` maps the statement to
+  `geode.auth.user_reset_password`. The intercept now handles only the
+  session's own password (and refuses a request with no authenticated
+  user); another user's goes to the parser and runs as
+  `user_reset_password`: Admin only (42501 otherwise), the password policy
+  (22000), audited (`proto_util.passwordInterceptApplies`). (2) **Behaviour
+  change:** `geode.auth.user_change_password` skipped the old-password check
+  when the old password was empty; it always checks it now (28000 and
+  nothing changed). (3) **Behaviour change:** failures that answered SQLSTATE
+  00000 with a status row starting `error:` or `note:` are GQLSTATUS errors:
+  `user_create` / `CREATE USER` of an existing user 42710 and of the reserved
+  `geode-cluster` 42939 (any other failure its own status);
+  `user_enable` / `user_disable` and `user_assign_role` failures (e.g. an
+  unreadable security graph, 58000); `user_assign_role` without arguments
+  22023 and of a missing user 42704 for an Admin; an unknown privilege 22023;
+  `GRANT` / `REVOKE` without `ON GRAPH` (and `geode.auth.grant` / `revoke`
+  with an empty resource) 0A000, changing nothing. (4)
+  `SecurityManager.validatePassword` counted runs of letters and digits as
+  words while `PasswordPolicy` counts space-separated words, so
+  `Alpha-Beta-Gamma-Delta-Epsilon` passed one and not the other; both use
+  `PasswordPolicy.countPassphraseWords`. (5) `UserStorageBackend.hasGraphGrant`
+  and `AuthGraphManager.listGraphGrants` / `listGraphGrantsForUser` (SHOW
+  GRANTS, startup hydration) read the grant records without `auth_ddl_lock`,
+  under which GRANT / REVOKE change them; they hold it now, and the GRANT /
+  REVOKE write-throughs take it themselves (re-entrant). (6) `geode auth
+  verify` ran the save path of a changing command and leaked the resolved
+  data directory; it now tears down without sealing or saving
+  (`cli_auth_helpers.deinitCliAuthWithoutSaving`) and leaks nothing.
+  **Remaining (not fixed):** opening the store still writes: each graph's
+  WAL is checkpointed (`graph.wal.ckpt`) and truncated, the graph registry
+  and the timeseries WAL are rewritten, and `.geode.lock` records the
+  holder; the storage engine has no read-only open, so a verify that
+  writes nothing at all needs one. (7) The in-repo scripts (`tests/*.sh`,
+  `scripts/cluster_spawn.sh`) seeded admin passwords that break the password
+  policy (a forced reset at the first login, so every query failed with
+  08P01); they seed the passphrase `Geode Test Admin Passphrase` (the
+  backup scripts their own passphrases), and the scripts that built a
+  command string with the password use `tests/lib/geode_cli_wrapper.sh` so
+  the passphrase stays one argument.
+  Regression: `zig build test-sonny6359-auth-residuals`.
 - **User changes no longer hold the user store's mutex across the
   security-graph write; offline removals report a failed delete (SONNY-6352,
   items 3 to 5).** (3) `user_management`'s createUser, createUserWithHash,

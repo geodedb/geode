@@ -87,7 +87,7 @@ make release > /dev/null 2>&1 || make build > /dev/null 2>&1
 # Start server
 echo "Starting server..."
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 DATA_DIR=$(mktemp -d /tmp/geode_perf_XXXXXX)
 GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
     ./zig-out/bin/geode serve --listen 0.0.0.0:8443 --data-dir "${DATA_DIR}" > /tmp/perf_server.log 2>&1 &
@@ -95,9 +95,12 @@ SERVER_PID=$!
 sleep 2
 
 # Cleanup on exit
-trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null; rm -f /tmp/perf_server.log; rm -rf ${DATA_DIR}" EXIT
+trap "kill $SERVER_PID 2>/dev/null; wait $SERVER_PID 2>/dev/null; rm -f /tmp/perf_server.log; rm -rf ${DATA_DIR}; rm -rf \${GEODE_CLI_WRAPPER_DIR:-}" EXIT
 
-QUERY_CMD="./zig-out/bin/geode query --server 127.0.0.1:8443 --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+# SONNY-6359: the admin password is a passphrase; the wrapper keeps it one argument.
+# shellcheck source=lib/geode_cli_wrapper.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/geode_cli_wrapper.sh"
+QUERY_CMD="$(geode_cli_wrapper ./zig-out/bin/geode query --server 127.0.0.1:8443 --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}")"
 
 echo
 echo -e "${BLUE}=== Phase 1: Basic Operation Benchmarks ===${NC}"

@@ -15,9 +15,13 @@ echo "Testing property persistence within same QUIC server session..."
 
 echo "Starting QUIC server for property persistence test..."
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_ADMIN_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_ADMIN_PASSWORD:-Geode Test Admin Passphrase}"
 SERVER_ADDR="127.0.0.1:9443"
-QUERY_CMD="./zig-out/bin/geode query --server ${SERVER_ADDR} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+# SONNY-6359: the admin password is a passphrase; the wrapper keeps it one argument.
+# shellcheck source=lib/geode_cli_wrapper.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/geode_cli_wrapper.sh"
+trap 'rm -rf "${GEODE_CLI_WRAPPER_DIR}"' EXIT
+QUERY_CMD="$(geode_cli_wrapper ./zig-out/bin/geode query --server ${SERVER_ADDR} --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}")"
 DATA_DIR=/tmp/geode_property_test
 rm -rf "${DATA_DIR}"
 GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_ADMIN_PASSWORD="${ADMIN_PASS}" \

@@ -7305,17 +7305,21 @@ fn handleClientMessage(
             {
                 const trimmed = std.mem.trim(u8, exec_req.query, " \t\r\n");
                 if (parseAlterUserSetPassword(trimmed)) |parsed| {
-                    // SONNY-2751: a password change changes stored security
-                    // state; a read-only request refuses it, as the read-only
-                    // floor below refuses the rest of the security DDL. This
-                    // intercept runs before the parser, so the floor never saw
-                    // it.
-                    if (exec_req.read_only) {
-                        try sendExecuteError(gpa, stream, "42501", "Read-only request: data modification rejected", &.{}, &.{});
+                    // SONNY-6359: another user's password goes to the parser
+                    // (geode.auth.user_reset_password: Admin only, the policy).
+                    if (proto_util.passwordInterceptApplies(state.authenticated_user, parsed.username)) {
+                        // SONNY-2751: a password change changes stored security
+                        // state; a read-only request refuses it, as the read-only
+                        // floor below refuses the rest of the security DDL. This
+                        // intercept runs before the parser, so the floor never saw
+                        // it.
+                        if (exec_req.read_only) {
+                            try sendExecuteError(gpa, stream, "42501", "Read-only request: data modification rejected", &.{}, &.{});
+                            return;
+                        }
+                        try handleAlterUserSetPassword(gpa, state, stream, parsed.username, parsed.new_password);
                         return;
                     }
-                    try handleAlterUserSetPassword(gpa, state, stream, parsed.username, parsed.new_password);
-                    return;
                 }
             }
 

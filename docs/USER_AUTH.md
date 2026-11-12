@@ -59,6 +59,13 @@ store at all) reports that there is no auth state and exits 1, creating
 nothing; it used to create the security graph and report `0 records,
 integrity OK` (SONNY-6345).
 
+On a store with auth state `geode auth verify` seals and saves nothing
+(SONNY-6359). It still takes the data-directory lock and opens the store, and
+opening the store writes: the storage engine checkpoints and truncates each
+graph's WAL, rewrites the graph registry and the timeseries WAL, and records
+the lock holder in `.geode.lock`. There is no read-only open of the store yet;
+run it with the server stopped, as it refuses a locked directory.
+
 - The file is created with `O_CREAT | O_EXCL | O_NOFOLLOW` and mode 0600, set
   again after the open, so the umask cannot widen it.
 - It is never written through a symbolic link, never over an existing file,

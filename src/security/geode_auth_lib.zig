@@ -525,7 +525,12 @@ pub const PasswordPolicy = struct {
         return false;
     }
 
-    fn countPassphraseWords(password: []const u8) usize {
+    // CANARY: REQ=REQ-SONNY-6359-ONE-WORD-COUNT; FEATURE="Unified Password Policy Validation"; ASPECT=WordCount; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    /// The words of a passphrase: runs of characters other than a space.
+    /// SONNY-6359: the one definition; SecurityManager.validatePassword
+    /// counted runs of letters and digits, so `Alpha-Beta-Gamma` was three
+    /// words to it and one to the policy.
+    pub fn countPassphraseWords(password: []const u8) usize {
         var word_count: usize = 0;
         var in_word = false;
         for (password) |c| {
@@ -1602,30 +1607,11 @@ pub const SecurityManager = struct {
 
         // Passphrase validation
         if (self.password_policy.require_passphrase) {
-            const word_count = self.countWords(password);
+            const word_count = PasswordPolicy.countPassphraseWords(password);
             if (word_count < self.password_policy.min_words) {
                 return error.PasswordNotPassphrase;
             }
         }
-    }
-
-    fn countWords(self: *Self, text: []const u8) usize {
-        _ = self;
-        var word_count: usize = 0;
-        var in_word = false;
-
-        for (text) |c| {
-            if (std.ascii.isAlphanumeric(c)) {
-                if (!in_word) {
-                    word_count += 1;
-                    in_word = true;
-                }
-            } else {
-                in_word = false;
-            }
-        }
-
-        return word_count;
     }
 
     // CANARY: REQ=REQ-AUTH-DEFAULT-001; FEATURE="Default User Creation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser; OWNER=security; UPDATED=2025-09-30

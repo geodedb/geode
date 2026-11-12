@@ -575,18 +575,12 @@ fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     // it; a refusal is an error status, 22000, naming the rule). This
     // applied an older rule: 8 characters, a letter and a digit.
     const role = user_mgmt.Role.fromString(role_str) orelse .User;
+    // SONNY-6359: every failure is an error status (a duplicate 42710, a
+    // reserved name 42939, a failed save 58030); the others answered 00000
+    // with a status row "error: <name>".
     user_mgmt.createUser(allocator, username, actual_password, email, role, false) catch |err| {
         log.warn("geode.auth.user_create failed", &.{Attr.string("error", @errorName(err))});
-        if (geode_auth.PasswordPolicy.violationOf(err) != null) return err;
-        const columns = try allocator.alloc([]const u8, 2);
-        columns[0] = try allocator.dupe(u8, "status");
-        columns[1] = try allocator.dupe(u8, "username");
-        const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
-        row[1] = Value{ .Str = try allocator.dupe(u8, username) };
-        const rows = try allocator.alloc([]Value, 1);
-        rows[0] = row;
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
+        return err;
     };
     // Include generated_password column when password was auto-generated
     const is_generated = std.mem.eql(u8, password, "auto_generated_password_placeholder");
@@ -806,14 +800,15 @@ fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, 
             allocator.free(rows);
             return err;
         },
+        // SONNY-6359: any other failure (the security graph could not be
+        // read) is an error status; it answered 00000 with an "error:" row.
         else => {
             log.warn("geode.auth.user_enable/disable failed", &.{
                 Attr.string("username", username),
                 Attr.string("error", @errorName(err)),
             });
-            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
-            row[1] = Value{ .Str = try allocator.dupe(u8, username) };
-            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
+            freeStatusScaffold(allocator, columns, row, rows);
+            return err;
         },
     };
     row[0] = Value{ .Str = if (is_enable)
@@ -824,7 +819,7 @@ fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, 
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
-fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleUserAssignRole(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     // geode.auth.user_assign_role(username, role) -> status
     var username: []const u8 = "";
     var role_name: []const u8 = "";
@@ -840,9 +835,11 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
 
+    // SONNY-6359: the failures below are error statuses; they answered 00000
+    // with a status row "error: ...".
     if (username.len == 0 or role_name.len == 0) {
-        row[0] = Value{ .Str = try allocator.dupe(u8, "error: username and role required") };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
+        freeStatusScaffold(allocator, columns, row, rows);
+        return error.InvalidArgs;
     }
 
     // Try built-in roles first.
@@ -850,15 +847,10 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
         user_mgmt.assignRole(allocator, username, builtin_role) catch |err| {
             // SONNY-3038: the change could not be saved (a downgrade is
             // enforced by locking the user out).
-            if (err == error.UserNotPersisted) {
-                allocator.free(columns[0]);
-                allocator.free(columns);
-                allocator.free(row);
-                allocator.free(rows);
-                return err;
-            }
-            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
-            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
+            freeStatusScaffold(allocator, columns, row, rows);
+            // No such user: 42704 for an Admin (SONNY-6291's rule).
+            if (err == error.Unauthenticated) return missingUser(allocator, proc_name, context);
+            return err;
         };
         row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "assigned {s} to {s}", .{ role_name, username }) };
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
@@ -1008,12 +1000,14 @@ fn handleUserChangePassword(allocator: std.mem.Allocator, _: []const u8, call_st
     // Bug 731 (same family) / MULTI_TENANCY_AUDIT_REPORT S6: a FAILED
     // verification used to be logged and then ignored, so the change went
     // through anyway and the caller was told "Password changed". Propagate.
-    if (old_pw.len > 0) {
-        _ = user_mgmt.authenticate(username, old_pw) catch |err| {
-            log.warn("geode.auth.user_change_password: old password verification failed", &.{Attr.string("error", @errorName(err))});
-            return err;
-        };
-    }
+    // CANARY: REQ=REQ-SONNY-6359-CHANGE-PASSWORD-OLD-REQUIRED; FEATURE="GQL Auth DDL"; ASPECT=OldPasswordAlwaysChecked; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6359: always, an empty old password included (it skipped the
+    // check, so '' changed any user's password); a reset without the old
+    // password is user_reset_password.
+    _ = user_mgmt.authenticate(username, old_pw) catch |err| {
+        log.warn("geode.auth.user_change_password: old password verification failed", &.{Attr.string("error", @errorName(err))});
+        return err;
+    };
     // Bug 731 (same family): a failed password update used to be swallowed and
     // still reported "Password changed for <user>" — a silent success on a
     // failed change. Propagate so the caller sees the failure.
@@ -1514,15 +1508,13 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
 
-    // No resource: per-graph grants require an ON GRAPH clause. Be honest.
+    // CANARY: REQ=REQ-SONNY-6359-AUTH-FAILURES-ARE-ERRORS; FEATURE="GQL Auth DDL"; ASPECT=GrantRevokeRefusals; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6359: no resource: there is no global per-privilege grant model
+    // (global privilege is the user's role), so it is refused (0A000) with
+    // nothing changed. It answered 00000 with a "note:" status row.
     if (resource.len == 0) {
-        row[0] = Value{ .Str = if (is_grant)
-            try std.fmt.allocPrint(allocator, "note: global privilege grants are governed by the user's role; " ++
-                "per-graph grants require ON GRAPH (granted nothing persistent for {s})", .{target})
-        else
-            try std.fmt.allocPrint(allocator, "note: global privilege revocations are governed by the user's role; " ++
-                "per-graph revocations require ON GRAPH (revoked nothing persistent for {s})", .{target}) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
+        freeStatusScaffold(allocator, columns, row, rows);
+        return error.GlobalPrivilegeNotSupported;
     }
 
     // Map perm name (case-insensitive) to action code(s): 0=read, 1=write, 2=schema
@@ -1544,8 +1536,10 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
         actions_buf[2] = 2;
         actions = actions_buf[0..3];
     } else {
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: unknown privilege: {s}", .{perm}) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
+        // SONNY-6359: an error status (22023); it answered 00000 with a row
+        // "error: unknown privilege".
+        freeStatusScaffold(allocator, columns, row, rows);
+        return error.UnknownPrivilege;
     }
 
     // Resolve target username -> user_id via callback (null in CLI / test contexts).

@@ -71,7 +71,7 @@ echo "[metrics-endpoints] booting geode serve on 127.0.0.1:${QUIC_PORT} (metrics
 
 # GEODE_METRICS_PORT is the env var read by src/server/main.zig:541 which
 # in turn calls metrics_server.initGlobalMetrics() → MetricsServer.start().
-GEODE_ADMIN_PASSWORD="GeodeTestPassword123!" \
+GEODE_ADMIN_PASSWORD="Geode Test Admin Passphrase" \
 GEODE_METRICS_PORT="${METRICS_PORT}" \
 "${GEODE_BIN}" serve \
     --data-dir "${DATA_DIR}" \

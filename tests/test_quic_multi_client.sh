@@ -7,7 +7,7 @@ set -e
 echo "=== QUIC Multi-Client Test Suite ==="
 echo ""
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 
 # Function to run a query and check result
 run_query() {

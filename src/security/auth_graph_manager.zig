@@ -1721,6 +1721,10 @@ pub const AuthGraphManager = struct {
     ) !void {
         const max_actions = 8;
         if (actions.len > max_actions) return error.TooManyGrantActions;
+        // SONNY-6359: the grant records change under auth_ddl_lock (the auth
+        // DDL holds it already; re-entrant), before any graph lock.
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
         suspendStatementUndo();
         defer geode.statement_undo.resumeCapture();
         var stored_new: [max_actions]bool = undefined;
@@ -1792,6 +1796,9 @@ pub const AuthGraphManager = struct {
         graph_name: []const u8,
         action: u8,
     ) !bool {
+        // SONNY-6359: as grantGraphPermissionsWriteThrough.
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
         suspendStatementUndo();
         defer geode.statement_undo.resumeCapture();
         const live_removed = if (pol) |p| p.revokeGraphPermission(user_id, graph_name, action) else false;
@@ -1806,9 +1813,14 @@ pub const AuthGraphManager = struct {
         return live_removed or stored_removed;
     }
 
+    // CANARY: REQ=REQ-SONNY-6359-GRANT-READERS-LOCKED; FEATURE="GQL Auth DDL Persistence"; ASPECT=GrantListingsLocked; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
     /// SONNY-1333: the stored grants of one user, for SHOW GRANTS. Caller owns
-    /// the returned slice.
+    /// the returned slice. SONNY-6359: under `auth_ddl_lock`, as GRANT /
+    /// REVOKE change the grant records under it; it read them unlocked.
+    /// Callers hold no graph lock but their session graph's.
     pub fn listGraphGrantsForUser(self: *Self, allocator: std.mem.Allocator, user_id: u64) ![]user_storage.UserStorageBackend.GraphGrantRecord {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
         const all = try self.storage.listGraphGrants(allocator);
         defer allocator.free(all);
         var out: std.ArrayList(user_storage.UserStorageBackend.GraphGrantRecord) = .empty;
@@ -1937,7 +1949,10 @@ pub const AuthGraphManager = struct {
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     /// List all persisted graph grants. Caller owns the returned slice.
+    /// SONNY-6359: under `auth_ddl_lock` (see `listGraphGrantsForUser`).
     pub fn listGraphGrants(self: *Self, allocator: std.mem.Allocator) ![]user_storage.UserStorageBackend.GraphGrantRecord {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
         return self.storage.listGraphGrants(allocator);
     }
 

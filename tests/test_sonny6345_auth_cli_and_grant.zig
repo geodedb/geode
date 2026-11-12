@@ -248,7 +248,9 @@ test "SONNY-6345: the auth DDL results own their rows (no leak when the caller f
     try w.run("SHOW USERS");
     try w.run("GRANT READ ON GRAPH g1 TO alice");
     try w.run("REVOKE READ ON GRAPH g1 FROM alice");
-    try w.run("GRANT WRITE TO alice");
+    // SONNY-6359: a GRANT without ON GRAPH is an error (0A000), no longer a
+    // "note:" status row; the failed call frees what it built.
+    try testing.expectError(error.GlobalPrivilegeNotSupported, w.run("GRANT WRITE TO alice"));
     try w.run("DROP ROLE auditors6345");
     try w.run("DROP USER carol");
     try w.run("CALL geode.auth.user_create('dave', 'auto_generated_password_placeholder')");

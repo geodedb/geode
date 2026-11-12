@@ -205,8 +205,16 @@ test "SONNY-6359: over gRPC an Admin's ALTER USER <other> SET PASSWORD resets it
     try expectCode(ga, carol, "ALTER USER dave SET PASSWORD '" ++ GOOD3 ++ "'", "42501");
     try testing.expect(canLogIn("dave", GOOD));
 
-    // One's own password, on the intercept.
-    try fx.expectRuns(ga, carol, "ALTER USER carol SET PASSWORD '" ++ GOOD3 ++ "'");
+    // One's own password, on the intercept (a status-only success: no
+    // payload, bug 731-4b).
+    const own = try fx.execute(ga, carol, "ALTER USER carol SET PASSWORD '" ++ GOOD3 ++ "'");
+    if (own.payload) |p| switch (p) {
+        .@"error" => |e| {
+            std.debug.print("own ALTER USER SET PASSWORD refused: {s} {s}\n", .{ e.code, e.message });
+            return error.OwnPasswordChangeRefused;
+        },
+        else => {},
+    };
     try testing.expect(canLogIn("carol", GOOD3));
 }
 

@@ -7,7 +7,7 @@ set -e
 echo "=== QUIC Integration Test Suite ==="
 echo ""
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 
 # Test 1: Basic QUIC query execution
 echo "Test 1: Basic QUIC query execution"

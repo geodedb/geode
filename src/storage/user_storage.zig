@@ -904,8 +904,14 @@ pub const UserStorageBackend = struct {
         return false;
     }
 
+    // CANARY: REQ=REQ-SONNY-6359-GRANT-READERS-LOCKED; FEATURE="GQL Auth DDL Persistence"; ASPECT=HasGraphGrantLocked; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
     /// SONNY-1333: is the grant (user_id, graph_name, action) stored?
+    /// SONNY-6359: under `auth_ddl_lock` (re-entrant: the GRANT / REVOKE
+    /// write-throughs call it holding the lock), under which GRANT / REVOKE
+    /// change `graph_grant_nodes`; it read the map unlocked.
     pub fn hasGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
+        const ddl_guard = @import("geode").security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
         return self.graph_grant_nodes.contains(graphGrantId(user_id, graph_name, action));
     }
 

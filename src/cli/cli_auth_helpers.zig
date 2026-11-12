@@ -460,6 +460,24 @@ pub fn deinitAndSaveCliAuth(allocator: std.mem.Allocator, mgr: *AuthGraphManager
     }
 }
 
+/// SONNY-6359: `deinitAndSaveCliAuth` for a command that changes nothing
+/// (`geode auth verify`): no seal and no save, then the same teardown.
+/// Opening the store still has its own side effects on disk (the storage
+/// engine checkpoints and truncates each graph's WAL, rewrites the graph
+/// registry and records the lock holder): the store has no read-only open.
+pub fn deinitCliAuthWithoutSaving(allocator: std.mem.Allocator, mgr: *AuthGraphManager) void {
+    _ = allocator;
+    g_verified_key = null;
+    g_empty_store = false;
+    mgr.deinit();
+    releaseCliDataDirLock();
+    if (g_resolved_data_dir_alloc) |a| {
+        if (g_resolved_data_dir) |d| a.free(d);
+        g_resolved_data_dir = null;
+        g_resolved_data_dir_alloc = null;
+    }
+}
+
 // -- Tests --
 
 // These tests previously encoded the CLI's own policy (>=8 chars, one letter,

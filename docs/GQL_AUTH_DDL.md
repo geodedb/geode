@@ -77,6 +77,21 @@ USER` applied an older rule (8 characters, a letter and a digit) and a
 password change applied none. Existing passwords keep working; the policy is
 checked when a password is set.
 
+### Password changes (SONNY-6359)
+
+- `ALTER USER <self> SET PASSWORD '<new>'` (the session's own user) is
+  handled by the QUIC and gRPC password intercept, so it also works while
+  the session must reset its password.
+- `ALTER USER <other> SET PASSWORD '<new>'` runs as
+  `geode.auth.user_reset_password`: an Admin only (42501 otherwise), with the
+  password policy (22000), audited like the other admin procedures. Over QUIC
+  and gRPC the intercept used to refuse it with 42501 for everyone, Admin
+  included. A session that must reset its own password cannot change
+  another user's (08P01) until it has.
+- `geode.auth.user_change_password(username, old, new)` checks `old`
+  against the stored password; an empty or wrong one fails with 28000 and
+  changes nothing. An empty `old` used to skip the check.
+
 ---
 
 ## Statement to Procedure Mapping
@@ -117,6 +132,15 @@ that does not exist is an error: 42704 for an Admin, and for anyone else
 the same 42501 refusal as another user's, so a non-admin cannot probe
 which users exist. It used to show any user to any authenticated user, and
 made up a row (`unknown` / `user` / `active`) for a missing one.
+
+Failures are GQLSTATUS errors, never a 00000 status row starting `error:`
+(SONNY-6359): `CREATE USER` / `geode.auth.user_create` of a user that exists
+fails with 42710 and of a reserved name (`geode-cluster`) with 42939;
+`geode.auth.user_assign_role` without a user or role fails with 22023 and of
+a user that does not exist with 42704 for an Admin; a privilege other than
+`READ`, `WRITE`, `SCHEMA` or `ALL` fails with 22023; and an
+`ALTER USER ... ENABLE | DISABLE` or role change that fails for another
+reason (the security graph cannot be read) fails with that error (58000).
 
 `GRANT <priv> ON GRAPH g TO <user>` and `REVOKE <priv> ON GRAPH g FROM
 <user>` (and `geode.auth.grant` / `revoke`) of a user that does not exist
@@ -376,9 +400,11 @@ create/revoke) are wired at startup in `server_init`.
 ## Known Limitations
 
 1. **No model for `GRANT <privilege>` without `ON GRAPH`.** A global per-privilege
-   grant (e.g. `GRANT WRITE TO alice` with no graph qualifier) is not persisted
-   and returns an explanatory note. Global privilege is governed by the user's
-   role — there is no per-privilege override model at the global level.
+   grant or revoke (e.g. `GRANT WRITE TO alice` with no graph qualifier, or
+   `geode.auth.grant` / `revoke` with an empty resource) fails with SQLSTATE
+   0A000 and changes nothing; it used to answer 00000 with a `note:` row
+   (SONNY-6359). Global privilege is governed by the user's role — there is
+   no per-privilege override model at the global level.
 
 2. **Custom roles carry no privileges and cannot be granted to users.**
    Roles created via `CREATE ROLE <custom-name>` are stored (and persisted) in

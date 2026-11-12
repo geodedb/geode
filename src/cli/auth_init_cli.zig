@@ -362,6 +362,8 @@ pub fn cmdAuthVerify(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: us
         std.debug.print("Error: Failed to resolve the data directory: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
+    // SONNY-6359: it leaked (initCliAuthManager keeps its own copy).
+    defer allocator.free(resolved);
     const has_state = cli_auth.hasAuthState(allocator, resolved) catch |err| {
         std.debug.print("Error: Failed to read the graph registry in {s}: {s}\n", .{ resolved, @errorName(err) });
         std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -379,7 +381,10 @@ pub fn cmdAuthVerify(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: us
         std.debug.print("Error: Failed to initialize auth store: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    // CANARY: REQ=REQ-SONNY-6359-AUTH-VERIFY-SAVES-NOTHING; FEATURE="OfflineAuthStoreSafety"; ASPECT=VerifyReadOnlyTeardown; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6359: a verify changes nothing, so it does not take the save path
+    // of a changing command (seal, saveIfDirty).
+    defer cli_auth.deinitCliAuthWithoutSaving(allocator, &mgr);
 
     // SONNY-3035: an empty store (no records, no chain root) verifies with
     // no key; otherwise the key is looked up, never generated: a key made up

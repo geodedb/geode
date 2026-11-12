@@ -172,6 +172,19 @@ fn checkedCharLen(len: usize) error{InvalidParams}!u16 {
     return std.math.cast(u16, len) orelse error.InvalidParams;
 }
 
+// CANARY: REQ=REQ-SONNY-6359-ALTER-USER-OTHER-PASSWORD; FEATURE="GQL Auth DDL"; ASPECT=AdminResetOverWire; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6359: whether the QUIC / gRPC password intercept handles `ALTER
+/// USER <target> SET PASSWORD`: the session's own password (it also runs
+/// during a forced reset), and any request with no authenticated user (the
+/// intercept refuses it). Another user's goes to the parser, which runs it
+/// as `geode.auth.user_reset_password` (Admin only, the password policy,
+/// audited), as docs/GQL_AUTH_DDL.md maps it; the intercept refused it with
+/// 42501 for everyone, Admin included.
+pub fn passwordInterceptApplies(authenticated_user: ?[]const u8, target: []const u8) bool {
+    const user = authenticated_user orelse return true;
+    return std.mem.eql(u8, user, target);
+}
+
 pub fn mapError(err: anyerror) ErrorInfo {
     return switch (err) {
         // SONNY-2675: grouping_error (42803), the class every other grouping
@@ -436,6 +449,12 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-6291: user_show / user_permissions (SHOW PERMISSIONS FOR) of
         // a user that does not exist, for an Admin.
         error.UserNotFound => .{ .code = "42704", .message = "User does not exist" },
+        // SONNY-6359: auth procedure failures that answered 00000 with a
+        // status row starting "error:" or "note:".
+        error.UserAlreadyExists => .{ .code = "42710", .message = "User already exists" },
+        error.ReservedUsername => .{ .code = "42939", .message = "Reserved user name: geode-cluster is the federation node identity and cannot be a user" },
+        error.UnknownPrivilege => .{ .code = "22023", .message = "Unknown privilege: expected READ, WRITE, SCHEMA or ALL" },
+        error.GlobalPrivilegeNotSupported => .{ .code = "0A000", .message = "GRANT / REVOKE of a privilege needs ON GRAPH <graph>: there are no global per-privilege grants (global privilege is the user's role: admin, readwrite, user, readonly); nothing was changed" },
         error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
         // GAP-0856: distributed EXPLAIN/PROFILE is intentionally node-local only.
         error.DistributedExplainUnsupported => .{ .code = "0A000", .message = @import("../distributed/distributed_explain.zig").unsupported_message },

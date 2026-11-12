@@ -2982,7 +2982,12 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
     // CANARY: REQ=REQ-GAP-0284-ALTER-USER-GRPC-WIRE; FEATURE="PasswordResetEnforcement"; ASPECT=GrpcExecuteIntercept; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
     {
         const trimmed = std.mem.trim(u8, req.query, " \t\r\n");
-        if (parseAlterUserSetPassword(trimmed)) |parsed| {
+        const parsed_password = parseAlterUserSetPassword(trimmed);
+        // SONNY-6359: another user's password goes to the parser
+        // (geode.auth.user_reset_password: Admin only, the policy).
+        const intercepted = if (parsed_password) |p| proto_util.passwordInterceptApplies(state.authenticated_user, p.username) else false;
+        if (intercepted) {
+            const parsed = parsed_password.?;
             // SONNY-2751: a read-only request refuses a password change, as
             // the read-only floor refuses the rest of the security DDL (see
             // the QUIC handler).

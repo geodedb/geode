@@ -224,9 +224,9 @@ test "SONNY-6331: user_create's generated password meets the policy and logs in"
 // ---------------------------------------------------------------------------
 
 /// The GQL statement through the executor's statement dispatch, as an Admin
-/// (ALTER USER ... SET PASSWORD of ANOTHER user: the QUIC / gRPC password
-/// intercept answers that one with 42501 before the parser, so this is the
-/// route an embedded or MCP caller takes; admin_ddl.executeAlterUser).
+/// (ALTER USER ... SET PASSWORD of ANOTHER user: admin_ddl.executeAlterUser,
+/// the route an embedded or MCP caller takes, and since SONNY-6359 the QUIC /
+/// gRPC route too: the password intercept handles only one's own password).
 fn gqlAsAdmin(w: *World, query: []const u8) !void {
     var parsed = try geode.parseGql(query, testing.allocator);
     defer parsed.deinit();

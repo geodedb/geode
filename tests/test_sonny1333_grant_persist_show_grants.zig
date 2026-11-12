@@ -487,13 +487,13 @@ test "SONNY-1333: a CREATE USER whose save fails answers an error status and cre
         const ga = w.ga();
 
         w.sec_fail.arm(offset);
-        const rows = try queryRows(ga, w.admin, "CREATE USER carol SET PASSWORD 'Carol Grant Persist Passphrase'");
+        // SONNY-6359: a failure is an error status (the save's 58030, or an
+        // allocation's own); it was a 00000 status row starting "error".
+        const code = try fx.outcome(ga, w.admin, "CREATE USER carol SET PASSWORD 'Carol Grant Persist Passphrase'");
         const induced = w.sec_fail.failed;
         w.sec_fail.disarm();
-        try testing.expectEqual(@as(usize, 1), rows.len);
-        const status = rows[0][0].?;
 
-        if (std.mem.startsWith(u8, status, "error")) {
+        if (code != null) {
             try testing.expect(induced);
             failures += 1;
             // No user in memory (no login) and none stored.
@@ -503,7 +503,7 @@ test "SONNY-1333: a CREATE USER whose save fails answers an error status and cre
             const again = try queryRows(ga, w.admin, "CREATE USER carol SET PASSWORD 'Carol Grant Persist Passphrase'");
             try testing.expectEqualStrings("created carol", again[0][0].?);
         } else {
-            try testing.expectEqualStrings("created carol", status);
+            try testing.expect(user_mgmt.getUser("carol") != null);
         }
         try testing.expect(user_mgmt.getUser("carol") != null);
         try testing.expect((try w.agm.findUserIdByName("carol")) != null);
