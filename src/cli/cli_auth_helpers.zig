@@ -30,7 +30,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 
 const builtin = @import("builtin");
 const geode = @import("geode");
-const graph_store = geode.graph_store;
+pub const graph_store = geode.graph_store;
 const auth_graph_manager = @import("auth_graph_manager");
 const data_dir_lock = @import("data_dir_lock");
 pub const AuthGraphManager = auth_graph_manager.AuthGraphManager;
@@ -211,6 +211,9 @@ fn releaseCliDataDirLock() void {
 /// The data directory `initCliAuthManager` resolved (flag, GEODE_DATA_DIR, or
 /// the default); the HMAC key file lives there.
 var g_resolved_data_dir: ?[]const u8 = null;
+/// The allocator `initCliAuthManager` copied it with (SONNY-6345);
+/// `deinitAndSaveCliAuth` frees it.
+var g_resolved_data_dir_alloc: ?std.mem.Allocator = null;
 
 /// The key the chain verified with, set by `verifyChainBeforeChange`;
 /// `deinitAndSaveCliAuth` seals the command's change with it.
@@ -276,6 +279,30 @@ pub fn requireIntactChain(allocator: std.mem.Allocator, mgr: *AuthGraphManager, 
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6345-CLI-DEFAULT-DATA-DIR; FEATURE="OfflineAuthStoreSafety"; ASPECT=ServerDefaultDataDir; STATUS=TESTED; TEST=tests/test_sonny6345_auth_cli_and_grant.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6345: the data directory the offline auth CLI (`geode auth init |
+/// reseal | verify | policy | grant`, `geode user`, `geode role`) opens:
+/// `--data-dir`, else the directory `geode serve` opens with no flag
+/// (`graph_store.getPersistenceFilePath`: GEODE_DATA_DIR, else the per-user
+/// `graph_store.defaultDataDir`). It was GEODE_DATA_DIR, else /var/lib/geode,
+/// so with neither set the CLI inspected and changed a different store than
+/// the server's. Caller owns the result.
+pub fn resolveCliDataDir(allocator: std.mem.Allocator, flag: ?[]const u8) ![]u8 {
+    if (flag) |dir| return allocator.dupe(u8, dir);
+    return graph_store.getPersistenceFilePath(allocator);
+}
+
+/// The data directory `initCliAuthManager` opened, once it has.
+pub fn resolvedDataDir() ?[]const u8 {
+    return g_resolved_data_dir;
+}
+
+/// SONNY-6345: whether `data_dir` holds auth state (a registered
+/// `__geode_security` graph), read without creating or locking anything.
+pub fn hasAuthState(allocator: std.mem.Allocator, data_dir: []const u8) !bool {
+    return geode.graph_storage_adapter.graphRegisteredOnDisk(allocator, data_dir, graph_store.SECURITY_GRAPH_NAME);
+}
+
 // -- Offline Auth Manager Initialization --
 
 /// Initialise an AuthGraphManager for CLI offline operations.
@@ -285,13 +312,11 @@ pub fn requireIntactChain(allocator: std.mem.Allocator, mgr: *AuthGraphManager, 
 ///
 /// The caller must call `deinit()` on the returned manager when done.
 pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !AuthGraphManager {
-    // Resolve the data directory from the flag, env var, or default
-    const resolved_dir: []const u8 = if (data_dir) |dir|
-        dir
-    else if (getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |env_dir|
-        env_dir
-    else |_|
-        "/var/lib/geode";
+    // SONNY-6345: the flag, else the directory `geode serve` opens (it was
+    // GEODE_DATA_DIR, else /var/lib/geode). Kept until
+    // `deinitAndSaveCliAuth` (`resolvedDataDir` reads it).
+    const resolved_dir: []const u8 = try resolveCliDataDir(allocator, data_dir);
+    errdefer allocator.free(resolved_dir);
 
     // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-002; FEATURE="DataDirLock"; ASPECT=OfflineCliWriter; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-29
     // ENG-3921: these offline CLI entry points open the data directory
@@ -304,6 +329,11 @@ pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !
     errdefer releaseCliDataDirLock();
     // SONNY-2798: where `requireIntactChain` finds the HMAC key.
     g_resolved_data_dir = resolved_dir;
+    g_resolved_data_dir_alloc = allocator;
+    errdefer {
+        g_resolved_data_dir = null;
+        g_resolved_data_dir_alloc = null;
+    }
 
     // Use initGlobalStore which initializes the storage adapter so that
     // saveIfDirty actually persists node/edge data to disk.  Without the
@@ -346,6 +376,11 @@ pub fn deinitAndSaveCliAuth(allocator: std.mem.Allocator, mgr: *AuthGraphManager
     // ENG-3921: drop the data-dir lock only after the flush has landed, so a
     // server starting up behind us never reads a half-written store.
     releaseCliDataDirLock();
+    if (g_resolved_data_dir_alloc) |a| {
+        if (g_resolved_data_dir) |d| a.free(d);
+        g_resolved_data_dir = null;
+        g_resolved_data_dir_alloc = null;
+    }
 }
 
 // -- Tests --

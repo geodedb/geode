@@ -12756,3 +12756,21 @@ test "GAP-0900 throughput: addEx(assume_new) builds a complete low-selectivity p
     const p2 = idx2.get(2, "k", H) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 1), p2.len);
 }
+
+// CANARY: REQ=REQ-SONNY-6345-AUTH-VERIFY-NO-STATE; FEATURE="OfflineAuthStoreSafety"; ASPECT=ReadOnlyRegistryProbe; STATUS=TESTED; TEST=tests/test_sonny6345_auth_cli_and_grant.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6345: whether the store in `data_dir` registers a graph named
+/// `name`, read from its `graph_registry.dat` without opening, creating or
+/// locking anything (`StorageAdapter.init` creates the directory and the
+/// registry). False when the directory or the registry does not exist.
+pub fn graphRegisteredOnDisk(allocator: std.mem.Allocator, data_dir: []const u8, name: []const u8) !bool {
+    const registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
+    defer allocator.free(registry_path);
+    std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), registry_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    var registry = gs.registry.GraphRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.loadFromFile(registry_path);
+    return registry.findByName(name) != null;
+}

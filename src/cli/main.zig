@@ -512,7 +512,7 @@ fn printAuthUsage() void {
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Offline Options (init, reseal, verify):\n" ++
-        "  --data-dir <path>      Data directory (default: GEODE_DATA_DIR env or ./data)\n" ++
+        "  --data-dir <path>      Data directory (default: GEODE_DATA_DIR, else the server's default: $XDG_STATE_HOME/geode or ~/.local/state/geode)\n" ++
         "\n" ++
         "Session Management:\n" ++
         "  Sessions are issued by the server and stored in ~/.geode/credentials.json\n" ++

@@ -4,6 +4,33 @@
 
 ### Security
 
+- **Offline auth CLI uses the server's data directory; `geode auth verify`
+  no longer passes a store with no auth state; GRANT of a missing user is an
+  error; auth DDL results own their rows (SONNY-6345).** (1) **Behaviour
+  change:** with no `--data-dir` and no `GEODE_DATA_DIR`, `geode auth init |
+  reseal | verify | policy | grant`, `geode user` and `geode role` opened
+  `/var/lib/geode` (their help said `./data`) while `geode serve` opens the
+  per-user default (`$XDG_STATE_HOME/geode`, `~/.local/state/geode`,
+  `/tmp/geode-<uid>`), so they inspected and changed another store. They now
+  resolve the directory as the store does
+  (`cli_auth_helpers.resolveCliDataDir` over
+  `graph_store.getPersistenceFilePath`); `geode auth init` creates it, and
+  the HMAC key is looked up in the resolved directory (it was looked up only
+  under an explicit `--data-dir`). Operators who relied on the
+  `/var/lib/geode` default must pass `--data-dir /var/lib/geode` or set
+  `GEODE_DATA_DIR`. (2) **Behaviour change:** `geode auth verify` on a
+  directory with no `__geode_security` graph created the directory, the
+  registry, a lock file and the security graph and printed `0 records,
+  integrity OK` with exit 0; it now reads the registry only, creates
+  nothing, and reports that there is no auth state with exit 1. (3)
+  **Behaviour change:** `GRANT` / `REVOKE ... ON GRAPH` (and
+  `geode.auth.grant` / `revoke`) of a user that does not exist answered
+  00000 with a row `error: user not found`; it is now 42704 (`User does not
+  exist`), and with no security graph wired 58030. (4) The status rows of
+  `CREATE` / `ALTER` / `DROP USER`, `GRANT` and `REVOKE` are owned by their
+  result (they leaked when the caller freed the result with a
+  general-purpose allocator).
+  Regression: `zig build test-sonny6345-auth-cli-and-grant`.
 - **`GRANT ROLE <custom role>` is refused instead of reporting a grant that
   confers nothing (SONNY-6292).** A custom role (`CREATE ROLE`) carries no
   privileges. `GRANT ROLE <custom> TO <user>`, `ALTER USER <user> SET ROLE

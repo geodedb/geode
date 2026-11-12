@@ -118,6 +118,14 @@ the same 42501 refusal as another user's, so a non-admin cannot probe
 which users exist. It used to show any user to any authenticated user, and
 made up a row (`unknown` / `user` / `active`) for a missing one.
 
+`GRANT <priv> ON GRAPH g TO <user>` and `REVOKE <priv> ON GRAPH g FROM
+<user>` (and `geode.auth.grant` / `revoke`) of a user that does not exist
+fail with 42704 (`User does not exist`) and change nothing (SONNY-6345).
+They used to succeed (SQLSTATE 00000) with a status row `error: user not
+found: <user>`. Without a security graph to look users up in (an embedded
+executor with no persistence wired), they fail with 58030 and grant or
+revoke nothing.
+
 The `geode.auth.apikey_*` procedures (`apikey_create`, `apikey_list`,
 `apikey_revoke`, `apikey_check_scope`, and any other `apikey_` name) answer
 0A000: the server has no API-key store, and its QUIC / gRPC handshake does

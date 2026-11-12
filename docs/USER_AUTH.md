@@ -47,8 +47,17 @@ password, it is written once to a file in the data directory:
 ```
 
 `<data-dir>` is the directory the command runs on: `geode serve
---data-dir`, `geode auth init --data-dir`, or `GEODE_DATA_DIR`. `geode auth
-init` defaults to `/var/lib/geode`.
+--data-dir`, `geode auth init --data-dir`, or `GEODE_DATA_DIR`. With neither,
+`geode auth init` (like every offline `geode auth`, `geode user` and `geode
+role` command, SONNY-6345) uses the directory `geode serve` uses:
+`$XDG_STATE_HOME/geode`, else `~/.local/state/geode`, else
+`/tmp/geode-<uid>`. It used to default to `/var/lib/geode`, a different
+store than the server's.
+
+`geode auth verify` on a directory with no `__geode_security` graph (or no
+store at all) reports that there is no auth state and exits 1, creating
+nothing; it used to create the security graph and report `0 records,
+integrity OK` (SONNY-6345).
 
 - The file is created with `O_CREAT | O_EXCL | O_NOFOLLOW` and mode 0600, set
   again after the open, so the umask cannot widen it.

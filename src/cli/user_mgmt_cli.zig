@@ -180,13 +180,15 @@ fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
     return null;
 }
 
-/// Resolve the data dir the offline auth store will be opened from, mirroring
-/// `initCliAuthManager`'s fallback chain (explicit --data-dir, then
-/// GEODE_DATA_DIR, then the packaged default).
-fn resolveDataDir(data_dir: ?[]const u8) []const u8 {
-    if (data_dir) |d| return d;
-    if (std.c.getenv("GEODE_DATA_DIR")) |p| return std.mem.span(p);
-    return "/var/lib/geode";
+/// Resolve the data dir the offline auth store will be opened from:
+/// `initCliAuthManager`'s chain (SONNY-6345: `cli_auth.resolveCliDataDir`,
+/// the server's default directory when there is no --data-dir).
+/// Caller owns the result.
+fn resolveDataDir(allocator: std.mem.Allocator, data_dir: ?[]const u8) []const u8 {
+    return cli_auth.resolveCliDataDir(allocator, data_dir) catch {
+        std.debug.print("Error: out of memory resolving the data directory\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 }
 
 fn hasFlag(argv: [][:0]u8, flag: []const u8) bool {
@@ -289,7 +291,8 @@ fn guardOfflineAuthStoreWrite(
     subcommand: []const u8,
     force: bool,
 ) void {
-    const resolved = resolveDataDir(data_dir);
+    const resolved = resolveDataDir(allocator, data_dir);
+    defer allocator.free(resolved);
     const holder = findDataDirHolderPid(allocator, resolved) orelse return;
 
     std.debug.print(
@@ -1054,7 +1057,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // stale, so the next server start failed `verifyChain` with
         // error.AuthChainTampered. Go through the same resealing seam
         // reset-password uses (which also clears password_reset_required).
-        var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, resolveDataDir(data_dir)) catch {
+        const kr_dir = resolveDataDir(allocator, data_dir);
+        defer allocator.free(kr_dir);
+        var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, kr_dir) catch {
             std.debug.print("Error: could not resolve HMAC key (set GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY or place .geode_hmac_key in the data dir)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1130,9 +1135,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // never get re-signed, and the next server start fails with
         // error.AuthChainTampered (verifyChain at server_init.zig:314).
         // `resolveDataDir` mirrors initCliAuthManager's data_dir fallback so
-        // .geode_hmac_key is found at the default /var/lib/geode location when
+        // .geode_hmac_key is found in the default data directory when
         // --data-dir is omitted.
-        const resolved_data_dir: ?[]const u8 = resolveDataDir(data_dir);
+        const resolved_data_dir = resolveDataDir(allocator, data_dir);
+        defer allocator.free(resolved_data_dir);
         var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, resolved_data_dir) catch {
             std.debug.print("Error: could not resolve HMAC key (set GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY or place .geode_hmac_key in the data dir)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1172,8 +1178,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Help / missing-subcommand checks BEFORE opening the auth store —
     // these paths must not require any disk I/O (graph_storage_adapter
-    // would otherwise attempt to open /var/lib/geode and fail noisily
-    // for any user without that path's permissions).
+    // would otherwise open the default data directory).
     if (start_idx + 1 >= argv.len) {
         std.debug.print("Error: missing role subcommand\n", .{});
         printRoleUsage();

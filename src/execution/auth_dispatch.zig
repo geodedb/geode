@@ -542,6 +542,12 @@ pub fn execute(
 // Handler functions -- extracted from the former if-else dispatch chain.
 // ===========================================================================
 
+// CANARY: REQ=REQ-SONNY-6345-AUTH-RESULT-OWNERSHIP; FEATURE="GQL Auth DDL"; ASPECT=StatusRowsOwned; STATUS=TESTED; TEST=tests/test_sonny6345_auth_cli_and_grant.zig; OWNER=security; UPDATED=2026-11-12
+// SONNY-6345: this handler's result, and those of user_delete,
+// user_enable / user_disable, user_assign_role, user_change_password,
+// user_reset_password, grant and revoke, own their status rows
+// (`owns_value_memory`, the username copied): a caller that frees the
+// result with a general-purpose allocator leaked them.
 fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     // geode.auth.user_create(username, password, email[, role]) -> status
     var username: []const u8 = "";
@@ -577,10 +583,10 @@ fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
         columns[1] = try allocator.dupe(u8, "username");
         const row = try allocator.alloc(Value, 2);
         row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
-        row[1] = Value{ .Str = username };
+        row[1] = Value{ .Str = try allocator.dupe(u8, username) };
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
     };
     // Include generated_password column when password was auto-generated
     const is_generated = std.mem.eql(u8, password, "auto_generated_password_placeholder");
@@ -591,11 +597,11 @@ fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     if (is_generated) columns[2] = try allocator.dupe(u8, "generated_password");
     const row = try allocator.alloc(Value, num_cols);
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "created {s}", .{username}) };
-    row[1] = Value{ .Str = username };
+    row[1] = Value{ .Str = try allocator.dupe(u8, username) };
     if (is_generated) row[2] = Value{ .Str = try allocator.dupe(u8, actual_password) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 // CANARY: REQ=REQ-AUTH-USER-IMPORT-002; FEATURE="AdminUserImport"; ASPECT=WireProcedure; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/authn_blake2b_migration.yml; OWNER=security; UPDATED=2026-08-30
@@ -733,10 +739,10 @@ fn handleUserDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     columns[1] = try allocator.dupe(u8, "username");
     const row = try allocator.alloc(Value, 2);
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "deleted {s}", .{username}) };
-    row[1] = Value{ .Str = username };
+    row[1] = Value{ .Str = try allocator.dupe(u8, username) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 // CANARY: REQ=REQ-SONNY-6291-APIKEY-USER-SHOW; FEATURE="GQL Auth DDL"; ASPECT=UserShowSelfOrAdmin; STATUS=TESTED; TEST=tests/test_sonny6291_apikey_user_show.zig; OWNER=security; UPDATED=2026-11-12
@@ -806,16 +812,16 @@ fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, 
                 Attr.string("error", @errorName(err)),
             });
             row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
-            row[1] = Value{ .Str = username };
-            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+            row[1] = Value{ .Str = try allocator.dupe(u8, username) };
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
         },
     };
     row[0] = Value{ .Str = if (is_enable)
         try std.fmt.allocPrint(allocator, "enabled {s}", .{username})
     else
         try std.fmt.allocPrint(allocator, "disabled {s}", .{username}) };
-    row[1] = Value{ .Str = username };
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    row[1] = Value{ .Str = try allocator.dupe(u8, username) };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -836,7 +842,7 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
 
     if (username.len == 0 or role_name.len == 0) {
         row[0] = Value{ .Str = try allocator.dupe(u8, "error: username and role required") };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
     }
 
     // Try built-in roles first.
@@ -852,10 +858,10 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
                 return err;
             }
             row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
-            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
         };
         row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "assigned {s} to {s}", .{ role_name, username }) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
     }
 
     // CANARY: REQ=REQ-SONNY-6292-CUSTOM-ROLE-GRANT-REFUSED; FEATURE="GQL Auth DDL"; ASPECT=CustomRoleGrantRefused; STATUS=TESTED; TEST=tests/test_sonny6292_custom_role_membership.zig; OWNER=security; UPDATED=2026-11-12
@@ -1021,7 +1027,7 @@ fn handleUserChangePassword(allocator: std.mem.Allocator, _: []const u8, call_st
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "Password changed for {s}", .{username}) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 fn handleUserResetPassword(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -1050,7 +1056,7 @@ fn handleUserResetPassword(allocator: std.mem.Allocator, _: []const u8, call_stm
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "Password reset for {s}", .{username}) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 fn handleMfaSetup(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -1489,7 +1495,7 @@ fn handlePolicyDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
 }
 
 // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-027; FEATURE="AuthDDLPersistence"; ASPECT=HandleGrantRevoke; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
-fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     var perm: []const u8 = "";
     var target: []const u8 = "";
     var resource: []const u8 = "";
@@ -1516,7 +1522,7 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
         else
             try std.fmt.allocPrint(allocator, "note: global privilege revocations are governed by the user's role; " ++
                 "per-graph revocations require ON GRAPH (revoked nothing persistent for {s})", .{target}) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
     }
 
     // Map perm name (case-insensitive) to action code(s): 0=read, 1=write, 2=schema
@@ -1539,21 +1545,24 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
         actions = actions_buf[0..3];
     } else {
         row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: unknown privilege: {s}", .{perm}) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
     }
 
     // Resolve target username -> user_id via callback (null in CLI / test contexts).
-    const uid_opt: ?u64 = if (g_grant_persist.resolve_user_id_fn) |f|
-        f(g_grant_persist.ctx, target)
-    else
-        null;
-
-    if (uid_opt == null) {
-        // Either no server context (CLI/test) or user does not exist in the graph.
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: user not found: {s}", .{target}) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
-    const uid = uid_opt.?;
+    // CANARY: REQ=REQ-SONNY-6345-GRANT-MISSING-USER; FEATURE="GQL Auth DDL"; ASPECT=GrantMissingUserIsError; STATUS=TESTED; TEST=tests/test_sonny6345_auth_cli_and_grant.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6345: a user that does not exist is an error, 42704 for an Admin
+    // (SONNY-6291's rule; only an Admin reaches here with authorization on).
+    // It answered SQLSTATE 00000 with a row "error: user not found". With no
+    // security graph to resolve users in, nothing can be granted or revoked.
+    const uid = blk: {
+        if (g_grant_persist.resolve_user_id_fn) |f| {
+            if (f(g_grant_persist.ctx, target)) |id| break :blk id;
+            freeStatusScaffold(allocator, columns, row, rows);
+            return missingUser(allocator, proc_name, context);
+        }
+        freeStatusScaffold(allocator, columns, row, rows);
+        return if (is_grant) error.GrantNotPersisted else error.RevokeNotPersisted;
+    };
 
     // CANARY: REQ=REQ-SONNY-3038-REVOKE-DURABLE; FEATURE="GQL Auth DDL Persistence"; ASPECT=RevokeFailureReported; STATUS=TESTED; TEST=tests/test_sonny3038_revoke_and_schema_ddl.zig; OWNER=security; UPDATED=2026-09-27
     // SONNY-3038: a revoke that could not be saved fails the call
@@ -1595,10 +1604,7 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     if (persist_failure != null) {
         // The in-memory RBAC state may have moved; tell the LSP providers.
         schema_change_notifier.notify();
-        allocator.free(columns[0]);
-        allocator.free(columns);
-        allocator.free(row);
-        allocator.free(rows);
+        freeStatusScaffold(allocator, columns, row, rows);
         return if (is_grant) error.GrantNotPersisted else error.RevokeNotPersisted;
     }
 
@@ -1613,7 +1619,16 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     // changes the LSP SchemaProvider's user-visible label/edge-type set.
     schema_change_notifier.notify();
 
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
+}
+
+/// Free a status result's columns, row and rows that an error path does not
+/// return (the row holds no value yet).
+fn freeStatusScaffold(allocator: std.mem.Allocator, columns: [][]const u8, row: []Value, rows: [][]Value) void {
+    for (columns) |c| allocator.free(c);
+    allocator.free(columns);
+    allocator.free(row);
+    allocator.free(rows);
 }
 
 /// The user a read-only procedure about one user's security state is asked
