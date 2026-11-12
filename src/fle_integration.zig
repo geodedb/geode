@@ -269,6 +269,112 @@ pub fn clearCurrentThreadState() void {
     const tid = std.Thread.getCurrentId();
     _ = per_thread_roles.remove(tid);
     _ = per_thread_tenants.remove(tid);
+    _ = per_thread_plaintext_gates.remove(tid);
+}
+
+// CANARY: REQ=REQ-SONNY-6334-FLE-PLAINTEXT-GATE; FEATURE="FieldLevelEncryption"; ASPECT=GpsDecryptFieldGate; STATUS=TESTED; TEST=tests/test_sonny6334_fle_authorization.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6334: the GPS `decrypt_field` half of the plaintext decision. A
+/// read of an encrypted field returns plaintext only when the request's FLE
+/// role is in the field's visibility roles AND this gate allows (GPS
+/// `decide(decrypt_field)` for the authenticated principal: the Admin
+/// builtin, or an ALLOW DECRYPT_FIELD policy; a DENY DECRYPT_FIELD refuses).
+/// It is asked once per encrypted value the role may read (the decision
+/// cache answers repeats), never for fields that are not encrypted.
+pub const PlaintextGate = struct {
+    ctx: ?*const anyopaque,
+    allows: *const fn (ctx: ?*const anyopaque) bool,
+};
+
+/// The request's gate on its thread, for reads made outside the executor's
+/// active context (the transports encode result rows after the executor
+/// returns). Set and cleared with the request's role and tenant
+/// (`ServerState.installRequestThreadState`); `clearCurrentThreadState`
+/// clears it.
+var per_thread_plaintext_gates: std.AutoHashMap(std.Thread.Id, PlaintextGate) = std.AutoHashMap(std.Thread.Id, PlaintextGate).init(std.heap.c_allocator);
+
+pub fn setCurrentPlaintextGate(gate: ?PlaintextGate) void {
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const tid = std.Thread.getCurrentId();
+    if (gate) |g| {
+        // A gate that cannot be recorded: the thread's FLE role goes too,
+        // so the request reads no plaintext (fail closed).
+        per_thread_plaintext_gates.put(tid, g) catch {
+            _ = per_thread_plaintext_gates.remove(tid);
+            _ = per_thread_roles.remove(tid);
+        };
+    } else {
+        _ = per_thread_plaintext_gates.remove(tid);
+    }
+}
+
+fn currentThreadPlaintextGate() ?PlaintextGate {
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    return per_thread_plaintext_gates.get(std.Thread.getCurrentId());
+}
+
+/// GPS `decide(decrypt_field)` for the active executor context's principal,
+/// on the session's graph. Anything but allow (deny, unauthorized, an
+/// error) refuses.
+fn activeContextAllowsDecrypt(ctx_opaque: ?*const anyopaque) bool {
+    const exec_mod = @import("execution.zig");
+    const ctx: *const exec_mod.ExecutionContext = @ptrCast(@alignCast(ctx_opaque orelse return false));
+    const princ = ctx.principal orelse return false;
+    const graph = blk: {
+        if (ctx.session_state) |sess| if (sess.graph) |g| break :blk g;
+        break :blk "default";
+    };
+    return decryptAllowedFor(princ, graph);
+}
+
+/// GPS `decide(decrypt_field)` for a principal (`*const Principal`) on
+/// `graph`. Installed by the executor (`execution.installDecryptDecider`,
+/// on every statement and at server start): this module cannot name GPS
+/// itself without pulling the security modules into every binary that
+/// reads a stored string.
+pub const DecryptDecider = *const fn (principal: *const anyopaque, graph: []const u8) bool;
+var decrypt_decider: std.atomic.Value(?DecryptDecider) = .init(null);
+
+pub fn setDecryptDecider(decider: DecryptDecider) void {
+    decrypt_decider.store(decider, .release);
+}
+
+/// GPS `decide(decrypt_field)` for `principal` on `graph` (SONNY-6334).
+/// Both the executor's gate and the transports' thread gate ask here. No
+/// decider installed: refused (fail closed).
+pub fn decryptAllowedFor(principal: *const anyopaque, graph: []const u8) bool {
+    const decide = decrypt_decider.load(.acquire) orelse return false;
+    return decide(principal, graph);
+}
+
+/// The plaintext gate for a read on this thread now. With authentication
+/// off none: every caller is an implicit admin, as before. With it on: the
+/// active executor context's principal; else the request's thread gate
+/// (both transports install one with the request's FLE role). A caller
+/// with neither is not a request (an in-process embedder, background
+/// work): no gate, and the role list alone decides, as the old hook did;
+/// such a caller has no FLE role unless it set one itself, and no role
+/// reads no plaintext.
+pub fn currentPlaintextGate() ?PlaintextGate {
+    const user_mgmt = @import("security/user_management.zig");
+    if (!user_mgmt.isAuthEnabled()) return null;
+    const exec_mod = @import("execution.zig");
+    if (exec_mod.getActiveContext()) |ctx_ptr| {
+        if (ctx_ptr.principal != null) return .{ .ctx = ctx_ptr, .allows = activeContextAllowsDecrypt };
+    }
+    return currentThreadPlaintextGate();
+}
+
+/// SONNY-6334: the FLE role a HELLO named, as both transports accept it:
+/// non-empty, `[A-Za-z0-9_-]` only (GAP-0271); anything else is no role.
+pub fn helloFleRole(requested: ?[]const u8) ?[]const u8 {
+    const r = requested orelse return null;
+    if (r.len == 0) return null;
+    for (r) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') return null;
+    }
+    return r;
 }
 
 pub const EncryptionContext = struct {
@@ -276,6 +382,9 @@ pub const EncryptionContext = struct {
     schema_name: []const u8,
     allocator: std.mem.Allocator,
     current_user_role: ?[]const u8 = null, // User's current role for RBAC checks
+    /// SONNY-6334: the GPS decrypt_field gate (`currentPlaintextGate`);
+    /// null: none (authentication off, or an internal caller).
+    plaintext_gate: ?PlaintextGate = null,
 };
 
 /// Get or create global key manager
@@ -545,8 +654,12 @@ pub fn decryptFieldIfNeeded(
         return data;
     }
 
-    // 3. If RBAC check required, verify access
-    if (check_rbac and !decision.plaintext_allowed) {
+    // 3. If RBAC check required, verify access: the role list, then
+    // (SONNY-6334) GPS decrypt_field. A GPS refusal reads as a role not in
+    // the list: "[REDACTED]", or SearchNotPermitted for a searchable field.
+    const plaintext_allowed = decision.plaintext_allowed and
+        (if (ctx.plaintext_gate) |gate| gate.allows(gate.ctx) else true);
+    if (check_rbac and !plaintext_allowed) {
         // If field is searchable, throw error (search operations require privilege)
         // If field is not searchable, return redacted placeholder (projection only)
         if (decision.searchable) {
@@ -722,7 +835,10 @@ fn canReadPlaintext(
     // A type/field not in the catalog is not FLE-protected (allowed); an
     // encrypted field with no visibility roles is locked to nobody; no role
     // reads nothing that lists roles.
-    return catalog.canReadPlaintext(type_name, field_name, ctx.current_user_role orelse getCurrentUserRole());
+    if (!catalog.canReadPlaintext(type_name, field_name, ctx.current_user_role orelse getCurrentUserRole())) return false;
+    // SONNY-6334: and GPS decrypt_field.
+    if (ctx.plaintext_gate) |gate| return gate.allows(gate.ctx);
+    return true;
 }
 
 /// SONNY-6327: what a read of a stored string property can fail with.
@@ -776,6 +892,7 @@ pub fn readStoredString(
         .schema_name = type_name,
         .allocator = allocator,
         .current_user_role = role_and_tenant[0],
+        .plaintext_gate = currentPlaintextGate(),
     };
 
     // The record identity must match the one the value was encrypted with.

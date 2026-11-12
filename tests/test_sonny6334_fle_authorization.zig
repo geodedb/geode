@@ -113,6 +113,9 @@ const Env = struct {
         gps.setInsecureAllowAll(false);
         _ = setenv("GEODE_MASTER_KEY", master_key, 1);
         fle_integration.resetGlobalKeyStateForTesting();
+        // The process-global key manager, built on the process allocator
+        // (never a request arena: it outlives every query; SONNY-2670).
+        _ = try fle_integration.getCurrentKeyVersion(.{ .tenant_id = "default", .schema_name = "T6334", .allocator = std.heap.smp_allocator }, "init");
         fle_catalog.resetGlobalCatalog(testing.allocator);
         fle_integration.setHasEncryptedFields(false);
 
@@ -378,20 +381,11 @@ test "SONNY-6334 (2): the plaintext decision table (FLE role list x GPS decrypt_
     try e.cat.addPolicyStrict(.{ .name = "deny-decrypt-6334", .scope_graph = "*", .actions = &.{.decrypt_field}, .effect = .deny, .expression_source = "true", .enabled = true });
     try expectStr("[REDACTED]", try e.str(admin_pii, read_q), "admin, in list, deny");
     try expectStr("[REDACTED]", try e.str(ro_pii, read_q), "ro, in list, allow+deny");
-    // The whole-value encodings say the same (proto: QUIC and gRPC share it).
-    const res = try e.run(admin_pii, "MATCH (n:T6334 {k: 1}) RETURN n");
-    const node = res.rows[0][0];
-    fle_integration.setCurrentUserRole("pii");
-    defer fle_integration.clearCurrentThreadState();
-    const pv = try proto_util.valueToProto(e.aa(), node);
-    var seen = false;
-    for (pv.kind.?.node_val.properties.items) |entry| {
-        if (std.mem.eql(u8, entry.key, "ssn")) {
-            seen = true;
-            try testing.expect(!contains(entry.value.?.kind.?.string_val.value, secret));
-        }
-    }
-    try testing.expect(seen);
+    // The whole value over gRPC (Pull encodes it) says the same.
+    const s_admin = try grpcSession(&e, admin_pii);
+    const row = try grpcRow(&e, s_admin, "MATCH (n:T6334 {k: 1}) RETURN n.ssn AS v, n");
+    try expectStr("[REDACTED]", strOf(row[0]), "grpc admin, deny");
+    try testing.expect(!contains(try nodeProp(row[1], "ssn"), secret));
 
     // The deny removed: Admin reads it again.
     try e.cat.removePolicy("deny-decrypt-6334");
@@ -406,6 +400,10 @@ test "SONNY-6334 (2): a searchable field refused by GPS is 42501 on member acces
     var roles = [_][]const u8{"pii"};
     try catalog.configureField("S6334", .{ .field_name = "ssn", .encryption = .{ .enabled = true }, .search = .{ .enabled = true }, .visibility = .{ .to_roles = &roles } });
     fle_integration.setHasEncryptedFields(true);
+    // The process-global blind index is made by its first user with that
+    // user's allocator: make it here on the process allocator, not on a
+    // request arena (SONNY-2670).
+    std.heap.smp_allocator.free(try fle_integration.encryptFieldIfNeeded(.{ .tenant_id = "default", .schema_name = "S6334", .allocator = std.heap.smp_allocator }, "S6334", "ssn", "warm", "0"));
     _ = try e.run(admin_pii, "CREATE (:S6334 {k: 1, ssn: 'x'})");
     try expectSqlstate(e.refusedWith(ro_pii, "MATCH (n:S6334 {k: 1}) RETURN n.ssn AS v"), "42501");
 }

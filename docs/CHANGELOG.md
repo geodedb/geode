@@ -4,6 +4,39 @@
 
 ### Security
 
+- **BEHAVIOUR CHANGE: FLE authorization (SONNY-6334).** (1)
+  `geode.fle.configureField`, `grantPlaintext`, `revokePlaintext` and the
+  key-affecting `tde.*` procedures (`initialize_key_hierarchy`,
+  `rotate_keys`, `configure_*`, `zeroize_keys`, `cleanup_key_hierarchy`,
+  the encrypted backup/restore ones) were gated by the GPS `write` action,
+  so a ReadWrite user could grant its own FLE role plaintext access or
+  reconfigure a field. They are now Admin only (42501 and an
+  `access_denied` audit event otherwise; authentication off: implicit
+  admin; `--insecure-allow-all`: bypassed as documented). (2) Plaintext
+  needed only the request's FLE role in the field's visibility roles, a
+  role the client names in HELLO; the GPS `decrypt_field` check sat in a
+  function nothing called, so `DENY DECRYPT_FIELD` was not enforced. A read
+  of an encrypted field now also needs GPS to allow `decrypt_field` for the
+  authenticated principal on the session's graph (the Admin builtin, or an
+  `ALLOW DECRYPT_FIELD` policy); a refusal reads as a role not in the list
+  (`[REDACTED]`, 42501 for `n.p` on a searchable field). **Upgrade note:**
+  a non-Admin user that read plaintext through a listed FLE role needs an
+  `ALLOW DECRYPT_FIELD` policy. (3) gRPC never put the session's FLE role
+  on the thread that encodes result rows (whole nodes and edges were
+  `[REDACTED]` over gRPC), and its Handshake left the role and tenant on
+  the Handshake's thread for the next session served there. The FLE role
+  is now kept on the gRPC session, and QUIC and gRPC install one request
+  context (`ServerState.installRequestThreadState`: tenant, FLE role, GPS
+  gate) per request and clear it on every exit. (4) configureField, grant
+  and revoke are audit events (`configuration_change`, success or failure
+  with the error name: caller, `type.field`, role or visibility roles; no
+  key material). Also fixed: `CALL geode.fle.configureField(...,
+  {visibility: [...]})` dropped the list (a list literal parses as
+  `ArrayLit`; only `List` was read), so a field configured online was
+  readable by nobody until a grant. Removed dead code:
+  `fle_hooks.decryptPropertyIfNeeded`, `planner/rewrite.performFLERewrite`.
+  Regression: `zig build test-sonny6334-fle-authorization`.
+
 - **BREAKING: fail-closed default role.** A user with no stored built-in
   role (not a superuser, no `HAS_ROLE` edge to `admin`, `user`, `readwrite`
   or `readonly`) used to fall back to `readwrite` and could read and write

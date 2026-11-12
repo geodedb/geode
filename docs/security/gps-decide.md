@@ -313,7 +313,13 @@ it for few actions:
 - **DENY READ and DENY WRITE** apply to `CALL` procedures. A read-only
   procedure asks for read on the procedure, and one that changes data asks
   for write.
-- **DENY DECRYPT_FIELD** applies to field-level decryption.
+- **DENY DECRYPT_FIELD** applies to field-level decryption: every read of
+  an encrypted field asks `decide(decrypt_field, graph)` for the
+  authenticated principal on the session's graph (SONNY-6334;
+  `fle_integration.readStoredString`). Plaintext needs the request's FLE
+  role in the field's visibility roles and an allow; a refusal reads as a
+  role not in the list (`[REDACTED]`, 42501 for an `n.p` read of a
+  searchable field). Before SONNY-6334 nothing called it.
 
 A deny on any other action is accepted but **not enforced**, because nothing
 calls `decide()` with that action:

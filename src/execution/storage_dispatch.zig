@@ -101,6 +101,24 @@ const tde_mutating_set = std.StaticStringMap(void).initComptime(.{
     .{ "tde.restore_with_historical_keys", {} },
 });
 
+/// SONNY-6334: the FLE procedures that change who reads what in plaintext.
+const fle_mutating_set = std.StaticStringMap(void).initComptime(.{
+    .{ "geode.fle.configurefield", {} },
+    .{ "geode.fle.grantplaintext", {} },
+    .{ "geode.fle.revokeplaintext", {} },
+});
+
+/// SONNY-6334: FLE and TDE key administration, Admin only
+/// (`fle_admin.requireAdmin`). `proc_name` is lowercase.
+pub fn isKeyAdministrationProcedure(proc_name: []const u8) bool {
+    return fle_mutating_set.has(proc_name) or tde_mutating_set.has(proc_name);
+}
+
+/// SONNY-6334: the FLE procedures whose every run is an audit event.
+pub fn isAuditedFleChange(proc_name: []const u8) bool {
+    return fle_mutating_set.has(proc_name);
+}
+
 const cdc_mutating_set = std.StaticStringMap(void).initComptime(.{
     .{ "cdc.enable", {} },
     .{ "cdc.disable", {} },
@@ -2844,8 +2862,13 @@ fn parseFLEConfigMap(allocator: std.mem.Allocator, map_props: []const ast.Proper
                 algorithm = fle_annotations.EncryptionConfig.Algorithm.fromString(prop.value.String) catch .aes256_gcm;
             }
         } else if (std.mem.eql(u8, prop.key, "visibility")) {
-            if (prop.value.* == .List) {
-                visibility_roles = try parseVisibilityList(allocator, prop.value.List);
+            // SONNY-6334: a list literal parses as `.ArrayLit`; only `.List`
+            // was read, so `{visibility: [...]}` was dropped and the field
+            // was readable by nobody.
+            switch (prop.value.*) {
+                .List => |items| visibility_roles = try parseVisibilityList(allocator, items),
+                .ArrayLit => |items| visibility_roles = try parseVisibilityList(allocator, items),
+                else => {},
             }
         }
     }
@@ -2880,12 +2903,7 @@ pub fn executeFle(
         // Cluster fail-closed: see GateStorageProcs. configureField writes the
         // durable HMAC-chained FLE field catalog; getfieldconfig /
         // listencryptedfields are reads and stay open.
-        if (std.mem.eql(u8, proc_name, "geode.fle.configurefield") or
-            std.mem.eql(u8, proc_name, "geode.fle.grantplaintext") or
-            std.mem.eql(u8, proc_name, "geode.fle.revokeplaintext"))
-        {
-            try cluster_mod.gateUnreplicatedWrite();
-        }
+        if (fle_mutating_set.has(proc_name)) try cluster_mod.gateUnreplicatedWrite();
         return try handler(allocator, call_stmt);
     }
     return null;

@@ -586,6 +586,60 @@ pub const ServerState = struct {
 
     /// SONNY-2776: the session's graph: the executor session's, or
     /// `current_graph` (the copy QUIC syncs; gRPC never sets it).
+    // CANARY: REQ=REQ-SONNY-6334-FLE-REQUEST-CONTEXT; FEATURE="FieldLevelEncryption"; ASPECT=OneRequestContextForQuicAndGrpc; STATUS=TESTED; TEST=tests/test_sonny6334_fle_authorization.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-6334: the session's request context on this thread, for the
+    /// FLE reads made outside the executor's active context (the result
+    /// encoding) and for audit events: the tenant (GAP-0281/0282), the FLE
+    /// role its HELLO named, and the GPS decrypt_field gate for its
+    /// authenticated principal, asked live (policy changes and USE GRAPH
+    /// count). QUIC and gRPC both install it at the start of every request
+    /// that runs or encodes a statement, and `clearRequestThreadState` on
+    /// every exit, so a pooled thread never carries one request's role into
+    /// the next. `self` must outlive the request (both keep the session's
+    /// state for its lifetime).
+    pub fn installRequestThreadState(self: *const ServerState) void {
+        const fle_integration = @import("../fle_integration.zig");
+        const audit_mod = @import("../security/audit.zig");
+        const tenant = if (self.session_config) |cfg| cfg.tenant_id else null;
+        fle_integration.setCurrentTenantId(tenant);
+        audit_mod.setCurrentAuditTenantId(tenant);
+        fle_integration.setCurrentUserRole(self.fle_user_role);
+        fle_integration.setCurrentPlaintextGate(.{ .ctx = self, .allows = sessionAllowsDecrypt });
+    }
+
+    /// SONNY-6334: undoes `installRequestThreadState`.
+    pub fn clearRequestThreadState() void {
+        const fle_integration = @import("../fle_integration.zig");
+        const audit_mod = @import("../security/audit.zig");
+        fle_integration.clearCurrentThreadState();
+        audit_mod.setCurrentAuditTenantId(null);
+    }
+
+    /// GPS decrypt_field for the session's authenticated principal on its
+    /// graph. With authentication off every session is an implicit admin;
+    /// with it on, an unauthenticated session is refused.
+    fn sessionAllowsDecrypt(ctx: ?*const anyopaque) bool {
+        const fle_integration = @import("../fle_integration.zig");
+        const user_mgmt = @import("../security/user_management.zig");
+        const principal_derive = @import("../security/principal_derive.zig");
+        const self: *const ServerState = @ptrCast(@alignCast(ctx orelse return false));
+        if (!user_mgmt.isAuthEnabled()) return true;
+        const username = self.authenticated_user orelse return false;
+        const role_raw = self.authenticated_role orelse return false;
+        const role_names = [_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(role_raw)))};
+        const graph = self.sessionGraph();
+        const principal = principal_derive.derivePrincipal(.{
+            .username = username,
+            .role_names = &role_names,
+            .tenant_id = if (self.session_config) |cfg| cfg.tenant_id else null,
+            .active_graph = graph,
+            .auth_version = self.authenticated_auth_version,
+            .auth_method = .password,
+            .source = .internal_service,
+        });
+        return fle_integration.decryptAllowedFor(&principal, graph);
+    }
+
     pub fn sessionGraph(self: *const ServerState) []const u8 {
         const graph_store_mod = @import("../graph_store.zig");
         if (self.exec_session) |*sess| return sess.graph orelse graph_store_mod.DEFAULT_GRAPH_NAME;

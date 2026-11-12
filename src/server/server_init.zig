@@ -365,6 +365,8 @@ pub fn initialize(
     // direct configuration via graph_store.setDataDirOverride() is preferred
     // Set data directory for GraphStore persistence (canonical configuration for isolation)
     graph_store.setDataDirOverride(allocator, data_dir);
+    // SONNY-6334: GPS decides FLE decrypt_field from the first request on.
+    geode.execution.installDecryptDecider();
 
     // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=StartupLoad; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
     // SONNY-6324: load the FLE catalog now, from the data directory just

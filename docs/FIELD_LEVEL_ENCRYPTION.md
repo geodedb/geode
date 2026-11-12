@@ -184,21 +184,40 @@ matches the established admin surface for other subsystems
 
 #### Authorization (who may call)
 
-Every `CALL geode.fle.*` invocation passes through the mandatory GPS dispatch
-gate (`procedure_registry.executeCallProcedure`, `REQ-GPS-PROC-001`) **before** the
-procedure body runs. The gate classifies each procedure as read-only or mutating
-([`src/execution/procedure_access.zig`](../src/execution/procedure_access.zig)
-`classifyProcedureName`) and remaps that to a GPS action; a principal is denied
-(`error.Unauthorized`) unless its role/policy permits that action on the
-procedure resource (fail-closed for unknown principals/procedures):
+The mutating procedures are security administration (SONNY-6334): they
+decide who reads which encrypted field in plaintext. They are **Admin
+only**, checked in `procedure_registry.executeCallProcedure` before the GPS
+procedure gate (`fle_admin.requireAdmin`, the same rule as the auth DDL):
+any other role is refused with 42501 and an `access_denied` audit event,
+and nothing changes in memory or on disk. With authentication off
+(embedded use) every caller is an implicit admin; `--insecure-allow-all`
+bypasses the check, as it bypasses all authorization. The read-only
+procedures pass the GPS procedure gate (`.read`) and name no roles:
+whether a field is encrypted is visible to any authenticated reader; who
+may read it in plaintext is not exposed by any procedure.
 
-| Procedure | Classification | GPS action | Who may call |
-|-----------|----------------|------------|--------------|
-| `geode.fle.configureField` | mutating | `.write` | Admin role, or a role/policy explicitly granted `write` on the procedure. This is the declare/mutate path. |
-| `geode.fle.grantPlaintext` | mutating | `.write` | Same as `configureField`. |
-| `geode.fle.revokePlaintext` | mutating | `.write` | Same as `configureField` (SONNY-6327). |
-| `geode.fle.getFieldConfig` | read-only | `.read` | Any role/policy with `read` on the procedure (read-only classification). |
-| `geode.fle.listEncryptedFields` | read-only | `.read` | Any role/policy with `read` on the procedure (read-only classification). |
+| Procedure | Who may call |
+|-----------|--------------|
+| `geode.fle.configureField` | Admin. |
+| `geode.fle.grantPlaintext` | Admin. |
+| `geode.fle.revokePlaintext` | Admin (SONNY-6327). |
+| `geode.fle.getFieldConfig` | Any role/policy with `read` on the procedure. |
+| `geode.fle.listEncryptedFields` | Any role/policy with `read` on the procedure. |
+
+The key-affecting `tde.*` procedures (`initialize_key_hierarchy`,
+`rotate_keys`, `configure_*`, `zeroize_keys`, `cleanup_key_hierarchy`,
+`backup_encrypted`, `encrypt_backup`, `create_encrypted_backup`,
+`restore_with_keys`, `restore_with_historical_keys`) are Admin only too.
+
+Every `configureField`, `grantPlaintext` and `revokePlaintext` is an audit
+event (`configuration_change`; result `success` or `failure`, a failed
+save included, with the error name): the caller, the procedure, the field
+as `type.field`, and the role (grant, revoke) or the visibility roles
+(configure). No key material is involved.
+
+The offline `geode fle grant-plaintext` / `revoke-plaintext` commands work
+on the data directory with the server stopped; whoever can run them owns
+the files.
 
 `configureField` declares **which** fields are encrypted; it does **not** grant
 decryption. Reading decrypted plaintext is a separate, per-field authorization
@@ -269,13 +288,25 @@ Nodes and edges are read by the same policy, on every read surface
 map projection, `RETURN n` / `RETURN r` / paths over QUIC and gRPC, JSON):
 
 - a field that is not encrypted: the stored value;
-- the principal's FLE role is in the field's visibility roles: the
-  decrypted value; a value that does not decrypt is refused (58030,
+- the request's FLE role is in the field's visibility roles AND GPS
+  allows `decrypt_field` for the authenticated principal on the session's
+  graph (SONNY-6334: the Admin builtin role, or an `ALLOW DECRYPT_FIELD`
+  policy; a `DENY DECRYPT_FIELD` refuses, Admin included): the decrypted
+  value; a value that does not decrypt is refused (58030,
   `FleDecryptionFailed`), never shown as stored;
-- any other principal: `[REDACTED]`; an `n.p` / `r.p` read of a searchable
+- any other principal (role not listed, or GPS refuses): `[REDACTED]`; an
+  `n.p` / `r.p` read of a searchable
   (blind-indexed) field is refused (42501, `SearchNotPermitted`). A
   predicate on the plaintext therefore never matches for that principal;
 - the FLE catalog cannot be loaded: refused (58030).
+
+The FLE role is the one the session's HELLO named (`role`); it is not
+checked against the user's roles, which is why GPS must also allow
+`decrypt_field`. QUIC and gRPC install the same request context
+(`ServerState.installRequestThreadState`: tenant, FLE role, GPS gate) for
+every request that runs or encodes a statement, and clear it afterwards.
+In-process callers with no principal and no request context (embedders,
+background work) are decided by the role list alone.
 
 An inline property map on an encrypted field (`MATCH (n:L {ssn: '...'})`,
 `-[:R {p: '...'}]->`) compares the stored envelope and never matches; use

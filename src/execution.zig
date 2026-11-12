@@ -497,7 +497,6 @@ pub fn cleanupCatalogInstance() void {
 // Re-export FLE hooks for backward compatibility (made public for CRUD module)
 pub const encryptPropertyIfNeeded = fle_hooks_mod.encryptPropertyIfNeeded;
 pub const encryptEdgePropertyIfNeeded = fle_hooks_mod.encryptEdgePropertyIfNeeded;
-const decryptPropertyIfNeeded = fle_hooks_mod.decryptPropertyIfNeeded;
 
 // CANARY: REQ=REQ-M10-CONSTANTS-001; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // Execution limits and validation thresholds
@@ -1166,6 +1165,24 @@ fn permissionToActionCode(p: @import("security/user_management.zig").Permission)
     };
 }
 
+/// SONNY-6334: GPS `decide(decrypt_field)` on `graph` for a principal, the
+/// second half of the FLE plaintext decision (`fle_integration`
+/// `readStoredString`; the first is the field's role list). Anything but
+/// allow refuses.
+fn decideDecryptField(principal_opaque: *const anyopaque, graph: []const u8) bool {
+    const gps = @import("security/gps.zig");
+    const principal: *const @import("security/principal.zig").Principal = @ptrCast(@alignCast(principal_opaque));
+    const req = gps.DecisionRequest{ .principal = principal, .action = .decrypt_field, .resource = .{ .graph = graph } };
+    const decision = gps.decide(std.heap.smp_allocator, &req) catch return false;
+    return decision.kind == .allow;
+}
+
+/// SONNY-6334: make GPS the FLE decrypt_field decider (idempotent; an
+/// atomic store).
+pub fn installDecryptDecider() void {
+    fle_integration.setDecryptDecider(decideDecryptField);
+}
+
 /// Check if user has required permission for operation.
 /// Phase 2 adapter: constructs a DecisionRequest and delegates to gps.decide().
 /// Behavior is bit-identical to the previous implementation:
@@ -1387,6 +1404,7 @@ pub fn validateProgramShapes(program: *const ast.Program, context: ExecutionCont
 }
 
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    installDecryptDecider(); // SONNY-6334
     // SONNY-3247: at the outermost entry point, the parameters are the
     // request's (a nested entry's context carries the ones its caller bound).
     if (t_entry_depth == 0) try param_check.checkProgram(program, context.query_param_names, context.query_param_values);
@@ -1594,6 +1612,7 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    installDecryptDecider(); // SONNY-6334
     // SONNY-3247: see `executeProgramWithContext`.
     if (t_entry_depth == 0) try param_check.checkStatement(&stmt, context.query_param_names, context.query_param_values);
     if (t_entry_depth == 0) graph_store.clearQuarantinedReadError();

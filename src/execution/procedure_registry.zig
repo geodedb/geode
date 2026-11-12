@@ -41,6 +41,7 @@ const rls_dispatch = @import("rls_dispatch.zig");
 const fts_dispatch = @import("fts_dispatch.zig");
 const ts_dispatch = @import("ts_dispatch.zig");
 const tenant_dispatch = @import("tenant_dispatch.zig");
+const fle_admin = @import("fle_admin.zig");
 
 // ==================== Re-exported Public Accessors ====================
 // These must remain on procedure_registry since external code imports them.
@@ -120,6 +121,11 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // legacy hasPermission() gate. For procedures with no entry in the classifier
     // table (unknown), we fall back to the raw .execute_procedure action, which
     // requires an explicit Policy match (or Admin role) — preserving fail-closed.
+    // SONNY-6334: FLE and TDE key administration is Admin only (it was the
+    // GPS `.write` gate below, so a ReadWrite user could grant its own FLE
+    // role plaintext access). Checked first, so every refusal is audited.
+    if (storage_dispatch.isKeyAdministrationProcedure(proc_name)) try fle_admin.requireAdmin(allocator, proc_name, context);
+
     if (context.principal) |princ| {
         const access_class = procedure_access.classifyProcedureName(proc_name);
         const action_for_gate: gps.Action = switch (access_class) {
@@ -175,7 +181,15 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
     // ---- geode.fle.* procedures (field-level encryption) ----
     if (std.mem.startsWith(u8, proc_name, "geode.fle.")) {
-        if (try storage_dispatch.executeFle(allocator, proc_name, call_stmt)) |result| {
+        // SONNY-6334: a configureField / grant / revoke is an audit event,
+        // whether it succeeds or fails.
+        const audited = storage_dispatch.isAuditedFleChange(proc_name);
+        const fle_result = storage_dispatch.executeFle(allocator, proc_name, call_stmt) catch |err| {
+            if (audited) fle_admin.auditChange(allocator, proc_name, call_stmt, context, err);
+            return err;
+        };
+        if (fle_result) |result| {
+            if (audited) fle_admin.auditChange(allocator, proc_name, call_stmt, context, null);
             return result;
         }
     }

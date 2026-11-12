@@ -2919,15 +2919,15 @@ fn isIdleStreamReadError(err: anyerror) bool {
     return err == error.EndOfStream or err == error.Timeout or err == error.Closed;
 }
 
+// SONNY-6334: the one request context both transports install
+// (`ServerState.installRequestThreadState`: tenant, FLE role, GPS
+// decrypt_field gate) and clear.
 fn installThreadLocalSessionState(state: *const ServerState) void {
-    fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-    audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-    fle_integration.setCurrentUserRole(state.fle_user_role);
+    state.installRequestThreadState();
 }
 
 fn clearThreadLocalSessionState() void {
-    fle_integration.clearCurrentThreadState();
-    audit_mod.setCurrentAuditTenantId(null);
+    ServerState.clearRequestThreadState();
 }
 
 const CooperativeMutationAdmissionClass = enum(u8) {
@@ -7012,40 +7012,21 @@ fn handleClientMessage(
                 state.session_config.?.tenant_id = try gpa.dupe(u8, tenant);
             }
 
-            // GAP-0281: Set per-thread FLE tenant_id from session config for encryption namespace isolation.
-            fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-            // GAP-0282: Set per-thread audit tenant_id so all audit events carry tenant context.
-            audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-
-            // GAP-0271: Set FLE role from HELLO request with injection validation.
-            // Always reset role on new connection to prevent stale role leakage.
+            // GAP-0271: the FLE role from the HELLO request, validated
+            // (fle_integration.helloFleRole, shared with gRPC). Always reset
+            // on a new HELLO to prevent stale role leakage.
             if (state.fle_user_role) |old_role| {
                 gpa.free(old_role);
                 state.fle_user_role = null;
             }
-            if (hello_req.role) |requested_role| {
-                if (requested_role.len > 0) {
-                    // Validate role: only [a-zA-Z0-9_-] allowed — reject semicolons, commas, wildcards
-                    var role_valid = true;
-                    for (requested_role) |c| {
-                        if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
-                            role_valid = false;
-                            break;
-                        }
-                    }
-                    if (role_valid) {
-                        state.fle_user_role = try gpa.dupe(u8, requested_role);
-                        fle_integration.setCurrentUserRole(state.fle_user_role);
-                    } else {
-                        log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
-                        fle_integration.setCurrentUserRole(null);
-                    }
-                } else {
-                    fle_integration.setCurrentUserRole(null);
-                }
-            } else {
-                fle_integration.setCurrentUserRole(null);
+            if (fle_integration.helloFleRole(hello_req.role)) |role| {
+                state.fle_user_role = try gpa.dupe(u8, role);
+            } else if (hello_req.role) |r| {
+                if (r.len > 0) log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
             }
+            // GAP-0281/0282, SONNY-6334: the session's tenant, FLE role and
+            // decrypt_field gate on this thread (the request context).
+            state.installRequestThreadState();
 
             // CANARY: REQ=REQ-DSN-GRAPH-BIND-003; FEATURE="DSNGraphBinding"; ASPECT=QuicGraphResolution; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=transport; UPDATED=2026-06-11
             // Resolve graph from HELLO request — validate, auto-create, bind session
