@@ -10142,6 +10142,31 @@ pub fn build(b: *std.Build) void {
     const sonny2976_step = b.step("test-sonny2976-merge-fast-path-tenant-scope", "Run SONNY-2976 regression (the server's bulk MERGE primitives match only a node of the merging session's tenant: a same-key node of another tenant is never matched, rewritten or answered; an unscoped MERGE matches the lowest holder; persisted, unbounded cache, lean indexing, reopened; parity with the executor; concurrent same-key MERGEs give one node per tenant)");
     sonny2976_step.dependOn(&run_sonny2976_tests.step);
 
+    // SONNY-6338 / SONNY-2820 / SONNY-2848: MERGE, knn() and subqueries see
+    // exactly the rows the same session's MATCH sees (hierarchy-aware).
+    const sonny6338_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6338_tenant_visibility_consistency.zig"), .target = target, .optimize = optimize });
+    sonny6338_mod.addImport("geode", root_mod);
+    sonny6338_mod.addImport("rls", rls_mod);
+    sonny6338_mod.addImport("rls_types", rls_types_mod);
+    const sonny6338_tests = b.addTest(.{ .root_module = sonny6338_mod });
+    const run_sonny6338_tests = b.addRunArtifact(sonny6338_tests);
+    shardDep(test_step, &run_sonny6338_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6338_step = b.step("test-sonny6338-tenant-visibility-consistency", "Run SONNY-6338 / SONNY-2820 / SONNY-2848 regression (a tenant-scoped session's MERGE, knn() and subqueries see exactly the rows its MATCH sees, with a tenant hierarchy: a parent's MERGE binds its child's node, knn ranks the k nearest visible rows, subqueries count the session's own rows; the node MERGE fast paths decline a tenant with descendants)");
+    sonny6338_step.dependOn(&run_sonny6338_tests.step);
+
+    // SONNY-2848: intentionally RED TDD reproduction (docs/KNOWN_TEST_ISSUES.md):
+    // kept out of `shardDep` until the commit that fixes it; compiled by
+    // `test-compile` meanwhile.
+    const sonny2848_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2848_tenant_subquery_aggregation.zig"), .target = target, .optimize = optimize });
+    sonny2848_mod.addImport("geode", root_mod);
+    sonny2848_mod.addImport("rls", rls_mod);
+    sonny2848_mod.addImport("rls_types", rls_types_mod);
+    const sonny2848_tests = b.addTest(.{ .root_module = sonny2848_mod });
+    const run_sonny2848_tests = b.addRunArtifact(sonny2848_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny2848_tests.step);
+    const sonny2848_step = b.step("test-sonny2848-tenant-subquery-aggregation", "Run SONNY-2848 red reproduction (on a tenant-scoped session a subquery or an aggregate after WITH, or an aggregate over a subquery, sees none of the session's rows: the legacy executor's pre-aggregation path)");
+    sonny2848_step.dependOn(&run_sonny2848_tests.step);
+
     // SONNY-2806 (round 8): the duplicate paths of the round-7 re-review. A
     // lookup's settle does not drop the entry of a holder inserted while it
     // resolves; equal values in two forms take one MERGE tuple lock; lean
