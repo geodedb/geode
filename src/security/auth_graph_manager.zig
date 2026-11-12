@@ -2041,6 +2041,33 @@ pub const AuthGraphManager = struct {
         _ = try self.updateUserPassword(hmac_key, uid, new_password_hash);
     }
 
+    // CANARY: REQ=REQ-SONNY-6369-LEGACY-HASH-UPGRADE; FEATURE="SecurePasswordVerify"; ASPECT=StoreUpgradedHash; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6369: the login upgrade's write-through
+    /// (`user_management.upgradeLegacyHash`, `server_init.writerRehashPassword`):
+    /// replace `username`'s stored legacy hash `old_hash` with the Argon2id
+    /// hash `new_hash` of the same password. The password is not changed, so
+    /// unlike `updateUserPassword` the auth version (the user's sessions), the
+    /// reset flag and `password_changed_at` stay. `error.PasswordHashChanged`
+    /// when the stored hash is no longer `old_hash` (a concurrent change wins).
+    /// All of it or none of it.
+    pub fn replaceLegacyPasswordHashWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, old_hash: []const u8, new_hash: []const u8) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return error.UserNotFound;
+        const old = self.storage.getUser(uid) orelse return error.UserNotFound;
+        if (!std.mem.eql(u8, old.getPasswordHash(), old_hash)) return error.PasswordHashChanged;
+        errdefer self.restoreUserRecord(hmac_key, old);
+        var record = old;
+        record.password_hash_len = UserStorageBackend.copyIntoField(&record.password_hash, new_hash);
+        record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
+        record.updated_at = compat_milliTimestamp();
+        try self.storage.putCachedUser(uid, record);
+        try self.storage.upsertUserNode(record);
+        try self.recomputeAndStoreUserHmac(uid, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "REHASH_PASSWORD", uid, record.getUsername(), null);
+    }
+
     /// SONNY-3038: ALTER USER ... ENABLE / DISABLE's write-through
     /// (`server_init.writerSetActive`): stored, or an error and the stored
     /// record as it was.

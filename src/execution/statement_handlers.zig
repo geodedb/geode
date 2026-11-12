@@ -1482,7 +1482,11 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
 //     DELETE for a change no finer action names), or, for a self-locking
 //     procedure, `gps.writePermitted` (write on the database, refused by a
 //     deny of a write on any graph).
-// A statement neither gate asks about (the security DDL, SHOW, session
+// SONNY-6369: then the checks the executor makes itself: USE GRAPH's
+// `mayBind`, the procedure gate (`gps.procedurePermitted`), and the DDL
+// schema gates (`maySchema` on the graph, `maySchemaDatabase` for DDL
+// catalogued database-wide).
+// A statement nothing asks about (the security DDL, SHOW, session
 // statements) reports the one action `classifyAction` derives, on the
 // database. It used to report that one action on the database for every
 // statement, which no graph-scoped policy matches (SONNY-2753) and which
@@ -1560,7 +1564,66 @@ pub fn executeExplainPolicy(allocator: std.mem.Allocator, ep: ast.ExplainPolicyS
         }
     }
 
-    // Neither gate asks: the one action the statement names, on the database.
+    // CANARY: REQ=REQ-SONNY-6369-EXPLAIN-POLICY-EXECUTOR-CHECKS; FEATURE="GPS EXPLAIN POLICY"; ASPECT=ExecutorGates; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6369: the checks the executor makes itself, after the handlers'
+    // gates. They were not reported, so a statement those refused looked
+    // allowed.
+    var proc_name: ?[]u8 = null;
+    defer if (proc_name) |n| allocator.free(n);
+    switch (ep.inner.*) {
+        // USE GRAPH (`session_graph.change`): `mayBind` on the graph it moves
+        // to. A DSN-bound session does not move; the default graph needs no
+        // check.
+        .UseGraph => |ug| if (!context.graph_bound) {
+            const target: ?[]const u8 = switch (query_traits.graphTarget(ug.graph_name)) {
+                .current => null,
+                .home => home_graph,
+                .named => |n| n,
+            };
+            if (target) |g| {
+                if (!std.mem.eql(u8, g, graph_store.DEFAULT_GRAPH_NAME)) try addPolicyAsk(allocator, &asks, .bind_graph, g);
+            }
+        },
+        // The procedure gate (`procedure_registry.executeCallProcedure`):
+        // read or write by the procedure's class, on the procedure, and no
+        // deny on the graph it runs on (`gps.procedurePermitted`).
+        .Call => |c| switch (c) {
+            .Procedure => |proc| {
+                const procedure_registry = @import("procedure_registry.zig");
+                const procedure_access = @import("procedure_access.zig");
+                proc_name = try procedure_registry.extractNormalizedProcName(allocator, proc);
+                const action: gps.Action = switch (procedure_access.classifyProcedureName(proc_name.?)) {
+                    .read_only => .read,
+                    .mutating => .write,
+                };
+                const g = if (procedure_access.isDefaultGraphProcedure(proc)) graph_store.DEFAULT_GRAPH_NAME else start_graph;
+                try addAsk(allocator, &asks, .{ .action = action, .graph = g, .procedure = proc_name.? });
+            },
+            .Subquery => {},
+        },
+        // The DDL schema gates (`session_graph.authorizeSchemaChange`,
+        // `authorizeCatalogSchemaChange`, `maySchemaDatabase`): schema and
+        // bind on the graph the statement names or runs on, and, for DDL
+        // catalogued database-wide, schema on every graph.
+        .CreateGraph => |cg| try addSchemaAsks(allocator, &asks, cg.name),
+        .DropGraph => |dg| try addSchemaAsks(allocator, &asks, dg.name),
+        .CreateIndex => |ci| {
+            try addSchemaAsks(allocator, &asks, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else start_graph);
+            try addAsk(allocator, &asks, .{ .action = .schema, .graph = "*", .everywhere = true });
+        },
+        .DropIndex => {
+            try addSchemaAsks(allocator, &asks, graph_store.DEFAULT_GRAPH_NAME);
+            try addAsk(allocator, &asks, .{ .action = .schema, .graph = "*", .everywhere = true });
+        },
+        .CreateConstraint, .DropConstraint => {
+            try addSchemaAsks(allocator, &asks, start_graph);
+            try addAsk(allocator, &asks, .{ .action = .schema, .graph = "*", .everywhere = true });
+        },
+        .CreateSchema, .DropSchema => try addAsk(allocator, &asks, .{ .action = .schema, .graph = "*", .everywhere = true }),
+        else => {},
+    }
+
+    // Nothing asks: the one action the statement names, on the database.
     if (asks.items.len == 0) try addPolicyAsk(allocator, &asks, classifyAction(ep.inner.*), null);
 
     const columns = try allocator.alloc([]const u8, 5);
@@ -1575,18 +1638,38 @@ pub fn executeExplainPolicy(allocator: std.mem.Allocator, ep: ast.ExplainPolicyS
         const req = gps.DecisionRequest{
             .principal = principal,
             .action = ask.action,
-            .resource = if (ask.graph) |g| gps.ResourceRef{ .graph = g } else gps.ResourceRef{ .database = {} },
+            .resource = if (ask.procedure) |name|
+                gps.ResourceRef{ .procedure = name }
+            else if (ask.graph) |g|
+                gps.ResourceRef{ .graph = g }
+            else
+                gps.ResourceRef{ .database = {} },
         };
         var decision = try gps.decide(allocator, &req);
-        // `gps.writePermitted` also refuses a change of every graph when a
-        // write is denied on any one graph.
-        if (self_locking_write and ask.graph == null and decision.kind == .allow and !gps.writePermitted(allocator, principal)) {
-            decision = .{ .kind = .deny, .reason_code = "deny_on_a_graph" };
+        if (decision.kind == .allow) {
+            // `gps.writePermitted` also refuses a change of every graph when
+            // a write is denied on any one graph; `schemaPermittedEverywhere`
+            // likewise for schema; `procedurePermitted` when the action is
+            // denied on the graph the procedure runs on.
+            if (self_locking_write and ask.graph == null and ask.procedure == null and !gps.writePermitted(allocator, principal)) {
+                decision = .{ .kind = .deny, .reason_code = "deny_on_a_graph" };
+            } else if (ask.everywhere and !gps.schemaPermittedEverywhere(allocator, principal)) {
+                decision = .{ .kind = .deny, .reason_code = "deny_on_a_graph" };
+            } else if (ask.procedure) |name| {
+                if (!try gps.procedurePermitted(allocator, principal, ask.action, name, ask.graph.?)) {
+                    decision = .{ .kind = .deny, .reason_code = "deny_on_graph" };
+                }
+            }
         }
         const row = try allocator.alloc(Value, 5);
         row[0] = Value{ .Int = @intCast(i + 1) };
         row[1] = Value{ .Str = try allocator.dupe(u8, @tagName(ask.action)) };
-        row[2] = Value{ .Str = if (ask.graph) |g| try std.fmt.allocPrint(allocator, "graph:{s}", .{g}) else try allocator.dupe(u8, "database") };
+        row[2] = Value{ .Str = if (ask.procedure) |name|
+            try std.fmt.allocPrint(allocator, "procedure:{s}", .{name})
+        else if (ask.graph) |g|
+            try std.fmt.allocPrint(allocator, "graph:{s}", .{g})
+        else
+            try allocator.dupe(u8, "database") };
         row[3] = Value{ .Str = try allocator.dupe(u8, @tagName(decision.kind)) };
         row[4] = Value{ .Str = try allocator.dupe(u8, decision.reason_code) };
         rows[i] = row;
@@ -1601,19 +1684,37 @@ pub fn executeExplainPolicy(allocator: std.mem.Allocator, ep: ast.ExplainPolicyS
 }
 
 /// One question EXPLAIN POLICY reports: `action` on `graph`, or on the
-/// database when null.
+/// database when null; on `procedure` when set (`graph` is then the graph it
+/// runs on, whose denies also refuse it). `everywhere`: schema on every
+/// graph (`graph` "*", and no deny on any graph).
 const PolicyAsk = struct {
     action: @import("../security/gps.zig").Action,
     graph: ?[]const u8,
+    procedure: ?[]const u8 = null,
+    everywhere: bool = false,
 };
 
-fn addPolicyAsk(allocator: std.mem.Allocator, asks: *std.ArrayList(PolicyAsk), action: @import("../security/gps.zig").Action, graph: ?[]const u8) !void {
+fn optEql(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null or b == null) return a == null and b == null;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
+fn addAsk(allocator: std.mem.Allocator, asks: *std.ArrayList(PolicyAsk), ask: PolicyAsk) !void {
     for (asks.items) |a| {
-        if (a.action != action) continue;
-        if (a.graph == null and graph == null) return;
-        if (a.graph != null and graph != null and std.mem.eql(u8, a.graph.?, graph.?)) return;
+        if (a.action == ask.action and a.everywhere == ask.everywhere and optEql(a.graph, ask.graph) and optEql(a.procedure, ask.procedure)) return;
     }
-    try asks.append(allocator, .{ .action = action, .graph = graph });
+    try asks.append(allocator, ask);
+}
+
+fn addPolicyAsk(allocator: std.mem.Allocator, asks: *std.ArrayList(PolicyAsk), action: @import("../security/gps.zig").Action, graph: ?[]const u8) !void {
+    try addAsk(allocator, asks, .{ .action = action, .graph = graph });
+}
+
+/// SONNY-6369: what `session_graph.maySchema` asks for DDL on `graph`:
+/// schema on it, and bind (`mayBind`; the default graph needs none).
+fn addSchemaAsks(allocator: std.mem.Allocator, asks: *std.ArrayList(PolicyAsk), graph: []const u8) !void {
+    try addPolicyAsk(allocator, asks, .schema, graph);
+    if (!std.mem.eql(u8, graph, graph_store.DEFAULT_GRAPH_NAME)) try addPolicyAsk(allocator, asks, .bind_graph, graph);
 }
 
 /// Map an AST Statement to the GPS Action it primarily requires. EXPLAIN

@@ -152,6 +152,10 @@ pub const User = struct {
     active: bool,
     password_reset_required: bool = false,
     auth_version: u64 = 1,
+    /// SONNY-6369: a superuser (the stored `is_superuser` flag) always
+    /// resolves to `.Admin` (`role_resolver`), so `assignRole` refuses any
+    /// other role for it. Set by the persistent resolver.
+    is_superuser: bool = false,
 
     pub fn deinit(self: *User, allocator: std.mem.Allocator) void {
         allocator.free(self.username);
@@ -219,6 +223,10 @@ pub const PersistentUserWriter = struct {
     create_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, email: []const u8, password_hash: []const u8, role: Role) anyerror!void = null,
     delete_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8) anyerror!void = null,
     update_password_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, new_password_hash: []const u8) anyerror!void = null,
+    /// SONNY-6369: replace a stored legacy hash with the Argon2id hash of the
+    /// same password (no auth version bump: the password is unchanged); an
+    /// error when the stored hash is no longer `old_hash`.
+    rehash_password_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, old_hash: []const u8, new_hash: []const u8) anyerror!void = null,
     set_role_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, role: Role) anyerror!void = null,
     set_active_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, active: bool) anyerror!void = null,
 };
@@ -277,6 +285,7 @@ const UserCache = struct {
             existing.user.active = user.active;
             existing.user.password_reset_required = user.password_reset_required;
             existing.user.auth_version = user.auth_version;
+            existing.user.is_superuser = user.is_superuser;
             return existing;
         }
 
@@ -649,8 +658,16 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![]const
 /// --algorithm blake2b` stores) is verified with
 /// geode_auth.verifyPasswordBlake2bLegacy; such a user could never log in.
 // CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-02-24
+// CANARY: REQ=REQ-SONNY-6369-LEGACY-HASH-TIMING; FEATURE="SecurePasswordVerify"; ASPECT=LegacyCheckTimingEqualised; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6369: the legacy check does the Argon2id work an Argon2id check
+/// does (it hashes the password and discards the hash), so the time a login
+/// takes does not tell an account with a legacy hash from one with an
+/// Argon2id hash (the BLAKE2b check alone takes microseconds).
 pub fn verifyPassword(password: []const u8, stored_hash: []const u8) !bool {
     if (geode_auth.isLegacyBlake2bHash(stored_hash)) {
+        if (hashPassword(std.heap.c_allocator, password)) |equaliser| {
+            std.heap.c_allocator.free(equaliser);
+        } else |_| {}
         return geode_auth.verifyPasswordBlake2bLegacy(password, stored_hash) catch |err| {
             if (err == error.FipsUnsupported) return err;
             return false;
@@ -1107,8 +1124,60 @@ fn authenticateChecked(username: []const u8, password: []const u8) !AuthResult {
             };
             finishAuthFlight(flight_key, flight, .{ .ok = true, .result = result });
             published = true;
+            if (geode_auth.isLegacyBlake2bHash(user_data.password_hash)) {
+                upgradeLegacyHash(username, password, user_data.password_hash);
+            }
             return result;
         },
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6369-LEGACY-HASH-UPGRADE; FEATURE="SecurePasswordVerify"; ASPECT=UpgradeAtLogin; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6369: after `username` logged in with `password` against its
+/// legacy BLAKE2b hash `legacy_hash`, store the Argon2id hash of the same
+/// password in its place (saved first through the persistent writer's
+/// `rehash_password_fn`, then cached). The password is unchanged, so the
+/// auth version is not bumped and the session the login opens stays
+/// current. Best effort: a failure (no rehash writer, a save that fails,
+/// cluster mode, FIPS, a hash changed meanwhile) is logged and the legacy
+/// hash stays; the login has already succeeded. A legacy hash used to be
+/// kept for ever.
+fn upgradeLegacyHash(username: []const u8, password: []const u8, legacy_hash: []const u8) void {
+    // SONNY-6352: serialized with the other user changes; user_store_mutex
+    // is never held across the write-through.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
+    const store_allocator, const writer = blk: {
+        user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (user_store == null) return;
+        const user_ptr = user_store.?.entries.get(username) orelse return;
+        if (!std.mem.eql(u8, user_ptr.user.password_hash, legacy_hash)) return;
+        break :blk .{ user_store.?.allocator, persistent_writer };
+    };
+    const new_hash = hashPassword(store_allocator, password) catch |err| {
+        log.warn("legacy password hash not upgraded", &.{ Attr.string("op", "hash"), Attr.string("error", @errorName(err)) });
+        return;
+    };
+    var new_hash_cached = false;
+    defer if (!new_hash_cached) store_allocator.free(new_hash);
+    if (writer) |w| {
+        // A writer that cannot store the upgrade: the cache must not carry
+        // a hash the store does not have.
+        const f = w.rehash_password_fn orelse return;
+        f(w.ctx, username, legacy_hash, new_hash) catch |err| {
+            log.warn("legacy password hash not upgraded", &.{ Attr.string("op", "rehash_password_fn"), Attr.string("error", @errorName(err)) });
+            return;
+        };
+    }
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (cachedUserForChange(username, store_allocator)) |user_ptr| {
+        if (std.mem.eql(u8, user_ptr.user.password_hash, legacy_hash)) {
+            store_allocator.free(user_ptr.user.password_hash);
+            user_ptr.user.password_hash = new_hash;
+            new_hash_cached = true;
+        }
     }
 }
 
@@ -1308,6 +1377,11 @@ pub fn assignRole(allocator: std.mem.Allocator, username: []const u8, role: Role
         defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (user_store == null) return error.Unauthenticated;
         const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
+        // CANARY: REQ=REQ-SONNY-6369-SUPERUSER-ROLE-FIXED; FEATURE="RoleAssignment"; ASPECT=SuperuserKeepsAdmin; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6369: a superuser always resolves to Admin, so another role
+        // would never take effect; refused, nothing changed. It was stored
+        // and reported assigned, and the next login resolved Admin again.
+        if (user_ptr.user.is_superuser and role != .Admin) return error.SuperuserRoleFixed;
         if (user_ptr.user.role == role) return; // no-op, no version bump
         break :blk .{ user_store.?.allocator, user_ptr.user.role, persistent_writer };
     };

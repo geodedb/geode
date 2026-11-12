@@ -213,6 +213,21 @@ const Server = struct {
         self.proc.deinit();
         allocator.free(self.addr);
     }
+
+    /// SIGTERM and wait (30 s at most) for the graceful shutdown, which
+    /// flushes the store; then `stop`. A write made outside a statement
+    /// (the login's hash upgrade) is durable once flushed.
+    fn stopGracefully(self: *Server, allocator: std.mem.Allocator) void {
+        if (self.proc.child.id) |pid| {
+            std.posix.kill(pid, .TERM) catch {};
+            const t0 = nowMillis();
+            while (util.processAlive(pid) and nowMillis() - t0 < 30_000) {
+                var req = linux.timespec{ .sec = 0, .nsec = 50 * std.time.ns_per_ms };
+                _ = linux.nanosleep(&req, null);
+            }
+        }
+        self.stop(allocator);
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -615,7 +630,7 @@ test "SONNY-6369: a BLAKE2b-imported user's hash is replaced with Argon2id at it
 
     {
         var s = try Server.start(allocator, dir);
-        defer s.stop(allocator);
+        defer s.stopGracefully(allocator);
         // A wrong password migrates nothing.
         {
             var c = try util.QuicProtoClient.connect(allocator, s.addr);

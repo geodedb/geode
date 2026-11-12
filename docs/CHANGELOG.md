@@ -4,6 +4,40 @@
 
 ### Security
 
+- **`geode query` exit code, superuser roles, procedure errors, EXPLAIN
+  POLICY's executor checks, legacy hashes (SONNY-6369).** (1) **Behaviour
+  change:** `geode query` exits 1 when the server answers the query with an
+  error (any non-00000 GQLSTATUS), on QUIC and gRPC, as `--batch` and
+  `--file` already did; it exited 0 and only a transport failure was
+  visible in the exit code. (2) **Behaviour change:** giving a superuser
+  (the bootstrap admin, or any user stored with `is_superuser`) a role other
+  than admin is refused: `ALTER USER ... SET ROLE` /
+  `geode.auth.user_assign_role` answer 0A000 (`SuperuserRoleFixed`) and the
+  offline `geode user assign-role` / `user update --role` exit 1, before
+  anything is changed. A superuser always resolves to admin, so the role was
+  stored, reported assigned and never took effect. (3) `geode.rls.add_deny_policy`,
+  `remove_deny_policy`, `add_attribute_policy` and `remove_attribute_policy`
+  answer missing arguments with 22023 and a process with no RLS engine with
+  55000 (`RlsEngineNotInitialized`); they answered 00000 with an `error:`
+  status row. (4) `geode.auth.user_set_attribute` / `user_remove_attribute`
+  results own their rows (a caller freeing them leaked); removing an
+  attribute the user does not have answers 42704 (`UserAttributeNotSet`)
+  instead of a 00000 row, and `user_remove_attribute` checks its arguments
+  (22023) and the user (42704 for an Admin) as `user_set_attribute` does.
+  (5) EXPLAIN POLICY also reports the checks the executor makes itself:
+  `bind_graph` for USE GRAPH, the procedure gate (`read` / `write` on
+  `procedure:<name>`, refused too by a deny on the graph it runs on), and
+  the DDL schema gates (`schema` and `bind_graph` on the graph, `schema` on
+  `graph:*` for index, constraint and schema DDL). (6) A user whose stored
+  hash is a legacy BLAKE2b hash (`user import --algorithm blake2b`) gets an
+  Argon2id hash of the same password at its first successful login (saved
+  to `__geode_security`, sealed; its auth version, sessions and reset flag
+  are kept; not in cluster mode, where the legacy hash stays). Checking a
+  password against a legacy hash now does Argon2id's work too, so the login
+  time no longer tells which accounts hold a legacy hash. (7) Docs:
+  `GQL_AUTH_DDL.md` gives a CREATE USER whose save fails as 58030;
+  `ENTERPRISE_GAPS.md` and `KNOWN_TEST_ISSUES.md` give `gql_conformance` as
+  21/21.
 - **`geode.rls.*` restrictions survive a restart and are refused in
   cluster mode (SONNY-3034).** (1) **Behaviour change:** the label denies
   `geode.rls.add_deny_policy` adds and the attribute policies

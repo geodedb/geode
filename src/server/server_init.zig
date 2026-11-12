@@ -890,6 +890,16 @@ fn writerUpdatePassword(ctx: ?*anyopaque, username: []const u8, new_password_has
     user_mgmt.notePersistentAuthMutation();
 }
 
+/// SONNY-6369: a legacy BLAKE2b hash replaced at login
+/// (`user_management.upgradeLegacyHash`). Refused in cluster mode (no
+/// replication slice: the user would hold a different hash on each node),
+/// so the legacy hash stays there.
+fn writerRehashPassword(ctx: ?*anyopaque, username: []const u8, old_hash: []const u8, new_hash: []const u8) anyerror!void {
+    try geode.distributed.cluster.gateUnreplicatedWrite();
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    try agm.replaceLegacyPasswordHashWriteThrough(&agm.hmac_key, username, old_hash, new_hash);
+}
+
 /// The built-in role names, for `writerSetRole`.
 const builtin_role_names = [_][]const u8{ "admin", "readwrite", "user", "readonly" };
 
@@ -1004,6 +1014,7 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
         .create_fn = &writerCreateUser,
         .delete_fn = &writerDeleteUser,
         .update_password_fn = &writerUpdatePassword,
+        .rehash_password_fn = &writerRehashPassword,
         .set_role_fn = &writerSetRole,
         .set_active_fn = &writerSetActive,
     });

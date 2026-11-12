@@ -209,6 +209,15 @@ fn requireBuiltinRoleOrExit(role: []const u8) void {
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
+/// SONNY-6369: exit, before anything is changed, when `username` is a
+/// superuser and `role` is not admin (it would never take effect).
+fn requireRoleTakesEffectOrExit(mgr: *AuthGraphManager, username: []const u8, role: []const u8) void {
+    cli_auth.requireRoleTakesEffect(mgr, username, role) catch {
+        std.debug.print("Error: '{s}' is a superuser: a superuser always holds the admin role, so the role '{s}' would never take effect. Nothing was changed\n", .{ username, role });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
 /// SONNY-6367: give a stored user the built-in role `role` (see
 /// `cli_auth.assignBuiltinRole`), or exit saying it was not given.
 fn assignRoleOrExit(allocator: std.mem.Allocator, mgr: *AuthGraphManager, username: []const u8, role: []const u8) void {
@@ -713,7 +722,11 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
         }
-        if (new_role) |nr| requireBuiltinRoleOrExit(nr);
+        if (new_role) |nr| {
+            requireBuiltinRoleOrExit(nr);
+            // SONNY-6369: before anything is changed.
+            requireRoleTakesEffectOrExit(&mgr, username, nr);
+        }
 
         if (mgr.storage.getUserByUsername(username)) |existing| {
             if (new_email != null) try mgr.storage.updateUser(existing.id, new_email, null, null, null, null);

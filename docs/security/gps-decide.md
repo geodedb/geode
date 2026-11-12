@@ -474,9 +474,18 @@ nothing. Since SONNY-6313 it asks what the gates ask, for the session's
 graph: one row per question, the read gate's `decide(match_, graph)` on
 every graph the statement reads, then the write gate's per-action
 questions on the graph it changes (`changePermittedOn`, or
-`writePermitted` on the database for a self-locking procedure). A
-statement neither gate asks about reports the one action it names on
-`database`.
+`writePermitted` on the database for a self-locking procedure). Since
+SONNY-6369 it also reports the checks the executor makes itself: for
+`USE GRAPH g`, `bind_graph` on `graph:g` (none for the default graph or a
+DSN-bound session); for `CALL p()`, the procedure gate, `read` or `write`
+on `procedure:p` (refused too by a deny of that action on the graph the
+procedure runs on); for graph, index and constraint DDL, `schema` and
+`bind_graph` on the graph it names or runs on; and for index, constraint
+and schema DDL, `schema` on `graph:*` (refused too by a DENY SCHEMA on any
+graph). A statement nothing asks about reports the one action it names on
+`database`. The admin-only checks of the `geode.auth.*` / `geode.rls.*`
+procedures and of policy DDL are role checks, not GPS decisions, and are
+not reported.
 
 Regression suite:
 [`tests/test_sonny2744_gps_deny.zig`](../../tests/test_sonny2744_gps_deny.zig)

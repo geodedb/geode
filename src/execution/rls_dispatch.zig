@@ -185,13 +185,15 @@ fn handleAddDenyPolicy(
     const label = argStr(call_stmt, 1);
     const username = argStr(call_stmt, 2);
 
-    if (graph.len == 0 or label.len == 0) {
-        return try singleStatusRow(allocator, "error: graph and label are required (positional args: graph, label, username)");
-    }
+    // CANARY: REQ=REQ-SONNY-6369-RLS-PROCEDURE-ERRORS; FEATURE="RLS deny-policy procedure"; ASPECT=FailuresAreErrors; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6369: missing arguments (22023) and no filter engine (55000)
+    // are error statuses here and in the other add / remove handlers; they
+    // answered 00000 with a status row starting "error:".
+    if (graph.len == 0 or label.len == 0) return error.InvalidArgs;
 
     const add_fn = g_callbacks.add_deny_fn orelse {
         log.warn("RLS deny-policy callback not installed — server started without RLS dispatch wiring", &.{});
-        return try singleStatusRow(allocator, "error: RLS filter engine not initialized (server started with no RLS support)");
+        return error.RlsEngineNotInitialized;
     };
 
     // SONNY-3034: no replication slice: refused in cluster mode, as the other
@@ -250,13 +252,9 @@ fn handleRemoveDenyPolicy(
     const label = argStr(call_stmt, 1);
     const username = argStr(call_stmt, 2);
 
-    if (graph.len == 0 or label.len == 0) {
-        return try singleStatusRow(allocator, "error: graph and label are required (positional args: graph, label, username)");
-    }
+    if (graph.len == 0 or label.len == 0) return error.InvalidArgs;
 
-    const remove_fn = g_callbacks.remove_deny_fn orelse {
-        return try singleStatusRow(allocator, "error: RLS filter engine not initialized");
-    };
+    const remove_fn = g_callbacks.remove_deny_fn orelse return error.RlsEngineNotInitialized;
 
     // SONNY-3034: refused in cluster mode; the stored records go first, so a
     // removal that cannot be saved keeps the deny in force (it would return
@@ -432,9 +430,7 @@ fn handleAddAttributePolicy(
     const row_property = argStr(call_stmt, 2);
     const attribute_key = argStr(call_stmt, 3);
 
-    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) {
-        return try singleStatusRow(allocator, "error: graph, label, row_property and attribute_key are required");
-    }
+    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) return error.InvalidArgs;
     // SONNY-2732: both are pasted into the policy text; refuse anything but
     // an identifier, and install nothing.
     if (!isPolicyIdentifier(row_property) or !isPolicyIdentifier(attribute_key)) {
@@ -443,7 +439,7 @@ fn handleAddAttributePolicy(
 
     const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse {
         log.warn("RLS attribute-policy: expr engine not initialized — server started without RLS support", &.{});
-        return try singleStatusRow(allocator, "error: RLS expression engine not initialized");
+        return error.RlsEngineNotInitialized;
     };
     const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
 
@@ -570,13 +566,9 @@ fn handleRemoveAttributePolicy(
     const row_property = argStr(call_stmt, 2);
     const attribute_key = argStr(call_stmt, 3);
 
-    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) {
-        return try singleStatusRow(allocator, "error: graph, label, row_property and attribute_key are required");
-    }
+    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) return error.InvalidArgs;
 
-    const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse {
-        return try singleStatusRow(allocator, "error: RLS expression engine not initialized");
-    };
+    const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return error.RlsEngineNotInitialized;
     const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
 
     // SONNY-3034: refused in cluster mode; the stored records go first.

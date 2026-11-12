@@ -117,6 +117,15 @@ pub fn builtinRoleName(name: []const u8) ?[]const u8 {
     return null;
 }
 
+// CANARY: REQ=REQ-SONNY-6369-SUPERUSER-ROLE-FIXED; FEATURE="OfflineAuthStoreSafety"; ASPECT=OfflineSuperuserKeepsAdmin; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6369: `error.SuperuserRoleFixed` when `username` is a stored
+/// superuser and `role` is not admin: a superuser always resolves to admin
+/// (`role_resolver`), so the role would be stored and never take effect.
+pub fn requireRoleTakesEffect(mgr: *AuthGraphManager, username: []const u8, role: []const u8) !void {
+    const record = mgr.storage.getUserByUsername(username) orelse return;
+    if (record.is_superuser and !std.ascii.eqlIgnoreCase(role, "admin")) return error.SuperuserRoleFixed;
+}
+
 // CANARY: REQ=REQ-SONNY-6367-OFFLINE-ROLE-ASSIGN; FEATURE="OfflineAuthStoreSafety"; ASPECT=BuiltinRoleAssigned; STATUS=TESTED; TEST=tests/test_sonny6367_offline_user_cli.zig; OWNER=security; UPDATED=2026-11-12
 /// SONNY-6367: give `username` the built-in role `role` offline, as ALTER
 /// USER ... SET ROLE does (`AuthGraphManager.setBuiltinRoleWriteThrough`:
@@ -129,6 +138,7 @@ pub fn builtinRoleName(name: []const u8) ?[]const u8 {
 pub fn assignBuiltinRole(allocator: std.mem.Allocator, mgr: *AuthGraphManager, username: []const u8, role: []const u8) !void {
     const name = builtinRoleName(role) orelse return error.CustomRoleMembershipNotSupported;
     if (mgr.storage.findUserIdByUsername(username) == null) return error.UserNotFound;
+    try requireRoleTakesEffect(mgr, username, name);
     const key = try changeKey(allocator);
     try mgr.setBuiltinRoleWriteThrough(&key, username, name, &builtin_role_names);
 }

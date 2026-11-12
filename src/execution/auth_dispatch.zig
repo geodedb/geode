@@ -893,17 +893,21 @@ fn handleUserSetAttribute(allocator: std.mem.Allocator, proc_name: []const u8, c
     // Admin) are error statuses; they answered 00000 with an "error:" row.
     if (username.len == 0 or key.len == 0) return error.InvalidArgs;
     if (user_mgmt.getUser(username) == null) return missingUser(allocator, proc_name, context);
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
+    // SONNY-6369: the reply is built first, so a failed allocation leaves
+    // the attribute unchanged, and the result owns it (it leaked).
+    const status = try std.fmt.allocPrint(allocator, "set attribute {s}={s} for {s}", .{ key, value, username });
+    var reply = try statusResult(allocator, status);
+    errdefer reply.deinit(allocator);
     try user_attr_store.setAttribute(allocator, username, key, value);
-    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "set attribute {s}={s} for {s}", .{ key, value, username }) };
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return reply;
 }
 
-fn handleUserRemoveAttribute(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+// CANARY: REQ=REQ-SONNY-6369-USER-ATTRIBUTE-RESULTS; FEATURE="GQL Auth DDL"; ASPECT=RemoveAttributeErrors; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+// SONNY-6369: missing arguments (22023), a user that does not exist (42704
+// for an Admin) and an attribute that is not set (42704) are errors; the last
+// answered 00000 with "attribute ... not set on ...", and none of the
+// results owned their rows.
+fn handleUserRemoveAttribute(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     var username: []const u8 = "";
     var key: []const u8 = "";
     if (call_stmt.procedure == .Call) {
@@ -911,17 +915,29 @@ fn handleUserRemoveAttribute(allocator: std.mem.Allocator, _: []const u8, call_s
         if (args.len >= 1 and args[0].* == .String) username = args[0].String;
         if (args.len >= 2 and args[1].* == .String) key = args[1].String;
     }
+    if (username.len == 0 or key.len == 0) return error.InvalidArgs;
+    if (user_mgmt.getUser(username) == null) return missingUser(allocator, proc_name, context);
+    const status = try std.fmt.allocPrint(allocator, "removed attribute {s} from {s}", .{ key, username });
+    var reply = try statusResult(allocator, status);
+    errdefer reply.deinit(allocator);
+    if (!user_attr_store.removeAttribute(username, key, allocator)) return error.UserAttributeNotSet;
+    return reply;
+}
+
+/// A one-row `status` result that owns `status` (allocated with
+/// `allocator`) and everything else it holds; `status` is freed on failure.
+fn statusResult(allocator: std.mem.Allocator, status: []const u8) !ExecutionResult {
+    errdefer allocator.free(status);
     const columns = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(columns);
     columns[0] = try allocator.dupe(u8, "status");
+    errdefer allocator.free(columns[0]);
     const row = try allocator.alloc(Value, 1);
+    errdefer allocator.free(row);
     const rows = try allocator.alloc([]Value, 1);
+    row[0] = Value{ .Str = status };
     rows[0] = row;
-    if (user_attr_store.removeAttribute(username, key, allocator)) {
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "removed attribute {s} from {s}", .{ key, username }) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
-    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "attribute {s} not set on {s}", .{ key, username }) };
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 // CANARY: REQ=REQ-SONNY-6269-PERMISSIONS-ADMIN-GATE; FEATURE="GQL Auth DDL"; ASPECT=UserPermissionsGate; STATUS=TESTED; TEST=tests/test_sonny6269_permissions_admin_gate.zig; OWNER=security; UPDATED=2026-11-11

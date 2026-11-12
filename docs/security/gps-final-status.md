@@ -131,7 +131,9 @@ live list. As of Phase 7, the shipped families and their coverage are:
 - ~~**Multi-step EXPLAIN POLICY.**~~ Done (SONNY-6313): EXPLAIN POLICY
   reports every question the read and write gates ask for the statement,
   per graph and per action (e.g. `MATCH … DELETE`: `match_` then
-  `delete`), for the session's graph.
+  `delete`), for the session's graph, and (SONNY-6369) the executor's own
+  checks: the procedure gate, the DDL schema gates and the USE GRAPH bind
+  check.
 - **Remove `graph_grant_check_fn` field entirely.** Phase 7 removed the
   widening consumer inside `decide()`; the function-pointer field itself remains
   for back-compat until all call sites are confirmed dead.

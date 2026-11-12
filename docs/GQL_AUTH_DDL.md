@@ -273,6 +273,14 @@ and keep the name in an in-memory table that was never saved, survived
 members) and was read by no authorization path. A role name that is neither
 built-in nor custom is still an error (`UnknownRole`).
 
+A superuser (the bootstrap admin, or any user stored with `is_superuser`)
+always resolves to `admin`, whatever role edge it holds. Giving it any other
+role (`ALTER USER <superuser> SET ROLE readonly`, `geode.auth.user_assign_role`,
+or offline `geode user assign-role` / `user update --role`) fails with
+SQLSTATE 0A000 (`SuperuserRoleFixed`; offline: exit 1) and changes nothing
+(SONNY-6369). It used to store the role and report it assigned, and the next
+login resolved `admin` again. `SET ROLE admin` for a superuser is a no-op.
+
 ---
 
 ## Persistence
@@ -307,7 +315,7 @@ its success text, and leaves nothing usable that is not stored:
 |---|---|
 | `GRANT <priv> ON GRAPH g TO u` | 58030 (`GrantNotPersisted`): nothing is granted. Every privilege of the statement (all three for `ALL`) is stored and added to the live grant table, or none is: what one statement added is taken out again, as `CREATE POLICY` takes out a policy whose save failed. A grant held before the statement is kept. Retry the statement. |
 | `REVOKE <priv> ON GRAPH g FROM u` | 58030 (`RevokeNotPersisted`): the privilege is taken away in memory first, so it stops at once, but its stored record remains and is loaded at the next start. Retry the statement to remove it. (A record removed whose chain seal failed is sealed again in the same statement; if that holds, the revoke succeeds.) Every action of `ALL` is attempted. This is fail-closed, unlike `DROP POLICY`, which on a failed save keeps the policy in memory and in the store. |
-| `CREATE USER` | Status `error: UserNotPersisted`: the user is not created (in memory or in the store). A user stored without its role edge is removed again, so the retry succeeds. |
+| `CREATE USER` | 58030 (`UserNotPersisted`): the user is not created (in memory or in the store). A user stored without its role edge is removed again, so the retry succeeds. |
 | `geode.auth.user_import` | 58030 (`UserNotPersisted`, SONNY-3038): the user is not imported (in memory or in the store). |
 | `DROP USER` | 58030 (`UserNotPersisted`): the user stays stored, and is **locked out** now (see below). Retry the statement. |
 | `ALTER USER u SET PASSWORD` | 58030: the stored password stays, and the user is locked out: neither the old password (it may be why it was changed) nor the new one works. |

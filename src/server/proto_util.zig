@@ -244,6 +244,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.SecurityRecordDeleteFailed => .{ .code = "58030", .message = "A record could not be deleted from the security graph; nothing was removed and it is still in force. Retry it" },
         // SONNY-3034: a geode.rls.* restriction change that could not be
         // stored in the security graph.
+        // SONNY-6369: a geode.rls add / remove procedure in a process with no
+        // RLS filter or expression engine (it answered 00000 "error:" rows).
+        error.RlsEngineNotInitialized => .{ .code = "55000", .message = "The row-level security engine is not initialized in this process (the server was started without RLS support), so the restriction was not changed" },
         error.RlsRestrictionNotPersisted => .{ .code = "58030", .message = "The RLS restriction change could not be saved to the security graph and was not made (an add is taken out again; a removal leaves the restriction in force). Retry it" },
         error.RoleNotPersisted => .{ .code = "58030", .message = "The role change could not be saved to the security graph: CREATE ROLE created nothing; DROP ROLE removed the role now but it returns at the next start. Retry it" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
@@ -448,10 +451,16 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-6292: GRANT ROLE / ALTER USER SET ROLE / user_assign_role
         // of a custom role (it answered "assigned" and conferred nothing).
         error.CustomRoleMembershipNotSupported => .{ .code = "0A000", .message = "A custom role cannot be granted to a user: custom roles carry no privileges, so the grant would confer nothing. Grant a built-in role (admin, readwrite, user, readonly) or per-graph privileges (GRANT READ | WRITE | SCHEMA | ALL ON GRAPH <g> TO <user>)" },
+        // SONNY-6369: ALTER USER SET ROLE / user_assign_role of a role other
+        // than admin to a superuser (it answered "assigned" and changed nothing).
+        error.SuperuserRoleFixed => .{ .code = "0A000", .message = "The user is a superuser: a superuser always holds the admin role, so another role would never take effect; nothing was changed" },
         error.ApiKeysNotSupported => .{ .code = "0A000", .message = "API keys are not supported by the server: the geode.auth.apikey_* procedures create, list, check and revoke nothing, and the handshake does not authenticate by key" },
         // SONNY-6291: user_show / user_permissions (SHOW PERMISSIONS FOR) of
         // a user that does not exist, for an Admin.
         error.UserNotFound => .{ .code = "42704", .message = "User does not exist" },
+        // SONNY-6369: user_remove_attribute of an attribute the user does not
+        // have (it answered 00000 "attribute ... not set").
+        error.UserAttributeNotSet => .{ .code = "42704", .message = "The user has no such attribute; nothing was removed" },
         // SONNY-6359: auth procedure failures that answered 00000 with a
         // status row starting "error:" or "note:".
         error.UserAlreadyExists => .{ .code = "42710", .message = "User already exists" },

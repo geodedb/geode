@@ -1735,6 +1735,13 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
     startDeadlineWatchdogTask(allocator, timeout_secs, &query_deadline_state);
 
+    // CANARY: REQ=REQ-SONNY-6369-QUERY-EXIT-CODE; FEATURE="QueryExitCode"; ASPECT=FailedQueryExitsNonZero; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=cli; UPDATED=2026-11-12
+    // SONNY-6369: a query the server answers with an error (a non-00000
+    // GQLSTATUS) exits 1, as --batch and --file do. It exited 0: only a
+    // transport failure was visible in the exit code, so a script could not
+    // tell a failed query from a successful one.
+    var query_failed = false;
+
     // Execute query via QUIC or gRPC connection
     params_owned = false;
     if (use_grpc) {
@@ -1751,6 +1758,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .page_size = page_size,
             .params = params,
             .read_only = read_only,
+            .failed_out = &query_failed,
         });
     } else {
         // GAP-0113: Execute query via QUIC connection with optional certificate verification
@@ -1774,6 +1782,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .role = role,
             .principal_envelope_bytes = forward_envelope_bytes,
             .read_only = read_only,
+            .failed_out = &query_failed,
         }) catch |err| {
             if (err == error.AuthenticationFailed)
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
@@ -1800,6 +1809,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
     }
+    if (query_failed) std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 /// Escape a string for safe embedding in JSON
@@ -3307,12 +3317,9 @@ fn runQueryOnHelloedStream(
     defer finishActiveQueryDeadlineWatchdog();
 
     // GAP-0272: Server-side errors (parse errors, execution errors) are
-    // rendered to stdout with the error status. The SINGLE-query CLI path
-    // exits 0 because the transport layer worked correctly — only
-    // connection/transport failures cause non-zero exit codes. `--batch`
-    // reads the returned flag instead so a failed statement inside a long
-    // batch is still visible in the process exit code (see
-    // REQ-CLI-BATCH-MODE-004).
+    // rendered with the error status, and the verdict is returned: every
+    // caller (single query, --batch, --file) exits non-zero on it
+    // (SONNY-6369 for the single query; REQ-CLI-BATCH-MODE-004).
     return try result.render(stdout, stderr_handle);
 }
 
