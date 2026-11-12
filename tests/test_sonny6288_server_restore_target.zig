@@ -160,8 +160,8 @@ const Server = struct {
             .environ_map = &env,
             .cwd = .{ .path = cwd },
             .stdin = .ignore,
-            .stdout = .ignore,
-            .stderr = .ignore,
+            .stdout = if (std.c.getenv("GEODE_TEST_INHERIT_SERVER_STDERR") != null) .inherit else .ignore,
+            .stderr = if (std.c.getenv("GEODE_TEST_INHERIT_SERVER_STDERR") != null) .inherit else .ignore,
         });
         var server: Server = .{ .threaded = threaded, .env = env, .child = child, .addr = addr, .grpc_addr = grpc_addr };
         errdefer server.stop(allocator);
@@ -232,6 +232,34 @@ fn seedAndBackup(client: *util.QuicProtoClient, allocator: std.mem.Allocator) !v
     try exec(client, allocator, "INSERT (:P {n: 3})");
     try exec(client, allocator, "INSERT (:P {n: 4})");
     try testing.expectEqual(@as(i64, 4), try countP(client, allocator));
+}
+
+/// A restore writes and fsyncs every file of the store (hundreds, one per
+/// shard file) and opens it; on a loaded disk that takes longer than the
+/// shared client helpers' 5-10 s read timeouts, so the restore calls here
+/// wait up to a minute.
+const restore_timeout_ms: u32 = 60_000;
+
+const QuicRestore = struct {
+    success: bool,
+    message: []u8,
+    restore_dir: []u8,
+
+    fn deinit(self: *QuicRestore, allocator: std.mem.Allocator) void {
+        allocator.free(self.message);
+        allocator.free(self.restore_dir);
+    }
+};
+
+fn quicRestore(client: *util.QuicProtoClient, allocator: std.mem.Allocator, confirm: bool) !QuicRestore {
+    try client.writeMessage(.{ .restore = .{ .target_time = "", .confirm = confirm } });
+    var packet = try client.readPacket(allocator, restore_timeout_ms);
+    defer packet.deinit(allocator);
+    const msg = packet.quic orelse return error.InvalidMessage;
+    if (msg != .restore) return error.InvalidMessage;
+    const message = try allocator.dupe(u8, msg.restore.message);
+    errdefer allocator.free(message);
+    return .{ .success = msg.restore.success, .message = message, .restore_dir = try allocator.dupe(u8, msg.restore.restore_dir) };
 }
 
 const Layout = struct {
@@ -323,7 +351,7 @@ fn restoreContract(config: Config) !void {
         defer admin.deinit();
         try seedAndBackup(&admin, allocator);
 
-        var r = try admin.restore(allocator, null, true);
+        var r = try quicRestore(&admin, allocator, true);
         defer r.deinit(allocator);
         restore_dir = try allocator.dupe(u8, r.restore_dir);
 
@@ -427,7 +455,7 @@ fn nowMs() i64 {
 /// A failed restore: no success, the named error, nothing new beside the
 /// data directory, the server healthy and serving its data.
 fn expectRestoreRefused(allocator: std.mem.Allocator, lay: *Layout, client: *util.QuicProtoClient, admin: *util.QuicProtoClient, needle: []const u8) !void {
-    var r = try client.restore(allocator, null, true);
+    var r = try quicRestore(client, allocator, true);
     defer r.deinit(allocator);
     if (r.success or std.mem.indexOf(u8, r.message, needle) == null) {
         std.debug.print("SONNY-6288: expected a refused restore naming '{s}', got success={} message='{s}' restore_dir='{s}'\n", .{ needle, r.success, r.message, r.restore_dir });
@@ -461,7 +489,7 @@ test "SONNY-6288 a failed server restore (corrupt backup, unsafe entry names, no
 
     // No confirmation: refused.
     {
-        var r = try admin.restore(allocator, null, false);
+        var r = try quicRestore(&admin, allocator, false);
         defer r.deinit(allocator);
         try testing.expect(!r.success);
         try expectNames(allocator, lay.root.path(), &.{ "cwd", "X" });
@@ -513,7 +541,12 @@ const GrpcRestore = struct {
 
 /// A restore over the real gRPC wire (/geode.GeodeService/Restore).
 fn grpcRestore(allocator: std.mem.Allocator, addr: []const u8, user: []const u8, password: []const u8) !GrpcRestore {
-    var client = try util.GrpcProtoClient.connect(allocator, addr);
+    const colon = std.mem.lastIndexOfScalar(u8, addr, ':').?;
+    const port = try std.fmt.parseInt(u16, addr[colon + 1 ..], 10);
+    var client: util.GrpcProtoClient = .{
+        .allocator = allocator,
+        .stream = try grpc_query_transport.connectPlaintext(allocator, addr[0..colon], port, restore_timeout_ms / 1000, .{}),
+    };
     defer client.deinit();
     var h = try client.hello(allocator, user, password);
     defer h.deinit(allocator);
@@ -555,4 +588,34 @@ test "SONNY-6288 gRPC restore on a server started with --data-dir restores besid
     try expectRestoredBeside(allocator, &lay, r.resp.success, r.resp.message, r.resp.restore_dir);
     try expectNames(allocator, lay.root.path(), &.{ "cwd", "X", std.fs.path.basename(r.resp.restore_dir) });
     try testing.expectEqual(@as(i64, 4), try countP(&admin, allocator));
+}
+
+// The cluster gate lives in the request function both handlers call
+// (backup_manager.restoreForServer); a cluster needs certificates and three
+// nodes, so the gate is driven in process with a coordinator installed as
+// the process's cluster coordinator (a fresh one is a follower).
+test "SONNY-6288 a server restore is refused in cluster mode before anything is read or written" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const allocator = testing.allocator;
+    const cluster = geode.distributed.cluster;
+
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    var coord = try cluster.ClusterCoordinator.init(arena.allocator(), 1, .{ .peers = &.{}, .cluster_token = "sonny6288" });
+    const saved = cluster.getGlobalClusterCoordinator();
+    cluster.setGlobalClusterCoordinator(&coord);
+    defer if (saved) |c| cluster.setGlobalClusterCoordinator(c) else cluster.clearGlobalClusterCoordinator();
+
+    var root = try test_scratch.ScratchDir.create("sonny6288-cluster");
+    defer root.remove();
+    const backups = try join(allocator, root.path(), "server_backups");
+    defer allocator.free(backups);
+
+    const result = try geode.backup_manager.restoreForServer(allocator, backups, "", "geode");
+    defer allocator.free(result.message);
+    defer allocator.free(result.restore_dir);
+    try testing.expect(!result.success);
+    try testing.expect(std.mem.indexOf(u8, result.message, "ClusterNotLeader") != null);
+    try testing.expectEqual(@as(usize, 0), result.restore_dir.len);
+    try expectNames(allocator, root.path(), &.{});
 }

@@ -9523,54 +9523,23 @@ fn handleClientMessage(
                     return;
                 }
             }
-            // GAP-0001: Restore mutates on-disk state — exclusive write lock
-            // NOTE: Restore is a cross-graph operation; global lock is intentional.
-            // TODO(P1): Consider multi-graph lock acquisition for restore.
-            graph_store.acquireStoreWriteLock();
-            defer graph_store.releaseStoreWriteLock();
             if (!restore_req.confirm) {
                 const msg_text = try gpa.dupe(u8, "Restore requires confirmation");
                 try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = msg_text } });
                 return;
             }
 
-            const backup_config = BackupConfig{
-                // Restore reads the codec from each backup file's header;
-                // the config codec is irrelevant here. Keep the honest
-                // default (.none) — .zstd has no encoder (GAP-0880).
-                .compression = .none,
-                .encryption = false,
-                .retention_days = 30,
-            };
-            var mgr = SimplifiedBackupManager.init(gpa, "./server_backups", backup_config) catch |err| {
-                const msg_text = try std.fmt.allocPrint(gpa, "Restore init failed: {s}", .{@errorName(err)});
-                try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = msg_text } });
-                return;
-            };
-            defer mgr.deinit();
-
-            const target_time: i64 = if (restore_req.target_time.len > 0)
-                std.fmt.parseInt(i64, restore_req.target_time, 10) catch compat_milliTimestamp()
-            else
-                compat_milliTimestamp();
-
-            const restore_dir = if (getEnvVarOwned(gpa, "GEODE_DATA_DIR")) |dir| blk: {
-                defer gpa.free(dir);
-                break :blk try gpa.dupe(u8, dir);
-            } else |_| try gpa.dupe(u8, "./data");
-
-            mgr.restoreToPointInTime(target_time, restore_dir) catch |err| {
-                const msg_text = try std.fmt.allocPrint(gpa, "Restore failed: {s}", .{@errorName(err)});
-                try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = msg_text } });
-                gpa.free(restore_dir);
-                return;
-            };
-
+            // SONNY-6288: the restore is written into a new directory beside
+            // the server's data directory, never into the live store (which
+            // used to be GEODE_DATA_DIR or ./data, written in place while
+            // this server kept serving its old data). No store lock: the live
+            // store is not touched.
+            const result = try backup_manager.restoreForServer(gpa, "./server_backups", restore_req.target_time, state.authenticated_user orelse "");
             const ts = compat_milliTimestamp();
             try sendQuicMessage(gpa, stream, .{ .restore = .{
-                .success = true,
-                .message = try gpa.dupe(u8, "Restore completed"),
-                .restore_dir = restore_dir,
+                .success = result.success,
+                .message = result.message,
+                .restore_dir = result.restore_dir,
                 .target_time = try gpa.dupe(u8, if (restore_req.target_time.len > 0) restore_req.target_time else "latest"),
                 .restore_timestamp = @intCast(ts),
             } });

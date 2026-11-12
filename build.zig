@@ -477,7 +477,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-first-boot-admin-breadcrumb", .reason = "failing: reset-password checks the password policy before loading the user (KNOWN_TEST_ISSUES)" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
-    .{ .name = "test-sonny6288-server-restore-target", .reason = "failing: intentionally red SONNY-6288 reproduction (server restore writes into ./data or over the live store and reports success); moves to shardDep with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9329,7 +9328,7 @@ pub fn build(b: *std.Build) void {
     const sonny6288_tests = b.addTest(.{ .root_module = sonny6288_test_mod });
     const run_sonny6288_tests = b.addRunArtifact(sonny6288_tests);
     spawnsBuiltGeode(sonny6288_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6288_tests.step);
+    shardDep(test_step, &run_sonny6288_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6288_step = b.step("test-sonny6288-server-restore-target", "Run SONNY-6288 regression (spawns servers: a QUIC or gRPC restore on a server started with --data-dir, GEODE_DATA_DIR or both restores beside its real data directory, staged and verified, never into ./data or over the live store, reports that directory and leaves the running server's data intact; corrupt, unsafe-entry and non-admin restores write nothing)");
     sonny6288_step.dependOn(&run_sonny6288_tests.step);
 

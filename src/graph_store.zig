@@ -16324,6 +16324,21 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
     return adapter;
 }
 
+/// Open the store in `data_dir` as a private StorageAdapter that is NOT the
+/// process-global one (SONNY-6288): a running server uses it to open a
+/// restored directory and count its graphs without touching the store it
+/// serves. Same TDE key as `initGlobalAdapter`; default durability and page
+/// cache. The caller owns it and calls `deinit()`.
+pub fn openDetachedAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*graph_storage_adapter.StorageAdapter {
+    const gs = @import("graph_storage");
+    const tde = @import("storage/tde_file_encryption.zig");
+    const tde_key = try tde.loadKey(allocator);
+    return graph_storage_adapter.StorageAdapter.init(allocator, data_dir, gs.GraphConfig{
+        .data_dir = data_dir,
+        .encryption_key = tde_key,
+    });
+}
+
 pub fn deinitGlobalAdapter() void {
     // Task 19 (2026-04-23): stop per-graph group-commit coordinators BEFORE
     // the adapter goes away — the coordinator threads call into the adapter

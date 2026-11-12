@@ -113,6 +113,26 @@ DROP INDEX IF EXISTS person_age_idx;
 > not supported; download the file first. (From 2026-03-28 until
 > SONNY-6280 this command wrote nothing and still reported success.)
 >
+> **Server restore (QUIC `restore`, gRPC `/geode.GeodeService/Restore`,
+> `geode restore --server <addr>` with no file; SONNY-6288):** Admin only,
+> audited (`SERVER_RESTORE`), refused in cluster mode, and needs
+> `confirm`. The server restores its newest backup in `./server_backups/`
+> taken at or before `target_time` (epoch milliseconds; empty means now;
+> anything else is refused) into a **new** directory beside the data
+> directory its storage engine has open, named
+> `<data dir>.restored-<backup id>-<ms>`. It never writes into its data
+> directory: a running server cannot swap its store under its open
+> engines. The restore is written into a staging directory, compared file
+> by file with the backup, opened as a store and counted per graph, and
+> only then renamed into place. The response (`success`, `message`,
+> `restore_dir`) names the directory and each graph's node and edge
+> counts; the server keeps serving its current data until it is stopped
+> and started with `--data-dir <restore_dir>`. A failed restore reports
+> `Restore failed: <Name>` and leaves no new directory. (Until SONNY-6288
+> the server restored into `GEODE_DATA_DIR` or `./data`, never its
+> `--data-dir`, in place and without staging, and answered "Restore
+> completed" while serving its old data.)
+>
 > If the server backup fails (unreachable, timeout, stalled transfer, server
 > error), `backup create` exits 1, leaves no output file and does not fall
 > back to a local backup. A local data-directory backup runs only with

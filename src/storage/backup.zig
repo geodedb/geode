@@ -907,6 +907,158 @@ pub fn stageRestore(allocator: std.mem.Allocator, archive: []const u8, target_di
     return .{ .allocator = allocator, .staging_dir = staging, .target_dir = target_owned, .stats = stats };
 }
 
+/// Node and edge count of one graph in a restored store.
+pub const RestoredGraph = struct {
+    name: []u8,
+    nodes: u64,
+    edges: u64,
+};
+
+pub fn freeRestoredGraphs(allocator: std.mem.Allocator, graphs: []RestoredGraph) void {
+    for (graphs) |g| allocator.free(g.name);
+    allocator.free(graphs);
+}
+
+/// Open the restored store in `dir` as a server would (its own storage
+/// adapter, never the process-global one, so a running server can call it)
+/// and count every graph's nodes and edges from its storage engine. Fails
+/// if any graph in the restored registry cannot be opened. Shared by
+/// `geode restore` and the server restore (SONNY-6280, SONNY-6288).
+// CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore"; ASPECT=OpenAndCountRestoredStore; STATUS=TESTED; TEST=tests/test_sonny6288_server_restore_target.zig; OWNER=storage; UPDATED=2026-11-11
+pub fn countRestoredStore(allocator: std.mem.Allocator, dir: []const u8) ![]RestoredGraph {
+    const adapter = try graph_store.openDetachedAdapter(allocator, dir);
+    defer adapter.deinit();
+
+    const names = try adapter.listGraphNames(allocator);
+    defer {
+        for (names) |n| allocator.free(n);
+        allocator.free(names);
+    }
+
+    var out: std.ArrayList(RestoredGraph) = .empty;
+    errdefer {
+        for (out.items) |g| allocator.free(g.name);
+        out.deinit(allocator);
+    }
+    for (names) |name| {
+        const nodes = try adapter.nodeCount(name);
+        const edges = try adapter.edgeCount(name);
+        const name_owned = try allocator.dupe(u8, name);
+        errdefer allocator.free(name_owned);
+        try out.append(allocator, .{ .name = name_owned, .nodes = nodes, .edges = edges });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// The newest full backup in `backup_dir/metadata.json` taken at or before
+/// `target_time` (epoch ms). Reads only. Caller owns the returned path.
+// CANARY: REQ=REQ-PITR-GS-001; FEATURE="Point-in-Time Recovery"; ASPECT=SnapshotSelection; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=backup; UPDATED=2026-11-11
+pub fn selectPointInTimeBackup(allocator: std.mem.Allocator, backup_dir: []const u8, target_time: i64) ![]u8 {
+    const metadata_path = try std.fmt.allocPrint(allocator, "{s}/metadata.json", .{backup_dir});
+    defer allocator.free(metadata_path);
+
+    const io_pt = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io_pt, metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
+        error.FileNotFound => return error.BackupMetadataNotFound,
+        else => return err,
+    };
+    defer file.close(io_pt);
+
+    const file_len = try file.length(io_pt);
+    if (file_len > 2 * 1024 * 1024) return error.OutOfMemory;
+    const data = try allocator.alloc(u8, @intCast(file_len));
+    defer allocator.free(data);
+    _ = try file.readPositionalAll(io_pt, data, 0);
+
+    const parsed = try std.json.parseFromSlice([]BackupMetadata, allocator, data, .{});
+    defer parsed.deinit();
+
+    var chosen: ?BackupMetadata = null;
+    for (parsed.value) |entry| {
+        if (entry.backup_type != .full) continue;
+        if (entry.timestamp > target_time) continue;
+        if (chosen == null or entry.timestamp > chosen.?.timestamp) {
+            chosen = entry;
+        }
+    }
+
+    const selected = chosen orelse return error.BackupNotFound;
+    return std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, selected.backup_id });
+}
+
+/// A server restore written into a new directory beside the server's data
+/// directory and verified. Owns its strings.
+pub const SideRestore = struct {
+    allocator: std.mem.Allocator,
+    /// The new directory holding the restored store.
+    target_dir: []u8,
+    /// The backup file restored.
+    backup_path: []u8,
+    stats: ArchiveStats,
+    graphs: []RestoredGraph,
+
+    pub fn deinit(self: *SideRestore) void {
+        self.allocator.free(self.target_dir);
+        self.allocator.free(self.backup_path);
+        freeRestoredGraphs(self.allocator, self.graphs);
+        self.* = undefined;
+    }
+};
+
+/// Restore the newest backup in `backup_dir` taken at or before
+/// `target_time` into a NEW directory beside `live_data_dir`, named
+/// `<live_data_dir>.restored-<backup id>-<ms>` (SONNY-6288). The live data
+/// directory is never written: a running server cannot swap its store under
+/// open engines, so the caller tells the operator to restart on the result.
+///
+/// Same sequence as `geode restore` (SONNY-6280): decode and verify the
+/// backup (`readBackupFile`), write it into a mode-0700 staging directory
+/// beside the target and compare it byte for byte with the archive
+/// (`stageRestore`), open it as a store and count every graph
+/// (`countRestoredStore`), then rename it into place. Any failure leaves
+/// neither the target nor the staging directory behind.
+// CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore"; ASPECT=ServerRestoreBesideDataDir; STATUS=TESTED; TEST=tests/test_sonny6288_server_restore_target.zig; OWNER=storage; UPDATED=2026-11-11
+pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dir: []const u8, live_data_dir: []const u8, target_time: i64) !SideRestore {
+    const live = std.mem.trimEnd(u8, live_data_dir, "/");
+    const base = std.fs.path.basename(live);
+    if (live.len == 0 or base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) {
+        return error.InvalidRestoreTarget;
+    }
+
+    const backup_path = try selectPointInTimeBackup(allocator, backup_dir, target_time);
+    errdefer allocator.free(backup_path);
+
+    var decoded = try readBackupFile(allocator, backup_path, null);
+    defer decoded.deinit(allocator);
+
+    const backup_name = std.fs.path.basename(backup_path);
+    const id_hex = if (std.mem.startsWith(u8, backup_name, "full_") and std.mem.endsWith(u8, backup_name, ".backup"))
+        backup_name["full_".len .. backup_name.len - ".backup".len]
+    else
+        "backup";
+    const target = try std.fmt.allocPrint(allocator, "{s}.restored-{s}-{d}", .{ live, id_hex, compat_milliTimestamp() });
+    errdefer allocator.free(target);
+    if (std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), target, .{})) |_| {
+        return error.RestoreTargetNotEmpty;
+    } else |_| {}
+
+    var staged = try stageRestore(allocator, decoded.archive, target);
+    defer staged.deinit();
+
+    const graphs = try countRestoredStore(allocator, staged.staging_dir);
+    errdefer freeRestoredGraphs(allocator, graphs);
+
+    try staged.commit();
+
+    return .{
+        .allocator = allocator,
+        .target_dir = target,
+        .backup_path = backup_path,
+        .stats = staged.stats,
+        .graphs = graphs,
+    };
+}
+
 /// Result of compressData: the compressed payload plus the compression type
 /// that was ACTUALLY applied to it. The caller MUST persist `effective` into
 /// the backup header, never the requested type. Recording the requested type
