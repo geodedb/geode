@@ -349,6 +349,16 @@
   code was removed in SONNY-6279) and its tests are removed, as is
   `EnhancedRLSEngine.policy_optimizer` / `PolicyOptimizer`, which was only
   initialised and freed.
+- **Uncompiled tests that carried TESTED markers (SONNY-6298).**
+  `tests/test_rls_enhanced.zig` (8 TESTED markers; its subject,
+  `src/security/rls_enhanced.zig`, is never analyzed by any build artifact),
+  `tests/test_enhanced_query_transport.zig` (3 TESTED markers for
+  cross-shard query coordination; it tested local mock structs only) and
+  `tests/canary_raft_partition_simulation.zig` (asserted a boolean it had
+  just set) were in no build step and are removed. The always-true
+  assertions in the uncompiled `tests/test_gap_0193_batch2_testing.zig` now
+  assert what they meant; its distributed-query case would fail, because
+  neither `QueryCoordinator` nor `Federation` exists.
 
 ---
 
