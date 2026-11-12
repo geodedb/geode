@@ -10359,6 +10359,17 @@ pub fn build(b: *std.Build) void {
     const sonny2774_step = b.step("test-sonny2774-exact-sum", "SONNY-2774: an exact integer sum is exact, and past i64 it is 22003 (shared projection and GROUP BY fast path)");
     sonny2774_step.dependOn(&run_sonny2774_tests.step);
 
+    // SONNY-2812: count(DISTINCT) and collect(DISTINCT) key list values as RETURN DISTINCT and GROUP BY do
+    const sonny2812_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2812_distinct_list_keys.zig"), .target = target, .optimize = optimize });
+    sonny2812_test_mod.addImport("geode", root_mod);
+    sonny2812_test_mod.addImport("logging", logging_mod);
+    sonny2812_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2812_tests = b.addTest(.{ .root_module = sonny2812_test_mod });
+    const run_sonny2812_tests = b.addRunArtifact(sonny2812_tests);
+    shardDep(test_step, &run_sonny2812_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2812_step = b.step("test-sonny2812-distinct-list-keys", "SONNY-2812: count(DISTINCT) and collect(DISTINCT) key list values as RETURN DISTINCT and GROUP BY do");
+    sonny2812_step.dependOn(&run_sonny2812_tests.step);
+
     // SONNY-738 Task W fix round: the one write step (a SET, REMOVE, CREATE,
     // MERGE or DELETE applied over the rows the pattern binds, after the WITH
     // and its WHERE) and the structural guard that refuses a write clause an
