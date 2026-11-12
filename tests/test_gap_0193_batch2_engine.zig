@@ -40,39 +40,44 @@ test "GAP-0193: Engine - Property access null handling" {
 // Engine: Schema Constraint Tests
 // ============================================================================
 
-// CANARY: REQ=REQ-GQL-032-CHECK; FEATURE="Constraints"; ASPECT=Check; STATUS=TESTED; OWNER=schema; UPDATED=2026-01-16
-test "GAP-0193: Engine - Check constraint evaluation" {
-    var result = try geode.parse(testing.allocator, "CREATE CONSTRAINT check_age ON (n:Person) ASSERT n.age >= 0", .{});
-    defer result.deinit();
-    try testing.expect(result.program.statements.len > 0);
+// SONNY-6320: these cases asserted that CHECK, range and regular-expression
+// constraints parse (`ASSERT n.age >= 0`, `=~`). Geode has no value-predicate
+// constraints: the parser accepts IS UNIQUE, IS NOT NULL, IS NODE KEY and
+// EXISTS only, so they are refused, and that is what is checked.
+// CANARY: REQ=REQ-GQL-032-CHECK; FEATURE="Constraints"; ASPECT=CheckRefused; STATUS=TESTED; OWNER=schema; UPDATED=2026-11-12
+test "GAP-0193: Engine - Check constraint is refused (no value-predicate constraints)" {
+    // A value predicate is not a constraint Geode supports.
+    try testing.expectError(error.UnexpectedToken, geode.parse(testing.allocator, "CREATE CONSTRAINT check_age FOR (n:Person) REQUIRE n.age >= 0", .{}));
 }
 
-// CANARY: REQ=REQ-GQL-032-RANGE; FEATURE="Constraints"; ASPECT=Range; STATUS=TESTED; OWNER=schema; UPDATED=2026-01-16
-test "GAP-0193: Engine - Check constraint range and" {
-    var result = try geode.parse(testing.allocator, "CREATE CONSTRAINT check_range ON (n:Item) ASSERT n.price > 0 AND n.price < 10000", .{});
-    defer result.deinit();
-    try testing.expect(result.program.statements.len > 0);
+// CANARY: REQ=REQ-GQL-032-RANGE; FEATURE="Constraints"; ASPECT=RangeRefused; STATUS=TESTED; OWNER=schema; UPDATED=2026-11-12
+test "GAP-0193: Engine - Range check constraint is refused" {
+    // A range predicate is not a constraint Geode supports.
+    try testing.expectError(error.UnexpectedToken, geode.parse(testing.allocator, "CREATE CONSTRAINT check_range FOR (n:Item) REQUIRE n.price > 0 AND n.price < 10000", .{}));
 }
 
-// CANARY: REQ=REQ-GQL-032-COMPOSITE; FEATURE="Constraints"; ASPECT=Composite; STATUS=TESTED; OWNER=schema; UPDATED=2026-01-16
-test "GAP-0193: Engine - Composite uniqueness" {
-    var result = try geode.parse(testing.allocator, "CREATE CONSTRAINT unique_pair ON (n:Record) ASSERT (n.key1, n.key2) IS UNIQUE", .{});
+// CANARY: REQ=REQ-GQL-032-COMPOSITE; FEATURE="Constraints"; ASPECT=Composite; STATUS=TESTED; OWNER=schema; UPDATED=2026-11-12
+test "GAP-0193: Engine - Composite node key" {
+    var result = try geode.parse(testing.allocator, "CREATE CONSTRAINT unique_pair FOR (n:Pair) REQUIRE (n.key1, n.key2) IS NODE KEY", .{});
     defer result.deinit();
-    try testing.expect(result.program.statements.len > 0);
+    const cc = result.program.statements[0].CreateConstraint;
+    try testing.expectEqual(geode.ast.ConstraintType.node_key, cc.constraint_type);
+    try testing.expectEqual(@as(usize, 2), cc.properties.len);
 }
 
-// CANARY: REQ=REQ-GQL-032-UNIQUE; FEATURE="Constraints"; ASPECT=Unique; STATUS=TESTED; OWNER=schema; UPDATED=2026-01-16
+// CANARY: REQ=REQ-GQL-032-UNIQUE; FEATURE="Constraints"; ASPECT=Unique; STATUS=TESTED; OWNER=schema; UPDATED=2026-11-12
 test "GAP-0193: Engine - Schema constraints uniqueness" {
-    var result = try geode.parse(testing.allocator, "CREATE CONSTRAINT unique_id ON (n:Entity) ASSERT n.id IS UNIQUE", .{});
+    var result = try geode.parse(testing.allocator, "CREATE CONSTRAINT unique_id FOR (n:Entity) REQUIRE n.id IS UNIQUE", .{});
     defer result.deinit();
-    try testing.expect(result.program.statements.len > 0);
+    const cc = result.program.statements[0].CreateConstraint;
+    try testing.expectEqual(geode.ast.ConstraintType.unique, cc.constraint_type);
+    try testing.expectEqualStrings("Entity", cc.label);
 }
 
-// CANARY: REQ=REQ-GQL-032-PATTERN; FEATURE="Constraints"; ASPECT=Pattern; STATUS=TESTED; OWNER=schema; UPDATED=2026-01-16
-test "GAP-0193: Engine - Schema constraints pattern matching" {
-    var result = try geode.parse(testing.allocator, "CREATE CONSTRAINT email_format ON (n:User) ASSERT n.email =~ '.*@.*'", .{});
-    defer result.deinit();
-    try testing.expect(result.program.statements.len > 0);
+// CANARY: REQ=REQ-GQL-032-PATTERN; FEATURE="Constraints"; ASPECT=PatternRefused; STATUS=TESTED; OWNER=schema; UPDATED=2026-11-12
+test "GAP-0193: Engine - Regular-expression constraint is refused" {
+    // `=~` is not GQL, and pattern constraints are not supported.
+    try testing.expectError(error.UnexpectedToken, geode.parse(testing.allocator, "CREATE CONSTRAINT email_format FOR (n:User) REQUIRE n.email =~ '.*@.*'", .{}));
 }
 
 // ============================================================================
@@ -161,13 +166,6 @@ test "GAP-0193: Execution - WITH groupby aggregation" {
 
 // CANARY: REQ=REQ-GQL-CRYPTO-TYPES-001; FEATURE="CryptoTypes"; ASPECT=Implementation; STATUS=TESTED; OWNER=types; UPDATED=2026-01-16
 test "GAP-0193: Types - Cryptographic types" {
-    const has_types = @hasDecl(geode, "types");
-    if (has_types) {
-        const types = geode.types;
-        try testing.expect(@hasDecl(types, "Hash") or
-            @hasDecl(types, "Signature") or
-            @hasDecl(types, "cryptographic") or true);
-    }
     var result = try geode.parse(testing.allocator, "RETURN hash('sha256', 'data') AS hash", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
@@ -179,12 +177,6 @@ test "GAP-0193: Types - Cryptographic types" {
 
 // CANARY: REQ=REQ-GQL-GEO-TYPES-001; FEATURE="GeoTypes"; ASPECT=Implementation; STATUS=TESTED; OWNER=types; UPDATED=2026-01-16
 test "GAP-0193: Types - Geographic types" {
-    const has_types = @hasDecl(geode, "types");
-    if (has_types) {
-        const types = geode.types;
-        try testing.expect(@hasDecl(types, "Point") or
-            @hasDecl(types, "geographic") or true);
-    }
     var result = try geode.parse(testing.allocator, "RETURN point({latitude: 37.7749, longitude: -122.4194}) AS location", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
@@ -196,12 +188,6 @@ test "GAP-0193: Types - Geographic types" {
 
 // CANARY: REQ=REQ-GQL-NET-TYPES-000; FEATURE="NetTypes"; ASPECT=Module; STATUS=TESTED; OWNER=types; UPDATED=2026-01-16
 test "GAP-0193: Types - Network types module" {
-    const has_types = @hasDecl(geode, "types");
-    if (has_types) {
-        const types = geode.types;
-        try testing.expect(@hasDecl(types, "network") or
-            @hasDecl(types, "IpAddr") or true);
-    }
     var result = try geode.parse(testing.allocator, "RETURN '192.168.1.1' AS ip", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
@@ -313,9 +299,10 @@ test "GAP-0193: Storage - Map properties" {
 
 // CANARY: REQ=REQ-MATVIEW-STORAGE-001; FEATURE="MatView"; ASPECT=Storage; STATUS=TESTED; OWNER=query; UPDATED=2026-01-16
 test "GAP-0193: Storage - Materialized view storage" {
-    var result = try geode.parse(testing.allocator, "CREATE MATERIALIZED VIEW mv_test AS MATCH (n) RETURN n.id AS id", .{});
-    defer result.deinit();
-    try testing.expect(result.program.statements.len > 0);
+    // SONNY-6320: there is no CREATE MATERIALIZED VIEW statement in Geode's
+    // GQL (materialized views are managed through the procedure API); the
+    // parser refuses it.
+    try testing.expectError(error.UnexpectedToken, geode.parse(testing.allocator, "CREATE MATERIALIZED VIEW mv_test AS MATCH (n) RETURN n.id AS id", .{}));
 }
 
 // ============================================================================
@@ -338,14 +325,14 @@ test "GAP-0193: Engine - Query optimization" {
 
 // CANARY: REQ=REQ-ENGINE-STREAMING-001; FEATURE="Engine"; ASPECT=Streaming; STATUS=TESTED; OWNER=engine; UPDATED=2026-01-16
 test "GAP-0193: Engine - Result streaming" {
-    var result = try geode.parse(testing.allocator, "UNWIND range(1, 1000) AS n RETURN n", .{});
+    var result = try geode.parse(testing.allocator, "FOR n IN range(1, 1000) RETURN n", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }
 
 // CANARY: REQ=REQ-STORAGE-TXN-001; FEATURE="Storage"; ASPECT=Transaction; STATUS=TESTED; OWNER=storage; UPDATED=2026-01-16
 test "GAP-0193: Storage - Transaction support" {
-    var result = try geode.parse(testing.allocator, "BEGIN TRANSACTION", .{});
+    var result = try geode.parse(testing.allocator, "START TRANSACTION", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);
 }

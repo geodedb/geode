@@ -131,7 +131,6 @@ const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");
 // `test-recursive-cte` in build.zig and pulled into `zig build test`; it is NOT
 // imported here to avoid running its tests twice in the aggregate.
 // const _e2e_materialized_views = @import("e2e_materialized_views.zig");
-// const _e2e_rls_enhanced = @import("e2e_rls_enhanced.zig");
 
 // Hash algorithm tests for new cryptographic types
 const _test_hash_algorithms = @import("test_hash_algorithms.zig");

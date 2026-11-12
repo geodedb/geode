@@ -402,6 +402,36 @@
   manager before the arena. `test-sonny-write-allowlist-r4-transport` runs
   SONNY-3319's label-SET vector check over gRPC as well as QUIC. Regression:
   `zig build test-sonny3379-grpc-vector-index-teardown`.
+- **Thirteen test files that no build step compiled are built or removed
+  (SONNY-6320).** Password hashing and timing-attack resistance had no
+  running test: `src/security/test_argon2id_hashing.zig` called a removed
+  `Auth` API and `test_timing_attacks.zig` asserted wall-clock variance.
+  Both are replaced by `test-sonny6320-password-hashing`: Argon2id PHC
+  strings with m=19456, t=2, p=1 and a fresh salt, verify refusing near
+  misses and malformed or foreign PHC strings, and a structural check that
+  every verify path compares digests through `timingSafeEql` (no clock).
+  The GAP-0193 parse suites (`test_gap_0193_batch2_engine`,
+  `test_gap_0193_batch2_misc`, `test_gap_0193_impl_verification`) are
+  registered (`test-gap0193-*`) with their Cypher-only syntax replaced by
+  GQL (`FOR ... IN`, `START TRANSACTION`, `EXISTS { }`, `REQUIRE`), their
+  always-true `or true` / module-existence cases removed, and the cases for
+  features Geode does not have (CHECK, range and `=~` constraints, `CREATE
+  MATERIALIZED VIEW`, a bare `SHORTEST` prefix, `SET TRANSACTION ISOLATION
+  LEVEL`) now asserting the parser's refusal.
+  `tests/test_external_kms_provider.zig` is ported to the
+  `external_kms_client` module (`test-external-kms-provider`: wrap/unwrap,
+  tampered tag/ciphertext/nonce, foreign key). Removed as testing nothing
+  live or duplicating registered tests: `test_abac_enforcement.zig` (struct
+  field checks; its SecurityManager authorize/ABAC cases are covered by
+  `tests/e2e_rls_security.zig`), `test_async_connection.zig` (the external
+  thread_pool library), `e2e_rls_enhanced.zig` (imported modules that no
+  longer exist), `canary_federation_latency_aggregate.zig` (duplicates the
+  module's registered inline tests), `priority_implementations.zig`,
+  `test_canary_core.zig` and `test_performance_integration.zig` (no-op,
+  duplicate or mock-module cases). The ABAC-WIRE CANARY markers that cited
+  `test_abac_enforcement.zig` are now IMPL: `SecurityManager.authorize`
+  and its ABAC policies are called by no server request path (authorization
+  is GPS), and `GEODE_ABAC_ENABLED` changes only a startup log line.
 - **The offline `geode user` CLI names the password-policy rule a password
   breaks; `reset-password` and `password` accept `--generate-password`
   (SONNY-6271).** `user create`, `update`, `password` and `reset-password`

@@ -3415,7 +3415,7 @@ pub fn main() !void {
                 continue;
             };
 
-            // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
+            // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
             // GAP-0202: Create context for async connection handling
             // #50: Reject connection on alloc failure instead of blocking main thread
             const ctx = gpa.create(ConnectionContext) catch {

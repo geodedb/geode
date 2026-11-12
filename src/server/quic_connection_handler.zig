@@ -95,7 +95,7 @@ const pooled = @import("transport/thread_pool");
 // Issue #444: Import AST cache to wire into parse hot path
 const query_ast_cache = @import("query_ast_cache");
 const group_commit = geode.group_commit;
-// CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");
 const server_init = @import("server_init.zig");
@@ -5627,7 +5627,7 @@ fn handleFirstStreamOwner(ctx_ptr: *anyopaque) void {
     );
 }
 
-// CANARY: REQ=REQ-ABAC-WIRE-013; FEATURE="ABAC Enforcement"; ASPECT=QUICHandler; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-ABAC-WIRE-013; FEATURE="ABAC Enforcement"; ASPECT=QUICHandler; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 // GAP-0165: Updated handleQuicConnection signature to accept SecurityManager for ABAC enforcement
 pub fn handleQuicConnection(
     gpa: std.mem.Allocator,
@@ -5744,7 +5744,7 @@ pub fn handleQuicConnection(
     state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.query_mem_limit_bytes = env_spill_threshold;
     state.storage_checksum_error = env_storage_checksum_error;
-    // CANARY: REQ=REQ-ABAC-WIRE-014; FEATURE="ABAC Enforcement"; ASPECT=QUICState; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-ABAC-WIRE-014; FEATURE="ABAC Enforcement"; ASPECT=QUICState; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
     // GAP-0165: Wire SecurityManager into ServerState for QUIC connection ABAC enforcement
     state.security_manager = security_manager;
 

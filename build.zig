@@ -6613,29 +6613,16 @@ pub fn build(b: *std.Build) void {
     const test_cef_tests_step = b.step("test-audit-cef", "Run audit CEF formatting tests (GAP-413)");
     test_cef_tests_step.dependOn(&run_test_cef_tests.step);
 
-    // GAP-413 BLOCKED: test_timing_attacks.zig (6 tests) - hash.zig imports storage/heap.zig outside module path
-    // Requires restructuring types_hash module with proper dependencies from root module
-    // const test_timing_attacks_mod = b.createModule(.{ .root_source_file = b.path("src/security/test_timing_attacks.zig"), .target = target, .optimize = optimize });
-    // test_timing_attacks_mod.addImport("geode_auth", auth_mod);
-    // test_timing_attacks_mod.addImport("types_hash", types_hash_mod);
-    // const test_timing_attacks_tests = b.addTest(.{ .root_module = test_timing_attacks_mod });
-    // test_step.dependOn(&test_timing_attacks_tests.step);
-
-    // GAP-413 REMAINING: 5 orphaned test files (34 test blocks) still need module restructuring:
+    // GAP-413 / SONNY-6320: the orphaned test files are resolved.
+    // test_timing_attacks.zig and test_argon2id_hashing.zig (wall-clock
+    // assertions, a removed Auth API) are replaced by the deterministic
+    // test-sonny6320-password-hashing; test_abac_enforcement.zig (struct
+    // field checks, and SecurityManager authorize/ABAC cases duplicated by
+    // tests/e2e_rls_security.zig) and test_async_connection.zig (the external
+    // thread_pool library) are removed.
     //
-    // Files with module import issues:
-    //   - src/security/test_timing_attacks.zig (6 tests) - hash.zig imports storage/heap.zig outside module
-    //
-    // Files with missing/changed APIs:
-    //   - src/security/test_argon2id_hashing.zig (9 tests) - references non-existent Auth struct
-    //   - src/server/test_abac_enforcement.zig (8 tests) - references non-existent server_init
-    //   - src/server/test_async_connection.zig (5 tests) - module path mismatch
-    //
-    // Files with deprecated APIs:
+    // Still not built:
     //   - src/security/test_tde_nonce.zig (6 tests) - uses tde.zig which has deprecated APIs
-    //
-    // TOTAL REMAINING: 28 test blocks across 4 files NOT running in CI
-    // REMEDIATION: Requires API updates or test file refactoring
 
     const audit_chain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize });
     audit_chain_test_mod.link_libc = true;
@@ -9467,6 +9454,35 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6320_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6320_step = b.step("test-sonny6320-password-hashing", "Run SONNY-6320 regression (Argon2id PHC strings with the OWASP parameters and a fresh salt, verify refuses near misses and malformed PHC strings, the verify paths compare digests with timingSafeEql (structural, no clock); every test file found in no build step is removed or built)");
     sonny6320_step.dependOn(&run_sonny6320_tests.step);
+
+    // SONNY-6320: test files that sat in no build step, ported and built.
+    // The GAP-0193 parse suites (their Cypher-only syntax replaced by the
+    // ISO GQL forms, their always-true assertions removed) and the external
+    // KMS client's envelope tamper checks.
+    for ([_]struct { name: []const u8, path: std.Build.LazyPath, desc: []const u8 }{
+        .{ .name = "test-gap0193-batch2-engine", .path = b.path("tests/test_gap_0193_batch2_engine.zig"), .desc = "Run the GAP-0193 batch 2 engine parse suite (SONNY-6320: registered)" },
+        .{ .name = "test-gap0193-batch2-misc", .path = b.path("tests/test_gap_0193_batch2_misc.zig"), .desc = "Run the GAP-0193 batch 2 misc parse suite (SONNY-6320: registered)" },
+        .{ .name = "test-gap0193-impl-verification", .path = b.path("tests/test_gap_0193_impl_verification.zig"), .desc = "Run the GAP-0193 IMPL verification parse suite (SONNY-6320: registered)" },
+    }) |t| {
+        const mod = b.createModule(.{ .root_source_file = t.path, .target = target, .optimize = optimize });
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(t.name, t.desc).dependOn(&run_tests.step);
+    }
+    {
+        const ext_kms_mod = b.createModule(.{ .root_source_file = b.path("src/security/external_kms_client.zig"), .target = target, .optimize = optimize });
+        ext_kms_mod.addImport("crypto_backend", crypto_backend_mod);
+        ext_kms_mod.addImport("logging", logging_mod);
+        ext_kms_mod.addImport("json", json_mod);
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_external_kms_provider.zig"), .target = target, .optimize = optimize });
+        mod.addImport("external_kms_client", ext_kms_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-external-kms-provider", "Run the external KMS client envelope wrap/unwrap and tamper-detection tests (SONNY-6320: registered)").dependOn(&run_tests.step);
+    }
 
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a

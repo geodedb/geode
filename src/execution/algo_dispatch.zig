@@ -86,7 +86,7 @@ const dispatch_table = std.StaticStringMap(AlgoHandler).initComptime(.{
     .{ "unionfind", handleUnionFind },
     .{ "algo.scc.stream", handleSCC },
     .{ "scc", handleSCC },
-    // CANARY: REQ=REQ-GQL-068; FEATURE="ExposedAlgorithms"; ASPECT=Centrality; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=graph; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-GQL-068; FEATURE="ExposedAlgorithms"; ASPECT=Centrality; STATUS=TESTED; TEST=tests/test_sonny2685_algo_rls.zig; OWNER=graph; UPDATED=2026-11-12
     .{ "algo.harmonic.stream", handleHarmonic },
     .{ "harmonic", handleHarmonic },
     .{ "algo.bridgeleverage.stream", handleBridgeLeverage },
