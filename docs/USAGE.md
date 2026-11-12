@@ -72,8 +72,9 @@ geode backup --dest s3://my-bucket/backups --list
 
 # Restore from backup: download the backup file, then restore it offline
 # into a new or empty data directory (restoring straight from s3:// is not
-# supported)
-geode restore ./full.backup --data-dir /data --yes
+# supported). Backups do not hold the auth-chain HMAC key: give the source
+# server's key file (or set GEODE_AUTH_HMAC_KEY / GEODE_TDE_KEY as it had it)
+geode restore ./full.backup --data-dir /data --yes --hmac-key-file /secure/geode_hmac_key
 ```
 
 ### CDC Webhook Configuration
@@ -372,7 +373,10 @@ geode query "CALL system.resources()"
 1. **Schedule regular full backups** - Weekly recommended
 2. **Keep incremental chains short** - Max 7 incrementals
 3. **Test restore procedures** - Verify backup integrity
-4. **Monitor S3 costs** - Use lifecycle policies
+4. **Keep the HMAC key apart from the backups** - Backups never hold
+   `.geode_hmac_key`, `server.key` or `.geode_admin_password`; restoring
+   auth records needs the HMAC key, so store it with your other key material
+5. **Monitor S3 costs** - Use lifecycle policies
 
 ### CDC
 

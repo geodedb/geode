@@ -420,33 +420,37 @@ REQ-AUTO-INDEX-SCAN-002,AutoIdIndex,RelationshipLabelIndexScan,TESTED,,,engine,2
 REQ-AUTO-INDEX-SCAN-003,AutoIdIndex,MultiHopGroupByLabelIndex,TESTED,,,engine,2026-06-11,src/execution/match_operations.zig,10523
 REQ-AUTO-INDEX-SCAN-004,AutoIdIndex,MultiHopLabelIndex,TESTED,,,engine,2026-06-11,src/execution/match_operations.zig,10521
 REQ-BACKUP-CLI-001,CLI Backup,RemoteFailureIsAnError,TESTED,,,cli,2026-10-24,tests/test_backup_create_remote_failure.zig,15
-REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,TESTED,,,cli,2026-10-24,src/cli/backup_cli.zig,1965
+REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,TESTED,,,cli,2026-10-24,src/cli/backup_cli.zig,2100
 REQ-BACKUP-CLI-5077,CLI Backup,PrivateCATrust,TESTED,,,cli,2026-11-06,tests/test_backup_create_remote_failure.zig,26
-REQ-BACKUP-COMPRESS-001,BackupGzipCompression,Storage,TESTED,,,storage,2026-06-10,src/storage/backup.zig,1079
+REQ-BACKUP-COMPRESS-001,BackupGzipCompression,Storage,TESTED,,,storage,2026-06-10,src/storage/backup.zig,1262
 REQ-BACKUP-COMPRESS-001,BackupGzipCompression,TEST,TESTED,,,backup,2026-06-10,tests/test_gap0880_backup_upload.zig,19
-REQ-BACKUP-ERROR-HANDLING-001,BackupErrorHandling,Security,TESTED,,,cli,2026-01-16,src/cli/backup_cli.zig,62
+REQ-BACKUP-ERROR-HANDLING-001,BackupErrorHandling,Security,TESTED,,,cli,2026-01-16,src/cli/backup_cli.zig,64
+REQ-BACKUP-HEADER-001,Backup Restore,RangeCheckedHeaderDecode,TESTED,,,storage,2026-11-11,src/storage/backup.zig,725
 REQ-BACKUP-HEX-001,SecureHexKeyParsing,SECURITY,TESTED,,,storage,2026-01-13,src/storage/backup.zig,65
-REQ-BACKUP-HEX-001,SecureHexKeyParsing,TEST,TESTED,,,storage,2026-01-13,src/storage/backup.zig,1185
-REQ-BACKUP-LOCAL-001,Local Directory Backup,DataExport,TESTED,,,cli,2026-10-24,src/cli/backup_cli.zig,1972
+REQ-BACKUP-HEX-001,SecureHexKeyParsing,TEST,TESTED,,,storage,2026-01-13,src/storage/backup.zig,1368
+REQ-BACKUP-LOCAL-001,Local Directory Backup,DataExport,TESTED,,,cli,2026-10-24,src/cli/backup_cli.zig,2107
 REQ-BACKUP-LSN-TEST-001,BackupLSN,LSNTests,TESTED,,,backup,2026-01-16,tests/test_gap_0193_batch2_testing.zig,55
-REQ-BACKUP-PER-GRAPH-001,PerGraphBackup,Storage,TESTED,,,storage,2026-03-16,src/storage/backup.zig,568
-REQ-BACKUP-PER-GRAPH-002,PerGraphRestore,Storage,TESTED,,,storage,2026-11-11,src/storage/backup.zig,786
+REQ-BACKUP-PER-GRAPH-001,PerGraphBackup,Storage,TESTED,,,storage,2026-03-16,src/storage/backup.zig,647
+REQ-BACKUP-PER-GRAPH-002,PerGraphRestore,Storage,TESTED,,,storage,2026-11-11,src/storage/backup.zig,912
 REQ-BACKUP-REAL-DATA-001,BackupRealData,ColdRestoreRoundTrip,TESTED,,,backup,2026-11-11,tests/test_sonny6277_backup_restore_roundtrip.zig,1
-REQ-BACKUP-REAL-DATA-001,BackupRealData,DataIntegrity,TESTED,,,backup,2026-01-10,src/server/backup_manager.zig,10
+REQ-BACKUP-REAL-DATA-001,BackupRealData,DataIntegrity,TESTED,,,backup,2026-01-10,src/server/backup_manager.zig,13
 REQ-BACKUP-REAL-DATA-001,BackupRealData,RestoreDataIntegrity,TESTED,,,backup,2026-06-10,tests/test_gap0862_backup_integrity.zig,14
-REQ-BACKUP-REMOTE-001,RemoteBackup,QUICProtocol,TESTED,,,cli,2026-01-09,src/cli/backup_cli.zig,1814
-REQ-BACKUP-RESTORE-001,Backup Restore,RemoteRestore,TESTED,,,cli,2026-01-09,src/cli/backup_cli.zig,2010
-REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,TESTED,,,cli,2026-11-11,src/cli/backup_cli.zig,2130
+REQ-BACKUP-REMOTE-001,RemoteBackup,QUICProtocol,TESTED,,,cli,2026-01-09,src/cli/backup_cli.zig,1948
+REQ-BACKUP-RESTORE-001,Backup Restore,RemoteRestore,TESTED,,,cli,2026-01-09,src/cli/backup_cli.zig,2145
+REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,TESTED,,,cli,2026-11-11,src/cli/backup_cli.zig,2406
 REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestoreWritesAndVerifies,TESTED,,,cli,2026-11-11,tests/test_sonny6280_cli_restore_writes_data.zig,1
-REQ-BACKUP-RESTORE-002,Backup Restore,SharedBackupDecode,TESTED,,,storage,2026-11-11,src/storage/backup.zig,652
-REQ-BACKUP-RESTORE-002,Backup Restore,StagedRestoreIntoEmptyTarget,TESTED,,,storage,2026-11-11,src/storage/backup.zig,875
-REQ-BACKUP-RESTORE-003,Backup Restore,OpenAndCountRestoredStore,TESTED,,,storage,2026-11-11,src/storage/backup.zig,927
-REQ-BACKUP-RESTORE-003,Backup Restore,ServerRestoreBesideDataDir,TESTED,,,storage,2026-11-11,src/storage/backup.zig,1020
-REQ-BACKUP-RESTORE-003,Backup Restore,ServerRestoreRequest,TESTED,,,storage,2026-11-11,src/server/backup_manager.zig,76
+REQ-BACKUP-RESTORE-002,Backup Restore,SharedBackupDecode,TESTED,,,storage,2026-11-11,src/storage/backup.zig,782
+REQ-BACKUP-RESTORE-002,Backup Restore,StagedRestoreIntoEmptyTarget,TESTED,,,storage,2026-11-11,src/storage/backup.zig,1003
+REQ-BACKUP-RESTORE-003,Backup Restore,OpenAndCountRestoredStore,TESTED,,,storage,2026-11-11,src/storage/backup.zig,1055
+REQ-BACKUP-RESTORE-003,Backup Restore,ServerRestoreBesideDataDir,TESTED,,,storage,2026-11-11,src/storage/backup.zig,1198
+REQ-BACKUP-RESTORE-003,Backup Restore,ServerRestoreRequest,TESTED,,,storage,2026-11-11,src/server/backup_manager.zig,165
 REQ-BACKUP-RESTORE-003,Backup Restore,ServerRestoreTarget,TESTED,,,storage,2026-11-11,tests/test_sonny6288_server_restore_target.zig,1
+REQ-BACKUP-SECRETS-001,Backup Restore,BackupExcludesSecrets,TESTED,,,storage,2026-11-11,tests/test_sonny6299_backup_excludes_secrets.zig,1
+REQ-BACKUP-SECRETS-001,Backup Restore,ExcludeKeyMaterialAndLock,TESTED,,,storage,2026-11-11,src/storage/backup.zig,165
+REQ-BACKUP-SECRETS-001,Backup Restore,ServerBackupDir,TESTED,,,storage,2026-11-11,src/server/backup_manager.zig,33
 REQ-BACKUP-TLS-001,BackupTLS,CertVerification,TESTED,,,cli,2026-01-16,tests/test_gap_0193_batch2_security.zig,139
-REQ-BACKUP-TLS-001,BackupTLSCertVerification,Security,TESTED,,,cli,2026-01-13,src/cli/backup_cli.zig,59
-REQ-BACKUP-UPLOAD-001,BackupUploadIngestion,Storage,TESTED,,,storage,2026-06-10,src/storage/backup.zig,313
+REQ-BACKUP-TLS-001,BackupTLSCertVerification,Security,TESTED,,,cli,2026-01-13,src/cli/backup_cli.zig,61
+REQ-BACKUP-UPLOAD-001,BackupUploadIngestion,Storage,TESTED,,,storage,2026-06-10,src/storage/backup.zig,396
 REQ-BACKUP-UPLOAD-001,BackupUploadIngestion,TEST,TESTED,,,backup,2026-06-10,tests/test_gap0880_backup_upload.zig,18
 REQ-BENCHMARK-ABAC-001,ABAC Benchmark,Documentation,EXEMPT,,,security,2026-01-14,BENCHMARK_REPORT.md,117
 REQ-BENCHMARK-AUDIT-001,Audit Latency Benchmark,Performance,EXEMPT,,,monitoring,2026-01-14,benchmarks/benchmark_audit_latency.zig,4
@@ -587,10 +591,12 @@ REQ-CLI-AUTH-HELPERS-001,CLI Auth Helpers,Offline,IMPL,,,cli,2026-02-24,src/cli/
 REQ-CLI-AUTHN-001,CLIAuthn,ProviderConfig,TESTED,,,cli,2026-02-04,src/cli/authn_cli.zig,40
 REQ-CLI-AUTO-001,GQL Query Auto-detection,UserExperience,TESTED,,,cli,2025-10-04,tests/cli_gql_autodetection_regression_test.sh,3
 REQ-CLI-AUTO-002,Basic GQL Query Auto-detection,UserExperience,TESTED,,,cli,2025-10-04,tests/cli_gql_autodetection_basic_test.sh,3
-REQ-CLI-BACKUP-INFO-001,CLIBackupInfo,FileMetadata,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig,577
+REQ-CLI-BACKUP-CLEANUP-001,CLIBackupCleanup,RetentionCleanup,TESTED,,,cli,2026-11-11,src/cli/backup_cli.zig,707
+REQ-CLI-BACKUP-CLEANUP-001,CLIBackupCleanup,RetentionCleanup,TESTED,,,cli,2026-11-11,tests/test_sonny6289_backup_cleanup_info.zig,1
+REQ-CLI-BACKUP-INFO-001,CLIBackupInfo,FileMetadata,TESTED,,,cli,2026-11-11,src/cli/backup_cli.zig,574
 REQ-CLI-BACKUP-INTEGRATION-001,CLIBackup,RemoteBackup,TESTED,,,claude,2026-01-16,tests/test_gap_0193_batch2_testing.zig,77
 REQ-CLI-BACKUP-INTEGRATION-001,Remote Backup/Restore Operations,IntegrationTesting,TESTED,,,claude,2026-02-05,tests/test_server_backup_api_integration.zig,1
-REQ-CLI-BACKUP-LIST-001,CLIBackupList,DirectoryScan,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig,433
+REQ-CLI-BACKUP-LIST-001,CLIBackupList,DirectoryScan,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig,438
 REQ-CLI-BATCH-MODE-001,QueryBatchMode,SubprocessE2E,TESTED,,,cli,2026-08-29,tests/test_cli_batch_mode.zig,1
 REQ-CLI-BATCH-MODE-002,QueryBatchMode,ArgReachability,TESTED,,,cli,2026-08-29,src/cli/main.zig,1412
 REQ-CLI-BATCH-MODE-003,QueryBatchMode,SingleStreamLoop,TESTED,,,cli,2026-08-29,src/cli/main.zig,2255
@@ -648,9 +654,9 @@ REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,MultiLabelJoin,TESTED,,,cli,2026-0
 REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,NodeFallbackToId,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig,66
 REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,NodeWithLabelsAndName,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig,45
 REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,QuoteEscape,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig,180
-REQ-CLI-MIGRATE-CREATE-001,CLIMigrateCreate,FileCreation,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig,1549
-REQ-CLI-MIGRATE-RUN-001,CLIMigrateRun,MigrationModule,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig,1339
-REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig,1259
+REQ-CLI-MIGRATE-CREATE-001,CLIMigrateCreate,FileCreation,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig,1683
+REQ-CLI-MIGRATE-RUN-001,CLIMigrateRun,MigrationModule,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig,1473
+REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig,1393
 REQ-CLI-MOD-001,CLI Modularization,SubcommandParsing,TESTED,,,cli,2026-01-15,tests/test_gap_0193_impl_verification.zig,415
 REQ-CLI-OFFLINE-AUTH-LOCK-001,OfflineAuthStoreSafety,LiveServerDetection,IMPL,,,cli,2026-07-31,src/cli/user_mgmt_cli.zig,216
 REQ-CLI-PASSWORD-PROMPT-001,PasswordPrompt,QueryCommand,IMPL,,,cli,2026-01-28,src/cli/main.zig,1173
@@ -1467,7 +1473,7 @@ REQ-GAP-0877,AdvancedTypeSemantics,Regression,TESTED,,,types,2026-06-11,tests/te
 REQ-GAP-0901-GRPC-GLOBAL-INIT,GrpcTransport,Regression,TESTED,,,transport,2026-07-10,tests/test_gap0901_grpc_globals.zig,1
 REQ-GAP-0901-GRPC-GLOBAL-INIT,GrpcTransport,TransportAgnosticGlobals,IMPL,,,transport,2026-07-10,src/server/main.zig,1997
 REQ-GAP-0902-MIGRATE-FAILED-NOT-APPLIED,Migrations,LedgerConsistencyOnFailure,TESTED,,,cli,2026-07-10,src/migration/mod.zig,967
-REQ-GAP-0902-MIGRATE-STREAM-HYGIENE,Migrations,StreamCloseBeforeTeardown,IMPL,,,cli,2026-07-10,src/cli/backup_cli.zig,1145
+REQ-GAP-0902-MIGRATE-STREAM-HYGIENE,Migrations,StreamCloseBeforeTeardown,IMPL,,,cli,2026-07-10,src/cli/backup_cli.zig,1279
 REQ-GAP-0903-DUP-INDEX-DOUBLE-FREE,IndexDDL,Regression,TESTED,,,schema,2026-07-10,tests/test_gap0903_dup_index_double_free.zig,1
 REQ-GAP-0904-ORDER-BY-ORDINAL,OrderByOrdinal,Regression,TESTED,,,execution,2026-07-10,tests/test_gap0904_order_by_ordinal.zig,1
 REQ-GAP-0905-CAST-FLOAT-OVERFLOW,TypeCasting,Regression,TESTED,,,eval,2026-07-10,tests/test_gap0905_cast_float_overflow.zig,1
@@ -1740,7 +1746,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,909
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,13474
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,13511
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,196
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2102
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1497
@@ -1891,7 +1897,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,114
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,13483
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,13520
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1680
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1922
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1034
@@ -1903,7 +1909,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7549
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,13495
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,13532
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -3403,7 +3409,7 @@ REQ-LIB-MIGRATION-JSON-023,JSON Library Migration,ResultSerialization,TESTED,,,e
 REQ-LIB-MIGRATION-JSON-024,JSON Library Migration,GeoJSON,TESTED,,,spatial,2026-01-24,src/eval_extended.zig,20
 REQ-LIB-MIGRATION-JSON-025,JSON Library Migration,WkbToGeoJson,TESTED,,,spatial,2026-01-24,src/eval_extended.zig,1480
 REQ-LIB-MIGRATION-JSON-026,JSON Library Migration,CLI,TESTED,,,cli,2026-01-24,src/cli/main.zig,99
-REQ-LIB-MIGRATION-JSON-032,JSON Library Migration,MigrationScript,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig,1137
+REQ-LIB-MIGRATION-JSON-032,JSON Library Migration,MigrationScript,TESTED,,,cli,2026-01-24,src/cli/backup_cli.zig,1271
 REQ-LIB-MIGRATION-JSON-038,JSON Library Migration,MCPTools,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig,7
 REQ-LIB-MIGRATION-JSON-039,JSON Library Migration,MCPResponseTypes,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig,53
 REQ-LIB-MIGRATION-JSON-040,JSON Library Migration,ToolResult,TESTED,,,mcp,2026-01-24,src/mcp/tools.zig,377
@@ -3436,7 +3442,7 @@ REQ-LIB-MIGRATION-PROTOBUF-001,Protobuf Wire Protocol,WireProtocolCompatibility,
 REQ-LIB-MIGRATION-REPL-001,External Library Migration,ReplParseDelegation,TESTED,,,client,2026-04-01,src/client/repl/repl_parse.zig,2
 REQ-LIB-MIGRATION-SLOG-002,Centralized Structured Logging,Infrastructure,EXEMPT,,,core,2026-01-24,src/logging/logger.zig,4
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Analytics,EXEMPT,,,analytics,2026-01-24,src/analytics/real_time.zig,50
-REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,EXEMPT,,,cli,2026-01-24,src/cli/backup_cli.zig,50
+REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,EXEMPT,,,cli,2026-01-24,src/cli/backup_cli.zig,52
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,EXEMPT,,,cli,2026-01-24,src/cli/cli_dispatcher.zig,55
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,CLI,EXEMPT,,,cli,2026-01-24,src/cli/main.zig,89
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,EXEMPT,,,execution,2026-01-24,src/exec.zig,17
@@ -3574,7 +3580,7 @@ REQ-M4.1-CLI-MODULARIZATION-001,CLI Modularization,UserManagement,TESTED,,,cli,2
 REQ-M4.1-USER-MGMT-CLI-001,CLI Modularization,UserManagement,EXEMPT,,,cli,2025-11-12,src/cli/user_mgmt_cli.zig,66
 REQ-M4.2-AUTH-CLI-001,CLI Modularization,AuthCommands,EXEMPT,,,cli,2025-11-12,src/cli/auth_cli.zig,33
 REQ-M4.2-CLI-MODULARIZATION-001,CLI Modularization,AuthCommands,TESTED,,,cli,2026-01-15,src/cli/main.zig,148
-REQ-M4.3-BACKUP-CLI-001,CLI Modularization,BackupCommands,EXEMPT,,,cli,2026-01-09,src/cli/backup_cli.zig,55
+REQ-M4.3-BACKUP-CLI-001,CLI Modularization,BackupCommands,EXEMPT,,,cli,2026-01-09,src/cli/backup_cli.zig,57
 REQ-M4.3-CLI-MODULARIZATION-001,CLI Modularization,BackupCommands,TESTED,,,cli,2026-01-15,src/cli/main.zig,155
 REQ-M4.4-CLI-DISPATCHER-001,CLI Modularization,CommandDispatch,EXEMPT,,,cli,2025-11-12,src/cli/cli_dispatcher.zig,75
 REQ-M4.4-CLI-DISPATCHER-002,CLI Modularization,DispatcherIntegration,TESTED,,,cli,2026-01-15,src/cli/main.zig,163
@@ -3762,7 +3768,7 @@ REQ-MFA-OUTPUT-001,MFASecureOutput,Security,TESTED,,,cli,2026-01-14,src/cli/user
 REQ-MFA-SETUP-REAL-001,MFARealEnrollment,Security,TESTED,,,cli,2026-01-29,src/cli/user_mgmt_cli.zig,764
 REQ-MFA-TEST-COMPREHENSIVE,MFA Enforcement Verification,SECURITY,TESTED,,,security,2026-01-29,tests/test_mfa_enforcement_comprehensive.zig,2
 REQ-MFA-TOGGLE-001,MFAToggleSecure,Security,TESTED,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig,902
-REQ-MIGRATION-QUIC-STABILITY-001,MigrationQuicStability,UnitTests,TESTED,,,cli,2026-01-25,src/cli/backup_cli.zig,2246
+REQ-MIGRATION-QUIC-STABILITY-001,MigrationQuicStability,UnitTests,TESTED,,,cli,2026-01-25,src/cli/backup_cli.zig,2536
 REQ-MIGRATION-SCHEMA-001,Migration,SchemaMigration,TESTED,,,admin,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,631
 REQ-ML-EMBEDDINGS-001,Graph Embeddings Integration,CoreSystem,TESTED,,,ml,2026-06-11,src/ml/graph_embeddings.zig,7
 REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Implementation,TESTED,,,ml,2026-06-11,src/ml/graph_embeddings.zig,8
@@ -4303,7 +4309,7 @@ REQ-PHASE6-005,Phase6Modularization,TestIsolation,TESTED,,,engine,2026-01-15,tes
 REQ-PHASE6-006,Phase6Modularization,BuildOptimization,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig,57
 REQ-PHASE6-007,Phase6Modularization,FeatureFlags,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig,65
 REQ-PHASE6-008,Phase6Modularization,LayeredArchitecture,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig,73
-REQ-PITR-GS-001,Point-in-Time Recovery,SnapshotSelection,TESTED,,,backup,2026-11-11,src/storage/backup.zig,955
+REQ-PITR-GS-001,Point-in-Time Recovery,SnapshotSelection,TESTED,,,backup,2026-11-11,src/storage/backup.zig,1083
 REQ-PLANNER-CARD-001,Cardinality Estimator,RealImplementation,TESTED,,,planner,2025-10-05,tests/test_cardinality_estimator.zig,5
 REQ-PRNG-CRYPTO-001,Cryptographic PRNG,Security,TESTED,,,security,2026-01-13,src/security/kms_remote.zig,113
 REQ-PROFILE-RLS-TENANT-001,PROFILE,ActiveContextPush,TESTED,,,security,2026-08-29,src/execution/planned_read_runtime.zig,475
@@ -4363,7 +4369,7 @@ REQ-QUALITY-GAP-0828,DocumentStoreReopenNoLeak,MemorySafety,TESTED,,,lsp,2026-06
 REQ-QUALITY-GAP-406-001,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/utils/stdio.zig,10
 REQ-QUALITY-GAP-406-002,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/main.zig,189
 REQ-QUALITY-GAP-406-003,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/lsp/transport.zig,43
-REQ-QUALITY-GAP-406-004,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/backup_cli.zig,93
+REQ-QUALITY-GAP-406-004,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/backup_cli.zig,95
 REQ-QUALITY-GAP-406-005,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/storage_cli.zig,4
 REQ-QUALITY-GAP-406-006,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/cli/auth_cli.zig,7
 REQ-QUALITY-GAP-406-007,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/client/repl/platform.zig,4
@@ -4395,7 +4401,7 @@ REQ-QUIC-CONN-CLEANUP-002,ConnectionMemoryManagement,ConnectionListCleanup,EXEMP
 REQ-QUIC-CONN-CLEANUP-002,QUICConnectionCleanup,ConnectionList,TESTED,,,transport,2026-01-15,tests/test_gap_analysis_january_2026.zig,200
 REQ-QUIC-CONN-CLEANUP-003,ConnectionMemoryManagement,ProperCleanup,EXEMPT,,,server,2025-12-27,src/server/quic_connection_handler.zig,5635
 REQ-QUIC-CONN-CLEANUP-003,QUICConnectionCleanup,DestructorPattern,TESTED,,,transport,2026-01-15,tests/test_gap_analysis_january_2026.zig,206
-REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME,QuicTransport,FirstStreamOwnerLifetime,TESTED,,,server,2026-06-10,src/server/quic_connection_handler.zig,10478
+REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME,QuicTransport,FirstStreamOwnerLifetime,TESTED,,,server,2026-06-10,src/server/quic_connection_handler.zig,10479
 REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME,QuicTransport,FirstStreamOwnerLifetime,TESTED,,,server,2026-06-10,tests/test_first_stream_owner_lifetime.zig,6
 REQ-QUIC-FIRST-STREAM-OWNER-LIFETIME,QuicTransport,FirstStreamOwnerLifetimeTestRoot,TESTED,,,server,2026-06-10,src/first_stream_owner_lifetime_test_root.zig,7
 REQ-QUIC-FLOW-001,QUICProtocol,FlowControl,TESTED,,,transport,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig,406
@@ -4807,7 +4813,7 @@ REQ-SERVER-REFACTOR-001,ServerRefactoring,ProtocolHandler,TESTED,,,server,2026-0
 REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,EXEMPT,,,refactor,2026-01-09,src/server/server_state.zig,5
 REQ-SERVER-REFACTOR-001,ServerRefactoring,SERVER_STATE,IMPL,,,refactor,"2026-01-09""",tests/unit_gap_0013_0016_fixes.zig,755
 REQ-SERVER-REFACTOR-001B,ServerRefactoring,SERVER_STATE_STRUCT,EXEMPT,,,refactor,2025-11-14,src/server/server_state.zig,668
-REQ-SERVER-REFACTOR-002,ServerRefactoring,BACKUP_MANAGER,EXEMPT,,,refactor,2026-01-10,src/server/backup_manager.zig,9
+REQ-SERVER-REFACTOR-002,ServerRefactoring,BACKUP_MANAGER,EXEMPT,,,refactor,2026-01-10,src/server/backup_manager.zig,12
 REQ-SERVER-REFACTOR-002,ServerRefactoring,ConnectionHandler,TESTED,,,server,2026-01-15,tests/test_gap_0193_high_priority.zig,372
 REQ-SERVER-REFACTOR-003,ServerRefactoring,INDEX_CATALOG,EXEMPT,,,refactor,2025-11-12,src/server/index_catalog.zig,4
 REQ-SERVER-REFACTOR-003,ServerRefactoring,QueryDispatch,TESTED,,,server,2026-01-15,tests/test_gap_0193_high_priority.zig,377

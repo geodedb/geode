@@ -4664,8 +4664,9 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     const backup_lock_handle = graph_store.acquireGraphReadLockTagged(graph_store.DEFAULT_GRAPH_NAME, .misc);
     defer graph_store.releaseGraphLock(backup_lock_handle);
 
-    const backup_dir = "./server_backups";
-    var mgr = SimplifiedBackupManager.init(allocator, backup_dir, .{
+    // SONNY-6299: under the data directory (or GEODE_BACKUP_DIR), not
+    // ./server_backups of the working directory.
+    var mgr = SimplifiedBackupManager.initForServer(allocator, .{
         // GAP-0880: gzip is the only compression codec with a real encoder;
         // never request zstd (no encoder — UnsupportedCompression).
         .compression = if (req.compress) .gzip else .none,
@@ -4767,7 +4768,7 @@ fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
     // or ./data, written in place while this server kept serving old data).
     var user_buf: [256]u8 = undefined;
     const username = sessionUsername(req.session_id, &user_buf);
-    const result = try backup_mgr.restoreForServer(allocator, "./server_backups", req.target_time, username);
+    const result = try backup_mgr.restoreForServerDefault(allocator, req.target_time, username);
     defer allocator.free(result.message);
     defer allocator.free(result.restore_dir);
     const resp = schema.RestoreResponse{
@@ -4848,7 +4849,7 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
         return encodeMessage(allocator, resp);
     };
 
-    var upload_mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{}) catch |err| {
+    var upload_mgr = SimplifiedBackupManager.initForServer(allocator, .{}) catch |err| {
         const resp = schema.UploadBackupResponse{
             .success = false,
             .message = try std.fmt.allocPrint(allocator, "Upload init failed: {s}", .{@errorName(err)}),
@@ -4868,7 +4869,7 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
     const resp = schema.UploadBackupResponse{
         .success = true,
         .message = try allocator.dupe(u8, "Backup uploaded, verified, and registered"),
-        .upload_path = try std.fmt.allocPrint(allocator, "./server_backups/full_{x}.backup", .{ingested.backup_id}),
+        .upload_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ upload_mgr.backupDir(), ingested.backup_id }),
     };
     return encodeMessage(allocator, resp);
 }

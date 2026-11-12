@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -34,6 +35,7 @@ const graph_store = geode.graph_store;
 const query_runner = geode.query_runner;
 // Import backup types directly from storage/backup module
 const backup_types = @import("storage/backup");
+const auth_graph_manager = @import("auth_graph_manager");
 const BackupHeader = backup_types.BackupHeader;
 const BACKUP_MAGIC = backup_types.BACKUP_MAGIC;
 const BACKUP_VERSION = backup_types.BACKUP_VERSION;
@@ -205,13 +207,14 @@ fn printBackupUsage() void {
         "Subcommands:\n" ++
         "  create        Create a new backup\n" ++
         "  list          List available backups\n" ++
-        "  info          Show backup information\n" ++
-        "  cleanup       Clean up old backup files\n" ++
+        "  info          Show a backup file's header\n" ++
+        "  cleanup       Delete old backups from a directory (dry run without --yes)\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode backup create --output ./backup.gz\n" ++
         "  geode backup list\n" ++
         "  geode backup info ./backup.gz\n" ++
+        "  geode backup cleanup --dir ./backups --older-than 30d --yes\n" ++
         "\n" ++
         "Use 'geode backup <subcommand> --help' for detailed usage\n", .{});
 }
@@ -398,6 +401,8 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     if (compress) {
         std.debug.print("Compression: enabled\n", .{});
     }
+    // SONNY-6299: say what is not in it, so the key is kept with the backup.
+    std.debug.print("The backup does not hold the auth-chain HMAC key (.geode_hmac_key), the TLS key or certificate, the generated admin password or the lock file. Keep the HMAC key (or GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY) safe and separate: restoring auth records needs it.\n", .{});
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
@@ -513,28 +518,18 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                         info.size_bytes = stat.size;
                     } else |_| {}
 
-                    // Try to read backup header for metadata (if uncompressed)
-                    if (info.compression == .none) {
-                        if (dir.openFile(io_h, entry.name, .{})) |file| {
-                            defer file.close(io_h);
-                            var header_buf: [@sizeOf(BackupHeader)]u8 align(@alignOf(BackupHeader)) = undefined;
-                            // GAP-0221 FIX: Log read errors instead of silent catch 0
-                            const bytes_read = file.readPositionalAll(io_h, &header_buf, 0) catch |err| blk: {
-                                log.debug("Failed to read backup header", &.{
-                                    Attr.string("error", @errorName(err)),
-                                });
-                                break :blk 0;
-                            };
-                            if (bytes_read == @sizeOf(BackupHeader)) {
-                                const header = @as(*const BackupHeader, @ptrCast(@alignCast(&header_buf))).*;
-                                if (header.magic == BACKUP_MAGIC) {
-                                    info.backup_type = header.backup_type;
-                                    info.timestamp = header.timestamp;
-                                    info.compression = header.compression;
-                                }
-                            }
-                        } else |_| {}
-                    }
+                    // SONNY-6289: every geode backup starts with its header
+                    // (compression is inside); decode it range-checked, and
+                    // skip a file that is not one instead of guessing from
+                    // its name (or crashing on a damaged enum field).
+                    const decoded = backup_types.readBackupHeaderAt(dir, entry.name, false) catch |err| {
+                        std.debug.print("Skipped {s}: not a readable geode backup ({s})\n", .{ full_name, @errorName(err) });
+                        allocator.free(full_name);
+                        continue;
+                    };
+                    info.backup_type = decoded.header.backup_type;
+                    info.timestamp = decoded.header.timestamp;
+                    info.compression = decoded.header.compression;
 
                     backup_files.append(allocator, info) catch {
                         allocator.free(full_name);
@@ -547,7 +542,9 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
     if (backup_files.items.len == 0) {
         std.debug.print("No backup files found.\n", .{});
-        std.debug.print("Searched: ./backups, /tmp\n", .{});
+        std.debug.print("Searched:", .{});
+        for (dirs_to_scan) |d| std.debug.print(" {s}", .{d});
+        std.debug.print("\n", .{});
         std.process.exit(@intFromEnum(ExitCode.success));
     }
 
@@ -574,7 +571,11 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-// CANARY: REQ=REQ-CLI-BACKUP-INFO-001; FEATURE="CLIBackupInfo"; ASPECT=FileMetadata; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-11
+// CANARY: REQ=REQ-CLI-BACKUP-INFO-001; FEATURE="CLIBackupInfo"; ASPECT=FileMetadata; STATUS=TESTED; TEST=tests/test_sonny6289_backup_cleanup_info.zig; OWNER=cli; UPDATED=2026-11-11
+// SONNY-6289: the header is decoded through the range-checked function the
+// restore path uses (`readBackupHeader`); it used to be cast straight from
+// the file (a damaged enum field crashed the print), and for a .gz/.zst
+// name it printed "gzip compressed, type full" without reading anything.
 fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     _ = allocator;
     var backup_file: ?[]const u8 = null;
@@ -586,6 +587,11 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             std.debug.print("geode backup info - Show backup information\n" ++
                 "\n" ++
                 "Usage: geode backup info <backup_file>\n" ++
+                "\n" ++
+                "Decodes and checks the backup file's header (format version, type,\n" ++
+                "compression, encryption, timestamp, payload size and checksum). A file that\n" ++
+                "is not a geode backup, or whose header is damaged or truncated, exits 1 with\n" ++
+                "'error: <Name>'. The payload is not verified: geode restore does that.\n" ++
                 "\n" ++
                 "Arguments:\n" ++
                 "  backup_file            Path to backup file\n" ++
@@ -599,165 +605,261 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         }
     }
 
-    if (backup_file == null) {
+    const filepath = backup_file orelse {
         std.debug.print("Error: backup file is required\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
-    }
+    };
 
-    const filepath = backup_file.?;
-
-    // Open the backup file
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.cwd().openFile(io, filepath, .{}) catch |err| {
-        std.debug.print("Error: Cannot open backup file '{s}': {}\n", .{ filepath, err });
+    const decoded = backup_types.readBackupHeader(filepath) catch |err| {
+        std.debug.print("error: {s}\n{s} is not a readable geode backup (missing, damaged or truncated header, or another file type)\n", .{ @errorName(err), filepath });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer file.close(io);
-
-    // Get file stat for size
-    const stat = file.stat(io) catch |err| {
-        std.debug.print("Error: Cannot stat backup file: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
+    const header = decoded.header;
 
     std.debug.print("Backup information for: {s}\n", .{filepath});
     std.debug.print("{s}\n", .{"-" ** 60});
-
-    // Detect compression from file extension and magic bytes
-    const is_gz = std.mem.endsWith(u8, filepath, ".gz");
-    const is_zst = std.mem.endsWith(u8, filepath, ".zst");
-
-    // Read first few bytes to detect format
-    var magic_buf: [4]u8 = undefined;
-    // GAP-0221 FIX: Log read errors instead of silent catch 0
-    const magic_read = file.readPositionalAll(io, &magic_buf, 0) catch |err| blk: {
-        log.debug("Failed to read magic bytes", &.{
-            Attr.string("error", @errorName(err)),
-        });
-        break :blk 0;
-    };
-
-    // Check for gzip magic (0x1f 0x8b)
-    const is_gzip_magic = magic_read >= 2 and magic_buf[0] == 0x1f and magic_buf[1] == 0x8b;
-    // Check for zstd magic (0x28 0xb5 0x2f 0xfd)
-    const is_zstd_magic = magic_read >= 4 and magic_buf[0] == 0x28 and magic_buf[1] == 0xb5 and magic_buf[2] == 0x2f and magic_buf[3] == 0xfd;
-
-    if (is_gzip_magic or is_gz) {
-        // Compressed gzip file
-        std.debug.print("  Format:        Geode Backup (gzip compressed)\n", .{});
-        std.debug.print("  compression:   gzip\n", .{});
-
-        std.debug.print("  type:          full\n", .{});
-
-        // Get timestamp from file modification time
-        const mtime_ns: i128 = stat.mtime.nanoseconds;
-        const mtime_s = @divFloor(mtime_ns, 1_000_000_000);
-        std.debug.print("  timestamp:     {d} (file mtime)\n", .{mtime_s});
-    } else if (is_zstd_magic or is_zst) {
-        // Compressed zstd file
-        std.debug.print("  Format:        Geode Backup (zstd compressed)\n", .{});
-        std.debug.print("  compression:   zstd\n", .{});
-
-        std.debug.print("  type:          full\n", .{});
-
-        const mtime_ns: i128 = stat.mtime.nanoseconds;
-        const mtime_s = @divFloor(mtime_ns, 1_000_000_000);
-        std.debug.print("  timestamp:     {d} (file mtime)\n", .{mtime_s});
+    std.debug.print("  Format:        Geode Backup v{d}\n", .{header.version});
+    std.debug.print("  type:          {s}\n", .{@tagName(header.backup_type)});
+    std.debug.print("  compression:   {s}\n", .{@tagName(header.compression)});
+    std.debug.print("  Encrypted:     {}\n", .{header.encrypted});
+    if (header.timestamp > 0) {
+        std.debug.print("  timestamp:     {d} (epoch ms: {d})\n", .{ @divFloor(header.timestamp, 1000), header.timestamp });
     } else {
-        // Try to read as uncompressed Geode backup
-        // Read header from beginning of file using positional read
-        var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
-        // GAP-0221 FIX: Log read errors instead of silent catch 0
-        const bytes_read = file.readPositionalAll(io, &header_buf, 0) catch |err| blk: {
-            log.debug("Failed to read backup header", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            break :blk 0;
-        };
-
-        if (bytes_read == @sizeOf(BackupHeader)) {
-            const header = @as(*const BackupHeader, @ptrCast(@alignCast(&header_buf))).*;
-
-            if (header.magic == BACKUP_MAGIC) {
-                // Valid Geode backup file
-                std.debug.print("  Format:        Geode Backup v{d}\n", .{header.version});
-                std.debug.print("  type:          {s}\n", .{@tagName(header.backup_type)});
-                std.debug.print("  compression:   {s}\n", .{@tagName(header.compression)});
-                std.debug.print("  Encrypted:     {}\n", .{header.encrypted});
-
-                // Format timestamp
-                const timestamp_ms = header.timestamp;
-                if (timestamp_ms > 0) {
-                    const secs = @divFloor(timestamp_ms, 1000);
-                    std.debug.print("  timestamp:     {d} (epoch ms: {d})\n", .{ secs, timestamp_ms });
-                } else {
-                    std.debug.print("  timestamp:     Unknown\n", .{});
-                }
-
-                std.debug.print("  Payload Size:  {} bytes\n", .{header.payload_len});
-                std.debug.print("  Checksum:      0x{x}\n", .{header.checksum});
-            } else {
-                // Not a Geode format backup, show generic info
-                std.debug.print("  Format:        Unknown (not Geode backup format)\n", .{});
-                std.debug.print("  Magic:         0x{x:0>8}\n", .{header.magic});
-            }
-        } else {
-            std.debug.print("  Format:        Unknown (header read failed)\n", .{});
-        }
+        std.debug.print("  timestamp:     Unknown\n", .{});
     }
-
-    // File statistics
-    std.debug.print("  size:          {s}\n", .{formatSize(stat.size)});
-
-    // Show raw size in bytes for precision
-    if (stat.size >= 1024) {
-        std.debug.print("  Size (bytes):  {d}\n", .{stat.size});
+    std.debug.print("  Payload Size:  {} bytes\n", .{header.payload_len});
+    std.debug.print("  Checksum:      0x{x}\n", .{header.checksum});
+    std.debug.print("  size:          {s}\n", .{formatSize(decoded.file_size)});
+    if (decoded.file_size >= 1024) {
+        std.debug.print("  Size (bytes):  {d}\n", .{decoded.file_size});
     }
-
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
+/// `<n><unit>` with unit s, m, h, d or w, n > 0, as milliseconds; null for
+/// anything else (or an overflow).
+fn parseDurationMs(text: []const u8) ?i64 {
+    if (text.len < 2) return null;
+    const unit_ms: i64 = switch (text[text.len - 1]) {
+        's' => 1000,
+        'm' => 60 * 1000,
+        'h' => 60 * 60 * 1000,
+        'd' => 24 * 60 * 60 * 1000,
+        'w' => 7 * 24 * 60 * 60 * 1000,
+        else => return null,
+    };
+    const n = std.fmt.parseInt(i64, text[0 .. text.len - 1], 10) catch return null;
+    if (n <= 0) return null;
+    return std.math.mul(i64, n, unit_ms) catch null;
+}
+
+const CleanupCandidate = struct {
+    name: []u8,
+    timestamp: i64,
+    delete: bool = false,
+};
+
+/// The backup id of a server-managed backup file name (`full_<hex>.backup`).
+fn backupIdFromName(name: []const u8) ?u64 {
+    if (!std.mem.startsWith(u8, name, "full_") or !std.mem.endsWith(u8, name, ".backup")) return null;
+    return std.fmt.parseInt(u64, name["full_".len .. name.len - ".backup".len], 16) catch null;
+}
+
+/// Rewrite `dir/metadata.json` without the entries for the backups about to
+/// be deleted (written to a temporary file 0600, then renamed over it), so
+/// a restore never selects a deleted backup. No metadata.json: nothing to do.
+fn dropFromMetadata(allocator: std.mem.Allocator, dir: std.Io.Dir, doomed: []const CleanupCandidate) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const data = dir.readFileAlloc(io, "metadata.json", allocator, .limited(2 * 1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer allocator.free(data);
+    const parsed = try std.json.parseFromSlice([]backup_types.BackupMetadata, allocator, data, .{});
+    defer parsed.deinit();
+    var kept: std.ArrayList(backup_types.BackupMetadata) = .empty;
+    defer kept.deinit(allocator);
+    outer: for (parsed.value) |entry| {
+        for (doomed) |c| {
+            if (c.delete and backupIdFromName(c.name) == entry.backup_id) continue :outer;
+        }
+        try kept.append(allocator, entry);
+    }
+    if (kept.items.len == parsed.value.len) return;
+    const json = try std.json.Stringify.valueAlloc(allocator, kept.items, .{});
+    defer allocator.free(json);
+    const perms: std.Io.File.Permissions = if (comptime builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600);
+    const tmp_name = "metadata.json.cleanup-tmp";
+    {
+        const f = try dir.createFile(io, tmp_name, .{ .permissions = perms });
+        defer f.close(io);
+        try f.writeStreamingAll(io, json);
+        try f.sync(io);
+    }
+    dir.rename(tmp_name, dir, "metadata.json", io) catch |err| {
+        // error-policy: A — remove our own temporary file; the caller reports
+        // the failure and deletes nothing.
+        dir.deleteFile(io, tmp_name) catch {};
+        return err;
+    };
+}
+
+// CANARY: REQ=REQ-CLI-BACKUP-CLEANUP-001; FEATURE="CLIBackupCleanup"; ASPECT=RetentionCleanup; STATUS=TESTED; TEST=tests/test_sonny6289_backup_cleanup_info.zig; OWNER=cli; UPDATED=2026-11-11
+// SONNY-6289: this printed "Cleaned 0 backup files" / "Backup cleanup
+// completed" and exited 0 without looking at any file. It now deletes, with
+// --yes, the full backups in --dir older than --older-than (by the header
+// timestamp), never the newest one, and only regular files directly in
+// --dir whose header decodes as a geode backup; without --yes it only lists
+// them. Backups are all full (no incrementals exist), so no backup depends
+// on another.
 fn cmdBackupCleanup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    _ = allocator;
     var older_than: ?[]const u8 = null;
+    var dir_arg: ?[]const u8 = null;
+    var confirmed = false;
 
     // Parse arguments
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
-            std.debug.print("geode backup cleanup - Clean up old backup files\n" ++
+            std.debug.print("geode backup cleanup - Delete old backups from a directory\n" ++
                 "\n" ++
-                "Usage: geode backup cleanup [options]\n" ++
+                "Usage: geode backup cleanup --dir <path> --older-than <duration> [--yes]\n" ++
                 "\n" ++
                 "Options:\n" ++
-                "  --older-than <duration>  Remove backups older than specified duration\n" ++
-                "                          (e.g., 1h, 24h, 7d, 30d)\n" ++
-                "  -h, --help              Show this help message\n" ++
+                "  --dir <path>             Directory holding the backups (required; only files\n" ++
+                "                           directly in it, never subdirectories or symlinks)\n" ++
+                "  --older-than <duration>  Delete backups taken longer ago than this\n" ++
+                "                           (<n>s, <n>m, <n>h, <n>d or <n>w, e.g. 24h, 7d, 30d)\n" ++
+                "  --yes                    Delete; without it nothing is deleted and the backups\n" ++
+                "                           that would be are listed (dry run)\n" ++
+                "  --confirm                Alias for --yes\n" ++
+                "  -h, --help               Show this help message\n" ++
+                "\n" ++
+                "Only files whose header decodes as a geode backup are considered, aged by the\n" ++
+                "time in that header. The newest backup in the directory is never deleted.\n" ++
+                "Deleted backups are removed from the directory's metadata.json. Exits 1 if any\n" ++
+                "deletion fails. Run it when no backup is being written to the directory.\n" ++
                 "\n" ++
                 "Examples:\n" ++
-                "  geode backup cleanup --older-than 1h\n" ++
-                "  geode backup cleanup --older-than 7d\n", .{});
+                "  geode backup cleanup --dir /var/lib/geode/backups --older-than 30d\n" ++
+                "  geode backup cleanup --dir /var/lib/geode/backups --older-than 30d --yes\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--older-than")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --older-than requires a value\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             i += 1;
             older_than = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--dir")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --dir requires a value\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            i += 1;
+            dir_arg = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--yes") or std.mem.eql(u8, argv[i], "--confirm")) {
+            confirmed = true;
+        } else {
+            std.debug.print("Error: unknown option '{s}' for backup cleanup\n", .{argv[i]});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
-    // Execute cleanup
-    std.debug.print("Backup cleanup started...\n", .{});
-    if (older_than) |duration| {
-        std.debug.print("Removing backups older than: {s}\n", .{duration});
-        std.debug.print("Cleaned 0 backup files\n", .{});
-    } else {
-        std.debug.print("Cleaned 0 backup files\n", .{});
+    const dir_path = dir_arg orelse {
+        std.debug.print("Error: backup cleanup needs --dir <path>: the directory to delete old backups from\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    };
+    if (!isPathSafe(dir_path)) {
+        std.debug.print("Error: --dir path contains invalid traversal components\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-    std.debug.print("Backup cleanup completed\n", .{});
-    std.process.exit(@intFromEnum(ExitCode.success));
+    const age_text = older_than orelse {
+        std.debug.print("Error: backup cleanup needs --older-than <duration> (e.g. 7d)\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    };
+    const age_ms = parseDurationMs(age_text) orelse {
+        std.debug.print("Error: --older-than '{s}' is not <n>s, <n>m, <n>h, <n>d or <n>w\n", .{age_text});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    };
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| {
+        std.debug.print("error: {s}\nCannot open backup directory {s}; nothing was deleted\n", .{ @errorName(err), dir_path });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer dir.close(io);
+
+    var candidates: std.ArrayList(CleanupCandidate) = .empty;
+    defer {
+        for (candidates.items) |c| allocator.free(c.name);
+        candidates.deinit(allocator);
+    }
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        // Regular files only: never a symlink (its target may be anywhere)
+        // or a subdirectory.
+        if (entry.kind != .file) continue;
+        const decoded = backup_types.readBackupHeaderAt(dir, entry.name, false) catch |err| {
+            if (std.mem.endsWith(u8, entry.name, ".backup") or std.mem.endsWith(u8, entry.name, ".gz") or std.mem.endsWith(u8, entry.name, ".zst")) {
+                std.debug.print("Skipped {s}/{s}: not a readable geode backup ({s})\n", .{ dir_path, entry.name, @errorName(err) });
+            }
+            continue;
+        };
+        const name = try allocator.dupe(u8, entry.name);
+        errdefer allocator.free(name);
+        try candidates.append(allocator, .{ .name = name, .timestamp = decoded.header.timestamp });
+    }
+
+    if (candidates.items.len == 0) {
+        std.debug.print("No geode backups in {s}; nothing to delete.\n", .{dir_path});
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+
+    var newest: i64 = std.math.minInt(i64);
+    for (candidates.items) |c| newest = @max(newest, c.timestamp);
+    const cutoff = compat_milliTimestamp() -| age_ms;
+    var to_delete: usize = 0;
+    for (candidates.items) |*c| {
+        if (c.timestamp == newest) {
+            std.debug.print("Kept {s}/{s} (the newest backup)\n", .{ dir_path, c.name });
+        } else if (c.timestamp < cutoff) {
+            c.delete = true;
+            to_delete += 1;
+        } else {
+            std.debug.print("Kept {s}/{s} (taken within {s})\n", .{ dir_path, c.name, age_text });
+        }
+    }
+    const kept = candidates.items.len - to_delete;
+
+    if (!confirmed) {
+        for (candidates.items) |c| {
+            if (c.delete) std.debug.print("Would delete {s}/{s} (taken at epoch ms {d})\n", .{ dir_path, c.name, c.timestamp });
+        }
+        std.debug.print("Dry run: {d} backup(s) would be deleted, {d} kept; nothing was deleted. Re-run with --yes to delete them.\n", .{ to_delete, kept });
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+
+    if (to_delete > 0) {
+        dropFromMetadata(allocator, dir, candidates.items) catch |err| {
+            std.debug.print("error: {s}\nCannot update {s}/metadata.json; nothing was deleted\n", .{ @errorName(err), dir_path });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    }
+    var deleted: usize = 0;
+    var failed: usize = 0;
+    for (candidates.items) |c| {
+        if (!c.delete) continue;
+        dir.deleteFile(io, c.name) catch |err| {
+            std.debug.print("Failed to delete {s}/{s}: {s}\n", .{ dir_path, c.name, @errorName(err) });
+            failed += 1;
+            continue;
+        };
+        std.debug.print("Deleted {s}/{s} (taken at epoch ms {d})\n", .{ dir_path, c.name, c.timestamp });
+        deleted += 1;
+    }
+    std.debug.print("Backup cleanup of {s}: deleted {d}, kept {d}, failed {d}\n", .{ dir_path, deleted, kept, failed });
+    std.process.exit(@intFromEnum(if (failed > 0) ExitCode.general_error else ExitCode.success));
 }
 
 /// Restore command handler
@@ -772,6 +874,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     var skip_confirmation: bool = false;
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
+    // SONNY-6299: the HMAC key a backup's auth state was sealed with.
+    var auth_key: AuthKeyOptions = .{};
     // GAP-0137: TLS configuration options
     var tls_config = TlsConfig{};
 
@@ -799,6 +903,14 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "Restoring directly from s3:// or http(s):// URIs is not supported: download\n" ++
                 "the backup file first.\n" ++
                 "\n" ++
+                "Backups do not hold the HMAC key that seals the __geode_security auth graph\n" ++
+                "(.geode_hmac_key), the TLS key or certificate, the generated admin password\n" ++
+                "or the lock file. A backup file holding auth records restores only with the\n" ++
+                "key it was sealed with, and the restore verifies the chain with it: give\n" ++
+                "--hmac-key-file <source data dir>/.geode_hmac_key (written into the restored\n" ++
+                "directory, mode 0600), or set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY as the source\n" ++
+                "server had it. A server restore copies the server's own key file.\n" ++
+                "\n" ++
                 "Options:\n" ++
                 "  --source <path>        Backup file (alternative to positional)\n" ++
                 "  --data-dir <path>      Directory to restore into (default: $GEODE_DATA_DIR)\n" ++
@@ -808,6 +920,11 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "  --server <addr:port>   Ask this server to restore its own backup\n" ++
                 "  --user <username>      Username for authentication\n" ++
                 "  --password <password>  Password for authentication\n" ++
+                "  --hmac-key-file <path> The source server's .geode_hmac_key (a file, never the\n" ++
+                "                         key on the command line)\n" ++
+                "  --unverified-auth      Key lost: restore the auth records unverified; no\n" ++
+                "                         server starts on them until an operator accepts them\n" ++
+                "                         with 'geode auth reseal --data-dir <dir>'\n" ++
                 "  --yes                  Skip confirmation prompts\n" ++
                 "  --confirm              Skip confirmation prompts (alias for --yes)\n" ++
                 "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
@@ -822,7 +939,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "  For enterprise PKI/mutual TLS, provide --ca-cert, --client-cert, --client-key.\n" ++
                 "\n" ++
                 "Examples:\n" ++
-                "  geode restore ./full.backup --data-dir /var/lib/geode-restored --yes\n" ++
+                "  geode restore ./full.backup --data-dir /var/lib/geode-restored --yes \\\n" ++
+                "      --hmac-key-file /secure/geode_hmac_key\n" ++
                 "  GEODE_DATA_DIR=/var/lib/geode geode restore ./full.backup --confirm\n" ++
                 "  geode restore --server 127.0.0.1:3141 --yes --ca-cert /etc/ssl/ca.crt\n" ++
                 "\n", .{});
@@ -872,6 +990,15 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             password = argv[i];
         } else if (std.mem.eql(u8, argv[i], "--yes") or std.mem.eql(u8, argv[i], "--confirm")) {
             skip_confirmation = true;
+        } else if (std.mem.eql(u8, argv[i], "--hmac-key-file")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --hmac-key-file requires a path\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            i += 1;
+            auth_key.key_file = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--unverified-auth")) {
+            auth_key.unverified = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure-tls-skip-verify")) {
             tls_config.insecure = true;
             insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
@@ -929,6 +1056,13 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     } else if (data_dir != null) {
         std.debug.print("Error: --data-dir applies to a backup file; a --server restore writes into the server's own data directory\n", .{});
         std.process.exit(@intFromEnum(ExitCode.usage_error));
+    } else if (auth_key.key_file != null or auth_key.unverified) {
+        std.debug.print("Error: --hmac-key-file and --unverified-auth apply to a backup file; a --server restore uses the server's own key\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    if (auth_key.key_file != null and auth_key.unverified) {
+        std.debug.print("Error: --hmac-key-file and --unverified-auth cannot be combined\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
     // S-7: Use consolidated password resolution
@@ -984,7 +1118,7 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     }
 
     if (source) |src| {
-        executeLocalRestore(allocator, src, target_time, data_dir) catch |err| {
+        executeLocalRestore(allocator, src, target_time, data_dir, auth_key) catch |err| {
             std.debug.print("error: {s}\nRestore failed; nothing was restored.\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1917,7 +2051,8 @@ fn executeRemoteBackup(
 
     // Create destination file
     const io_bf = std.Io.Threaded.global_single_threaded.io();
-    const output_file = try std.Io.Dir.cwd().createFile(io_bf, dest, .{});
+    // SONNY-6299: a backup holds every graph's data; owner-only.
+    const output_file = try std.Io.Dir.cwd().createFile(io_bf, dest, .{ .permissions = if (comptime builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600) });
     // Do not leave a truncated file behind under the requested backup name.
     errdefer std.Io.Dir.cwd().deleteFile(io_bf, dest) catch {};
     defer output_file.close(io_bf);
@@ -2127,6 +2262,147 @@ fn executeRemoteRestore(
     }
 }
 
+/// How `geode restore <file>` gets the HMAC key a backup's auth state was
+/// sealed with (SONNY-6299).
+const AuthKeyOptions = struct {
+    /// --hmac-key-file: the source server's .geode_hmac_key.
+    key_file: ?[]const u8 = null,
+    /// --unverified-auth: restore the auth records without verifying them.
+    unverified: bool = false,
+};
+
+fn envSet(name: [*:0]const u8) bool {
+    const v = posixGetenv(name) orelse return false;
+    return v.len > 0;
+}
+
+/// Read an HMAC key file in the `.geode_hmac_key` formats (64 hex
+/// characters, optionally newline-terminated, or 32 raw bytes). A regular
+/// file only. Its bytes are never printed.
+fn readHmacKeyFile(path: []const u8) ![32]u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_only }) catch |err| {
+        std.debug.print("RESTORE: cannot open --hmac-key-file '{s}': {s}\n", .{ path, @errorName(err) });
+        return error.InvalidHmacKeyFile;
+    };
+    defer file.close(io);
+    const st = try file.stat(io);
+    if (st.kind != .file or st.size > 128) return error.InvalidHmacKeyFile;
+    var buf: [128]u8 = undefined;
+    defer std.crypto.secureZero(u8, &buf);
+    const n = try file.readPositionalAll(io, buf[0..@intCast(st.size)], 0);
+    var key: [32]u8 = undefined;
+    if (n == 32) {
+        @memcpy(&key, buf[0..32]);
+        return key;
+    }
+    const hex = std.mem.trimEnd(u8, buf[0..n], "\r\n");
+    if (hex.len != 64) return error.InvalidHmacKeyFile;
+    _ = std.fmt.hexToBytes(&key, hex) catch return error.InvalidHmacKeyFile;
+    return key;
+}
+
+/// Verify the `__geode_security` HMAC chain of the restored store in `dir`
+/// with `key` (the check a server runs at startup), opening it in this
+/// process. Fails with error.AuthChainVerificationFailed.
+fn verifyRestoredAuthChain(allocator: std.mem.Allocator, dir: []const u8, key: *const [32]u8) !void {
+    const store = try graph_store.initGlobalStore(allocator, dir);
+    defer {
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
+    defer mgr.deinit();
+    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) return;
+    mgr.verifyChain(key) catch |err| {
+        std.debug.print("RESTORE: the __geode_security HMAC chain does not verify with the given key ({s})\n", .{@errorName(err)});
+        return error.AuthChainVerificationFailed;
+    };
+    std.debug.print("RESTORE: __geode_security HMAC chain verified ({d} records)\n", .{mgr.countAuthRecords()});
+}
+
+/// Write `key` into `dir/.geode_hmac_key` (hex), mode 0600, never
+/// overwriting.
+fn plantHmacKey(allocator: std.mem.Allocator, dir: []const u8, key: *const [32]u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, backup_types.hmac_key_file_name });
+    defer allocator.free(path);
+    const perms: std.Io.File.Permissions = if (comptime builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600);
+    const out = try std.Io.Dir.cwd().createFile(io, path, .{ .exclusive = true, .permissions = perms });
+    defer out.close(io);
+    var hex = std.fmt.bytesToHex(key.*, .lower);
+    defer std.crypto.secureZero(u8, &hex);
+    try out.writeStreamingAll(io, &hex);
+    try out.sync(io);
+}
+
+fn printHmacKeyRequired() void {
+    std.debug.print(
+        "RESTORE: this backup holds __geode_security auth records sealed with an HMAC key, and backups do not carry\n" ++
+            "that key (.geode_hmac_key). Supply the source server's key: --hmac-key-file <source data dir>/.geode_hmac_key,\n" ++
+            "or set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY as the source server had it; the restore verifies the chain with it.\n" ++
+            "If the key is lost, --unverified-auth restores the records unverified, and no server starts on them until an\n" ++
+            "operator accepts them with 'geode auth reseal --data-dir <dir>'.\n",
+        .{},
+    );
+}
+
+/// SONNY-6299: make the restored store's auth state well-defined before it
+/// is committed. A store with no `__geode_security` records needs nothing.
+/// Otherwise the key is the archive's own `.geode_hmac_key` (an older
+/// archive), --hmac-key-file (then written into the restored directory), or
+/// GEODE_AUTH_HMAC_KEY / GEODE_TDE_KEY (as the server will read it), and the
+/// chain must verify with it; or --unverified-auth, explicitly.
+fn settleRestoredAuth(allocator: std.mem.Allocator, staging: []const u8, graphs: []const backup_types.RestoredGraph, km: backup_types.KeyMaterial, opts: AuthKeyOptions) !void {
+    var has_auth = false;
+    for (graphs) |g| {
+        if (std.mem.eql(u8, g.name, graph_store.SECURITY_GRAPH_NAME) and g.nodes > 0) has_auth = true;
+    }
+    if (!has_auth) {
+        if (opts.key_file != null or opts.unverified) {
+            std.debug.print("RESTORE: the backup holds no __geode_security auth records; --hmac-key-file / --unverified-auth not used\n", .{});
+        }
+        return;
+    }
+    if (opts.unverified) {
+        std.debug.print(
+            "RESTORE: WARNING: --unverified-auth: the __geode_security auth records are restored WITHOUT verification.\n" ++
+                "A server will refuse to start on this directory (AuthChainTampered) until an operator who has checked them\n" ++
+                "accepts them, re-sealing them under a new key: geode auth reseal --data-dir <dir>\n",
+            .{},
+        );
+        return;
+    }
+
+    var key: [32]u8 = undefined;
+    defer std.crypto.secureZero(u8, &key);
+    var plant = false;
+    if (opts.key_file) |kf| {
+        if (km.hmac_key) {
+            std.debug.print("RESTORE: the backup already holds .geode_hmac_key (an older archive); --hmac-key-file is not used with it\n", .{});
+            return error.HmacKeySourceConflict;
+        }
+        if (envSet("GEODE_AUTH_HMAC_KEY") or envSet("GEODE_TDE_KEY")) {
+            std.debug.print("RESTORE: --hmac-key-file and GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY are both set; a server uses the environment key, so give one\n", .{});
+            return error.HmacKeySourceConflict;
+        }
+        key = try readHmacKeyFile(kf);
+        plant = true;
+    } else {
+        // An older archive's key file was restored into staging; otherwise
+        // only the environment (never a key generated now).
+        const dir: ?[]const u8 = if (km.hmac_key) staging else null;
+        const kr = auth_graph_manager.AuthGraphManager.resolveExistingHmacKey(allocator, dir) catch {
+            printHmacKeyRequired();
+            return error.HmacKeyRequired;
+        };
+        key = kr.key;
+    }
+
+    try verifyRestoredAuthChain(allocator, staging, &key);
+    if (plant) try plantHmacKey(allocator, staging, &key);
+}
+
 // CANARY: REQ=REQ-BACKUP-RESTORE-002; FEATURE="Backup Restore"; ASPECT=LocalRestore; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=cli; UPDATED=2026-11-11
 // Local restore: writes a backup file into a data directory, offline.
 //
@@ -2137,11 +2413,15 @@ fn executeRemoteRestore(
 // writes into a staging directory beside the target, verifies every file
 // against the archive and opens the restored store cold, and only then
 // renames it onto the target and reports success.
+//
+// SONNY-6299: backups no longer hold .geode_hmac_key; restored auth state
+// is verified with the key the operator supplies (`settleRestoredAuth`).
 fn executeLocalRestore(
     allocator: std.mem.Allocator,
     source: []const u8,
     target_time: ?[]const u8,
     data_dir_arg: ?[]const u8,
+    auth_key: AuthKeyOptions,
 ) !void {
     std.debug.print("RESTORE: Initiating restore from '{s}'\n", .{source});
 
@@ -2171,6 +2451,14 @@ fn executeLocalRestore(
         decoded.stats.files,
         decoded.stats.bytes,
     });
+    const km = try backup_types.archiveKeyMaterial(decoded.archive);
+    if (km.any()) {
+        var names_buf: [128]u8 = undefined;
+        std.debug.print("RESTORE: WARNING: this backup was made by an older geode and holds key material ({s}); those files are restored mode 0600. Treat the backup file as secret and consider rotating these keys.\n", .{km.names(&names_buf)});
+    }
+    if (km.lock) {
+        std.debug.print("RESTORE: the backup's lock file (.geode.lock) is not restored\n", .{});
+    }
 
     const target = data_dir_arg orelse posixGetenv("GEODE_DATA_DIR") orelse {
         std.debug.print("Error: geode restore needs a target directory: --data-dir <path> or GEODE_DATA_DIR\n", .{});
@@ -2192,6 +2480,8 @@ fn executeLocalRestore(
 
     const graphs = try backup_types.countRestoredStore(allocator, staged.staging_dir);
     defer backup_types.freeRestoredGraphs(allocator, graphs);
+
+    try settleRestoredAuth(allocator, staged.staging_dir, graphs, km, auth_key);
 
     staged.commit() catch |err| {
         if (err == error.RestoreTargetNotEmpty) {

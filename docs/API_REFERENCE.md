@@ -100,7 +100,22 @@ DROP INDEX IF EXISTS person_age_idx;
 > geode backup create --output ./full.backup --local --data-dir /var/lib/geode  # from a local data directory
 > geode restore ./full.backup --data-dir /var/lib/geode-restored --yes  # restore a backup file, offline
 > geode backup list [--dir ./backups]                        # list local backups
+> geode backup info ./full.backup                            # decode a backup's header
+> geode backup cleanup --dir ./backups --older-than 30d [--yes]  # delete old backups (dry run without --yes)
 > ```
+>
+> `geode backup info` decodes the header through the same range-checked
+> function as restore and exits 1 with `error: <Name>` for a file that is
+> not a geode backup or whose header is damaged or truncated (it does not
+> verify the payload; restore does). `geode backup cleanup` (SONNY-6289)
+> needs `--dir` and `--older-than <n>s|m|h|d|w`; without `--yes` it only
+> lists what it would delete. It considers only regular files directly in
+> `--dir` whose header decodes as a geode backup (never symlinks or
+> subdirectories), ages them by the header's timestamp, never deletes the
+> newest one, removes deleted backups from the directory's `metadata.json`,
+> reports every file, and exits 1 if a deletion fails. (Until SONNY-6289
+> cleanup printed "Backup cleanup completed" and deleted nothing, and
+> `backup info` crashed on every header.)
 >
 > `geode restore <file>` writes the backup into `--data-dir` (or
 > `GEODE_DATA_DIR`), which must not exist or be empty; no server is
@@ -116,7 +131,8 @@ DROP INDEX IF EXISTS person_age_idx;
 > **Server restore (QUIC `restore`, gRPC `/geode.GeodeService/Restore`,
 > `geode restore --server <addr>` with no file; SONNY-6288):** Admin only,
 > audited (`SERVER_RESTORE`), refused in cluster mode, and needs
-> `confirm`. The server restores its newest backup in `./server_backups/`
+> `confirm`. The server restores its newest backup in its backup directory
+> (and, for one release, the legacy `./server_backups/`; see below)
 > taken at or before `target_time` (epoch milliseconds; empty means now;
 > anything else is refused) into a **new** directory beside the data
 > directory its storage engine has open, named
@@ -157,9 +173,46 @@ DROP INDEX IF EXISTS person_age_idx;
 > plus declared `size_bytes` and the hex CRC32 `checksum` from the original
 > `BackupResponse`. The server verifies size, checksum, and the artifact
 > header (magic/version/payload-length/CRC32) BEFORE writing, persists the
-> exact bytes into `./server_backups/`, and durably registers the backup in
+> exact bytes into the server's backup directory, and durably registers the backup in
 > the metadata log so it is restorable. Metadata-only uploads (no payload)
 > are rejected — there is no "upload slot" placeholder path.
+>
+> **What a backup holds, and where server backups live (SONNY-6299;
+> BREAKING, 2026-11):** a backup archives the data directory's graph data
+> (`graph_registry.dat`, every per-graph directory, `timeseries/`) and
+> never `.geode.lock` (the running process's lock), `.geode_hmac_key` (the
+> key that seals the `__geode_security` auth chain), `.geode_admin_password`
+> (the generated first-boot password), `server.key` or `server.crt` (the
+> auto-generated TLS identity; a server regenerates the pair on first
+> start), or the server's own backup directory. Backup files and
+> `metadata.json` are mode 0600. A server writes its backups to
+> `<data dir>/backups/` (created 0700) of the data directory its storage
+> engine has open, whatever its working directory, or to `GEODE_BACKUP_DIR`
+> (an absolute path outside the data directory; anything else refuses the
+> backup with `InvalidBackupDir`). A server restore still reads the legacy
+> `./server_backups/` of its working directory for one release and picks
+> the newest backup in either; new backups are never written there, so move
+> old ones into `<data dir>/backups/` before that release ends.
+>
+> **Restoring auth state needs the HMAC key.** Because the key is no longer
+> in the backup, `geode restore <file>` of a backup holding
+> `__geode_security` records needs the key it was sealed with:
+> `--hmac-key-file <source data dir>/.geode_hmac_key` (written into the
+> restored directory, mode 0600), or `GEODE_AUTH_HMAC_KEY` / `GEODE_TDE_KEY`
+> set as the source server had it. The restore verifies the chain with that
+> key before it moves the directory into place; without a key it fails with
+> `error: HmacKeyRequired`, with the wrong one `error:
+> AuthChainVerificationFailed`, and nothing is restored. If the key is lost,
+> `--unverified-auth` restores the records unverified: no server starts on
+> them (`AuthChainTampered`) until an operator who has checked them accepts
+> them with `geode auth reseal --data-dir <dir>`, which re-seals them under a
+> new key. Keep the HMAC key with your other key material (as for
+> `GEODE_TDE_KEY`), separate from the backups. A server restore copies the
+> server's own `.geode_hmac_key` into the restored directory, so its own
+> backups verify when a server starts there; a backup sealed under another
+> key does not. A backup written by an older geode (keys inside) still
+> restores: the key files are written mode 0600 with a warning, and its
+> `.geode.lock` is never written.
 
 ### BACKUP TO
 

@@ -136,8 +136,9 @@ else
 fi
 
 # CLI restore writes the backup file into a fresh directory, offline, and
-# reports success only after verifying it (SONNY-6280).
-RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --data-dir "$WORK_DIR/restored" --yes 2>&1)
+# reports success only after verifying it (SONNY-6280). The backup holds
+# auth records and (SONNY-6299) not the HMAC key: pass the source's key file.
+RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --data-dir "$WORK_DIR/restored" --yes --hmac-key-file "$DATA_DIR/.geode_hmac_key" 2>&1)
 assert_contains "CLI restore writes and verifies" "$RESTORE_OUT" "RESTORE: Restored and verified [0-9]+ files"
 
 # CLI backup list must run and not error out (directory scan).
