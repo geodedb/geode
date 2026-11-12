@@ -9484,6 +9484,29 @@ pub fn build(b: *std.Build) void {
         b.step("test-external-kms-provider", "Run the external KMS client envelope wrap/unwrap and tamper-detection tests (SONNY-6320: registered)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6328: a deliberate data race built exactly like the TSan
+    // companion steps (`test-*-tsan`), run by a checker that requires
+    // ThreadSanitizer to report it. The companions passed while detecting
+    // nothing.
+    {
+        const race_mod = b.createModule(.{
+            .root_source_file = b.path("tests/sonny6328_tsan_race_fixture.zig"),
+            .target = target,
+            .optimize = .Debug,
+            .link_libc = true,
+            .sanitize_thread = true,
+        });
+        const race_fixture = b.addTest(.{ .root_module = race_mod });
+        const opts = b.addOptions();
+        opts.addOptionPath("race_fixture", race_fixture.getEmittedBin());
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6328_tsan_detects_race.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6328_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6328-tsan-detects-race", "Run SONNY-6328 regression (a deliberate data race built like the TSan companion steps must be reported by ThreadSanitizer: exit 66 and a data-race warning)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per
