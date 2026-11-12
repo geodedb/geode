@@ -1150,6 +1150,18 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
     log.info("Auth DDL persistence callbacks installed", &.{});
 }
 
+/// Free the GraphRBACPolicy `wireAuthDDLCallbacks` installed (SONNY-6378: a
+/// debug server reported it leaked at exit). Called from main.zig's
+/// shutdown, after every listener and request thread has stopped. Unsetting
+/// the global first leaves `graphGrantCheck` denying, not reading freed
+/// memory, should anything still ask.
+pub fn releaseAuthDDLPolicy(allocator: std.mem.Allocator) void {
+    const policy = multi_graph_security.getGlobalPolicy() orelse return;
+    multi_graph_security.setGlobalPolicy(null);
+    policy.deinit();
+    allocator.destroy(policy);
+}
+
 // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
 /// Hydrate the in-memory PolicyCatalog from __geode_security and install
 /// write-through hooks so CREATE/DROP POLICY DDL persists automatically.

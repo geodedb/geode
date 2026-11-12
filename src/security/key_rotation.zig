@@ -64,9 +64,13 @@ const Attr = logging.Attr;
 //     keys nothing encrypts with. Scheduling is operator-invoked.
 //   - Re-encryption of existing pages is LAZY (reencryptPage on access /
 //     reencryptBatch on demand). There is no eager full-scan re-encrypt.
-//   - saveState()/loadState() and the remote-KMS rotation paths predate the
-//     Zig 0.16 std.Io migration; they are unreferenced by any named build
-//     gate and are not exercised by test-gap0890.
+//   - saveState()/loadState() predate the Zig 0.16 std.Io migration; they
+//     are not exercised by test-gap0890.
+//   - There is no remote-KMS rotation (SONNY-6378). The former method
+//     never compiled (ArrayList.writer() is gone in Zig 0.16), installed an
+//     all-zero key as the active data key, and loadState unwraps envelopes
+//     with the local simulated KMS only, so a remotely wrapped key could not
+//     be reloaded. Nothing called it, and it was removed.
 
 /// Audit log entry for rotation events
 pub const RotationAuditEntry = struct {
@@ -147,8 +151,6 @@ pub const KeyRegistry = struct {
     // persisted state path (optional)
     state_path: ?[]const u8 = null,
     kms_seed: ?u64 = null, // deterministic seed for simulated external KMS
-    remote_kms_host: ?[]const u8 = null,
-    remote_kms_port: ?u16 = null,
     // Version tracking
     current_version: u32 = 1,
 
@@ -162,8 +164,6 @@ pub const KeyRegistry = struct {
             },
             .state_path = null,
             .kms_seed = null,
-            .remote_kms_host = null,
-            .remote_kms_port = null,
         };
     }
 
@@ -244,11 +244,6 @@ pub const KeyRegistry = struct {
 
     pub fn setKmsSeed(self: *KeyRegistry, seed: u64) void {
         self.kms_seed = seed;
-    }
-
-    pub fn setRemoteKms(self: *KeyRegistry, host: []const u8, port: u16) void {
-        self.remote_kms_host = host;
-        self.remote_kms_port = port;
     }
 
     /// Load or generate active data key using cryptographically secure random source
@@ -347,33 +342,6 @@ pub const KeyRegistry = struct {
         try self.history.append(self.allocator, key_ref);
         self.active = key_ref;
         return .{ .old_id = if (old) |o| o.id else 0, .new_id = key_ref.id, .ts = compat_timestamp(), .method = .manual };
-    }
-
-    pub fn rotateWithRemoteKms(self: *KeyRegistry) !RotationEvent {
-        if (self.remote_kms_host == null or self.remote_kms_port == null) return error.RemoteKmsNotConfigured;
-        const host = self.remote_kms_host.?;
-        const port = self.remote_kms_port.?;
-        const kms_remote = @import("kms_remote.zig");
-        var client = kms_remote.RemoteKmsClient.init(self.allocator);
-        // Best-effort connect; propagate error if fails
-        try client.connect(host, port);
-        // Request generate envelope
-        const env = try client.generate();
-        // We cannot unwrap remotely without plaintext; for now treat ct as opaque and store envelope only.
-        // Mark is_wrapped=true and leave material zeroed (future: request plaintext via privileged unwrap).
-        const zero: [32]u8 = [_]u8{0} ** 32;
-        var env_json_buf: std.ArrayList(u8) = .empty;
-        defer env_json_buf.deinit(self.allocator);
-        try env_json_buf.writer().print("{", .{}); // minimal re-serialization using external client helpers would be better; reuse envelopeToJson path via external client module for consistency in future
-        // For brevity, reuse kms_remote internal printer by reconstructing JSON (lossless enough for test)
-        env_json_buf.clearRetainingCapacity();
-        // Simpler: call external_kms_client.envelopeToJson since schema same
-        const ekc = @import("external_kms_client.zig");
-        const env_json = try ekc.envelopeToJson(.{ .nonce = env.nonce, .tag = env.tag, .ct = env.ct, .version = env.version, .alg = env.alg }, self.allocator);
-        const key_ref: DataKeyRef = .{ .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1, .created_unix_epoch = compat_timestamp(), .material = zero, .envelope_json = env_json, .is_wrapped = true };
-        try self.history.append(self.allocator, key_ref);
-        self.active = key_ref;
-        return .{ .old_id = 0, .new_id = key_ref.id, .ts = compat_timestamp(), .method = .manual };
     }
 
     pub fn saveState(self: *KeyRegistry, path: []const u8) !void {

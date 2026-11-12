@@ -12,7 +12,7 @@ services:
         USER_UID: ${USER_UID:-1000}
         USER_GID: ${USER_GID:-1000}
         USERNAME: ${USERNAME:-dev}
-        ZIG_VERSION: "0.15.1"
+        ZIG_VERSION: "0.16.0"
     image: geode-dev:latest
     container_name: geode-dev
     hostname: geode-dev

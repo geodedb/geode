@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy pre-downloaded Zig archives for both architectures (avoids entropy issues in Docker build)
 # Only the archive matching TARGETARCH needs to exist; the other COPY is allowed to fail via
 # the glob pattern which gracefully handles missing files.
-ARG ZIG_VERSION=0.15.2
+ARG ZIG_VERSION=0.16.0
 COPY docker/zig/zig-x86_64-linux-${ZIG_VERSION}.tar.xz* /tmp/
 COPY docker/zig/zig-aarch64-linux-${ZIG_VERSION}.tar.xz* /tmp/
 

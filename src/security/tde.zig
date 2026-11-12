@@ -53,7 +53,7 @@ const Attr = logging.Attr;
 
 // Transparent Data Encryption (TDE) minimal AES-256-GCM implementation.
 // Runtime gated by GEODE_ENABLE_TDE.
-// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE baseline"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/e2e_security_tde_mfa.zig:1; OWNER=security; UPDATED=2026-11-12
+// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE baseline"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/e2e_security_tde_mfa.zig; OWNER=security; UPDATED=2026-11-12
 
 pub const KeyStatus = key_manager.KeyStatus;
 

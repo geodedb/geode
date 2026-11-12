@@ -281,9 +281,14 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
 
 ### Password Hashing
 
-- **Current**: BLAKE2b-256 with salt (secure placeholder)
-- **Future**: Argon2id with OWASP parameters (when Zig API stabilizes)
-- **Security Level**: Post-quantum computational resistance
+- **Algorithm**: Argon2id with the OWASP minimum parameters (m=19456 KiB,
+  t=2, p=1), stored as a PHC string (`hashPasswordArgon2id` in
+  `src/security/geode_auth_lib.zig`)
+- **Stored hash bounds**: a stored hash with other parameters still
+  verifies, within 1 <= t <= 10, 8*p <= m <= 262144 KiB (256 MiB) and
+  1 <= p <= 16; outside them, or unparseable, verification fails without
+  running Argon2, so a corrupt stored hash cannot burn CPU or memory on
+  every login (SONNY-6378)
 - **Validation**: All passwords validated before hashing
 
 ### Session Management

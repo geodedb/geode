@@ -24,8 +24,8 @@ RUN set -eux; \
         ; \
         rm -rf /var/lib/apt/lists/*
 
-# Install Zig 0.15.1 directly with correct filename format
-ARG ZIG_VERSION=0.15.2
+# Install Zig (build.zig.zon minimum_zig_version) directly with correct filename format
+ARG ZIG_VERSION=0.16.0
 RUN set -ex && \
     if [ "$TARGETARCH" = "arm64" ]; then \
         ARCH="aarch64"; \

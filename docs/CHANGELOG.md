@@ -4,6 +4,33 @@
 
 ### Security
 
+- **A stored Argon2id hash outside the parameter bounds fails verification;
+  startup log lines are written; the server frees its RBAC policy and
+  proto-reader registry at exit (SONNY-6378).** `verifyPasswordArgon2id`
+  ran any stored `t` and `m` up to 2^32-1, so a corrupt stored hash could
+  burn CPU (t) or memory (m, up to 4 TiB) on every login; a hash outside
+  1 <= t <= 10, 8*p <= m <= 262144 KiB and 1 <= p <= 16 now fails without
+  running Argon2 (the hashes Geode writes, m=19456,t=2,p=1, and RFC 9106's
+  m=64 MiB,t=3,p=4 are inside). The structured logger wrote stderr through
+  a 4 KiB buffer nothing flushed, so startup `log.info` lines did not
+  appear; every record is now one unbuffered write. A debug server
+  reported the `GraphRBACPolicy` from `wireAuthDDLCallbacks` and the
+  proto-reader registry capacity as leaked at exit; both are freed at
+  shutdown. `KeyRegistry.rotateWithRemoteKms` (and `setRemoteKms`) never
+  compiled under Zig 0.16, installed an all-zero active key and could not
+  be reloaded by `loadState`; nothing called it and it is removed with its
+  never-built test. `tests/e2e_security_tde_mfa.zig` was compiled but never
+  run while REQ-GQL-TDE-001 cited it; it now also covers the enabled TDE
+  round trip and RFC 6238 TOTP and runs as `test-e2e-security-tde-mfa`.
+  The 172 CANARY markers of the GAP-0193 batch 2 engine, misc, security and
+  testing suites, whose cases only parse a query, are IMPL instead of
+  TESTED (GAP-0514: 412 IMPL, 7.0%). Dockerfile, Dockerfile.dev,
+  Dockerfile.simple, Dockerfile.reliable, Dockerfile.gpu, the three compose
+  files and `scripts/install-deps.sh` pinned Zig 0.15.x; they pin 0.16.0
+  (Dockerfile and Dockerfile.gpu expect `docker/zig/zig-<arch>-linux-0.16.0.tar.xz`).
+  `docs/USER_AUTH.md` said passwords were hashed with BLAKE2b; it now
+  describes Argon2id and the bounds. Regression:
+  `zig build test-sonny6378-server-exit-and-hygiene`.
 - **BREAKING (library API): `KMSProvider` has no `remote_kms` provider
   (SONNY-2441).** `wrapDataKey` with `remote_kms` ignored the key it was
   given and returned one the remote KMS generated (the remote protocol has

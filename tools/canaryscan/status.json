@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T16:58:38.7940578Z",
+  "generated_at": "2026-11-12T17:05:39.417857573Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -1385,14 +1385,14 @@
         {
           "feature": "DistributedQuery",
           "aspect": "Federation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -1648,14 +1648,14 @@
         {
           "feature": "2PC",
           "aspect": "TLSSecurity",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "2PC TLS",
@@ -1677,14 +1677,14 @@
         {
           "feature": "2PC",
           "aspect": "TLSOneShot",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "2PC TLS One-shot",
@@ -2929,14 +2929,14 @@
         {
           "feature": "AuditSecurity",
           "aspect": "AuditLog",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "audit",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -2946,14 +2946,14 @@
         {
           "feature": "AuditSecurity",
           "aspect": "ComplianceLog",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "audit",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -3048,14 +3048,14 @@
         {
           "feature": "AuditTests",
           "aspect": "UnitTests",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -3065,14 +3065,14 @@
         {
           "feature": "AuditTLS",
           "aspect": "SyslogTests",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "audit",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -3218,14 +3218,14 @@
         {
           "feature": "AuthConfig",
           "aspect": "PasswordPolicy",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Configurable Password Policy",
@@ -3263,14 +3263,14 @@
         {
           "feature": "AuthDefault",
           "aspect": "UserCreation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Default User Creation",
@@ -4904,14 +4904,14 @@
         {
           "feature": "AuthPolicy",
           "aspect": "PasswordReset",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Password Reset Tracking",
@@ -4949,14 +4949,14 @@
         {
           "feature": "AuthPolicy",
           "aspect": "EnhancedPolicy",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Enhanced Password Policy",
@@ -4994,14 +4994,14 @@
         {
           "feature": "AuthPolicy",
           "aspect": "PasswordValidation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Enhanced Password Validation",
@@ -5025,14 +5025,14 @@
         {
           "feature": "AuthPolicy",
           "aspect": "UnifiedPolicy",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Unified Password Policy",
@@ -5056,14 +5056,14 @@
         {
           "feature": "AuthPolicy",
           "aspect": "PreHashValidation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Password Policy Validation Before Hashing",
@@ -5102,14 +5102,14 @@
         {
           "feature": "AuthPolicy",
           "aspect": "PostAuthCheck",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Post-Authentication Policy Check",
@@ -5133,14 +5133,14 @@
         {
           "feature": "AuthPolicy",
           "aspect": "MandatoryEnforcement",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Mandatory Password Policy Enforcement",
@@ -5164,14 +5164,14 @@
         {
           "feature": "AuthPolicy",
           "aspect": "PreHashValidation2",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Pre-Hash Password Validation",
@@ -5195,14 +5195,14 @@
         {
           "feature": "AuthPolicy",
           "aspect": "UpdateValidation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Password Update Policy Validation",
@@ -5511,14 +5511,14 @@
         {
           "feature": "AuthState",
           "aspect": "ProductionGuard",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -5542,14 +5542,14 @@
         {
           "feature": "AuthToken",
           "aspect": "TokenValidation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -6049,14 +6049,14 @@
         {
           "feature": "BackupLSN",
           "aspect": "LSNTests",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "backup",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -6370,14 +6370,14 @@
         {
           "feature": "BackupTLS",
           "aspect": "CertVerification",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "BackupTLSCertVerification",
@@ -6446,14 +6446,14 @@
         {
           "feature": "AuditBenchmark",
           "aspect": "LatencyBenchmark",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "monitoring",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -7086,14 +7086,14 @@
         {
           "feature": "BuiltinFunctions",
           "aspect": "Aggregate",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "functions",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -7120,14 +7120,14 @@
         {
           "feature": "BuiltinFunctions",
           "aspect": "Date",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "functions",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -7137,14 +7137,14 @@
         {
           "feature": "BuiltinFunctions",
           "aspect": "List",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "functions",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "BuiltinFunctions",
@@ -7183,14 +7183,14 @@
         {
           "feature": "BuiltinFunctions",
           "aspect": "Math",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "functions",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "BuiltinFunctions",
@@ -7224,14 +7224,14 @@
         {
           "feature": "BuiltinFunctions",
           "aspect": "Path",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "functions",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -7275,14 +7275,14 @@
         {
           "feature": "BuiltinFunctions",
           "aspect": "String",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "functions",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "BuiltinFunctions",
@@ -8764,14 +8764,14 @@
         {
           "feature": "CLIBackup",
           "aspect": "RemoteBackup",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "claude",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -10226,14 +10226,14 @@
         {
           "feature": "CLISubprocess",
           "aspect": "Elimination",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -10257,14 +10257,14 @@
         {
           "feature": "CLISubprocess",
           "aspect": "Integration1",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "claude",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -10288,14 +10288,14 @@
         {
           "feature": "CLISubprocess",
           "aspect": "Integration2",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "claude",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -10319,14 +10319,14 @@
         {
           "feature": "CLISubprocess",
           "aspect": "Integration3",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "claude",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -14094,14 +14094,14 @@
         {
           "feature": "DistQueryCoord",
           "aspect": "CoordinationTests",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "dist",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -15165,14 +15165,14 @@
         {
           "feature": "DocStructure",
           "aspect": "StructureTests",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "claude",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Documentation Structure Tests",
@@ -16487,14 +16487,14 @@
         {
           "feature": "Engine",
           "aspect": "Optimization",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -16567,14 +16567,14 @@
         {
           "feature": "Engine",
           "aspect": "QueryExec",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -16618,14 +16618,14 @@
         {
           "feature": "Engine",
           "aspect": "Streaming",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -17811,14 +17811,14 @@
         {
           "feature": "Execution",
           "aspect": "Delete",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -17828,14 +17828,14 @@
         {
           "feature": "Execution",
           "aspect": "Merge",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -17845,14 +17845,14 @@
         {
           "feature": "Execution",
           "aspect": "Remove",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -17862,14 +17862,14 @@
         {
           "feature": "Execution",
           "aspect": "Set",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19675,14 +19675,14 @@
         {
           "feature": "FLE",
           "aspect": "BasicEncryption",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "FieldLevelEncryption",
@@ -19706,14 +19706,14 @@
         {
           "feature": "FLE",
           "aspect": "BlindIndex",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "FieldLevelEncryption",
@@ -19737,14 +19737,14 @@
         {
           "feature": "FLE",
           "aspect": "Rotation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "FieldLevelEncryption",
@@ -19768,14 +19768,14 @@
         {
           "feature": "FLE",
           "aspect": "Migration",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "FieldLevelEncryption",
@@ -19799,14 +19799,14 @@
         {
           "feature": "FLE",
           "aspect": "RBAC",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "FieldLevelEncryption",
@@ -20594,14 +20594,14 @@
         {
           "feature": "GapTests",
           "aspect": "Jan2026Fixes",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -20649,14 +20649,14 @@
         {
           "feature": "IMPLBatchPromotion",
           "aspect": "EngineBatch2",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "test",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -20666,14 +20666,14 @@
         {
           "feature": "IMPLBatchPromotion",
           "aspect": "MiscBatch2",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "test",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -20683,14 +20683,14 @@
         {
           "feature": "IMPLBatchPromotion",
           "aspect": "SecurityBatch2",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "test",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -20700,14 +20700,14 @@
         {
           "feature": "IMPLBatchPromotion",
           "aspect": "TestingBatch2",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "test",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -22887,14 +22887,14 @@
         {
           "feature": "GapTests",
           "aspect": "AnalysisFixes",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -27636,14 +27636,14 @@
         {
           "feature": "GQLCompliance",
           "aspect": "ISOCompliance",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "parser",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "KeywordsAsIdentifiers",
@@ -27873,14 +27873,14 @@
         {
           "feature": "SetOps",
           "aspect": "Distinct",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -29450,14 +29450,14 @@
         {
           "feature": "PropertyAccess",
           "aspect": "Basic",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "QueryPlanCaching",
@@ -29677,14 +29677,14 @@
         {
           "feature": "Docs",
           "aspect": "MatchGuard",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -29694,14 +29694,14 @@
         {
           "feature": "PropertyAccess",
           "aspect": "Null",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -29711,14 +29711,14 @@
         {
           "feature": "Docs",
           "aspect": "ResultGuard",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -29728,14 +29728,14 @@
         {
           "feature": "Docs",
           "aspect": "SafetyGuards",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -29745,14 +29745,14 @@
         {
           "feature": "Docs",
           "aspect": "StatusWireMapping",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -29762,14 +29762,14 @@
         {
           "feature": "Docs",
           "aspect": "Tutorial",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "docs",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -31584,7 +31584,7 @@
         {
           "feature": "Constraints",
           "aspect": "Composite",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
@@ -31635,7 +31635,7 @@
         {
           "feature": "Constraints",
           "aspect": "Unique",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
@@ -36505,14 +36505,14 @@
         {
           "feature": "2PC",
           "aspect": "Coordinator",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Distributed Transaction Coordinator",
@@ -36550,14 +36550,14 @@
         {
           "feature": "2PC",
           "aspect": "Idempotence",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "2PC Idempotence",
@@ -36581,14 +36581,14 @@
         {
           "feature": "2PC",
           "aspect": "RaftIntegration",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -36615,14 +36615,14 @@
         {
           "feature": "2PC",
           "aspect": "WriteSetApplication",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -36632,14 +36632,14 @@
         {
           "feature": "2PC",
           "aspect": "WriteSetParser",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -36706,14 +36706,14 @@
         {
           "feature": "GQLTypes",
           "aspect": "Integration",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -36756,14 +36756,14 @@
         {
           "feature": "GQLTypes",
           "aspect": "Regression",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -36956,14 +36956,14 @@
         {
           "feature": "AlgoPerf",
           "aspect": "PageRank",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -36973,14 +36973,14 @@
         {
           "feature": "AlgoPerf",
           "aspect": "Betweenness",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -36990,14 +36990,14 @@
         {
           "feature": "AlgoPerf",
           "aspect": "Closeness",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -37007,14 +37007,14 @@
         {
           "feature": "AlgoPerf",
           "aspect": "Eigenvector",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -37333,14 +37333,14 @@
         {
           "feature": "Centrality",
           "aspect": "BridgeLeverage",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -37369,14 +37369,14 @@
         {
           "feature": "CallSubquery",
           "aspect": "Basic",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "CallSubquery",
@@ -37510,14 +37510,14 @@
         {
           "feature": "Catalog",
           "aspect": "E2E",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "server",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "End-to-End Catalog Operations",
@@ -38126,14 +38126,14 @@
         {
           "feature": "CryptoTypes",
           "aspect": "Implementation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Cryptographic Types Implementation",
@@ -38204,14 +38204,14 @@
         {
           "feature": "Parser",
           "aspect": "CTEList",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "parser",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -38840,14 +38840,14 @@
         {
           "feature": "FTS",
           "aspect": "IndexOptimizer",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "search",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "FTS IndexOptimizer Integration",
@@ -39297,14 +39297,14 @@
         {
           "feature": "GeoTypes",
           "aspect": "Implementation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Geographic Types Implementation",
@@ -39361,14 +39361,14 @@
         {
           "feature": "Statistics",
           "aspect": "GlobalClustering",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -39411,14 +39411,14 @@
         {
           "feature": "Statistics",
           "aspect": "Density",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -39442,14 +39442,14 @@
         {
           "feature": "Statistics",
           "aspect": "Diameter",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -39511,14 +39511,14 @@
         {
           "feature": "Centrality",
           "aspect": "GreyCardinal",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "GreyCardinalComposite",
@@ -39540,14 +39540,14 @@
         {
           "feature": "GroupByRel",
           "aspect": "Pattern",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "GroupByRelationshipPattern",
@@ -39590,14 +39590,14 @@
         {
           "feature": "Centrality",
           "aspect": "Harmonic",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "HarmonicCentrality",
@@ -39660,14 +39660,14 @@
         {
           "feature": "Centrality",
           "aspect": "HITS",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "HITSAlgorithm",
@@ -40287,14 +40287,14 @@
         {
           "feature": "Centrality",
           "aspect": "Katz",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "KatzCentrality",
@@ -40622,14 +40622,14 @@
         {
           "feature": "Statistics",
           "aspect": "LocalClustering",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -40888,14 +40888,14 @@
         {
           "feature": "Statistics",
           "aspect": "MeanDistance",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -41264,14 +41264,14 @@
         {
           "feature": "MultiChainRel",
           "aspect": "Match",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "MultiChainRelationshipMatch",
@@ -41328,14 +41328,14 @@
         {
           "feature": "Parser",
           "aspect": "MultiCreate",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "parser",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -41397,14 +41397,14 @@
         {
           "feature": "MultiHop",
           "aspect": "Patterns",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "MultiHopPatterns",
@@ -41466,14 +41466,14 @@
         {
           "feature": "MultiHop",
           "aspect": "GroupBy",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "MultiHopGroupBy",
@@ -41566,14 +41566,14 @@
         {
           "feature": "MultiNode",
           "aspect": "GroupBy",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "MultiNodeGroupBy",
@@ -41703,14 +41703,14 @@
         {
           "feature": "NetTypes",
           "aspect": "Module",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -41720,14 +41720,14 @@
         {
           "feature": "NetTypes",
           "aspect": "IpAddr",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -41737,14 +41737,14 @@
         {
           "feature": "NetTypes",
           "aspect": "Subnet",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -41754,14 +41754,14 @@
         {
           "feature": "NetTypes",
           "aspect": "Mac",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -42671,14 +42671,14 @@
         {
           "feature": "FinalSort",
           "aspect": "MultiChain",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "GQLOrderBy",
@@ -42716,14 +42716,14 @@
         {
           "feature": "FinalSort",
           "aspect": "MultiNode",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "GQLOrderBy",
@@ -42761,14 +42761,14 @@
         {
           "feature": "FinalSort",
           "aspect": "PostWith",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "OrderByPostWith",
@@ -42792,14 +42792,14 @@
         {
           "feature": "FinalSort",
           "aspect": "PostWithAgg",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "OrderByPostWithAgg",
@@ -43133,14 +43133,14 @@
         {
           "feature": "Parser",
           "aspect": "PathModes",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "parser",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -44340,7 +44340,7 @@
             "src/security/tde.zig"
           ],
           "tests": [
-            "tests/e2e_security_tde_mfa.zig:1"
+            "tests/e2e_security_tde_mfa.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -44542,8 +44542,7 @@
           "aspect": "TEST",
           "status": "TESTED",
           "files": [
-            "tests/canary_remote_kms.zig",
-            "tests/test_external_kms_remote.zig"
+            "tests/canary_remote_kms.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate"
@@ -44680,14 +44679,14 @@
         {
           "feature": "Statistics",
           "aspect": "TriangleCount",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "graph",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "TriangleCounting",
@@ -45341,14 +45340,14 @@
         {
           "feature": "VarLenPath",
           "aspect": "Aggregation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "VariableLengthPathAggregation",
@@ -45583,14 +45582,14 @@
         {
           "feature": "VectorTypes",
           "aspect": "Implementation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -45785,14 +45784,14 @@
         {
           "feature": "WithGroupBy",
           "aspect": "Aggregation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "WithGroupByAggregation",
@@ -47356,14 +47355,14 @@
         {
           "feature": "InputSecurity",
           "aspect": "SQLInjection",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -47373,14 +47372,14 @@
         {
           "feature": "InputSecurity",
           "aspect": "XSSPrevention",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -47390,14 +47389,14 @@
         {
           "feature": "InputSecurity",
           "aspect": "PathTraversal",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -47441,14 +47440,14 @@
         {
           "feature": "IntegrationTest",
           "aspect": "E2E",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -47458,14 +47457,14 @@
         {
           "feature": "IntegrationTest",
           "aspect": "ServerClient",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -47766,14 +47765,14 @@
         {
           "feature": "KMS",
           "aspect": "KeyManagement",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -47783,14 +47782,14 @@
         {
           "feature": "KMS",
           "aspect": "KeyGeneration",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -47800,14 +47799,14 @@
         {
           "feature": "KMS",
           "aspect": "KeyDerivation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -48761,14 +48760,14 @@
         {
           "feature": "ListProperties",
           "aspect": "Storage",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "crud_operations",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -49018,14 +49017,14 @@
         {
           "feature": "Main",
           "aspect": "Benchmarks",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "loadtest",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -49064,14 +49063,14 @@
         {
           "feature": "Main",
           "aspect": "Cluster",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "loadtest",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -49081,14 +49080,14 @@
         {
           "feature": "Main",
           "aspect": "Generator",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "tooling",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "StreamingDataGenerator",
@@ -49177,14 +49176,14 @@
         {
           "feature": "Main",
           "aspect": "Regression",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "loadtest",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "RegressionRunner",
@@ -51401,14 +51400,14 @@
         {
           "feature": "MapProperties",
           "aspect": "Storage",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "crud_operations",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -52072,14 +52071,14 @@
         {
           "feature": "MatView",
           "aspect": "Storage",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "query",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "Materialized View Storage Creation",
@@ -56007,14 +56006,14 @@
         {
           "feature": "NetworkSecurity",
           "aspect": "TLSConnection",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -56024,14 +56023,14 @@
         {
           "feature": "NetworkSecurity",
           "aspect": "CertValidation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -56206,14 +56205,14 @@
         {
           "feature": "NoReturnClause",
           "aspect": "Create",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "NoReturnClause",
@@ -56247,14 +56246,14 @@
         {
           "feature": "NoReturnClause",
           "aspect": "Set",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -56264,14 +56263,14 @@
         {
           "feature": "NoReturnClause",
           "aspect": "Delete",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -56281,14 +56280,14 @@
         {
           "feature": "NoReturnClause",
           "aspect": "Merge",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -56298,14 +56297,14 @@
         {
           "feature": "NoReturnClause",
           "aspect": "Remove",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -59377,14 +59376,14 @@
         {
           "feature": "PerfPhase1",
           "aspect": "Optimization",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "performance",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "PerformanceOptimization",
@@ -59423,14 +59422,14 @@
         {
           "feature": "PerfPhase2",
           "aspect": "StorageBench",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "performance",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "StorageBenchmarking",
@@ -60930,14 +60929,14 @@
         {
           "feature": "PerfTest",
           "aspect": "QuerySpeed",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "performance",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         },
         {
           "feature": "PerformanceTests",
@@ -60959,14 +60958,14 @@
         {
           "feature": "PerfTest",
           "aspect": "MemoryUsage",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "performance",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -60976,14 +60975,14 @@
         {
           "feature": "PerfTest",
           "aspect": "IndexPerf",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "performance",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -65469,14 +65468,14 @@
         {
           "feature": "QUICProtocol",
           "aspect": "Connection",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -65486,14 +65485,14 @@
         {
           "feature": "QUICProtocol",
           "aspect": "Streaming",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -65503,14 +65502,14 @@
         {
           "feature": "QUICProtocol",
           "aspect": "Security",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -65520,14 +65519,14 @@
         {
           "feature": "QUICProtocol",
           "aspect": "Multiplexing",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -65537,14 +65536,14 @@
         {
           "feature": "QUICProtocol",
           "aspect": "FlowControl",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -65554,14 +65553,14 @@
         {
           "feature": "QUICProtocol",
           "aspect": "Congestion",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -66834,14 +66833,14 @@
         {
           "feature": "RLS",
           "aspect": "PolicyEnforcement",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -66851,14 +66850,14 @@
         {
           "feature": "RLS",
           "aspect": "RowFiltering",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -66868,14 +66867,14 @@
         {
           "feature": "RLS",
           "aspect": "PolicyCompilation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -68868,14 +68867,14 @@
         {
           "feature": "RBAC",
           "aspect": "RoleManagement",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -68885,14 +68884,14 @@
         {
           "feature": "RBAC",
           "aspect": "PermissionGrant",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -68902,14 +68901,14 @@
         {
           "feature": "RBAC",
           "aspect": "RoleAssignment",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -68919,14 +68918,14 @@
         {
           "feature": "TDE",
           "aspect": "EncryptionAtRest",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -68936,14 +68935,14 @@
         {
           "feature": "TDE",
           "aspect": "KeyRotation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -69474,14 +69473,14 @@
         {
           "feature": "SessionSecurity",
           "aspect": "SessionToken",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -69491,14 +69490,14 @@
         {
           "feature": "SessionSecurity",
           "aspect": "SessionTimeout",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -69508,14 +69507,14 @@
         {
           "feature": "SessionSecurity",
           "aspect": "SessionIsolation",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_security.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -70338,14 +70337,14 @@
         {
           "feature": "StatementHandler",
           "aspect": "ShowConstraints",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -70369,14 +70368,14 @@
         {
           "feature": "StatementHandler",
           "aspect": "ShowFunctions",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -70419,14 +70418,14 @@
         {
           "feature": "StatementHandler",
           "aspect": "ShowProcedures",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -70469,14 +70468,14 @@
         {
           "feature": "StatementHandler",
           "aspect": "ShowTables",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -80336,14 +80335,14 @@
         {
           "feature": "Storage",
           "aspect": "Commit",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -80686,14 +80685,14 @@
         {
           "feature": "Storage",
           "aspect": "Rollback",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -80720,14 +80719,14 @@
         {
           "feature": "Storage",
           "aspect": "Transaction",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_engine.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -82194,14 +82193,14 @@
         {
           "feature": "TestInfra",
           "aspect": "Framework",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -82211,14 +82210,14 @@
         {
           "feature": "TestInfra",
           "aspect": "Coverage",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -82228,14 +82227,14 @@
         {
           "feature": "TestInfra",
           "aspect": "Regression",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -85390,14 +85389,14 @@
         {
           "feature": "UnitTest",
           "aspect": "ModuleCoverage",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -85407,14 +85406,14 @@
         {
           "feature": "UnitTest",
           "aspect": "FunctionTests",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -85424,14 +85423,14 @@
         {
           "feature": "UnitTest",
           "aspect": "ParserTests",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_testing.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "testing",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -86403,14 +86402,14 @@
         {
           "feature": "WhereClause",
           "aspect": "Filtering",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -86420,14 +86419,14 @@
         {
           "feature": "WhereClause",
           "aspect": "Complex",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -86437,14 +86436,14 @@
         {
           "feature": "WhereClause",
           "aspect": "Pattern",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -86454,14 +86453,14 @@
         {
           "feature": "WhereClause",
           "aspect": "Exists",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "tests/test_gap_0193_batch2_misc.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "execution",
-          "updated": "2026-01-16"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -86892,8 +86891,8 @@
       "BENCHED": 215,
       "COMPLETE": 2,
       "EXEMPT": 217,
-      "IMPL": 173,
-      "TESTED": 4633
+      "IMPL": 345,
+      "TESTED": 4461
     },
     "by_aspect": {
       "2PC": 3,

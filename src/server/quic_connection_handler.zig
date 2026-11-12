@@ -324,6 +324,14 @@ pub fn reserveProtoReaderRegistryCapacity(gpa: std.mem.Allocator, capacity: usiz
     try g_proto_reader_registry.reserveCapacity(gpa, capacity);
 }
 
+/// Free the registry's storage (SONNY-6378: a debug server reported the
+/// capacity reserved above as leaked at exit). `gpa` must be the allocator
+/// the registry was grown with. Called once at server shutdown, after every
+/// stream thread has stopped; the registry is empty and reusable afterwards.
+pub fn deinitProtoReaderRegistry(gpa: std.mem.Allocator) void {
+    g_proto_reader_registry.deinit(gpa);
+}
+
 /// Return the current number of active stream handler threads globally.
 pub fn getGlobalStreamThreadCount() u32 {
     return g_stream_throttle.count();

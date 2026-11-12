@@ -16,8 +16,13 @@ pub const Clock = slog.Clock;
 /// Without this, the writer may capture a pointer to a stack-local object
 /// that is destroyed when the function returns, causing a dangling-pointer
 /// crash under concurrent logging (DESTADDRREQ).
-var g_stderr_buffer: [4096]u8 = undefined;
-var g_stderr_file_writer: std.Io.File.Writer = std.Io.File.stderr().writerStreaming(std.Options.debug_io, &g_stderr_buffer);
+///
+/// SONNY-6378: unbuffered. The slog handlers format a whole record into
+/// their own buffer and write it with one `writeAll` under their mutex, and
+/// their `flush` is a no-op; behind a 4 KiB buffer nothing flushed it, so
+/// startup lines sat in memory until 4 KiB of log had accumulated (or were
+/// never written). Each record is now one write(2) of a complete line.
+var g_stderr_file_writer: std.Io.File.Writer = std.Io.File.stderr().writerStreaming(std.Options.debug_io, &.{});
 
 /// Get stderr writer compatible with Zig 0.16+
 fn getStderrWriter() *std.Io.Writer {

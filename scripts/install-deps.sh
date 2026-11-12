@@ -51,7 +51,7 @@ echo "→ QUIC: using vendored implementation (libmsquic not required)"
 # Install Zig if not present
 if ! command -v zig &> /dev/null; then
     echo "→ Installing Zig via zvm (https://zig.sh)..."
-    GEODE_ZIG_VERSION="${GEODE_ZIG_VERSION:-0.15.2}"
+    GEODE_ZIG_VERSION="${GEODE_ZIG_VERSION:-0.16.0}"
     sudo apt-get install -y jq xz-utils tar
     curl -fsSL https://zig.sh/install.sh | bash
     export PATH="$HOME/bin:$PATH"

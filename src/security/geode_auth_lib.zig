@@ -2021,12 +2021,22 @@ pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const
     );
 }
 
+// SONNY-6378: bounds on the parameters of a stored Argon2id hash. A stored
+// hash is untrusted input; without bounds a corrupt `t` (up to 2^32-1
+// passes) or `m` (up to 4 TiB) made every login against it burn CPU or
+// memory. The bounds admit the hashes Geode writes (m=19456, t=2, p=1) and
+// RFC 9106's second recommended option (m=64 MiB, t=3, p=4).
+pub const argon2_max_t: u32 = 10;
+pub const argon2_max_m_kib: u32 = 256 * 1024;
+pub const argon2_max_p: u24 = 16;
+
 /// Canonical Argon2id password verification against PHC format strings.
 /// Parses the PHC string to extract parameters, salt, and expected hash,
 /// then re-derives the hash and compares using constant-time equality.
 ///
-/// Supports any valid Argon2id PHC string (not just OWASP params), enabling
-/// verification of hashes created with different parameter sets during migration.
+/// Supports Argon2id PHC strings with parameters other than the OWASP ones
+/// Geode writes, enabling verification of hashes created with different
+/// parameter sets during migration, within the bounds below.
 pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_string: []const u8) !bool {
     // FIPS: Argon2id is not FIPS-approved — fail closed under -Dfips
     if (build_options.fips) {
@@ -2067,6 +2077,12 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
             p = std.fmt.parseInt(u24, value, 10) catch return false;
         }
     }
+
+    // SONNY-6378: refuse out-of-bounds parameters before running Argon2.
+    // Argon2 needs at least 8 KiB of memory per lane.
+    if (t < 1 or t > argon2_max_t) return false;
+    if (p < 1 or p > argon2_max_p) return false;
+    if (m > argon2_max_m_kib or m < 8 * @as(u32, p)) return false;
 
     const salt_hex = parts.next() orelse return false;
     const hash_hex = parts.next() orelse return false;

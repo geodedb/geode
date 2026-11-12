@@ -6212,7 +6212,13 @@ pub fn build(b: *std.Build) void {
     // Newly added scaffold acceptance tests (runtime-flag gated components)
     const e2e_security_tde_mfa_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_security_tde_mfa.zig"), .target = target, .optimize = optimize }) });
     e2e_security_tde_mfa_test.root_module.addImport("geode", root_mod);
+    // libc: the test installs GEODE_TDE_KEY with setenv.
+    e2e_security_tde_mfa_test.root_module.link_libc = true;
     test_e2e_step.dependOn(&e2e_security_tde_mfa_test.step);
+    // SONNY-6378: compiled but never run, while REQ-GQL-TDE-001 cited it.
+    const run_e2e_security_tde_mfa = b.addRunArtifact(e2e_security_tde_mfa_test);
+    shardDep(test_step, &run_e2e_security_tde_mfa.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-e2e-security-tde-mfa", "Run the TDE and MFA runtime-gate e2e tests (disabled: FeatureDisabled; enabled: AES-256-GCM round trip with tamper detection, RFC 6238 TOTP) (SONNY-6378)").dependOn(&run_e2e_security_tde_mfa.step);
     const e2e_fts_advanced_test = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_fts_advanced.zig"), .target = target, .optimize = optimize }) });
     e2e_fts_advanced_test.root_module.addImport("geode", root_mod);
     e2e_fts_advanced_test.root_module.link_libc = true;

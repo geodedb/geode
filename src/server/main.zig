@@ -1345,6 +1345,10 @@ pub fn main() !void {
     // outlive the DebugAllocator and surface as leaks on shutdown, which the
     // test harness interprets as a server crash mid-spec. See ensuing fix.
     defer geode.execution.cleanupCatalogInstance();
+    // SONNY-6378: the proto-reader registry capacity reserved for the QUIC
+    // listener. Registered this early so it runs after every stream thread
+    // (which unregisters itself) has been joined.
+    defer quic_connection_handler.deinitProtoReaderRegistry(gpa);
     // Parse server CLI args using modularized cli_args module (M3.2 Phase 3 CLI extraction)
     const config_opt = try cli_args.parseArgs(gpa);
     if (config_opt == null) return; // Help was shown, exit
@@ -1807,6 +1811,9 @@ pub fn main() !void {
     // P7: Install write-through callbacks for user/role/grant DDL and hydrate
     // in-memory state from __geode_security.
     server_init.wireAuthDDLCallbacks(agm, gpa);
+    // SONNY-6378: registered here, so it runs after the listener blocks
+    // below have stopped every request thread.
+    defer server_init.releaseAuthDDLPolicy(gpa);
     log.info("Authentication configured for persistent auth graph with LRU cache", &.{});
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=StartupHydration; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20

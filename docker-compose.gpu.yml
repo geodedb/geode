@@ -9,7 +9,7 @@ services:
       context: .
       dockerfile: Dockerfile.gpu
       args:
-        ZIG_VERSION: "0.15.1"
+        ZIG_VERSION: "0.16.0"
         TARGETARCH: amd64
         CUDA_VERSION: "12.3.0"
     image: geode:gpu

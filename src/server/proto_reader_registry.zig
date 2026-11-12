@@ -83,6 +83,10 @@ pub const Registry = struct {
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
         self.entries.deinit(gpa);
+        // Leave an empty, usable registry (SONNY-6378): the server frees the
+        // process-wide instance at shutdown, and a late `unregister` must
+        // see no entries rather than undefined memory.
+        self.entries = .empty;
     }
 
     pub fn reserveCapacity(self: *Registry, gpa: std.mem.Allocator, capacity: usize) !void {

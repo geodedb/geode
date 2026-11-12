@@ -21,6 +21,8 @@ Geode provides enterprise-grade Key Management Service (KMS) integration for Tra
 > on top of it was never used by any executable and was removed (SONNY-6298);
 > wiring a KMS into server TDE is tracked as SONNY-6380. The remote KMS client itself
 > (`src/security/kms_remote.zig`) is covered by `zig build test-remote-kms`.
+> `KeyRegistry` (`src/security/key_rotation.zig`) has no remote-KMS rotation:
+> `rotateWithRemoteKms` never compiled and was removed (SONNY-6378).
 
 - **Provider Types**: Local dev, External KMS (wrap/unwrap); Vault, AWS and Azure configurations refuse
 - **Envelope Encryption**: AES-256-GCM with JSON metadata serialization
