@@ -379,7 +379,10 @@ test "SONNY-2728: every MERGE refused for a hidden match is audited with the use
     try s.execAs(null, "CREATE (:Hidden {s: 'leak', salary: 250000})");
     try s.execAs(null, "CREATE (:Doc {s: 'pub', cls: 'public'})");
     try s.execAs(null, "CREATE (:Doc {s: 'pub2', cls: 'public'})");
-    try s.execAs(null, "MATCH (a:Doc {s: 'pub'}), (b:Doc {s: 'pub2'}) CREATE (a)-[:SECRET {x: 'topsecret'}]->(b)");
+    // SONNY-3357: the edge holds the pattern's property, so the refused
+    // MERGE below matches it (a relationship MERGE matches on its
+    // properties; one the edge lacks would create a new edge instead).
+    try s.execAs(null, "MATCH (a:Doc {s: 'pub'}), (b:Doc {s: 'pub2'}) CREATE (a)-[:SECRET {x: 'topsecret', tag: 'kval9'}]->(b)");
     try s.restrict("Hidden");
     try s.restrictEdgeType("SECRET");
 

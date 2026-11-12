@@ -439,10 +439,12 @@ fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
     if (hop.rel.dir != .right) return null;
     if (hop.rel.types.len != 1) return null;
     if (hop.rel.min_len != null or hop.rel.max_len != null) return null;
+    // SONNY-3357: a relationship's properties are part of the pattern MERGE
+    // matches, and the adapter's edge MERGE matches on endpoints and type
+    // only (it wrote them onto whichever edge it found). Such a statement is
+    // the executor's (`crud_operations.findExistingEdge`).
     if (hop.rel.props) |eprops| {
-        for (eprops) |ep| {
-            if (!isScalarPropExpr(ep.value.*)) return null;
-        }
+        if (eprops.len != 0) return null;
     }
 
     // MERGE endpoints must be bare refs to the matched vars.

@@ -202,6 +202,18 @@
 
 ### Fixed
 
+- **BEHAVIOUR CHANGE: a relationship MERGE matches on the relationship's
+  properties (SONNY-3357).** `MERGE (a)-[:T {w: 1}]->(b)` then `MERGE
+  (a)-[:T {w: 2}]->(b)` left one edge (`w: 1`): the edge was matched on
+  endpoints, type, graph and tenant only, and the second MERGE's ON MATCH
+  SET ran on it. The whole pattern now has to match, its relationship
+  properties included (MERGE is a Geode extension; ISO/IEC 39075:2024 has
+  no MERGE, and this follows openCypher), or MERGE creates the edge, on the
+  standalone MERGE and on MATCH ... MERGE. The server's MATCH ... MERGE edge
+  fast path matched the same way and wrote the pattern's properties onto
+  whatever edge it found; a relationship with properties now goes to the
+  executor. A MERGE with no relationship properties is unchanged.
+  Regression: `zig build test-sonny3357-merge-relationship-properties`.
 - **BEHAVIOUR CHANGE: lean-mode late keys and runtime composite keys are
   complete in their indexes; a bit-63 reserved id takes property SETs
   again (SONNY-6354).** (1) Regression from SONNY-6268: a property SET,

@@ -174,6 +174,16 @@ fn nodeMatchesEvaluatedProps(node: *const graph_store.Node, props: ?[]const Eval
     return true;
 }
 
+/// SONNY-3357: `nodeMatchesEvaluatedProps` for a relationship.
+fn edgeMatchesEvaluatedProps(edge: *const graph_store.Edge, props: ?[]const EvaluatedPatternProp) bool {
+    const evaluated_props = props orelse return true;
+    for (evaluated_props) |prop| {
+        const actual = edge.properties.get(prop.key) orelse return false;
+        if (!valuesEqual(actual, prop.value)) return false;
+    }
+    return true;
+}
+
 fn nodeMatchesPattern(
     node: *const graph_store.Node,
     graph_name: []const u8,
@@ -593,6 +603,14 @@ const EdgeMatch = union(enum) {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-3357-MERGE-REL-PROPS; FEATURE="MergeRelationship"; ASPECT=MatchRelationshipProperties; STATUS=TESTED; TEST=tests/test_sonny3357_merge_relationship_properties.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-3357: `props` is the relationship's evaluated property map; an
+/// edge matches only when it holds every one of them, equal, as a node
+/// matches its map (`nodeMatchesEvaluatedProps`). The whole pattern must
+/// match or MERGE creates it (MERGE is a Geode extension with openCypher's
+/// semantics; ISO/IEC 39075:2024 has no MERGE). It matched on endpoints,
+/// type, graph and tenant only, so `(a)-[:T {w: 2}]->(b)` bound an edge
+/// with `w: 1`.
 fn findExistingEdge(
     read_store: *graph_store.GraphStore,
     graph_name: []const u8,
@@ -600,6 +618,7 @@ fn findExistingEdge(
     source_id: u64,
     target_id: u64,
     rel_types: []const []const u8,
+    props: ?[]const EvaluatedPatternProp,
     visibility: *MergeVisibility,
 ) EdgeMatch {
     const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return .none;
@@ -608,6 +627,7 @@ fn findExistingEdge(
         const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
         if (edge.to_id != target_id) continue;
         if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
+        if (!edgeMatchesEvaluatedProps(edge, props)) continue;
         if (visibility.allowsEdge(edge)) return .{ .visible = edge_id };
         saw_hidden = true;
     }
@@ -3403,16 +3423,20 @@ fn refuseHiddenMergeMatches(
         for (chain.hops) |hop| {
             const source = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.left, context, &scope, visibility, &known);
             const target = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.right, context, &scope, visibility, &known);
-            // P12: both endpoints exist, so the edge `mergeRelationshipHop`
-            // would bind exists already: refuse now when only hidden edges
-            // match, before an earlier chain writes anything.
-            if (source != null and target != null) {
-                _ = try visibility.bindEdge(findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, visibility), hop.rel);
-            }
             for ([_]struct { ?[]const u8, ?u64 }{ .{ hop.left.name, source }, .{ hop.right.name, target } }) |end| {
                 if (end[0]) |name| if (end[1]) |found| {
                     if (known.contains(name)) try scope.bindNode(read_store, name, found);
                 };
+            }
+            // P12: both endpoints exist, so the edge `mergeRelationshipHop`
+            // would bind exists already: refuse now when only hidden edges
+            // match, before an earlier chain writes anything. SONNY-3357:
+            // with the relationship's properties; a map that cannot be
+            // evaluated yet (it names a node an earlier chain creates) is
+            // left to `mergeRelationshipHop`, which refuses the same match.
+            if (source != null and target != null) check: {
+                const rel_props = evaluatePatternPropsIn(allocator, hop.rel.props, scope.env(allocator)) catch break :check;
+                _ = try visibility.bindEdge(findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, rel_props, visibility), hop.rel);
             }
         }
     }
@@ -3562,6 +3586,10 @@ fn mergeRelationshipHop(
     const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars, scope, visibility);
 
     const edge_type = if (rel_types.len > 0) rel_types[0] else "";
+    // SONNY-3357: the relationship's properties are part of the pattern it
+    // matches, and the values a created edge takes; evaluated once, in
+    // `scope`, for both.
+    const rel_props = try evaluatePatternPropsIn(allocator, hop.rel.props, scope.env(allocator));
     // P12: an edge the session may not see is never bound; when only hidden
     // edges match, the statement is refused (`refuseHiddenMergeMatches`
     // already refused it before any write when both endpoints existed).
@@ -3572,6 +3600,7 @@ fn mergeRelationshipHop(
         source_id,
         target_id,
         rel_types,
+        rel_props,
         visibility,
     ), hop.rel);
 
@@ -3590,11 +3619,9 @@ fn mergeRelationshipHop(
     // paths set rel props after `createEdgeWithGraph` (lines 697-708,
     // 861-873, 1249-1257, 1830-1838, 2058-2070).
     if (created_new) {
-        if (hop.rel.props) |props| {
-            const env = scope.env(allocator);
+        if (rel_props) |props| {
             for (props) |prop| {
-                const value = try eval.evalExpr(allocator, prop.value.*, env);
-                try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
+                try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, prop.value);
             }
         }
     }
