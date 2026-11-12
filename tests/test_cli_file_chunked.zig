@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-CLI-FILE-CHUNKED-001; FEATURE="QueryFileChunkedExecution"; ASPECT=SubprocessE2E; STATUS=IMPL; TEST=self; OWNER=cli; UPDATED=2026-08-31
+// CANARY: REQ=REQ-CLI-FILE-CHUNKED-001; FEATURE="QueryFileChunkedExecution"; ASPECT=SubprocessE2E; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-11-12
 //
 // `geode query --file` reproduction lane.  Three verified defects, all
 // live-reproduced at HEAD (e46ece27, this worktree, ./zig-out/bin/geode,

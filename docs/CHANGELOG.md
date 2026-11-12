@@ -24,6 +24,23 @@
   shard WAL LSN anchor"); an open whose marker cannot be written fails.
   Records an earlier recovery already skipped are not recovered.
   `test-sonny6384-offline-change-crash-durability`.
+- **A gRPC chunked run that stops early still prints its summary; the Raft
+  drop of a graph has no check-then-lock window (SONNY-6384 items 3, 4,
+  6).** (6) `geode query --grpc --file`: when a chunk's connection failed
+  after the chunk was sent, or the client timed out on it,
+  `executeGrpcQuery` exited the process itself, so the run printed no
+  "Chunked execution complete" summary and did not say how many statements
+  were not run (the QUIC path did). It now returns to the chunked driver,
+  which stops the run there (the chunk is still not sent again,
+  SONNY-6377), prints the summary and exits 4 for a timeout, 1 otherwise.
+  The statement-by-statement retry of a rejected chunk still exits inside
+  `executeGrpcQuery` on those failures. (4) The Raft apply of `drop_graph`
+  checked `graphExists` and then took the graph's write lock; a drop in
+  between sent that lock to its global-exclusive fallback. It now calls
+  `GraphStore.dropGraph`, which takes the write lock itself and reports a
+  graph that is not there without locking it. (3)
+  `tests/test_cli_file_chunked.zig`'s CANARY is TESTED (12/12 pass).
+  `test-sonny6384-grpc-chunk-summary`.
 - **`geode query` never sends a write again once the server may have
   applied it (SONNY-6377).** `geode query --file` on a file over 16 KiB
   ships each 32 KiB chunk as one program. A chunk of ~400 CREATEs takes

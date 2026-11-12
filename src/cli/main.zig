@@ -1976,6 +1976,10 @@ const GrpcQueryOptions = struct {
     failed_out: ?*bool = null,
     // SONNY-6377: see QuicQueryOptions.sent_out.
     sent_out: ?*bool = null,
+    // SONNY-6384 item 6: a timeout, or a failure after the query was sent, is
+    // returned (after its message) instead of exiting the process, so the
+    // chunked driver stops the run and still prints its summary.
+    return_unknown_outcome: bool = false,
 };
 
 /// Issue #424: Set SO_RCVTIMEO and SO_SNDTIMEO on a TCP socket so that
@@ -2086,6 +2090,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
                     .{timeout_secs},
                 ) catch "Error: query timed out; the statement may still be executing on the server\n";
                 stderr.writeStreamingAll(io_t, timeout_msg) catch {};
+                if (opts.return_unknown_outcome) return error.Timeout;
                 std.process.exit(@intFromEnum(ExitCode.timeout_error));
             }
             // REQ-TRANSPORT-GRPC-SHUTDOWN-002: the server closed the stream
@@ -2101,6 +2106,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
                     io_t,
                     "Error: the server closed the connection before the query completed; it may have been shutting down, and the statement may or may not have executed\n",
                 ) catch {};
+                if (opts.return_unknown_outcome) return err;
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
             // CANARY: REQ=REQ-SONNY-6377-QUERY-NO-RESEND; FEATURE="ChunkedExecution"; ASPECT=GrpcNoRetryAfterSend; STATUS=TESTED; TEST=tests/test_sonny6377_query_no_resend.zig; OWNER=cli; UPDATED=2026-11-12
@@ -2118,6 +2124,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
                     .{err},
                 ) catch "Error: the connection failed after the query was sent; the statement may or may not have executed, so it was not sent again\n";
                 stderr.writeStreamingAll(io_t, sent_msg) catch {};
+                if (opts.return_unknown_outcome) return err;
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
             last_error = @errorName(err);
@@ -2693,6 +2700,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .params = empty_params,
                 .failed_out = &chunk_failed,
                 .sent_out = &chunk_sent,
+                .return_unknown_outcome = true,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
                 chunk_failed = true;

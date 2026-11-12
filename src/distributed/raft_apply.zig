@@ -642,16 +642,19 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
             // apply thread dropped it with no lock, and freed the graph under
             // requests holding it. A graph that is not there is not locked
             // (the lock would create it); the drop is idempotent.
-            if (!store.graphExists(sc.graph)) {
-                log.info("raft apply: drop_graph of a graph that is not there (idempotent)", &.{
-                    Attr.string("graph", sc.graph),
-                });
-                return allocator.alloc(u8, 0);
-            }
-            const lock = graph_store_mod.acquireGraphWriteLock(sc.graph);
-            defer graph_store_mod.releaseGraphLock(lock);
+            // SONNY-6384 (item 4): `GraphStore.dropGraph` takes the graph's
+            // write lock itself (SONNY-3135) and reports a graph that is not
+            // there as GraphNotFound without locking it. The apply checked
+            // `graphExists` first and then took `acquireGraphWriteLock`; a
+            // drop in between sent that lock to its global-exclusive
+            // fallback for a graph that no longer existed.
             store.dropGraph(sc.graph) catch |err| switch (err) {
-                error.GraphNotFound => {}, // idempotent
+                error.GraphNotFound => {
+                    log.info("raft apply: drop_graph of a graph that is not there (idempotent)", &.{
+                        Attr.string("graph", sc.graph),
+                    });
+                    return allocator.alloc(u8, 0);
+                },
                 error.CannotDropDefaultGraph => {
                     log.warn("raft apply: attempted to drop default graph, ignoring", &.{});
                 },
