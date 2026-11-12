@@ -225,6 +225,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UserNotPersisted => .{ .code = "58030", .message = "The change to the user could not be saved to the security graph and was not made; a delete, disable, password change or role downgrade locks the user out until a change to it is saved. Retry it" },
         // SONNY-3038: CREATE ROLE (not created) or DROP ROLE (removed now,
         // but its stored record returns at the next start).
+        // SONNY-6293: a security record's node could not be deleted (DROP
+        // POLICY): nothing was removed, the record is still stored and in
+        // force.
+        error.SecurityRecordDeleteFailed => .{ .code = "58030", .message = "A record could not be deleted from the security graph; nothing was removed and it is still in force. Retry it" },
         error.RoleNotPersisted => .{ .code = "58030", .message = "The role change could not be saved to the security graph: CREATE ROLE created nothing; DROP ROLE removed the role now but it returns at the next start. Retry it" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
         // SONNY-3134: or another session's open transaction.

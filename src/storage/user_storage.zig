@@ -922,10 +922,26 @@ pub const UserStorageBackend = struct {
     /// SONNY-1333: delete a record's node and confirm it is gone.
     /// `GraphStore.deleteNode` reports nothing: when it fails part way (an
     /// allocation, the storage adapter) the node stays, and a revoked grant
-    /// would be loaded again at the next start.
+    /// would be loaded again at the next start. SONNY-6293: every record
+    /// removal (policy, role, user, permission) goes through it.
     fn deleteNodeChecked(self: *Self, node_id: u64) !void {
-        self.store.deleteNode(node_id);
+        if (!takeDeleteFault()) self.store.deleteNode(node_id);
         if (self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
+    }
+
+    /// SONNY-6293: a test-only fault hook. While non-zero, each checked
+    /// delete (`deleteNodeChecked`, the HAS_ROLE edge delete) consumes one
+    /// and skips the graph-store delete, as a delete that failed part way
+    /// leaves the node or edge, so the existence check that follows fails
+    /// it. Production code never sets it.
+    pub var fail_deletes_for_testing: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+    fn takeDeleteFault() bool {
+        var n = fail_deletes_for_testing.load(.acquire);
+        while (n > 0) {
+            n = fail_deletes_for_testing.cmpxchgWeak(n, n - 1, .acq_rel, .acquire) orelse return true;
+        }
+        return false;
     }
 
     pub fn listGraphGrants(self: *Self, allocator: Allocator) ![]GraphGrantRecord {
@@ -1132,7 +1148,9 @@ pub const UserStorageBackend = struct {
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
                 if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
                 if (edge.to_id == role_node_id) {
-                    self.store.deleteEdge(edge_id);
+                    // SONNY-6293: checked, as a record's node delete.
+                    if (!takeDeleteFault()) self.store.deleteEdge(edge_id);
+                    if (self.store.edgeExistsForUndo(edge_id)) return error.SecurityRecordDeleteFailed;
                     return true;
                 }
             }
@@ -1164,11 +1182,19 @@ pub const UserStorageBackend = struct {
         return result.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-6293-CHECKED-AUTH-DELETES; FEATURE="GQL Auth DDL Persistence"; ASPECT=CheckedRecordRemoval; STATUS=TESTED; TEST=tests/test_sonny6293_checked_auth_deletes.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6293: the node goes first (checked), and the cached record and
+    /// node mapping only once it is gone. A delete that fails leaves the
+    /// record in memory and in the store, so the chain still counts and
+    /// seals it and the caller's error path runs. The record used to leave
+    /// memory first and the delete went unchecked: a node left behind was
+    /// loaded again at the next start, and the sealed count did not match.
     pub fn removeUser(self: *Self, user_id: u64) !void {
-        _ = self.removeCachedUser(user_id);
-        if (self.user_nodes.fetchRemove(user_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.user_nodes.get(user_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.user_nodes.remove(user_id);
         }
+        _ = self.removeCachedUser(user_id);
     }
 
     /// A copy of the cached record (SONNY-6329: under `user_cache_lock`).
@@ -1398,11 +1424,13 @@ pub const UserStorageBackend = struct {
         try self.upsertRoleNode(record);
     }
 
+    /// SONNY-6293: as `removeUser`.
     pub fn removeRole(self: *Self, role_id: u64) !void {
-        _ = self.role_cache.remove(role_id);
-        if (self.role_nodes.fetchRemove(role_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.role_nodes.get(role_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.role_nodes.remove(role_id);
         }
+        _ = self.role_cache.remove(role_id);
     }
 
     pub fn getRole(self: *Self, role_id: u64) ?RoleRecord {
@@ -1464,11 +1492,13 @@ pub const UserStorageBackend = struct {
         return max_id + 1;
     }
 
+    /// SONNY-6293: as `removeUser`.
     pub fn removePermission(self: *Self, permission_id: u64) !void {
-        _ = self.permission_cache.remove(permission_id);
-        if (self.permission_nodes.fetchRemove(permission_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.permission_nodes.get(permission_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.permission_nodes.remove(permission_id);
         }
+        _ = self.permission_cache.remove(permission_id);
     }
 
     pub fn getPermission(self: *Self, permission_id: u64) ?PermissionRecord {
@@ -1575,11 +1605,14 @@ pub const UserStorageBackend = struct {
         try self.upsertPolicyNode(record);
     }
 
+    /// SONNY-6293: as `removeUser`. DROP POLICY (`AuthGraphManager.dropPolicy`)
+    /// then seals what is stored and fails, and the catalog keeps the policy.
     pub fn removePolicy(self: *Self, policy_id: u64) !void {
-        _ = self.policy_cache.remove(policy_id);
-        if (self.policy_nodes.fetchRemove(policy_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.policy_nodes.get(policy_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.policy_nodes.remove(policy_id);
         }
+        _ = self.policy_cache.remove(policy_id);
     }
 
     pub fn getPolicy(self: *Self, policy_id: u64) ?PolicyRecord {

@@ -215,6 +215,25 @@
   always on). `geode lsp --no-auth` and `geode mcp --no-auth` are
   unchanged.
   Regression: `zig build test-sonny6329-user-cache-and-ddl-serialization`.
+- **A security record whose node delete fails stays stored and in force
+  (SONNY-6293).** `UserStorageBackend.removePolicy`, `removeRole`,
+  `removeUser` and `removePermission` took the record out of memory first
+  and then deleted its `__geode_security` node without checking it (the
+  `HAS_ROLE` edge delete of a role revocation likewise). A delete that
+  failed left the node stored while the record was gone from memory: the
+  chain was sealed without it, the next start loaded the policy or role
+  again with a sealed record count that no longer matched, and DROP POLICY
+  reported success. The node now goes first through the checked delete
+  (grant removal's since SONNY-1333), and the record leaves memory only once
+  it is gone. DROP POLICY of a policy whose node cannot be deleted answers
+  58030 (`SecurityRecordDeleteFailed`) with the record stored, the catalog
+  entry kept (a DENY keeps denying, an ALLOW keeps allowing) and the chain
+  verifying; DROP ROLE answers 58030 (`RoleNotPersisted`, as before: the
+  role is out of memory now and returns at the next start unless retried;
+  a role only grants, so this fails closed); a DROP USER whose delete fails
+  answers 58030 (`UserNotPersisted`) and the user stays locked out
+  (SONNY-3038). A retry succeeds.
+  Regression: `zig build test-sonny6293-checked-auth-deletes`.
 - **A read-only request refuses the security DDL (SONNY-2751).** The
   statement classifier behind the per-request read-only floor
   (`ExecuteRequest.read_only`, QUIC and gRPC) and the MCP read-only mode
