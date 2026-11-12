@@ -960,42 +960,46 @@ pub const AuditLogger = struct {
         dm.deinit();
     }
 
+    // CANARY: REQ=REQ-SONNY-6346-NO-SILENT-DEGRADE; FEATURE="AuditDurability"; ASPECT=CleanupOwnDirectory; STATUS=TESTED; TEST=tests/test_sonny6346_silent_degrade_audit_housekeeping.zig; OWNER=security; UPDATED=2026-11-12
+    /// Delete this log's rotated files (`<log file name>.<ms>`, beside the
+    /// log) whose timestamp is older than `retention_days`. SONNY-6346: it
+    /// scanned the WORKING directory for `audit.jsonl.<ts>`, so the log's
+    /// own rotated files were never removed, a log of another name never
+    /// cleaned, and matching files in the working directory deleted.
     pub fn cleanupOldLogs(self: *AuditLogger) !struct { files_deleted: u32, bytes_freed: u64 } {
         var files_deleted: u32 = 0;
         var bytes_freed: u64 = 0;
 
-        // Scan for old log files
         const io_cl = std.Io.Threaded.global_single_threaded.io();
-        var dir = try std.Io.Dir.cwd().openDir(io_cl, ".", .{ .iterate = true });
+        const log_dir = std.fs.path.dirname(self.config.file_path) orelse ".";
+        const base = std.fs.path.basename(self.config.file_path);
+        var dir = try std.Io.Dir.cwd().openDir(io_cl, log_dir, .{ .iterate = true });
         defer dir.close(io_cl);
 
         var iter = dir.iterate();
         const cutoff_time = compat_milliTimestamp() - (@as(i64, @intCast(self.config.retention_days)) * 24 * 60 * 60 * 1000);
 
         while (try iter.next(io_cl)) |entry| {
-            // Check if file is an old audit log (pattern: audit.jsonl.TIMESTAMP)
-            if (std.mem.startsWith(u8, entry.name, "audit.jsonl.") and entry.kind == .file) {
-                // Parse timestamp from filename
-                const timestamp_str = entry.name["audit.jsonl.".len..];
-                const timestamp = std.fmt.parseInt(i64, timestamp_str, 10) catch continue;
+            if (entry.kind != .file) continue;
+            if (entry.name.len <= base.len + 1) continue;
+            if (!std.mem.startsWith(u8, entry.name, base) or entry.name[base.len] != '.') continue;
+            const timestamp_str = entry.name[base.len + 1 ..];
+            const all_digits = for (timestamp_str) |c| {
+                if (!std.ascii.isDigit(c)) break false;
+            } else true;
+            if (!all_digits) continue;
+            const timestamp = std.fmt.parseInt(i64, timestamp_str, 10) catch continue;
+            if (timestamp >= cutoff_time) continue;
 
-                if (timestamp < cutoff_time) {
-                    // Get file size before deletion
-                    const file = try std.Io.Dir.cwd().openFile(io_cl, entry.name, .{});
-                    const stat = try file.stat(io_cl);
-                    file.close(io_cl);
+            const stat = try dir.statFile(io_cl, entry.name, .{ .follow_symlinks = false });
+            try dir.deleteFile(io_cl, entry.name);
+            files_deleted += 1;
+            bytes_freed += stat.size;
 
-                    // Delete old file
-                    try std.Io.Dir.cwd().deleteFile(io_cl, entry.name);
-                    files_deleted += 1;
-                    bytes_freed += stat.size;
-
-                    log.info("Audit log cleaned up", &.{
-                        Attr.string("deleted", entry.name),
-                        Attr.int("size", @intCast(stat.size)),
-                    });
-                }
-            }
+            log.info("Audit log cleaned up", &.{
+                Attr.string("deleted", entry.name),
+                Attr.int("size", @intCast(stat.size)),
+            });
         }
 
         return .{ .files_deleted = files_deleted, .bytes_freed = bytes_freed };

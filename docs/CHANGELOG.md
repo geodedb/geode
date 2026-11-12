@@ -4,6 +4,19 @@
 
 ### Security
 
+- **BREAKING: no silent degrade in the tenant registry and the audit log
+  writer (SONNY-6346).** A server whose `<data dir>/tenants` could not be
+  created (or whose `registry.jsonl` could not be read) ran with an
+  in-memory tenant registry and a warning, and every tenant was gone at the
+  next restart; it now refuses to start and names the registry. An audit
+  record with more than 32 detail keys was written without the extra keys
+  (a fixed 32-entry buffer in rls_core); every key is written, in the same
+  sorted order. `cleanupOldLogs` (`CALL audit.cleanup_log_files()`)
+  scanned the working directory for `audit.jsonl.<ts>`, so the log's own
+  rotated files were never removed and files in the working directory could
+  be deleted; it deletes `<log file name>.<ms>` beside the log, older than
+  its retention. Regression:
+  `zig build test-sonny6346-silent-degrade-audit-housekeeping`.
 - **BREAKING: the `tde.*` key-management stubs are refused (SONNY-6342).**
   36 `tde.*` procedures answered with constants: `tde.rotate_keys` reported
   success and a new master key id `mk-00000002` with nothing rotated,

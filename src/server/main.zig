@@ -1717,9 +1717,15 @@ pub fn main() !void {
     geode.tenant_quota.setGlobalQuotaManager(&quota_manager);
     defer geode.tenant_quota.setGlobalQuotaManager(null);
 
-    var tenant_reg = geode.tenant_registry.TenantRegistry.initWithDataDir(gpa, data_dir) catch blk: {
-        log.warn("tenant_registry.init_failed_fallback_in_memory", &.{});
-        break :blk geode.tenant_registry.TenantRegistry.init(gpa);
+    // SONNY-6346: a tenant registry that cannot be durable refuses startup
+    // (it fell back to an in-memory registry whose tenants a restart lost),
+    // like the auth state of SONNY-6339.
+    var tenant_reg = geode.tenant_registry.TenantRegistry.initWithDataDir(gpa, data_dir) catch |err| {
+        log.err("cannot open the tenant registry in the data directory; refusing to start", &.{
+            Attr.string("dir", data_dir),
+            Attr.string("error", @errorName(err)),
+        });
+        return err;
     };
     defer tenant_reg.deinit();
     geode.tenant_registry.setGlobalRegistry(&tenant_reg);

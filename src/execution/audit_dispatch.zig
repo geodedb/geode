@@ -566,7 +566,7 @@ fn handleAuditTestAuthCategories(allocator: std.mem.Allocator, _: ast.CallProced
 }
 
 fn handleAuditCleanupLogFiles(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-AUDIT-PROC-023; FEATURE="AuditProcedures"; ASPECT=LogCleanup; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
+    // CANARY: REQ=REQ-AUDIT-PROC-023; FEATURE="AuditProcedures"; ASPECT=LogCleanup; STATUS=TESTED; TEST=tests/test_sonny6346_silent_degrade_audit_housekeeping.zig; OWNER=audit; UPDATED=2026-11-12
     // audit.cleanup_log_files() -> success, files_deleted, space_freed_bytes
     // Deletes the server audit log's rotated files older than its retention.
     // SONNY-6340: it opened a logger of its own (on the query's allocator) in
