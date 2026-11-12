@@ -945,7 +945,7 @@ const NodePropertyExactIndex = struct {
     /// tail routes to a SAFE rebuild; a correct O(tail) reconcile of this
     /// value→node index is not achievable with the v0.2.29 API — see the Phase 5
     /// report). Non-fatal: callers should catch and log warnings.
-    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, checkpoint_epoch: u64, covered_lsn: u64) !void {
+    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, checkpoint_epoch: u64, covered_lsn: u64, config_hash: u64) !void {
         self.lockAllShards();
         defer self.unlockAllShards();
 
@@ -964,14 +964,17 @@ const NodePropertyExactIndex = struct {
 
         // 8-byte magic header (v3 = checkpoint-epoch + covered-lsn stamped, the
         // WAL-aware Path B contract; v4 = SONNY-2806, a number's value hash is
-        // its exact value). GENPIDX3 (bytes-hashed numbers), GENPIDX2
+        // its exact value; v5 = SONNY-6354, stamped with the indexed-key
+        // configuration). GENPIDX4, GENPIDX3 (bytes-hashed numbers), GENPIDX2
         // (counter-stamped) and GENPIDX1 (unstamped) are treated as stale on
         // load → rebuild (never mis-served).
-        try writer.writeAll("GENPIDX4");
+        try writer.writeAll(exact_index_magic);
         // WAL-aware staleness stamp: the gs checkpoint_epoch (derived-index
         // generation) and the durable-frontier LSN this index covers.
         try writer.writeInt(u64, checkpoint_epoch, .little);
         try writer.writeInt(u64, covered_lsn, .little);
+        // SONNY-6354: which keys the index holds (`graph_store.exactIndexConfigHash`).
+        try writer.writeInt(u64, config_hash, .little);
 
         // Entry count
         var count: u64 = 0;
@@ -1116,7 +1119,12 @@ const NodePropertyExactIndex = struct {
     /// Never blesses a stale copy: on ANY uncertainty it does NOT return `.loaded`
     /// (the "never serve a stale prop_exact.idx" invariant — a wrong exact index =
     /// silently wrong WHERE/GROUP BY/DISTINCT).
-    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
+    ///
+    /// SONNY-6354: and only if it holds the keys this process indexes
+    /// (`expected_config`, `graph_store.exactIndexConfigHash`): a lean-mode
+    /// index saved before a key was registered lacks that key's older
+    /// holders, and one saved with lean mode on lacks every other key.
+    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64, expected_config: u64) ExactIndexLoadOutcome {
         self.lockAllShards();
         defer self.unlockAllShards();
 
@@ -1136,13 +1144,14 @@ const NodePropertyExactIndex = struct {
         var file_reader = file.reader(gsa_io, &reader_buffer);
         const reader = &file_reader.interface;
 
-        // Validate magic header — only the v4 (epoch + covered-lsn stamped,
-        // numbers hashed by value) format loads; a GENPIDX3 (numbers hashed by
-        // their bytes), GENPIDX2 (counter-stamped) or GENPIDX1 (unstamped) file
-        // is a present-but-stale snapshot -> rebuild.
+        // Validate magic header — only the v5 (epoch + covered-lsn + key
+        // configuration stamped, numbers hashed by value) format loads; a
+        // GENPIDX4 (no key configuration), GENPIDX3 (numbers hashed by their
+        // bytes), GENPIDX2 (counter-stamped) or GENPIDX1 (unstamped) file is a
+        // present-but-stale snapshot -> rebuild.
         var magic: [8]u8 = undefined;
         reader.readSliceAll(&magic) catch return .stale;
-        if (!std.mem.eql(u8, &magic, "GENPIDX4")) return .stale;
+        if (!std.mem.eql(u8, &magic, exact_index_magic)) return .stale;
 
         // WAL-aware staleness gate (Path B): reject unless BOTH the derived-index
         // generation matches (no checkpoint since persist) AND the covered LSN is
@@ -1151,6 +1160,8 @@ const NodePropertyExactIndex = struct {
         if (stored_epoch != expected_epoch) return .stale;
         const stored_covered_lsn = reader.takeInt(u64, .little) catch return .stale;
         if (stored_covered_lsn != expected_covered_lsn) return .stale;
+        const stored_config = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_config != expected_config) return .stale;
 
         const entry_count = reader.takeInt(u64, .little) catch return .stale;
 
@@ -1204,9 +1215,12 @@ const NodePropertyExactIndex = struct {
 /// (`.absent` → defer to lazy first-access, preserving sub-second cold-open).
 const ExactIndexLoadOutcome = enum { loaded, stale, absent };
 
+/// `prop_exact.idx` format edition (see `NodePropertyExactIndex.saveToFile`).
+const exact_index_magic = "GENPIDX5";
+
 /// Phase E2: the `(checkpoint_epoch, covered_lsn)` stamp of an on-disk
 /// `prop_exact.idx`, read from its header alone (no postings). `null` when the
-/// file is absent, torn, or not the GENPIDX4 (WAL-aware) format. Used by the
+/// file is absent, torn, or not the current (WAL-aware) format. Used by the
 /// crash-reopen reconcile gate to compare the snapshot's covered_lsn against the
 /// pre-recovery frontier BEFORE deciding to reconcile vs full-rebuild.
 const ExactIndexStamp = struct { epoch: u64, covered_lsn: u64 };
@@ -1225,7 +1239,7 @@ fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8) ?ExactI
 
     var magic: [8]u8 = undefined;
     reader.readSliceAll(&magic) catch return null;
-    if (!std.mem.eql(u8, &magic, "GENPIDX4")) return null;
+    if (!std.mem.eql(u8, &magic, exact_index_magic)) return null;
     const epoch = reader.takeInt(u64, .little) catch return null;
     const covered = reader.takeInt(u64, .little) catch return null;
     return .{ .epoch = epoch, .covered_lsn = covered };
@@ -1676,6 +1690,13 @@ pub const ManagedGraph = struct {
     /// mutexes here. Only `ensureExactNodePropertyIndexBuilt` ever holds it, so it
     /// participates in no lock-ordering relationship and cannot deadlock.
     exact_index_build_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// SONNY-6354: the lean late-key generation (`graph_store.leanLateGenMax`)
+    /// the exact index is complete for. A lean key registered at runtime after
+    /// it has holders written while it was unregistered, so unindexed; the
+    /// index serves (and is saved) only once `catchUpExactLeanKeysLocked` has
+    /// added them (`exactIndexCurrent`). Written under
+    /// `exact_index_build_mutex`.
+    exact_lean_gen: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// GAP-0064 FIX A: `true` while a RACE-FREE background reopen rebuild
     /// (`spawnExactIndexRebuildOnReopen` → `exactIndexRebuildOnReopenWorker`)
     /// owns this graph's exact-index build. Set at a successful reopen spawn
@@ -2491,6 +2512,22 @@ fn addNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []cons
     }
 }
 
+/// SONNY-6354: `addNodePropertiesForLabels` restricted to the lean keys
+/// registered at runtime after generation `since`
+/// (`catchUpExactLeanKeysLocked`). The node may already be in a posting (a
+/// write after the registration indexed it), so the de-dup scan stays on.
+fn addNodeLateKeyPropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []const gs.LabelId, prop_head: u64, since: u64) !void {
+    if (prop_head == 0 or label_ids.len == 0) return;
+    var iter = try mg.shardEngineForNode(node_id).getAllProperties(prop_head);
+    defer iter.deinit();
+    while (try iter.next()) |entry| {
+        if (!graph_store.leanKeyRegisteredAfter(entry.key, since)) continue;
+        for (label_ids) |label_id| {
+            try addIndexedNodePropertyFromEncoded(mg, label_id, node_id, entry.key, entry.encoded_value, false);
+        }
+    }
+}
+
 fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []const gs.LabelId, prop_head: u64) void {
     if (prop_head == 0 or label_ids.len == 0) return;
 
@@ -2541,15 +2578,67 @@ fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []c
 const exact_rebuild_cancel_poll_batch: usize = 256;
 
 fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFlags) !void {
-    // H4 (cold-open phase 1): instrument every rebuild so tests can prove the
-    // deferred-build latch rebuilds 0 times at open and exactly once on first
-    // access. Counts the eager-open, test-helper, AND lazy-first-access paths.
-    _ = g_exact_rebuild_runs.fetchAdd(1, .monotonic);
-    mg.exact_node_property_index.clear();
-    mg.exact_index_rebuild_iters.store(0, .monotonic);
-    // task0048d: per-build dispatch accounting (pool vs inline shard scans).
-    g_exact_rebuild_pool_tasks.store(0, .monotonic);
-    g_exact_rebuild_inline_tasks.store(0, .monotonic);
+    // SONNY-6354: the rebuild indexes every key registered when it reads the
+    // node, so it is complete for the late keys registered before it began.
+    const lean_gen = graph_store.leanLateGenMax();
+    try scanExactNodePropertyIndex(mg, cancel, null);
+    mg.exact_lean_gen.store(lean_gen, .release);
+}
+
+/// SONNY-6354: is the exact index built and complete for every lean key
+/// registered so far (`ManagedGraph.exact_lean_gen`)? Lock-free.
+fn exactIndexCurrent(mg: *ManagedGraph) bool {
+    if (!mg.exact_index_built.load(.acquire)) return false;
+    return mg.exact_lean_gen.load(.acquire) >= graph_store.leanLateGenMax();
+}
+
+// CANARY: REQ=REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES; FEATURE="MergeIdempotency"; ASPECT=ExactIndexLateKeyCatchUp; STATUS=TESTED; TEST=tests/test_sonny6354_lean_late_key_indexes.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6354: add to a BUILT exact index the postings of the lean keys
+/// registered at runtime since it was last complete (`exact_lean_gen`): the
+/// nodes that carried such a key before it was registered were not indexed
+/// for it (`addIndexedNodePropertyEx` skips unregistered keys), and every
+/// seek trusts the index as complete for a registered key
+/// (`graph_store.shouldIndexProperty`). Nothing is removed and no other key
+/// is touched, so a reader of another key is unaffected; a posting a live
+/// write added meanwhile is de-duplicated. Repeats until no key was
+/// registered during the scan. Caller holds `exact_index_build_mutex`.
+fn catchUpExactLeanKeysLocked(mg: *ManagedGraph, cancel: read_budget.CancelFlags) !void {
+    while (true) {
+        const target = graph_store.leanLateGenMax();
+        const since = mg.exact_lean_gen.load(.acquire);
+        if (target <= since) return;
+        try scanExactNodePropertyIndex(mg, cancel, since);
+        mg.exact_lean_gen.store(target, .release);
+    }
+}
+
+/// SONNY-6354: make a built exact index complete for every registered key
+/// (`catchUpExactLeanKeysLocked`) before it is saved, and return the key
+/// configuration to stamp it with. The configuration is read FIRST, so every
+/// key it names is one the catch-up then covers. Caller holds
+/// `exact_index_build_mutex`.
+fn prepareExactIndexSaveLocked(mg: *ManagedGraph) !u64 {
+    const config = graph_store.exactIndexConfigHash();
+    try catchUpExactLeanKeysLocked(mg, .{});
+    return config;
+}
+
+/// The per-shard node scan behind the rebuild (`late_since == null`: clear,
+/// then index every registered key) and the late-key catch-up
+/// (`late_since == g`: add only the postings of lean keys registered after
+/// generation `g`, clearing nothing).
+fn scanExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFlags, late_since: ?u64) !void {
+    if (late_since == null) {
+        // H4 (cold-open phase 1): instrument every rebuild so tests can prove the
+        // deferred-build latch rebuilds 0 times at open and exactly once on first
+        // access. Counts the eager-open, test-helper, AND lazy-first-access paths.
+        _ = g_exact_rebuild_runs.fetchAdd(1, .monotonic);
+        mg.exact_node_property_index.clear();
+        mg.exact_index_rebuild_iters.store(0, .monotonic);
+        // task0048d: per-build dispatch accounting (pool vs inline shard scans).
+        g_exact_rebuild_pool_tasks.store(0, .monotonic);
+        g_exact_rebuild_inline_tasks.store(0, .monotonic);
+    }
 
     const shards = mg.engine.shards;
 
@@ -2562,6 +2651,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
         mg: *ManagedGraph,
         shard: *gs.GraphEngine,
         cancel: read_budget.CancelFlags,
+        late_since: ?u64,
         since_poll: usize = 0,
         err: ?anyerror = null,
 
@@ -2569,8 +2659,10 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
             if (self.err != null) return;
             // Coverage counter: count every live node the scan presents (atomic
             // so the parallel per-shard workers compose correctly).
-            _ = self.mg.exact_index_rebuild_iters.fetchAdd(1, .monotonic);
-            _ = g_exact_rebuild_nodes_scanned.fetchAdd(1, .monotonic);
+            if (self.late_since == null) {
+                _ = self.mg.exact_index_rebuild_iters.fetchAdd(1, .monotonic);
+                _ = g_exact_rebuild_nodes_scanned.fetchAdd(1, .monotonic);
+            }
             // GAP-ENT-0048 DEFECT B: poll the read-executor cancel flags at a
             // batch boundary. On a client disconnect / stall-watchdog abort this
             // stops the expensive per-node property-chain walk immediately (the
@@ -2607,6 +2699,12 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
             };
             defer self.mg.engine.allocator.free(label_ids);
 
+            if (self.late_since) |since| {
+                addNodeLateKeyPropertiesForLabels(self.mg, node_id, label_ids, rec.prop_head, since) catch |err| {
+                    self.err = err;
+                };
+                return;
+            }
             addNodePropertiesForLabels(self.mg, node_id, label_ids, rec.prop_head) catch |err| {
                 self.err = err;
             };
@@ -2632,7 +2730,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
 
     var ctxs: [gs.sharded_engine.SHARD_COUNT]ShardCtx = undefined;
     for (shards, 0..) |shard, idx| {
-        ctxs[idx] = .{ .mg = mg, .shard = shard, .cancel = cancel };
+        ctxs[idx] = .{ .mg = mg, .shard = shard, .cancel = cancel, .late_since = late_since };
     }
 
     // Serial fallback: a single shard gains nothing from the pool, and keeps a
@@ -2672,7 +2770,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
         // Default backpressure (.return_error) is deadlock-safe; the wait_group
         // auto-adds on submit and auto-dones on completion.
         if (pool.submit(Task.run, c, .{ .wait_group = &wg })) |_| {
-            _ = g_exact_rebuild_pool_tasks.fetchAdd(1, .monotonic);
+            if (late_since == null) _ = g_exact_rebuild_pool_tasks.fetchAdd(1, .monotonic);
         } else |_| {
             inline_ctxs_buf[inline_n] = c;
             inline_n += 1;
@@ -2681,7 +2779,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
     // Shards that failed to submit run inline on this (non-worker) thread BEFORE
     // wg.wait(), so they still complete and are not double-counted by wg.
     for (inline_ctxs_buf[0..inline_n]) |c| {
-        _ = g_exact_rebuild_inline_tasks.fetchAdd(1, .monotonic);
+        if (late_since == null) _ = g_exact_rebuild_inline_tasks.fetchAdd(1, .monotonic);
         c.run();
     }
     wg.wait();
@@ -2720,7 +2818,8 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
 /// checkpoint can never lose its non-blocking `tryLock` to the very build it is
 /// persisting (the lost persist).
 fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
-    if (mg.exact_index_built.load(.acquire)) return;
+    // SONNY-6354: built AND complete for every lean key registered so far.
+    if (exactIndexCurrent(mg)) return;
     const io = std.Io.Threaded.global_single_threaded.io();
     // SONNY-1574: the build runs in an INNER scope so `exact_index_build_mutex`
     // is released BEFORE the persist worker is spawned (see the spawn below).
@@ -2728,8 +2827,12 @@ fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph
         mg.exact_index_build_mutex.lockUncancelable(io);
         defer mg.exact_index_build_mutex.unlock(io);
         // Double-check under the mutex: a peer first-accessor may have built it
-        // while we waited for the lock.
-        if (mg.exact_index_built.load(.acquire)) break :blk false;
+        // while we waited for the lock. A built index may still lack a lean
+        // key registered since (SONNY-6354): add its older holders.
+        if (mg.exact_index_built.load(.acquire)) {
+            try catchUpExactLeanKeysLocked(mg, read_budget.activeCancelFlags());
+            break :blk false;
+        }
         // GAP-0064 (adversarial review — TEST-ONLY): hold the LAZY build "in flight"
         // (mutex held, mid-build) so a test can prove a concurrent FULL checkpoint's
         // eager build does NOT run a second concurrent rebuild (the lazy-vs-checkpoint
@@ -3917,6 +4020,8 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
         // Statement-atomicity pre-pass. This path SKIPS the undo log by design
@@ -4056,6 +4161,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        try graph_store.refuseFlaggedNodeId(reserved_id); // SONNY-6362
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkInsertPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
         for (props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
@@ -4086,6 +4192,8 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -4332,6 +4440,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -4460,6 +4569,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -4649,6 +4759,7 @@ pub const StorageAdapter = struct {
         graph_name: []const u8,
         edges: []BatchMergeEdge,
     ) !void {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         if (edges.len == 0) return;
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -4799,6 +4910,7 @@ pub const StorageAdapter = struct {
         apply_on_match: bool,
         request_tenant: []const u8,
     ) !MergeResult {
+        try graph_store.refuseFlaggedNodeId(reserved_id); // SONNY-6362
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkMergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
         try self.checkPropertyEntryWritable(merge_key, merge_value);
@@ -4870,6 +4982,8 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -4977,6 +5091,7 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !MergeResult {
         if (merge_props.len == 0) return error.InvalidMergePattern;
+        try graph_store.refuseFlaggedNodeId(reserved_id); // SONNY-6362
 
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkMergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
@@ -5036,6 +5151,8 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -5164,6 +5281,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // thread-local statement-txn slots are source of truth.
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -5269,6 +5387,40 @@ pub const StorageAdapter = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-3241-FAST-PATH-PARITY; FEATURE="WriteFastPathParity"; ASPECT=SoleHolderEndpoint; STATUS=TESTED; TEST=tests/test_sonny3241_fast_path_parity_wire.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-3241: `lookupNodeByMergeKey` for the MATCH ... CREATE edge fast
+    /// path, which writes ONE edge: the node holding the key when it is the
+    /// key's only holder; `missing_err` when no node holds it (the executor's
+    /// MATCH has no row, and creates nothing); `error.MergeKeyNotUnique` when
+    /// more nodes may hold it, or MERGE's index cannot hold the value (a
+    /// non-integer number, an over-long key). The executor creates an edge
+    /// per matched pair, and finds a value the index cannot hold by a scan,
+    /// so the caller declines to it. (The lowest holder was taken as the
+    /// only one, and an unindexable value as none.)
+    pub fn lookupSoleNodeByMergeKey(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: graph_store.PropertyValue,
+        missing_err: anyerror,
+    ) !u64 {
+        _ = self;
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        var id: u64 = undefined;
+        // Settles an entry left unresolved by a removed holder first.
+        switch (store.lookupMergeCandidate(graph_name, label, prop_key, prop_value, &id)) {
+            .found => {},
+            .not_found => return missing_err,
+            .not_indexable => return error.MergeKeyNotUnique,
+        }
+        return switch (store.lookupOnlyMergeHolder(graph_name, label, prop_key, prop_value, &id)) {
+            .found => id,
+            .not_found => missing_err,
+            .not_indexable => error.MergeKeyNotUnique,
+        };
+    }
+
     /// Task 15/16 (enterprise-ingest-throughput): write-phase counterpart of
     /// `bulkInsertEdge` that skips the MATCH lookups.
     ///
@@ -5299,6 +5451,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // thread-local statement-txn slots are source of truth.
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -5509,6 +5662,8 @@ pub const StorageAdapter = struct {
         txn_id_opt: ?u64,
         apply_on_match: bool,
     ) !MergeResult {
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
         // GAP-0046 / GAP-0900 Layer-3 (Fix 2): in lean-index mode the merge key
@@ -7023,6 +7178,31 @@ pub const StorageAdapter = struct {
         mg.exact_index_built.store(true, .release);
     }
 
+    /// SONNY-6362 test instrumentation: add the posting `(label, key = value)
+    /// -> node_slot` to `graph_name`'s exact property index, as a value-hash
+    /// collision or a posting left stale reads to a lookup (the posting
+    /// names a node whose value is another).
+    pub fn addExactIndexPostingForTesting(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+        value: graph_store.PropertyValue,
+        node_slot: u64,
+    ) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        try ensureExactNodePropertyIndexBuilt(self, mg);
+        const label_id = mg.label_dict.getId(label) orelse return error.LabelNotFound;
+        const storage_value = try toStorageProperty(self.allocator, value);
+        defer freeTemporaryStorageProperty(self.allocator, storage_value);
+        const value_hash = try hashStorageProperty(self.allocator, storage_value);
+        try mg.exact_node_property_index.addEx(label_id, key, value_hash, node_slot, false);
+    }
+
     /// Test-only: read the coverage counter from the most recent
     /// `rebuildExactNodePropertyIndex` pass on `graph_name` (equals the
     /// live-node count after a successful rebuild).
@@ -7108,8 +7288,11 @@ pub const StorageAdapter = struct {
         for (candidates) |node_id| {
             _ = g_lookup_all_props_candidates_scanned.fetchAdd(1, .monotonic);
             var all_match = true;
-            for (filters, 0..) |f, i| {
-                if (i == seed_idx) continue; // seed already matched via the index
+            // CANARY: REQ=REQ-SONNY-6362-SEED-RECHECK; FEATURE="MergeIdempotency"; ASPECT=SeedFilterVerified; STATUS=TESTED; TEST=tests/test_sonny6362_merge_index_residuals.zig; OWNER=storage; UPDATED=2026-11-12
+            // SONNY-6362: every filter, the seed's included. The seed's
+            // posting is a value HASH (a collision names a node holding
+            // another value) and may be stale; it was trusted unchecked.
+            for (filters) |f| {
                 // getNodeProperty returns a STORAGE-domain PropertyValue (owns
                 // .string/.ext bytes); convert to the high-level domain to
                 // compare with the filter (a graph_store.PropertyValue).
@@ -7253,7 +7436,7 @@ pub const StorageAdapter = struct {
             var seed_id: u64 = 0;
             switch (store.lookupMergeCandidate(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, &seed_id)) {
                 .found => {
-                    if (try self.publicNodeMatchesRemaining(graph_name, store, seed_id, filters, seed_idx)) return seed_id;
+                    if (try self.publicNodeMatchesAll(graph_name, store, seed_id, filters)) return seed_id;
                     return missing_err;
                 },
                 // Merge index miss but the exact index has it (best_len==1) ⇒ a
@@ -7331,19 +7514,18 @@ pub const StorageAdapter = struct {
         return propertyValuesEqual(actual, f.value);
     }
 
-    /// Verify every filter EXCEPT `seed_idx` against the public-id node's stored
-    /// properties (the seed already matched via the index/merge probe). Reads
-    /// each property engine-direct by slot — NO full-node hydration (Phase 2).
-    fn publicNodeMatchesRemaining(
+    /// Verify every filter against the public-id node's stored properties.
+    /// Reads each property engine-direct by slot — NO full-node hydration
+    /// (Phase 2). SONNY-6362: the seed's filter too; the merge probe that
+    /// named the node checks only that it exists in the graph.
+    fn publicNodeMatchesAll(
         self: *StorageAdapter,
         graph_name: []const u8,
         store: *graph_store.GraphStore,
         node_id: u64,
         filters: []const PropKV,
-        seed_idx: usize,
     ) !bool {
-        for (filters, 0..) |f, i| {
-            if (i == seed_idx) continue;
+        for (filters) |f| {
             if (!self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) return false;
         }
         return true;
@@ -9065,8 +9247,14 @@ pub const StorageAdapter = struct {
         if (mg.exact_index_built.load(.acquire)) {
             // Built (reloaded at open, or built by a prior touch/this checkpoint).
             // Persist the current index — under the build mutex, so no concurrent
-            // rebuild mutates it during the save.
-            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+            // rebuild mutates it during the save. SONNY-6354: complete for every
+            // registered key first, and stamped with that key set.
+            const config = prepareExactIndexSaveLocked(mg) catch |err| {
+                _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+                log.warn("failed to complete property index for graph '{s}' before persisting it: {}", .{ mg.name, err });
+                return .write_failed;
+            };
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg), config) catch |err| {
                 // SONNY-1574: a failed save is a FAILURE, not a warning the
                 // success surface swallows.
                 _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
@@ -9082,7 +9270,12 @@ pub const StorageAdapter = struct {
         // the build mutex excludes the worker/lazy builds) — then persist. An empty
         // (0-node) deferred graph has nothing to build → invalidate any stale file.
         if (self.eagerBuildDeferredIndexForFullCheckpoint(mg)) {
-            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+            const config = prepareExactIndexSaveLocked(mg) catch |err| {
+                _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+                log.warn("failed to complete eagerly-built property index for graph '{s}' before persisting it: {}", .{ mg.name, err });
+                return .write_failed;
+            };
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg), config) catch |err| {
                 _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
                 log.warn("failed to persist eagerly-built property index for graph '{s}': {}", .{ mg.name, err });
                 return .write_failed;
@@ -9245,9 +9438,15 @@ pub const StorageAdapter = struct {
         // guarantee under a still-open WAL tail.
         if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
             defer self.allocator.free(dir_path);
-            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
-                log.warn("hydration-time exact-index persist failed for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
-            };
+            // SONNY-6354: complete for a key registered during the build, and
+            // stamped with the key set.
+            if (prepareExactIndexSaveLocked(mg)) |config| {
+                mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg), config) catch |err| {
+                    log.warn("hydration-time exact-index persist failed for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
+                };
+            } else |err| {
+                log.warn("hydration-time exact-index persist skipped for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
+            }
         } else |err| {
             log.warn("hydration-time exact-index persist: dir path failed for graph '{s}': {}", .{ graph_name, err });
         }
@@ -9512,7 +9711,11 @@ pub const StorageAdapter = struct {
         // 4) Load the covered_lsn BASE postings (the snapshot as it stood at the
         //    last checkpoint). `expected_covered_lsn == stamp.covered_lsn` (==
         //    pre_recovery, gated) so the file loads despite the tail.
-        const base_outcome = mg.exact_node_property_index.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn);
+        // SONNY-6354: the late-key generation is read before the key
+        // configuration the file must match, so a key registered in between
+        // leaves the index behind (caught up on first access), never ahead.
+        const lean_gen = graph_store.leanLateGenMax();
+        const base_outcome = mg.exact_node_property_index.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn, graph_store.exactIndexConfigHash());
         if (base_outcome != .loaded) return false;
         // From here a `false` return MUST leave the index EMPTY (a partial index
         // is worse than a rebuild): every failure branch below calls `clear()`
@@ -9522,6 +9725,7 @@ pub const StorageAdapter = struct {
             // A committed tail advanced the frontier but touched NO node-owning
             // pages (e.g. edge-only) → the node-property base is already correct.
             _ = g_exact_index_reconciled.fetchAdd(1, .monotonic);
+            mg.exact_lean_gen.store(lean_gen, .release);
             return true;
         }
 
@@ -9573,6 +9777,7 @@ pub const StorageAdapter = struct {
         }
 
         _ = g_exact_index_reconciled.fetchAdd(1, .monotonic);
+        mg.exact_lean_gen.store(lean_gen, .release);
         return true;
     }
 
@@ -10251,14 +10456,18 @@ pub const StorageAdapter = struct {
         // matches the engine's current epoch AND no committed WAL tail advanced
         // the durable frontier past its covered_lsn. Otherwise fall back to a
         // race-free hydration/lazy rebuild (never a stale serve).
+        // SONNY-6354: the late-key generation is read before the key
+        // configuration the file must match (see `tryReconcileExactIndexOnReopen`).
+        const load_lean_gen = graph_store.leanLateGenMax();
         const load_outcome: ExactIndexLoadOutcome = blk: {
             const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk .absent;
             defer self.allocator.free(dir_path);
-            break :blk mg.exact_node_property_index.loadFromFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg));
+            break :blk mg.exact_node_property_index.loadFromFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg), graph_store.exactIndexConfigHash());
         };
         const loaded_from_disk = load_outcome == .loaded;
         if (loaded_from_disk) {
             // Persisted snapshot loaded: the index is complete and ready.
+            mg.exact_lean_gen.store(load_lean_gen, .release);
             mg.exact_index_built.store(true, .release);
             // GAP-ENT-0048 PRIMARY: record the O(snapshot) reload so a test can
             // prove the reopen engaged the index WITHOUT an O(graph) rebuild.

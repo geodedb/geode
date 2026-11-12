@@ -726,6 +726,11 @@ fn sendBulkEdgeSuccessResponse(
 /// the wire response is the same as the single-phase pre-Task-16 path.
 /// The session / statement engine txn is joined implicitly via the
 /// adapter's thread-local slots (R8 / R9).
+///
+/// SONNY-3241: returns false when it declines (an endpoint key more than one
+/// node may hold, or one MERGE's index cannot hold): nothing was written or
+/// sent, and the caller runs the executor, which makes an edge per matched
+/// pair. True when it answered the statement.
 fn executeBulkMatchCreateEdge(
     gpa: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -734,7 +739,7 @@ fn executeBulkMatchCreateEdge(
     spec: geode.bulk_ingest.MatchCreateEdgeSpec,
     query_graph_name: []const u8,
     ctx: execution.ExecutionContext,
-) !void {
+) !bool {
     const geode_eval = geode.eval;
     const property_codec = geode.property_value_codec;
 
@@ -776,7 +781,7 @@ fn executeBulkMatchCreateEdge(
     const adapter_opt = graph_store.getGlobalAdapter();
     if (adapter_opt == null) {
         try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: no adapter registered", &.{}, &.{});
-        return;
+        return true;
     }
     const adapter = adapter_opt.?;
 
@@ -799,7 +804,7 @@ fn executeBulkMatchCreateEdge(
         ) catch |err| {
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-            return;
+            return true;
         };
         mut_sample.markLockAcquired();
 
@@ -815,9 +820,12 @@ fn executeBulkMatchCreateEdge(
             .result = .{},
         } };
         const result_id = coord.submit(&op) catch |err| {
+            // SONNY-3241: an endpoint key more nodes may hold: nothing was
+            // written; the executor makes an edge per matched pair.
+            if (err == error.MergeKeyNotUnique) return false;
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-            return;
+            return true;
         };
         mut_sample.markExecuteDone();
         mut_sample.markLockReleased();
@@ -838,7 +846,7 @@ fn executeBulkMatchCreateEdge(
         }
         syncGraphFromSession(state);
         updateTxnStateFromProgram(state, program, query_graph_name);
-        return;
+        return true;
     }
 
     // Non-coordinator path: use the legacy SHARED-lock endpoint
@@ -846,7 +854,9 @@ fn executeBulkMatchCreateEdge(
     const resolved = blk: {
         const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_edge);
         defer graph_store.releaseGraphLock(read_handle);
-        const s = adapter.lookupNodeByMergeKey(
+        // SONNY-3241: each endpoint key's only holder; a key more nodes
+        // may hold declines to the executor (an edge per matched pair).
+        const s = adapter.lookupSoleNodeByMergeKey(
             query_graph_name,
             spec.source.label,
             spec.source.filter_key,
@@ -854,9 +864,10 @@ fn executeBulkMatchCreateEdge(
             error.SourceNodeNotFound,
         ) catch |err| switch (err) {
             error.SourceNodeNotFound => break :blk null,
+            error.MergeKeyNotUnique => return false,
             else => return err,
         };
-        const t = adapter.lookupNodeByMergeKey(
+        const t = adapter.lookupSoleNodeByMergeKey(
             query_graph_name,
             spec.target.label,
             spec.target.filter_key,
@@ -864,6 +875,7 @@ fn executeBulkMatchCreateEdge(
             error.TargetNodeNotFound,
         ) catch |err| switch (err) {
             error.TargetNodeNotFound => break :blk null,
+            error.MergeKeyNotUnique => return false,
             else => return err,
         };
         break :blk @as(?struct { src: u64, dst: u64 }, .{ .src = s, .dst = t });
@@ -875,7 +887,7 @@ fn executeBulkMatchCreateEdge(
         auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped", true);
         syncGraphFromSession(state);
         updateTxnStateFromProgram(state, program, query_graph_name);
-        return;
+        return true;
     }
     const source_id: u64 = resolved.?.src;
     const target_id: u64 = resolved.?.dst;
@@ -895,7 +907,7 @@ fn executeBulkMatchCreateEdge(
                     Attr.uint("timeout_ns", write_lock_timeout_ns),
                 });
                 try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
-                return;
+                return true;
             }
             return err;
         };
@@ -918,12 +930,12 @@ fn executeBulkMatchCreateEdge(
                     auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped_race", true);
                     syncGraphFromSession(state);
                     updateTxnStateFromProgram(state, program, query_graph_name);
-                    return;
+                    return true;
                 },
                 else => {
                     const info = proto_util.mapError(err);
                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-                    return;
+                    return true;
                 },
             }
         };
@@ -946,6 +958,7 @@ fn executeBulkMatchCreateEdge(
     execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
     syncGraphFromSession(state);
     updateTxnStateFromProgram(state, program, query_graph_name);
+    return true;
 }
 
 /// FIX #3 (edge-phase 40001): fast-path dispatcher for the relationship-MERGE
@@ -2927,15 +2940,15 @@ fn isIdleStreamReadError(err: anyerror) bool {
     return err == error.EndOfStream or err == error.Timeout or err == error.Closed;
 }
 
+// SONNY-6334: the one request context both transports install
+// (`ServerState.installRequestThreadState`: tenant, FLE role, GPS
+// decrypt_field gate) and clear.
 fn installThreadLocalSessionState(state: *const ServerState) void {
-    fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-    audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-    fle_integration.setCurrentUserRole(state.fle_user_role);
+    state.installRequestThreadState();
 }
 
 fn clearThreadLocalSessionState() void {
-    fle_integration.clearCurrentThreadState();
-    audit_mod.setCurrentAuditTenantId(null);
+    ServerState.clearRequestThreadState();
 }
 
 const CooperativeMutationAdmissionClass = enum(u8) {
@@ -6987,40 +7000,24 @@ fn handleClientMessage(
                 state.session_config.?.tenant_id = try gpa.dupe(u8, tenant);
             }
 
-            // GAP-0281: Set per-thread FLE tenant_id from session config for encryption namespace isolation.
-            fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-            // GAP-0282: Set per-thread audit tenant_id so all audit events carry tenant context.
-            audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-
-            // GAP-0271: Set FLE role from HELLO request with injection validation.
-            // Always reset role on new connection to prevent stale role leakage.
+            // GAP-0271: the FLE role from the HELLO request, validated
+            // (fle_integration.helloFleRole, shared with gRPC). Always reset
+            // on a new HELLO to prevent stale role leakage.
             if (state.fle_user_role) |old_role| {
                 gpa.free(old_role);
                 state.fle_user_role = null;
             }
-            if (hello_req.role) |requested_role| {
-                if (requested_role.len > 0) {
-                    // Validate role: only [a-zA-Z0-9_-] allowed — reject semicolons, commas, wildcards
-                    var role_valid = true;
-                    for (requested_role) |c| {
-                        if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
-                            role_valid = false;
-                            break;
-                        }
-                    }
-                    if (role_valid) {
-                        state.fle_user_role = try gpa.dupe(u8, requested_role);
-                        fle_integration.setCurrentUserRole(state.fle_user_role);
-                    } else {
-                        log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
-                        fle_integration.setCurrentUserRole(null);
-                    }
-                } else {
-                    fle_integration.setCurrentUserRole(null);
-                }
-            } else {
-                fle_integration.setCurrentUserRole(null);
+            if (fle_integration.helloFleRole(hello_req.role)) |role| {
+                state.fle_user_role = try gpa.dupe(u8, role);
+            } else if (hello_req.role) |r| {
+                if (r.len > 0) log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
             }
+            // SONNY-6341: a role the user does not hold is audited and not
+            // acted under (`ServerState.effectiveFleRole`, every request).
+            state.auditUnheldFleRole();
+            // GAP-0281/0282, SONNY-6334: the session's tenant, FLE role and
+            // decrypt_field gate on this thread (the request context).
+            state.installRequestThreadState();
 
             // CANARY: REQ=REQ-DSN-GRAPH-BIND-003; FEATURE="DSNGraphBinding"; ASPECT=QuicGraphResolution; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=transport; UPDATED=2026-06-11
             // Resolve graph from HELLO request — validate, auto-create, bind session
@@ -7247,6 +7244,10 @@ fn handleClientMessage(
                     return;
                 },
             }
+            // SONNY-6341: the request context again for this request (the
+            // stream turn installed it once): an FLE role granted or revoked
+            // since counts now, for the executor and the result encoding.
+            state.installRequestThreadState();
 
             // SONNY-1835: refuse an unbound sibling stream with a typed error
             // instead of silently querying the default graph and returning zero
@@ -7640,7 +7641,8 @@ fn handleClientMessage(
                 // FLE read sites that hold this context prefer it via
                 // getCurrentUserRoleCtx, making the context authoritative at the
                 // request boundary (per-thread map remains the fallback).
-                .fle_role = state.fle_user_role,
+                // SONNY-6341: only a role the authenticated user holds.
+                .fle_role = state.effectiveFleRole(),
                 .principal = &principal_for_request,
                 // GAP-0511 Task 3b: Wire expression RLS engine pointer into execution context.
                 // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
@@ -7821,7 +7823,25 @@ fn handleClientMessage(
             // SONNY-2686: the fast paths below that find existing nodes by
             // merge key (every MERGE shape, and MATCH … CREATE edge) serve a
             // session only when no tenant scope or RLS policy restricts it.
-            const key_resolved_writes_ok = is_mutation and keyResolvedWriteFastPathServes(state, &exec_context);
+            // CANARY: REQ=REQ-SONNY-6327-FLE-FAST-PATH-DECLINE; FEATURE="FieldLevelEncryption"; ASPECT=QuicFastPathDecline; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-6327: the write fast paths write property values to the
+            // engine as given, without the executor's FLE hook: a bulk MERGE
+            // or CREATE stored an encrypted field's PLAINTEXT on disk (and an
+            // envelope in memory, encrypted afterwards under another record
+            // identity, so memory and engine disagreed and an FLE error then
+            // stopped the batch part-way after the engine write). With any
+            // FLE field configured, or the FLE catalog unavailable, every
+            // write fast path declines and the executor encrypts the write.
+            const fle_fast_paths_ok = !geode.fle_integration.hasEncryptedFields();
+            const key_resolved_writes_ok = is_mutation and fle_fast_paths_ok and keyResolvedWriteFastPathServes(state, &exec_context);
+            // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=QuicFastPathDecline; STATUS=TESTED; TEST=tests/test_sonny2846_unique_fast_paths_wire.zig; OWNER=transport; UPDATED=2026-11-11
+            // SONNY-2846: the node-writing fast paths (simple CREATE, bulk
+            // MERGE, `/*+BATCH*/`, `USE GRAPH g; MERGE`) skip the executor's
+            // UNIQUE check, so they decline a graph a UNIQUE constraint
+            // (SONNY-6281: or any NOT NULL / EXISTS / NODE KEY one)
+            // applies in and the write takes the executor. The edge fast
+            // paths write no node and are not affected.
+            const node_fast_paths_ok = fle_fast_paths_ok and !geode.bulk_ingest.uniqueConstraintsDeclineFastPath(query_graph_name);
 
             // GAP-0900 lever (c): opt-in concurrent batch-merge fast path.
             // A client signals "this program is a batch of independent simple
@@ -7842,6 +7862,7 @@ fn handleClientMessage(
             if (batch_requested and
                 is_mutation and
                 key_resolved_writes_ok and
+                node_fast_paths_ok and
                 !state.in_txn and
                 graph_store.getGlobalAdapter() != null and
                 geode.distributed.cluster.getGlobalClusterCoordinator() == null)
@@ -8046,14 +8067,14 @@ fn handleClientMessage(
             const cluster_active = geode.distributed.cluster.getGlobalClusterCoordinator() != null;
             if (is_mutation and !state.in_txn and geode.bulk_ingest.isEnabled() and !cluster_active) {
                 const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
-                if (bulk_shape == .simple_node_create) {
+                if (bulk_shape == .simple_node_create and node_fast_paths_ok) {
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
                     return;
                 }
                 if (bulk_shape == .match_create_edge and key_resolved_writes_ok) {
                     if (geode.bulk_ingest.matchEdgeSpec(&parse_result.program)) |edge_spec| {
-                        try executeBulkMatchCreateEdge(gpa, stream, state, &parse_result.program, edge_spec, query_graph_name, exec_context);
-                        return;
+                        // SONNY-3241: false = declined, nothing written.
+                        if (try executeBulkMatchCreateEdge(gpa, stream, state, &parse_result.program, edge_spec, query_graph_name, exec_context)) return;
                     }
                     // If the spec helper disagrees with matchSingleStatement,
                     // fall through to the regular executor (programming error
@@ -8068,7 +8089,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok) {
+                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok and node_fast_paths_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -8102,14 +8123,14 @@ fn handleClientMessage(
             // -> proposeWrite and replicates to every node.
             if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled() and graph_store.getGlobalAdapter() != null and geode.distributed.cluster.getGlobalClusterCoordinator() == null) {
                 const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
-                if (bulk_shape == .simple_node_create) {
+                if (bulk_shape == .simple_node_create and node_fast_paths_ok) {
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
                     return;
                 }
                 if (bulk_shape == .match_create_edge and key_resolved_writes_ok) {
                     if (geode.bulk_ingest.matchEdgeSpec(&parse_result.program)) |edge_spec| {
-                        try executeBulkMatchCreateEdge(gpa, stream, state, &parse_result.program, edge_spec, query_graph_name, exec_context);
-                        return;
+                        // SONNY-3241: false = declined, nothing written.
+                        if (try executeBulkMatchCreateEdge(gpa, stream, state, &parse_result.program, edge_spec, query_graph_name, exec_context)) return;
                     }
                     // Spec/detector disagreement — fall through to the
                     // general executor as the original block does.
@@ -8122,7 +8143,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok) {
+                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok and node_fast_paths_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -8147,7 +8168,7 @@ fn handleClientMessage(
             // falls through so the graph-access check + session rebind run in
             // the regular executor. Same gating as the single-statement fast
             // paths: autocommit, non-cluster (cluster writes must reach Raft).
-            if (is_mutation and key_resolved_writes_ok and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
+            if (is_mutation and key_resolved_writes_ok and node_fast_paths_ok and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
                 if (geode.bulk_ingest.matchGraphSelectorThenMerge(&parse_result.program)) |gs| {
                     if (std.mem.eql(u8, gs.graph_name, query_graph_name)) {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, gs.merge, query_graph_name, exec_context);

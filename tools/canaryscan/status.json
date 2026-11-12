@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:07:52.148788567Z",
+  "generated_at": "2026-11-12T18:50:16.332043707Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -11379,44 +11379,6 @@
           ],
           "benches": [],
           "owner": "schema",
-          "updated": "2026-01-09"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CONSTRAINT-ENFORCE-001",
-      "features": [
-        {
-          "feature": "ConstraintEnforcement",
-          "aspect": "CatalogImport",
-          "status": "TESTED",
-          "files": [
-            "src/execution/crud_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_catalog_operations_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-09"
-        }
-      ]
-    },
-    {
-      "id": "REQ-CONSTRAINT-ENFORCE-002",
-      "features": [
-        {
-          "feature": "ConstraintEnforcement",
-          "aspect": "Validation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/crud_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_catalog_operations_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
           "updated": "2026-01-09"
         }
       ]
@@ -26081,7 +26043,6 @@
           "aspect": "DecryptFieldGate",
           "status": "TESTED",
           "files": [
-            "src/execution/fle_hooks.zig",
             "src/security/gps.zig",
             "tests/test_gps_fle_enforcement.zig"
           ],
@@ -45078,26 +45039,6 @@
           ],
           "tests": [
             "TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc"
-          ],
-          "benches": [],
-          "owner": "unicode",
-          "updated": "2025-09-27"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-UNICODE-011",
-      "features": [
-        {
-          "feature": "UnicodeUniqueKeys",
-          "aspect": "NormalizeLabel",
-          "status": "TESTED",
-          "files": [
-            "src/schema/constraint_manager.zig",
-            "tests/canary_unicode_unique_key.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_UNICODE_011_UniqueKeyNormalize"
           ],
           "benches": [],
           "owner": "unicode",
@@ -70318,7 +70259,7 @@
           "aspect": "CatalogList",
           "status": "TESTED",
           "files": [
-            "src/schema/catalog.zig"
+            "src/execution/meta_dispatch.zig"
           ],
           "tests": [
             "geodetestlab/specs/gap_139_show_statements.yml"
@@ -70719,6 +70660,123 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-09-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-1319-GRAPH-SCOPED-CATALOG",
+      "features": [
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "ConstraintGraphScope",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1319_graph_scoped_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "CreateIndexGraph",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1319_graph_scoped_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DropIndexGraph",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1319_graph_scoped_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "GraphScope",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1319_graph_scoped_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "IndexGraphField",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1319_graph_scoped_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "IndexGraphScope",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1319_graph_scoped_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny1319_graph_scoped_catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1319_graph_scoped_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "ShowGraphScope",
+          "status": "TESTED",
+          "files": [
+            "src/execution/statement_handlers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny1319_graph_scoped_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
         }
       ]
     },
@@ -72530,6 +72588,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2725-MERGE-ATOMICITY",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "MergeStatementUndo",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2725_merge_atomicity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2725_merge_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2727-PARAM-DECODER-NARROWING",
       "features": [
         {
@@ -73677,6 +73754,110 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2795-DROP-INDEX-CATALOG",
+      "features": [
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DbIndexesLocked",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2795_drop_index_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DropIndexLockedAndSaved",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2795_drop_index_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DropIndexPersisted",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2795_drop_index_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "InMemoryCatalog",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig",
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2795_drop_index_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "ProcessLifetimeIndexManager",
+          "status": "TESTED",
+          "files": [
+            "src/execution/statement_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2795_drop_index_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2795_drop_index_catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2795_drop_index_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "VectorReadersLocked",
+          "status": "TESTED",
+          "files": [
+            "src/execution/statement_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2795_drop_index_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2798-OFFLINE-VERIFY-FIRST",
       "features": [
         {
@@ -74602,6 +74783,184 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2846-UNIQUE-ENFORCEMENT",
+      "features": [
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "CatalogCopy",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "CreateConstraintValidates",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "ExactIndexCandidates",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "FastPathDecline",
+          "status": "TESTED",
+          "files": [
+            "src/execution/bulk_ingest.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "FastPathFence",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "QuicFastPathDecline",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_fast_paths_wire.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "StatementEndCheck",
+          "status": "TESTED",
+          "files": [
+            "src/execution/unique_constraints.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "StatementEndHook",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "UniqueViolationCode",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_constraint_enforcement.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "WireRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2846_unique_fast_paths_wire.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2846_unique_fast_paths_wire.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2847-MERGE-INDEX-MULTI-HOLDER",
+      "features": [
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2847_merge_index_multi_holder.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2847_merge_index_multi_holder.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -75549,6 +75908,53 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3056-LEAN-MERGE-BACKFILL",
+      "features": [
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "LateKeyRegistry",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3056_lean_merge_evicted_holder.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "PerLabelBackfillFromPostings",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3056_lean_merge_evicted_holder.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3056_lean_merge_evicted_holder.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3056_lean_merge_evicted_holder.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -76946,6 +77352,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3241-FAST-PATH-PARITY",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "SoleHolderEndpoint",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3241_fast_path_parity_wire.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "WireRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3241_fast_path_parity_wire.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3241_fast_path_parity_wire.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3242-SET-SEMANTICS",
       "features": [
         {
@@ -77003,6 +77442,25 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-28"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3243-UNION-WRITE-ATOMICITY",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "UnionStatementUndo",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3243_union_write_atomicity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3243_union_write_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -78249,6 +78707,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3357-MERGE-REL-PROPS",
+      "features": [
+        {
+          "feature": "MergeRelationship",
+          "aspect": "MatchRelationshipProperties",
+          "status": "TESTED",
+          "files": [
+            "src/execution/crud_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3357_merge_relationship_properties.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeRelationship",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3357_merge_relationship_properties.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3357_merge_relationship_properties.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3367-VARIABLE-KIND",
       "features": [
         {
@@ -78390,6 +78881,72 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3380-MERGE-ALIAS-SET",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "DuplicateSetUndo",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3380_merge_alias_duplicate_set.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3380_merge_alias_duplicate_set.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3381-UNDO-INDEX-REPAIR",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "UndoIndexRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3381_undo_index_entries.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3381_undo_index_entries.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Execution",
+          "aspect": "UndoIndexRepairHook",
+          "status": "TESTED",
+          "files": [
+            "src/execution/undo_index_repair.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3381_undo_index_entries.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "IndexRepairCollector",
+          "status": "TESTED",
+          "files": [
+            "src/txn_undo_log.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3381_undo_index_entries.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3384-SET-DELETE-RETURN",
       "features": [
         {
@@ -78461,6 +79018,195 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6268-EDGE-CREATE-ATOMIC",
+      "features": [
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "EdgeCreateInMemory",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6268_graph_store_failure_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6268-FAILURE-ATOMICITY",
+      "features": [
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6268_graph_store_failure_atomicity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6268_graph_store_failure_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6268-LABEL-ATOMIC",
+      "features": [
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "NodeLabelAddRemove",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6268_graph_store_failure_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6268-NODE-CREATE-ATOMIC",
+      "features": [
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "NodeCreateInMemory",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6268_graph_store_failure_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6268-NODE-DELETE-ATOMIC",
+      "features": [
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "NodeDelete",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6268_graph_store_failure_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6268-PROPERTY-MAP-ATOMIC",
+      "features": [
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "PropertyMapPutRemove",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6268_graph_store_failure_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6270-DROP-CONSTRAINT",
+      "features": [
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DbConstraintsLocked",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6270_drop_constraint.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DropConstraintLockedAndSaved",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6270_drop_constraint.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DropConstraintPersisted",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6270_drop_constraint.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DropLowersFence",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6270_drop_constraint.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6270_drop_constraint.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6270_drop_constraint.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6272-NO-DOCKERFILE-PROD",
       "features": [
         {
@@ -78475,6 +79221,142 @@
           ],
           "benches": [],
           "owner": "release",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6274-FLE-CATALOG-NO-TMP",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "CatalogPath",
+          "status": "TESTED",
+          "files": [
+            "src/schema/fle_catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6274_fle_catalog_no_tmp.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "PrivateFileWrite",
+          "status": "TESTED",
+          "files": [
+            "src/storage/tde_file_encryption.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6274_fle_catalog_no_tmp.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6274_fle_catalog_no_tmp.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6274_fle_catalog_no_tmp.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6281-EXISTENCE-CONSTRAINTS",
+      "features": [
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "CatalogKinds",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6281_existence_constraints.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "CreateConstraintValidates",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6281_existence_constraints.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "NotNullViolationCode",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6281_existence_constraints.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6281_existence_constraints.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6281_existence_constraints.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "StatementEndCheck",
+          "status": "TESTED",
+          "files": [
+            "src/execution/unique_constraints.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6281_existence_constraints.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ConstraintEnforcement",
+          "aspect": "UniqueIndexRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6281_existence_constraints.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-12"
         }
       ]
@@ -78495,6 +79377,95 @@
           "benches": [],
           "owner": "cli",
           "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6294-DROP-INDEX-RULES",
+      "features": [
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DropAllRowsOfTheName",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6294_drop_index_rules.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DropIndexSessionGraphLock",
+          "status": "TESTED",
+          "files": [
+            "src/query/query_traits.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6294_drop_index_rules.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "FulltextDropInDefault",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6294_drop_index_rules.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "NameIsOneObjectPerGraph",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6294_drop_index_rules.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6294_drop_index_rules.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6294_drop_index_rules.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "SqlstateMapping",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6294_drop_index_rules.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-11"
         }
       ]
     },
@@ -78540,6 +79511,109 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6302-WRITE-ERRORS",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ApplyDeleteFailure",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_replication.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6302_edge_write_and_delete_errors.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "AdapterFaultSeam",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6302_edge_write_and_delete_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "EdgePropertyRemove",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6302_edge_write_and_delete_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "EdgePropertySet",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6302_edge_write_and_delete_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "LongNameRemoverKeys",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6302_edge_write_and_delete_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6302_edge_write_and_delete_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6302_edge_write_and_delete_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "TenantLifecycle",
+          "aspect": "DropDeleteFailure",
+          "status": "TESTED",
+          "files": [
+            "src/execution/tenant_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6302_edge_write_and_delete_errors.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
         }
       ]
     },
@@ -78771,6 +79845,109 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "LoadFailureIsAnError",
+          "status": "TESTED",
+          "files": [
+            "src/schema/fle_catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6324_fle_catalog_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6324_fle_catalog_fail_closed.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6324_fle_catalog_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "SaveFailureIsAnError",
+          "status": "TESTED",
+          "files": [
+            "src/schema/fle_catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6324_fle_catalog_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "SqlstateMapping",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6324_fle_catalog_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "StartupLoad",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6324_fle_catalog_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "UnknownMeansEncrypted",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6324_fle_catalog_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "WriteRefusedNotPlaintext",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6324_fle_catalog_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6325-NO-FIXED-TMP",
       "features": [
         {
@@ -78902,6 +80079,152 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6327-FLE-CATALOG-READS-UNDER-LOCK",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "NoBorrowedReads",
+          "status": "TESTED",
+          "files": [
+            "src/schema/fle_catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6327-FLE-FAST-PATH-DECLINE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "AdapterBulkRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "QuicFastPathDecline",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6327-FLE-ONLINE-REVOKE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "RevokePlaintextProcedure",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6327-FLE-READ-POLICY",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "EvalReadSites",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "GraphStoreCheckedRead",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "OneReadPolicyForNodesAndEdges",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "WireEncoding",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6327_fle_read_gaps.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6328-TSAN-INSTRUMENTED",
       "features": [
         {
@@ -78954,6 +80277,214 @@
           ],
           "benches": [],
           "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6334-FLE-ADMIN-AUDIT",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "AuditedGrantRevokeConfigure",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fle_admin.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6334_fle_authorization.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6334-FLE-ADMIN-GATE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "AdminOnlyKeyAdministration",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fle_admin.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6334_fle_authorization.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6334-FLE-AUTHZ",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6334_fle_authorization.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6334_fle_authorization.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6334-FLE-PLAINTEXT-GATE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "GpsDecryptFieldGate",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6334_fle_authorization.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6334-FLE-REQUEST-CONTEXT",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "OneRequestContextForQuicAndGrpc",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_state.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6334_fle_authorization.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6335-FLE-IDENTITY-INDEXES",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6335_fle_identity_and_indexes.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6335_fle_identity_and_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6335-FLE-ONE-IDENTITY",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "OneEncryptionIdentity",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6335_fle_identity_and_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "ConfigureFieldRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6335_fle_identity_and_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "CreateIndexRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6335_fle_identity_and_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "FulltextSearchRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6335_fle_identity_and_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "IndexedFieldLookup",
+          "status": "TESTED",
+          "files": [
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6335_fle_identity_and_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "SqlstateMapping",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6335_fle_identity_and_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "security",
           "updated": "2026-11-12"
         }
       ]
@@ -79059,6 +80590,91 @@
           ],
           "tests": [
             "tests/test_sonny6340_no_fabricated_procedures.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6341-FLE-ROLE-BINDING",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "FleRoleBoundToPrincipal",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_state.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6341_fle_role_binding.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6341_fle_role_binding.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6341_fle_role_binding.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6341-FLE-ROLE-GRANT-PROC",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "GrantRevokeFleRole",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6341_fle_role_binding.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6341-FLE-ROLE-GRANT-STORE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "DurableFleRoleGrants",
+          "status": "TESTED",
+          "files": [
+            "src/storage/user_storage.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6341_fle_role_binding.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "SealedFleRoleGrants",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_graph_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6341_fle_role_binding.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -79218,6 +80834,67 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES",
+      "features": [
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "CompositeBackfillFromPostings",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6354_lean_late_key_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "ExactIndexConfigStamp",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6354_lean_late_key_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "ExactIndexLateKeyCatchUp",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6354_lean_late_key_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6354_lean_late_key_indexes.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6354_lean_late_key_indexes.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6355-BACKUP-ENCRYPT-FSYNC",
       "features": [
         {
@@ -79251,6 +80928,285 @@
           ],
           "benches": [],
           "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6362-FLAGGED-ID-REFUSED",
+      "features": [
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "CreateRefusesFlaggedId",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6362_merge_index_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6362-MERGE-ADD-FAILURE",
+      "features": [
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "FailedAddUntrustsIndex",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6362_merge_index_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6362-MERGE-FLE-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "MergeOnEncryptedFieldRefused",
+          "status": "TESTED",
+          "files": [
+            "src/execution/crud_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6362_merge_index_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6362-MERGE-INDEX-RESIDUALS",
+      "features": [
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6362_merge_index_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6362_merge_index_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6362-SEED-RECHECK",
+      "features": [
+        {
+          "feature": "MergeIdempotency",
+          "aspect": "SeedFilterVerified",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6362_merge_index_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6362-STATEMENT-RECORD",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "CrossThreadRecordRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6362_statement_undo_threads.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6362_statement_undo_threads.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Execution",
+          "aspect": "StatementScopedRecord",
+          "status": "TESTED",
+          "files": [
+            "src/statement_undo.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6362_statement_undo_threads.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6368-EVERY-LABEL",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "WriteChokepointEveryLabel",
+          "status": "TESTED",
+          "files": [
+            "src/execution/property_mutation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6368-INDEX-MAINTENANCE",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "IndexMaintenanceRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6368-REBUILD-AGAIN",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "RebuildAgainRequest",
+          "status": "TESTED",
+          "files": [
+            "src/storage/fts_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FullText",
+          "aspect": "RebuildOrRequestAgain",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_index_ops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FullText",
+          "aspect": "RebuildPasses",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_index_ops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6368-REMOVE-MAINTENANCE",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "RemoveProperty",
+          "status": "TESTED",
+          "files": [
+            "src/execution/property_mutation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FullText",
+          "aspect": "RemovedTextRebuildQueue",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_index_ops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FullText",
+          "aspect": "StatementEndRebuild",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6368-SET-LABEL-MAINTENANCE",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "SetLabel",
+          "status": "TESTED",
+          "files": [
+            "src/execution/property_mutation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6368_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-12"
         }
       ]
@@ -86982,7 +88938,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4472
+      "TESTED": 4595
     },
     "by_aspect": {
       "2PC": 3,
@@ -87021,8 +88977,10 @@
       "ActiveContextPush": 1,
       "ActorFieldPresent": 1,
       "ActualQueryExecution": 1,
+      "AdapterBulkRefusal": 1,
       "AdapterBulkSlots": 1,
       "AdapterDeleteSnapshotElision": 1,
+      "AdapterFaultSeam": 1,
       "AdapterGuard": 1,
       "AdapterImport": 1,
       "AdapterMergeSnapshotElision": 1,
@@ -87054,6 +89012,7 @@
       "AddShard": 1,
       "Addition": 2,
       "AdminAllowed": 4,
+      "AdminOnlyKeyAdministration": 1,
       "AdminShortcut": 1,
       "AdmissionDiagnostic": 1,
       "AdmissionFutexWake": 1,
@@ -87112,6 +89071,7 @@
       "ApplyAbsoluteIdEdge": 1,
       "ApplyConfigChange": 1,
       "ApplyDelete": 1,
+      "ApplyDeleteFailure": 1,
       "ApplyEdgeCreate": 1,
       "ApplyErrorCount": 1,
       "ApplyKeyedCreate": 1,
@@ -87157,6 +89117,7 @@
       "AuditSinks": 1,
       "AuditTrail": 2,
       "AuditTransports": 1,
+      "AuditedGrantRevokeConfigure": 1,
       "AuthCategories": 1,
       "AuthCommands": 2,
       "AuthDispatchPolicyCreate": 1,
@@ -87380,12 +89341,14 @@
       "CaseFolding": 1,
       "CaseParsing": 1,
       "Catalog": 3,
+      "CatalogCopy": 1,
       "CatalogErrorDenyAccess": 1,
-      "CatalogImport": 1,
       "CatalogIntegrityCheck": 1,
+      "CatalogKinds": 1,
       "CatalogList": 3,
       "CatalogMethod": 1,
       "CatalogMethods": 1,
+      "CatalogPath": 1,
       "CatalogPermissionsPersisted": 1,
       "CatalogRenameInMemory": 1,
       "CatalogTests": 2,
@@ -87542,6 +89505,7 @@
       "Compliance": 2,
       "ComplianceLog": 1,
       "Composite": 1,
+      "CompositeBackfillFromPostings": 1,
       "ComprehensiveBatch3": 1,
       "ComprehensiveBatch4": 1,
       "ComprehensiveBatch5": 1,
@@ -87573,6 +89537,7 @@
       "Configuration": 1,
       "ConfigureAdaptiveFlush": 1,
       "ConfigureChangeStream": 1,
+      "ConfigureFieldRefused": 1,
       "ConfigureFieldRestart": 1,
       "ConflictDetection": 1,
       "ConflictRepair": 1,
@@ -87605,6 +89570,7 @@
       "Connectivity": 3,
       "Consensus": 1,
       "ConstCorrectness": 2,
+      "ConstraintGraphScope": 1,
       "ConstraintIsolation": 1,
       "ConstraintMetadata": 1,
       "ConstraintPerfVarianceEnvelope": 1,
@@ -87674,6 +89640,7 @@
       "Coverage": 3,
       "Create": 1,
       "CreateClassifiedAsCreate": 1,
+      "CreateConstraintValidates": 2,
       "CreateEdge": 2,
       "CreateExecution": 4,
       "CreateForBatch": 1,
@@ -87681,6 +89648,8 @@
       "CreateGraph": 1,
       "CreateHandler": 1,
       "CreateIdempotency": 1,
+      "CreateIndexGraph": 1,
+      "CreateIndexRefused": 1,
       "CreateMultiActionPolicy": 1,
       "CreateNoReturn": 1,
       "CreateNode": 2,
@@ -87700,6 +89669,7 @@
       "CreatePolicyWriteThrough": 1,
       "CreatePrePass": 1,
       "CreateQuery": 2,
+      "CreateRefusesFlaggedId": 1,
       "CreateRole": 1,
       "CreateSavepoint": 1,
       "CreateSetPrePass": 1,
@@ -87720,6 +89690,7 @@
       "CrossShardOperationCosts": 1,
       "CrossSubsystemReachability": 1,
       "CrossTenantE2E": 1,
+      "CrossThreadRecordRegression": 1,
       "CrudAutoIndex": 1,
       "CrudImport": 2,
       "Crypto": 1,
@@ -87758,7 +89729,9 @@
       "DateTime": 1,
       "DateType": 1,
       "DbConstraints": 1,
+      "DbConstraintsLocked": 1,
       "DbIndexes": 1,
+      "DbIndexesLocked": 1,
       "DbLabels": 1,
       "DbLabelsFilter": 1,
       "DbLabelsTenantFilter": 1,
@@ -87917,12 +89890,21 @@
       "DownReversalSafety": 1,
       "DrainReadyMessages": 1,
       "DriftPolicyOutcomeStrict": 1,
+      "DropAllRowsOfTheName": 1,
       "DropClearsDimPin": 1,
+      "DropConstraintLockedAndSaved": 1,
+      "DropConstraintPersisted": 1,
+      "DropDeleteFailure": 1,
       "DropDrainsWriters": 1,
       "DropGraph": 1,
       "DropGraphReset": 2,
       "DropInTransaction": 1,
+      "DropIndexGraph": 1,
+      "DropIndexLockedAndSaved": 1,
+      "DropIndexPersisted": 1,
+      "DropIndexSessionGraphLock": 1,
       "DropLegacyReservedName": 1,
+      "DropLowersFence": 1,
       "DropNotFound": 1,
       "DropPolicy": 1,
       "DropPolicyAST": 1,
@@ -87946,10 +89928,12 @@
       "DuplicateNameReject": 1,
       "DuplicateNameSingleFree": 1,
       "DuplicateNodeDedup": 1,
+      "DuplicateSetUndo": 1,
       "Durability": 1,
       "DurabilityFlushBeforeWatchdog": 1,
       "DurableAuthStateOrRefuse": 1,
       "DurableDdl": 1,
+      "DurableFleRoleGrants": 1,
       "DurableOrError": 1,
       "DurablePersistTestSuite": 1,
       "DurableRegistry": 1,
@@ -87978,6 +89962,7 @@
       "EdgeCaseHandling": 2,
       "EdgeCollection": 1,
       "EdgeCreateAutoTenant": 1,
+      "EdgeCreateInMemory": 1,
       "EdgeCreation": 1,
       "EdgeCutMinimization": 1,
       "EdgeGraphNameLoad": 1,
@@ -87988,6 +89973,8 @@
       "EdgeLookup": 3,
       "EdgePersistence": 1,
       "EdgePropertyEncryption": 1,
+      "EdgePropertyRemove": 1,
+      "EdgePropertySet": 1,
       "EdgePropertyWrite": 1,
       "EdgeRLS": 1,
       "EdgeReApplyIdempotency": 1,
@@ -88083,6 +90070,7 @@
       "EvalContextAttributes": 1,
       "EvalDispatch": 1,
       "EvalError": 1,
+      "EvalReadSites": 1,
       "EvalSupport": 3,
       "Evaluate": 1,
       "EvaluatedValueLeak": 1,
@@ -88103,7 +90091,9 @@
       "EveryLabelPolicy": 1,
       "EvidenceDeltaGuard": 1,
       "ExactAtAnyScale": 1,
-      "ExactIndexCandidates": 1,
+      "ExactIndexCandidates": 2,
+      "ExactIndexConfigStamp": 1,
+      "ExactIndexLateKeyCatchUp": 1,
       "ExactMatchRewrite": 1,
       "ExactNumberHash": 1,
       "ExactNumberKey": 1,
@@ -88223,6 +90213,7 @@
       "FailOpenInterim": 2,
       "FailSecureOnCatalogError": 1,
       "FailSecureOnKeyError": 1,
+      "FailedAddUntrustsIndex": 1,
       "FailedLogin": 1,
       "FailedTransactionSemantics": 1,
       "FailureLogBackpressure": 1,
@@ -88230,6 +90221,8 @@
       "FalsePositiveRegression": 1,
       "FanoutScaledServerDefaults": 1,
       "FastPath": 2,
+      "FastPathDecline": 1,
+      "FastPathFence": 1,
       "FastPathGate": 1,
       "FeatureFlag": 2,
       "FeatureFlags": 1,
@@ -88282,6 +90275,7 @@
       "FlaggerCompleteness": 1,
       "FlakePin": 1,
       "FleLeakRegression": 1,
+      "FleRoleBoundToPrincipal": 1,
       "FloatSupport": 1,
       "FloatType": 1,
       "FloatTypes": 1,
@@ -88315,7 +90309,9 @@
       "FullStack": 1,
       "FullStackTest": 1,
       "FullTextSearch": 2,
+      "FulltextDropInDefault": 1,
       "FulltextOptimization": 1,
+      "FulltextSearchRefused": 1,
       "FunctionAlias": 1,
       "FunctionCall": 2,
       "FunctionImpl": 1,
@@ -88396,6 +90392,7 @@
       "GovernanceSliceReqCrosscheckNegative": 1,
       "GovernanceTest": 2,
       "GpsActionClassification": 1,
+      "GpsDecryptFieldGate": 1,
       "GqlExecution": 1,
       "GqlFunction": 21,
       "GracefulShutdown": 1,
@@ -88408,6 +90405,7 @@
       "GrantOnlyPrincipal": 1,
       "GrantPersistCallbacks": 1,
       "GrantPlaintextDispatch": 1,
+      "GrantRevokeFleRole": 1,
       "GrantUserGraphPermission": 1,
       "GrantWidening": 1,
       "Graph": 5,
@@ -88431,8 +90429,10 @@
       "GraphOperations": 1,
       "GraphReadGate": 1,
       "GraphSAGE": 1,
+      "GraphScope": 1,
       "GraphScopingParity": 1,
       "GraphStore": 4,
+      "GraphStoreCheckedRead": 1,
       "GraphStoreFlushPolicyBench": 1,
       "GraphStoreImport": 1,
       "GraphStoreIndep": 1,
@@ -88604,6 +90604,7 @@
       "ImplementationVerification": 1,
       "ImplicitAckStampsProof": 1,
       "InFlightHandlerDrain": 1,
+      "InMemoryCatalog": 1,
       "InWorkloadMutationVerifier": 1,
       "InboundConnSnapshot": 1,
       "InboundIdleDeadline": 1,
@@ -88615,12 +90616,15 @@
       "IncrementalSnapshot": 1,
       "Index": 3,
       "IndexDDL": 1,
+      "IndexGraphField": 1,
+      "IndexGraphScope": 1,
       "IndexIndep": 1,
       "IndexIntegration": 2,
       "IndexIsolation": 1,
       "IndexKeyGate": 1,
       "IndexLookup": 1,
       "IndexMaintenance": 4,
+      "IndexMaintenanceRegression": 1,
       "IndexManagement": 1,
       "IndexMetadata": 1,
       "IndexOptimization": 2,
@@ -88631,11 +90635,13 @@
       "IndexProbeAuthority": 1,
       "IndexQueryableDuringRebuild": 1,
       "IndexRebuild": 1,
+      "IndexRepairCollector": 1,
       "IndexResultsScoped": 1,
       "IndexSeekOpKind": 1,
       "IndexStorage": 2,
       "IndexTests": 1,
       "IndexVector": 1,
+      "IndexedFieldLookup": 1,
       "IndexerNormalize": 1,
       "Indexing": 1,
       "Infrastructure": 1,
@@ -88773,6 +90779,7 @@
       "LargeScaleIntegration": 1,
       "LargeScaleStability": 1,
       "LastElement": 1,
+      "LateKeyRegistry": 1,
       "LatencyBenchmark": 2,
       "LatencyVarianceEnvelope": 2,
       "LayeredArchitecture": 1,
@@ -88849,6 +90856,7 @@
       "LiveServerDetection": 1,
       "LoadBalancing": 1,
       "LoadCorrectnessAndVariance": 1,
+      "LoadFailureIsAnError": 1,
       "LoadFromAdapter": 1,
       "LoadFromFile": 1,
       "LoadGraphGrants": 2,
@@ -88877,6 +90885,7 @@
       "LogicHelpers": 1,
       "LogicHelpersImport": 1,
       "LoginState": 2,
+      "LongNameRemoverKeys": 1,
       "Lookup": 1,
       "LostAcknowledgement": 1,
       "LowestHolderEntry": 1,
@@ -88939,6 +90948,7 @@
       "MatchPhaseVisibility": 1,
       "MatchQueryWithParams": 2,
       "MatchRLSPrincipalUsername": 1,
+      "MatchRelationshipProperties": 1,
       "MatchSetResolution": 1,
       "MaterializeCapNeedsLimit": 1,
       "MaterializeLimitFails": 1,
@@ -88981,10 +90991,12 @@
       "MergeFiltering": 1,
       "MergeHandler": 1,
       "MergeIsolation": 1,
+      "MergeOnEncryptedFieldRefused": 1,
       "MergeOncePerMatchedRow": 1,
       "MergeOptimization": 1,
       "MergePath": 1,
       "MergePrePass": 1,
+      "MergeStatementUndo": 1,
       "MerkleOfServerLog": 1,
       "MessageDispatch": 1,
       "MessageProtocol": 2,
@@ -89076,6 +91088,7 @@
       "NETWORK": 1,
       "NVRTCCompiler": 1,
       "NaNForbidden": 1,
+      "NameIsOneObjectPerGraph": 1,
       "NamedGraphLock": 1,
       "NamingConventions": 1,
       "NeedsRowFlag": 1,
@@ -89104,6 +91117,7 @@
       "NoArenaCallerLeak": 1,
       "NoAuthBind": 1,
       "NoAutoCreate": 1,
+      "NoBorrowedReads": 1,
       "NoCatalog": 1,
       "NoDeadBackupTestsOrStaleCanaryRows": 1,
       "NoDeadRemotePath": 1,
@@ -89140,14 +91154,17 @@
       "NodeCompare": 1,
       "NodeConstruction": 1,
       "NodeCreateAutoTenant": 1,
+      "NodeCreateInMemory": 1,
       "NodeCreation": 1,
       "NodeDegree": 2,
+      "NodeDelete": 1,
       "NodeEdgeMapKeys": 2,
       "NodeFallbackToId": 1,
       "NodeFiltering": 2,
       "NodeGraphNameLoad": 1,
       "NodeGraphNamePersistence": 1,
       "NodeGraphTag": 2,
+      "NodeLabelAddRemove": 1,
       "NodeLookup": 4,
       "NodePersistence": 1,
       "NodeProperties": 1,
@@ -89175,8 +91192,8 @@
       "NoneRole": 1,
       "Normalization": 1,
       "NormalizationNfc": 1,
-      "NormalizeLabel": 1,
       "NotNull": 1,
+      "NotNullViolationCode": 1,
       "NotParenDisambiguation": 1,
       "NotParenExpr": 1,
       "NoteInboundAppendEntriesAdvance": 1,
@@ -89213,7 +91230,10 @@
       "OltpAuthClusterFleEvidence": 1,
       "OnCreateSetRelationship": 1,
       "OnMessage": 1,
+      "OneEncryptionIdentity": 1,
       "OneGraphLockAtATime": 1,
+      "OneReadPolicyForNodesAndEdges": 1,
+      "OneRequestContextForQuicAndGrpc": 1,
       "OneResolver": 1,
       "OneSetPath": 1,
       "OpenAndCountRestoredStore": 1,
@@ -89421,6 +91441,7 @@
       "PerDocumentCache": 1,
       "PerGraphStore": 1,
       "PerGroupAggregates": 1,
+      "PerLabelBackfillFromPostings": 1,
       "PerMapHolders": 1,
       "PerNodeRows": 1,
       "PerRequestInstall": 1,
@@ -89623,12 +91644,14 @@
       "Printing": 1,
       "PriorityCategories": 1,
       "PrivateCATrust": 1,
+      "PrivateFileWrite": 1,
       "PrivateTempDir": 1,
       "PrivateUserTmpDir": 1,
       "PrivilegeEscalation": 1,
       "ProcedureCall": 1,
       "ProcessEnvironment": 1,
       "ProcessFlag": 1,
+      "ProcessLifetimeIndexManager": 1,
       "ProcessMetrics": 2,
       "ProcessMetrics+DbClient": 1,
       "ProcessRefusal": 1,
@@ -89663,6 +91686,7 @@
       "PropertyFilter": 1,
       "PropertyFiltering": 2,
       "PropertyIndex": 1,
+      "PropertyMapPutRemove": 1,
       "PropertyMatching": 1,
       "PropertyMetadata": 1,
       "PropertyPatternMatch": 1,
@@ -89776,6 +91800,7 @@
       "QuicBatchRoute": 1,
       "QuicCommit": 1,
       "QuicE2E": 1,
+      "QuicFastPathDecline": 2,
       "QuicFastPathGateBehaviour": 1,
       "QuicFrameLatencyVarianceEnvelope": 1,
       "QuicGate": 1,
@@ -89858,9 +91883,12 @@
       "RealityFreshnessGuard": 1,
       "ReasonCodePresent": 1,
       "Rebalance": 1,
+      "RebuildAgainRequest": 1,
       "RebuildBackfill": 1,
       "RebuildGuard": 1,
       "RebuildMutex": 1,
+      "RebuildOrRequestAgain": 1,
+      "RebuildPasses": 1,
       "RebuildProc": 1,
       "RebuildStateRegistry": 1,
       "RebuildWindowApi": 1,
@@ -89888,7 +91916,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 215,
+      "Regression": 234,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -89915,8 +91943,10 @@
       "RemoveFiltering": 1,
       "RemoveGraph": 1,
       "RemoveNoReturn": 1,
+      "RemoveProperty": 1,
       "RemoveRole": 1,
       "RemoveUser": 1,
+      "RemovedTextRebuildQueue": 1,
       "RenameAndToggleTogether": 1,
       "RenameSurvivesRestartNoStale": 1,
       "ReopenReMergeDedup": 1,
@@ -89989,6 +92019,7 @@
       "RevokeFailureReported": 1,
       "RevokeGraphPermission": 2,
       "RevokeMatchesPrincipal": 1,
+      "RevokePlaintextProcedure": 1,
       "RevokeUserGraphPermission": 1,
       "RewriteHookImplementation": 1,
       "RewriteHookPipelineIntegration": 1,
@@ -90059,6 +92090,7 @@
       "SafetyGuard": 1,
       "SafetyGuards": 1,
       "Sanitization": 1,
+      "SaveFailureIsAnError": 1,
       "SaveToFile": 1,
       "SavepointSupport": 1,
       "Scaffold": 2,
@@ -90087,6 +92119,7 @@
       "ScopedLockedClone": 1,
       "ScratchAllocator": 1,
       "SealRefusesUnsignedLegacy": 1,
+      "SealedFleRoleGrants": 1,
       "SearchHitHydrate": 1,
       "SearchHitHydrateNegativeControl": 1,
       "SearchHitHydrateTenantScoped": 1,
@@ -90109,6 +92142,7 @@
       "SecurityRLSAuditTDE": 1,
       "SecurityReview": 1,
       "SecurityTests": 1,
+      "SeedFilterVerified": 1,
       "SeededVerdict": 1,
       "SegfaultPrevention": 2,
       "SelectivityStats": 1,
@@ -90182,6 +92216,7 @@
       "SetExecution": 2,
       "SetFiltering": 1,
       "SetGuardrail": 1,
+      "SetLabel": 1,
       "SetNoReturn": 1,
       "SetOpDistinctDedupVarianceEnvelope": 1,
       "SetPath": 1,
@@ -90234,6 +92269,7 @@
       "ShowFunctions": 1,
       "ShowGrantsColumns": 1,
       "ShowGrantsRows": 1,
+      "ShowGraphScope": 1,
       "ShowGraphsFilter": 1,
       "ShowIndexesFilter": 1,
       "ShowPoliciesEmpty": 1,
@@ -90301,6 +92337,7 @@
       "SnapshotSerialization": 1,
       "SnapshotStorage": 1,
       "SnapshotValidation": 1,
+      "SoleHolderEndpoint": 1,
       "SortExecution": 1,
       "Sorting": 1,
       "SourceAudit": 2,
@@ -90312,7 +92349,7 @@
       "Split": 1,
       "SplitPoint": 1,
       "SplitRequestAnsweredOnce": 1,
-      "SqlstateMapping": 6,
+      "SqlstateMapping": 9,
       "StableBindings": 1,
       "StableUnsupportedContract": 1,
       "StackAndSpawnFailure": 1,
@@ -90327,6 +92364,7 @@
       "Startup": 6,
       "StartupGuard": 1,
       "StartupHydration": 1,
+      "StartupLoad": 1,
       "StartupMetadataRepair": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
@@ -90339,6 +92377,9 @@
       "StatementBatchCodec": 1,
       "StatementBatchRegression": 1,
       "StatementDispatch": 1,
+      "StatementEndCheck": 2,
+      "StatementEndHook": 1,
+      "StatementEndRebuild": 1,
       "StatementFallback": 1,
       "StatementHandler": 4,
       "StatementLimitRelay": 1,
@@ -90348,6 +92389,7 @@
       "StatementProposalBatch": 1,
       "StatementScopeFailed": 1,
       "StatementScopedDimScratch": 1,
+      "StatementScopedRecord": 1,
       "StatementUndoRecord": 1,
       "StatementUndoRegression": 1,
       "StatementUndoReplay": 1,
@@ -90606,6 +92648,8 @@
       "UndoCheckpoint": 1,
       "UndoEntry": 1,
       "UndoEntryCompaction": 1,
+      "UndoIndexRegression": 1,
+      "UndoIndexRepairHook": 1,
       "UndoLogCore": 2,
       "UndoLogPersistence": 1,
       "UndoLogSavepoint": 1,
@@ -90634,8 +92678,11 @@
       "UnionIsolation": 1,
       "UnionQueries": 1,
       "UnionQueryContext": 1,
+      "UnionStatementUndo": 1,
       "Unique": 1,
+      "UniqueIndexRefused": 1,
       "UniquePerfVarianceEnvelope": 1,
+      "UniqueViolationCode": 1,
       "UnitAssertions": 1,
       "UnitTest": 13,
       "UnitTestCoverage": 1,
@@ -90650,6 +92697,7 @@
       "UnknownEdgeType": 1,
       "UnknownFunctionEscapes": 1,
       "UnknownLabel": 1,
+      "UnknownMeansEncrypted": 1,
       "UnknownPropertyDiagnostic": 1,
       "UnrelatedIndexMustNotShadowScan": 2,
       "UnresolvableEndpointFailsLoud": 1,
@@ -90695,7 +92743,7 @@
       "Utf8ToUtf16": 1,
       "Utilities": 1,
       "VARIANCE": 1,
-      "Validation": 4,
+      "Validation": 3,
       "ValidatorScope": 1,
       "ValueBridge": 1,
       "ValueConverters": 1,
@@ -90732,6 +92780,7 @@
       "VectorIndexPopulation": 1,
       "VectorMetricPersistence": 1,
       "VectorOps": 1,
+      "VectorReadersLocked": 1,
       "VendorParallelPoolGating": 1,
       "Verification": 3,
       "VerifiedPrincipalGate": 1,
@@ -90760,9 +92809,11 @@
       "Wire": 3,
       "WireCallbacks": 1,
       "WireCode": 1,
+      "WireEncoding": 1,
       "WireField": 1,
       "WireProcedure": 1,
       "WireProtocolCompatibility": 1,
+      "WireRegression": 2,
       "WireRoundTrip": 1,
       "WithAgg": 1,
       "WithAggregation": 2,
@@ -90783,10 +92834,12 @@
       "WriteBlocked": 1,
       "WriteBodyComposition": 1,
       "WriteChokepoint": 2,
+      "WriteChokepointEveryLabel": 1,
       "WriteChokepointLabels": 1,
       "WriteDoesNotFullRebuild": 1,
       "WriteGate": 1,
       "WriteHarnessStoresOnTmpfs": 1,
+      "WriteRefusedNotPlaintext": 1,
       "WriteReplicationNodeCreate": 1,
       "WriteSetApplication": 1,
       "WriteSetParser": 1,

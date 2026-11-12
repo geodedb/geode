@@ -236,8 +236,11 @@ pub fn labelsAfterSet(allocator: std.mem.Allocator, current: []const []const u8,
 /// of its assignments (SONNY-3242), so two assignments to one (element,
 /// property) have no order to settle them, and the second silently won
 /// (`SET q.a = 1, q.a = 2`; `SET a.c = 1, b.c = 2` with a and b the same
-/// node). Geode refuses it (error.RepeatedSetTarget, 22G03, its invalid-value
-/// code) before anything is written; one variable assigned twice is refused
+/// node). Geode refuses it (error.RepeatedSetTarget) before anything is
+/// written, with 22G0M, multiple assignments to a graph element property:
+/// ISO/IEC 39075:2024 13.3 General Rule 7 lets an implementation raise it or
+/// pick one value (IA017), and Geode raises it (SONNY-6368; it answered
+/// 22G03, invalid value type); one variable assigned twice is refused
 /// from the statement already (`param_check.setListRepeatsTarget`). `SET n = {map}` assigns every property of n, so it
 /// shares its element with no other assignment of the clause. `elements[i]`
 /// is what `group[i]` targets on this row (null: nothing, or not applied).
@@ -355,7 +358,7 @@ pub fn applySetGroups(
             switch (scope.get(name) orelse continue) {
                 .Node => |node| switch (sc) {
                     .Property => |p| try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, p.target.property, value),
-                    .Labels => |l| for (l.labels) |label| try store.addNodeLabel(node.id, label),
+                    .Labels => |l| for (l.labels) |label| try property_mutation.addNodeLabel(allocator, store, node.id, label),
                     .AllProperties => {
                         const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
                         try property_mutation.replaceNodeProperties(allocator, store, node_ptr, value);

@@ -944,6 +944,8 @@ pub fn deleteUser(username: []const u8) !void {
     if (user_store == null) return error.Unauthenticated;
     if (!user_store.?.remove(username)) return error.Unauthenticated;
     bumpAuthInvalidationEpoch();
+    // SONNY-6341: a dropped user acts under no FLE role (leaf lock).
+    @import("fle_role_grants.zig").forgetUser(username);
 
     if (persistent_writer) |w| {
         if (w.delete_fn) |f| {

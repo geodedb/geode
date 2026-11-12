@@ -132,6 +132,12 @@ fn handleGrantPlaintext(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx:
     const field = argv[start_idx + 1];
     const role = argv[start_idx + 2];
 
+    // SONNY-6274: with no data directory the FLE catalog is in memory, so the
+    // grant would end with this process. It used to land in a shared /tmp file.
+    if (!geode.fle_integration.catalog_mod.isPersisted()) {
+        std.debug.print("Error: grant-plaintext needs GEODE_DATA_DIR set to the server's data directory (the FLE catalog lives there)\n", .{});
+        return error.InvalidArguments;
+    }
     const catalog = try geode.fle_integration.catalog_mod.globalCatalog(allocator);
     catalog.grantPlaintextAccess(schema, field, role) catch |err| {
         std.debug.print("\n❌ Error: Failed to grant privilege: {any}\n", .{err});

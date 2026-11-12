@@ -21,6 +21,8 @@ const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const admin_ddl = @import("admin_ddl.zig");
+const session_graph = @import("session_graph.zig");
+const catalog_mod = @import("../schema/catalog.zig");
 const planned_read_runtime = @import("planned_read_runtime.zig");
 const result_utils = @import("result_utils.zig");
 
@@ -105,10 +107,11 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // Task 3-8: Gate SHOW INDEXES by tenant + active graph. When the
             // execution context carries a Principal with an active_graph, verify
             // the principal can bind that graph via gps.decide(.bind_graph). If
-            // denied, return an empty result. Catalog indexes have no per-graph
-            // field (they are registered globally); the active_graph gate is the
-            // practical proxy for scoping visibility. When principal is null
-            // (legacy/test paths) all indexes are returned unchanged.
+            // denied, return an empty result. When principal is null
+            // (legacy/test paths) the bind check is skipped.
+            // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=ShowGraphScope; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-1319: only the session's graph's catalog is listed (its own
+            // rows and the engine-wide ones), not every graph's.
             const gps_mod_idx = @import("../security/gps.zig");
             const active_graph_idx: ?[]const u8 = if (context.session_state) |ss| ss.graph else null;
             const idx_allowed = blk: {
@@ -126,9 +129,11 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 break :blk true;
             };
             if (idx_allowed) {
+                const show_graph = session_graph.current(context);
                 var iter = cat.indexes.iterator();
                 while (iter.next()) |entry| {
                     const info = entry.value_ptr.*;
+                    if (!catalog_mod.rowInGraph(info.graph, show_graph)) continue;
                     var row = try allocator.alloc(Value, 4);
                     row[0] = Value{ .Str = try allocator.dupe(u8, info.name) };
                     row[1] = Value{ .Str = try allocator.dupe(u8, info.index_type) };
@@ -202,9 +207,12 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 break :blk true;
             };
             if (con_allowed) {
+                // SONNY-1319: the session's graph's constraints only.
+                const show_graph = session_graph.current(context);
                 var iter = cat.constraints.iterator();
                 while (iter.next()) |entry| {
                     const info = entry.value_ptr.*;
+                    if (!catalog_mod.rowInGraph(info.graph, show_graph)) continue;
                     var row = try allocator.alloc(Value, 4);
                     row[0] = Value{ .Str = try allocator.dupe(u8, info.name) };
 
@@ -1704,6 +1712,8 @@ const Catalog = @import("../schema/catalog.zig").Catalog;
 const testing = std.testing;
 
 test "executeShow tables reads persisted snapshot state" {
+    const saved_override = graph_store.saveDataDirOverride();
+    defer saved_override.restore();
     graph_store.deinitGlobalStore();
     defer graph_store.deinitGlobalStore();
 

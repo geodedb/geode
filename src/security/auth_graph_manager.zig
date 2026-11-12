@@ -554,6 +554,9 @@ pub const AuthGraphManager = struct {
         // Verify graph grant records
         try self.verifyGraphGrantRecords(hmac_key, &hmac_list);
 
+        // SONNY-6341: FLE role grant records
+        try self.verifyFleRoleGrantRecords(hmac_key, &hmac_list);
+
         // Sort HMACs by their byte representation for deterministic ordering
         sortHmacs(hmac_list.items);
 
@@ -810,6 +813,9 @@ pub const AuthGraphManager = struct {
 
         // Seal graph grant records
         try self.sealGraphGrantRecords(hmac_key, &hmac_list);
+
+        // SONNY-6341: FLE role grant records
+        try self.sealFleRoleGrantRecords(hmac_key, &hmac_list);
 
         // Sort HMACs for deterministic chain hash
         sortHmacs(hmac_list.items);
@@ -1181,7 +1187,8 @@ pub const AuthGraphManager = struct {
             @as(u64, self.storage.role_cache.count()) +
             @as(u64, self.storage.permission_cache.count()) +
             @as(u64, self.storage.policy_cache.count()) +
-            @as(u64, self.storage.graph_grant_nodes.count());
+            @as(u64, self.storage.graph_grant_nodes.count()) +
+            @as(u64, self.storage.fle_role_grant_nodes.count());
     }
 
     fn recomputeAndStoreUserHmac(self: *Self, user_id: u64, hmac_key: *const [32]u8) !void {
@@ -1558,6 +1565,42 @@ pub const AuthGraphManager = struct {
         return removed;
     }
 
+    // CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-GRANT-STORE; FEATURE="FieldLevelEncryption"; ASPECT=SealedFleRoleGrants; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6341: let `user_id` act under FLE role `role`. Stored and the
+    /// chain resealed, or nothing: a reseal that fails takes the record out
+    /// again, so the caller can refuse the grant (fail closed).
+    pub fn grantUserFleRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role: []const u8) !void {
+        const was_there = self.storage.fle_role_grant_nodes.contains(UserStorageBackend.fleRoleGrantId(user_id, role));
+        _ = try self.storage.persistFleRoleGrant(user_id, role);
+        self.sealChain(hmac_key) catch |err| {
+            if (!was_there) {
+                _ = self.storage.revokeFleRoleGrant(user_id, role);
+                self.sealChain(hmac_key) catch {};
+            }
+            return err;
+        };
+        self.logSecurityGraphMutation(.configuration_change, "GRANT_FLE_ROLE", user_id, role, null);
+    }
+
+    /// SONNY-6341: take FLE role `role` from `user_id`; false when it was
+    /// not granted. An error means the revoke may not be saved.
+    pub fn revokeUserFleRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role: []const u8) !bool {
+        if (!self.storage.revokeFleRoleGrant(user_id, role)) return false;
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "REVOKE_FLE_ROLE", user_id, role, null);
+        return true;
+    }
+
+    /// SONNY-6341: every FLE role grant of a user being dropped.
+    pub fn revokeAllUserFleRoles(self: *Self, hmac_key: *const [32]u8, user_id: u64) !void {
+        if (try self.storage.revokeAllFleRoleGrants(user_id) > 0) try self.sealChain(hmac_key);
+    }
+
+    /// SONNY-6341: every stored FLE role grant (roles borrow from the store).
+    pub fn listFleRoleGrants(self: *Self, allocator: std.mem.Allocator) ![]UserStorageBackend.FleRoleGrantRecord {
+        return self.storage.listFleRoleGrants(allocator);
+    }
+
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     /// List all persisted graph grants. Caller owns the returned slice.
     pub fn listGraphGrants(self: *Self, allocator: std.mem.Allocator) ![]user_storage.UserStorageBackend.GraphGrantRecord {
@@ -1650,6 +1693,36 @@ pub const AuthGraphManager = struct {
             const computed = computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
             const computed_hex = auth_hmac.hmacToHex(&computed);
             try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    // -- FleRoleGrant HMAC chain support (SONNY-6341) --
+
+    fn sealFleRoleGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.fle_role_grant_nodes.keyIterator();
+            while (it.next()) |key| try ids.append(self.allocator, key.*);
+        }
+        for (ids.items) |grant_id| {
+            const node_id = self.storage.fle_role_grant_nodes.get(grant_id) orelse continue;
+            const computed = computeFleRoleGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    fn verifyFleRoleGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var it = self.storage.fle_role_grant_nodes.iterator();
+        while (it.next()) |e| {
+            const computed = computeFleRoleGrantHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*, e.key_ptr.*);
+            const stored = self.storage.store.getNodeProperty(e.value_ptr.*, "hmac") orelse return error.RecordHmacMismatch;
+            if (stored != .String) return error.RecordHmacMismatch;
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            if (!std.mem.eql(u8, &computed_hex, stored.String)) return error.RecordHmacMismatch;
             try hmac_list.append(self.allocator, computed);
         }
     }
@@ -1919,6 +1992,27 @@ fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.Gr
         .{ .key = "user_id", .value = uid_str },
     };
 
+    return computeRecordHmacChecked(hmac_key, &props);
+}
+
+/// SONNY-6341: the HMAC of a FleRoleGrant node, from its stored fields.
+fn computeFleRoleGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64, grant_id: u64) [32]u8 {
+    var id_buf: [20]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{grant_id}) catch "0";
+    const user_id_val = if (store.getNodeProperty(node_id, "user_id")) |v| if (v == .Int) v.Int else 0 else 0;
+    var uid_buf: [20]u8 = undefined;
+    const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{user_id_val}) catch "0";
+    const role = if (store.getNodeProperty(node_id, "role")) |v| if (v == .String) v.String else "" else "";
+    const granted_at_val = if (store.getNodeProperty(node_id, "granted_at")) |v| if (v == .Int) v.Int else 0 else 0;
+    var granted_at_buf: [20]u8 = undefined;
+    const granted_at_str = std.fmt.bufPrint(&granted_at_buf, "{d}", .{granted_at_val}) catch "0";
+    const props = [_]auth_hmac.KeyValue{
+        .{ .key = "fle_role", .value = role },
+        .{ .key = "grant_id", .value = id_str },
+        .{ .key = "granted_at", .value = granted_at_str },
+        .{ .key = "kind", .value = "FleRoleGrant" },
+        .{ .key = "user_id", .value = uid_str },
+    };
     return computeRecordHmacChecked(hmac_key, &props);
 }
 

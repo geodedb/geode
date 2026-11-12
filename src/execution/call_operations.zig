@@ -120,6 +120,8 @@ fn parseCallStatement(src: []const u8) !struct { ast.CallStatement, std.heap.Are
 }
 
 test "executeCallStatement routes read-only procedures through QueryReadSession" {
+    const saved_override = graph_store.saveDataDirOverride();
+    defer saved_override.restore();
     graph_store.deinitGlobalStore();
     defer graph_store.deinitGlobalStore();
 

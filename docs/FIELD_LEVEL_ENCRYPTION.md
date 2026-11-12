@@ -10,7 +10,8 @@ Geode implements **native, application-level field-level encryption** that provi
 - **Transparent encryption/decryption** for authorized users
 - **RBAC/ABAC-gated access** to plaintext values
 - **Equality search** on encrypted fields via blind indexes: designed, **not
-  available** (see "Searchable fields today" below)
+  available** (see "Searchable fields today" below); `MERGE` on an encrypted
+  field is refused (SONNY-6362)
 - **Online key rotation** with zero downtime
 - **Hierarchical key management** (TRK → SK → FEK/BIK)
 - **AEAD encryption** using Zig `std.crypto` (AES-256-GCM, ChaCha20-Poly1305)
@@ -205,19 +206,43 @@ matches the established admin surface for other subsystems
 
 #### Authorization (who may call)
 
-Every `CALL geode.fle.*` invocation passes through the mandatory GPS dispatch
-gate (`procedure_registry.executeCallProcedure`, `REQ-GPS-PROC-001`) **before** the
-procedure body runs. The gate classifies each procedure as read-only or mutating
-([`src/execution/procedure_access.zig`](../src/execution/procedure_access.zig)
-`classifyProcedureName`) and remaps that to a GPS action; a principal is denied
-(`error.Unauthorized`) unless its role/policy permits that action on the
-procedure resource (fail-closed for unknown principals/procedures):
+The mutating procedures are security administration (SONNY-6334): they
+decide who reads which encrypted field in plaintext. They are **Admin
+only**, checked in `procedure_registry.executeCallProcedure` before the GPS
+procedure gate (`fle_admin.requireAdmin`, the same rule as the auth DDL):
+any other role is refused with 42501 and an `access_denied` audit event,
+and nothing changes in memory or on disk. With authentication off
+(embedded use) every caller is an implicit admin; `--insecure-allow-all`
+bypasses the check, as it bypasses all authorization. The read-only
+procedures pass the GPS procedure gate (`.read`) and name no roles:
+whether a field is encrypted is visible to any authenticated reader; who
+may read it in plaintext is not exposed by any procedure.
 
-| Procedure | Classification | GPS action | Who may call |
-|-----------|----------------|------------|--------------|
-| `geode.fle.configureField` | mutating | `.write` | Admin role, or a role/policy explicitly granted `write` on the procedure. This is the declare/mutate path. |
-| `geode.fle.getFieldConfig` | read-only | `.read` | Any role/policy with `read` on the procedure (read-only classification). |
-| `geode.fle.listEncryptedFields` | read-only | `.read` | Any role/policy with `read` on the procedure (read-only classification). |
+| Procedure | Who may call |
+|-----------|--------------|
+| `geode.fle.configureField` | Admin. |
+| `geode.fle.grantPlaintext` | Admin. |
+| `geode.fle.revokePlaintext` | Admin (SONNY-6327). |
+| `geode.fle.grantRole` | Admin (SONNY-6341). |
+| `geode.fle.revokeRole` | Admin (SONNY-6341). |
+| `geode.fle.getFieldConfig` | Any role/policy with `read` on the procedure. |
+| `geode.fle.listEncryptedFields` | Any role/policy with `read` on the procedure. |
+
+The key-affecting `tde.*` procedures (`initialize_key_hierarchy`,
+`rotate_keys`, `configure_*`, `zeroize_keys`, `cleanup_key_hierarchy`,
+`backup_encrypted`, `encrypt_backup`, `create_encrypted_backup`,
+`restore_with_keys`, `restore_with_historical_keys`) are Admin only too.
+
+Every `configureField`, `grantPlaintext`, `revokePlaintext`, `grantRole`
+and `revokeRole` is an audit event (`configuration_change`; result `success` or `failure`, a failed
+save included, with the error name): the caller, the procedure, the field
+as `type.field`, and the role (grant, revoke) or the visibility roles
+(configure); for `grantRole` / `revokeRole`, `user=<u> role=<r>`. No key
+material is involved.
+
+The offline `geode fle grant-plaintext` / `revoke-plaintext` commands work
+on the data directory with the server stopped; whoever can run them owns
+the files.
 
 `configureField` declares **which** fields are encrypted; it does **not** grant
 decryption. Reading decrypted plaintext is a separate, per-field authorization
@@ -267,6 +292,132 @@ CALL geode.fle.configureField('Person', 'ssn',
 RETURN 'configured' AS status;
 ```
 
+#### `CALL geode.fle.revokePlaintext(type_name, field_name, role)`
+
+The online equivalent of `geode fle revoke-plaintext` (SONNY-6327), the
+mirror of `CALL geode.fle.grantPlaintext(type_name, field_name, role)`:
+removes `role` from the field's visibility roles. Every read that starts
+after the call returns sees the revoke (the catalog is the only decision
+source; there is no decision cache). Revoking a role that has no access is a
+no-op; an unknown type or field is an error. Refused in cluster mode. If the
+catalog cannot be saved the revoke stays in effect in the running server
+and the call fails with 58030 (`FleRevokeNotPersisted`): retry it, or the
+role regains access at the next start.
+
+Returns one row: `status` (STRING, `"revoked"`).
+
+#### `CALL geode.fle.grantRole(user, role)` / `CALL geode.fle.revokeRole(user, role)`
+
+SONNY-6341. An **FLE role** is a name in a field's `visibility` list (for
+example `'pii'` or `'admin'`); it is not an auth role (`Admin`,
+`ReadWrite`, `ReadOnly`) and not a custom role. A session names the FLE role
+it wants in its HELLO (`role`; the CLI's `geode query --role <r>`). With authentication on, the session acts under
+that role only if its authenticated user **holds** it: `grantRole` gives
+`user` the role, `revokeRole` takes it away. Both are Admin only and audited,
+refused in cluster mode, and stored as `FleRoleGrant` records in the
+HMAC-chained `__geode_security` graph (loaded at startup; a dropped user's
+grants go with it). A grant that cannot be saved is not applied (58030); a
+revoke is in force at once and, if it cannot be saved, reports 58030 (retry
+it). `user` must exist (42704); `role` is non-empty, letters, digits, `_`
+and `-` only (22023). Returns one row: `status` (`granted`, `revoked` or
+`not granted`).
+
+A HELLO naming a role the user does not hold is not refused (clients that
+always send a role keep connecting): the session has **no** FLE role, so
+encrypted fields read as for a role not in their list, and the HELLO is an
+`access_denied` audit event naming the user and the requested role. Grants
+and revokes count from the next request of every live session. The Admin
+builtin holds no FLE role implicitly; an Admin grants one to itself, which
+leaves an audit record. With authentication off (embedded use) the named
+role is used as before; `--insecure-allow-all` bypasses the check as it
+bypasses all authorization.
+
+**Upgrade (BREAKING):** after upgrading no user holds any FLE role, so
+readers that saw plaintext read `[REDACTED]` until an Admin runs
+`CALL geode.fle.grantRole('<user>', '<fle role>')` for each of them.
+
+#### Read semantics (SONNY-6327)
+
+Nodes and edges are read by the same policy, on every read surface
+(`n.p` / `r.p` in RETURN, WHERE, ORDER BY and aggregates, `properties()`,
+map projection, `RETURN n` / `RETURN r` / paths over QUIC and gRPC, JSON):
+
+- a field that is not encrypted: the stored value;
+- the request's FLE role is in the field's visibility roles AND GPS
+  allows `decrypt_field` for the authenticated principal on the session's
+  graph (SONNY-6334: the Admin builtin role, or an `ALLOW DECRYPT_FIELD`
+  policy; a `DENY DECRYPT_FIELD` refuses, Admin included): the decrypted
+  value; a value that does not decrypt is refused (58030,
+  `FleDecryptionFailed`), never shown as stored;
+- any other principal (role not listed, or GPS refuses): `[REDACTED]`; an
+  `n.p` / `r.p` read of a searchable
+  (blind-indexed) field is refused (42501, `SearchNotPermitted`). A
+  predicate on the plaintext therefore never matches for that principal;
+- the FLE catalog cannot be loaded: refused (58030).
+
+The FLE role is the one the session's HELLO named (`role`), when its user
+holds it (`grantRole` above, SONNY-6341); GPS must also allow
+`decrypt_field`. QUIC and gRPC install the same request context
+(`ServerState.installRequestThreadState`: tenant, FLE role, GPS gate) for
+every request that runs or encodes a statement, and clear it afterwards.
+In-process callers with no principal and no request context (embedders,
+background work) are decided by the role list alone.
+
+An inline property map on an encrypted field (`MATCH (n:L {ssn: '...'})`,
+`-[:R {p: '...'}]->`) compares the stored envelope and never matches; use
+`WHERE` (SONNY-6335 item 3, open). While any FLE field is configured the QUIC
+write fast paths and the aggregate pushdowns decline to the executor.
+
+`MERGE` whose pattern names a property that is FLE-encrypted in any type
+(`MERGE (n:L {ssn: '...'})`, `MERGE (n {ssn: '...'})`, a relationship
+property) is refused (0A000, SONNY-6362) before anything is written: the
+stored value is randomized ciphertext, so the pattern value never matched
+it and MERGE created a duplicate every time. Any type, because a value is
+encrypted under its node's first label, which the pattern may not name.
+MERGE on an unencrypted key and set the encrypted field with `ON CREATE
+SET` / `SET`. Matching on an encrypted value needs deterministic or
+blind-index encryption (SONNY-6350). The internal `__geode_security` graph
+is never encrypted and is exempt.
+
+#### Encryption identity (SONNY-6335)
+
+Every encrypted string property is encrypted, and decrypted, under one
+identity (`fle_integration.recordIdentity`): the request tenant (else
+`default`), the node's first label or the edge's type, the field, and the
+record id `<id>` (node) or `edge_<id>` (edge). The executor's FLE hook and the
+graph-store write primitives (which encrypt a plaintext value that reaches
+them without the hook: raft apply, internal callers) both use it; a value
+that is already an envelope is stored as it is, never encrypted twice. Values
+the graph-store primitives wrote before SONNY-6335 (tenant and schema
+`default`, record id `node_<id>` / `edge_<id>`) are still read: a reader tries
+that identity after the current one. The tenant is the writer's request
+tenant: a reader in another tenant (a parent tenant reading a child's row
+included) does not decrypt it (58030).
+
+#### No index over an encrypted field (SONNY-6335)
+
+An index holds the values it indexes in its own files. Over an encrypted
+field it would hold ciphertext (a fulltext search, an equality or range seek
+and a UNIQUE check would never match: the envelope has a fresh random nonce
+per write) or, maintained from a decrypted value, the plaintext. So:
+
+- `CREATE INDEX` of any type (btree, hash, fulltext, vector, ...) over an
+  encrypted field, and `CREATE CONSTRAINT ... IS UNIQUE` / `NODE KEY` over
+  one, are refused (0A000). `NOT NULL` / `EXISTS` constraints are allowed.
+- `CALL geode.fle.configureField` on a field that has an index or a UNIQUE /
+  NODE KEY constraint over it, in any graph, is refused (0A000): drop it
+  first.
+- A fulltext index made over a field before the field was encrypted (an
+  existing deployment) refuses `geode.fts.search` / `phrase` / `proximity`
+  (0A000) instead of matching nothing. Other index types over such a field
+  are not detected at startup; drop them (`DROP INDEX`).
+
+Searchable (blind-index) fields exist in the FLE catalog and the read
+path (`@searchable`, `lookupEncryptedField`), but no `CALL` procedure can
+declare one (`configureField` always configures `searchable: false`), and the
+blind-index equality search is not wired to `WHERE` or to inline maps
+(SONNY-6335 item 5).
+
 #### `CALL geode.fle.getFieldConfig(type_name, field_name)`
 
 Reads the FLE configuration of a single field.
@@ -306,6 +457,10 @@ RETURN 'configured' AS status;
 -- 2. Create a readonly user that is NOT granted decrypt access.
 CREATE USER pii_reader SET PASSWORD 'reader-pass-123' ROLE readonly;
 
+-- 2b. Let the admin user act under the FLE role 'admin' (SONNY-6341: a
+--     session acts under an FLE role only if its user holds it).
+CALL geode.fle.grantRole('geode', 'admin');
+
 -- 3. Write a row (admin). The engine encrypts ssn transparently on write;
 --    the plaintext never lands on disk.
 CREATE (p:Person { user_id: 'P001', ssn: 'SECRET-123-45-6789', city: 'Denver' })
@@ -313,20 +468,25 @@ RETURN p.user_id AS user_id;
 ```
 
 ```bash
-# 4a. Admin reads — sees decrypted plaintext (decrypt authorized).
-geode query -U geode -P "$GEODE_ADMIN_PASSWORD" \
+# 4a. Admin reads under the FLE role 'admin' (--role sends it in HELLO):
+#     plaintext (the Admin builtin passes GPS decrypt_field, and the user
+#     holds the FLE role). Without --role, or before step 2b: [REDACTED].
+geode query -U geode -P "$GEODE_ADMIN_PASSWORD" --role admin \
   "MATCH (p:Person {user_id:'P001'}) RETURN p.ssn AS ssn"
 #   ssn
 #   SECRET-123-45-6789
 
 # 4b. Readonly user reads — the ROW is visible (row_count matches admin), but
-#     the ssn field is REDACTED (e.g. <ENCRYPTED> / null / [REDACTED]).
+#     the ssn field is [REDACTED], even naming --role admin: it does not hold
+#     the FLE role (and GPS does not allow it decrypt_field).
 #     Field visibility != row visibility.
-geode query -U pii_reader -P reader-pass-123 \
+geode query -U pii_reader -P reader-pass-123 --role admin \
   "MATCH (p:Person {user_id:'P001'}) RETURN p.ssn AS ssn, p.city AS city"
 #   ssn          | city
-#   <ENCRYPTED>  | Denver
+#   [REDACTED]   | Denver
 ```
+
+`tests/test_sonny6341_fle_role_binding.zig` runs this example as written.
 
 The unauthorized reader gets a redacted placeholder for `ssn` (never raw
 ciphertext, never plaintext) while still reading the non-encrypted `city`
@@ -542,6 +702,25 @@ defer std.crypto.secureZero(u8, plaintext);
 
 - Max plaintext: 64 KiB (configurable)
 - AEAD usage limits enforced (track operations per key)
+
+**The FLE catalog fails closed (SONNY-6324):**
+
+The catalog (`geode_fle_catalog.dat` in the data directory) says which
+fields are encrypted and who may read them in plaintext.
+
+- A change whose save fails is an error (58030). `configureField` and a
+  plaintext grant are undone. A revoke stays in effect in the running
+  process and is reported as not saved (`FleRevokeNotPersisted`): retry it;
+  any later saved change of the catalog also saves it. With no data
+  directory the catalog is memory-only and nothing is saved.
+- A catalog file that exists and cannot be loaded (corrupt, truncated,
+  another or no `GEODE_TDE_KEY`, a symbolic link, unreadable) stops the
+  server at startup with the file and the cause. An embedded or CLI session
+  gets `FleCatalogUnavailable` (58030) from every use of the catalog, and
+  every string property write and string property read is refused until
+  it is restored. An absent file is an empty catalog.
+- A string value that must be encrypted and cannot be is refused
+  (`EncryptionRequired`, 58030), never stored in plaintext.
 
 ---
 

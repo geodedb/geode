@@ -15,6 +15,7 @@ const fle_catalog = @import("schema/fle_catalog.zig");
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
 const statement_undo = @import("statement_undo.zig");
+const undo_index_repair = @import("execution/undo_index_repair.zig");
 // SONNY-3348 (round 19): a statement's replicated writes, one entry or none.
 const statement_proposals = @import("distributed/statement_proposals.zig");
 const log = logging.scoped("execution");
@@ -47,6 +48,7 @@ const graph_store = @import("graph_store.zig");
 const storage_adapter = @import("storage/graph_storage_adapter.zig");
 const index_manager = @import("index/index_manager.zig");
 const catalog_mod = @import("schema/catalog.zig");
+const unique_constraints = @import("execution/unique_constraints.zig");
 const fle_hooks_mod = @import("execution/fle_hooks.zig");
 const graph_algorithms = @import("execution/graph_algorithms.zig");
 const set_operations = @import("execution/set_operations.zig");
@@ -64,7 +66,7 @@ const aggregation_evaluation = @import("execution/aggregation_evaluation.zig");
 pub const distinct_set = @import("execution/distinct_set.zig");
 pub const grouped_having = @import("execution/grouped_having.zig");
 const return_and_sorting = @import("execution/return_and_sorting.zig");
-const statement_dispatcher = @import("execution/statement_dispatcher.zig");
+pub const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // A4a: fulltext CREATE/DROP INDEX glue (named adapter index + backfill).
 // pub: server startup + apply-symmetry tests reach registerFtsApplyHook()
 // through geode.execution.fts_index_ops.
@@ -368,17 +370,48 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
         return instance;
     }
 
-    // The store's data directory: the override, GEODE_DATA_DIR, or the
-    // per-user default. SONNY-6325: the catalog used to fall back to the
-    // shared /tmp (reading and writing /tmp/geode_catalog.dat).
-    const data_dir = try graph_store.getPersistenceFilePath(allocator);
-    defer allocator.free(data_dir);
+    // Prefer GraphStore data dir override; fall back to GEODE_DATA_DIR.
+    // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=InMemoryCatalog; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    // SONNY-2795: with neither, the store is in memory and so is the catalog
+    // (an empty data dir: `Catalog.isPersisted`). It fell back to /tmp, so
+    // every such session in every process shared /tmp/geode_catalog.dat and
+    // a fresh one loaded whatever an earlier run had left there.
+    var data_dir_owned: ?[]u8 = null;
+    const data_dir = if (graph_store.getDataDirOverride()) |override| blk: {
+        data_dir_owned = try allocator.dupe(u8, override);
+        break :blk data_dir_owned.?;
+    } else blk: {
+        const env = getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| {
+            if (err == error.EnvironmentVariableNotFound) {
+                break :blk "";
+            }
+            return err;
+        };
+        data_dir_owned = env;
+        break :blk env;
+    };
+    defer if (data_dir_owned) |owned| allocator.free(owned);
 
     // Create the catalog instance with provided allocator
     const instance = try catalog_mod.Catalog.init(allocator, data_dir);
+    // SONNY-2846: the graphs the loaded UNIQUE rows apply in are closed to
+    // the server's bulk fast paths (`graph_store.uniqueFenced`). Fail
+    // closed: a catalog whose fences cannot be recorded is not used.
+    graph_store.resetUniqueFences();
+    unique_constraints.registerCatalogFences(instance) catch |err| {
+        graph_store.resetUniqueFences();
+        instance.deinit();
+        allocator.destroy(instance);
+        return err;
+    };
     // GAP-0203: Atomic store ensures other threads see the fully-initialized instance
     @atomicStore(?*catalog_mod.Catalog, &global_catalog_instance, instance, .release);
     return instance;
+}
+
+/// SONNY-6335: the process catalog if one exists (never creates it).
+pub fn existingCatalogInstance() ?*catalog_mod.Catalog {
+    return @atomicLoad(?*catalog_mod.Catalog, &global_catalog_instance, .acquire);
 }
 
 /// M2: Get catalog from ExecutionContext
@@ -406,6 +439,7 @@ pub fn tearDownGlobalCatalogForTest() void {
         instance.deinit();
         a.destroy(instance);
         @atomicStore(?*catalog_mod.Catalog, &global_catalog_instance, null, .release);
+        graph_store.resetUniqueFences(); // SONNY-2846: derived from the catalog
     }
 }
 
@@ -462,13 +496,13 @@ pub fn cleanupCatalogInstance() void {
         alloc.destroy(instance);
 
         global_catalog_instance = null;
+        graph_store.resetUniqueFences(); // SONNY-2846: derived from the catalog
     }
 }
 
 // Re-export FLE hooks for backward compatibility (made public for CRUD module)
 pub const encryptPropertyIfNeeded = fle_hooks_mod.encryptPropertyIfNeeded;
 pub const encryptEdgePropertyIfNeeded = fle_hooks_mod.encryptEdgePropertyIfNeeded;
-const decryptPropertyIfNeeded = fle_hooks_mod.decryptPropertyIfNeeded;
 
 // CANARY: REQ=REQ-M10-CONSTANTS-001; FEATURE="CodeQuality"; ASPECT=MAGIC_NUMBERS; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // Execution limits and validation thresholds
@@ -715,6 +749,9 @@ pub const ExecutionError = error{
     Unauthorized,
     SearchNotPermitted,
     DuplicateIndex,
+    // SONNY-1319: an index name another graph holds for an index whose
+    // runtime structure is keyed by name alone.
+    IndexNameInUseByOtherGraph,
     IncompatibleIndexDataType,
     GraphNotFound,
     // GAP-0871: GQL BACKUP/RESTORE statements are intentionally unsupported —
@@ -1134,6 +1171,24 @@ fn permissionToActionCode(p: @import("security/user_management.zig").Permission)
     };
 }
 
+/// SONNY-6334: GPS `decide(decrypt_field)` on `graph` for a principal, the
+/// second half of the FLE plaintext decision (`fle_integration`
+/// `readStoredString`; the first is the field's role list). Anything but
+/// allow refuses.
+fn decideDecryptField(principal_opaque: *const anyopaque, graph: []const u8) bool {
+    const gps = @import("security/gps.zig");
+    const principal: *const @import("security/principal.zig").Principal = @ptrCast(@alignCast(principal_opaque));
+    const req = gps.DecisionRequest{ .principal = principal, .action = .decrypt_field, .resource = .{ .graph = graph } };
+    const decision = gps.decide(std.heap.smp_allocator, &req) catch return false;
+    return decision.kind == .allow;
+}
+
+/// SONNY-6334: make GPS the FLE decrypt_field decider (idempotent; an
+/// atomic store).
+pub fn installDecryptDecider() void {
+    fle_integration.setDecryptDecider(decideDecryptField);
+}
+
 /// Check if user has required permission for operation.
 /// Phase 2 adapter: constructs a DecisionRequest and delegates to gps.decide().
 /// Behavior is bit-identical to the previous implementation:
@@ -1355,6 +1410,7 @@ pub fn validateProgramShapes(program: *const ast.Program, context: ExecutionCont
 }
 
 pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
+    installDecryptDecider(); // SONNY-6334
     // SONNY-3247: at the outermost entry point, the parameters are the
     // request's (a nested entry's context carries the ones its caller bound).
     if (t_entry_depth == 0) try param_check.checkProgram(program, context.query_param_names, context.query_param_values);
@@ -1562,6 +1618,7 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 // statements (subqueries) open their own inner scope that cannot clear the
 // enclosing statement's flag.
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    installDecryptDecider(); // SONNY-6334
     // SONNY-3247: see `executeProgramWithContext`.
     if (t_entry_depth == 0) try param_check.checkStatement(&stmt, context.query_param_names, context.query_param_values);
     if (t_entry_depth == 0) graph_store.clearQuarantinedReadError();
@@ -1628,7 +1685,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         result.deinit(allocator);
         return endStatementFailed(owns_in_predicate_scope, err);
     }
-    endStatementSucceeded(owns_in_predicate_scope) catch |err| {
+    endStatementSucceeded(owns_in_predicate_scope, context.catalog) catch |err| {
         result.deinit(allocator);
         return err;
     };
@@ -1640,6 +1697,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 /// held replicated writes (`statement_proposals`). `pub` for PROFILE's scope
 /// (`planned_read_runtime.executeProfiledIfSupported`).
 pub fn beginStatementScope(owns: bool) void {
+    undo_index_repair.install(); // SONNY-3381
     statement_undo.begin(owns);
     statement_proposals.begin(owns);
 }
@@ -1673,18 +1731,39 @@ pub fn endStatementFailed(owns: bool, err: anytype) (@TypeOf(err) || StatementSc
         storage_adapter.abortThreadSessionTxn();
     }
     const over_budget = owns and statement_undo.budgetExceeded();
-    if (!statement_undo.finishFailed(owns)) return error.StatementUndoIncomplete;
+    const undone = statement_undo.finishFailed(owns);
+    flushFulltextRebuilds(owns, null); // SONNY-6368
+    if (!undone) return error.StatementUndoIncomplete;
     if (over_budget) return error.WriteQueryBudgetExceeded;
     return err;
+}
+
+// CANARY: REQ=REQ-SONNY-6368-REMOVE-MAINTENANCE; FEATURE="FullText"; ASPECT=StatementEndRebuild; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-6368: at the end of the outermost statement, rebuild the full-text
+/// indexes a REMOVE of indexed text queued (`fts_index_ops.flushQueuedRebuilds`),
+/// once each, still under the graph lock the statement holds. After a failed
+/// statement too: its undo repaired its own, and the queue is drained.
+fn flushFulltextRebuilds(owns: bool, catalog: ?*catalog_mod.Catalog) void {
+    if (!owns) return;
+    const cat = catalog orelse (if (getActiveContext()) |ctx| ctx.catalog else getCatalogInstanceIfPresent()) orelse return;
+    fts_index_ops.flushQueuedRebuilds(cat);
 }
 
 /// SONNY-3348: the statement that opened the scope `owns` evaluated without
 /// an error. On a cluster leader its held writes are proposed now, as one
 /// entry (round 19); if that fails, it fails (nothing was applied). Then its
 /// undo record joins its explicit transaction, or is dropped.
-pub fn endStatementSucceeded(owns: bool) (statement_proposals.Error || StatementScopeError)!void {
+///
+/// SONNY-2846: first, its writes are checked against the UNIQUE
+/// constraints of `catalog` (`unique_constraints.checkStatementWrites`); a
+/// violation fails it, and its changes are undone. Still under the
+/// transport's graph write lock, so no other statement writes in between.
+pub fn endStatementSucceeded(owns: bool, catalog: *catalog_mod.Catalog) (statement_proposals.Error || StatementScopeError || unique_constraints.Error)!void {
+    // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=StatementEndHook; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=execution; UPDATED=2026-11-11
+    if (owns) unique_constraints.checkStatementWrites(catalog) catch |err| return endStatementFailed(owns, err);
     statement_proposals.flush(owns) catch |err| return endStatementFailed(owns, err);
     try statement_undo.finishSucceeded(owns);
+    flushFulltextRebuilds(owns, catalog); // SONNY-6368
 }
 
 fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
@@ -2101,12 +2180,31 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // an ungated CREATE INDEX exists on ONE node and silently diverges.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateIndexDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // CANARY: REQ=REQ-SONNY-6281-EXISTENCE-CONSTRAINTS; FEATURE="ConstraintEnforcement"; ASPECT=UniqueIndexRefused; STATUS=TESTED; TEST=tests/test_sonny6281_existence_constraints.zig; OWNER=engine; UPDATED=2026-11-12
+            // SONNY-6281: `CREATE UNIQUE INDEX` (a Geode/openCypher extension;
+            // ISO/IEC 39075:2024 has no index DDL) built a plain index and
+            // ignored UNIQUE. Uniqueness is declared with CREATE CONSTRAINT
+            // ... IS UNIQUE, which is enforced; the keyword is refused
+            // (0A000) rather than accepted and not honoured.
+            if (ci.unique) return error.UniqueIndexNotSupported;
             // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=IndexDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
             // SONNY-2803: schema on the graph the index DDL runs on (the
             // session's; a fulltext index lives in the default graph,
             // SONNY-2790), before the IF NOT EXISTS lookup.
-            // SONNY-3030: and on the database: the catalog is database-wide.
-            try session_graph.authorizeCatalogSchemaChange(context, if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context));
+            // SONNY-3030: and on the database.
+            // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=CreateIndexGraph; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-1319: the index belongs to that graph's catalog: IF NOT
+            // EXISTS asks about it, and the row records it.
+            const index_graph = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context);
+            try session_graph.authorizeCatalogSchemaChange(context, index_graph);
+            // CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=CreateIndexRefused; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+            // SONNY-6335: no index of any type over an FLE-encrypted field:
+            // it would index the ciphertext (a fulltext search, an equality
+            // seek or a range never matches) or, maintained from a decrypted
+            // value, put the plaintext in an unencrypted index file.
+            for (ci.properties) |prop| {
+                if (fle_integration.fieldRequiresEncryption(ci.label, prop)) return error.IndexOnEncryptedField;
+            }
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -2120,7 +2218,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             };
 
             if (ci.if_not_exists) {
-                const existing = cat.getIndex(ci.label, index_name) catch null;
+                const existing = cat.getIndexInGraph(index_graph, ci.label, index_name) catch null;
                 if (existing != null) {
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
@@ -2200,8 +2298,12 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 // index the DDL actually asked for instead of guessing `l2`.
                 // Only vector indexes have one; everything else stays null.
                 .metric = if (ci.index_type == .vector or ci.index_type == .vector_f32) ci.metric else null,
+                .graph = index_graph,
             };
 
+            // SONNY-1319: IndexNameInUseByOtherGraph is not swallowed by IF
+            // NOT EXISTS: no index of that name exists in this graph, and none
+            // can be created.
             cat.addIndex(index_info) catch |err| {
                 if (err == error.DuplicateIndex and ci.if_not_exists) {
                     return ExecutionResult{
@@ -2287,9 +2389,19 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             try cluster_mod.gateUnreplicatedWrite();
             // SONNY-2803: schema on the session's graph, before the IF NOT
             // EXISTS lookup. SONNY-3030: and on the database.
-            try session_graph.authorizeCatalogSchemaChange(context, session_graph.current(context));
+            const constraint_graph = session_graph.current(context);
+            try session_graph.authorizeCatalogSchemaChange(context, constraint_graph);
+            // SONNY-6335: UNIQUE / NODE KEY compare stored values; an encrypted
+            // field stores a fresh random nonce per write, so duplicates would
+            // never be detected. Refused (NOT NULL / EXISTS are presence checks).
+            if (cc.constraint_type == .unique or cc.constraint_type == .node_key) {
+                for (cc.properties) |prop| {
+                    if (fle_integration.fieldRequiresEncryption(cc.label, prop)) return error.IndexOnEncryptedField;
+                }
+            }
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
-            // CREATE CONSTRAINT implementation - store in catalog and enforce
+            // CREATE CONSTRAINT: validate existing data, record the row; every
+            // kind is enforced at statement end (`unique_constraints`).
 
             // Convert AST constraint type to catalog constraint type
             const constraint_type: catalog_mod.ConstraintInfo.ConstraintType = switch (cc.constraint_type) {
@@ -2306,6 +2418,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 .label = cc.label,
                 .properties = cc.properties,
                 .is_enforced = true, // Constraints are enforced by default
+                // SONNY-1319: the session's graph's catalog.
+                .graph = constraint_graph,
             };
 
             // Get catalog from context
@@ -2313,8 +2427,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             // Check IF NOT EXISTS
             if (cc.if_not_exists) {
-                const existing = cat.getConstraint(cc.label, cc.name) catch null;
-                if (existing != null) {
+                // SONNY-6294: the name, on any label of the graph.
+                if (cat.constraintNameTaken(constraint_graph, cc.name)) {
                     // Constraint already exists, return success (no-op)
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
@@ -2324,6 +2438,50 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                             break :blk list;
                         },
                     };
+                }
+            }
+
+            // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=CreateConstraintValidates; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=engine; UPDATED=2026-11-11
+            // SONNY-2846: a UNIQUE (or NODE KEY) constraint is enforced from
+            // here on (`unique_constraints`), so it is refused over data
+            // that already breaks it: 23505, naming how many groups of
+            // nodes share a value. The graph's fence goes up first (the
+            // server's bulk fast paths stop writing it), then the data is
+            // validated: under the transport's graph write lock, a bulk
+            // write either finished before (and is seen) or is refused
+            // after. The name is checked first so a duplicate name stays
+            // 42710.
+            // CANARY: REQ=REQ-SONNY-6281-EXISTENCE-CONSTRAINTS; FEATURE="ConstraintEnforcement"; ASPECT=CreateConstraintValidates; STATUS=TESTED; TEST=tests/test_sonny6281_existence_constraints.zig; OWNER=engine; UPDATED=2026-11-12
+            // SONNY-6281: NOT NULL, EXISTS and NODE KEY require each node of
+            // the label to hold every property (not NULL); such a row over
+            // nodes that lack one is refused (23502, with how many). Every
+            // kind is checked at statement end and fences the fast paths,
+            // so the fence goes up before either validation.
+            const probe_row = catalog_mod.ConstraintInfo{ .name = cc.name, .constraint_type = constraint_type, .label = cc.label, .properties = cc.properties, .is_enforced = true };
+            var fenced = false;
+            defer if (fenced) graph_store.removeUniqueFence(constraint_graph);
+            if (cat.constraintNameTaken(constraint_graph, cc.name)) {
+                if (cc.if_not_exists) return ExecutionResult{
+                    .columns = try allocator.alloc([]const u8, 0),
+                    .rows = try allocator.alloc([]Value, 0),
+                    .flags = std.ArrayList([]const u8).empty,
+                };
+                return error.ConstraintAlreadyExists;
+            }
+            try graph_store.addUniqueFence(constraint_graph);
+            fenced = true;
+            if (catalog_mod.enforcesExistence(probe_row)) {
+                const missing = try unique_constraints.countNodesMissing(graph_store.getGlobalStore(allocator), constraint_graph, cc.label, cc.properties);
+                if (missing > 0) {
+                    unique_constraints.setMissingMessage(cc.name, cc.label, cc.properties, missing);
+                    return error.NotNullConstraintViolation;
+                }
+            }
+            if (catalog_mod.enforcesUnique(probe_row)) {
+                const groups = try unique_constraints.countDuplicateGroups(graph_store.getGlobalStore(allocator), constraint_graph, cc.label, cc.properties);
+                if (groups > 0) {
+                    unique_constraints.setDuplicatesMessage(cc.name, cc.label, cc.properties, groups);
+                    return error.UniqueConstraintViolation;
                 }
             }
 
@@ -2342,6 +2500,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 }
                 return err;
             };
+            // The row is in: its fence stays up for as long as it is.
+            fenced = false;
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -2355,26 +2515,117 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
         .DropIndex => |di| {
             // Cluster fail-closed: see .CreateIndex (GateIndexDDL).
             try cluster_mod.gateUnreplicatedWrite();
-            // SONNY-2803: schema on the default graph, the graph DROP INDEX
-            // runs on (SONNY-2790: the index may be a fulltext one), before
-            // the index is looked up.
-            // SONNY-3030: and on the database: the catalog is database-wide.
-            try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
+            // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DropIndexGraph; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-1319: DROP INDEX drops an index of the session's graph's
+            // catalog: its own, an engine-wide one, or a fulltext one (those
+            // live in the default graph, SONNY-2790). It used to drop the
+            // first index of that name in ANY graph.
+            // SONNY-2803: schema on the session's graph before the index is
+            // looked up; SONNY-3030: and on the database.
+            const drop_graph = session_graph.current(context);
+            try session_graph.authorizeCatalogSchemaChange(context, drop_graph);
             const cat = context.catalog;
             const index_name = di.name;
 
-            var found_key: ?[]const u8 = null;
-            var iter = cat.indexes.iterator();
-            while (iter.next()) |entry| {
-                const info = entry.value_ptr.*;
-                if (std.mem.eql(u8, info.name, index_name)) {
-                    found_key = entry.key_ptr.*;
-                    break;
+            // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DropIndexLockedAndSaved; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-2795: the row is found, removed and saved under the
+            // catalog lock held EXCLUSIVE, as CREATE INDEX's `addIndex` does.
+            // DROP INDEX took no lock (so it freed a row a reader could be
+            // holding) and never saved (so the index came back after a
+            // restart). A failed save refuses the statement with the row
+            // still in place. Nothing else is done under the lock: the
+            // authorization below can read the security graph (a graph lock,
+            // a lower tier), and the runtime teardown takes `rebuild_mutex`
+            // (DROP of a vector index waits there for in-flight readers),
+            // also a lower tier.
+            const io_dl = std.Io.Threaded.global_single_threaded.io();
+            // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=DropAllRowsOfTheName; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-6294: an index name is one index of a graph (addIndex
+            // refuses a second label under it). A catalog written before
+            // that may hold the name on several labels: all of them in the
+            // resolved scope go, as DROP CONSTRAINT drops (SONNY-6270). It
+            // dropped whichever row hash iteration met first.
+            const Resolve = struct {
+                keys: std.ArrayList([]const u8) = .empty,
+                rank: u2 = 0,
+                fulltext: bool = false,
+
+                /// The rows DROP INDEX drops: those of the best scope (the
+                /// graph's own rows, else engine-wide rows, else a fulltext
+                /// row of the default graph). Caller holds the catalog lock;
+                /// the keys borrow the catalog's memory.
+                fn find(self: *@This(), a: std.mem.Allocator, c: *catalog_mod.Catalog, name: []const u8, graph: []const u8) !void {
+                    self.keys.clearRetainingCapacity();
+                    self.rank = 0;
+                    self.fulltext = false;
+                    var iter = c.indexes.iterator();
+                    while (iter.next()) |entry| {
+                        const info = entry.value_ptr.*;
+                        if (!std.mem.eql(u8, info.name, name)) continue;
+                        const rank: u2 = if (std.mem.eql(u8, info.graph, graph))
+                            3
+                        else if (info.graph.len == 0)
+                            2
+                        else if (std.mem.eql(u8, info.index_type, "fulltext") and std.mem.eql(u8, info.graph, graph_store.DEFAULT_GRAPH_NAME))
+                            1
+                        else
+                            0;
+                        if (rank == 0 or rank < self.rank) continue;
+                        if (rank > self.rank) {
+                            self.keys.clearRetainingCapacity();
+                            self.rank = rank;
+                            self.fulltext = false;
+                        }
+                        try self.keys.append(a, entry.key_ptr.*);
+                        if (std.mem.eql(u8, info.index_type, "fulltext")) self.fulltext = true;
+                    }
                 }
+
+                fn needsDefaultGraph(self: @This(), graph: []const u8) bool {
+                    return self.keys.items.len > 0 and self.rank < 3 and !std.mem.eql(u8, graph, graph_store.DEFAULT_GRAPH_NAME);
+                }
+            };
+
+            var found: Resolve = .{};
+            defer found.keys.deinit(allocator);
+            cat.rwlock.lockUncancelable(io_dl);
+            var cat_locked = true;
+            defer if (cat_locked) cat.rwlock.unlock(io_dl);
+            try found.find(allocator, cat, index_name, drop_graph);
+
+            // An engine-wide or fulltext row is the default graph's as much as
+            // this one's: schema on the default graph as well, as DROP INDEX
+            // always asked before SONNY-1319. Asked with the lock released,
+            // then the rows are resolved again (the catalog may have changed).
+            if (found.needsDefaultGraph(drop_graph)) {
+                cat.rwlock.unlock(io_dl);
+                cat_locked = false;
+                try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
+                cat.rwlock.lockUncancelable(io_dl);
+                cat_locked = true;
+                try found.find(allocator, cat, index_name, drop_graph);
             }
 
-            if (found_key) |key| {
-                if (cat.indexes.fetchRemove(key)) |removed| {
+            // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=FulltextDropInDefault; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-6294: DROP INDEX runs under the session graph's write
+            // lock (query_traits). A fulltext index's engine, facade cache and
+            // label registry live in the default graph and its writers
+            // maintain them under default's lock, so dropping one from
+            // another graph's session would change default under the wrong
+            // lock: refused (0A000); `USE GRAPH default; DROP INDEX <name>`.
+            if (found.fulltext and !std.mem.eql(u8, drop_graph, graph_store.DEFAULT_GRAPH_NAME)) {
+                return error.FulltextIndexInDefaultGraph;
+            }
+
+            var dropped: usize = 0;
+            if (found.keys.items.len > 0) {
+                const removed_rows = try allocator.alloc(std.StringHashMap(catalog_mod.IndexInfo).KV, found.keys.items.len);
+                defer allocator.free(removed_rows);
+                try cat.takeIndexesLocked(found.keys.items, removed_rows);
+                cat.rwlock.unlock(io_dl);
+                cat_locked = false;
+                dropped = removed_rows.len;
+                for (removed_rows) |removed| {
                     // A4a: fulltext index → drop the NAMED fts-storage engine and
                     // free its cached facade. Done BEFORE the catalog strings are
                     // freed (so the index name is still valid). Tolerates a
@@ -2407,43 +2658,124 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                         manager.unregisterVectorDimValidation(removed.value.name);
                     }
                     cat.allocator.free(removed.key);
-                    cat.allocator.free(removed.value.name);
-                    cat.allocator.free(removed.value.index_type);
-                    cat.allocator.free(removed.value.table_name);
-                    // ADVANCED-INDEX-RESTART: the persisted vector metric is
-                    // catalog-owned like every other field of the row.
-                    if (removed.value.metric) |m| cat.allocator.free(m);
-                    for (removed.value.columns) |col| {
-                        cat.allocator.free(col);
-                    }
-                    cat.allocator.free(removed.value.columns);
+                    // Every catalog-owned field: the ADVANCED-INDEX-RESTART
+                    // metric and the SONNY-1319 graph included.
+                    cat.freeIndexInfo(removed.value);
                 }
             } else if (!di.if_exists) {
                 return error.IndexNotFound;
+            }
+
+            var result = ExecutionResult{
+                .columns = try allocator.alloc([]const u8, 0),
+                .rows = try allocator.alloc([]Value, 0),
+                .flags = std.ArrayList([]const u8).empty,
+            };
+            if (dropped > 1) {
+                log.warn("DROP INDEX removed several indexes of one name (one per label) that an older catalog held", &.{
+                    Attr.string("index", index_name),
+                    Attr.uint("rows", dropped),
+                });
+                try appendFlagIfMissing(allocator, &result, "DROP INDEX removed several indexes of this name, one per label, that a catalog written before index names were unique per graph held");
+            }
+            return result;
+        },
+        .DropConstraint => |dc| {
+            // Cluster fail-closed: see .CreateConstraint (GateConstraintDDL).
+            try cluster_mod.gateUnreplicatedWrite();
+            // SONNY-2803, SONNY-3030: as CREATE CONSTRAINT, before the name
+            // is looked up.
+            const drop_graph = session_graph.current(context);
+            try session_graph.authorizeCatalogSchemaChange(context, drop_graph);
+            const cat = context.catalog;
+
+            // CANARY: REQ=REQ-SONNY-6270-DROP-CONSTRAINT; FEATURE="SchemaCatalog"; ASPECT=DropConstraintLockedAndSaved; STATUS=TESTED; TEST=tests/test_sonny6270_drop_constraint.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-6270: DROP CONSTRAINT was a no-op that answered success.
+            // It is DROP INDEX's mirror image (SONNY-1319, SONNY-2795): the
+            // name resolves in the session's graph's catalog, its own rows
+            // first, else the engine-wide ones (a row of another graph is not
+            // found); the rows are found, removed and saved under the catalog
+            // lock held EXCLUSIVE, and a failed save refuses the statement
+            // with the rows still in place. Rows of one name on several
+            // labels are one constraint name to DROP: all of them go. Nothing
+            // else is done under the lock: the default-graph authorization
+            // can read the security graph (a graph lock, a lower tier).
+            const io_dc = std.Io.Threaded.global_single_threaded.io();
+            const Resolve = struct {
+                keys: std.ArrayList([]const u8) = .empty,
+                engine_wide: bool = false,
+
+                /// The rows DROP CONSTRAINT drops. Caller holds the catalog
+                /// lock; the keys borrow the catalog's memory.
+                fn find(self: *@This(), a: std.mem.Allocator, c: *catalog_mod.Catalog, name: []const u8, graph: []const u8) !void {
+                    self.keys.clearRetainingCapacity();
+                    self.engine_wide = false;
+                    for ([_]bool{ false, true }) |engine_wide| {
+                        const scope = if (engine_wide) catalog_mod.ENGINE_WIDE_GRAPH else graph;
+                        var iter = c.constraints.iterator();
+                        while (iter.next()) |entry| {
+                            const info = entry.value_ptr.*;
+                            if (!std.mem.eql(u8, info.name, name) or !std.mem.eql(u8, info.graph, scope)) continue;
+                            try self.keys.append(a, entry.key_ptr.*);
+                        }
+                        if (self.keys.items.len > 0) {
+                            self.engine_wide = engine_wide;
+                            return;
+                        }
+                    }
+                }
+            };
+
+            var found: Resolve = .{};
+            defer found.keys.deinit(allocator);
+            cat.rwlock.lockUncancelable(io_dc);
+            var cat_locked = true;
+            defer if (cat_locked) cat.rwlock.unlock(io_dc);
+            try found.find(allocator, cat, dc.name, drop_graph);
+
+            // An engine-wide row is the default graph's as much as this
+            // one's, and binds every graph: schema on the default graph as
+            // well, as DROP INDEX asks for one. Asked with the lock released,
+            // then the rows are resolved again (the catalog may have changed).
+            if (found.engine_wide and !std.mem.eql(u8, drop_graph, graph_store.DEFAULT_GRAPH_NAME)) {
+                cat.rwlock.unlock(io_dc);
+                cat_locked = false;
+                try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
+                cat.rwlock.lockUncancelable(io_dc);
+                cat_locked = true;
+                try found.find(allocator, cat, dc.name, drop_graph);
+            }
+
+            if (found.keys.items.len == 0) {
+                if (!dc.if_exists) return error.ConstraintNotFound;
+            } else {
+                const removed = try allocator.alloc(std.StringHashMap(catalog_mod.ConstraintInfo).KV, found.keys.items.len);
+                defer allocator.free(removed);
+                try cat.takeConstraintsLocked(found.keys.items, removed);
+                cat.rwlock.unlock(io_dc);
+                cat_locked = false;
+                for (removed) |kv| {
+                    // CANARY: REQ=REQ-SONNY-6270-DROP-CONSTRAINT; FEATURE="SchemaCatalog"; ASPECT=DropLowersFence; STATUS=TESTED; TEST=tests/test_sonny6270_drop_constraint.zig; OWNER=catalog; UPDATED=2026-11-11
+                    // SONNY-2846's fence is a count per graph: one per enforced
+                    // row of any kind (SONNY-6281; raised by CREATE CONSTRAINT and
+                    // the catalog load) and one per CREATE CONSTRAINT still
+                    // validating. The row is gone from the catalog (saved)
+                    // before its count is given back, so the fence is never
+                    // down while the row is enforced, stays up while another
+                    // row or a concurrent CREATE holds a count on the graph
+                    // (an engine-wide row's count is under "", which fences
+                    // every graph), and comes down with the last.
+                    if (catalog_mod.fencesFastPaths(kv.value)) graph_store.removeUniqueFence(kv.value.graph);
+                    // No reader holds the row: they copy under the lock.
+                    cat.allocator.free(kv.key);
+                    cat.freeConstraintInfo(kv.value);
+                }
             }
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
                 .flags = std.ArrayList([]const u8).empty,
-            };
-        },
-        .DropConstraint => |dc| {
-            // Cluster fail-closed: see .CreateConstraint (GateConstraintDDL).
-            // (Currently a stub no-op, but the surface claims to mutate — keep
-            // the fail-closed contract so a future real implementation stays gated.)
-            try cluster_mod.gateUnreplicatedWrite();
-            // SONNY-2803, SONNY-3030: as CREATE CONSTRAINT.
-            try session_graph.authorizeCatalogSchemaChange(context, session_graph.current(context));
-            // DROP CONSTRAINT implementation
-            _ = dc;
-            return ExecutionResult{
-                .columns = try allocator.alloc([]const u8, 0),
-                .rows = try allocator.alloc([]Value, 0),
-                .flags = blk: {
-                    const list = std.ArrayList([]const u8).empty;
-                    break :blk list;
-                },
             };
         },
         .Call => |call_stmt| {
@@ -3636,6 +3968,11 @@ pub fn isQueryLevelEvalError(err: anyerror) bool {
         // write statement's budget abort and cancel were swallowed the same
         // way.
         error.SearchNotPermitted,
+        // SONNY-6327: an FLE read refused because the catalog cannot be
+        // loaded or the value does not decrypt is the query's error too: an
+        // aggregate or a projected cell must not skip or default it.
+        error.FleCatalogUnavailable,
+        error.FleDecryptionFailed,
         error.WriteQueryBudgetExceeded,
         error.WriteQueryCancelled,
         // Item 5 of the SONNY-2686 review: the evaluator's row visibility is

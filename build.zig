@@ -7456,8 +7456,7 @@ pub fn build(b: *std.Build) void {
 
     // GAP-0875: residual local stubs batch. Two test modules under one step:
     //  - tests/test_gap0875_stubs.zig (via the `geode` module; lib.zig exports
-    //    constraint_manager + memory_mapped_io for it): unique-constraint
-    //    index consultation, printer IN/NOT IN subquery round-trip +
+    //    memory_mapped_io for it): printer IN/NOT IN subquery round-trip +
     //    temporal-walker descent, measured mmap write benchmark.
     //  - tests/test_gap0875_stubs_mcp.zig (rooted module at src/mcp/tools.zig
     //    exposed as `mcp_tools`, mirroring the gap0516 import set): MCP
@@ -7486,7 +7485,7 @@ pub fn build(b: *std.Build) void {
     const run_gap0875_mcp_tests = b.addRunArtifact(gap0875_mcp_tests);
     shardDep(test_step, &run_gap0875_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0875_mcp_tests.step, 1, test_shard_loads, test_shard_index);
-    const gap0875_step = b.step("test-gap0875", "GAP-0875: residual stubs batch (unique-index check, printer subqueries, MCP cancellation, measured write bench)");
+    const gap0875_step = b.step("test-gap0875", "GAP-0875: residual stubs batch (printer subqueries, MCP cancellation, measured write bench)");
     gap0875_step.dependOn(&run_gap0875_tests.step);
     gap0875_step.dependOn(&run_gap0875_mcp_tests.step);
 
@@ -10595,6 +10594,90 @@ pub fn build(b: *std.Build) void {
     const sonny3348b_step = b.step("test-sonny3348-round19-undo", "Run SONNY-3348 round 19 regression (the statement undo record counts against the write budget: a DETACH DELETE of a graph whose images do not fit answers 53200 and leaves the graph; the record is leak-checked; an undo that cannot undo answers 40003; ROLLBACK continues past it and reports it; every failure path aborts the transaction; COMMIT after a failure answers 40000 on every transport; the delete image reads the checked adjacency; gRPC in process)");
     sonny3348b_step.dependOn(&run_sonny3348b_tests.step);
 
+    const sonny2725_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2725_merge_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny2725_test_mod.link_libc = true;
+    sonny2725_test_mod.addImport("geode", root_mod);
+    sonny2725_test_mod.addImport("schema", schema_mod);
+    sonny2725_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2725_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2725_test_mod.addImport("logging", logging_mod);
+    sonny2725_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2725_tests = b.addTest(.{ .root_module = sonny2725_test_mod });
+    const run_sonny2725_tests = b.addRunArtifact(sonny2725_tests);
+    shardDep(test_step, &run_sonny2725_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2725_step = b.step("test-sonny2725-merge-atomicity", "Run SONNY-2725 regression (a MERGE statement that fails part-way leaves nothing: a later MERGE, ON CREATE SET, relationship MERGE, DELETE or RETURN that errors undoes the nodes and edges the earlier MERGE clauses created; gRPC in process)");
+    sonny2725_step.dependOn(&run_sonny2725_tests.step);
+
+    const sonny3380_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3380_merge_alias_duplicate_set.zig"), .target = target, .optimize = optimize });
+    sonny3380_test_mod.link_libc = true;
+    sonny3380_test_mod.addImport("geode", root_mod);
+    sonny3380_test_mod.addImport("schema", schema_mod);
+    sonny3380_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3380_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3380_test_mod.addImport("logging", logging_mod);
+    sonny3380_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3380_tests = b.addTest(.{ .root_module = sonny3380_test_mod });
+    const run_sonny3380_tests = b.addRunArtifact(sonny3380_tests);
+    shardDep(test_step, &run_sonny3380_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3380_step = b.step("test-sonny3380-merge-alias-duplicate-set", "Run SONNY-3380 regression (MERGE (a) MERGE (b) SET a.x = 1, b.x = 2 with a and b one node is refused 22G03 and the MERGE's create is undone, for a created and an existing node, per row of MATCH ... MERGE and in an explicit transaction; two distinct nodes still run; gRPC in process)");
+    sonny3380_step.dependOn(&run_sonny3380_tests.step);
+
+    const sonny3243_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3243_union_write_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny3243_test_mod.link_libc = true;
+    sonny3243_test_mod.addImport("geode", root_mod);
+    sonny3243_test_mod.addImport("schema", schema_mod);
+    sonny3243_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3243_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3243_test_mod.addImport("logging", logging_mod);
+    sonny3243_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3243_tests = b.addTest(.{ .root_module = sonny3243_test_mod });
+    const run_sonny3243_tests = b.addRunArtifact(sonny3243_tests);
+    shardDep(test_step, &run_sonny3243_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3243_step = b.step("test-sonny3243-union-write-atomicity", "Run SONNY-3243 regression (a UNION [ALL] whose later part fails -- NodeHasEdges, divide by zero -- leaves nothing an earlier part SET, REMOVEd or labelled, for two and three parts and in an explicit transaction; a UNION whose parts all succeed applies every part; gRPC in process)");
+    sonny3243_step.dependOn(&run_sonny3243_tests.step);
+
+    const sonny3381_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3381_undo_index_entries.zig"), .target = target, .optimize = optimize });
+    sonny3381_test_mod.link_libc = true;
+    sonny3381_test_mod.addImport("geode", root_mod);
+    sonny3381_test_mod.addImport("schema", schema_mod);
+    sonny3381_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3381_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3381_test_mod.addImport("logging", logging_mod);
+    sonny3381_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3381_tests = b.addTest(.{ .root_module = sonny3381_test_mod });
+    const run_sonny3381_tests = b.addRunArtifact(sonny3381_tests);
+    shardDep(test_step, &run_sonny3381_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3381_step = b.step("test-sonny3381-undo-index-entries", "Run SONNY-3381 regression (after a failed statement and after ROLLBACK the full-text and vector indexes answer for the values the store holds: an undone SET, REMOVE, DELETE and CREATE of a fulltext-indexed property, an undone first vector and vector overwrite; live maintenance continues; gRPC in process)");
+    sonny3381_step.dependOn(&run_sonny3381_tests.step);
+
+    const sonny6368_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6368_index_maintenance.zig"), .target = target, .optimize = optimize });
+    sonny6368_test_mod.link_libc = true;
+    sonny6368_test_mod.addImport("geode", root_mod);
+    sonny6368_test_mod.addImport("schema", schema_mod);
+    sonny6368_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6368_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6368_test_mod.addImport("logging", logging_mod);
+    sonny6368_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6368_tests = b.addTest(.{ .root_module = sonny6368_test_mod });
+    const run_sonny6368_tests = b.addRunArtifact(sonny6368_tests);
+    shardDep(test_step, &run_sonny6368_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6368_step = b.step("test-sonny6368-index-maintenance", "Run SONNY-6368 regression (a repeated SET target answers 22G0M; geode.fts.rebuild from another graph rebuilds the default graph's index; a live SET n:L and a committed REMOVE n.prop maintain the full-text and vector indexes; vector maintenance covers every label; an undo repair colliding with a running fulltext rebuild runs after it; gRPC in process)");
+    sonny6368_step.dependOn(&run_sonny6368_tests.step);
+
+    const sonny6362_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6362_statement_undo_threads.zig"), .target = target, .optimize = optimize });
+    sonny6362_test_mod.link_libc = true;
+    sonny6362_test_mod.addImport("geode", root_mod);
+    sonny6362_test_mod.addImport("schema", schema_mod);
+    sonny6362_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6362_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6362_test_mod.addImport("logging", logging_mod);
+    sonny6362_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6362_tests = b.addTest(.{ .root_module = sonny6362_test_mod });
+    const run_sonny6362_tests = b.addRunArtifact(sonny6362_tests);
+    shardDep(test_step, &run_sonny6362_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6362_step = b.step("test-sonny6362-statement-undo-threads", "Run SONNY-6362 item 1 regression (the statement undo record is the statement's: writes a thread working for the statement makes are undone when it fails and seen by the UNIQUE and NOT NULL checks at its end; threads appending concurrently lose no entry; a parallel UNION's arms join the record; gRPC in process)");
+    sonny6362_step.dependOn(&run_sonny6362_tests.step);
+
     // SONNY-3384: MATCH ... SET ... DETACH DELETE ... RETURN runs every clause,
     // or is refused. gRPC in process.
     const sonny3384_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3384_set_detach_delete.zig"), .target = target, .optimize = optimize });
@@ -13598,6 +13681,233 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_advanced_index_restart_tests.step, 0, test_shard_loads, test_shard_index);
     const advanced_index_restart_step = b.step("test-advanced-index-restart", "Run advanced (HNSW) index rebuild-after-restart regressions");
     advanced_index_restart_step.dependOn(&run_advanced_index_restart_tests.step);
+
+    // SONNY-1319: the index and constraint catalogs were engine-global (keyed
+    // label:name, no graph): IF NOT EXISTS silently no-op'd across graphs,
+    // DROP INDEX in one graph removed another graph's index, and SHOW listed
+    // every graph's rows. Rows now carry their graph, persisted and reloaded.
+    const sonny1319_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny1319_graph_scoped_catalog.zig"), .target = target, .optimize = optimize });
+    sonny1319_test_mod.addImport("geode", root_mod);
+    const sonny1319_tests = b.addTest(.{ .root_module = sonny1319_test_mod });
+    const run_sonny1319_tests = b.addRunArtifact(sonny1319_tests);
+    shardDep(test_step, &run_sonny1319_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny1319_step = b.step("test-sonny1319-graph-scoped-catalog", "Run SONNY-1319 regression (index and constraint catalogs are graph-scoped: IF NOT EXISTS, DROP INDEX, SHOW, CREATE CONSTRAINT across two graphs; restart; legacy engine-global catalog loads losslessly)");
+    sonny1319_step.dependOn(&run_sonny1319_tests.step);
+
+    const sonny2795_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2795_drop_index_catalog.zig"), .target = target, .optimize = optimize });
+    sonny2795_test_mod.addImport("geode", root_mod);
+    const sonny2795_tests = b.addTest(.{ .root_module = sonny2795_test_mod });
+    const run_sonny2795_tests = b.addRunArtifact(sonny2795_tests);
+    shardDep(test_step, &run_sonny2795_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny2795_step = b.step("test-sonny2795-drop-index-catalog", "Run SONNY-2795 regression (DROP INDEX is saved and refused when the save fails; DROP INDEX and the vector-index catalog readers take the catalog lock; the global index manager does not adopt a request allocator; a session with no data directory keeps its catalog in memory)");
+    sonny2795_step.dependOn(&run_sonny2795_tests.step);
+
+    const sonny2846_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2846_unique_constraint_enforcement.zig"), .target = target, .optimize = optimize });
+    sonny2846_test_mod.addImport("geode", root_mod);
+    const sonny2846_tests = b.addTest(.{ .root_module = sonny2846_test_mod });
+    const run_sonny2846_tests = b.addRunArtifact(sonny2846_tests);
+    shardDep(test_step, &run_sonny2846_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny2846_step = b.step("test-sonny2846-unique-constraint-enforcement", "Run SONNY-2846 / SONNY-3358 regression (UNIQUE constraints are enforced on CREATE, MERGE and SET at statement end, per graph and tenant, on in-memory, persisted, reopened and lean stores; CREATE CONSTRAINT over duplicates is refused; N concurrent writers of one value: one wins; the bulk fast-path helpers refuse a constrained graph)");
+    sonny2846_step.dependOn(&run_sonny2846_tests.step);
+
+    const sonny2846_wire_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2846_unique_fast_paths_wire.zig"), .target = target, .optimize = optimize });
+    sonny2846_wire_test_mod.link_libc = true;
+    sonny2846_wire_test_mod.addImport("geode", root_mod);
+    sonny2846_wire_test_mod.addImport("schema", schema_mod);
+    sonny2846_wire_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2846_wire_test_mod.addImport("logging", logging_mod);
+    sonny2846_wire_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2846_wire_tests = b.addTest(.{ .root_module = sonny2846_wire_test_mod });
+    const run_sonny2846_wire_tests = b.addRunArtifact(sonny2846_wire_tests);
+    run_sonny2846_wire_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny2846_wire_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2846_wire_step = b.step("test-sonny2846-unique-fast-paths-wire", "Run SONNY-2846 wire regression (spawns a server: simple CREATE, bulk MERGE, /*+BATCH*/ and USE GRAPH; MERGE fast paths answer 23505 on a UNIQUE duplicate, with group commit on and off; 8 concurrent QUIC writers of one value: exactly one wins)");
+    sonny2846_wire_step.dependOn(&run_sonny2846_wire_tests.step);
+
+    const sonny6270_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6270_drop_constraint.zig"), .target = target, .optimize = optimize });
+    sonny6270_test_mod.addImport("geode", root_mod);
+    const sonny6270_tests = b.addTest(.{ .root_module = sonny6270_test_mod });
+    const run_sonny6270_tests = b.addRunArtifact(sonny6270_tests);
+    shardDep(test_step, &run_sonny6270_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny6270_step = b.step("test-sonny6270-drop-constraint", "Run SONNY-6270 regression (DROP CONSTRAINT removes the session graph's or an engine-wide row, saves the catalog under its lock and refuses when the save fails; a dropped constraint stops being enforced and stays dropped after a restart; the UNIQUE fast-path fence comes down with the last applicable row; db.constraints() copies rows under the catalog lock; schema permission required)");
+    sonny6270_step.dependOn(&run_sonny6270_tests.step);
+
+    const sonny2847_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2847_merge_index_multi_holder.zig"), .target = target, .optimize = optimize });
+    sonny2847_test_mod.link_libc = true; // setenv/unsetenv
+    sonny2847_test_mod.addImport("geode", root_mod);
+    const sonny2847_tests = b.addTest(.{ .root_module = sonny2847_test_mod });
+    const run_sonny2847_tests = b.addRunArtifact(sonny2847_tests);
+    shardDep(test_step, &run_sonny2847_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2847_step = b.step("test-sonny2847-merge-index-multi-holder", "Run SONNY-2847 regression (two CREATEd nodes hold one MERGE key; deleting, SETting or REMOVEing either leaves MERGE matching the other, on the executor, a registered composite key and the server's bulk MERGE helpers, in-memory and persisted)");
+    sonny2847_step.dependOn(&run_sonny2847_tests.step);
+
+    const sonny6281_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6281_existence_constraints.zig"), .target = target, .optimize = optimize });
+    sonny6281_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6281_test_mod.addImport("geode", root_mod);
+    const sonny6281_tests = b.addTest(.{ .root_module = sonny6281_test_mod });
+    const run_sonny6281_tests = b.addRunArtifact(sonny6281_tests);
+    shardDep(test_step, &run_sonny6281_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny6281_step = b.step("test-sonny6281-existence-constraints", "Run SONNY-6281 regression (NOT NULL, EXISTS and the existence half of NODE KEY are enforced at statement end on CREATE, MERGE, SET, REMOVE and label SET, 23502; CREATE CONSTRAINT over nodes lacking the property is refused; the bulk fast paths decline such a graph, across a reopen, until DROP CONSTRAINT; CREATE UNIQUE INDEX is refused with 0A000)");
+    sonny6281_step.dependOn(&run_sonny6281_tests.step);
+
+    const sonny3056_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3056_lean_merge_evicted_holder.zig"), .target = target, .optimize = optimize });
+    sonny3056_test_mod.link_libc = true; // setenv/unsetenv
+    sonny3056_test_mod.addImport("geode", root_mod);
+    const sonny3056_tests = b.addTest(.{ .root_module = sonny3056_test_mod });
+    const run_sonny3056_tests = b.addRunArtifact(sonny3056_tests);
+    shardDep(test_step, &run_sonny3056_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3056_step = b.step("test-sonny3056-lean-merge-evicted-holder", "Run SONNY-3056 regression (lean index mode, a small node cache: the executor's MERGE and the server's bulk MERGE helpers match a holder written before its MERGE key was registered and evicted since, also for a key registered through another label and after a reopen)");
+    sonny3056_step.dependOn(&run_sonny3056_tests.step);
+
+    const sonny3357_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3357_merge_relationship_properties.zig"), .target = target, .optimize = optimize });
+    sonny3357_test_mod.addImport("geode", root_mod);
+    const sonny3357_tests = b.addTest(.{ .root_module = sonny3357_test_mod });
+    const run_sonny3357_tests = b.addRunArtifact(sonny3357_tests);
+    shardDep(test_step, &run_sonny3357_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3357_step = b.step("test-sonny3357-merge-relationship-properties", "Run SONNY-3357 regression (a relationship MERGE matches on the relationship's properties too, on the executor's standalone MERGE and MATCH ... MERGE: a pattern whose properties differ creates an edge, ON MATCH / ON CREATE SET run on the right edge; the server's MATCH ... MERGE edge fast path declines a relationship with properties)");
+    sonny3357_step.dependOn(&run_sonny3357_tests.step);
+
+    const sonny3241_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3241_fast_path_parity_wire.zig"), .target = target, .optimize = optimize });
+    sonny3241_test_mod.link_libc = true;
+    sonny3241_test_mod.addImport("geode", root_mod);
+    sonny3241_test_mod.addImport("schema", schema_mod);
+    sonny3241_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3241_test_mod.addImport("logging", logging_mod);
+    sonny3241_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3241_tests = b.addTest(.{ .root_module = sonny3241_test_mod });
+    const run_sonny3241_tests = b.addRunArtifact(sonny3241_tests);
+    run_sonny3241_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3241_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3241_step = b.step("test-sonny3241-fast-path-parity-wire", "Run SONNY-3241 wire regression (spawns a server, group commit on and off: node MERGE with ON CREATE / ON MATCH SET beside a bare SET, also /*+BATCH*/ and USE GRAPH; MATCH ... CREATE edges over a key two nodes hold or a non-integer key; MATCH ... MERGE edges with ON CREATE SET and with relationship properties all write what the executor writes)");
+    sonny3241_step.dependOn(&run_sonny3241_tests.step);
+
+    const sonny6354_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6354_lean_late_key_indexes.zig"), .target = target, .optimize = optimize });
+    sonny6354_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6354_test_mod.addImport("geode", root_mod);
+    const sonny6354_tests = b.addTest(.{ .root_module = sonny6354_test_mod });
+    const run_sonny6354_tests = b.addRunArtifact(sonny6354_tests);
+    shardDep(test_step, &run_sonny6354_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6354_step = b.step("test-sonny6354-lean-late-key-indexes", "Run SONNY-6354 regression (a node whose reserved id has bit 63 set takes property SETs and labels and never touches another node's MERGE entry; in lean index mode a key registered after its nodes were written is complete in the exact property index for WHERE / inline seeks and bulk endpoint resolution, also after a reopen; a composite MERGE key registered at runtime resolves a non-resident holder)");
+    sonny6354_step.dependOn(&run_sonny6354_tests.step);
+
+    const sonny6268_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6268_graph_store_failure_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny6268_test_mod.addImport("geode", root_mod);
+    const sonny6268_tests = b.addTest(.{ .root_module = sonny6268_test_mod });
+    const run_sonny6268_tests = b.addRunArtifact(sonny6268_tests);
+    shardDep(test_step, &run_sonny6268_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6268_step = b.step("test-sonny6268-graph-store-failure-atomicity", "Run SONNY-6268 regression (allocation-failure sweep over the graph store's node, label and edge primitives, in memory and with a storage adapter: a failed create, property SET/REMOVE, label add/remove or delete leaves the store unchanged, reports the failure, leaks nothing, and the retry succeeds)");
+    sonny6268_step.dependOn(&run_sonny6268_tests.step);
+
+    const sonny6274_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6274_fle_catalog_no_tmp.zig"), .target = target, .optimize = optimize });
+    sonny6274_test_mod.addImport("geode", root_mod);
+    sonny6274_test_mod.link_libc = true; // setenv/unsetenv/umask
+    const sonny6274_tests = b.addTest(.{ .root_module = sonny6274_test_mod });
+    const run_sonny6274_tests = b.addRunArtifact(sonny6274_tests);
+    shardDep(test_step, &run_sonny6274_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6274_step = b.step("test-sonny6274-fle-catalog-no-tmp", "Run SONNY-6274 regression (with no data directory the FLE catalog is in memory and never reads or writes /tmp/geode_fle_catalog.dat; with one it lives in the store's data directory, mode 0600, across a restart; a symbolic link at the catalog path is neither read nor written through)");
+    sonny6274_step.dependOn(&run_sonny6274_tests.step);
+
+    const sonny6324_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6324_fle_catalog_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6324_test_mod.addImport("geode", root_mod);
+    sonny6324_test_mod.link_libc = true; // setenv/unsetenv/chmod
+    const sonny6324_tests = b.addTest(.{ .root_module = sonny6324_test_mod });
+    const run_sonny6324_tests = b.addRunArtifact(sonny6324_tests);
+    shardDep(test_step, &run_sonny6324_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6324_step = b.step("test-sonny6324-fle-catalog-fail-closed", "Run SONNY-6324 regression (a failed FLE catalog save is an error: configureField and grants roll back, a revoke stays applied in memory and is reported; a catalog file that cannot be loaded is an error and never an empty catalog, and string writes and reads are refused until it is resolved; no leaks under allocation failure)");
+    sonny6324_step.dependOn(&run_sonny6324_tests.step);
+
+    const sonny6327_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6327_fle_read_gaps.zig"), .target = target, .optimize = optimize });
+    sonny6327_test_mod.link_libc = true; // setenv/unsetenv/chmod
+    sonny6327_test_mod.addImport("geode", root_mod);
+    sonny6327_test_mod.addImport("schema", schema_mod);
+    sonny6327_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6327_test_mod.addImport("logging", logging_mod);
+    sonny6327_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6327_tests = b.addTest(.{ .root_module = sonny6327_test_mod });
+    const run_sonny6327_tests = b.addRunArtifact(sonny6327_tests);
+    run_sonny6327_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6327_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6327_step = b.step("test-sonny6327-fle-read-gaps", "Run SONNY-6327 regression (an encrypted edge property is read by the node FLE policy on every surface: member access, WHERE, aggregates, properties(), the wire and JSON encodings; a value that does not decrypt is an error, never the stored bytes; the FLE catalog answers under its mutex; CALL geode.fle.revokePlaintext; the QUIC write fast paths never store an encrypted field's plaintext)");
+    sonny6327_step.dependOn(&run_sonny6327_tests.step);
+
+    const sonny6334_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6334_fle_authorization.zig"), .target = target, .optimize = optimize });
+    sonny6334_test_mod.link_libc = true; // setenv/unsetenv/chmod
+    sonny6334_test_mod.addImport("geode", root_mod);
+    sonny6334_test_mod.addImport("schema", schema_mod);
+    sonny6334_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6334_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6334_test_mod.addImport("logging", logging_mod);
+    sonny6334_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6334_tests = b.addTest(.{ .root_module = sonny6334_test_mod });
+    const run_sonny6334_tests = b.addRunArtifact(sonny6334_tests);
+    run_sonny6334_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6334_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6334_step = b.step("test-sonny6334-fle-authorization", "Run SONNY-6334 regression (FLE administration -- configureField, grantPlaintext, revokePlaintext, key-affecting tde.* -- is Admin only, refusals 42501 + audited, catalog unchanged; plaintext needs the FLE role in the field's list AND GPS decrypt_field; gRPC installs and clears the FLE request context like QUIC; grant/revoke/configure are audit events; a ReadWrite user cannot obtain plaintext over the executor, gRPC or QUIC)");
+    sonny6334_step.dependOn(&run_sonny6334_tests.step);
+
+    const sonny6341_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6341_fle_role_binding.zig"), .target = target, .optimize = optimize });
+    sonny6341_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6341_test_mod.addImport("geode", root_mod);
+    sonny6341_test_mod.addImport("schema", schema_mod);
+    sonny6341_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6341_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6341_test_mod.addImport("logging", logging_mod);
+    sonny6341_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6341_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const sonny6341_tests = b.addTest(.{ .root_module = sonny6341_test_mod });
+    const run_sonny6341_tests = b.addRunArtifact(sonny6341_tests);
+    run_sonny6341_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6341_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6341_step = b.step("test-sonny6341-fle-role-binding", "Run SONNY-6341 regression (the FLE role a session acts under is one the authenticated user holds: CALL geode.fle.grantRole/revokeRole, Admin only, audited, stored in the HMAC-chained security graph and reloaded; a HELLO naming an unheld role connects with no FLE role and is audited; grant/revoke count from the next request; auth off unchanged; QUIC, gRPC and the CLI, across a restart)");
+    sonny6341_step.dependOn(&run_sonny6341_tests.step);
+
+    const sonny6335_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6335_fle_identity_and_indexes.zig"), .target = target, .optimize = optimize });
+    sonny6335_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6335_test_mod.addImport("geode", root_mod);
+    sonny6335_test_mod.addImport("schema", schema_mod);
+    sonny6335_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6335_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6335_test_mod.addImport("logging", logging_mod);
+    const sonny6335_tests = b.addTest(.{ .root_module = sonny6335_test_mod });
+    const run_sonny6335_tests = b.addRunArtifact(sonny6335_tests);
+    shardDep(test_step, &run_sonny6335_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6335_step = b.step("test-sonny6335-fle-identity-and-indexes", "Run SONNY-6335 regression (one FLE encryption identity for every writer and reader: a value the graph-store primitive encrypts -- raft apply, internal callers -- decrypts, and values under the old store identity still do; no index of any type, and no UNIQUE / NODE KEY constraint, over an FLE-encrypted field, configureField on an indexed field refused, a pre-existing fulltext index over an encrypted field refuses searches; no plaintext in any file)");
+    sonny6335_step.dependOn(&run_sonny6335_tests.step);
+
+    const sonny6362m_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6362_merge_index_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6362m_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6362m_test_mod.addImport("geode", root_mod);
+    sonny6362m_test_mod.addImport("schema", schema_mod);
+    sonny6362m_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6362m_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6362m_test_mod.addImport("logging", logging_mod);
+    const sonny6362m_tests = b.addTest(.{ .root_module = sonny6362m_test_mod });
+    const run_sonny6362m_tests = b.addRunArtifact(sonny6362m_tests);
+    shardDep(test_step, &run_sonny6362m_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6362m_step = b.step("test-sonny6362-merge-index-residuals", "Run SONNY-6362 regression, items 2-5 (a node id with bit 63 set is refused at creation on every path that takes one; the all-properties resolver checks the seed filter against the node it returns; MERGE on an FLE-encrypted property is refused 0A000 with nothing written; a MERGE index entry that could not be added leaves the index unable to answer instead of answering a miss)");
+    sonny6362m_step.dependOn(&run_sonny6362m_tests.step);
+
+    const sonny6294_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6294_drop_index_rules.zig"), .target = target, .optimize = optimize });
+    sonny6294_test_mod.link_libc = true;
+    sonny6294_test_mod.addImport("geode", root_mod);
+    sonny6294_test_mod.addImport("schema", schema_mod);
+    sonny6294_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6294_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6294_test_mod.addImport("logging", logging_mod);
+    const sonny6294_tests = b.addTest(.{ .root_module = sonny6294_test_mod });
+    const run_sonny6294_tests = b.addRunArtifact(sonny6294_tests);
+    shardDep(test_step, &run_sonny6294_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6294_step = b.step("test-sonny6294-drop-index-rules", "Run SONNY-6294 regression (an index or constraint name is one object per graph: a second CREATE with the name on another label is refused, and DROP INDEX drops every row a legacy catalog holds under the name in its scope, the same way in every run; DROP INDEX locks the session's graph, not default's, and a fulltext index is dropped from the default graph; IndexNotFound and ConstraintNotFound are 42704)");
+    sonny6294_step.dependOn(&run_sonny6294_tests.step);
+
+    const sonny6302_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6302_edge_write_and_delete_errors.zig"), .target = target, .optimize = optimize });
+    sonny6302_test_mod.addImport("geode", root_mod);
+    sonny6302_test_mod.link_libc = true; // setenv/unsetenv
+    const sonny6302_tests = b.addTest(.{ .root_module = sonny6302_test_mod });
+    const run_sonny6302_tests = b.addRunArtifact(sonny6302_tests);
+    shardDep(test_step, &run_sonny6302_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6302_step = b.step("test-sonny6302-edge-write-and-delete-errors", "Run SONNY-6302 regression (a failed engine write in setEdgeProperty / removeEdgeProperty is reported and memory stays equal to the engine; a tenant drop whose delete fails is refused before the tenant is removed and a retry completes it; a replicated delete reports a failed delete; deleting nodes and edges with names past 512 bytes cannot fail after the engine delete)");
+    sonny6302_step.dependOn(&run_sonny6302_tests.step);
 
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once

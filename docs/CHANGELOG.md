@@ -273,6 +273,74 @@
   auth state, timeseries, tenants and audit log in the resolved directory
   from now on (none of it had been kept). Regression:
   `zig build test-sonny6339-resolved-data-dir`.
+- **BEHAVIOUR CHANGE: one FLE encryption identity; no index over an
+  encrypted field (SONNY-6335).** (1) The graph-store write primitives
+  encrypted a plaintext value that reached them (raft apply, internal
+  callers) with the store's tenant/schema and `node_<id>` / `edge_<id>`,
+  which no reader used, so those values read as `FleDecryptionFailed`
+  (58030). Every writer and reader now uses one identity (request tenant,
+  label or edge type, field, `<id>` / `edge_<id>`); readers also try the old
+  store identity, so values already written that way decrypt. (2) `CREATE
+  INDEX` of any type and `CREATE CONSTRAINT ... IS UNIQUE` / `NODE KEY` over
+  an FLE-encrypted field are refused (0A000): the index held ciphertext (a
+  fulltext search, a seek or a UNIQUE check never matched). `CALL
+  geode.fle.configureField` on a field with such an index or constraint is
+  refused (0A000; drop it first), and a fulltext index made before its field
+  was encrypted refuses searches (0A000) instead of matching nothing.
+  Regression: `zig build test-sonny6335-fle-identity-and-indexes`.
+- **BREAKING: the FLE role is bound to the authenticated user
+  (SONNY-6341).** The FLE role a session reads encrypted fields with was
+  whatever its client named in HELLO (`role`, the CLI's `--role`), checked
+  for shape only, so every principal GPS lets decrypt (every Admin, any
+  `ALLOW DECRYPT_FIELD`) could name any FLE role and read every field
+  listed for it. With authentication on, a named role now counts only when
+  the user holds it: `CALL geode.fle.grantRole(user, role)` /
+  `CALL geode.fle.revokeRole(user, role)` (Admin only, audited, refused in
+  cluster mode; stored as `FleRoleGrant` records in the HMAC-chained
+  `__geode_security` graph and loaded at startup; a grant that cannot be
+  saved is not applied, 58030; a revoke that cannot be saved stays in force
+  and reports 58030). A HELLO naming a role the user does not hold still
+  connects, with no FLE role (encrypted fields read `[REDACTED]`), and is an
+  `access_denied` audit event. Grants and revokes count from the next
+  request of every live session. The Admin builtin holds no FLE role
+  implicitly. Authentication off and `--insecure-allow-all`: unchanged.
+  **Upgrade note:** after upgrading no user holds any FLE role; each reader
+  of plaintext needs `CALL geode.fle.grantRole('<user>', '<fle role>')` by
+  an Admin (an Admin grants itself too). Regression:
+  `zig build test-sonny6341-fle-role-binding`.
+- **BEHAVIOUR CHANGE: FLE authorization (SONNY-6334).** (1)
+  `geode.fle.configureField`, `grantPlaintext`, `revokePlaintext` and the
+  key-affecting `tde.*` procedures (`initialize_key_hierarchy`,
+  `rotate_keys`, `configure_*`, `zeroize_keys`, `cleanup_key_hierarchy`,
+  the encrypted backup/restore ones) were gated by the GPS `write` action,
+  so a ReadWrite user could grant its own FLE role plaintext access or
+  reconfigure a field. They are now Admin only (42501 and an
+  `access_denied` audit event otherwise; authentication off: implicit
+  admin; `--insecure-allow-all`: bypassed as documented). (2) Plaintext
+  needed only the request's FLE role in the field's visibility roles, a
+  role the client names in HELLO; the GPS `decrypt_field` check sat in a
+  function nothing called, so `DENY DECRYPT_FIELD` was not enforced. A read
+  of an encrypted field now also needs GPS to allow `decrypt_field` for the
+  authenticated principal on the session's graph (the Admin builtin, or an
+  `ALLOW DECRYPT_FIELD` policy); a refusal reads as a role not in the list
+  (`[REDACTED]`, 42501 for `n.p` on a searchable field). **Upgrade note:**
+  a non-Admin user that read plaintext through a listed FLE role needs an
+  `ALLOW DECRYPT_FIELD` policy. (3) gRPC never put the session's FLE role
+  on the thread that encodes result rows (whole nodes and edges were
+  `[REDACTED]` over gRPC), and its Handshake left the role and tenant on
+  the Handshake's thread for the next session served there. The FLE role
+  is now kept on the gRPC session, and QUIC and gRPC install one request
+  context (`ServerState.installRequestThreadState`: tenant, FLE role, GPS
+  gate) per request and clear it on every exit. (4) configureField, grant
+  and revoke are audit events (`configuration_change`, success or failure
+  with the error name: caller, `type.field`, role or visibility roles; no
+  key material). Also fixed: `CALL geode.fle.configureField(...,
+  {visibility: [...]})` dropped the list (a list literal parses as
+  `ArrayLit`; only `List` was read), so a field configured online was
+  readable by nobody until a grant. Removed dead code:
+  `fle_hooks.decryptPropertyIfNeeded`, `planner/rewrite.performFLERewrite`.
+  Regression: `zig build test-sonny6334-fle-authorization`.
+
 - **BREAKING: fail-closed default role.** A user with no stored built-in
   role (not a superuser, no `HAS_ROLE` edge to `admin`, `user`, `readwrite`
   or `readonly`) used to fall back to `readwrite` and could read and write
@@ -422,6 +490,90 @@
     `AuthChainVerificationFailed` and leaves nothing behind (it used to
     succeed and fail at the next startup).
   Regression: `zig build test-sonny6322-audit-seed-and-hmac-startup`.
+- **The FLE catalog is no longer kept in /tmp (SONNY-6274):** the
+  field-level-encryption catalog (which fields are encrypted, their
+  algorithm, key scope and blind-index setting, and the roles that may read
+  them in plaintext; no key material) was saved to and loaded from
+  `{GEODE_DATA_DIR or /tmp}/geode_fle_catalog.dat`. With no data directory
+  every session, test and process shared `/tmp/geode_fle_catalog.dat`, so a
+  fresh session took its encrypted-field set from whatever an earlier run
+  left there; and only `GEODE_DATA_DIR` counted, so a server started with
+  `--data-dir` alone also kept its FLE catalog in `/tmp`. The file was
+  opened `O_CREAT|O_TRUNC` with the default mode (0644 under the usual
+  umask), and a symbolic link planted at the path was followed on read and
+  write. The FLE catalog now lives in the store's data directory (the
+  `--data-dir` override, else `GEODE_DATA_DIR`); with neither it is in
+  memory, as the index catalog is. It is written to a new
+  `O_EXCL|O_NOFOLLOW` 0600 file renamed over the path, and a link at the
+  path is refused on read. **Upgrade note:** a server that ran with
+  `--data-dir` and no `GEODE_DATA_DIR` had its FLE catalog in
+  `/tmp/geode_fle_catalog.dat`; it is not read from there any more. Copy
+  that file into the data directory (after checking it is yours) before
+  restarting. `geode fle grant-plaintext` refuses to run without
+  `GEODE_DATA_DIR`, where it used to write the grant to `/tmp`.
+  Regression: `zig build test-sonny6274-fle-catalog-no-tmp`.
+- **BEHAVIOUR CHANGE: FLE read gaps closed (SONNY-6327).** (1) An
+  encrypted EDGE property was returned as stored (the ciphertext envelope)
+  to every principal by `RETURN r.p` and `WHERE r.p = ...`, and every
+  whole-value read (`properties(n|r)`, map projection, `RETURN n`,
+  `RETURN r` and paths over QUIC/gRPC, and JSON) sent the stored bytes for
+  nodes too. All of them now use the one node policy
+  (`fle_integration.readStoredString`): the plaintext role reads the
+  plaintext, any other principal reads `[REDACTED]` (an `n.p`/`r.p` read
+  of a searchable field is 42501, as before), and while the FLE catalog
+  cannot be loaded the read is refused (58030). (2) A value the principal
+  may read that does not decrypt (damaged, or written under another
+  `GEODE_MASTER_KEY`) was returned as the stored bytes; it is now refused,
+  `FleDecryptionFailed` (58030), also inside builtin calls, predicates and
+  aggregates. `GraphStore.getNodeProperty` now returns the stored value
+  and never tries to decrypt; `getNodePropertyChecked` /
+  `getEdgePropertyChecked` read through the policy. (3) The FLE catalog's
+  readers (`getType`, `getFieldMetadata`, the plaintext-role check, the
+  `geode.fle.getFieldConfig` / `listEncryptedFields` procedures) used
+  catalog memory after releasing its lock, which a reconfigure, grant or
+  revoke frees (a use-after-free in the authorization decision); they now
+  answer under the lock or copy, and a deployment with no FLE field skips
+  FLE without a lock. (4) New online `CALL geode.fle.revokePlaintext(type,
+  field, role)`, mirroring `grantPlaintext` (mutating; refused in cluster
+  mode; a failed save leaves the revoke in effect and reports 58030). (5)
+  The QUIC write fast paths (simple CREATE, bulk MERGE, `/*+BATCH*/`,
+  `USE GRAPH g; MERGE`, MATCH ... CREATE/MERGE edge) wrote an encrypted
+  field's PLAINTEXT to disk; with any FLE field configured they now
+  decline to the executor, which encrypts (bulk-ingest throughput on FLE
+  deployments drops to executor speed), and the aggregate/point-write
+  pushdowns decline too. Regression: `zig build test-sonny6327-fle-read-gaps`.
+- **BEHAVIOUR CHANGE: the FLE catalog fails closed (SONNY-6324).**
+  (1) `CALL geode.fle.configureField`, `CALL geode.fle.grantPlaintext`,
+  `geode fle grant-plaintext` and `geode fle revoke-plaintext` logged a
+  failed catalog save and reported success, so the change was lost at the
+  next start: a field the operator was told is encrypted was not, and a
+  revoked role read plaintext again. A failed save is now an error (58030).
+  `configureField` and a grant are undone, so nothing changed; a revoke
+  stays in effect in the running process (`FleRevokeNotPersisted`: it is
+  not saved, and the role has access again after a restart unless a later
+  change of the catalog, such as the retried revoke, is saved). With no data
+  directory the catalog is memory-only and nothing is saved. (2) A catalog
+  file that existed but could not be loaded (corrupt, truncated, written
+  with another `GEODE_TDE_KEY` or with none set, a symbolic link,
+  unreadable) gave an empty catalog, so the fields configured as encrypted
+  were written in plaintext. **The server now refuses to start** and names
+  the file and the cause; an embedded or CLI session gets
+  `FleCatalogUnavailable` (58030) from everything that uses the catalog,
+  and the engine refuses every string property write and every read of a
+  string property while it lasts (it cannot tell which fields are
+  encrypted); other writes run. An absent file is still a fresh, empty
+  catalog. A string value that must be encrypted and cannot be is refused
+  (`EncryptionRequired`, 58030) on the graph store's own write paths too,
+  which wrote it in plaintext. (3) The catalog no longer leaks field names
+  and role lists, and a corrupt enum byte in the file is an error instead
+  of a crash. **Upgrade note (SONNY-6274):** the engine cannot tell that a
+  store holds encrypted values whose catalog was left in
+  `/tmp/geode_fle_catalog.dat` (no cheap, reliable signal: the values are
+  opaque strings, and a key or a `/tmp` file proves nothing about this
+  store), so it does not refuse to start; it warns at startup when the data
+  directory has no catalog and that file exists. Copy it over (after
+  checking it is yours) before serving traffic.
+  Regression: `zig build test-sonny6324-fle-catalog-fail-closed`.
 
 ### Added
 
@@ -914,6 +1066,359 @@
   crash-reopened graph is hydrated it returns null for a node that exists,
   so callers take ids from a hydration chokepoint (every caller does).
   Regression: the configure-time guard (`zig build -l`).
+- **MERGE's indexes answer only what the store holds (SONNY-6362, items
+  2-5).** (2) A node could be created with an id whose bit 63 is set (a
+  reserved or replicated id); MERGE's index keeps a flag in that bit, so the
+  node was never an entry (a MERGE of a value it alone held created a
+  duplicate) and the loader refuses such an id (the node vanished at
+  restart). Creating one is now refused (`graph_store.refuseFlaggedNodeId`:
+  the reserved-id creates, `createNodeWithId`, the adapter's bulk insert and
+  MERGE). (3) `StorageAdapter.lookupNodeIdByLabelAndAllProps` (bulk edge
+  endpoint resolution) trusted the exact index's posting for its seed filter
+  unchecked; the posting is a value hash, so a collision or a stale posting
+  returned a node holding another value. Every filter is now checked against
+  the node, and the public-id resolver checks the seed too. (4)
+  **BEHAVIOUR CHANGE:** MERGE on a property that is FLE-encrypted in any type
+  is refused (0A000) with nothing written; it compared the stored randomized
+  ciphertext with the plaintext pattern value, never matched, and created a
+  duplicate every time. MERGE on an unencrypted key and `SET` the encrypted
+  field instead; matching on encrypted values needs deterministic or
+  blind-index encryption (SONNY-6350). `docs/FIELD_LEVEL_ENCRYPTION.md` no
+  longer lists blind-index equality search as available (it is not wired to
+  any query). (5) The MERGE index writers that cannot fail their write
+  (hydration, the full rebuild, the label-add and composite helpers, the
+  streaming load's merge stage) swallowed every error, out of memory
+  included, and MERGE trusted the miss; a failed add now marks the index
+  untrusted, so lookups answer "unable to tell" and the caller scans, until a
+  full rebuild adds every entry. Regression:
+  `zig build test-sonny6362-merge-index-residuals`.
+- **Full-text and vector indexes follow SET n:L, REMOVE n.prop and every
+  label; a repeated SET target answers 22G0M (SONNY-6368).** (1) **BEHAVIOUR
+  CHANGE:** one SET clause assigning one property of an element twice
+  (`SET q.c = 1, q.c = 2`, or two variables bound to one node) is refused
+  with GQLSTATE 22G0M, data exception - multiple assignments to a graph
+  element property (ISO/IEC 39075:2024 13.3 General Rule 7 a); it answered
+  22G03 (invalid value type). Clients matching on 22G03 for it must match
+  22G0M. (2) A live `SET n:L` put the node into neither the full-text nor the
+  vector indexes on `L`, so neither search found it; the node now joins them
+  with the properties it holds (`property_mutation.addNodeLabel`, every SET
+  executor). (3) A committed `REMOVE n.prop` left the removed text in the
+  full-text index, so the node stayed findable by the removed word. The
+  engine cannot take one property's postings out of a document, so every
+  full-text index covering the removed text is rebuilt from the store at the
+  end of the statement, once per index however many rows it removed from.
+  Cost: an O(nodes of the label) rebuild per statement that removes indexed
+  text. (4) Vector and other advanced-index maintenance used only the node's
+  first label (SET, `SET n = {map}`, REMOVE, and the batch CREATE path), so an
+  index on a second label went stale; it now maintains every label's.
+  (5) An undo (failed statement, ROLLBACK) whose index repair found a
+  rebuild of the same full-text index running (`CALL geode.fts.rebuild`, a
+  restore's or snapshot install's rebuild) was refused, logged and dropped,
+  and the index kept the undone value that rebuild had read; the running
+  rebuild now runs again from the store after its pass
+  (`FtsStorageAdapter.requestRebuildAgain`). `CALL geode.fts.rebuild` itself
+  still refuses a second concurrent rebuild of one index. Not changed:
+  `CALL geode.fts.rebuild` from a session on another graph rebuilds the
+  default graph's index, where every full-text index lives (SONNY-2790); the
+  ticket's item asking it to use the session graph described the design.
+  Regression: `zig build test-sonny6368-index-maintenance`.
+- **The statement undo record is the statement's, not the thread's
+  (SONNY-6362, item 1).** A write another thread made for a statement was
+  not in the statement's undo record (`statement_undo` kept it in a
+  thread-local), so a statement that failed did not undo it, and the UNIQUE
+  and NOT NULL / EXISTS / NODE KEY checks at the statement's end, which read
+  the record, never saw it. The record is now a `statement_undo.Record` that
+  a thread working for the statement joins (`current` on the statement's
+  thread, `attach` / `detach` on the worker); every change to it takes its
+  mutex, and a create's reserved slot is counted per create, so concurrent
+  threads lose no entry. The parallel UNION arms
+  (`set_operations.tryParallelUnion`), the executor's one path that runs a
+  statement's work on threads of its own, join it; they are read-only today,
+  and the record no longer depends on that. Regression:
+  `zig build test-sonny6362-statement-undo-threads`.
+- **A failed statement and a ROLLBACK leave the full-text and vector
+  indexes answering for what the store holds (SONNY-3381).** The executor
+  maintains the full-text indexes and the advanced (vector, spatial, ...)
+  indexes beside the graph store's write methods, while the undo of a failed
+  statement and of `ROLLBACK` / rollback to a savepoint replays through those
+  methods only. Afterwards `CALL geode.fts.search` still found a node by a
+  word an undone SET wrote (also inside a transaction, where fulltext
+  maintenance is not deferred), missed a node whose DELETE was undone (the
+  engine's tombstone is permanent), and `knn()` ranked a node by a vector an
+  undone SET had added. The undo now collects the (graph, label, property)
+  of each node change it reverts (`txn_undo_log.IndexRepair`) and, when it
+  is done, rebuilds every full-text and advanced index covering one of them
+  from the store (`execution/undo_index_repair.zig`), on the undoing thread
+  under its graph lock. Cost: an O(nodes of the label) rebuild, only after
+  such an undo. Also fixed on the way: a transaction that wrote one
+  vector-indexed property twice leaked the index name it queued for its
+  COMMIT's rebuild, and a ROLLBACK left that queued rebuild for the next
+  COMMIT of any session to run. Regression:
+  `zig build test-sonny3381-undo-index-entries`.
+- **The server's MATCH ... CREATE and MATCH ... MERGE edge fast paths write
+  what the executor writes (SONNY-3241).** (1) `MATCH (a:P {k: 1}), (b:Q
+  {k: 9}) CREATE (a)-[:E]->(b)` resolved each endpoint to the lowest node
+  holding its key, so with two `(:P {k: 1})` it made one edge where the
+  executor makes one per matched pair (two); and a key MERGE's index cannot
+  hold (a non-integer number such as `1.5`, an over-long key) was taken as
+  "no such node", so it made none where the executor finds the nodes. The
+  fast path now takes an endpoint only when it is its key's single holder
+  (`StorageAdapter.lookupSoleNodeByMergeKey`) and otherwise hands the
+  statement to the executor, before writing anything; a key no node holds
+  still creates nothing. (2) The MATCH ... MERGE edge fast path wrote its
+  SET properties on the edge it matched as well as the one it created, so
+  `ON CREATE SET r.c = 1` (alone, or beside a bare `SET`) changed an
+  existing edge; such statements now go to the executor, and only a single
+  bare `SET` (which applies on both branches) stays on the fast path, as for
+  the node MERGE fast path. The node MERGE cases of this ticket (ON CREATE /
+  ON MATCH SET beside a bare SET, also through `/*+BATCH*/` and `USE GRAPH
+  g; MERGE`) were already declined since round 4a and are now pinned over
+  the wire. Regression: `zig build test-sonny3241-fast-path-parity-wire`.
+- **BEHAVIOUR CHANGE: a relationship MERGE matches on the relationship's
+  properties (SONNY-3357).** `MERGE (a)-[:T {w: 1}]->(b)` then `MERGE
+  (a)-[:T {w: 2}]->(b)` left one edge (`w: 1`): the edge was matched on
+  endpoints, type, graph and tenant only, and the second MERGE's ON MATCH
+  SET ran on it. The whole pattern now has to match, its relationship
+  properties included (MERGE is a Geode extension; ISO/IEC 39075:2024 has
+  no MERGE, and this follows openCypher), or MERGE creates the edge, on the
+  standalone MERGE and on MATCH ... MERGE. The server's MATCH ... MERGE edge
+  fast path matched the same way and wrote the pattern's properties onto
+  whatever edge it found; a relationship with properties now goes to the
+  executor. A MERGE with no relationship properties is unchanged.
+  Regression: `zig build test-sonny3357-merge-relationship-properties`.
+- **BEHAVIOUR CHANGE: lean-mode late keys and runtime composite keys are
+  complete in their indexes; a bit-63 reserved id takes property SETs
+  again (SONNY-6354).** (1) Regression from SONNY-6268: a property SET,
+  no-save SET or label add on a node whose reserved id has bit 63 set
+  failed with `MergeHolderIdFlagged`. Such an id is never a MERGE index
+  entry (the bit flags an entry), so the write now goes on and writes no
+  entry, as every other path does; a removal for such an id no longer
+  drops the entry of the node whose id has the same low bits. (2) With
+  `GEODE_INDEX_MERGE_KEYS_ONLY=1` the exact node-property index held a key
+  registered at runtime (the first MERGE on it) only for nodes written
+  after, yet every seek trusted it as complete: `MATCH (n:L {k: v})`,
+  WHERE seeks and both bulk endpoint resolvers missed older nodes (the
+  resolvers reported a present endpoint as missing), and the index saved
+  at shutdown carried the hole across a restart. The first access to a
+  graph's exact index after such a registration now adds the older
+  holders of the new key (one scan of the graph per registration, under
+  the index's build mutex; a lean-off store never pays it), and an index is
+  saved only once complete. (3) `prop_exact.idx` is stamped with the
+  indexed-key set (format `GENPIDX5`): one saved under another key set, or
+  with lean mode on and read with it off (it lacked every non-MERGE key, so
+  seeks on them returned nothing), is rebuilt instead of trusted.
+  **Upgrade note:** every graph's `prop_exact.idx` from an older binary is
+  rebuilt once, in the background, on its first open. (4) A composite
+  MERGE key registered at runtime gets the entries of holders written
+  before it, from the label's postings (evicted nodes included), before a
+  probe trusts a miss; it covered resident nodes only. The two eager scans
+  of the node cache at registration, which walked every graph without its
+  lock, are gone. (5) The unwired second constraint implementation
+  (`src/schema/constraint_manager.zig`, `schema_manager.zig`) and the tests
+  of it only are removed. Regression:
+  `zig build test-sonny6354-lean-late-key-indexes`.
+- **Lean mode: MERGE no longer duplicates a holder that is not resident
+  (SONNY-3056).** With `GEODE_INDEX_MERGE_KEYS_ONLY=1`, a MERGE key is
+  indexed only once registered (the first MERGE on it), and the
+  registration backfilled MERGE's index from the resident nodes only, so a
+  node written before (by CREATE, or a MERGE on another key) and evicted
+  from the node cache had no entry: the executor's MERGE and the server's
+  bulk MERGE trusted the miss and created a duplicate. A key registered at
+  runtime is now backfilled per (graph, label) from the label's postings,
+  hydrating nodes that are not resident, before the first lookup trusts a
+  miss (`GraphStore.ensureLeanMergeBackfill`); the cost is one scan of the
+  label per key, once (keys read from `merge_index_keys.dat` at start cost
+  nothing). The legacy executor's point read through the same index
+  (`lookupOnlyMergeHolder`) is covered too. The exact node-property index
+  and runtime composite keys followed in SONNY-6354. Regression:
+  `zig build test-sonny3056-lean-merge-evicted-holder`.
+
+- **BEHAVIOUR CHANGE: NOT NULL, EXISTS and NODE KEY existence are enforced;
+  `CREATE UNIQUE INDEX` is refused (SONNY-6281).** `REQUIRE n.p IS NOT
+  NULL`, `ASSERT EXISTS (p)` and the existence half of `IS NODE KEY` were
+  recorded and never checked. They are now checked at the end of every
+  statement, through SONNY-2846's check: a statement that would leave a node
+  of the label without the property (absent or `NULL`: CREATE, MERGE that
+  creates, `SET n.p = NULL`, `SET n = {...}`, `REMOVE n.p`, `SET n:Label`)
+  fails with 23502 (`not_null_violation`) and keeps none of its changes;
+  `REMOVE n:Label` frees a node. **`CREATE CONSTRAINT` of these kinds over
+  nodes that already lack the property is now refused** (23502, with the
+  count); it used to be accepted. Every enforced constraint, of any kind,
+  now sends the server's node-writing fast paths (simple CREATE, bulk
+  MERGE, `/*+BATCH*/`, `USE GRAPH g; MERGE`) to the executor, and a cluster
+  leader refuses a replicated non-delete write on such a graph, as for
+  UNIQUE. **`CREATE UNIQUE INDEX` is now refused with 0A000**
+  (`UniqueIndexNotSupported`): it built a plain index and ignored `UNIQUE`;
+  use `CREATE CONSTRAINT ... IS UNIQUE`. ISO/IEC 39075:2024 has no
+  constraint or index DDL; these are Geode extensions. **Upgrade note:** a
+  NOT NULL / EXISTS / NODE KEY constraint created on an older version over
+  data that lacks the property stays in the catalog and is enforced from
+  now on for each node a statement writes (a statement that changes any
+  property or label of such a node must also supply the missing one);
+  nodes not written are not rechecked. Find them with `MATCH (n:Label)
+  WHERE n.prop IS NULL`. The dead `catalog_mod` import in `crud_operations.zig` and its
+  misleading `REQ-CONSTRAINT-ENFORCE-001` CANARY are removed. Regression:
+  `zig build test-sonny6281-existence-constraints`.
+
+- **`zig build test-graph-store` is green again (SONNY-6336, tests
+  only):** seven inline tests set the process-global data-directory
+  override through `initGlobalStore` and left it naming their removed
+  scratch directory, so the later FLE inline test (GAP-0886), whose catalog
+  save now fails closed (SONNY-6324), failed with `FileNotFound`. Those
+  tests now restore the previous override
+  (`graph_store.saveDataDirOverride` / `restore`), and the FLE inline tests
+  point the FLE catalog at their own scratch directory and restore the
+  previous one (`fle_catalog.saveDataDirOverride`). No product change.
+
+- **Index and constraint catalogs are graph-scoped (SONNY-1319):** the
+  catalog keyed a row `<label>:<name>` with no graph, so with two graphs
+  `CREATE INDEX IF NOT EXISTS i ...` in one was a silent no-op when the other
+  had `i`, a plain CREATE answered 42P07, `DROP INDEX i` in one graph removed
+  the other's `i` (one tenant could drop another's indexes by name), `CREATE
+  CONSTRAINT c` was refused (42710) when another graph had `c`, and `SHOW
+  INDEXES` / `SHOW CONSTRAINTS` / `db.indexes()` / `db.constraints()` listed
+  every graph's rows. Every row now records its graph (the session's; the
+  default graph for a fulltext index, where its engine lives), persisted in a
+  trailer after the catalog records and reloaded at restart. CREATE, IF NOT
+  EXISTS, DROP INDEX and SHOW resolve within the session's graph; DROP INDEX
+  now needs the schema permission on the session's graph (and, as before,
+  on the database; on `default` too for a fulltext or engine-wide index).
+  Two exceptions: an index whose runtime structure is keyed by name alone
+  (vector/HNSW and the other advanced types, SONNY-1223) cannot share its
+  name with another graph's index — that CREATE, IF NOT EXISTS included, is
+  refused with 42P07 `IndexNameInUseByOtherGraph` instead of being
+  swallowed; and rows from a catalog written before this change, and the
+  implicit `auto_idx_*_id` indexes, are engine-wide (in every graph's
+  catalog, as before), so an upgrade loses nothing. Constraint enforcement
+  on writes is unchanged (SONNY-2846, SONNY-3358). Regression:
+  `zig build test-sonny1319-graph-scoped-catalog`.
+- **A dropped index stays dropped, and DROP INDEX takes the catalog lock
+  (SONNY-2795):** DROP INDEX removed the catalog row in memory and never
+  saved the catalog, so the index came back after a restart. It now saves
+  as CREATE INDEX does; if the save fails the statement fails and the
+  index stays, in memory and on disk. DROP INDEX also removed and freed
+  the row without the catalog lock while readers could hold it; it now
+  holds the lock exclusive, and the vector-index readers on the write and
+  knn paths, `db.indexes()` and `CALL geode.fts.rebuild` copy what they
+  need under the lock. CREATE INDEX and the vector dimension guard created
+  the process-wide index manager with the statement's per-request
+  allocator; it now uses the process allocator. A session with no data
+  directory read and wrote its catalog at the shared
+  `/tmp/geode_catalog.dat`, so separate sessions and processes shared one
+  catalog and a new session loaded an earlier one's indexes; its catalog
+  is now kept in memory only, as its store is. Regression:
+  `zig build test-sonny2795-drop-index-catalog`.
+- **BEHAVIOUR CHANGE: UNIQUE constraints are enforced (SONNY-2846,
+  SONNY-3358).** `CREATE CONSTRAINT ... IS UNIQUE` recorded a row and
+  nothing checked it: CREATE, MERGE that creates, `ON CREATE SET`, `SET
+  n.p = <taken value>` and `SET n:<constrained label>` all made duplicates,
+  on in-memory and persisted sessions, and the server's write fast paths
+  skipped the executor altogether. **Writes that used to succeed can now
+  fail:** every statement is checked when it ends (SQL's rule for a
+  constraint that is not deferred), and one that would leave two nodes
+  holding one key fails with 23505 (`unique_violation`, naming the
+  constraint, never the value) with none of its changes kept, a
+  multi-element CREATE included. A swap is allowed. Uniqueness is per graph
+  (an engine-wide row from an older catalog applies in every graph, each
+  checked on its own) and per tenant tag, so a refusal never tells one
+  tenant what another holds; NULL and missing values never conflict; values
+  compare as MERGE matches them (`1` = `1.0`; strings byte for byte, so an
+  NFC and an NFD spelling are distinct). **`CREATE CONSTRAINT ... IS UNIQUE`
+  (or `NODE KEY`) over data that already has duplicates is now refused**
+  (23505, with the number of duplicate groups); it used to be accepted. The
+  uniqueness half of NODE KEY is enforced; NOT NULL, EXISTS and NODE KEY's
+  existence half followed in SONNY-6281 (above). The holder is found through the
+  exact node-property index, or, where it cannot answer (lean mode, the
+  index rebuilding after a restart, an in-memory session, a non-scalar
+  value), by a scan of the label, including nodes that are not resident.
+  The simple-CREATE, bulk MERGE, `/*+BATCH*/` and `USE GRAPH g; MERGE` fast
+  paths no longer serve a graph with a UNIQUE constraint (those writes run
+  through the executor, and are slower); a fast-path write already past
+  that check when the constraint is created is refused with 40001. A
+  cluster leader refuses (40001) a replicated non-delete write on such a
+  graph. The dead `validateConstraints` (crud_operations.zig) and
+  `Catalog.getConstraintsForLabel` are removed. (`CREATE UNIQUE INDEX` is
+  refused since SONNY-6281, above.) Regressions:
+  `zig build test-sonny2846-unique-constraint-enforcement` and
+  `zig build test-sonny2846-unique-fast-paths-wire`.
+- **DROP CONSTRAINT drops the constraint (SONNY-6270):** it answered
+  success and removed nothing, so the constraint stayed in `SHOW
+  CONSTRAINTS`, kept being enforced and survived restarts. It now works as
+  DROP INDEX does: the name resolves in the session's graph (its own rows,
+  else an engine-wide row from an older catalog; a constraint of another
+  graph is not found), all rows of that name there are removed and the
+  catalog saved under the catalog lock, and a failed save fails the
+  statement with the constraint still in place and enforced. A missing name
+  is refused (`ConstraintNotFound`) unless `IF EXISTS` is given. Dropping
+  an engine-wide row from any graph removes it for every graph. A UNIQUE or
+  NODE KEY constraint stops being enforced at once, and once no UNIQUE row
+  applies in a graph the server's bulk write fast paths serve it again. The
+  permission checks are CREATE CONSTRAINT's (an engine-wide row also needs
+  schema on `default`, as for DROP INDEX); cluster mode refuses it. DDL is
+  not transactional: a ROLLBACK does not bring a dropped constraint back.
+  `db.constraints()` read catalog rows after releasing the catalog lock; it
+  now copies them under the lock, as SHOW CONSTRAINTS does. The unused
+  `Catalog.removeConstraint`, `listAllConstraints` and
+  `listConstraintsForGraph` are removed. Regression:
+  `zig build test-sonny6270-drop-constraint`.
+- **BEHAVIOUR CHANGE: index and constraint names are unique per graph;
+  DROP INDEX is deterministic and locks the session's graph (SONNY-6294).**
+  CREATE INDEX accepted one name on two labels of a graph, and DROP INDEX
+  then dropped whichever row the catalog's hash order met first. A name is
+  now one index of a graph: a second `CREATE INDEX` with the name, on any
+  label, is refused (42P07; a no-op under `IF NOT EXISTS`), and the same
+  for `CREATE CONSTRAINT` (42710). Another graph may still use the name
+  (SONNY-1319). A catalog written before this may hold one name on several
+  labels: DROP INDEX drops all of them in the scope it resolves (the
+  graph's own rows, else the engine-wide rows) and adds a note to the
+  result, as DROP CONSTRAINT does. The server took the default graph's
+  write lock for every DROP INDEX (it might be a fulltext index), so a
+  DROP INDEX in graph g ran beside g's writers and blocked default's; it
+  now takes the session graph's lock, as constraint DDL does. A fulltext
+  index lives in the default graph, so **a bare `DROP INDEX` of a fulltext
+  index from a session on another graph is now refused (0A000)**: run
+  `USE GRAPH default; DROP INDEX <name>`. `IndexNotFound` and
+  `ConstraintNotFound` reached clients as 58000 (system error); they are
+  42704 (undefined_object), and `IndexAlreadyExists` is 42P07. Clients or
+  harness specs that matched 58000 for these must match 42704. Regression:
+  `zig build test-sonny6294-drop-index-rules`.
+- **A graph-store write that runs out of memory part way leaves nothing
+  half done (SONNY-6268):** node and edge creates, property SET and REMOVE,
+  label add and remove, and node and edge deletes either complete or leave
+  the store, its indexes and the storage engine as they were, free what they
+  copied, and report the failure. Before, a SET whose key copy failed left a
+  property slot with an undefined key, so the next lookup on the node, its
+  delete or the store's shutdown crashed; a create that failed after the node
+  cache took the node left a node no caller knew of in the cache and in some
+  indexes, or leaked its copies, or left an orphan node in the engine; a
+  failed merge-index insert was ignored, so a later MERGE created a
+  duplicate; and a delete that failed half way (edges not collected, a label
+  posting not updated) still removed the node and reported nothing. The node
+  cache's `put` is all-or-nothing and documents who owns the value when it
+  fails (the caller). `GraphStore.deleteNodeChecked` and `deleteEdgeChecked`
+  return the error (the executor's DELETE and the statement undo use them);
+  `deleteNode` and `deleteEdge` log it and fail the running statement on out
+  of memory. Regression:
+  `zig build test-sonny6268-graph-store-failure-atomicity`.
+- **No edge write, tenant drop or replicated delete reports success when the
+  storage engine did not store it (SONNY-6302):** `setEdgeProperty` logged a
+  failed engine write (or slot lookup) at debug level and wrote the property
+  in memory anyway, so the client saw success and a restart lost the value;
+  it now returns the error and leaves memory as it was, as `setNodeProperty`
+  does. `removeEdgeProperty` prepares its in-memory removal before the engine
+  write (memory could keep a property the engine had removed). A tenant drop
+  (`CALL geode.tenant.drop(t, true)`) whose delete fails now fails before the
+  tenant is removed, logs what was deleted and what remains, and a retry
+  finishes it; it used to remove the tenant and report success with its rows
+  left behind. The replicated-delete apply returns a failed delete to the raft
+  apply loop (logged as not applied, counted in `apply_errors`) after applying
+  the rest of the entry; the 2PC participant and coordinator fail a commit
+  whose delete fails, as they do a failed create; the 2PC undo of a create
+  logs a failed delete as an incomplete undo. Deleting a node or edge whose
+  names pass 512 bytes reserves its index-key room before the engine delete,
+  so the in-memory removal cannot leave the node in its label posting or a
+  counter high. Regression:
+  `zig build test-sonny6302-edge-write-and-delete-errors`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

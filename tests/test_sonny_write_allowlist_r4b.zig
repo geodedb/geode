@@ -446,8 +446,7 @@ test "SONNY-3322: a relationship variable reads its relationship after 150 and 6
         .{ .head = "INSERT (a0:V {k: 0})-[r:T {w: 3}]->(b0:V {k: 0})", .sep = ", ", .chain = create_chain, .tail = ", (z:Z {w: r.w})", .then = "MATCH (z:Z) RETURN z.w", .want = "3" },
         // MERGE: three clauses a chain (at most 1024 clauses a part).
         // MERGE: each later clause merges one more relationship from a0 to a
-        // node of its own (at most 1024 clauses a part; a relationship MERGE
-        // matches on the endpoints and type, not the properties).
+        // node of its own (at most 1024 clauses a part).
         .{ .head = "MERGE (a0:V {k: 0}) MERGE (b0:V {k: 0}) MERGE (a0)-[r:T {w: 3}]->(b0)", .sep = " ", .chain = "MERGE (a0)-[:T {w: {k}0}]->(:V {k: {k}})", .tail = " ON CREATE SET a0.w = r.w RETURN a0.w, r.w", .want = "3|3" },
     };
     var failures: usize = 0;

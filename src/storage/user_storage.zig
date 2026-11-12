@@ -55,6 +55,8 @@ const POLICY_LABEL = "Policy";
 const AUTH_CHAIN_ROOT_LABEL = "AuthChainRoot";
 const HAS_ROLE_EDGE = "HAS_ROLE";
 pub const GRAPH_GRANT_LABEL = "GraphGrant";
+/// SONNY-6341: a user's permission to act under one FLE role.
+pub const FLE_ROLE_GRANT_LABEL = "FleRoleGrant";
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
     // error-policy: D — computeRecordHmac's only error is TooManyProperties
@@ -78,6 +80,8 @@ pub const UserStorageBackend = struct {
     permission_nodes: std.AutoHashMap(u64, u64),
     policy_nodes: std.AutoHashMap(u64, u64),
     graph_grant_nodes: std.AutoHashMap(u64, u64),
+    /// SONNY-6341: FLE role grant id (`fleRoleGrantId`) -> node id.
+    fle_role_grant_nodes: std.AutoHashMap(u64, u64),
 
     // AuthChainRoot singleton node ID (null if not yet created)
     chain_root_node: ?u64,
@@ -326,6 +330,7 @@ pub const UserStorageBackend = struct {
             .permission_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .policy_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .graph_grant_nodes = std.AutoHashMap(u64, u64).init(allocator),
+            .fle_role_grant_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .chain_root_node = null,
         };
 
@@ -343,6 +348,7 @@ pub const UserStorageBackend = struct {
         self.permission_nodes.deinit();
         self.policy_nodes.deinit();
         self.graph_grant_nodes.deinit();
+        self.fle_role_grant_nodes.deinit();
     }
 
     fn ensureSecurityGraph(store: *graph_store.GraphStore) !void {
@@ -358,6 +364,7 @@ pub const UserStorageBackend = struct {
         try self.loadPermissionsFromGraph();
         try self.loadPoliciesFromGraph();
         try self.loadGraphGrantsFromGraph();
+        try self.loadFleRoleGrantsFromGraph();
         // Hydrate `chain_root_node` from the persisted AuthChainRoot node so
         // a subsequent `persistChainRoot` call (e.g. during offline
         // reset-password rewriting the seal) updates the existing node
@@ -914,6 +921,102 @@ pub const UserStorageBackend = struct {
             try records.append(allocator, record);
         }
         return records.toOwnedSlice(allocator);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-GRANT-STORE; FEATURE="FieldLevelEncryption"; ASPECT=DurableFleRoleGrants; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6341: one FLE role a user may act under. Stored as a
+    /// (:FleRoleGrant {id, user_id, role, granted_at}) node in the security
+    /// graph, counted in and sealed by the HMAC chain like a GraphGrant.
+    pub const FleRoleGrantRecord = struct {
+        id: u64,
+        user_id: u64,
+        role: []const u8, // borrowed from the store
+    };
+
+    /// The id of an FLE role grant: a hash of who and which role, so a
+    /// repeated grant is the same record.
+    pub fn fleRoleGrantId(user_id: u64, role: []const u8) u64 {
+        var h = std.hash.Wyhash.init(0x6341);
+        h.update(std.mem.asBytes(&user_id));
+        h.update(role);
+        return h.final();
+    }
+
+    fn fleRoleGrantIdFromNode(store: *graph_store.GraphStore, node_id: u64) ?u64 {
+        const uid_val = getIntProp(store, node_id, "user_id", -1);
+        if (uid_val < 0) return null;
+        const role = getStringProp(store, node_id, "role", "");
+        if (role.len == 0) return null;
+        return fleRoleGrantId(@intCast(uid_val), role);
+    }
+
+    fn loadFleRoleGrantsFromGraph(self: *Self) !void {
+        const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, FLE_ROLE_GRANT_LABEL);
+        if (nodes_opt == null) return;
+        for (nodes_opt.?) |node_id| {
+            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+            // As for GraphGrant: a record whose fields give no id is still
+            // mapped (under its stored id) so the chain check sees it.
+            const grant_id = fleRoleGrantIdFromNode(self.store, node_id) orelse
+                @as(u64, @bitCast(getIntProp(self.store, node_id, "id", -1)));
+            try self.fle_role_grant_nodes.put(grant_id, node_id);
+        }
+    }
+
+    /// Store the grant (idempotent).
+    pub fn persistFleRoleGrant(self: *Self, user_id: u64, role: []const u8) !u64 {
+        if (role.len == 0 or role.len > 127) return error.FieldTooLong;
+        const grant_id = fleRoleGrantId(user_id, role);
+        if (self.fle_role_grant_nodes.contains(grant_id)) return grant_id;
+        const node_id = try self.createEntityNode(FLE_ROLE_GRANT_LABEL);
+        errdefer self.store.deleteNode(node_id);
+        try self.store.setNodeProperty(node_id, "id", .{ .Int = @bitCast(grant_id) });
+        try self.store.setNodeProperty(node_id, "user_id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "role", .{ .String = role });
+        try self.store.setNodeProperty(node_id, "granted_at", .{ .Int = compat_timestamp() });
+        try self.fle_role_grant_nodes.put(grant_id, node_id);
+        return grant_id;
+    }
+
+    /// Remove the grant; false when there was none.
+    pub fn revokeFleRoleGrant(self: *Self, user_id: u64, role: []const u8) bool {
+        const kv = self.fle_role_grant_nodes.fetchRemove(fleRoleGrantId(user_id, role)) orelse return false;
+        self.store.deleteNode(kv.value);
+        return true;
+    }
+
+    /// Remove every grant of `user_id` (DROP USER); how many went.
+    pub fn revokeAllFleRoleGrants(self: *Self, user_id: u64) !usize {
+        var doomed: std.ArrayList(u64) = .empty;
+        defer doomed.deinit(self.allocator);
+        var it = self.fle_role_grant_nodes.iterator();
+        while (it.next()) |e| {
+            if (getIntProp(self.store, e.value_ptr.*, "user_id", -1) == safeI64(user_id)) try doomed.append(self.allocator, e.key_ptr.*);
+        }
+        for (doomed.items) |id| {
+            if (self.fle_role_grant_nodes.fetchRemove(id)) |kv| self.store.deleteNode(kv.value);
+        }
+        return doomed.items.len;
+    }
+
+    /// Every stored grant whose fields are intact. Roles borrow from the
+    /// store; the slice is the caller's.
+    pub fn listFleRoleGrants(self: *Self, allocator: Allocator) ![]FleRoleGrantRecord {
+        var out: std.ArrayList(FleRoleGrantRecord) = .empty;
+        errdefer out.deinit(allocator);
+        var it = self.fle_role_grant_nodes.iterator();
+        while (it.next()) |e| {
+            const node_id = e.value_ptr.*;
+            const id = fleRoleGrantIdFromNode(self.store, node_id) orelse continue;
+            if (id != e.key_ptr.*) continue;
+            try out.append(allocator, .{
+                .id = id,
+                .user_id = @intCast(getIntProp(self.store, node_id, "user_id", 0)),
+                .role = getStringProp(self.store, node_id, "role", ""),
+            });
+        }
+        return out.toOwnedSlice(allocator);
     }
 
     // User operations

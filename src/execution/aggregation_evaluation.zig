@@ -301,7 +301,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     };
 
                                     // Evaluate the expression
-                                    const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                                    const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                                     switch (val) {
                                         .Int => |i| {
                                             // Use overflow-safe addition
@@ -668,7 +668,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             if (val != .Null) {
                                 count += 1;
                             }
@@ -692,7 +692,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             _ = try distinct.add(val);
                         }
                         return Value{ .Int = @intCast(distinct.count()) };
@@ -710,7 +710,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             switch (val) {
                                 .Int => |i| {
                                     // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-005; FEATURE="OverflowSafeSum"; ASPECT=IntOverflow; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
@@ -769,7 +769,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             switch (val) {
                                 .Int => |i| {
                                     sum += @floatFromInt(i);
@@ -804,7 +804,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             if (val == .Int) {
                                 if (min_int == null or val.Int < min_int.?) {
                                     min_int = val.Int;
@@ -836,7 +836,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             if (val == .Int) {
                                 if (max_int == null or val.Int > max_int.?) {
                                     max_int = val.Int;
@@ -868,7 +868,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             // B02 Fix: Skip NULL values - COLLECT only collects non-NULL values
                             if (val != .Null) {
                                 list.append(allocator, val) catch {};

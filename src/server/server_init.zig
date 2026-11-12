@@ -429,6 +429,16 @@ pub fn initialize(
     // direct configuration via graph_store.setDataDirOverride() is preferred
     // Set data directory for GraphStore persistence (canonical configuration for isolation)
     graph_store.setDataDirOverride(allocator, data_dir);
+    // SONNY-6334: GPS decides FLE decrypt_field from the first request on.
+    geode.execution.installDecryptDecider();
+
+    // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=StartupLoad; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-6324: load the FLE catalog now, from the data directory just
+    // set, and refuse to start if a catalog file exists and cannot be
+    // loaded: without it the fields configured as encrypted are unknown. It
+    // was loaded lazily on first use and a failure gave an empty catalog, so
+    // those fields were written in plaintext.
+    try geode.fle_integration.catalog_mod.loadGlobalCatalogAtStartup();
 
     // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-007; FEATURE="EngineBackedPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=storage; UPDATED=2026-06-11
     // Initialize global store with engine-backed adapter (creates adapter + loads from engine).
@@ -951,8 +961,47 @@ fn writerCreateUser(ctx: ?*anyopaque, username: []const u8, email: []const u8, p
 fn writerDeleteUser(ctx: ?*anyopaque, username: []const u8) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
     const uid = (try agm.findUserIdByName(username)) orelse return;
+    // SONNY-6341: a dropped user's FLE role grants go with it (a user made
+    // later under the name holds none).
+    try agm.revokeAllUserFleRoles(&agm.hmac_key, uid);
     try agm.removeUser(&agm.hmac_key, uid);
     user_mgmt.notePersistentAuthMutation();
+}
+
+// -- FLE role grants (SONNY-6341) --
+
+fn fleRoleGrantPersist(ctx: ?*anyopaque, username: []const u8, role: []const u8) anyerror!void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const uid = (try agm.findUserIdByName(username)) orelse return error.FleRoleUserNotFound;
+    try agm.grantUserFleRole(&agm.hmac_key, uid, role);
+}
+
+fn fleRoleRevokePersist(ctx: ?*anyopaque, username: []const u8, role: []const u8) anyerror!bool {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const uid = (try agm.findUserIdByName(username)) orelse return false;
+    return agm.revokeUserFleRole(&agm.hmac_key, uid, role);
+}
+
+/// SONNY-6341: the stored FLE role grants, loaded into memory. A grant whose
+/// user is gone is not loaded; a listing that fails loads none (no session
+/// acts under any FLE role: fail closed), logged.
+fn hydrateFleRoleGrants(agm: *auth_graph_manager.AuthGraphManager, allocator: std.mem.Allocator) void {
+    const fle_role_grants = geode.security.fle_role_grants;
+    const list = agm.listFleRoleGrants(allocator) catch |e| {
+        log.err("Auth DDL startup: FLE role grants could not be listed; no session acts under an FLE role", &.{Attr.string("error", @errorName(e))});
+        return;
+    };
+    defer allocator.free(list);
+    var loaded: usize = 0;
+    for (list) |g| {
+        const user = agm.storage.getUser(g.user_id) orelse continue;
+        fle_role_grants.load(user.getUsername(), g.role) catch |e| {
+            log.err("Auth DDL startup: an FLE role grant could not be loaded", &.{Attr.string("error", @errorName(e))});
+            continue;
+        };
+        loaded += 1;
+    }
+    if (loaded > 0) log.info("Auth DDL startup: hydrated FLE role grants", &.{Attr.int("count", @intCast(loaded))});
 }
 
 fn writerUpdatePassword(ctx: ?*anyopaque, username: []const u8, new_password_hash: []const u8) anyerror!void {
@@ -1103,6 +1152,14 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
         .grant_fn = &grantApply,
         .revoke_fn = &grantRevoke,
     });
+
+    // 4b. SONNY-6341: FLE role grants, stored and loaded.
+    geode.security.fle_role_grants.setPersistence(.{
+        .ctx = @ptrCast(agm),
+        .grant_fn = &fleRoleGrantPersist,
+        .revoke_fn = &fleRoleRevokePersist,
+    });
+    hydrateFleRoleGrants(agm, allocator);
 
     // 5. Per-graph grant check function for execution.zig fallback path.
     geode.execution.graph_grant_check_fn = &graphGrantCheck;

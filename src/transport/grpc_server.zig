@@ -463,6 +463,28 @@ pub const SessionStore = struct {
         return self.createSessionAs(username, username, password, role, tenant_id, graph, pwd_reset_required, auth_version);
     }
 
+    /// SONNY-6334: the FLE role a HELLO named, validated
+    /// (`fle_integration.helloFleRole`, as QUIC), kept on the session's
+    /// state; an invalid or empty one is no role.
+    pub fn setSessionFleRole(self: *SessionStore, session_id: []const u8, requested: ?[]const u8) !void {
+        const role = fle_integration.helloFleRole(requested) orelse {
+            if (requested) |r| if (r.len > 0) log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
+            return;
+        };
+        const entry = self.acquire(session_id) orelse return error.SessionNotFound;
+        defer self.release(entry);
+        {
+            entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            const copy = try entry.state.allocator.dupe(u8, role);
+            if (entry.state.fle_user_role) |old| entry.state.allocator.free(old);
+            entry.state.fle_user_role = copy;
+        }
+        // SONNY-6341: a role the user does not hold is audited and not acted
+        // under (`ServerState.effectiveFleRole`, every request).
+        entry.state.auditUnheldFleRole();
+    }
+
     /// SONNY-3252: a session for `username`, counted against `principal`.
     pub fn createSessionAs(
         self: *SessionStore,
@@ -516,10 +538,9 @@ pub const SessionStore = struct {
                 state.session_config.?.tenant_id = tenant_copy;
             }
 
-            // GAP-0281: Set per-thread FLE tenant_id for encryption namespace isolation.
-            fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-            // GAP-0282: Set per-thread audit tenant_id so all audit events carry tenant context.
-            audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
+            // GAP-0281/0282, SONNY-6334: the tenant reaches FLE and audit
+            // through each request's context (`installRequestThreadState`),
+            // not the Handshake's thread, which serves other sessions next.
 
             // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=GrpcSessionGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
             if (graph) |g| {
@@ -872,6 +893,10 @@ fn deinitServerState(state: *server_state.ServerState) void {
     fle_integration.clearCurrentThreadState();
     // GAP-0285: Also clear per-thread audit tenant_id.
     audit_mod.setCurrentAuditTenantId(null);
+    if (state.fle_user_role) |r| {
+        alloc.free(r);
+        state.fle_user_role = null;
+    }
 
     // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=GrpcTeardown; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
     // SONNY-2823: a session that ends with a transaction open rolls it back,
@@ -1495,6 +1520,10 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
     // are this thread's for the request, whichever worker thread serves it.
     const txn_scope = state.enterSessionTxn();
     defer state.leaveSessionTxn(txn_scope);
+    // SONNY-6334: the session's request context (tenant, FLE role,
+    // decrypt_field gate) on this thread for the request, as QUIC does.
+    state.installRequestThreadState();
+    defer server_state.ServerState.clearRequestThreadState();
 
     const result_ptr = if (state.active_result_values) |*res| res else {
         var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
@@ -1534,6 +1563,9 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
 /// Issue #514: Lock-free variant that operates on an already-locked state pointer.
 /// Caller MUST hold entry.mutex for the entire streaming loop.
 fn buildStreamDataPageLocked(state: *server_state.ServerState, allocator: std.mem.Allocator) !PageResult {
+    // SONNY-6334: the page encodes FLE fields as the session may read them.
+    state.installRequestThreadState();
+    defer server_state.ServerState.clearRequestThreadState();
     const result_ptr = if (state.active_result_values) |*res| res else {
         var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
         defer resp.deinit(allocator);
@@ -2709,32 +2741,11 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
             }
         }
 
-        // GAP-0284: Set FLE role from HELLO request with injection validation (parity with QUIC handler).
-        // Always reset role on new connection to prevent stale role leakage.
-        if (req.role) |requested_role| {
-            if (requested_role.len > 0) {
-                // Validate role: only [a-zA-Z0-9_-] allowed — reject semicolons, commas, wildcards
-                var role_valid = true;
-                for (requested_role) |c| {
-                    if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
-                        role_valid = false;
-                        break;
-                    }
-                }
-                if (role_valid) {
-                    fle_integration.setCurrentUserRole(requested_role);
-                } else {
-                    log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
-                    fle_integration.setCurrentUserRole(null);
-                }
-            } else {
-                fle_integration.setCurrentUserRole(null);
-            }
-        } else {
-            fle_integration.setCurrentUserRole(null);
-        }
-
         const session_id = store.createSession(req.username, req.password, auth_result.role, req.tenant_id, resolved_graph, auth_result.password_reset_required, auth_result.auth_version) catch |err| return helloSessionRefused(allocator, caps, err);
+        // GAP-0284, SONNY-6334: the FLE role the HELLO named, validated as
+        // QUIC does, kept on the session (its requests install it), never
+        // on the Handshake's thread.
+        store.setSessionFleRole(session_id, req.role) catch |err| return helloSessionRefused(allocator, caps, err);
         const resp = schema.HelloResponse{
             .success = true,
             .session_id = try allocator.dupe(u8, session_id),
@@ -2836,6 +2847,7 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
     var anon_buf: [96]u8 = undefined;
     const anon_principal = principalFor(&anon_buf, .anonymous, "", peer_ip);
     const session_id = store.createSessionAs(anon_principal, "", "", null, req.tenant_id, noauth_resolved_graph, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
+    store.setSessionFleRole(session_id, req.role) catch |err| return helloSessionRefused(allocator, caps, err);
     const resp = schema.HelloResponse{
         .success = true,
         .session_id = try allocator.dupe(u8, session_id),
@@ -2953,6 +2965,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
     // are this thread's for the request, whichever worker thread serves it.
     const txn_scope = state.enterSessionTxn();
     defer state.leaveSessionTxn(txn_scope);
+    // SONNY-6334: the session's request context (tenant, FLE role,
+    // decrypt_field gate) on this thread for the request, as QUIC does.
+    state.installRequestThreadState();
+    defer server_state.ServerState.clearRequestThreadState();
 
     state.resetResult();
     // SONNY-1560: a new statement invalidates any in-flight pushed stream on
@@ -3254,12 +3270,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 .graph_bound = state.graph_bound,
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
-                // GAP-0844 (secondary): thread the session FLE role into the context
-                // so getCurrentUserRoleCtx prefers it. The gRPC HELLO sets the role
-                // per-thread (setCurrentUserRole); state.fle_user_role mirrors it
-                // when populated, else null falls back to the per-thread map —
-                // identical to current behavior.
-                .fle_role = state.fle_user_role,
+                // GAP-0844 (secondary), SONNY-6334: the session's FLE role, the
+                // one its HELLO named (`SessionStore.setSessionFleRole`), when
+                // the authenticated user holds it (SONNY-6341).
+                .fle_role = state.effectiveFleRole(),
                 .principal = &principal_for_request,
                 .pending_index_rebuilds = null,
                 // SONNY-2799: see `abortFailedTransaction`.
@@ -4073,6 +4087,10 @@ pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
     // are this thread's for the request, whichever worker thread serves it.
     const txn_scope = state.enterSessionTxn();
     defer state.leaveSessionTxn(txn_scope);
+    // SONNY-6334: the session's request context (tenant, FLE role,
+    // decrypt_field gate) on this thread for the request, as QUIC does.
+    state.installRequestThreadState();
+    defer server_state.ServerState.clearRequestThreadState();
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},

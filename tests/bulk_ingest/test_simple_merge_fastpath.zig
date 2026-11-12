@@ -61,8 +61,9 @@ const Harness = struct {
         // master key (the pre-push shards run without GEODE_MASTER_KEY set) and
         // isolate the persisted FLE catalog so a SIBLING test that configured an
         // encrypted field (e.g. test_gap0854_fle_chain's ('User','email'))
-        // cannot leak its config into this process via the shared
-        // {GEODE_DATA_DIR or /tmp}/geode_fle_catalog.dat file. Point
+        // cannot leak its config into this process via a persisted
+        // geode_fle_catalog.dat (before SONNY-6274 a shared /tmp file when no
+        // data directory was set). Point
         // GEODE_DATA_DIR at this harness's own tmp dir and reset the in-memory
         // global catalog so it reloads from there (empty).
         _ = setenv("GEODE_MASTER_KEY", TEST_MASTER_KEY_HEX, 1);

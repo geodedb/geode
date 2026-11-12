@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const fle_integration = @import("../fle_integration.zig"); // SONNY-6362
 const property_codec = @import("../property_value_codec.zig");
 const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
@@ -21,8 +22,6 @@ const Attr = logging.Attr;
 
 // CANARY: REQ=REQ-TXN-UNDO-008; FEATURE="TransactionUndoLog"; ASPECT=CrudImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("../txn_undo_log.zig");
-// CANARY: REQ=REQ-CONSTRAINT-ENFORCE-001; FEATURE="ConstraintEnforcement"; ASPECT=CatalogImport; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
-const catalog_mod = @import("../schema/catalog.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -172,6 +171,16 @@ fn nodeMatchesEvaluatedProps(node: *const graph_store.Node, props: ?[]const Eval
         } else {
             return false;
         }
+    }
+    return true;
+}
+
+/// SONNY-3357: `nodeMatchesEvaluatedProps` for a relationship.
+fn edgeMatchesEvaluatedProps(edge: *const graph_store.Edge, props: ?[]const EvaluatedPatternProp) bool {
+    const evaluated_props = props orelse return true;
+    for (evaluated_props) |prop| {
+        const actual = edge.properties.get(prop.key) orelse return false;
+        if (!valuesEqual(actual, prop.value)) return false;
     }
     return true;
 }
@@ -595,6 +604,14 @@ const EdgeMatch = union(enum) {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-3357-MERGE-REL-PROPS; FEATURE="MergeRelationship"; ASPECT=MatchRelationshipProperties; STATUS=TESTED; TEST=tests/test_sonny3357_merge_relationship_properties.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-3357: `props` is the relationship's evaluated property map; an
+/// edge matches only when it holds every one of them, equal, as a node
+/// matches its map (`nodeMatchesEvaluatedProps`). The whole pattern must
+/// match or MERGE creates it (MERGE is a Geode extension with openCypher's
+/// semantics; ISO/IEC 39075:2024 has no MERGE). It matched on endpoints,
+/// type, graph and tenant only, so `(a)-[:T {w: 2}]->(b)` bound an edge
+/// with `w: 1`.
 fn findExistingEdge(
     read_store: *graph_store.GraphStore,
     graph_name: []const u8,
@@ -602,6 +619,7 @@ fn findExistingEdge(
     source_id: u64,
     target_id: u64,
     rel_types: []const []const u8,
+    props: ?[]const EvaluatedPatternProp,
     visibility: *MergeVisibility,
 ) EdgeMatch {
     const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return .none;
@@ -610,6 +628,7 @@ fn findExistingEdge(
         const edge = read_store.getEdgePtrHydrated(edge_id) orelse continue;
         if (edge.to_id != target_id) continue;
         if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
+        if (!edgeMatchesEvaluatedProps(edge, props)) continue;
         if (visibility.allowsEdge(edge)) return .{ .visible = edge_id };
         saw_hidden = true;
     }
@@ -788,188 +807,6 @@ pub fn ensureAutoIndexes(allocator: std.mem.Allocator, labels: []const []const u
             });
         };
     }
-}
-
-// CANARY: REQ=REQ-CONSTRAINT-ENFORCE-002; FEATURE="ConstraintEnforcement"; ASPECT=Validation; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
-/// Constraint violation error
-pub const ConstraintViolationError = error{
-    UniqueConstraintViolation,
-    NotNullConstraintViolation,
-    NodeKeyConstraintViolation,
-};
-
-/// Validate constraints before creating a node
-/// Checks UNIQUE, NOT NULL, and NODE KEY constraints
-fn validateConstraints(
-    allocator: std.mem.Allocator,
-    store: *graph_store.GraphStore,
-    labels: []const []const u8,
-    props: ?[]const ast.PropSpec,
-    context: *const execution.ExecutionContext,
-) ConstraintViolationError!void {
-    // Get catalog from context
-    const cat = context.catalog;
-
-    // Check constraints for each label
-    for (labels) |label| {
-        const constraints = cat.getConstraintsForLabel(label) catch continue;
-        defer allocator.free(constraints);
-
-        for (constraints) |constraint| {
-            if (!constraint.is_enforced) continue;
-
-            switch (constraint.constraint_type) {
-                .unique => {
-                    // Check if any existing node has same property value
-                    if (props) |prop_specs| {
-                        for (constraint.properties) |prop_name| {
-                            for (prop_specs) |prop_spec| {
-                                if (std.mem.eql(u8, prop_spec.key, prop_name)) {
-                                    // Found the property, check for duplicates
-                                    const value = eval.evalExpr(allocator, prop_spec.value.*, Env{
-                                        .names = &.{},
-                                        .values = &.{},
-                                        .allocator = allocator,
-                                    }) catch continue;
-
-                                    // Check if value exists in any node with this label
-                                    if (checkUniqueViolation(store, label, prop_name, value)) {
-                                        return ConstraintViolationError.UniqueConstraintViolation;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                .not_null => {
-                    // Check if required property is present and non-null
-                    for (constraint.properties) |prop_name| {
-                        var found = false;
-                        if (props) |prop_specs| {
-                            for (prop_specs) |prop_spec| {
-                                if (std.mem.eql(u8, prop_spec.key, prop_name)) {
-                                    found = true;
-                                    // Check if value is null
-                                    const value = eval.evalExpr(allocator, prop_spec.value.*, Env{
-                                        .names = &.{},
-                                        .values = &.{},
-                                        .allocator = allocator,
-                                    }) catch continue;
-
-                                    if (value == .Null) {
-                                        return ConstraintViolationError.NotNullConstraintViolation;
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        if (!found) {
-                            return ConstraintViolationError.NotNullConstraintViolation;
-                        }
-                    }
-                },
-                .node_key => {
-                    // NODE KEY is combination of NOT NULL + UNIQUE
-                    // First check all properties present
-                    for (constraint.properties) |prop_name| {
-                        var found = false;
-                        if (props) |prop_specs| {
-                            for (prop_specs) |prop_spec| {
-                                if (std.mem.eql(u8, prop_spec.key, prop_name)) {
-                                    found = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!found) {
-                            return ConstraintViolationError.NodeKeyConstraintViolation;
-                        }
-                    }
-                    // Then check uniqueness of combination (simplified: check first property)
-                    if (constraint.properties.len > 0 and props != null) {
-                        const first_prop = constraint.properties[0];
-                        for (props.?) |prop_spec| {
-                            if (std.mem.eql(u8, prop_spec.key, first_prop)) {
-                                const value = eval.evalExpr(allocator, prop_spec.value.*, Env{
-                                    .names = &.{},
-                                    .values = &.{},
-                                    .allocator = allocator,
-                                }) catch continue;
-
-                                if (checkUniqueViolation(store, label, first_prop, value)) {
-                                    return ConstraintViolationError.NodeKeyConstraintViolation;
-                                }
-                            }
-                        }
-                    }
-                },
-                .exists => {
-                    // EXISTS just requires property to be present (not necessarily non-null)
-                    for (constraint.properties) |prop_name| {
-                        var found = false;
-                        if (props) |prop_specs| {
-                            for (prop_specs) |prop_spec| {
-                                if (std.mem.eql(u8, prop_spec.key, prop_name)) {
-                                    found = true;
-                                    break;
-                                }
-                            }
-                        }
-                        if (!found) {
-                            return ConstraintViolationError.NotNullConstraintViolation;
-                        }
-                    }
-                },
-            }
-        }
-    }
-}
-
-/// Check if a unique constraint would be violated
-fn checkUniqueViolation(
-    store: *graph_store.GraphStore,
-    label: []const u8,
-    property: []const u8,
-    value: Value,
-) bool {
-    if (graph_store.getGlobalAdapter()) |adapter| {
-        const storage_prop = property_codec.valueToPropertyValue(store.allocator, value) catch {
-            return false;
-        };
-        defer property_codec.freePropertyValue(store.allocator, storage_prop);
-
-        const candidate_ids = adapter.getCandidateNodesByLabelAndProperty(
-            "default",
-            label,
-            property,
-            storage_prop,
-            store.allocator,
-        ) catch {
-            return false;
-        };
-        defer store.allocator.free(candidate_ids);
-
-        for (candidate_ids) |node_id| {
-            const existing_value = store.getNodePropertyValue(node_id, property) catch continue;
-            if (valuesEqual(existing_value, value)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // Get all nodes with this label
-    const nodes = store.getNodesByLabel("default", label) orelse return false;
-
-    // Check if any node has same property value
-    for (nodes) |node_id| {
-        const existing_value = store.getNodePropertyValue(node_id, property) catch continue;
-        if (valuesEqual(existing_value, value)) {
-            return true; // Violation found
-        }
-    }
-
-    return false;
 }
 
 /// Compare two values for equality
@@ -1439,9 +1276,10 @@ fn executeBatchCreateHomogeneous(
     // nodes are written. In the common batch-CREATE case no advanced
     // index is registered for these labels, so this is a fast O(1)
     // probe per key.
-    if (template_props.len > 0 and labels.len > 0) {
+    // SONNY-6368: every label's indexes, not only the first label's.
+    for (labels) |label| {
         for (template_props) |prop| {
-            property_mutation.rebuildAdvancedIndexesForPropertyPublic(store, labels[0], prop.key);
+            property_mutation.rebuildAdvancedIndexesForPropertyPublic(store, label, prop.key);
         }
     }
 
@@ -3587,16 +3425,20 @@ fn refuseHiddenMergeMatches(
         for (chain.hops) |hop| {
             const source = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.left, context, &scope, visibility, &known);
             const target = try preResolveMergeEndpoint(allocator, read_store, target_graph, filter_tenant, hop.right, context, &scope, visibility, &known);
-            // P12: both endpoints exist, so the edge `mergeRelationshipHop`
-            // would bind exists already: refuse now when only hidden edges
-            // match, before an earlier chain writes anything.
-            if (source != null and target != null) {
-                _ = try visibility.bindEdge(findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, visibility), hop.rel);
-            }
             for ([_]struct { ?[]const u8, ?u64 }{ .{ hop.left.name, source }, .{ hop.right.name, target } }) |end| {
                 if (end[0]) |name| if (end[1]) |found| {
                     if (known.contains(name)) try scope.bindNode(read_store, name, found);
                 };
+            }
+            // P12: both endpoints exist, so the edge `mergeRelationshipHop`
+            // would bind exists already: refuse now when only hidden edges
+            // match, before an earlier chain writes anything. SONNY-3357:
+            // with the relationship's properties; a map that cannot be
+            // evaluated yet (it names a node an earlier chain creates) is
+            // left to `mergeRelationshipHop`, which refuses the same match.
+            if (source != null and target != null) check: {
+                const rel_props = evaluatePatternPropsIn(allocator, hop.rel.props, scope.env(allocator)) catch break :check;
+                _ = try visibility.bindEdge(findExistingEdge(read_store, target_graph, filter_tenant, source.?, target.?, hop.rel.types, rel_props, visibility), hop.rel);
             }
         }
     }
@@ -3746,6 +3588,10 @@ fn mergeRelationshipHop(
     const target_id = try resolveMergeEndpoint(allocator, store, read_store, target_graph, filter_tenant, hop.right, context, merged_vars, scope, visibility);
 
     const edge_type = if (rel_types.len > 0) rel_types[0] else "";
+    // SONNY-3357: the relationship's properties are part of the pattern it
+    // matches, and the values a created edge takes; evaluated once, in
+    // `scope`, for both.
+    const rel_props = try evaluatePatternPropsIn(allocator, hop.rel.props, scope.env(allocator));
     // P12: an edge the session may not see is never bound; when only hidden
     // edges match, the statement is refused (`refuseHiddenMergeMatches`
     // already refused it before any write when both endpoints existed).
@@ -3756,6 +3602,7 @@ fn mergeRelationshipHop(
         source_id,
         target_id,
         rel_types,
+        rel_props,
         visibility,
     ), hop.rel);
 
@@ -3774,11 +3621,9 @@ fn mergeRelationshipHop(
     // paths set rel props after `createEdgeWithGraph` (lines 697-708,
     // 861-873, 1249-1257, 1830-1838, 2058-2070).
     if (created_new) {
-        if (hop.rel.props) |props| {
-            const env = scope.env(allocator);
+        if (rel_props) |props| {
             for (props) |prop| {
-                const value = try eval.evalExpr(allocator, prop.value.*, env);
-                try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
+                try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, prop.value);
             }
         }
     }
@@ -3789,7 +3634,37 @@ fn mergeRelationshipHop(
 // CANARY: REQ=REQ-MULTI-GRAPH-020; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteMerge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
+// CANARY: REQ=REQ-SONNY-6362-MERGE-FLE-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=MergeOnEncryptedFieldRefused; STATUS=TESTED; TEST=tests/test_sonny6362_merge_index_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6362: MERGE matches its pattern's property values against the
+/// stored ones (`nodeMatchesEvaluatedProps`, `edgeMatchesEvaluatedProps`,
+/// MERGE's index), and an FLE-encrypted value is stored as randomized AEAD
+/// ciphertext: a plaintext pattern value never equals it, so MERGE never
+/// matched and created a duplicate every time. Until matching on an
+/// encrypted value exists (deterministic or blind-index encryption,
+/// SONNY-6350), a MERGE whose pattern names a property FLE-encrypted in any
+/// type is refused (0A000), before anything is written. The internal
+/// security graph is never encrypted (GAP-0854) and is exempt.
+fn refuseMergeOnEncryptedField(pattern: ast.GraphPattern, graph_name: []const u8) error{MergeOnEncryptedField}!void {
+    if (!fle_integration.hasEncryptedFields()) return;
+    if (std.mem.eql(u8, graph_name, graph_store.SECURITY_GRAPH_NAME)) return;
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| try refuseEncryptedKeys(head.props);
+        for (chain.hops) |hop| {
+            try refuseEncryptedKeys(hop.left.props);
+            try refuseEncryptedKeys(hop.rel.props);
+            try refuseEncryptedKeys(hop.right.props);
+        }
+    }
+}
+
+fn refuseEncryptedKeys(props: ?[]ast.Property) error{MergeOnEncryptedField}!void {
+    for (props orelse return) |prop| {
+        if (fle_integration.fieldEncryptedInAnyType(prop.key)) return error.MergeOnEncryptedField;
+    }
+}
+
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
+    try refuseMergeOnEncryptedField(m.pattern, current_graph orelse graph_store.DEFAULT_GRAPH_NAME); // SONNY-6362
     // SONNY-2686: run the statement under its own context. Row-level security
     // reads the ACTIVE context (`passesRLSFilter`), while the tenant filter
     // below comes from `context`; `executeStatementWithContext` installs the
@@ -4766,11 +4641,11 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
                 // + edge slots), so proceeding would leave it DANGLING once
                 // the node goes. Refuse the whole DETACH instead.
                 if (store.getEdgePtr(edge_id) == null) return error.IncidentEdgeUnresolvable;
-                store.deleteEdge(edge_id);
+                try store.deleteEdgeChecked(edge_id);
                 try detached_edge_ids.append(allocator, edge_id);
             }
         }
-        store.deleteNode(node_id);
+        try store.deleteNodeChecked(node_id);
         if (store.getNodePtr(node_id) == null) {
             deleted_count += 1;
         }
@@ -4801,7 +4676,7 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
             // `MATCH … DELETE r` over no rows stays a successful 00000.)
             return error.EdgeBodyUnresolvable;
         }
-        store.deleteEdge(edge_id);
+        try store.deleteEdgeChecked(edge_id);
         if (store.getEdgePtr(edge_id) == null) {
             deleted_count += 1;
         }
@@ -5027,17 +4902,17 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                                 }
                                 for (edges_to_remove.items) |eid| {
                                     if (store.getEdgePtr(eid) == null) return error.IncidentEdgeUnresolvable;
-                                    store.deleteEdge(eid);
+                                    try store.deleteEdgeChecked(eid);
                                 }
                             }
-                            store.deleteNode(nid);
+                            try store.deleteNodeChecked(nid);
                             if (store.getNodePtr(nid) == null) {
                                 deleted_count += 1;
                             }
                         },
                         .edge_id => |eid| {
                             if (store.getEdgePtr(eid) != null) {
-                                store.deleteEdge(eid);
+                                try store.deleteEdgeChecked(eid);
                             }
                             if (store.getEdgePtr(eid) == null) {
                                 deleted_count += 1;

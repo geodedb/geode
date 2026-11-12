@@ -152,7 +152,10 @@ is not guaranteed for all letters. This applies equally to `search`, `phrase`,
 DROP INDEX <name>;
 ```
 
-Drops the fulltext index. The server stays alive during the drop: the
+Drops the fulltext index, from a session on the default graph (from
+another graph: `USE GRAPH default; DROP INDEX <name>`; a bare `DROP INDEX`
+there is refused with 0A000, SONNY-6294). The server stays alive during the
+drop: the
 `fts-storage` 0.1.1 single-writer thread-check fix
 (`EngineConfig.single_writer_thread_check`) makes a cross-worker-thread `DROP`
 safe.
@@ -186,7 +189,16 @@ graph dir
 After an index exists, ordinary write paths keep it current automatically:
 
 - **Node create** — newly created nodes matching the index label/property are tokenized and indexed (including nodes inserted *after* the index was created).
-- **`SET`** — updating an indexed property re-indexes the node.
+- **`SET`** — updating an indexed property re-indexes the node (the old
+  value's postings stay, see the stale-posting residual below).
+- **`SET n:L`** — a node given a label joins the label's fulltext (and
+  vector) indexes with the properties it holds (SONNY-6368).
+- **`REMOVE n.prop`** — removing an indexed text property rebuilds every
+  fulltext index covering it from the store at the end of the statement
+  (once per index, however many rows the statement removed from): the
+  engine cannot take one property's postings out of a document, and a
+  tombstone would hide the node for good (SONNY-6368). Cost: an O(nodes of
+  the label) rebuild per statement that removes indexed text.
 - **Delete** — deleting a node removes it from the index.
 - **Bulk-MERGE fast path** — `MERGE` statements shaped for the connection-thread
   fast path (`executeBulkSimpleMerge` in `quic_connection_handler.zig`, and its
@@ -202,10 +214,13 @@ After an index exists, ordinary write paths keep it current automatically:
 > fulltext index, which `geode.fts.search`/`phrase`/`proximity`/`rebuild`
 > cannot currently query.
 >
-> By design, `CREATE INDEX ... USING fulltext`, `DROP INDEX` and every
-> `CALL geode.fts.*` run on the default graph, whatever the session's graph
-> (SONNY-2790). The server takes the default graph's lock for them. A request
-> that also changes another graph is refused (0A000); send it on its own.
+> By design, `CREATE INDEX ... USING fulltext` and every `CALL geode.fts.*`
+> run on the default graph, whatever the session's graph (SONNY-2790). The
+> server takes the default graph's lock for them. A request that also
+> changes another graph is refused (0A000); send it on its own. `DROP INDEX`
+> runs on the session's graph and takes its lock (SONNY-6294), so a
+> fulltext index is dropped from the default graph:
+> `USE GRAPH default; DROP INDEX <name>`.
 
 ### Recovery: `CALL geode.fts.rebuild`
 
@@ -244,7 +259,25 @@ cannot be resolved against the live store — so correctness at query time is
 preserved. A second `CALL geode.fts.rebuild` on the SAME index while one is
 already in flight is refused (`RebuildInProgress`) rather than racing two
 drop→create sequences. Regression: `tests/test_fts_rebuild.zig` (`zig build
-test-fts-rebuild`).
+test-fts-rebuild`). An undo repair or a statement-end rebuild after a REMOVE
+(below) that finds a rebuild of the index running is not refused: that
+rebuild runs again from the store after its pass
+(`FtsStorageAdapter.requestRebuildAgain`, SONNY-6368).
+
+**Undo rebuilds the indexes it touched (SONNY-3381):** a statement that fails
+and a `ROLLBACK` (or rollback to a savepoint) undo their changes through the
+graph store, which the fulltext engine cannot follow: it is append-only, a
+SET's old postings stay, and a tombstoned document is never searchable again.
+After such an undo every fulltext index (and every vector or other advanced
+index) covering a property, label or node it reverted is rebuilt from the
+store as the undo left it (`execution/undo_index_repair.zig`, through
+`rebuildFulltextIndex` above), so a search no longer finds a node by a word
+an undone SET wrote, and finds a node whose DELETE was undone. The rebuild is
+O(nodes of the label) and runs only for such an undo. If a rebuild of the
+same index is already running (its backfill may have read the undone value),
+that rebuild runs again after its pass instead of the repair being dropped
+(SONNY-6368). Regression: `zig build test-sonny3381-undo-index-entries`,
+`zig build test-sonny6368-index-maintenance`.
 
 **Ingestion invariant:** after any bulk-ingestion run, verify FTS visibility
 with a canary query (`CALL geode.fts.search(index, term)` for a term known to

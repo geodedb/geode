@@ -460,7 +460,10 @@ pub fn setNodePropertyFromValue(
         }
     }
 
-    if (labels.len > 0) maintainAdvancedIndexesForNodeWrite(store, labels[0], key, node_id, prop_value);
+    // CANARY: REQ=REQ-SONNY-6368-EVERY-LABEL; FEATURE="VectorIndex"; ASPECT=WriteChokepointEveryLabel; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=engine; UPDATED=2026-11-12
+    // SONNY-6368: every label's indexes. Only the first label's were
+    // maintained, so an index on a node's second label went stale.
+    for (labels) |label| maintainAdvancedIndexesForNodeWrite(store, label, key, node_id, prop_value);
 
     // A4b: keep fulltext indexes current. This is the single property-write
     // chokepoint for ALL node SET paths (CREATE…SET, MATCH…SET, MERGE ON
@@ -550,7 +553,7 @@ pub fn replaceNodeProperties(
         );
     }
 
-    if (node.labels.len > 0) rebuildAdvancedIndexesForLabel(store, node.labels[0]);
+    for (node.labels) |label| rebuildAdvancedIndexesForLabel(store, label); // SONNY-6368: every label
 }
 
 pub fn replaceEdgeProperties(
@@ -578,13 +581,82 @@ pub fn replaceEdgeProperties(
     rebuildAdvancedIndexesForLabel(store, edge.label);
 }
 
+// CANARY: REQ=REQ-SONNY-6368-REMOVE-MAINTENANCE; FEATURE="FullText"; ASPECT=RemoveProperty; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=engine; UPDATED=2026-11-12
+/// REMOVE n.prop. SONNY-6368: the advanced indexes of every label of the
+/// node (only the first label's were rebuilt), and the full-text indexes:
+/// a removed non-empty string is text an index may hold, which the engine
+/// cannot take out of one document, so every covering index is queued for a
+/// rebuild at the end of the statement (`fts_index_ops.queueRebuildForRemovedText`).
+/// The node stayed findable by the removed word.
 pub fn removeNodeProperty(
     store: *graph_store.GraphStore,
     node: *graph_store.Node,
     key: []const u8,
 ) void {
+    const removed_text = if (store.getNodeProperty(node.id, key)) |pv| pv == .String and pv.String.len > 0 else false;
     store.removeNodeProperty(node.id, key);
-    if (node.labels.len > 0) rebuildAdvancedIndexesForProperty(store, node.labels[0], key);
+    for (node.labels) |label| rebuildAdvancedIndexesForProperty(store, label, key);
+    if (removed_text) fts_index_ops.queueRebuildForRemovedText(node.graph_name, node.labels, key);
+}
+
+// CANARY: REQ=REQ-SONNY-6368-SET-LABEL-MAINTENANCE; FEATURE="Execution"; ASPECT=SetLabel; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=engine; UPDATED=2026-11-12
+/// SET n:L. SONNY-6368: the node joins `label`, so it joins the full-text
+/// and advanced (vector, ...) indexes on `label` with the properties it
+/// already holds. The executors called `store.addNodeLabel` alone, so a
+/// node given a label was found by neither search. The full-text document
+/// is appended only if the index does not hold the node (`.create`).
+pub fn addNodeLabel(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    node_id: u64,
+    label: []const u8,
+) !void {
+    try store.addNodeLabel(node_id, label);
+    maintainAdvancedIndexesForLabelAdded(store, label, node_id);
+    fts_index_ops.maintainFulltextOnWrite(allocator, null, node_id, &.{label}, .create) catch |err| {
+        log.warn("fts maintain (SET label) failed for node {d} label '{s}': {}", .{ node_id, label, err });
+    };
+}
+
+/// The advanced indexes on `label` over a property the node holds: an
+/// incremental insert, or a rebuild (`maintainAdvancedIndexesForNodeWrite`).
+/// The indexed properties are copied under `rebuild_mutex`, which is
+/// released before any insert or rebuild takes it.
+fn maintainAdvancedIndexesForLabelAdded(store: *graph_store.GraphStore, label: []const u8, node_id: u64) void {
+    const manager = index_manager.getGlobalIndexManager() orelse return;
+    if (!manager.hasAdvancedIndexForLabel(label)) return;
+    var properties: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer {
+        for (properties.items) |p| store.allocator.free(p);
+        properties.deinit(store.allocator);
+    }
+    const copied = blk: {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        manager.rebuild_mutex.lockUncancelable(io);
+        defer manager.rebuild_mutex.unlock(io);
+        var it = manager.advanced_property_indexes.iterator();
+        while (it.next()) |entry| {
+            const meta = entry.value_ptr.*;
+            if (!std.mem.eql(u8, meta.label, label)) continue;
+            const copy = store.allocator.dupe(u8, meta.property) catch break :blk false;
+            properties.append(store.allocator, copy) catch {
+                store.allocator.free(copy);
+                break :blk false;
+            };
+        }
+        break :blk true;
+    };
+    if (!copied) {
+        // error-policy: B — out of memory: rebuild every index on the label
+        // from the store instead (it queues, or runs, as any rebuild does).
+        log.warn("advanced index maintenance for SET label '{s}': OutOfMemory; rebuilding its indexes", .{label});
+        return rebuildAdvancedIndexesForLabel(store, label);
+    }
+    for (properties.items) |property| {
+        // Borrowed: the statement's graph lock keeps it alive for the call.
+        const prop = store.getNodeProperty(node_id, property) orelse continue;
+        maintainAdvancedIndexesForNodeWrite(store, label, property, node_id, prop);
+    }
 }
 
 pub fn removeEdgeProperty(

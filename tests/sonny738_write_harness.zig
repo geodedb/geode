@@ -84,9 +84,11 @@ pub const Session = struct {
             if (data_dir) |d| allocator.free(d);
             if (tmp) |*t| t.cleanup();
         }
-        // Even an in-memory graph persists its catalog on index DDL. Own
-        // that directory instead of inheriting /tmp/geode_catalog.dat from another
-        // test or runner account. Keep the graph's storage adapter disabled.
+        // The in-memory mode still gives the catalog a data directory of its
+        // own, so index DDL persists there while the graph's storage adapter
+        // stays disabled. (With no data directory at all the catalogs are in
+        // memory: SONNY-2795 for the index catalog, SONNY-6274 for the FLE
+        // catalog; neither falls back to a shared /tmp file any more.)
         tmp = std.testing.tmpDir(.{});
         const persisted = mode != .in_memory;
         var shm_dir: ?[]u8 = null;

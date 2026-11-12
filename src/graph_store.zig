@@ -96,6 +96,25 @@ var g_lean_index_flag_loaded: bool = false;
 var g_lean_index_key_bufs: [lean_index_max_keys][lean_index_key_cap]u8 = undefined;
 var g_lean_index_key_lens: [lean_index_max_keys]usize = [_]usize{0} ** lean_index_max_keys;
 var g_lean_index_key_count: usize = 0;
+// SONNY-3056: per registered key, whether it was registered at RUNTIME (the
+// first MERGE on it in this process) rather than read from the sidecar at
+// adapter init, and the registration's generation (process-monotonic, never
+// reset, so a re-registration after `setLeanIndexingForTest` is a new one).
+// A runtime-registered key may have holders written before it was indexed
+// that are no longer resident; `GraphStore.ensureLeanMergeBackfill` makes
+// MERGE's index complete for it, per (graph, label), from the label's
+// postings, before a lookup trusts a miss. A sidecar key was registered
+// before any graph hydrated, so hydration and every later write indexed it.
+var g_lean_index_key_late: [lean_index_max_keys]bool = [_]bool{false} ** lean_index_max_keys;
+var g_lean_index_key_gen: [lean_index_max_keys]u64 = [_]u64{0} ** lean_index_max_keys;
+var g_lean_registration_gen: u64 = 0;
+/// Late keys registered (lock-free fast path for every lookup: zero after a
+/// restart, when every key comes from the sidecar).
+var g_lean_late_key_count = std.atomic.Value(u32).init(0);
+/// SONNY-6354: the generation of the latest lean key registered at runtime.
+/// The adapter's exact property index records the generation it is complete
+/// for (`leanLateGenMax`).
+var g_lean_late_gen_max = std.atomic.Value(u64).init(0);
 
 fn leanIndexEnabledLocked() bool {
     if (!g_lean_index_flag_loaded) {
@@ -144,23 +163,28 @@ fn registerMergeIndexKeyInner(key: []const u8, persist: bool) void {
         if (g_lean_index_key_count >= lean_index_max_keys) break :blk false; // overflow: tolerate
         @memcpy(g_lean_index_key_bufs[g_lean_index_key_count][0..key.len], key);
         g_lean_index_key_lens[g_lean_index_key_count] = key.len;
+        g_lean_registration_gen += 1;
+        g_lean_index_key_gen[g_lean_index_key_count] = g_lean_registration_gen;
+        // `persist` is true on the runtime path, false for a sidecar key.
+        g_lean_index_key_late[g_lean_index_key_count] = persist;
         g_lean_index_key_count += 1;
+        if (persist) {
+            g_lean_late_gen_max.store(g_lean_registration_gen, .release);
+            _ = g_lean_late_key_count.fetchAdd(1, .release);
+        }
         break :blk true;
     };
 
     // GAP-0900 Layer-3 (Fix 3): a key that becomes indexable for the FIRST time
-    // in lean mode may already have loaded nodes carrying it (hydrated from disk
-    // before this registration). `addToMergePropertyIndex` skipped those at load
-    // because the key was not yet registered, so the merge index has no entry —
-    // and the first re-MERGE after a reopen would create a duplicate. Backfill
-    // the index for this single key now by scanning loaded nodes. Done OUTSIDE
-    // `g_lean_index_mutex` (a leaf lock) so the scan can take the per-shard node
-    // locks without inverting lock order. Only the primary global store is
-    // backfilled; ad-hoc unit stores never reopen, so they need no backfill.
+    // in lean mode may already have nodes carrying it, written or hydrated
+    // before this registration, with no entry in MERGE's index or the exact
+    // property index. SONNY-3056 / SONNY-6354: both are made complete for it
+    // lazily, under the graph lock of the reader that needs it
+    // (`GraphStore.ensureLeanMergeBackfill` per graph and label from the
+    // label's postings; the adapter's exact index per graph,
+    // `leanLateGenMax`). The scan of the resident node cache this replaced
+    // walked every graph without its lock and missed evicted nodes.
     if (newly_registered) {
-        if (getCurrentGlobalStore()) |store| {
-            store.backfillMergeIndexForKey(key);
-        }
         // LEAN-MERGE-KEY-SEEK (Part 1): persist the newly-registered merge key
         // so it survives a restart. On reopen the adapter loads this set BEFORE
         // it opens any graph (and thus before the exact-index rebuild runs), so
@@ -282,6 +306,157 @@ pub fn setLeanIndexingForTest(enabled: bool) void {
     g_lean_index_flag_loaded = true;
     g_lean_index_enabled = enabled;
     g_lean_index_key_count = 0;
+    g_lean_late_key_count.store(0, .release);
+}
+
+/// SONNY-6354: the generation of the latest lean key registered at runtime,
+/// or 0 when none is (always 0 with lean mode off, when every key is
+/// indexed). An exact index made complete for every registered key at
+/// generation `g` is complete while this is `<= g`. Lock-free.
+pub fn leanLateGenMax() u64 {
+    if (g_lean_late_key_count.load(.acquire) == 0) return 0;
+    return g_lean_late_gen_max.load(.acquire);
+}
+
+/// SONNY-6354: whether `key` is a lean key registered at runtime after
+/// generation `since` (so an index complete at `since` lacks the holders
+/// written before it).
+pub fn leanKeyRegisteredAfter(key: []const u8, since: u64) bool {
+    const gen = leanLateKeyGen(key) orelse return false;
+    return gen > since;
+}
+
+// CANARY: REQ=REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES; FEATURE="MergeIdempotency"; ASPECT=ExactIndexConfigStamp; STATUS=TESTED; TEST=tests/test_sonny6354_lean_late_key_indexes.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6354: fingerprint of what the adapter's exact property index holds:
+/// the lean flag and, in lean mode, the registered key set (order-free). A
+/// saved index loads only under the same fingerprint, so one written before
+/// a key was registered (or with lean mode off and read with it on, or the
+/// reverse) is rebuilt instead of trusted as complete for that key.
+pub fn exactIndexConfigHash() u64 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_lean_index_mutex.lockUncancelable(io);
+    defer g_lean_index_mutex.unlock(io);
+    var h = std.hash.Wyhash.init(0x6578_6163_7469_6478); // "exactidx"
+    const lean = leanIndexEnabledLocked();
+    h.update(&[_]u8{@intFromBool(lean)});
+    if (lean) {
+        var acc: u64 = 0;
+        var i: usize = 0;
+        while (i < g_lean_index_key_count) : (i += 1) {
+            acc ^= std.hash.Wyhash.hash(1, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]]);
+        }
+        var b: [8]u8 = undefined;
+        std.mem.writeInt(u64, &b, acc, .little);
+        h.update(&b);
+    }
+    return h.final();
+}
+
+// CANARY: REQ=REQ-SONNY-3056-LEAN-MERGE-BACKFILL; FEATURE="MergeIdempotency"; ASPECT=LateKeyRegistry; STATUS=TESTED; TEST=tests/test_sonny3056_lean_merge_evicted_holder.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-3056: the registration generation of `key` when lean mode is on
+/// and `key` was registered at runtime (see `g_lean_index_key_late`), else
+/// null (lean off, the key not registered, or read from the sidecar).
+fn leanLateKeyGen(key: []const u8) ?u64 {
+    if (g_lean_late_key_count.load(.acquire) == 0) return null;
+    g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (!leanIndexEnabledLocked()) return null;
+    var i: usize = 0;
+    while (i < g_lean_index_key_count) : (i += 1) {
+        if (std.mem.eql(u8, g_lean_index_key_bufs[i][0..g_lean_index_key_lens[i]], key)) {
+            return if (g_lean_index_key_late[i]) g_lean_index_key_gen[i] else null;
+        }
+    }
+    return null;
+}
+
+// CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=FastPathFence; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=storage; UPDATED=2026-11-11
+// SONNY-2846: the graphs that have a UNIQUE (or NODE KEY) constraint, as a
+// count of such rows per graph ("" = an engine-wide row, in every graph).
+// SONNY-6281: NOT NULL and EXISTS rows hold a count too (the executor checks
+// them at statement end as well; `catalog.fencesFastPaths`).
+// The executor checks a constraint when a statement ends
+// (`execution/unique_constraints.zig`); the server's bulk write fast paths
+// skip the executor, so they must not serve such a graph. The handler's gate
+// (`bulk_ingest.uniqueConstraintsDeclineFastPath`) reads this to send the
+// write to the executor, and the adapter's bulk node helpers read it again
+// while they hold the graph's lock (`refuseIfUniqueFenced`), so a write
+// that passed the gate just before CREATE CONSTRAINT is refused instead of
+// landing after the constraint validated the data. CREATE CONSTRAINT adds
+// the row's fence before it validates, under the graph's write lock.
+//
+// Leaf lock: nothing else is acquired while `g_unique_fence_mutex` is held.
+var g_unique_fence_mutex: std.Io.Mutex = .init;
+var g_unique_fences: std.StringHashMapUnmanaged(u32) = .empty;
+var g_unique_fence_rows: std.atomic.Value(u32) = .init(0);
+
+/// A UNIQUE row now applies in `graph` ("" = every graph).
+pub fn addUniqueFence(graph: []const u8) error{OutOfMemory}!void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_unique_fence_mutex.lockUncancelable(io);
+    defer g_unique_fence_mutex.unlock(io);
+    const gop = try g_unique_fences.getOrPut(std.heap.smp_allocator, graph);
+    if (!gop.found_existing) {
+        gop.key_ptr.* = std.heap.smp_allocator.dupe(u8, graph) catch |err| {
+            _ = g_unique_fences.remove(graph);
+            return err;
+        };
+        gop.value_ptr.* = 0;
+    }
+    gop.value_ptr.* += 1;
+    _ = g_unique_fence_rows.fetchAdd(1, .release);
+}
+
+/// One UNIQUE row of `graph` no longer applies (its CREATE CONSTRAINT failed).
+pub fn removeUniqueFence(graph: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_unique_fence_mutex.lockUncancelable(io);
+    defer g_unique_fence_mutex.unlock(io);
+    const count = g_unique_fences.getPtr(graph) orelse return;
+    count.* -= 1;
+    _ = g_unique_fence_rows.fetchSub(1, .release);
+    if (count.* == 0) {
+        const kv = g_unique_fences.fetchRemove(graph).?;
+        std.heap.smp_allocator.free(kv.key);
+    }
+}
+
+/// Forget every fence (the process catalog was torn down).
+pub fn resetUniqueFences() void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_unique_fence_mutex.lockUncancelable(io);
+    defer g_unique_fence_mutex.unlock(io);
+    var it = g_unique_fences.keyIterator();
+    while (it.next()) |k| std.heap.smp_allocator.free(k.*);
+    g_unique_fences.clearAndFree(std.heap.smp_allocator);
+    g_unique_fence_rows.store(0, .release);
+}
+
+/// Does a UNIQUE row apply in `graph`? One atomic load when no graph has one.
+pub fn uniqueFenced(graph: []const u8) bool {
+    if (g_unique_fence_rows.load(.acquire) == 0) return false;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_unique_fence_mutex.lockUncancelable(io);
+    defer g_unique_fence_mutex.unlock(io);
+    return g_unique_fences.contains(graph) or g_unique_fences.contains("");
+}
+
+/// For a bulk write helper, called with the graph's lock held: refuse to
+/// write into a graph a UNIQUE constraint applies in (40001: retry, and the
+/// retry takes the executor, which checks the constraint).
+pub fn refuseIfUniqueFenced(graph: []const u8) error{UniqueConstraintFastPathConflict}!void {
+    if (uniqueFenced(graph)) return error.UniqueConstraintFastPathConflict;
+}
+
+// CANARY: REQ=REQ-SONNY-6327-FLE-FAST-PATH-DECLINE; FEATURE="FieldLevelEncryption"; ASPECT=AdapterBulkRefusal; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6327: the adapter's bulk (fast-path) writers write property values
+/// to the engine as given, without the executor's FLE hook. The QUIC
+/// handler declines every write fast path while an FLE field is configured
+/// (or the catalog is unavailable); a field configured between that check
+/// and the write is refused here, before any engine write (58030), instead
+/// of storing plaintext.
+pub fn refuseIfFleConfigured() error{EncryptionRequired}!void {
+    if (fle_integration.hasEncryptedFields()) return error.EncryptionRequired;
 }
 
 /// Whether a property `key` should be added to the exact + merge property
@@ -400,6 +575,12 @@ const PropNameIter = struct {
 
 var g_composite_keys: [composite_index_max_keys]CompositeKeySpec = undefined;
 var g_composite_key_count: usize = 0;
+// SONNY-6354: per composite, the generation of its registration when it was
+// registered at runtime (0: read from the sidecar before any graph
+// hydrated, so hydration wrote its entries). Its holders written earlier
+// get their entries from `GraphStore.ensureLeanMergeBackfill`.
+var g_composite_key_late_gen: [composite_index_max_keys]u64 = [_]u64{0} ** composite_index_max_keys;
+var g_composite_late_count = std.atomic.Value(u32).init(0);
 
 /// Compare two prop-name sets for set-equality (order-insensitive). Used to test
 /// whether a filter set matches a registered composite key.
@@ -456,6 +637,12 @@ fn registerCompositeMergeKeyInner(prop_names: []const []const u8, persist: bool)
         // always built from this order, and lookups sort their filters the same
         // way, so caller filter order never matters.
         sortCompositeSpec(spec);
+        g_composite_key_late_gen[g_composite_key_count] = 0;
+        if (persist) {
+            g_lean_registration_gen += 1;
+            g_composite_key_late_gen[g_composite_key_count] = g_lean_registration_gen;
+            _ = g_composite_late_count.fetchAdd(1, .release);
+        }
         g_composite_key_count += 1;
         break :blk true;
     };
@@ -467,14 +654,12 @@ fn registerCompositeMergeKeyInner(prop_names: []const []const u8, persist: bool)
     for (prop_names) |n| registerMergeIndexKeyInner(n, persist);
 
     if (newly_registered) {
-        // Backfill the composite entry for already-loaded nodes (a reopen
-        // registers the composite AFTER nodes were hydrated; without this the
-        // edges-only run after a separate node-load run would find no composite
-        // entry and fall back to seed+verify). Mirrors the single-key
-        // backfillMergeIndexForKey.
-        if (getCurrentGlobalStore()) |store| {
-            store.backfillCompositeMergeEntries();
-        }
+        // SONNY-6354: nodes that carried the composite before it was
+        // registered get their entries before a probe trusts a miss
+        // (`GraphStore.ensureLeanMergeBackfill`, per graph and label, from
+        // the label's postings). The scan of the resident node cache this
+        // replaced missed evicted holders and took no graph lock.
+        //
         // Persist so a fresh process (the from-dump EDGE phase runs separately
         // from the NODE phase) re-registers it on reopen and the rebuild/backfill
         // repopulates the composite entries. Best-effort.
@@ -660,6 +845,19 @@ pub fn clearCompositeMergeKeysForTest() void {
     g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_lean_index_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     g_composite_key_count = 0;
+    g_composite_late_count.store(0, .release);
+}
+
+/// SONNY-6354: the generation of composite `idx`'s registration when it was
+/// registered at runtime, else null.
+fn compositeLateGen(idx: usize) ?u64 {
+    if (g_composite_late_count.load(.acquire) == 0) return null;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_lean_index_mutex.lockUncancelable(io);
+    defer g_lean_index_mutex.unlock(io);
+    if (idx >= g_composite_key_count) return null;
+    const gen = g_composite_key_late_gen[idx];
+    return if (gen == 0) null else gen;
 }
 
 const node_id_sequence_mask: u64 = 0x0fff;
@@ -761,6 +959,9 @@ var g_data_dir_mutex: std.Io.Mutex = std.Io.Mutex.init;
 /// Pass null to clear the override and revert to env var behavior
 pub fn setDataDirOverride(allocator: std.mem.Allocator, dir: ?[]const u8) void {
     _ = allocator; // Not needed with fixed buffer
+    // SONNY-6274: the FLE catalog file lives in the same data directory (or,
+    // with none, the FLE catalog is in memory). Both mutexes are leaves.
+    fle_integration.catalog_mod.setDataDirOverride(if (dir) |path| path[0..@min(path.len, g_override_data_dir_buf.len)] else null);
     g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_data_dir_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (dir) |path| {
@@ -784,6 +985,30 @@ pub fn ensureDataDir(path: []const u8) !void {
         error.PathAlreadyExists => {},
         else => return err,
     };
+}
+
+/// The data-directory override as it was when `saveDataDirOverride` ran.
+/// The override is process-global and `initGlobalStore` sets it, while
+/// `deinitGlobalStore` leaves it: a test that sets it (directly or through
+/// `initGlobalStore`) restores the previous value with `restore`
+/// (SONNY-6336). Restoring also restores the FLE catalog's override, which
+/// `setDataDirOverride` forwards.
+pub const DataDirOverrideSnapshot = struct {
+    buf: [512]u8 = undefined,
+    len: usize = 0,
+    set: bool = false,
+
+    pub fn restore(self: *const DataDirOverrideSnapshot) void {
+        setDataDirOverride(std.heap.smp_allocator, if (self.set) self.buf[0..self.len] else null);
+    }
+};
+
+pub fn saveDataDirOverride() DataDirOverrideSnapshot {
+    g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_data_dir_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    var snap: DataDirOverrideSnapshot = .{ .len = g_override_data_dir_len, .set = g_override_data_dir_set };
+    @memcpy(snap.buf[0..g_override_data_dir_len], g_override_data_dir_buf[0..g_override_data_dir_len]);
+    return snap;
 }
 
 /// Get the current data directory override (or null if using env var)
@@ -1351,30 +1576,132 @@ pub const CompactPropertyMap = struct {
         res.value_ptr.* = value;
     }
 
+    // CANARY: REQ=REQ-SONNY-6268-PROPERTY-MAP-ATOMIC; FEATURE="GraphStoreFailureAtomicity"; ASPECT=PropertyMapPutRemove; STATUS=TESTED; TEST=tests/test_sonny6268_graph_store_failure_atomicity.zig; OWNER=storage; UPDATED=2026-11-11
+    /// SONNY-6268: store the caller-owned `value` under `key`, failure-atomic.
+    /// A new key is copied (with `key_allocator`) BEFORE the entry slice
+    /// grows, and the copy is written into the new slot at once, so on error
+    /// the map is unchanged and the caller still owns `value`. On success the
+    /// map owns `value` (and the key copy). Returns the value it replaced,
+    /// which the caller frees, or null when the key was new.
+    ///
+    /// The open-coded `getOrPut` + `key_ptr.* = try dupe(key)` this replaces
+    /// left a slot with an undefined key when the copy failed: every later
+    /// search of the sorted map, the node's delete and the store's teardown
+    /// then read (and freed) garbage.
+    pub fn putValue(self: *Self, key_allocator: std.mem.Allocator, key: []const u8, value: PropertyValue) !?PropertyValue {
+        if (self.getPtr(key)) |slot| {
+            const old = slot.*;
+            slot.* = value;
+            return old;
+        }
+        const r = try self.reserveInsert(key_allocator, key);
+        self.commitInsert(r, value);
+        return null;
+    }
+
+    /// SONNY-6268: what inserting a new key needs (its copy and the grown
+    /// entry slice), allocated without changing the map, so a write that has
+    /// a fallible step of its own (the storage adapter's) can reserve before
+    /// it and commit after it with `commitInsert`, which cannot fail.
+    pub const InsertReservation = struct {
+        key: []const u8,
+        entries: []Entry,
+    };
+
+    /// Reserve an insert of `key`, which must not be in the map. The map is
+    /// unchanged; release the reservation with `commitInsert` or
+    /// `cancelInsert`. Valid until the map next changes.
+    pub fn reserveInsert(self: *const Self, key_allocator: std.mem.Allocator, key: []const u8) !InsertReservation {
+        std.debug.assert(!self.contains(key));
+        const key_copy = try key_allocator.dupe(u8, key);
+        errdefer key_allocator.free(key_copy);
+        const entries = try self.allocator.alloc(Entry, self.entries.len + 1);
+        return .{ .key = key_copy, .entries = entries };
+    }
+
+    /// Insert the reserved key with the caller-owned `value` (the map owns
+    /// both from here). Cannot fail.
+    pub fn commitInsert(self: *Self, r: InsertReservation, value: PropertyValue) void {
+        const at = self.search(r.key);
+        std.debug.assert(!at.found and r.entries.len == self.entries.len + 1);
+        const old = self.entries;
+        @memcpy(r.entries[0..at.index], old[0..at.index]);
+        @memcpy(r.entries[at.index + 1 ..], old[at.index..]);
+        r.entries[at.index] = .{ .key = r.key, .value = value };
+        if (old.len > 0) self.allocator.free(old);
+        self.entries = r.entries;
+    }
+
+    pub fn cancelInsert(self: *const Self, key_allocator: std.mem.Allocator, r: InsertReservation) void {
+        key_allocator.free(r.key);
+        self.allocator.free(r.entries);
+    }
+
+    /// SONNY-6268: the shrunken entry slice a removal of `key` needs,
+    /// allocated without changing the map (empty when `key` is the only
+    /// entry). Null when `key` is not in the map. Release with
+    /// `commitRemove` or `cancelRemove`; valid until the map next changes.
+    pub const RemoveReservation = struct {
+        entries: []Entry,
+    };
+
+    pub fn reserveRemove(self: *const Self, key: []const u8) !?RemoveReservation {
+        if (!self.contains(key)) return null;
+        if (self.entries.len == 1) return .{ .entries = &[_]Entry{} };
+        return .{ .entries = try self.allocator.alloc(Entry, self.entries.len - 1) };
+    }
+
+    /// Remove the reserved key. Cannot fail. The caller frees the returned
+    /// key and value.
+    pub fn commitRemove(self: *Self, r: RemoveReservation, key: []const u8) KV {
+        const at = self.search(key);
+        std.debug.assert(at.found and r.entries.len + 1 == self.entries.len);
+        const old = self.entries;
+        const removed = KV{ .key = old[at.index].key, .value = old[at.index].value };
+        @memcpy(r.entries[0..at.index], old[0..at.index]);
+        @memcpy(r.entries[at.index..], old[at.index + 1 ..]);
+        self.allocator.free(old);
+        self.entries = r.entries;
+        return removed;
+    }
+
+    pub fn cancelRemove(self: *const Self, r: RemoveReservation) void {
+        if (r.entries.len > 0) self.allocator.free(r.entries);
+    }
+
+    /// SONNY-6268: `fetchRemove` that fails instead of removing when the
+    /// shrunken entry slice cannot be allocated: on error the map is
+    /// unchanged. The caller frees the returned key and value.
+    pub fn fetchRemoveChecked(self: *Self, key: []const u8) !?KV {
+        const r = (try self.reserveRemove(key)) orelse return null;
+        return self.commitRemove(r, key);
+    }
+
     /// Identical contract to std.StringHashMap.fetchRemove: removes the entry
     /// and returns the stored key + value for the caller to free, or null.
+    ///
+    /// SONNY-6268: when the shrunken slice cannot be allocated, the entry is
+    /// compacted out in place only if the allocator can shrink the block in
+    /// place; otherwise the entry is NOT removed and this returns null (use
+    /// `fetchRemoveChecked` to observe that). The old fallback kept a slice
+    /// shorter than its allocation, and the next free passed the allocator
+    /// the wrong length (heap corruption; a Debug build panics).
     pub fn fetchRemove(self: *Self, key: []const u8) ?KV {
-        const r = self.search(key);
-        if (!r.found) return null;
-        const removed = KV{ .key = self.entries[r.index].key, .value = self.entries[r.index].value };
-        const old = self.entries;
-        if (old.len == 1) {
-            self.allocator.free(old);
-            self.entries = &[_]Entry{};
-            return removed;
-        }
-        const new_entries = self.allocator.alloc(Entry, old.len - 1) catch {
-            // Allocation failure on shrink: fall back to in-place compaction so
-            // the entry is still removed (correctness over the slack saving).
+        return self.fetchRemoveChecked(key) catch {
+            const r = self.search(key);
+            if (!r.found) return null;
+            const removed = KV{ .key = self.entries[r.index].key, .value = self.entries[r.index].value };
+            const old = self.entries;
             std.mem.copyForwards(Entry, old[r.index .. old.len - 1], old[r.index + 1 ..]);
+            if (!self.allocator.resize(old, old.len - 1)) {
+                // Put it back: the map is as it was.
+                std.mem.copyBackwards(Entry, old[r.index + 1 ..], old[r.index .. old.len - 1]);
+                old[r.index] = .{ .key = removed.key, .value = removed.value };
+                return null;
+            }
             self.entries = old[0 .. old.len - 1];
             return removed;
         };
-        @memcpy(new_entries[0..r.index], old[0..r.index]);
-        @memcpy(new_entries[r.index..], old[r.index + 1 ..]);
-        self.allocator.free(old);
-        self.entries = new_entries;
-        return removed;
     }
 
     /// Identical to std.StringHashMap.remove: returns whether a key was removed.
@@ -1468,6 +1795,18 @@ pub fn parsePersistedPublicId(text: []const u8) ?u64 {
 /// Check whether a byte slice looks like a serialized FLE EnvelopeV1.
 /// Format: alg_id(1) + key_version(2) + nonce(12) + tag(16) + ciphertext_len(4) + ciphertext
 /// Used to prevent double-encryption when callers already encrypted before setNodeProperty.
+// CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=WriteRefusedNotPlaintext; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6324: a string value the FLE catalog says must be encrypted (or,
+/// with the catalog unavailable, may have to be) and that could not be
+/// encrypted is refused, never written as plaintext. The four write sites
+/// below fell back to the plaintext value on any encryption error, which an
+/// unloadable catalog turned into "every value in plaintext".
+const FleWriteError = error{ EncryptionRequired, FleCatalogUnavailable };
+
+fn fleWriteRefused(err: anyerror) FleWriteError {
+    return if (err == error.FleCatalogUnavailable) error.FleCatalogUnavailable else error.EncryptionRequired;
+}
+
 fn isLikelyFleEnvelope(data: []const u8) bool {
     if (data.len < 35) return false;
     // Valid algorithm IDs: 1 (AES-256-GCM), 2 (ChaCha20-Poly1305), 3 (XChaCha20-Poly1305)
@@ -1740,6 +2079,23 @@ const merge_property_index_shard_count: usize = 256;
 /// Round 8: a node id never has this bit set (`parsePersistedPublicId`).
 const merge_entry_shared: u64 = @as(u64, 1) << 63;
 
+// CANARY: REQ=REQ-SONNY-6362-FLAGGED-ID-REFUSED; FEATURE="MergeIdempotency"; ASPECT=CreateRefusesFlaggedId; STATUS=TESTED; TEST=tests/test_sonny6362_merge_index_residuals.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6362: no node is created with an id that has bit 63 set. MERGE's
+/// index keeps a flag in that bit, so such a node is never an entry
+/// (`MergePropertyIndex.putOrUpdate`) and a MERGE of a value it alone holds
+/// created a duplicate; and the loader refuses a persisted id with it
+/// (`parsePersistedPublicId`), so the node vanished at the next restart.
+/// Time-based and raft-derived ids never have it; a reserved or replicated
+/// id is the only way in, and is refused here, before anything is written.
+pub fn refuseFlaggedNodeId(node_id: u64) error{NodeIdFlagged}!void {
+    if (node_id & merge_entry_shared != 0) {
+        log.err("refusing to create a node whose id has bit 63 set: no id has it, and MERGE's index flags entries with it", &.{
+            Attr.uint("node_id", node_id),
+        });
+        return error.NodeIdFlagged;
+    }
+}
+
 /// The entry after `node_id` is recorded as a holder of its key.
 /// `node_id` never has bit 63 set: `MergePropertyIndex.putOrUpdate` refuses
 /// one.
@@ -1932,7 +2288,13 @@ pub const MergePropertyIndex = struct {
     /// kept. (The removal was unconditional
     /// before round 7: deleting either of two equal nodes dropped the entry,
     /// and a later MERGE trusted the miss and created a third node.)
+    ///
+    /// SONNY-6354: an id with bit 63 set never holds an entry
+    /// (`putOrUpdate`), so it removes none. It would otherwise compare equal
+    /// to the entry "shared, lowest holder <the id without bit 63>" and
+    /// drop another node's entry.
     fn remove(self: *MergePropertyIndex, key: []const u8, node_id: u64) void {
+        if (node_id & merge_entry_shared != 0) return;
         const io = std.Io.Threaded.global_single_threaded.io();
         const shard = &self.shards[shardForKey(key)];
         shard.mutex.lockUncancelable(io);
@@ -2204,6 +2566,21 @@ pub const GraphStore = struct {
     // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
     // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
     merge_prop_index: MergePropertyIndex,
+    // SONNY-6362: an entry could not be added to `merge_prop_index` (out of
+    // memory) on a path that cannot fail its write, so a miss is no longer
+    // authoritative: every lookup answers `.not_indexable` (its caller
+    // scans) until a full rebuild (`rebuildIndexes`) adds every entry with
+    // no failure. `merge_index_add_failures` counts them (diagnostics, and
+    // the rebuild's test that none happened while it ran).
+    merge_index_untrusted: std.atomic.Value(bool) = .init(false),
+    merge_index_add_failures: std.atomic.Value(u64) = .init(0),
+    // SONNY-3056: "graph\x00label\x00key" -> the registration generation
+    // of a runtime-registered lean key (`leanLateKeyGen`) whose holders of
+    // that label were backfilled into `merge_prop_index`
+    // (`ensureLeanMergeBackfill`). Guarded by `lean_backfill_mutex`, a leaf
+    // held only for map operations, never across the scan.
+    lean_backfilled: std.StringHashMapUnmanaged(u64) = .empty,
+    lean_backfill_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // PERF-C (issue #814) race fix (2026-05-18): serialize every access to
     // the three tenant-keyed refcount maps (`node_labels_by_tenant`,
     // `edge_types_by_tenant`, `label_properties_by_tenant`).  The bump/dec
@@ -2544,6 +2921,8 @@ pub const GraphStore = struct {
         deinitTenantStringMultiset(&self.label_properties_by_tenant, self.allocator);
 
         self.merge_prop_index.deinit();
+        self.clearLeanBackfilled();
+        self.lean_backfilled.deinit(self.allocator);
 
         // PERF-P0-001: Clean up edge-type index
         var eti_iter = self.edge_type_index.iterator();
@@ -2670,6 +3049,7 @@ pub const GraphStore = struct {
         self.label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
 
         self.merge_prop_index.reset();
+        self.clearLeanBackfilled();
 
         // PERF-P0-001: Reset edge-type index (SONNY-3233: under its lock).
         {
@@ -3444,17 +3824,15 @@ pub const GraphStore = struct {
             // present PropertyValue.Null made a durably-REMOVEd property
             // resurface after reopen (live remove = fetchRemove = truly absent).
             if (e.value_ptr.* == .null) continue;
-            const key = try allocator.dupe(u8, e.key_ptr.*);
-            errdefer allocator.free(key);
             const value = try graph_storage_adapter.fromStorageProperty(allocator, e.value_ptr.*);
-            const gop = try node.properties.getOrPut(key);
-            if (gop.found_existing) {
-                // Duplicate key (shouldn't happen) — free the dup key, keep first.
-                allocator.free(key);
-            } else {
-                gop.key_ptr.* = key;
-            }
-            gop.value_ptr.* = value;
+            // SONNY-6268: failure-atomic put (the value leaked when the slot
+            // could not be made). A duplicate key (shouldn't happen) keeps
+            // the last value and frees the one it replaces (that leaked too).
+            const replaced = node.properties.putValue(allocator, e.key_ptr.*, value) catch |err| {
+                freePropertyValueWithAllocator(allocator, value);
+                return err;
+            };
+            if (replaced) |old| freePropertyValueWithAllocator(allocator, old);
         }
 
         // Tenant id: persisted as an internal property; absent ⇒ default.
@@ -4874,6 +5252,7 @@ pub const GraphStore = struct {
         graph_name: []const u8,
         tenant: []const u8,
     ) !void {
+        try refuseFlaggedNodeId(reserved_id); // SONNY-6362
         try statementWriteFence(); // SONNY-3348
         try statement_undo.reserve(1); // SONNY-3348 (round 18): room to record the node
         // PHASE 1b chokepoint: build the graph's resident indexes BEFORE this
@@ -4890,21 +5269,20 @@ pub const GraphStore = struct {
             }
         else
             null;
+        // SONNY-6268: a failure from here on deletes the engine slot again.
+        errdefer if (adapter_node) |persisted_node| rollbackAdapterNode(persisted_node.vt, graph_name, persisted_node.slot_id);
         try self.ensureGraph(graph_name);
 
         if (adapter_node) |persisted_node| {
-            persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, reserved_id) catch |err| {
-                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
-                return err;
-            };
+            try persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, reserved_id);
             // GAP-0891 (RC-2): round-trip the tenant tag (no-op for default).
-            persistNodeTenantId(persisted_node.vt, graph_name, persisted_node.slot_id, tenant) catch |err| {
-                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
-                return err;
-            };
+            try persistNodeTenantId(persisted_node.vt, graph_name, persisted_node.slot_id, tenant);
             const im = try self.getOrCreateIdMap(graph_name);
             try im.insertNodeWithSlot(@as(u128, reserved_id), persisted_node.slot_id);
         }
+        errdefer if (adapter_node != null) {
+            if (self.getIdMap(graph_name)) |im| _ = im.removeNode(@as(u128, reserved_id));
+        };
 
         try self.insertReservedNodeInMemory(reserved_id, labels, graph_name, tenant);
     }
@@ -4923,6 +5301,7 @@ pub const GraphStore = struct {
         graph_name: []const u8,
         tenant: []const u8,
     ) !void {
+        try refuseFlaggedNodeId(reserved_id); // SONNY-6362
         try statementWriteFence(); // SONNY-3348
         try statement_undo.reserve(1); // SONNY-3348 (round 18): room to record the node
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
@@ -4946,6 +5325,18 @@ pub const GraphStore = struct {
         return self.createNodeWithReservedIdAndSlotGraphAndTenant(reserved_id, slot_id, labels, graph_name, tenant);
     }
 
+    // CANARY: REQ=REQ-SONNY-6268-NODE-CREATE-ATOMIC; FEATURE="GraphStoreFailureAtomicity"; ASPECT=NodeCreateInMemory; STATUS=TESTED; TEST=tests/test_sonny6268_graph_store_failure_atomicity.zig; OWNER=storage; UPDATED=2026-11-11
+    /// The in-memory half of every node create: the node body into the node
+    /// cache, then the label postings, the per-graph id index and the PERF-C
+    /// label counters.
+    ///
+    /// SONNY-6268: failure-atomic. Each step that succeeded is undone, in
+    /// reverse order, when a later one fails, with removers that do not
+    /// allocate for ordinary names; so on error the node is in none of these
+    /// structures and nothing it copied is left allocated. (Before, a failure
+    /// after `nodes.put` left a node in the cache, and in some of the indexes,
+    /// behind an error: a node no caller knew of, which the next scan, delete
+    /// or teardown met half-built; and a failure before it leaked the copies.)
     fn insertReservedNodeInMemory(
         self: *GraphStore,
         reserved_id: u64,
@@ -4953,19 +5344,39 @@ pub const GraphStore = struct {
         graph_name: []const u8,
         tenant: []const u8,
     ) !void {
+        try self.insertNodeInMemory(reserved_id, labels, graph_name, tenant);
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+        notifyMutation(.create_node, reserved_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
+        statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = reserved_id, .graph_name = "" } }); // SONNY-3348 (round 18)
+    }
+
+    /// The structures of `insertReservedNodeInMemory`, failure-atomic, with
+    /// no notification (`createNodeWithIdInternal` sends none).
+    fn insertNodeInMemory(
+        self: *GraphStore,
+        reserved_id: u64,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        tenant: []const u8,
+    ) !void {
         const labels_copy = try self.allocator.alloc([]const u8, labels.len);
-        errdefer self.allocator.free(labels_copy);
         var copied_labels: usize = 0;
+        // Until the cache holds the node, its copies are ours to free.
+        var node_stored = false;
+        errdefer if (!node_stored) {
+            for (labels_copy[0..copied_labels]) |label| self.allocator.free(label);
+            self.allocator.free(labels_copy);
+        };
         for (labels, 0..) |label, i| {
             labels_copy[i] = try self.allocator.dupe(u8, label);
             copied_labels += 1;
         }
-        errdefer for (labels_copy[0..copied_labels]) |label| self.allocator.free(label);
 
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        errdefer self.allocator.free(graph_name_copy);
+        errdefer if (!node_stored) self.allocator.free(graph_name_copy);
         const tenant_id_copy = try self.allocator.dupe(u8, tenant);
-        errdefer self.allocator.free(tenant_id_copy);
+        errdefer if (!node_stored) self.allocator.free(tenant_id_copy);
 
         const node = Node{
             .id = reserved_id,
@@ -4975,23 +5386,36 @@ pub const GraphStore = struct {
             .tenant_id = tenant_id_copy,
         };
 
+        // On error `put` stored nothing and the copies are still ours (the
+        // cache's ownership rule, `BoundedNodeCache.put`).
         try self.nodes.put(reserved_id, node);
+        node_stored = true;
+        errdefer if (self.nodes.fetchRemove(reserved_id)) |kv| {
+            var removed = kv.value;
+            freeNodeValue(self.allocator, &removed);
+        };
+
+        // CANARY: REQ=REQ-PERF-LABEL-INDEX-002; FEATURE="LabelBasedIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
+        // A failed `addToLabelIndex` may have made the label's (empty)
+        // posting, so the label it failed on is undone too.
+        var labels_touched: usize = 0;
+        errdefer for (labels[0..labels_touched]) |label| self.removeFromLabelIndex(graph_name, label, reserved_id);
         for (labels) |label| {
+            labels_touched += 1;
             try self.addToLabelIndex(graph_name, label, reserved_id);
         }
         // PERF-B (issue #811): per-graph node-id index.
-        try self.addNodeToGraphIndex(graph_name, reserved_id);
+        const new_graph_set = try self.addNodeToGraphIndexReportingNewGraph(graph_name, reserved_id);
+        errdefer self.removeNodeFromGraphIndexUndo(graph_name, reserved_id, new_graph_set);
         // PERF-C (issue #814): tenant-keyed label counters. New nodes
         // carry no user properties at create time, so only the label
         // dimension fires here.
+        var labels_counted: usize = 0;
+        errdefer for (labels[0..labels_counted]) |label| self.decLabelCount(graph_name, tenant, label);
         for (labels) |label| {
             try self.bumpLabelCount(graph_name, tenant, label);
+            labels_counted += 1;
         }
-
-        self.dirty.store(true, .release);
-        incrementMutationEpoch();
-        notifyMutation(.create_node, reserved_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
-        statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = reserved_id, .graph_name = "" } }); // SONNY-3348 (round 18)
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
@@ -5020,66 +5444,46 @@ pub const GraphStore = struct {
             }
         else
             null;
+        // SONNY-6268: from here on a failure deletes the engine slot again
+        // (and the IdMap entry below), so a failed create leaves no orphan
+        // node in the engine for the next open to hydrate.
+        errdefer if (adapter_node) |persisted_node| rollbackAdapterNode(persisted_node.vt, graph_name, persisted_node.slot_id);
         try self.ensureGraph(graph_name);
         // Generate UUIDv7-based time-sortable unique ID
         const id = generateTimeBasedId();
 
         // Store UUID→slot mapping in IdMap for adapter translation
         if (adapter_node) |persisted_node| {
-            persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, id) catch |err| {
-                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
-                return err;
-            };
+            try persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, id);
             // GAP-0891 (RC-2): round-trip the tenant tag (no-op for default).
-            persistNodeTenantId(persisted_node.vt, graph_name, persisted_node.slot_id, tenant) catch |err| {
-                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
-                return err;
-            };
+            try persistNodeTenantId(persisted_node.vt, graph_name, persisted_node.slot_id, tenant);
             const im = try self.getOrCreateIdMap(graph_name);
             try im.insertNodeWithSlot(@as(u128, id), persisted_node.slot_id);
         }
-
-        const labels_copy = try self.allocator.alloc([]const u8, labels.len);
-        for (labels, 0..) |label, i| {
-            labels_copy[i] = try self.allocator.dupe(u8, label);
-        }
-
-        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
-
-        const node = Node{
-            .id = id,
-            .labels = labels_copy,
-            .properties = CompactPropertyMap.init(self.allocator),
-            .graph_name = graph_name_copy,
-            .tenant_id = tenant_id_copy,
+        errdefer if (adapter_node != null) {
+            if (self.getIdMap(graph_name)) |im| _ = im.removeNode(@as(u128, id));
         };
 
-        try self.nodes.put(id, node);
-        // CANARY: REQ=REQ-PERF-LABEL-INDEX-002; FEATURE="LabelBasedIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
-        for (labels) |label| {
-            try self.addToLabelIndex(graph_name, label, id);
-        }
-        // PERF-B (issue #811): per-graph node-id index.
-        try self.addNodeToGraphIndex(graph_name, id);
-        // PERF-C (issue #814): tenant-keyed label counters.
-        for (labels) |label| {
-            try self.bumpLabelCount(graph_name, tenant, label);
-        }
-
-        // Mark store as dirty - persistence happens at query completion, not per-node
-        self.dirty.store(true, .release);
-        incrementMutationEpoch();
+        try self.insertReservedNodeInMemory(id, labels, graph_name, tenant);
         log.debug("Node created, dirty=true", &.{
             Attr.int("node_id", @intCast(id)),
             Attr.int("total_nodes", @intCast(self.nodes.count())),
         });
 
-        // WAL notification: CreateNode
-        notifyMutation(.create_node, id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
-        statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = id, .graph_name = "" } }); // SONNY-3348 (round 18)
-
         return id;
+    }
+
+    /// SONNY-6268: undo a node create's engine slot after a later step
+    /// failed. A failure here is logged (the slot stays, and the next open
+    /// sees a node no caller was given): the create already reports an error.
+    fn rollbackAdapterNode(vt: AdapterVTable, graph_name: []const u8, slot_id: u64) void {
+        vt.deleteNodeFn(vt.ctx, graph_name, slot_id) catch |err| {
+            log.err("could not delete the engine slot of a failed node create", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.int("slot_id", @intCast(slot_id)),
+                Attr.string("graph", graph_name),
+            });
+        };
     }
 
     // CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreate"; ASPECT=BulkNodeSlots; STATUS=TESTED; TEST=tests/test_gap0815_deep_bulk_create.zig; OWNER=performance; UPDATED=2026-04-20
@@ -5177,26 +5581,20 @@ pub const GraphStore = struct {
         // Pre-resolve IdMap once (graph name already ensured above).
         const id_map_opt: ?*id_map_mod.IdMap = if (adapter_slot_ids != null) try self.getOrCreateIdMap(graph_name) else null;
 
+        // SONNY-6268: on a failure at node i, the engine slots of nodes i..n
+        // are deleted again (nodes before i are complete, and recorded for
+        // the statement's undo like every created node), and node i itself
+        // is undone by the failure-atomic insert. (Before, the copies' error
+        // paths stayed armed after the node cache took them, so an index
+        // failure freed memory the cache still held; teardown then freed it
+        // again. And the remaining slots were left orphaned in the engine.)
         var i: usize = 0;
+        errdefer if (adapter_slot_ids) |slots| {
+            if (global_vtable) |vt| for (slots[i..]) |slot| rollbackAdapterNode(vt, graph_name, slot);
+        };
         while (i < n) : (i += 1) {
             const public_id = generateTimeBasedId();
             public_ids[i] = public_id;
-
-            // Per-node label strings must be individually-owned (the
-            // GraphStore Node deinit frees each string + the outer slice).
-            const labels_copy = try self.allocator.alloc([]const u8, labels.len);
-            errdefer self.allocator.free(labels_copy);
-            var filled: usize = 0;
-            errdefer for (labels_copy[0..filled]) |s| self.allocator.free(s);
-            for (labels, 0..) |label, li| {
-                labels_copy[li] = try self.allocator.dupe(u8, label);
-                filled += 1;
-            }
-
-            const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-            errdefer self.allocator.free(graph_name_copy);
-            const tenant_id_copy = try self.allocator.dupe(u8, tenant);
-            errdefer self.allocator.free(tenant_id_copy);
 
             // Persist the public ID + IdMap entry via the adapter (each
             // call takes its own adapter mutex once — this is unavoidable
@@ -5204,51 +5602,22 @@ pub const GraphStore = struct {
             // above).
             if (adapter_slot_ids) |slots| {
                 if (global_vtable) |vt| {
-                    persistNodePublicId(vt, graph_name, slots[i], public_id) catch |err| {
-                        // Roll back the adapter slot on error. We cannot
-                        // recover slots already committed earlier in the
-                        // batch — their public IDs are emitted but the
-                        // caller never saw the return value (errdefer on
-                        // public_ids above drops it).
-                        if (global_vtable) |v| v.deleteNodeFn(v.ctx, graph_name, slots[i]) catch {};
-                        return err;
-                    };
+                    try persistNodePublicId(vt, graph_name, slots[i], public_id);
                     // GAP-0891 (RC-2): round-trip the tenant tag (no-op for default).
-                    persistNodeTenantId(vt, graph_name, slots[i], tenant) catch |err| {
-                        if (global_vtable) |v| v.deleteNodeFn(v.ctx, graph_name, slots[i]) catch {};
-                        return err;
-                    };
+                    try persistNodeTenantId(vt, graph_name, slots[i], tenant);
                 }
                 if (id_map_opt) |im| {
                     try im.insertNodeWithSlot(@as(u128, public_id), slots[i]);
                 }
             }
-
-            // In-memory node entry.
-            const node = Node{
-                .id = public_id,
-                .labels = labels_copy,
-                .properties = CompactPropertyMap.init(self.allocator),
-                .graph_name = graph_name_copy,
-                .tenant_id = tenant_id_copy,
+            errdefer if (id_map_opt) |im| {
+                _ = im.removeNode(@as(u128, public_id));
             };
-            try self.nodes.put(public_id, node);
 
-            // Label index: append-only (monotonic IDs preserve sort).
-            for (labels) |label| {
-                try self.appendToLabelIndex(graph_name, label, public_id);
-            }
-            // PERF-B (issue #811): per-graph node-id index.
-            try self.addNodeToGraphIndex(graph_name, public_id);
-            // PERF-C (issue #814): tenant-keyed label counters. Batch path
-            // creates nodes with the same label set, so we could hoist the
-            // bumpLabelCount out of the per-node loop — but the bump itself
-            // is a HashMap probe + integer-add, so the per-node cost is
-            // negligible and the simpler call shape matches the other
-            // create paths.
-            for (labels) |label| {
-                try self.bumpLabelCount(graph_name, tenant, label);
-            }
+            // In-memory node entry, label postings (append-only: monotonic
+            // ids keep them sorted), PERF-B per-graph index, PERF-C label
+            // counters.
+            try self.insertNodeInMemory(public_id, labels, graph_name, tenant);
 
             // WAL / mutation notification per node.
             notifyMutation(.create_node, public_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
@@ -5275,7 +5644,11 @@ pub const GraphStore = struct {
         var buf: [512]u8 = undefined;
         const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, label }) catch {
             const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
-            const result = try self.label_index.getOrPut(key);
+            // SONNY-6268: a failed insert frees the key (it leaked).
+            const result = self.label_index.getOrPut(key) catch |err| {
+                self.allocator.free(key);
+                return err;
+            };
             if (!result.found_existing) {
                 result.value_ptr.* = .{};
             } else {
@@ -5287,7 +5660,10 @@ pub const GraphStore = struct {
         if (self.label_index.getPtr(probe_key)) |posting| return posting;
 
         const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
-        const result = try self.label_index.getOrPut(key);
+        const result = self.label_index.getOrPut(key) catch |err| {
+            self.allocator.free(key);
+            return err;
+        };
         if (!result.found_existing) {
             result.value_ptr.* = .{};
         } else {
@@ -5304,11 +5680,83 @@ pub const GraphStore = struct {
     ) !struct { key: []const u8, owned: ?[]u8 } {
         const key = std.fmt.bufPrint(scratch, "{s}:{s}", .{ graph_name, label }) catch |err| switch (err) {
             error.NoSpaceLeft => {
-                const owned = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ graph_name, label });
+                // One exact allocation (SONNY-6302: the removers' reserved
+                // room is sized for it; allocPrint grows a buffer).
+                const owned = try allocator.alloc(u8, graph_name.len + 1 + label.len);
+                @memcpy(owned[0..graph_name.len], graph_name);
+                owned[graph_name.len] = ':';
+                @memcpy(owned[graph_name.len + 1 ..], label);
                 return .{ .key = owned, .owned = owned };
             },
         };
         return .{ .key = key, .owned = null };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=LongNameRemoverKeys; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
+    /// SONNY-6302: the allocator the index and counter removers build a key
+    /// past their 512-byte stack buffers with: the room a delete reserved
+    /// before its point of no return (`RemoverKeyRoom`), else the store's.
+    /// A remover whose key could not be built left a deleted node in its label
+    /// posting, or a label or edge-type counter high.
+    fn removerKeyAllocator(self: *GraphStore) std.mem.Allocator {
+        if (tl_remover_key_room) |fba| return fba.allocator();
+        return self.allocator;
+    }
+
+    /// SONNY-6302: heap room for the removers' keys of one delete, allocated
+    /// before the engine delete when any name involved could make a key past
+    /// the removers' 512-byte stack buffers, and installed for this thread
+    /// around the in-memory removal (which then cannot fail). A key joins two
+    /// names and a separator; a remover holds at most two keys at once
+    /// (`decLabelPropertyCount`; `removeFromLabelIndex` around
+    /// `decGraphLabelCount`), and frees them in reverse order, which a
+    /// fixed-buffer allocator reclaims.
+    const RemoverKeyRoom = struct {
+        buf: []u8 = &.{},
+        fba: std.heap.FixedBufferAllocator = undefined,
+        prev: ?*std.heap.FixedBufferAllocator = null,
+        installed: bool = false,
+
+        fn reserve(allocator: std.mem.Allocator, longest_name: usize) !RemoverKeyRoom {
+            const longest_key = 2 * longest_name + 1;
+            if (longest_key <= 512) return .{};
+            return .{ .buf = try allocator.alloc(u8, 2 * longest_key) };
+        }
+
+        fn install(self: *RemoverKeyRoom) void {
+            if (self.buf.len == 0) return;
+            self.fba = std.heap.FixedBufferAllocator.init(self.buf);
+            self.prev = tl_remover_key_room;
+            tl_remover_key_room = &self.fba;
+            self.installed = true;
+        }
+
+        fn uninstall(self: *RemoverKeyRoom) void {
+            if (!self.installed) return;
+            tl_remover_key_room = self.prev;
+            self.installed = false;
+        }
+
+        fn deinit(self: *RemoverKeyRoom, allocator: std.mem.Allocator) void {
+            self.uninstall();
+            if (self.buf.len > 0) allocator.free(self.buf);
+        }
+    };
+
+    /// The longest name a node's removal builds a remover key from: its
+    /// graph, tenant, labels and property keys, and the graph, tenant and type
+    /// of each incident edge.
+    fn longestRemovalName(node: *const Node, incident: []const IncidentEdge) usize {
+        var n = @max(node.graph_name.len, node.tenant_id.len);
+        for (node.labels) |l| n = @max(n, l.len);
+        var it = node.properties.iterator();
+        while (it.next()) |p| n = @max(n, p.key_ptr.*.len);
+        for (incident) |e| n = @max(n, longestEdgeRemovalName(&e.body));
+        return n;
+    }
+
+    fn longestEdgeRemovalName(edge: *const Edge) usize {
+        return @max(@max(edge.graph_name.len, edge.tenant_id.len), edge.label.len);
     }
 
     fn ensureGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) !void {
@@ -5399,8 +5847,9 @@ pub const GraphStore = struct {
 
     fn decGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) void {
         var key_buf: [512]u8 = undefined;
-        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const formatted = formatGraphLabelKey(&key_buf, ka, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| ka.free(owned);
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_count_rwlock.lockSharedUncancelable(io);
@@ -5487,8 +5936,9 @@ pub const GraphStore = struct {
 
     fn decGraphEdgeTypeCount(self: *GraphStore, graph_name: []const u8, edge_type: []const u8) void {
         var key_buf: [512]u8 = undefined;
-        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type) catch return;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const formatted = formatGraphLabelKey(&key_buf, ka, graph_name, edge_type) catch return;
+        defer if (formatted.owned) |owned| ka.free(owned);
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.edge_type_count_rwlock.lockSharedUncancelable(io);
@@ -5531,24 +5981,6 @@ pub const GraphStore = struct {
         try posting.list.ensureUnusedCapacity(self.allocator, additional);
     }
 
-    /// Append-only label-index insert. Used only by the batch path where
-    /// the caller guarantees the new id is greater than every id already
-    /// present for this (graph, label) — which holds for the batch path
-    /// because `generateTimeBasedId` is monotonic within a batch. Falls
-    /// back to a sorted insert if the monotonic invariant is accidentally
-    /// violated (e.g. clock skew), so correctness is preserved.
-    fn appendToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.label_index_mutex.lockUncancelable(io);
-        defer self.label_index_mutex.unlock(io);
-
-        const posting = try self.ensureLabelPostingListLocked(graph_name, label);
-        posting.lock();
-        defer posting.unlock();
-        const inserted = try insertIntoPostingLocked(posting, self.allocator, node_id);
-        if (inserted) self.bumpGraphLabelCount(graph_name, label);
-    }
-
     fn createNodeWithIdInternal(
         self: *GraphStore,
         node_id: u64,
@@ -5557,6 +5989,7 @@ pub const GraphStore = struct {
         mark_dirty: bool,
         persist_adapter: bool,
     ) !void {
+        try refuseFlaggedNodeId(node_id); // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (hydrate before write)
         // Existence check BEFORE any storage-adapter slot creation: an
         // idempotent re-create (e.g. a restarted Raft node replaying a
@@ -5585,48 +6018,23 @@ pub const GraphStore = struct {
             };
         } else null;
 
+        // SONNY-6268: a failure from here on deletes the engine slot again
+        // (and the IdMap entry), and the in-memory insert is failure-atomic.
+        errdefer if (adapter_node) |persisted_node| rollbackAdapterNode(persisted_node.vt, graph_name, persisted_node.slot_id);
         if (adapter_node) |persisted_node| {
-            persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, node_id) catch |err| {
-                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
-                return err;
-            };
+            try persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, node_id);
             // GAP-0891 (RC-2): round-trip the tenant tag (no-op for default).
-            persistNodeTenantId(persisted_node.vt, graph_name, persisted_node.slot_id, tenant) catch |err| {
-                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
-                return err;
-            };
+            try persistNodeTenantId(persisted_node.vt, graph_name, persisted_node.slot_id, tenant);
             const im = try self.getOrCreateIdMap(graph_name);
             try im.insertNodeWithSlot(@as(u128, node_id), persisted_node.slot_id);
         }
-
-        const labels_copy = try self.allocator.alloc([]const u8, labels.len);
-        for (labels, 0..) |label, i| {
-            labels_copy[i] = try self.allocator.dupe(u8, label);
-        }
-
-        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
-
-        const node = Node{
-            .id = node_id,
-            .labels = labels_copy,
-            .properties = CompactPropertyMap.init(self.allocator),
-            .graph_name = graph_name_copy,
-            .tenant_id = tenant_id_copy,
+        errdefer if (adapter_node != null) {
+            if (self.getIdMap(graph_name)) |im| _ = im.removeNode(@as(u128, node_id));
         };
 
-        try self.nodes.put(node_id, node);
-
-        for (labels) |label| {
-            try self.addToLabelIndex(graph_name, label, node_id);
-        }
-        // PERF-B (issue #811): per-graph node-id index.
-        try self.addNodeToGraphIndex(graph_name, node_id);
-        // PERF-C (issue #814): tenant-keyed label counters. GAP-0891 (RC-3):
-        // bump the SAME tenant bucket the node is tagged with.
-        for (labels) |label| {
-            try self.bumpLabelCount(graph_name, tenant, label);
-        }
+        // PERF-C (issue #814) label counters: GAP-0891 (RC-3) bumps the SAME
+        // tenant bucket the node is tagged with.
+        try self.insertNodeInMemory(node_id, labels, graph_name, tenant);
 
         if (node_id >= self.next_node_id) {
             self.next_node_id = node_id + 1;
@@ -5671,20 +6079,32 @@ pub const GraphStore = struct {
     // PERF-B (issue #811): Add a node-id to the per-graph node-id index.
     // Idempotent: re-adding the same id is a no-op (AutoHashMap.put dedupes).
     fn addNodeToGraphIndex(self: *GraphStore, graph_name: []const u8, node_id: u64) !void {
+        _ = try self.addNodeToGraphIndexReportingNewGraph(graph_name, node_id);
+    }
+
+    /// `addNodeToGraphIndex`, returning whether it made the graph's set (so
+    /// an undo can drop it again, `removeNodeFromGraphIndexUndo`).
+    fn addNodeToGraphIndexReportingNewGraph(self: *GraphStore, graph_name: []const u8, node_id: u64) !bool {
         // PHASE 1b concurrency fix: serialise the outer-map rehash against the
         // lockless `nodes_by_graph` readers (see `nodes_by_graph_mutex`). Leaf
         // lock — innermost, no nesting.
         const io = std.Io.Threaded.global_single_threaded.io();
         self.nodes_by_graph_mutex.lockUncancelable(io);
         defer self.nodes_by_graph_mutex.unlock(io);
-        const result = try self.nodes_by_graph.getOrPut(graph_name);
-        if (!result.found_existing) {
-            const key_copy = try self.allocator.dupe(u8, graph_name);
-            errdefer self.allocator.free(key_copy);
-            result.key_ptr.* = key_copy;
-            result.value_ptr.* = std.AutoHashMap(u64, void).init(self.allocator);
+        // SONNY-6268: the graph's key is copied before its slot is made, so
+        // a failure leaves no slot with an undefined key (which the store's
+        // teardown then freed).
+        if (self.nodes_by_graph.getPtr(graph_name)) |inner| {
+            try inner.put(node_id, {});
+            return false;
         }
-        try result.value_ptr.put(node_id, {});
+        const key_copy = try self.allocator.dupe(u8, graph_name);
+        errdefer self.allocator.free(key_copy);
+        var inner = std.AutoHashMap(u64, void).init(self.allocator);
+        errdefer inner.deinit();
+        try inner.put(node_id, {});
+        try self.nodes_by_graph.put(key_copy, inner);
+        return true;
     }
 
     /// T2b (hydration merge): pre-size the per-graph node-id index for a bulk
@@ -5717,6 +6137,22 @@ pub const GraphStore = struct {
         defer self.nodes_by_graph_mutex.unlock(io);
         if (self.nodes_by_graph.getPtr(graph_name)) |inner| {
             _ = inner.remove(node_id);
+        }
+    }
+
+    /// SONNY-6268: undo `addNodeToGraphIndexReportingNewGraph` exactly: the
+    /// id goes, and so does the graph's (now empty) set when the add made it.
+    fn removeNodeFromGraphIndexUndo(self: *GraphStore, graph_name: []const u8, node_id: u64, made_set: bool) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.nodes_by_graph_mutex.lockUncancelable(io);
+        defer self.nodes_by_graph_mutex.unlock(io);
+        const inner = self.nodes_by_graph.getPtr(graph_name) orelse return;
+        _ = inner.remove(node_id);
+        if (!made_set or inner.count() != 0) return;
+        if (self.nodes_by_graph.fetchRemove(graph_name)) |kv| {
+            self.allocator.free(kv.key);
+            var set = kv.value;
+            set.deinit();
         }
     }
 
@@ -5811,21 +6247,28 @@ pub const GraphStore = struct {
         self.perf_c_refcount_mutex.lockUncancelable(io);
         defer self.perf_c_refcount_mutex.unlock(io);
 
-        const outer_result = try outer.getOrPut(outer_key);
-        if (!outer_result.found_existing) {
-            const okey_copy = try self.allocator.dupe(u8, outer_key);
-            errdefer self.allocator.free(okey_copy);
-            outer_result.key_ptr.* = okey_copy;
-            outer_result.value_ptr.* = std.StringHashMap(usize).init(self.allocator);
-        }
-        const inner_result = try outer_result.value_ptr.getOrPut(inner_key);
-        if (!inner_result.found_existing) {
+        // SONNY-6268: every key copied, and every slot made, before
+        // anything is written, so a failure leaves both maps as they were (a
+        // slot with an undefined key, which the next lookup and the store's
+        // teardown read, was left before).
+        if (outer.getPtr(outer_key)) |inner| {
+            if (inner.getPtr(inner_key)) |n| {
+                n.* += 1;
+                return;
+            }
             const ikey_copy = try self.allocator.dupe(u8, inner_key);
             errdefer self.allocator.free(ikey_copy);
-            inner_result.key_ptr.* = ikey_copy;
-            inner_result.value_ptr.* = 0;
+            try inner.put(ikey_copy, 1);
+            return;
         }
-        inner_result.value_ptr.* += 1;
+        const okey_copy = try self.allocator.dupe(u8, outer_key);
+        errdefer self.allocator.free(okey_copy);
+        const ikey_copy = try self.allocator.dupe(u8, inner_key);
+        errdefer self.allocator.free(ikey_copy);
+        var inner = std.StringHashMap(usize).init(self.allocator);
+        errdefer inner.deinit();
+        try inner.put(ikey_copy, 1);
+        try outer.put(okey_copy, inner);
     }
 
     /// PERF-C: Decrement the refcount; remove the key when it hits zero so the
@@ -5912,8 +6355,9 @@ pub const GraphStore = struct {
 
     fn decLabelCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, label: []const u8) void {
         var scratch: [512]u8 = undefined;
-        const k = formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id) catch return;
-        defer if (k.owned) |buf| self.allocator.free(buf);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const k = formatGraphTenantKey(&scratch, ka, graph_name, tenant_id) catch return;
+        defer if (k.owned) |buf| ka.free(buf);
         self.decRefcount(&self.node_labels_by_tenant, k.key, label);
     }
 
@@ -5926,8 +6370,9 @@ pub const GraphStore = struct {
 
     fn decEdgeTypeCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, edge_type: []const u8) void {
         var scratch: [512]u8 = undefined;
-        const k = formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id) catch return;
-        defer if (k.owned) |buf| self.allocator.free(buf);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const k = formatGraphTenantKey(&scratch, ka, graph_name, tenant_id) catch return;
+        defer if (k.owned) |buf| ka.free(buf);
         self.decRefcount(&self.edge_types_by_tenant, k.key, edge_type);
     }
 
@@ -5994,11 +6439,12 @@ pub const GraphStore = struct {
         prop_key: []const u8,
     ) void {
         var oscratch: [512]u8 = undefined;
-        const ok = formatGraphTenantKey(&oscratch, self.allocator, graph_name, tenant_id) catch return;
-        defer if (ok.owned) |buf| self.allocator.free(buf);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const ok = formatGraphTenantKey(&oscratch, ka, graph_name, tenant_id) catch return;
+        defer if (ok.owned) |buf| ka.free(buf);
         var scratch: [512]u8 = undefined;
-        const k = formatLabelPropKey(&scratch, self.allocator, label, prop_key) catch return;
-        defer if (k.owned) |buf| self.allocator.free(buf);
+        const k = formatLabelPropKey(&scratch, ka, label, prop_key) catch return;
+        defer if (k.owned) |buf| ka.free(buf);
         self.decRefcount(&self.label_properties_by_tenant, ok.key, k.key);
     }
 
@@ -6085,7 +6531,7 @@ pub const GraphStore = struct {
     /// Alias of `sortedInsert` used at sites where the surrounding
     /// `LabelPosting.mutex` is already held. The `Locked` suffix documents
     /// the call-site contract for readers of the label-index mutation
-    /// helpers (`addToLabelIndex`, `appendToLabelIndex`).
+    /// helper (`addToLabelIndex`).
     const sortedInsertLocked = sortedInsert;
 
     fn insertIntoPostingLocked(posting: *LabelPosting, allocator: std.mem.Allocator, node_id: u64) !bool {
@@ -6193,8 +6639,14 @@ pub const GraphStore = struct {
     }
 
     fn removeFromLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) void {
-        const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
-        defer self.allocator.free(key);
+        // SONNY-6268: the key on the stack (the heap only past 512 bytes), as
+        // the other label-index paths build it: a delete or a rollback that
+        // could not allocate the key left the node in the posting.
+        var key_buf: [512]u8 = undefined;
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const formatted = formatGraphLabelKey(&key_buf, ka, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| ka.free(owned);
+        const key = formatted.key;
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_index_mutex.lockUncancelable(io);
@@ -6288,7 +6740,9 @@ pub const GraphStore = struct {
     /// Null for any other value, or when `buf` is too small. MERGE's index
     /// keeps the integers, strings and booleans (`serializePropValueForIndex`);
     /// a lookup of any number compares by these bytes (`findMergeHolders`).
-    fn writeMergeValue(buf: []u8, value: PropertyValue) ?usize {
+    /// `pub` for the UNIQUE check's grouping of existing nodes (SONNY-2846),
+    /// which must key values exactly as MERGE does.
+    pub fn writeMergeValue(buf: []u8, value: PropertyValue) ?usize {
         var writer: std.Io.Writer = .fixed(buf);
         if (numberOfProperty(value)) |n| {
             value_order.writeNumberKey(&writer, n) catch return null;
@@ -6378,37 +6832,171 @@ pub const GraphStore = struct {
         }
     }
 
-    /// GAP-0900 Layer-3 (Fix 3): backfill the merge property index for a single
-    /// key by scanning all currently-loaded nodes. Called when a NEW merge key
-    /// is registered in lean mode (`registerMergeIndexKey`) AFTER the graph was
-    /// hydrated from disk — at hydration time the key was not yet registered, so
-    /// `addToMergePropertyIndex` skipped it and the index had no entry for the
-    /// loaded nodes. Without this, the first re-MERGE of that key after a reopen
-    /// would create a duplicate. Real workloads register a tiny fixed set of
-    /// merge keys once at startup, so this scan runs a handful of times total —
-    /// never per node. Indexes only the named key (lean's RAM bound is intact:
-    /// the other ~19 never-queried SET props stay unindexed).
-    pub fn backfillMergeIndexForKey(self: *GraphStore, key: []const u8) void {
-        var node_iter = self.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            const node = entry.value_ptr;
-            const value = node.properties.get(key) orelse continue;
-            self.addToMergePropertyIndex(node.graph_name, node.labels, key, value, node.id) catch {};
+    // CANARY: REQ=REQ-SONNY-6362-MERGE-ADD-FAILURE; FEATURE="MergeIdempotency"; ASPECT=FailedAddUntrustsIndex; STATUS=TESTED; TEST=tests/test_sonny6362_merge_index_residuals.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6362: a MERGE index entry was not added on a path that cannot
+    /// fail its write (hydration, the full rebuild, the label-add and
+    /// composite helpers, the streaming load's merge stage). The index no
+    /// longer knows every holder, so it stops answering misses
+    /// (`merge_index_untrusted`). These paths swallowed every error,
+    /// out of memory included, and MERGE trusted the miss and created a
+    /// duplicate. `MergeHolderIdFlagged` is no failure: such an id is never
+    /// an entry (and no node is created with one, `refuseFlaggedNodeId`).
+    fn noteMergeIndexAddFailure(self: *GraphStore, err: anyerror) void {
+        if (err == error.MergeHolderIdFlagged) return;
+        _ = self.merge_index_add_failures.fetchAdd(1, .acq_rel);
+        self.merge_index_untrusted.store(true, .release);
+        log.err("a MERGE index entry could not be added; MERGE lookups scan until the index is rebuilt", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    }
+
+    /// SONNY-6268: `addToMergePropertyIndex` that undoes its own entries when
+    /// one fails, so on error the index is as it was. `old` is the value the
+    /// node held under `prop_key` (null for none): an entry the old value
+    /// keys alike was the node's already and is left in place.
+    ///
+    /// SONNY-6354: an id with bit 63 set is never an entry (`putOrUpdate`
+    /// refuses it: the bit flags an entry), so it writes none and the write
+    /// it belongs to goes on, as on every other path that adds an entry
+    /// (creates, hydration, `ensureLeanMergeBackfill`). Only a failure to
+    /// store an entry (out of memory) fails the write.
+    fn addToMergePropertyIndexAtomic(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue, node_id: u64, old: ?PropertyValue) !void {
+        if (!shouldIndexProperty(prop_key)) return;
+        if (node_id & merge_entry_shared != 0) return;
+        var buf: [1024]u8 = undefined;
+        for (labels, 0..) |label, i| {
+            const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
+            self.merge_prop_index.putOrUpdate(probe, node_id) catch |err| {
+                self.removeFromMergePropertyIndex(graph_name, labels[0..i], prop_key, prop_value, node_id, old);
+                return err;
+            };
         }
     }
 
-    /// Caveat "B": backfill the COMPOSITE merge entry for every RESIDENT node.
-    /// Called when a composite key is registered AFTER nodes were already
-    /// loaded into the cache (the in-process register-then-merge order, and as a
-    /// best-effort top-up). The authoritative full-graph rebuild on reopen runs
-    /// in `loadOneGraphFromAdapter` (covers ALL nodes, resident or not); this
-    /// covers the resident set when registration happens mid-process. No-op when
-    /// no composite key is registered.
-    pub fn backfillCompositeMergeEntries(self: *GraphStore) void {
-        var node_iter = self.nodes.iterator();
-        while (node_iter.next()) |entry| {
-            self.addNodeCompositeMergeEntries(entry.value_ptr);
+    /// SONNY-3056: forget which (graph, label, key) triples were backfilled
+    /// (`merge_prop_index` was emptied or the store is going).
+    fn clearLeanBackfilled(self: *GraphStore) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.lean_backfill_mutex.lockUncancelable(io);
+        defer self.lean_backfill_mutex.unlock(io);
+        var it = self.lean_backfilled.keyIterator();
+        while (it.next()) |k| self.allocator.free(k.*);
+        self.lean_backfilled.clearRetainingCapacity();
+    }
+
+    // CANARY: REQ=REQ-SONNY-3056-LEAN-MERGE-BACKFILL; FEATURE="MergeIdempotency"; ASPECT=PerLabelBackfillFromPostings; STATUS=TESTED; TEST=tests/test_sonny3056_lean_merge_evicted_holder.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-3056: before a lookup of `key` under `label` in `graph_name`
+    /// trusts MERGE's index, make the index complete for that triple when
+    /// `key` is a lean key registered at runtime (`leanLateKeyGen`). Such a
+    /// key's holders written before it was registered have no entry (they
+    /// were not indexed then), so the lookup trusted the miss and MERGE
+    /// created a duplicate. This reads every node the label's postings list
+    /// (`snapshotNodesByLabel`), hydrating those that are not resident
+    /// (`residentNodeSatisfies`), and adds its entry. Once per (graph,
+    /// label, key) and registration; holders written afterwards index
+    /// themselves (the key is registered). The caller holds the graph's
+    /// lock, as for any lookup; this takes no graph lock. A key from the
+    /// sidecar costs nothing (the lock-free check in `leanLateKeyGen`).
+    fn ensureLeanMergeBackfill(self: *GraphStore, graph_name: []const u8, label: []const u8, key: []const u8) !void {
+        const gen = leanLateKeyGen(key) orelse return;
+        return self.ensureMergeBackfill(graph_name, label, .{ .key = key }, gen);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES; FEATURE="MergeIdempotency"; ASPECT=CompositeBackfillFromPostings; STATUS=TESTED; TEST=tests/test_sonny6354_lean_late_key_indexes.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6354: `ensureLeanMergeBackfill` for a composite key registered
+    /// at runtime (`compositeLateGen`), in any index mode: its holders
+    /// written before the registration get their composite entry, from the
+    /// label's postings, before a probe trusts a miss. (The registration
+    /// used to add entries for the resident nodes only.)
+    fn ensureCompositeMergeBackfill(self: *GraphStore, graph_name: []const u8, label: []const u8, composite_idx: usize) !void {
+        const gen = compositeLateGen(composite_idx) orelse return;
+        return self.ensureMergeBackfill(graph_name, label, .{ .composite = composite_idx }, gen);
+    }
+
+    const MergeBackfillTarget = union(enum) {
+        key: []const u8,
+        composite: usize,
+    };
+
+    /// The backfill both of the above run: once per (graph, label, target)
+    /// and registration generation `gen` (`lean_backfilled`, guarded by the
+    /// leaf `lean_backfill_mutex`, held only for its map).
+    fn ensureMergeBackfill(self: *GraphStore, graph_name: []const u8, label: []const u8, target: MergeBackfillTarget, gen: u64) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        // A composite's entry is keyed apart from any property name: a
+        // property name never starts with NUL.
+        const triple = switch (target) {
+            .key => |key| try std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00{s}", .{ graph_name, label, key }),
+            .composite => |idx| try std.fmt.allocPrint(self.allocator, "{s}\x00{s}\x00\x00composite {d}", .{ graph_name, label, idx }),
+        };
+        var triple_owned = true;
+        defer if (triple_owned) self.allocator.free(triple);
+        {
+            self.lean_backfill_mutex.lockUncancelable(io);
+            defer self.lean_backfill_mutex.unlock(io);
+            if (self.lean_backfilled.get(triple)) |done| if (done == gen) return;
         }
+
+        const spec: ?CompositeKeySpec = switch (target) {
+            .key => null,
+            .composite => |idx| blk: {
+                g_lean_index_mutex.lockUncancelable(io);
+                defer g_lean_index_mutex.unlock(io);
+                if (idx >= g_composite_key_count) return;
+                break :blk g_composite_keys[idx];
+            },
+        };
+
+        const Probe = struct {
+            graph_name: []const u8,
+            label: []const u8,
+            target: MergeBackfillTarget,
+            spec: ?CompositeKeySpec,
+            buf: [1024]u8 = undefined,
+            len: usize = 0,
+
+            fn build(c: *@This(), node: *const Node) bool {
+                c.len = 0;
+                if (!std.mem.eql(u8, node.graph_name, c.graph_name)) return false;
+                if (!nodeCarriesLabel(node, c.label)) return false;
+                const probe = switch (c.target) {
+                    .key => |key| blk: {
+                        const value = node.properties.get(key) orelse return false;
+                        break :blk buildMergeIndexKey(&c.buf, c.graph_name, c.label, key, value) orelse return false;
+                    },
+                    .composite => blk: {
+                        const cs = &c.spec.?;
+                        var values: [composite_index_max_props]PropertyValue = undefined;
+                        var i: usize = 0;
+                        while (i < cs.prop_count) : (i += 1) {
+                            values[i] = node.properties.get(cs.prop_bufs[i][0..cs.prop_lens[i]]) orelse return false;
+                        }
+                        break :blk buildCompositeMergeIndexKey(&c.buf, c.graph_name, c.label, cs, values[0..cs.prop_count]) orelse return false;
+                    },
+                };
+                c.len = probe.len;
+                return true;
+            }
+        };
+        if (try self.snapshotNodesByLabel(self.allocator, graph_name, label)) |ids| {
+            defer self.allocator.free(ids);
+            var probe: Probe = .{ .graph_name = graph_name, .label = label, .target = target, .spec = spec };
+            for (ids) |id| {
+                if (!try self.residentNodeSatisfies(id, &probe, Probe.build)) continue;
+                // An id with bit 63 set is never an entry (`putOrUpdate`), as
+                // on every other path that writes one.
+                self.merge_prop_index.putOrUpdate(probe.buf[0..probe.len], id) catch |err| switch (err) {
+                    error.MergeHolderIdFlagged => continue,
+                    else => return err,
+                };
+            }
+        }
+
+        self.lean_backfill_mutex.lockUncancelable(io);
+        defer self.lean_backfill_mutex.unlock(io);
+        const gop = try self.lean_backfilled.getOrPut(self.allocator, triple);
+        if (!gop.found_existing) triple_owned = false;
+        gop.value_ptr.* = gen;
     }
 
     /// `node_id` no longer holds `prop_value` under each of its labels (see
@@ -6473,7 +7061,12 @@ pub const GraphStore = struct {
     /// bulk MERGE, edge endpoint resolution) gets the same authoritative
     /// answer.
     pub fn lookupMergeCandidate(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
+        if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
+        // SONNY-3056: a lean key registered at runtime is complete for this
+        // label only after its backfill; a failed one leaves the index unable
+        // to answer.
+        self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable;
         var buf: [1024]u8 = undefined;
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
 
@@ -6496,7 +7089,9 @@ pub const GraphStore = struct {
     /// (Round 8: a settle that finds a single holder records it alone again,
     /// so such a key answers here once more.)
     pub fn lookupOnlyMergeHolder(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
+        if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
+        self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable; // SONNY-3056
         var buf: [1024]u8 = undefined;
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
         const entry = self.merge_prop_index.get(probe) orelse return .not_found;
@@ -6637,6 +7232,19 @@ pub const GraphStore = struct {
         return .{};
     }
 
+    // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=ExactIndexCandidates; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=storage; UPDATED=2026-11-11
+    /// SONNY-2846: for the UNIQUE check, the nodes of `label` in `graph_name`
+    /// the exact node-property index lists under one of `props`' values (the
+    /// smallest posting), as `findMergeHolders` reads them: every node that
+    /// may hold all of them, resident or not. The caller checks each one.
+    /// Null when the index cannot answer (no storage adapter, lean mode, the
+    /// index deferred or being rebuilt); the caller then scans the label.
+    pub fn uniqueKeyCandidates(self: *GraphStore, allocator: std.mem.Allocator, graph_name: []const u8, label: []const u8, props: []const graph_storage_adapter.StorageAdapter.PropKV) !?[]u64 {
+        self.ensureGraphHydrated(graph_name);
+        const adapter = self.exactIndexAdapter() orelse return null;
+        return adapter.exactIndexMergeCandidates(self, allocator, graph_name, label, props);
+    }
+
     /// The storage adapter whose exact node-property index describes this
     /// store's nodes: the global adapter, when this is the global store.
     fn exactIndexAdapter(self: *GraphStore) ?*graph_storage_adapter.StorageAdapter {
@@ -6774,6 +7382,7 @@ pub const GraphStore = struct {
         filters: []const graph_storage_adapter.StorageAdapter.PropKV,
         out_node_id: *u64,
     ) MergeLookupResult {
+        if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint (merge-MISS authority)
         const spec = blk: {
             g_lean_index_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -6783,6 +7392,9 @@ pub const GraphStore = struct {
         } orelse return .not_indexable;
 
         if (filters.len != spec.prop_count) return .not_indexable;
+        // SONNY-6354: a composite registered at runtime is complete for this
+        // label only after its backfill; a failed one cannot answer.
+        self.ensureCompositeMergeBackfill(graph_name, label, composite_idx) catch return .not_indexable;
 
         // Gather values in the spec's (sorted) prop order by matching names.
         var values: [composite_index_max_props]PropertyValue = undefined;
@@ -6864,7 +7476,7 @@ pub const GraphStore = struct {
             var buf: [1024]u8 = undefined;
             for (labels) |label| {
                 const probe = buildCompositeMergeIndexKey(&buf, node.graph_name, label, &spec_copy, values[0..spec_copy.prop_count]) orelse continue;
-                self.merge_prop_index.putOrUpdate(probe, node.id) catch {};
+                self.merge_prop_index.putOrUpdate(probe, node.id) catch |err| self.noteMergeIndexAddFailure(err);
             }
         }
     }
@@ -7187,6 +7799,10 @@ pub const GraphStore = struct {
         self.label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
 
         self.merge_prop_index.reset();
+        self.clearLeanBackfilled();
+        // SONNY-6362: the index is trusted again once this rebuild has added
+        // every entry and no add failed meanwhile (here or elsewhere).
+        const merge_failures_before = self.merge_index_add_failures.load(.acquire);
 
         // PERF-P0-001: Reset edge-type index (SONNY-3233: under its lock).
         {
@@ -7234,12 +7850,13 @@ pub const GraphStore = struct {
             // Rebuild merge property index entries for this node
             var prop_iter = node.properties.iterator();
             while (prop_iter.next()) |prop_entry| {
-                self.addToMergePropertyIndex(node.graph_name, node.labels, prop_entry.key_ptr.*, prop_entry.value_ptr.*, node.id) catch {};
+                self.addToMergePropertyIndex(node.graph_name, node.labels, prop_entry.key_ptr.*, prop_entry.value_ptr.*, node.id) catch |err| self.noteMergeIndexAddFailure(err);
             }
             // Rebuild COMPOSITE merge entries too (caveat "B") so endpoint
             // resolution stays zero-read after a reopen/rebuild.
             self.addNodeCompositeMergeEntries(node);
         }
+        if (self.merge_index_add_failures.load(.acquire) == merge_failures_before) self.merge_index_untrusted.store(false, .release);
 
         // Rebuild adjacency index, edge-type index, and ensure graph registry entries for edges
         var edge_iter = self.edges.iterator();
@@ -7297,30 +7914,18 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_node) |n| isSecurityGraphName(n.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(node_type, key)) {
-                        const fle_ctx = fle_integration.EncryptionContext{
-                            .tenant_id = self.tenant_id,
-                            .schema_name = self.schema_name,
-                            .allocator = self.allocator,
-                            .current_user_role = fle_integration.rolePreferringActiveContext(),
-                        };
-                        // FLE record-id formatting must NOT go through allocPrint on the
-                        // shared self.allocator — concurrent thread-pool paths (QUIC auth
-                        // lookups, etc.) can trigger `@memcpy arguments alias` inside
-                        // std.Io.Writer.drain when the allocator is contended. Stack buffer
-                        // is large enough for "node_" + u64 (max 25 bytes).
-                        var id_buf: [32]u8 = undefined;
-                        const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch {
-                            break :blk value;
-                        };
-                        const encrypted = fle_integration.encryptFieldIfNeeded(
-                            fle_ctx,
+                        // SONNY-6335: the one encryption identity (label/type, request
+                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. It used the store's
+                        // tenant/schema and "node_<id>", which no reader used.
+                        const encrypted = fle_integration.encryptStoredString(
+                            self.allocator,
+                            .node,
                             node_type,
                             key,
                             s,
-                            record_id,
-                        ) catch {
-                            break :blk value;
-                        };
+                            node_id,
+                        ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             owned_encrypted = encrypted;
                             break :blk PropertyValue{ .String = encrypted };
@@ -7333,73 +7938,137 @@ pub const GraphStore = struct {
             else => value,
         };
 
-        if (global_vtable) |vt| {
-            const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
-            const slot_id = try self.requireNodeSlot(node.graph_name, node_id);
-            try vt.setNodePropertyFn(vt.ctx, node.graph_name, slot_id, key, effective_value);
+        // SONNY-6268: failure-atomic. Everything that can fail runs before
+        // anything is written: the value's copy, the map slot of a new key
+        // (`preparePropertyPut`), the PERF-C counters of a new key and the
+        // merge-index entries of the new value (each undone, below, if a
+        // later step fails); then the adapter write; then the in-memory
+        // commit, which cannot fail. So a failure leaves the node, its
+        // indexes and the engine as they were. (Before: a failed key copy
+        // left a map slot with an undefined key, which every later lookup,
+        // the delete and teardown read; a failed in-memory write after the
+        // adapter's left the engine and the node disagreeing; and a failed
+        // merge-index or counter insert was swallowed, so MERGE trusted a
+        // miss for a value the node holds.)
+        const node_meta = self.nodes.get(node_id) orelse {
+            if (global_vtable != null) return error.NodeNotFound;
+            return;
+        };
+        const prep = try self.preparePropertyPut(&node_meta.properties, key, effective_value);
+        var committed = false;
+        errdefer if (!committed) self.cancelPropertyPut(&node_meta.properties, prep);
+        const was_new = prep.insert != null;
+        const old_value: ?PropertyValue = node_meta.properties.get(key);
+
+        // PERF-C (issue #814): only bump the label-property counter on the
+        // new-key transition. Value updates do not change the set of property
+        // keys reported by `listPropertiesForLabel`. (Internal keys were
+        // refused above.)
+        var labels_counted: usize = 0;
+        errdefer for (node_meta.labels[0..labels_counted]) |label| self.decLabelPropertyCount(node_meta.graph_name, node_meta.tenant_id, label, key);
+        if (was_new) {
+            for (node_meta.labels) |label| {
+                try self.bumpLabelPropertyCount(node_meta.graph_name, node_meta.tenant_id, label, key);
+                labels_counted += 1;
+            }
         }
-        if (self.nodes.getPtr(node_id)) |node| {
-            const value_copy = try copyPropertyValue(self, effective_value);
-            errdefer freePropertyValue(self, value_copy);
+        // The new value's merge-index entries (the old value's go at the
+        // commit). Undone without touching the entries the old value keys
+        // alike (`removeFromMergePropertyIndex`'s replacement rule).
+        try self.addToMergePropertyIndexAtomic(node_meta.graph_name, node_meta.labels, key, prep.value, node_id, old_value);
+        errdefer self.removeFromMergePropertyIndex(node_meta.graph_name, node_meta.labels, key, prep.value, node_id, old_value);
 
-            // ENG-3954 / #874: the property-map mutation below reallocs-and-frees
-            // the node's `entries` slice, so it must exclude concurrent readers
-            // that are dereferencing this node. The per-graph rwlock does not
-            // (the callers that take it are the transports, not this store), so
-            // hold the node cache's per-shard leaf lock EXCLUSIVE across the
-            // whole in-place mutation. See `BoundedNodeCache.ShardGuard`.
-            {
-                self.nodes.lockShardExclusive(node_id);
-                defer self.nodes.unlockShardExclusive(node_id);
+        if (global_vtable) |vt| {
+            const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
+            try vt.setNodePropertyFn(vt.ctx, node_meta.graph_name, slot_id, key, effective_value);
+        }
 
-                // Caveat "B": if `key` is a composite component and its value is
-                // CHANGING, the existing composite merge entry (built from the OLD
-                // value) is now stale — remove it BEFORE overwriting so we don't leak
-                // a dangling composite entry. Re-asserted from current values below.
-                // (The from-dump path never mutates composite components, so this is
-                // a robustness guard, not a hot path.)
-                const composite_component = isCompositeComponentKey(key);
-                if (composite_component) self.removeNodeCompositeMergeEntries(node);
+        // ENG-3954 / #874: the property-map mutation below reallocs-and-frees
+        // the node's `entries` slice, so it must exclude concurrent readers
+        // that are dereferencing this node. The per-graph rwlock does not
+        // (the callers that take it are the transports, not this store), so
+        // hold the node cache's per-shard leaf lock EXCLUSIVE across the
+        // whole in-place mutation. See `BoundedNodeCache.ShardGuard`.
+        {
+            self.nodes.lockShardExclusive(node_id);
+            defer self.nodes.unlockShardExclusive(node_id);
+            // Property writers of a graph are serialised (the per-graph
+            // exclusive lock), so the node read above is the node here,
+            // unless a bounded cache evicted it meanwhile (another graph's
+            // insert into the shard): then the engine, written above, is the
+            // node's only copy and the next read hydrates the new value.
+            const node = self.nodes.getPtrUnlocked(node_id) orelse {
+                if (old_value) |old| self.removeFromMergePropertyIndex(node_meta.graph_name, node_meta.labels, key, old, node_id, prep.value);
+                self.cancelPropertyPut(&node_meta.properties, prep);
+                committed = true;
+                return;
+            };
 
-                // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
-                const result = try node.properties.getOrPut(key);
-                const was_new = !result.found_existing;
-                if (was_new) {
-                    // Key doesn't exist, allocate a copy
-                    result.key_ptr.* = try self.allocator.dupe(u8, key);
-                } else {
-                    // Key exists — remove old merge property index entry before overwriting
-                    self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*, node_id, value_copy);
-                    freePropertyValue(self, result.value_ptr.*);
-                }
-                result.value_ptr.* = value_copy;
+            // Caveat "B": if `key` is a composite component and its value is
+            // CHANGING, the existing composite merge entry (built from the OLD
+            // value) is now stale — remove it BEFORE overwriting so we don't leak
+            // a dangling composite entry. Re-asserted from current values below.
+            // (The from-dump path never mutates composite components, so this is
+            // a robustness guard, not a hot path.)
+            const composite_component = isCompositeComponentKey(key);
+            if (composite_component) self.removeNodeCompositeMergeEntries(node);
 
-                // Update merge property index with new value
-                self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
-                // Re-assert the composite merge entry from the node's CURRENT values
-                // (now including the new value for `key`). No-op if the node doesn't
-                // carry all composite props yet, or no composite is registered.
-                if (composite_component) self.addNodeCompositeMergeEntries(node);
-
-                // PERF-C (issue #814): only bump the label-property counter on
-                // the new-key transition. Value updates do not change the set of
-                // property keys reported by `listPropertiesForLabel`. Internal
-                // persisted-id keys are skipped (they're filtered out at read
-                // time too).
-                if (was_new and !isInternalPersistedPropertyKey(key)) {
-                    for (node.labels) |label| {
-                        self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, key) catch {};
-                    }
-                }
+            const replaced = commitPropertyPut(&node.properties, key, prep);
+            committed = true;
+            if (replaced) |old| {
+                // The old value's merge-index entries, except those the new
+                // value keys alike.
+                self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, old, node_id, prep.value);
+                freePropertyValue(self, old);
             }
 
-            // Mark as dirty - persistence happens at query completion
-            self.dirty.store(true, .release);
-            incrementMutationEpoch();
-
-            // WAL notification: SetNodeProperty
-            notifyMutation(.set_node_property, node_id, 0, 0, null, key, effective_value, null);
+            // Re-assert the composite merge entry from the node's CURRENT values
+            // (now including the new value for `key`). No-op if the node doesn't
+            // carry all composite props yet, or no composite is registered.
+            if (composite_component) self.addNodeCompositeMergeEntries(node);
         }
+
+        // Mark as dirty - persistence happens at query completion
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+
+        // WAL notification: SetNodeProperty
+        notifyMutation(.set_node_property, node_id, 0, 0, null, key, effective_value, null);
+    }
+
+    /// SONNY-6268: a property write whose fallible part is done (see
+    /// `setNodeProperty`): the value's copy, and for a new key the map slot.
+    const PreparedPropertyPut = struct {
+        value: PropertyValue,
+        insert: ?CompactPropertyMap.InsertReservation,
+    };
+
+    fn preparePropertyPut(self: *GraphStore, props: *const CompactPropertyMap, key: []const u8, value: PropertyValue) !PreparedPropertyPut {
+        const value_copy = try copyPropertyValue(self, value);
+        errdefer freePropertyValue(self, value_copy);
+        const insert: ?CompactPropertyMap.InsertReservation = if (props.contains(key))
+            null
+        else
+            try props.reserveInsert(self.allocator, key);
+        return .{ .value = value_copy, .insert = insert };
+    }
+
+    fn cancelPropertyPut(self: *GraphStore, props: *const CompactPropertyMap, prep: PreparedPropertyPut) void {
+        if (prep.insert) |r| props.cancelInsert(self.allocator, r);
+        freePropertyValue(self, prep.value);
+    }
+
+    /// Cannot fail. Returns the value it replaced (the caller frees it), or
+    /// null for a new key.
+    fn commitPropertyPut(props: *CompactPropertyMap, key: []const u8, prep: PreparedPropertyPut) ?PropertyValue {
+        if (prep.insert) |r| {
+            props.commitInsert(r, prep.value);
+            return null;
+        }
+        const slot = props.getPtr(key).?;
+        const old = slot.*;
+        slot.* = prep.value;
+        return old;
     }
 
     /// Batch property entry for `setNodePropertiesBatch`.
@@ -7446,7 +8115,7 @@ pub const GraphStore = struct {
 
             for (entries, 0..) |entry, i| {
                 if (entry.value) |val| {
-                    const res = self.applyFleEncryption(node_id, entry.key, val);
+                    const res = try self.applyFleEncryption(node_id, entry.key, val);
                     adapter_entries[i] = .{ .key = entry.key, .value = res.value };
                     owned_envelopes[i] = res.owned;
                 } else {
@@ -7461,7 +8130,7 @@ pub const GraphStore = struct {
             const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
             for (entries) |entry| {
                 if (entry.value) |val| {
-                    const res = self.applyFleEncryption(node_id, entry.key, val);
+                    const res = try self.applyFleEncryption(node_id, entry.key, val);
                     // GAP-0854 follow-up: free the envelope after the vtable
                     // setter has copied it into the storage layer.
                     defer if (res.owned) |buf| self.allocator.free(buf);
@@ -7489,7 +8158,7 @@ pub const GraphStore = struct {
                 if (isInternalPersistedPropertyKey(entry.key)) continue;
 
                 if (entry.value) |val| {
-                    const res = self.applyFleEncryption(node_id, entry.key, val);
+                    const res = try self.applyFleEncryption(node_id, entry.key, val);
                     // GAP-0854 follow-up: the encrypted envelope is copied into
                     // the in-memory store and read by the WAL notify below;
                     // free the freshly-allocated buffer once both have consumed
@@ -7504,15 +8173,15 @@ pub const GraphStore = struct {
                         // must exclude concurrent readers of this node.
                         self.nodes.lockShardExclusive(node_id);
                         defer self.nodes.unlockShardExclusive(node_id);
-                        const result = try node.properties.getOrPut(entry.key);
-                        if (!result.found_existing) {
-                            result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
-                        } else {
-                            self.removeFromMergePropertyIndex(node.graph_name, node.labels, entry.key, result.value_ptr.*, node_id, value_copy);
-                            freePropertyValue(self, result.value_ptr.*);
+                        // SONNY-6268: the merge entries first (undone on a
+                        // failure), then the failure-atomic map write.
+                        const old_value = node.properties.get(entry.key);
+                        try self.addToMergePropertyIndexAtomic(node.graph_name, node.labels, entry.key, value_copy, node_id, old_value);
+                        errdefer self.removeFromMergePropertyIndex(node.graph_name, node.labels, entry.key, value_copy, node_id, old_value);
+                        if (try node.properties.putValue(self.allocator, entry.key, value_copy)) |old| {
+                            self.removeFromMergePropertyIndex(node.graph_name, node.labels, entry.key, old, node_id, value_copy);
+                            freePropertyValue(self, old);
                         }
-                        result.value_ptr.* = value_copy;
-                        self.addToMergePropertyIndex(node.graph_name, node.labels, entry.key, value_copy, node_id) catch {};
                     }
 
                     notifyMutation(.set_node_property, node_id, 0, 0, null, entry.key, effective, null);
@@ -7520,7 +8189,7 @@ pub const GraphStore = struct {
                     // Remove
                     self.nodes.lockShardExclusive(node_id);
                     defer self.nodes.unlockShardExclusive(node_id);
-                    if (node.properties.fetchRemove(entry.key)) |kv| {
+                    if (try node.properties.fetchRemoveChecked(entry.key)) |kv| {
                         self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value, node_id, null);
                         self.allocator.free(kv.key);
                         freePropertyValue(self, kv.value);
@@ -7564,7 +8233,7 @@ pub const GraphStore = struct {
     /// Apply FLE encryption to a property value if required.  Factored out
     /// so both `setNodeProperty` and `setNodePropertiesBatch` share the
     /// same logic.
-    fn applyFleEncryption(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) FleApplyResult {
+    fn applyFleEncryption(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) FleWriteError!FleApplyResult {
         switch (value) {
             .String => |s| {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
@@ -7576,26 +8245,18 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_node) |n| isSecurityGraphName(n.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(node_type, key)) {
-                        const fle_ctx = fle_integration.EncryptionContext{
-                            .tenant_id = self.tenant_id,
-                            .schema_name = self.schema_name,
-                            .allocator = self.allocator,
-                            .current_user_role = fle_integration.rolePreferringActiveContext(),
-                        };
-                        // Stack-formatted record ID — see setNodeProperty comment.
-                        var id_buf: [32]u8 = undefined;
-                        const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch {
-                            return .{ .value = value };
-                        };
-                        const encrypted = fle_integration.encryptFieldIfNeeded(
-                            fle_ctx,
+                        // SONNY-6335: the one encryption identity (label/type, request
+                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. It used the store's
+                        // tenant/schema and "node_<id>", which no reader used.
+                        const encrypted = fle_integration.encryptStoredString(
+                            self.allocator,
+                            .node,
                             node_type,
                             key,
                             s,
-                            record_id,
-                        ) catch {
-                            return .{ .value = value };
-                        };
+                            node_id,
+                        ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             return .{ .value = PropertyValue{ .String = encrypted }, .owned = encrypted };
                         }
@@ -7607,6 +8268,21 @@ pub const GraphStore = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=GraphStoreCheckedRead; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+    /// The node's STORED property value: for an FLE-encrypted string, the
+    /// stored envelope. A caller that needs the value as the requesting
+    /// principal may see it uses `getNodePropertyChecked`.
+    ///
+    /// SONNY-6327: this used to try to decrypt and return the stored bytes
+    /// when that failed, so its caller took ciphertext for the value. It
+    /// also decrypted with the store's tenant/schema and a "node_<id>"
+    /// record identity, which the executor's FLE hook (label, request
+    /// tenant, "<id>") never writes, so it failed on every value the
+    /// executor encrypted, and a decrypted copy leaked on `self.allocator`.
+    /// Its callers are the security graph (never FLE-encrypted, GAP-0854),
+    /// the fulltext indexer (which must not index plaintext of an encrypted
+    /// field), the in-memory MERGE key check, and the aggregate fast paths,
+    /// which decline whenever an FLE field is configured.
     pub fn getNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) ?PropertyValue {
         // Hydrate-on-miss: an evicted-but-live node is rebuilt from the engine
         // so this read is transparent under the bounded cache. The returned
@@ -7614,60 +8290,37 @@ pub const GraphStore = struct {
         // valid until a grace-point reclaim, which the caller's per-graph rwlock
         // excludes for the read's duration (same borrow lifetime as pre-cache).
         if (self.nodes.getOrHydratePtr(node_id) catch null) |node| {
-            const value = node.properties.get(key) orelse return null;
-
-            // Fast path: skip FLE decryption when no encryption is configured.
-            if (!fle_integration.hasEncryptedFields()) return value;
-
-            // GAP-0854: the internal security graph is never FLE-encrypted (see
-            // setNodeProperty), so it must never be run through FLE decryption
-            // either — its `hmac`/`username`/`email` values are stored as
-            // plaintext and feed the auth HMAC chain verbatim.
-            if (isSecurityGraphName(node.graph_name)) return value;
-
-            // Field-Level Encryption: decrypt string values if encrypted
-            switch (value) {
-                .String => |s| {
-                    // Get node type (primary label) for catalog lookup
-                    const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-
-                    // Create encryption context using GraphStore's tenant/schema
-                    const fle_ctx = fle_integration.EncryptionContext{
-                        .tenant_id = self.tenant_id,
-                        .schema_name = self.schema_name,
-                        .allocator = self.allocator,
-                        .current_user_role = fle_integration.rolePreferringActiveContext(),
-                    };
-
-                    // Format record ID on the stack — NOT via allocPrint on the shared
-                    // self.allocator. Concurrent thread-pool access (QUIC auth lookups,
-                    // parallel query handlers) triggered '@memcpy arguments alias' inside
-                    // std.Io.Writer.drain → ArrayList.ensureTotalCapacityPrecise when the
-                    // allocator was contended. Stack buffer fits "node_" + u64 (<=25 bytes).
-                    var id_buf: [32]u8 = undefined;
-                    const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch s;
-
-                    // Decrypt if field is encrypted
-                    const decrypted_value = fle_integration.decryptFieldIfNeeded(
-                        fle_ctx,
-                        type_name,
-                        key,
-                        s,
-                        record_id,
-                        true, // Check RBAC permissions
-                    ) catch s; // Fall back to original value on error
-
-                    // If decryption returned a different value, return new PropertyValue
-                    if (!std.mem.eql(u8, decrypted_value, s)) {
-                        return PropertyValue{ .String = decrypted_value };
-                    }
-
-                    return value;
-                },
-                else => return value,
-            }
+            return node.properties.get(key);
         }
         return null;
+    }
+
+    /// SONNY-6327: the node's property as the requesting principal may see
+    /// it: a string through the shared FLE read policy
+    /// (`fle_integration.readStoredString`, the one eval uses): decrypted
+    /// for a role that may read it, "[REDACTED]" or `SearchNotPermitted`
+    /// for one that may not, `FleDecryptionFailed` when it does not
+    /// decrypt, `FleCatalogUnavailable` while the catalog cannot be loaded.
+    /// Never the stored envelope presented as the value. A decrypted or
+    /// redacted string is allocated from `allocator`.
+    pub fn getNodePropertyChecked(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64, key: []const u8) fle_integration.FleReadError!?PropertyValue {
+        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return null;
+        const value = node.properties.get(key) orelse return null;
+        if (value != .String) return value;
+        // GAP-0854: the internal security graph is never FLE-encrypted.
+        if (isSecurityGraphName(node.graph_name)) return value;
+        const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+        return PropertyValue{ .String = try fle_integration.readStoredString(allocator, .node, type_name, key, value.String, node_id) };
+    }
+
+    /// SONNY-6327: the edge's property as the requesting principal may see
+    /// it, by the same policy as `getNodePropertyChecked`.
+    pub fn getEdgePropertyChecked(self: *GraphStore, allocator: std.mem.Allocator, edge_id: u64, key: []const u8) fle_integration.FleReadError!?PropertyValue {
+        const edge = self.getEdgeHydrated(edge_id) orelse return null;
+        const value = edge.properties.get(key) orelse return null;
+        if (value != .String) return value;
+        if (isSecurityGraphName(edge.graph_name)) return value;
+        return PropertyValue{ .String = try fle_integration.readStoredString(allocator, .edge, edge.label, key, value.String, edge_id) };
     }
 
     /// Get a node property value (simplified version without FLE decryption).
@@ -7691,15 +8344,25 @@ pub const GraphStore = struct {
         if (isInternalPersistedPropertyKey(key)) return;
         // SONNY-3348 (round 18): the value it removes.
         self.undoRecordNodeProperty(node_id, key, true) catch return undoRecordFailed();
+        // SONNY-6268: the map's shrunken slice is allocated before the
+        // adapter write, so the in-memory removal after it cannot fail (it
+        // could, and then compacted in place into a slice shorter than its
+        // allocation, which the next free handed back with the wrong length).
+        // A failure to allocate it, or of the adapter write, changes nothing
+        // and fails the statement (out of memory) or is logged (the adapter).
+        const node_meta = self.nodes.get(node_id) orelse return;
+        const reservation = node_meta.properties.reserveRemove(key) catch return undoRecordFailed();
+        var reserved = reservation != null;
+        defer if (reserved) node_meta.properties.cancelRemove(reservation.?);
         if (global_vtable) |vt| {
-            const node = self.nodes.get(node_id) orelse return;
+            const node = node_meta;
             const slot_id = self.requireNodeSlot(node.graph_name, node_id) catch |err| {
                 log.err("adapter node-slot lookup failed during removeNodeProperty", &.{
                     Attr.string("error", @errorName(err)),
                     Attr.int("node_id", @intCast(node_id)),
                     Attr.string("graph", node.graph_name),
                 });
-                return;
+                return voidWriteFailed(err);
             };
             vt.removeNodePropertyFn(vt.ctx, node.graph_name, slot_id, key) catch |err| {
                 log.err("adapter removeNodeProperty failed", &.{
@@ -7707,10 +8370,10 @@ pub const GraphStore = struct {
                     Attr.int("node_id", @intCast(node_id)),
                     Attr.string("graph", node.graph_name),
                 });
-                return;
+                return voidWriteFailed(err);
             };
         }
-        if (self.nodes.getPtr(node_id)) |node| {
+        {
             // Caveat "B" COMPLETENESS (GAP-B): if `key` is a composite component,
             // removing it makes any composite merge entry (keyed on the node's
             // CURRENT full value set) stale — and lookupCompositeMergeCandidate
@@ -7723,8 +8386,11 @@ pub const GraphStore = struct {
                 // concurrent readers of this node (see setNodeProperty).
                 self.nodes.lockShardExclusive(node_id);
                 defer self.nodes.unlockShardExclusive(node_id);
+                const node = self.nodes.getPtrUnlocked(node_id).?;
                 if (isCompositeComponentKey(key)) self.removeNodeCompositeMergeEntries(node);
-                if (node.properties.fetchRemove(key)) |kv| {
+                if (reservation) |r| {
+                    reserved = false;
+                    const kv = node.properties.commitRemove(r, key);
                     // Remove from merge property index before freeing
                     self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value, node_id, null);
                     // PERF-C (issue #814): decrement the label-property counter
@@ -7769,161 +8435,216 @@ pub const GraphStore = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-6268-LABEL-ATOMIC; FEATURE="GraphStoreFailureAtomicity"; ASPECT=NodeLabelAddRemove; STATUS=TESTED; TEST=tests/test_sonny6268_graph_store_failure_atomicity.zig; OWNER=storage; UPDATED=2026-11-11
+    /// SONNY-6268: failure-atomic. The label's copy and the node's new label
+    /// slice are made before the adapter write; after it, the label postings,
+    /// the PERF-C counters and MERGE's entries are added with each one undone
+    /// if a later one fails, and the adapter's label is taken back (logged if
+    /// that compensating write fails too). (Before: the node took the label
+    /// and then an index insert failed, leaving the node with a label its
+    /// posting, counters and merge entries did not know; and the copies
+    /// leaked on the earlier failures.)
     pub fn addNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
         try statementWriteFence(); // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
         try self.undoRecordNodeLabel(node_id, label, true); // SONNY-3348 (round 18)
-        if (global_vtable) |vt| {
-            if (vt.addNodeLabelFn) |f| {
-                const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
-                const slot_id = try self.requireNodeSlot(node.graph_name, node_id);
-                try f(vt.ctx, node.graph_name, slot_id, label);
-            }
+        const adapter_add: ?AdapterVTable = if (global_vtable) |vt| (if (vt.addNodeLabelFn != null) vt else null) else null;
+        const node_meta = self.nodes.get(node_id) orelse {
+            if (adapter_add != null) return error.NodeNotFound;
+            return;
+        };
+        var has_label = false;
+        for (node_meta.labels) |existing_label| {
+            if (std.mem.eql(u8, existing_label, label)) has_label = true;
         }
-        if (self.nodes.getPtr(node_id)) |node| {
-            // Check if label already exists
-            for (node.labels) |existing_label| {
-                if (std.mem.eql(u8, existing_label, label)) {
-                    return; // Label already exists, no need to add
-                }
-            }
 
-            // Add the label to the node's labels array
-            const label_copy = try self.allocator.dupe(u8, label);
-            const new_labels = try self.allocator.alloc([]const u8, node.labels.len + 1);
-            @memcpy(new_labels[0..node.labels.len], node.labels);
-            new_labels[node.labels.len] = label_copy;
+        // Add the label to the node's labels array (made before anything is
+        // written; ours until the node takes it).
+        var taken = false;
+        const label_copy: []const u8 = if (has_label) "" else try self.allocator.dupe(u8, label);
+        errdefer if (!taken and !has_label) self.allocator.free(label_copy);
+        const new_labels: [][]const u8 = if (has_label) &.{} else try self.allocator.alloc([]const u8, node_meta.labels.len + 1);
+        errdefer if (!taken and !has_label) self.allocator.free(new_labels);
 
-            // GAP-825: hold `labels_rwlock` EXCLUSIVE across the entire
-            // mutation window (free-then-reassign + label_index update +
-            // PERF-C counter bumps).  Without this, a snapshot reader in
-            // `cloneNodesFrom` (which holds the same lock SHARED for the
-            // duration of its walk) could observe `node.labels == []`
-            // between `free(node.labels)` and `node.labels = new_labels`
-            // (the freed-page zero-fill bug) OR an inconsistent
-            // (node.labels, label_index) pair after the slice update but
-            // before the index update.  Leaf lock — nothing else inside
-            // this critical section acquires another lock.
-            const io = std.Io.Threaded.global_single_threaded.io();
-            self.labels_rwlock.lockUncancelable(io);
-            defer self.labels_rwlock.unlock(io);
-
-            // Free old labels array if it was allocated
-            if (node.labels.len > 0) {
-                self.allocator.free(node.labels);
-            }
-
-            node.labels = new_labels;
-
-            // Maintain label index
-            try self.addToLabelIndex(node.graph_name, label, node_id);
-            // PERF-C (issue #814): bump tenant-keyed label counter and, for
-            // every existing property on the node, the label-property counter
-            // — because the new label "inherits" all the node's properties
-            // for introspection purposes (`listPropertiesForLabel` reports
-            // every property carried by any node holding `label`).
-            try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
-            var prop_it_for_pc = node.properties.iterator();
-            while (prop_it_for_pc.next()) |p| {
-                const pkey = p.key_ptr.*;
-                if (isInternalPersistedPropertyKey(pkey)) continue;
-                try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
-            }
-            // SONNY-3109: the node now holds each of its keys under `label`,
-            // as a node created with it does: MERGE's index records it, and a
-            // registered composite key's entry too. Without this, `SET n:L`
-            // left the node out of every (L, key, value) entry, and
-            // `MERGE (:L {x: 1})` trusted the miss and created a second node.
-            // After the label index write, so a lookup that settles one of
-            // these entries by a label scan sees the node. (The merge index's
-            // shard mutexes are leaves: no path holding one takes
-            // `labels_rwlock`.)
-            self.addNodeMergeEntriesForLabel(node, label);
-
-            // Mark as dirty - persistence happens at query completion
-            self.dirty.store(true, .release);
-            incrementMutationEpoch();
-
-            // WAL notification: AddNodeLabel
-            notifyMutation(.add_node_label, node_id, 0, 0, label, null, null, null);
+        if (adapter_add) |vt| {
+            const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
+            try vt.addNodeLabelFn.?(vt.ctx, node_meta.graph_name, slot_id, label);
         }
+        if (has_label) return; // Label already exists, no need to add
+        errdefer if (adapter_add) |vt| self.compensateAdapterLabel(vt, node_meta.graph_name, node_id, label, .remove);
+
+        // GAP-825: hold `labels_rwlock` EXCLUSIVE across the entire
+        // mutation window (label_index update + PERF-C counter bumps +
+        // the label-slice swap). Without this, a snapshot reader in
+        // `cloneNodesFrom` (which holds the same lock SHARED for the
+        // duration of its walk) could observe an inconsistent
+        // (node.labels, label_index) pair. Released before the adapter
+        // compensation above runs.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.labels_rwlock.lockUncancelable(io);
+        defer self.labels_rwlock.unlock(io);
+
+        const node = self.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+
+        // Maintain label index (a failed add may leave the label's empty
+        // posting, which the undo removes).
+        errdefer self.removeFromLabelIndex(node.graph_name, label, node_id);
+        try self.addToLabelIndex(node.graph_name, label, node_id);
+        // PERF-C (issue #814): bump tenant-keyed label counter and, for
+        // every existing property on the node, the label-property counter
+        // — because the new label "inherits" all the node's properties
+        // for introspection purposes (`listPropertiesForLabel` reports
+        // every property carried by any node holding `label`).
+        try self.bumpLabelCount(node.graph_name, node.tenant_id, label);
+        errdefer self.decLabelCount(node.graph_name, node.tenant_id, label);
+        const props = node.properties.entries;
+        var props_counted: usize = 0;
+        errdefer for (props[0..props_counted]) |p| {
+            if (!isInternalPersistedPropertyKey(p.key)) self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, p.key);
+        };
+        for (props) |p| {
+            if (!isInternalPersistedPropertyKey(p.key)) try self.bumpLabelPropertyCount(node.graph_name, node.tenant_id, label, p.key);
+            props_counted += 1;
+        }
+        // SONNY-3109: the node now holds each of its keys under `label`,
+        // as a node created with it does: MERGE's index records it, and a
+        // registered composite key's entry too. Without this, `SET n:L`
+        // left the node out of every (L, key, value) entry, and
+        // `MERGE (:L {x: 1})` trusted the miss and created a second node.
+        // After the label index write, so a lookup that settles one of
+        // these entries by a label scan sees the node. (The merge index's
+        // shard mutexes are leaves: no path holding one takes
+        // `labels_rwlock`.)
+        const one_label = [_][]const u8{label};
+        var props_indexed: usize = 0;
+        errdefer for (props[0..props_indexed]) |p| self.removeFromMergePropertyIndex(node.graph_name, &one_label, p.key, p.value, node_id, null);
+        for (props) |p| {
+            try self.addToMergePropertyIndexAtomic(node.graph_name, &one_label, p.key, p.value, node_id, null);
+            props_indexed += 1;
+        }
+
+        // Commit: cannot fail from here.
+        @memcpy(new_labels[0..node.labels.len], node.labels);
+        new_labels[node.labels.len] = label_copy;
+        if (node.labels.len > 0) self.allocator.free(node.labels);
+        node.labels = new_labels;
+        taken = true;
+        self.addNodeCompositeMergeEntriesForLabels(node, &one_label);
+
+        // Mark as dirty - persistence happens at query completion
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+
+        // WAL notification: AddNodeLabel
+        notifyMutation(.add_node_label, node_id, 0, 0, label, null, null, null);
     }
 
+    const LabelCompensation = enum { add, remove };
+
+    /// SONNY-6268: take back an adapter label write whose in-memory half
+    /// failed. A failure here is logged: the engine and the node then
+    /// disagree on the label until the next write of it.
+    fn compensateAdapterLabel(self: *GraphStore, vt: AdapterVTable, graph_name: []const u8, node_id: u64, label: []const u8, op: LabelCompensation) void {
+        const slot_id = self.requireNodeSlot(graph_name, node_id) catch |err| return logLabelCompensationFailure(err, node_id, label);
+        const f = switch (op) {
+            .add => vt.addNodeLabelFn,
+            .remove => vt.removeNodeLabelFn,
+        } orelse return logLabelCompensationFailure(error.AdapterLabelWriteUnavailable, node_id, label);
+        f(vt.ctx, graph_name, slot_id, label) catch |err| logLabelCompensationFailure(err, node_id, label);
+    }
+
+    fn logLabelCompensationFailure(err: anyerror, node_id: u64, label: []const u8) void {
+        log.err("could not take back the engine's label after a failed label write", &.{
+            Attr.string("error", @errorName(err)),
+            Attr.int("node_id", @intCast(node_id)),
+            Attr.string("label", label),
+        });
+    }
+
+    /// SONNY-6268: failure-atomic. The node's new label slice is the only
+    /// allocation, made before the adapter write; the in-memory removal
+    /// after it cannot fail.
     pub fn removeNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
         try statementWriteFence(); // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (hydrate before write)
         try self.undoRecordNodeLabel(node_id, label, false); // SONNY-3348 (round 18)
-        if (global_vtable) |vt| {
-            if (vt.removeNodeLabelFn) |f| {
-                const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
-                const slot_id = try self.requireNodeSlot(node.graph_name, node_id);
-                try f(vt.ctx, node.graph_name, slot_id, label);
+        const adapter_remove: ?AdapterVTable = if (global_vtable) |vt| (if (vt.removeNodeLabelFn != null) vt else null) else null;
+        const node_meta = self.nodes.get(node_id) orelse {
+            if (adapter_remove != null) return error.NodeNotFound;
+            return;
+        };
+        // Find the label to remove
+        var found_index: ?usize = null;
+        for (node_meta.labels, 0..) |existing_label, i| {
+            if (std.mem.eql(u8, existing_label, label)) {
+                found_index = i;
+                break;
             }
         }
-        if (self.nodes.getPtr(node_id)) |node| {
-            // Find the label to remove
-            var found_index: ?usize = null;
-            for (node.labels, 0..) |existing_label, i| {
-                if (std.mem.eql(u8, existing_label, label)) {
-                    found_index = i;
-                    break;
-                }
-            }
+        const new_labels: ?[][]const u8 = if (found_index != null) try self.allocator.alloc([]const u8, node_meta.labels.len - 1) else null;
+        var taken = false;
+        errdefer if (!taken) {
+            if (new_labels) |nl| self.allocator.free(nl);
+        };
 
-            if (found_index) |index| {
-                const removed_label = node.labels[index];
-                // Create new labels array without the removed label
-                const new_labels = try self.allocator.alloc([]const u8, node.labels.len - 1);
-                var new_index: usize = 0;
-                for (node.labels, 0..) |existing_label, i| {
-                    if (i != index) {
-                        new_labels[new_index] = existing_label;
-                        new_index += 1;
-                    }
-                }
+        if (adapter_remove) |vt| {
+            const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
+            try vt.removeNodeLabelFn.?(vt.ctx, node_meta.graph_name, slot_id, label);
+        }
 
-                // GAP-825: hold `labels_rwlock` EXCLUSIVE across the
-                // entire mutation window. See addNodeLabel for the full
-                // rationale.
-                const io = std.Io.Threaded.global_single_threaded.io();
-                self.labels_rwlock.lockUncancelable(io);
-                defer self.labels_rwlock.unlock(io);
+        const index = found_index orelse return;
+        // GAP-825: hold `labels_rwlock` EXCLUSIVE across the
+        // entire mutation window. See addNodeLabel for the full
+        // rationale.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.labels_rwlock.lockUncancelable(io);
+        defer self.labels_rwlock.unlock(io);
 
-                // Free old labels array if it was allocated
-                if (node.labels.len > 0) {
-                    self.allocator.free(node.labels);
-                }
-
-                node.labels = new_labels;
-
-                // Remove label from index and free label memory
-                self.removeFromLabelIndex(node.graph_name, label, node_id);
-                // PERF-C (issue #814): mirror the bump done by `addNodeLabel`
-                // — decrement the label-property counter for every property
-                // still carried by the node, then drop the label counter.
-                var prop_it_for_pc_rm = node.properties.iterator();
-                while (prop_it_for_pc_rm.next()) |p| {
-                    const pkey = p.key_ptr.*;
-                    if (isInternalPersistedPropertyKey(pkey)) continue;
-                    self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
-                }
-                self.decLabelCount(node.graph_name, node.tenant_id, label);
-                self.allocator.free(removed_label);
-                // SONNY-3109: the node no longer holds its keys under
-                // `label`: it leaves those entries of MERGE's index as a
-                // deleted node does. Without this, the entry still named the
-                // node, and the server's bulk MERGE, which takes the entry's
-                // node as the match, returned a node without the label.
-                self.removeNodeMergeEntriesForLabel(node, label);
-
-                // Mark as dirty - persistence happens at query completion
-                self.dirty.store(true, .release);
-                incrementMutationEpoch();
-
-                // WAL notification: RemoveNodeLabel
-                notifyMutation(.remove_node_label, node_id, 0, 0, label, null, null, null);
+        const node = self.nodes.getPtr(node_id) orelse return error.NodeNotFound;
+        const removed_label = node.labels[index];
+        // Create new labels array without the removed label
+        var new_index: usize = 0;
+        for (node.labels, 0..) |existing_label, i| {
+            if (i != index) {
+                new_labels.?[new_index] = existing_label;
+                new_index += 1;
             }
         }
+
+        // Free old labels array if it was allocated
+        if (node.labels.len > 0) {
+            self.allocator.free(node.labels);
+        }
+
+        node.labels = new_labels.?;
+        taken = true;
+
+        // Remove label from index and free label memory
+        self.removeFromLabelIndex(node.graph_name, label, node_id);
+        // PERF-C (issue #814): mirror the bump done by `addNodeLabel`
+        // — decrement the label-property counter for every property
+        // still carried by the node, then drop the label counter.
+        var prop_it_for_pc_rm = node.properties.iterator();
+        while (prop_it_for_pc_rm.next()) |p| {
+            const pkey = p.key_ptr.*;
+            if (isInternalPersistedPropertyKey(pkey)) continue;
+            self.decLabelPropertyCount(node.graph_name, node.tenant_id, label, pkey);
+        }
+        self.decLabelCount(node.graph_name, node.tenant_id, label);
+        // SONNY-3109: the node no longer holds its keys under
+        // `label`: it leaves those entries of MERGE's index as a
+        // deleted node does. Without this, the entry still named the
+        // node, and the server's bulk MERGE, which takes the entry's
+        // node as the match, returned a node without the label.
+        self.removeNodeMergeEntriesForLabel(node, label);
+        self.allocator.free(removed_label);
+
+        // Mark as dirty - persistence happens at query completion
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+
+        // WAL notification: RemoveNodeLabel
+        notifyMutation(.remove_node_label, node_id, 0, 0, label, null, null, null);
     }
 
     /// SONNY-3109: record `node` as a holder, under `label`, of MERGE's key
@@ -7933,7 +8654,7 @@ pub const GraphStore = struct {
         const labels = [_][]const u8{label};
         var it = node.properties.iterator();
         while (it.next()) |p| {
-            self.addToMergePropertyIndex(node.graph_name, &labels, p.key_ptr.*, p.value_ptr.*, node.id) catch {};
+            self.addToMergePropertyIndex(node.graph_name, &labels, p.key_ptr.*, p.value_ptr.*, node.id) catch |err| self.noteMergeIndexAddFailure(err);
         }
         self.addNodeCompositeMergeEntriesForLabels(node, &labels);
     }
@@ -9493,6 +10214,9 @@ pub const GraphStore = struct {
                 .edge_slot = edge_slot,
             };
         };
+        // SONNY-6268: a failure from here on deletes the engine edge again
+        // (and the IdMap entry below), so a failed create leaves no orphan.
+        errdefer if (adapter_edge) |pe| rollbackAdapterEdge(pe.vt, graph_name, pe.from_slot, pe.to_slot, pe.edge_slot);
         try self.ensureGraph(graph_name);
 
         // Store UUID→slot mapping in IdMap for adapter translation
@@ -9501,52 +10225,22 @@ pub const GraphStore = struct {
             // adjacency records (written by createEdgeFn above) — the legacy
             // per-edge `__geode_internal_edge_id` property write is gone.
             // GAP-0891 (RC-2): round-trip the edge tenant tag (no-op for default).
-            persistEdgeTenantId(
+            try persistEdgeTenantId(
                 persisted_edge.vt,
                 graph_name,
                 persisted_edge.from_slot,
                 persisted_edge.to_slot,
                 persisted_edge.edge_slot,
                 tenant,
-            ) catch |err| {
-                persisted_edge.vt.deleteEdgeFn(
-                    persisted_edge.vt.ctx,
-                    graph_name,
-                    persisted_edge.from_slot,
-                    persisted_edge.to_slot,
-                    persisted_edge.edge_slot,
-                ) catch {};
-                return err;
-            };
+            );
             const im = try self.getOrCreateIdMap(graph_name);
             try im.insertEdgeWithSlot(@as(u128, id), persisted_edge.edge_slot);
         }
-
-        const edge_type_copy = try self.allocator.dupe(u8, edge_type);
-        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
-
-        const edge = Edge{
-            .id = id,
-            .from_id = from_id,
-            .to_id = to_id,
-            .label = edge_type_copy,
-            .properties = CompactPropertyMap.init(self.allocator),
-            .graph_name = graph_name_copy,
-            .tenant_id = tenant_id_copy,
+        errdefer if (adapter_edge != null) {
+            if (self.getIdMap(graph_name)) |im| _ = im.removeEdge(@as(u128, id));
         };
 
-        try self.edges.put(id, edge);
-
-        // CANARY: REQ=REQ-PERF-EDGE-ADJ-002; FEATURE="EdgeAdjacencyIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=perf; UPDATED=2026-04-11
-        // Issue #392: Maintain adjacency indexes for fast DELETE DETACH
-        try self.addToAdjacencyIndex(from_id, to_id, id);
-        // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
-        try self.addToEdgeTypeIndex(graph_name, edge_type, id);
-        // PERF-C (issue #814): tenant-keyed edge-type counter for LSP introspection.
-        try self.bumpEdgeTypeCount(graph_name, tenant, edge_type);
-        // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
-        self.bumpGraphEdgeTypeCount(graph_name, edge_type);
+        try self.insertEdgeInMemory(id, from_id, to_id, edge_type, graph_name, tenant);
 
         // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
         // Mark store as dirty - persistence happens at query completion, not per-edge
@@ -9558,6 +10252,81 @@ pub const GraphStore = struct {
         statement_undo.appendCreated(self, .{ .CreateEdge = .{ .edge_id = id, .graph_name = "" } }); // SONNY-3348 (round 18)
 
         return id;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6268-EDGE-CREATE-ATOMIC; FEATURE="GraphStoreFailureAtomicity"; ASPECT=EdgeCreateInMemory; STATUS=TESTED; TEST=tests/test_sonny6268_graph_store_failure_atomicity.zig; OWNER=storage; UPDATED=2026-11-11
+    /// The in-memory half of every edge create: the body into the edge
+    /// cache, then the adjacency lists, the edge-type posting and the two
+    /// edge-type counters.
+    ///
+    /// SONNY-6268: failure-atomic, as `insertReservedNodeInMemory`: a step
+    /// that succeeded is undone, in reverse order, when a later one fails.
+    /// (Before, a failure after `edges.put` left the edge in the cache and
+    /// in some of the indexes behind an error, and the copies leaked on the
+    /// earlier failures.)
+    fn insertEdgeInMemory(
+        self: *GraphStore,
+        edge_id: u64,
+        from_id: u64,
+        to_id: u64,
+        edge_type: []const u8,
+        graph_name: []const u8,
+        tenant: []const u8,
+    ) !void {
+        var stored = false;
+        const edge_type_copy = try self.allocator.dupe(u8, edge_type);
+        errdefer if (!stored) self.allocator.free(edge_type_copy);
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        errdefer if (!stored) self.allocator.free(graph_name_copy);
+        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
+        errdefer if (!stored) self.allocator.free(tenant_id_copy);
+
+        const edge = Edge{
+            .id = edge_id,
+            .from_id = from_id,
+            .to_id = to_id,
+            .label = edge_type_copy,
+            .properties = CompactPropertyMap.init(self.allocator),
+            .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
+        };
+
+        // On error `put` stored nothing (`BoundedNodeCache.put`).
+        try self.edges.put(edge_id, edge);
+        stored = true;
+        errdefer if (self.edges.fetchRemove(edge_id)) |kv| {
+            var removed = kv.value;
+            freeEdgeValue(self.allocator, &removed);
+        };
+
+        // CANARY: REQ=REQ-PERF-EDGE-ADJ-002; FEATURE="EdgeAdjacencyIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=perf; UPDATED=2026-04-11
+        // Issue #392: Maintain adjacency indexes for fast DELETE DETACH. The
+        // undo takes the id out of whichever list it reached.
+        errdefer self.removeFromAdjacencyIndex(from_id, to_id, edge_id);
+        try self.addToAdjacencyIndex(from_id, to_id, edge_id);
+        // PERF-P0-001: Maintain edge-type index for fast getEdgesByType (a
+        // failed add may leave the type's empty posting, which the undo drops).
+        errdefer self.removeFromEdgeTypeIndex(graph_name, edge_type, edge_id);
+        try self.addToEdgeTypeIndex(graph_name, edge_type, edge_id);
+        // PERF-C (issue #814): tenant-keyed edge-type counter for LSP introspection.
+        try self.bumpEdgeTypeCount(graph_name, tenant, edge_type);
+        errdefer self.decEdgeTypeCount(graph_name, tenant, edge_type);
+        // Per-(graph,type) exact counter (typed count(r:TYPE) fast path). Its
+        // entry is made first, so the bump itself does not allocate.
+        try self.ensureGraphEdgeTypeCount(graph_name, edge_type);
+        self.bumpGraphEdgeTypeCount(graph_name, edge_type);
+    }
+
+    /// SONNY-6268: undo an edge create's engine edge after a later step
+    /// failed; a failure here is logged (see `rollbackAdapterNode`).
+    fn rollbackAdapterEdge(vt: AdapterVTable, graph_name: []const u8, from_slot: u64, to_slot: u64, edge_slot: u64) void {
+        vt.deleteEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_slot) catch |err| {
+            log.err("could not delete the engine edge of a failed edge create", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.int("edge_slot", @intCast(edge_slot)),
+                Attr.string("graph", graph_name),
+            });
+        };
     }
 
     fn createEdgeWithIdInternal(
@@ -9608,6 +10377,8 @@ pub const GraphStore = struct {
                 .edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type, edge_id),
             };
         } else null;
+        // SONNY-6268: a failure from here on deletes the engine edge again.
+        errdefer if (adapter_edge) |pe| rollbackAdapterEdge(pe.vt, graph_name, pe.from_slot, pe.to_slot, pe.edge_slot);
 
         // GAP-0891 (RC-3): honor the active tenant instead of hardcoding
         // DEFAULT_TENANT_ID, and keep the PERF-C edge-type counter on the same
@@ -9619,50 +10390,24 @@ pub const GraphStore = struct {
             // adjacency records (written by createEdgeFn above) — no
             // `__geode_internal_edge_id` property write on the create path.
             // GAP-0891 (RC-2): round-trip the edge tenant tag (no-op for default).
-            persistEdgeTenantId(
+            try persistEdgeTenantId(
                 persisted_edge.vt,
                 graph_name,
                 persisted_edge.from_slot,
                 persisted_edge.to_slot,
                 persisted_edge.edge_slot,
                 tenant,
-            ) catch |err| {
-                persisted_edge.vt.deleteEdgeFn(
-                    persisted_edge.vt.ctx,
-                    graph_name,
-                    persisted_edge.from_slot,
-                    persisted_edge.to_slot,
-                    persisted_edge.edge_slot,
-                ) catch {};
-                return err;
-            };
+            );
             const im = try self.getOrCreateIdMap(graph_name);
             try im.insertEdgeWithSlot(@as(u128, edge_id), persisted_edge.edge_slot);
         }
-
-        const edge_type_copy = try self.allocator.dupe(u8, edge_type);
-        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
-
-        const edge = Edge{
-            .id = edge_id,
-            .from_id = from_id,
-            .to_id = to_id,
-            .label = edge_type_copy,
-            .properties = CompactPropertyMap.init(self.allocator),
-            .graph_name = graph_name_copy,
-            .tenant_id = tenant_id_copy,
+        errdefer if (adapter_edge != null) {
+            if (self.getIdMap(graph_name)) |im| _ = im.removeEdge(@as(u128, edge_id));
         };
 
-        try self.edges.put(edge_id, edge);
-        try self.addToAdjacencyIndex(from_id, to_id, edge_id);
-        // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
-        try self.addToEdgeTypeIndex(graph_name, edge_type, edge_id);
-        // PERF-C (issue #814): tenant-keyed edge-type counter for LSP
-        // introspection. GAP-0891 (RC-3): bump the SAME bucket as the tag.
-        try self.bumpEdgeTypeCount(graph_name, tenant, edge_type);
-        // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
-        self.bumpGraphEdgeTypeCount(graph_name, edge_type);
+        // GAP-0891 (RC-3): the PERF-C edge-type counter bumps the SAME
+        // bucket as the tag.
+        try self.insertEdgeInMemory(edge_id, from_id, to_id, edge_type, graph_name, tenant);
 
         if (edge_id >= self.next_edge_id) {
             self.next_edge_id = edge_id + 1;
@@ -9722,14 +10467,28 @@ pub const GraphStore = struct {
             // them; a Debug build faulted in the allocator.
             cache.lockShardExclusive(node);
             defer cache.unlockShardExclusive(node);
-            const r = try cache.getOrPutLocked(node);
-            if (!r.found_existing) {
-                r.value_ptr.* = .{ .list = .empty, .graph = try self.allocator.dupe(u8, graph_name) };
-                // New entry: record it for (disabled) eviction bookkeeping so the
-                // FIFO/accounting stays consistent if the cap is ever raised.
-                try cache.noteInserted(node);
+            // SONNY-6268: a new entry's graph copy is made before its slot,
+            // and the entry goes again if it cannot be tracked or take the
+            // id (an entry with an undefined value was left before, which
+            // the next read and teardown met).
+            if (cache.getPtrUnlocked(node)) |entry| {
+                try self.appendAdjId(cache, node, entry, edge_id, graph_name);
+                return;
             }
-            try self.appendAdjId(cache, node, r.value_ptr, edge_id, graph_name);
+            const graph_copy = try self.allocator.dupe(u8, graph_name);
+            const r = cache.getOrPutLocked(node) catch |err| {
+                self.allocator.free(graph_copy);
+                return err;
+            };
+            r.value_ptr.* = .{ .list = .empty, .graph = graph_copy };
+            errdefer if (cache.store.fetchRemove(node)) |kv| {
+                var v = kv.value;
+                freeAdjListValue(self.allocator, &v);
+            };
+            // New entry: record it for (disabled) eviction bookkeeping so the
+            // FIFO/accounting stays consistent if the cap is ever raised.
+            try cache.noteInserted(node);
+            try self.appendAdjId(cache, node, cache.getPtrUnlocked(node).?, edge_id, graph_name);
             return;
         }
         // Bounded + engine-backed: only touch a resident entry; otherwise the
@@ -9808,6 +10567,8 @@ pub const GraphStore = struct {
         const old_cap = list.capacity;
         const new_cap = if (old_cap == 0) 4 else old_cap * 2;
         var grown = try std.ArrayList(u64).initCapacity(self.allocator, new_cap);
+        // SONNY-6268: a failed graph-name copy below freed nothing (leak).
+        errdefer grown.deinit(self.allocator);
         grown.appendSliceAssumeCapacity(list.items);
         grown.appendAssumeCapacity(edge_id);
 
@@ -9821,7 +10582,6 @@ pub const GraphStore = struct {
         const retired_old = AdjList{ .list = list.*, .graph = try self.allocator.dupe(u8, graph_name) };
         cache.retireValue(node, retired_old) catch |err| {
             self.allocator.free(retired_old.graph);
-            grown.deinit(self.allocator);
             return err;
         };
 
@@ -9923,7 +10683,10 @@ pub const GraphStore = struct {
         const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, edge_type }) catch {
             // Key too long for stack buffer — fall back to heap alloc
             const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type });
-            const result = try self.edge_type_index.getOrPut(key);
+            const result = self.edge_type_index.getOrPut(key) catch |err| {
+                self.allocator.free(key);
+                return err;
+            };
             if (!result.found_existing) {
                 result.value_ptr.* = std.ArrayList(u64).empty;
             } else {
@@ -9937,7 +10700,10 @@ pub const GraphStore = struct {
             try sortedInsert(list, self.allocator, edge_id);
         } else {
             const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type });
-            const result = try self.edge_type_index.getOrPut(key);
+            const result = self.edge_type_index.getOrPut(key) catch |err| {
+                self.allocator.free(key);
+                return err;
+            };
             if (!result.found_existing) {
                 result.value_ptr.* = std.ArrayList(u64).empty;
             } else {
@@ -9949,8 +10715,12 @@ pub const GraphStore = struct {
 
     // PERF-P0-001: Remove edge from edge-type index
     fn removeFromEdgeTypeIndex(self: *GraphStore, graph_name: []const u8, edge_type: []const u8, edge_id: u64) void {
-        const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type }) catch return;
-        defer self.allocator.free(key);
+        // SONNY-6268: the key on the stack (see removeFromLabelIndex).
+        var key_buf: [512]u8 = undefined;
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const formatted = formatGraphLabelKey(&key_buf, ka, graph_name, edge_type) catch return;
+        defer if (formatted.owned) |owned| ka.free(owned);
+        const key = formatted.key;
         // SONNY-3233 (round 15, F5).
         const eti_io = std.Io.Threaded.global_single_threaded.io();
         self.edge_type_index_lock.lockUncancelable(eti_io);
@@ -10054,26 +10824,18 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(edge_type, key)) {
-                        const fle_ctx = fle_integration.EncryptionContext{
-                            .tenant_id = self.tenant_id,
-                            .schema_name = self.schema_name,
-                            .allocator = self.allocator,
-                            .current_user_role = fle_integration.rolePreferringActiveContext(),
-                        };
-                        // Stack-formatted record ID — see setNodeProperty comment.
-                        var id_buf: [32]u8 = undefined;
-                        const record_id = std.fmt.bufPrint(&id_buf, "edge_{d}", .{edge_id}) catch {
-                            break :blk value;
-                        };
-                        const encrypted = fle_integration.encryptFieldIfNeeded(
-                            fle_ctx,
+                        // SONNY-6335: the one encryption identity (label/type, request
+                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. It used the store's
+                        // tenant/schema and "edge_<id>", which no reader used.
+                        const encrypted = fle_integration.encryptStoredString(
+                            self.allocator,
+                            .edge,
                             edge_type,
                             key,
                             s,
-                            record_id,
-                        ) catch {
-                            break :blk value;
-                        };
+                            edge_id,
+                        ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             owned_encrypted = encrypted;
                             break :blk PropertyValue{ .String = encrypted };
@@ -10085,53 +10847,47 @@ pub const GraphStore = struct {
             else => value,
         };
 
-        blk_adapter: {
-            const vt = global_vtable orelse break :blk_adapter;
-            const f = vt.setEdgePropertyFn orelse break :blk_adapter;
-            const edge = self.getEdgeHydrated(edge_id) orelse break :blk_adapter;
-            const slot_from = self.requireNodeSlot(edge.graph_name, edge.from_id) catch |err| {
-                log.debug("adapter edge endpoint-slot lookup failed during setEdgeProperty", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                break :blk_adapter;
-            };
-            const slot_to = self.requireNodeSlot(edge.graph_name, edge.to_id) catch |err| {
-                log.debug("adapter edge endpoint-slot lookup failed during setEdgeProperty", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                break :blk_adapter;
-            };
-            const slot_edge = self.requireEdgeSlot(edge.graph_name, edge_id) catch |err| {
-                log.debug("adapter edge-slot lookup failed during setEdgeProperty", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                break :blk_adapter;
-            };
-            f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value) catch |err| {
-                log.debug("adapter setEdgeProperty failed", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-        }
-        if (self.getEdgePtrHydrated(edge_id)) |edge| {
-            const value_copy = try copyPropertyValue(self, effective_value);
-            errdefer freePropertyValue(self, value_copy);
+        // SONNY-6268: the value's copy and, for a new key, the map slot are
+        // made before the adapter write, so the in-memory write after it
+        // cannot fail (a failed key copy left a slot with an undefined key).
+        const edge_meta = self.getEdgeHydrated(edge_id);
+        const prep: ?PreparedPropertyPut = if (edge_meta) |e| try self.preparePropertyPut(&e.properties, key, effective_value) else null;
+        var committed = false;
+        errdefer if (!committed) {
+            if (prep) |p| self.cancelPropertyPut(&edge_meta.?.properties, p);
+        };
 
+        // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=EdgePropertySet; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
+        // SONNY-6302: a failed slot lookup or engine write is returned, with
+        // nothing written in memory (the errdefer above cancels the prepared
+        // put), as in setNodeProperty. Both were logged at debug level and
+        // the property was then written in memory only: the client saw
+        // success and a restart lost the value.
+        if (global_vtable) |vt| {
+            if (vt.setEdgePropertyFn) |f| {
+                if (edge_meta) |edge| {
+                    const slot_from = try self.requireNodeSlot(edge.graph_name, edge.from_id);
+                    const slot_to = try self.requireNodeSlot(edge.graph_name, edge.to_id);
+                    const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
+                    try f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value);
+                }
+            }
+        }
+        if (prep) |p| {
             {
                 // ENG-3954 / #874: edge parity with setNodeProperty — exclude
                 // concurrent readers across the realloc-and-free.
                 self.edges.lockShardExclusive(edge_id);
                 defer self.edges.unlockShardExclusive(edge_id);
-                // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
-                const result = try edge.properties.getOrPut(key);
-                if (!result.found_existing) {
-                    // Key doesn't exist, allocate a copy
-                    result.key_ptr.* = try self.allocator.dupe(u8, key);
+                // Edge writers of a graph are serialised, so the edge read
+                // above is still resident here, unless a bounded cache
+                // evicted it meanwhile (then the engine holds the new value).
+                if (self.edges.getPtrUnlocked(edge_id)) |edge| {
+                    if (commitPropertyPut(&edge.properties, key, p)) |old| freePropertyValue(self, old);
                 } else {
-                    // Key exists, free old value
-                    freePropertyValue(self, result.value_ptr.*);
+                    self.cancelPropertyPut(&edge_meta.?.properties, p);
                 }
-                result.value_ptr.* = value_copy;
+                committed = true;
             }
 
             // Mark as dirty - persistence happens at query completion
@@ -10192,7 +10948,7 @@ pub const GraphStore = struct {
 
             for (entries, 0..) |entry, i| {
                 if (entry.value) |val| {
-                    const res = self.applyFleEncryptionForEdge(edge_id, entry.key, val);
+                    const res = try self.applyFleEncryptionForEdge(edge_id, entry.key, val);
                     adapter_entries[i] = .{ .key = entry.key, .value = res.value };
                     owned_envelopes[i] = res.owned;
                 } else {
@@ -10209,7 +10965,7 @@ pub const GraphStore = struct {
                 if (isInternalPersistedPropertyKey(entry.key)) continue;
 
                 if (entry.value) |val| {
-                    const res = self.applyFleEncryptionForEdge(edge_id, entry.key, val);
+                    const res = try self.applyFleEncryptionForEdge(edge_id, entry.key, val);
                     // GAP-0854 follow-up: free the in-memory-path envelope after
                     // the copy + WAL notify have consumed it.
                     defer if (res.owned) |buf| self.allocator.free(buf);
@@ -10221,13 +10977,8 @@ pub const GraphStore = struct {
                         // ENG-3954 / #874: see setNodePropertiesBatchInMemoryOnly.
                         self.edges.lockShardExclusive(edge_id);
                         defer self.edges.unlockShardExclusive(edge_id);
-                        const result = try edge_ptr.properties.getOrPut(entry.key);
-                        if (!result.found_existing) {
-                            result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
-                        } else {
-                            freePropertyValue(self, result.value_ptr.*);
-                        }
-                        result.value_ptr.* = value_copy;
+                        // SONNY-6268: failure-atomic.
+                        if (try edge_ptr.properties.putValue(self.allocator, entry.key, value_copy)) |old| freePropertyValue(self, old);
                     }
 
                     notifyMutation(.set_edge_property, edge_id, 0, 0, null, entry.key, effective, null);
@@ -10236,7 +10987,7 @@ pub const GraphStore = struct {
                     const removed = blk: {
                         self.edges.lockShardExclusive(edge_id);
                         defer self.edges.unlockShardExclusive(edge_id);
-                        if (edge_ptr.properties.fetchRemove(entry.key)) |kv| {
+                        if (try edge_ptr.properties.fetchRemoveChecked(entry.key)) |kv| {
                             self.allocator.free(kv.key);
                             freePropertyValue(self, kv.value);
                             break :blk true;
@@ -10257,7 +11008,7 @@ pub const GraphStore = struct {
     /// out so both `setEdgeProperty` and `setEdgePropertiesBatch` share the
     /// same logic.  Mirrors `applyFleEncryption` (the node variant) at line
     /// 2132.
-    fn applyFleEncryptionForEdge(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) FleApplyResult {
+    fn applyFleEncryptionForEdge(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) FleWriteError!FleApplyResult {
         switch (value) {
             .String => |s| {
                 if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
@@ -10266,26 +11017,18 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(edge_type, key)) {
-                        const fle_ctx = fle_integration.EncryptionContext{
-                            .tenant_id = self.tenant_id,
-                            .schema_name = self.schema_name,
-                            .allocator = self.allocator,
-                            .current_user_role = fle_integration.rolePreferringActiveContext(),
-                        };
-                        // Stack-formatted record ID — see setNodeProperty comment.
-                        var id_buf: [32]u8 = undefined;
-                        const record_id = std.fmt.bufPrint(&id_buf, "edge_{d}", .{edge_id}) catch {
-                            return .{ .value = value };
-                        };
-                        const encrypted = fle_integration.encryptFieldIfNeeded(
-                            fle_ctx,
+                        // SONNY-6335: the one encryption identity (label/type, request
+                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. It used the store's
+                        // tenant/schema and "edge_<id>", which no reader used.
+                        const encrypted = fle_integration.encryptStoredString(
+                            self.allocator,
+                            .edge,
                             edge_type,
                             key,
                             s,
-                            record_id,
-                        ) catch {
-                            return .{ .value = value };
-                        };
+                            edge_id,
+                        ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             return .{ .value = PropertyValue{ .String = encrypted }, .owned = encrypted };
                         }
@@ -10303,42 +11046,52 @@ pub const GraphStore = struct {
         if (isInternalPersistedPropertyKey(key)) return;
         // SONNY-3348 (round 18): the value it removes.
         self.undoRecordEdgeProperty(edge_id, key, true) catch return undoRecordFailed();
+        // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=EdgePropertyRemove; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
+        // SONNY-6302: the map's shrunken slice is allocated before the engine
+        // write, as in removeNodeProperty, so the in-memory removal after it
+        // cannot fail. (It could: `fetchRemove` then kept the property in
+        // memory after the engine had removed it.) A failure of that
+        // allocation or of the engine write changes nothing and fails the
+        // statement (out of memory) or is logged (the engine).
+        const edge_meta = self.getEdgeHydrated(edge_id) orelse return;
+        const reservation = edge_meta.properties.reserveRemove(key) catch return undoRecordFailed();
+        var reserved = reservation != null;
+        defer if (reserved) edge_meta.properties.cancelRemove(reservation.?);
         if (global_vtable) |vt| {
             if (vt.removeEdgePropertyFn) |f| {
-                if (self.getEdgeHydrated(edge_id)) |edge_info| {
-                    const slot_from = self.requireNodeSlot(edge_info.graph_name, edge_info.from_id) catch |err| {
-                        log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
-                            Attr.string("error", @errorName(err)),
-                            Attr.int("edge_id", @intCast(edge_id)),
-                            Attr.string("graph", edge_info.graph_name),
-                        });
-                        return;
-                    };
-                    const slot_to = self.requireNodeSlot(edge_info.graph_name, edge_info.to_id) catch |err| {
-                        log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
-                            Attr.string("error", @errorName(err)),
-                            Attr.int("edge_id", @intCast(edge_id)),
-                            Attr.string("graph", edge_info.graph_name),
-                        });
-                        return;
-                    };
-                    const slot_edge = self.requireEdgeSlot(edge_info.graph_name, edge_id) catch |err| {
-                        log.err("adapter edge-slot lookup failed during removeEdgeProperty", &.{
-                            Attr.string("error", @errorName(err)),
-                            Attr.int("edge_id", @intCast(edge_id)),
-                            Attr.string("graph", edge_info.graph_name),
-                        });
-                        return;
-                    };
-                    f(vt.ctx, edge_info.graph_name, slot_from, slot_to, slot_edge, key) catch |err| {
-                        log.err("adapter removeEdgeProperty failed", &.{
-                            Attr.string("error", @errorName(err)),
-                            Attr.int("edge_id", @intCast(edge_id)),
-                            Attr.string("graph", edge_info.graph_name),
-                        });
-                        return;
-                    };
-                }
+                const edge_info = edge_meta;
+                const slot_from = self.requireNodeSlot(edge_info.graph_name, edge_info.from_id) catch |err| {
+                    log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge_info.graph_name),
+                    });
+                    return voidWriteFailed(err);
+                };
+                const slot_to = self.requireNodeSlot(edge_info.graph_name, edge_info.to_id) catch |err| {
+                    log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge_info.graph_name),
+                    });
+                    return voidWriteFailed(err);
+                };
+                const slot_edge = self.requireEdgeSlot(edge_info.graph_name, edge_id) catch |err| {
+                    log.err("adapter edge-slot lookup failed during removeEdgeProperty", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge_info.graph_name),
+                    });
+                    return voidWriteFailed(err);
+                };
+                f(vt.ctx, edge_info.graph_name, slot_from, slot_to, slot_edge, key) catch |err| {
+                    log.err("adapter removeEdgeProperty failed", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge_info.graph_name),
+                    });
+                    return voidWriteFailed(err);
+                };
             }
         }
         if (self.getEdgePtrHydrated(edge_id)) |edge| {
@@ -10346,9 +11099,17 @@ pub const GraphStore = struct {
                 // ENG-3954 / #874: edge parity with removeNodeProperty.
                 self.edges.lockShardExclusive(edge_id);
                 defer self.edges.unlockShardExclusive(edge_id);
-                if (edge.properties.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
-                    freePropertyValue(self, kv.value);
+                // Edge writers of a graph are serialised, so the edge read
+                // above is this one, unless a bounded cache evicted it
+                // meanwhile (then the engine, written above, holds the removal
+                // and the reservation is cancelled by the defer).
+                if (reservation) |r| {
+                    if (edge.properties.entries.ptr == edge_meta.properties.entries.ptr) {
+                        reserved = false;
+                        const kv = edge.properties.commitRemove(r, key);
+                        self.allocator.free(kv.key);
+                        freePropertyValue(self, kv.value);
+                    }
                 }
             }
             self.dirty.store(true, .release);
@@ -13367,7 +14128,7 @@ pub const GraphStore = struct {
                         prop_entry.key_ptr.*,
                         prop_entry.value_ptr.*,
                         node.id,
-                    ) catch {};
+                    ) catch |err| p.store.noteMergeIndexAddFailure(err);
                 }
                 p.store.addNodeCompositeMergeEntries(node);
             }
@@ -13718,7 +14479,7 @@ pub const GraphStore = struct {
                                 prop_entry.key_ptr.*,
                                 prop_entry.value_ptr.*,
                                 copy.id,
-                            ) catch {};
+                            ) catch |err| self.noteMergeIndexAddFailure(err);
                         }
                         self.addNodeCompositeMergeEntries(&copy);
                     }
@@ -14260,8 +15021,8 @@ pub const GraphStore = struct {
                     // off (default) indexes every key; on
                     // (GEODE_INDEX_MERGE_KEYS_ONLY=1) indexes only keys registered
                     // SO FAR. Keys registered AFTER load (e.g. the first MERGE of a
-                    // fresh server process) are backfilled at registration time by
-                    // `registerMergeIndexKey` -> `backfillMergeIndexForKey`.
+                    // fresh server process) are backfilled per graph and label
+                    // before a lookup trusts a miss (`ensureLeanMergeBackfill`).
                     // GAP-ENT-0023 P3: the whole merge product (single-key AND
                     // composite entries) came from the merge snapshot — skip the
                     // per-node rebuild (putOrUpdate would be an idempotent
@@ -14275,7 +15036,7 @@ pub const GraphStore = struct {
                                 prop_entry.key_ptr.*,
                                 prop_entry.value_ptr.*,
                                 stored_node_ptr.id,
-                            ) catch {};
+                            ) catch |err| self.noteMergeIndexAddFailure(err);
                         }
                         // Caveat "B": rebuild the COMPOSITE merge entry for this
                         // hydrated node so the from-dump EDGE phase (which runs as a
@@ -15101,15 +15862,95 @@ pub const GraphStore = struct {
         @import("eval.zig").recordLimitError(error.OutOfMemory);
     }
 
+    /// SONNY-6268: a void write method failed part way (nothing changed): an
+    /// out-of-memory fails the statement at its relay, as `undoRecordFailed`
+    /// does; any other error was logged by the caller. Either way the write
+    /// did not happen, and nothing is left half done.
+    fn voidWriteFailed(err: anyerror) void {
+        if (err == error.OutOfMemory) undoRecordFailed();
+    }
+
     // CANARY: REQ=REQ-TXN-UNDO-002; FEATURE="TransactionUndoLog"; ASPECT=NoSaveOperations; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
     // NoSave versions of mutation methods for transaction undo/redo operations
     // These methods modify the store without triggering auto-save to disk
 
-    /// Delete a node without saving (used during rollback)
+    /// Delete a node without saving (used during rollback). A failure (out
+    /// of memory, or an adjacency the engine cannot read) changes nothing; it
+    /// is logged, and an out-of-memory fails the statement
+    /// (`deleteNodeNoSaveChecked` returns it).
     pub fn deleteNodeNoSave(self: *GraphStore, node_id: u64) void {
+        self.deleteNodeNoSaveChecked(node_id) catch |err| {
+            log.err("node delete failed; the node is unchanged", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.int("node_id", @intCast(node_id)),
+            });
+            voidWriteFailed(err);
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6268-NODE-DELETE-ATOMIC; FEATURE="GraphStoreFailureAtomicity"; ASPECT=NodeDelete; STATUS=TESTED; TEST=tests/test_sonny6268_graph_store_failure_atomicity.zig; OWNER=storage; UPDATED=2026-11-11
+    /// SONNY-6268: `deleteNodeNoSave`, failure-atomic. What can fail (the
+    /// node's body and its incident edges, read through the CHECKED
+    /// hydrating readers) runs first; the removal after it cannot fail. On
+    /// error nothing changed. (Before, a failed edge-list append dropped
+    /// the node's edges from the delete, which then removed the node and left
+    /// them dangling; a failed label-key allocation left the node in its
+    /// label posting; a failed adjacency hydrate read as "no edges".)
+    pub fn deleteNodeNoSaveChecked(self: *GraphStore, node_id: u64) !void {
         // PHASE 1b chokepoint: hydrate before mutating indexes (must run BEFORE
-        // the getPtr below — hydration mutates the node cache).
+        // the cache reads below — hydration mutates the node cache).
         self.ensureNodeGraphHydrated(node_id);
+        const node = (try self.nodes.getOrHydrate(node_id)) orelse return;
+        var incident = try self.collectIncidentEdges(node_id);
+        defer incident.deinit(self.allocator);
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longestRemovalName(&node, incident.items)); // SONNY-6302
+        defer keys.deinit(self.allocator);
+        keys.install();
+        self.removeNodeInMemory(node_id, incident.items);
+    }
+
+    /// An edge to remove, with its body as read before the removal (its
+    /// slices point into cache-owned heap, which eviction only retires, so
+    /// they stay valid across the removal).
+    const IncidentEdge = struct {
+        id: u64,
+        body: Edge,
+    };
+
+    /// Every edge incident to `node_id`, each once (a self-loop is in both
+    /// lists), with its body; hydrated on a miss, and failing when the engine
+    /// cannot be read (ENG-3983: an unreadable adjacency is not "no edges").
+    fn collectIncidentEdges(self: *GraphStore, node_id: u64) !std.ArrayList(IncidentEdge) {
+        var ids = std.ArrayList(u64).empty;
+        defer ids.deinit(self.allocator);
+        // PHASE 0: collect via the hydrating accessors so an EVICTED node's full
+        // edge set is still found (appendSlice copies, so the later incoming
+        // read can safely evict the outgoing entry we already copied).
+        try ids.appendSlice(self.allocator, try self.getOutgoingEdgeIdsChecked(node_id));
+        for (try self.getIncomingEdgeIdsChecked(node_id)) |edge_id| {
+            if (std.mem.indexOfScalar(u64, ids.items, edge_id) == null) try ids.append(self.allocator, edge_id);
+        }
+        var out = std.ArrayList(IncidentEdge).empty;
+        errdefer out.deinit(self.allocator);
+        try out.ensureTotalCapacity(self.allocator, ids.items.len);
+        for (ids.items) |edge_id| {
+            // PHASE 1: an EVICTED edge body is hydrated back, so the
+            // adjacency + edge-type cleanup (keyed off from/to/label) runs.
+            const body = (try self.edges.getOrHydrate(edge_id)) orelse continue;
+            out.appendAssumeCapacity(.{ .id = edge_id, .body = body });
+        }
+        return out;
+    }
+
+    /// The in-memory removal of a node and of its incident edges, read by
+    /// `collectIncidentEdges`. Cannot fail: its removers do not allocate for
+    /// names under 512 bytes, and past that build their keys in the room the
+    /// delete reserved beforehand (SONNY-6302, `RemoverKeyRoom`). A caller that
+    /// reserved none falls back to the store's allocator, where a key that
+    /// cannot be built leaves a stale counter or posting entry.
+    fn removeNodeInMemory(self: *GraphStore, node_id: u64, incident: []const IncidentEdge) void {
+        for (incident) |e| self.removeEdgeInMemory(e.id, e.body);
+
         // SONNY-3180 (round 15, F2): a copy of the node, read under its
         // shard's lock (`get`), not a pointer into the shard: another
         // graph's insert into the same shard may grow it and move the entry.
@@ -15117,36 +15958,6 @@ pub const GraphStore = struct {
         // lock keeps.
         const node_copy = self.nodes.get(node_id) orelse return;
         const node_ptr = &node_copy;
-
-        // Collect connected edges first
-        var edge_ids = std.ArrayList(u64).empty;
-        defer edge_ids.deinit(self.allocator);
-
-        // PHASE 0: collect via the hydrating accessors so an EVICTED node's full
-        // edge set is still found (appendSlice copies, so the later inAdjItems
-        // call can safely evict the outgoing entry we already copied).
-        if (self.outAdjItems(node_id)) |outgoing| {
-            edge_ids.appendSlice(self.allocator, outgoing) catch {};
-        }
-        if (self.inAdjItems(node_id)) |incoming| {
-            for (incoming) |edge_id| {
-                var exists = false;
-                for (edge_ids.items) |existing| {
-                    if (existing == edge_id) {
-                        exists = true;
-                        break;
-                    }
-                }
-                if (!exists) {
-                    edge_ids.append(self.allocator, edge_id) catch {};
-                }
-            }
-        }
-
-        // Remove connected edges
-        for (edge_ids.items) |edge_id| {
-            self.deleteEdgeNoSave(edge_id);
-        }
 
         // Remove node from label index
         for (node_ptr.labels) |label| {
@@ -15176,28 +15987,10 @@ pub const GraphStore = struct {
         // here). `fetchRemove` hands the value over without retiring it, as
         // `unlink` did, so it is freed once, here, as the pre-cache mirror
         // did on explicit delete.
-        const removed = self.nodes.fetchRemove(node_id) orelse return;
-        var node = removed.value;
-        // Free labels
-        for (node.labels) |label| {
-            self.allocator.free(label);
+        if (self.nodes.fetchRemove(node_id)) |removed| {
+            var node = removed.value;
+            freeNodeValue(self.allocator, &node);
         }
-        self.allocator.free(node.labels);
-        // Free graph_name
-        if (node.graph_name.len > 0) {
-            self.allocator.free(node.graph_name);
-        }
-        // GAP-0279: Free tenant_id
-        if (node.tenant_id.len > 0) {
-            self.allocator.free(node.tenant_id);
-        }
-        // Free properties
-        var prop_iter = node.properties.iterator();
-        while (prop_iter.next()) |prop_entry| {
-            self.allocator.free(prop_entry.key_ptr.*);
-            freePropertyValue(self, prop_entry.value_ptr.*);
-        }
-        node.properties.deinit();
 
         // Remove any still-resident adjacency lists for this node. PHASE 0: use
         // the cache's retire-based remove (frees the AdjList via freeAdjListValue
@@ -15208,155 +16001,161 @@ pub const GraphStore = struct {
         self.incoming_edges.remove(node_id);
     }
 
-    /// Delete an edge without saving (used during rollback)
-    pub fn deleteEdgeNoSave(self: *GraphStore, edge_id: u64) void {
-        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
-        // PHASE 1: if the edge body was EVICTED, hydrate it back into the cache
-        // first so fetchRemove below recovers the body — otherwise the
-        // adjacency + edge-type index cleanup (keyed off from/to/label) would be
-        // skipped, leaving the edge id dangling in those indexes. fetchRemove
-        // takes ownership of the value; the inline free here mirrors the
-        // pre-cache delete (delete runs under the exclusive write path, so no
-        // SHARED reader holds this specific entry).
-        if (!self.edges.contains(edge_id)) {
-            _ = self.getEdgePtrHydrated(edge_id);
-        }
+    /// The in-memory removal of one edge whose body (`body`) was read before.
+    /// Cannot fail (see `removeNodeInMemory`).
+    fn removeEdgeInMemory(self: *GraphStore, edge_id: u64, body: Edge) void {
+        self.removeFromAdjacencyIndex(body.from_id, body.to_id, edge_id);
+        // PERF-P0-001: Remove from edge-type index before freeing label/graph_name
+        self.removeFromEdgeTypeIndex(body.graph_name, body.label, edge_id);
+        // PERF-C (issue #814): tenant-keyed edge-type counter.
+        self.decEdgeTypeCount(body.graph_name, body.tenant_id, body.label);
+        // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
+        self.decGraphEdgeTypeCount(body.graph_name, body.label);
+        // Freed last: when resident, `body`'s slices are this value's heap.
+        // fetchRemove takes ownership of the value; the inline free here
+        // mirrors the pre-cache delete (delete runs under the exclusive write
+        // path, so no SHARED reader holds this specific entry). A body that
+        // is not resident (evicted) is on the retire list, freed at its grace.
         if (self.edges.fetchRemove(edge_id)) |kv| {
             var edge = kv.value;
-
-            self.removeFromAdjacencyIndex(edge.from_id, edge.to_id, edge_id);
-            // PERF-P0-001: Remove from edge-type index before freeing label/graph_name
-            self.removeFromEdgeTypeIndex(edge.graph_name, edge.label, edge_id);
-            // PERF-C (issue #814): tenant-keyed edge-type counter. Decrement
-            // before we free label/tenant_id strings (they're still alive in
-            // the `edge` struct copy we own here).
-            self.decEdgeTypeCount(edge.graph_name, edge.tenant_id, edge.label);
-            // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
-            self.decGraphEdgeTypeCount(edge.graph_name, edge.label);
-
-            // Free label
-            self.allocator.free(edge.label);
-            // Free graph_name
-            if (edge.graph_name.len > 0) {
-                self.allocator.free(edge.graph_name);
-            }
-            // GAP-0279: Free tenant_id
-            if (edge.tenant_id.len > 0) {
-                self.allocator.free(edge.tenant_id);
-            }
-            // Free properties
-            var prop_iter = edge.properties.iterator();
-            while (prop_iter.next()) |prop_entry| {
-                self.allocator.free(prop_entry.key_ptr.*);
-                freePropertyValue(self, prop_entry.value_ptr.*);
-            }
-            edge.properties.deinit();
+            freeEdgeValue(self.allocator, &edge);
         }
     }
 
-    /// Delete a node and mark store dirty
+    /// Delete an edge without saving (used during rollback). See
+    /// `deleteNodeNoSave` for how a failure is reported.
+    pub fn deleteEdgeNoSave(self: *GraphStore, edge_id: u64) void {
+        self.deleteEdgeNoSaveChecked(edge_id) catch |err| {
+            log.err("edge delete failed; the edge is unchanged", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.int("edge_id", @intCast(edge_id)),
+            });
+            voidWriteFailed(err);
+        };
+    }
+
+    /// SONNY-6268: `deleteEdgeNoSave`, failure-atomic: the body read
+    /// (hydrated on a miss) is the only step that can fail.
+    pub fn deleteEdgeNoSaveChecked(self: *GraphStore, edge_id: u64) !void {
+        self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (hydrate before write)
+        // PHASE 1: if the edge body was EVICTED, hydrate it back first —
+        // otherwise the adjacency + edge-type index cleanup (keyed off
+        // from/to/label) would be skipped, leaving the edge id dangling in
+        // those indexes.
+        const body = (try self.edges.getOrHydrate(edge_id)) orelse return;
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longestEdgeRemovalName(&body)); // SONNY-6302
+        defer keys.deinit(self.allocator);
+        keys.install();
+        self.removeEdgeInMemory(edge_id, body);
+    }
+
+    /// Delete a node (and its incident edges) and mark the store dirty. A
+    /// failure changes nothing: it is logged, and an out-of-memory fails the
+    /// statement at its relay. Callers that can return the error use
+    /// `deleteNodeChecked`.
     pub fn deleteNode(self: *GraphStore, node_id: u64) void {
         if (statementWritesFenced()) return; // SONNY-3348
+        self.deleteNodeChecked(node_id) catch |err| {
+            log.err("deleteNode failed; the node is unchanged", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.int("node_id", @intCast(node_id)),
+            });
+            voidWriteFailed(err);
+        };
+    }
+
+    /// SONNY-6268: delete a node (and its incident edges), failure-atomic,
+    /// returning the error. Order: the statement's undo record, the node's
+    /// body and incident edges (hydrated on a miss), the adapter delete,
+    /// then the in-memory removal, which cannot fail. On error nothing
+    /// changed, in memory or in the engine. (`deleteNode` reported nothing
+    /// when any of these failed, and could fail after the engine delete,
+    /// leaving the node deleted in the engine and half deleted in memory.)
+    /// Deleting a node that does not exist is a no-op.
+    pub fn deleteNodeChecked(self: *GraphStore, node_id: u64) !void {
+        try statementWriteFence(); // SONNY-3348
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (before any cache read)
         // SONNY-3348 (round 18): the node, and the edges it takes with it.
-        self.undoRecordDeleteNode(node_id) catch return undoRecordFailed();
+        try self.undoRecordDeleteNode(node_id);
+        const node = (try self.nodes.getOrHydrate(node_id)) orelse return;
         // Capture graph_name before deletion for WAL notification and handle routing.
         // SONNY-3233 (round 15): a copy: the delete frees the node's own.
-        const gn: []const u8 = if (self.nodes.get(node_id)) |n| (self.allocator.dupe(u8, n.graph_name) catch "") else "";
-        defer if (gn.len > 0) self.allocator.free(gn);
+        const gn = try self.allocator.dupe(u8, node.graph_name);
+        defer self.allocator.free(gn);
+        var incident = try self.collectIncidentEdges(node_id);
+        defer incident.deinit(self.allocator);
+        // SONNY-6302: room for the removal's long-name keys, before the
+        // engine delete (the removal after it cannot fail).
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longestRemovalName(&node, incident.items));
+        defer keys.deinit(self.allocator);
 
         if (global_vtable) |vt| {
-            const adapter_gn = if (gn.len > 0) gn else "default";
-            const slot_id = self.requireNodeSlot(adapter_gn, node_id) catch |err| {
-                log.err("adapter node-slot lookup failed during deleteNode", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.int("node_id", @intCast(node_id)),
-                    Attr.string("graph", adapter_gn),
-                });
-                return;
-            };
-            vt.deleteNodeFn(vt.ctx, adapter_gn, slot_id) catch |err| {
-                log.err("adapter deleteNode failed", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.int("node_id", @intCast(node_id)),
-                    Attr.string("graph", adapter_gn),
-                });
-                return;
-            };
+            const slot_id = try self.requireNodeSlot(gn, node_id);
+            try vt.deleteNodeFn(vt.ctx, gn, slot_id);
             // Remove from IdMap
-            if (self.getIdMap(adapter_gn)) |im| {
+            if (self.getIdMap(gn)) |im| {
                 _ = im.removeNode(@as(u128, node_id));
             }
         }
 
-        self.deleteNodeNoSave(node_id);
+        keys.install();
+        self.removeNodeInMemory(node_id, incident.items);
+        keys.uninstall();
         self.dirty.store(true, .release);
         incrementMutationEpoch();
         // WAL notification: DeleteNode
         notifyMutation(.delete_node, node_id, 0, 0, null, null, null, gn);
     }
 
-    /// Delete an edge and mark store dirty
+    /// Delete an edge and mark the store dirty. See `deleteNode` for how a
+    /// failure is reported; `deleteEdgeChecked` returns it.
     pub fn deleteEdge(self: *GraphStore, edge_id: u64) void {
         if (statementWritesFenced()) return; // SONNY-3348
+        self.deleteEdgeChecked(edge_id) catch |err| {
+            log.err("deleteEdge failed; the edge is unchanged", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.int("edge_id", @intCast(edge_id)),
+            });
+            voidWriteFailed(err);
+        };
+    }
+
+    /// SONNY-6268: delete an edge, failure-atomic, returning the error: the
+    /// undo record, the body (hydrated on a miss), the adapter delete, then
+    /// the in-memory removal, which cannot fail. Deleting an edge that does
+    /// not exist is a no-op.
+    pub fn deleteEdgeChecked(self: *GraphStore, edge_id: u64) !void {
+        try statementWriteFence(); // SONNY-3348
         self.ensureEdgeGraphHydrated(edge_id); // PHASE 1b chokepoint (before any cache read)
-        self.undoRecordDeleteEdge(edge_id) catch return undoRecordFailed(); // SONNY-3348 (round 18)
-        // Capture graph_name before deletion for WAL notification and handle
-        // routing. PHASE 1: hydrate-on-miss so an EVICTED edge can still be
-        // deleted (its endpoints/graph resolved from the engine).
+        try self.undoRecordDeleteEdge(edge_id); // SONNY-3348 (round 18)
+        // PHASE 1: hydrate-on-miss so an EVICTED edge can still be deleted
+        // (its endpoints/graph resolved from the engine).
         //
         // SONNY-3233 (round 15): a copy of the edge, read under its shard's
-        // lock (`getEdgeHydrated`), not a pointer into the shard: a writer of
-        // another graph that inserts into the same shard grows it and moves
-        // the entry (two edge writers on two graphs crashed here). And the
-        // graph's name copied for the notification below: the delete frees
-        // the edge's own copy first.
-        const edge_copy = self.getEdgeHydrated(edge_id);
-        const gn: []const u8 = if (edge_copy) |e| (self.allocator.dupe(u8, e.graph_name) catch "") else "";
-        defer if (gn.len > 0) self.allocator.free(gn);
+        // lock, not a pointer into the shard: a writer of another graph that
+        // inserts into the same shard grows it and moves the entry (two edge
+        // writers on two graphs crashed here). And the graph's name copied
+        // for the notification below: the delete frees the edge's own copy.
+        const edge = (try self.edges.getOrHydrate(edge_id)) orelse return;
+        const gn = try self.allocator.dupe(u8, edge.graph_name);
+        defer self.allocator.free(gn);
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longestEdgeRemovalName(&edge)); // SONNY-6302
+        defer keys.deinit(self.allocator);
 
         if (global_vtable) |vt| {
-            if (edge_copy) |edge| {
-                const slot_from = self.requireNodeSlot(edge.graph_name, edge.from_id) catch |err| {
-                    log.err("adapter edge endpoint-slot lookup failed during deleteEdge", &.{
-                        Attr.string("error", @errorName(err)),
-                        Attr.int("edge_id", @intCast(edge_id)),
-                        Attr.string("graph", edge.graph_name),
-                    });
-                    return;
-                };
-                const slot_to = self.requireNodeSlot(edge.graph_name, edge.to_id) catch |err| {
-                    log.err("adapter edge endpoint-slot lookup failed during deleteEdge", &.{
-                        Attr.string("error", @errorName(err)),
-                        Attr.int("edge_id", @intCast(edge_id)),
-                        Attr.string("graph", edge.graph_name),
-                    });
-                    return;
-                };
-                const slot_edge = self.requireEdgeSlot(edge.graph_name, edge_id) catch |err| {
-                    log.err("adapter edge-slot lookup failed during deleteEdge", &.{
-                        Attr.string("error", @errorName(err)),
-                        Attr.int("edge_id", @intCast(edge_id)),
-                        Attr.string("graph", edge.graph_name),
-                    });
-                    return;
-                };
-                vt.deleteEdgeFn(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge) catch |err| {
-                    log.err("adapter deleteEdge failed", &.{
-                        Attr.string("error", @errorName(err)),
-                        Attr.int("edge_id", @intCast(edge_id)),
-                        Attr.string("graph", edge.graph_name),
-                    });
-                    return;
-                };
-                // Remove edge from IdMap
-                if (self.getIdMap(edge.graph_name)) |im| {
-                    _ = im.removeEdge(@as(u128, edge_id));
-                }
+            const slot_from = try self.requireNodeSlot(edge.graph_name, edge.from_id);
+            const slot_to = try self.requireNodeSlot(edge.graph_name, edge.to_id);
+            const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
+            try vt.deleteEdgeFn(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge);
+            // Remove edge from IdMap
+            if (self.getIdMap(edge.graph_name)) |im| {
+                _ = im.removeEdge(@as(u128, edge_id));
             }
         }
 
-        self.deleteEdgeNoSave(edge_id);
+        keys.install();
+        self.removeEdgeInMemory(edge_id, edge);
+        keys.uninstall();
         self.dirty.store(true, .release);
         incrementMutationEpoch();
         // WAL notification: DeleteEdge
@@ -15388,16 +16187,17 @@ pub const GraphStore = struct {
             const composite_component = isCompositeComponentKey(key);
             if (composite_component) self.removeNodeCompositeMergeEntries(node);
 
-            const result = try node.properties.getOrPut(key);
-            const was_new = !result.found_existing;
-            if (was_new) {
-                result.key_ptr.* = try self.allocator.dupe(u8, key);
-            } else {
-                self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*, node_id, value_copy);
-                freePropertyValue(self, result.value_ptr.*);
+            // SONNY-6268: the merge entries first (undone on a failure), then
+            // the failure-atomic map write (no slot with an undefined key).
+            const old_value = node.properties.get(key);
+            try self.addToMergePropertyIndexAtomic(node.graph_name, node.labels, key, value_copy, node_id, old_value);
+            errdefer self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id, old_value);
+            const replaced = try node.properties.putValue(self.allocator, key, value_copy);
+            const was_new = replaced == null;
+            if (replaced) |old| {
+                self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, old, node_id, value_copy);
+                freePropertyValue(self, old);
             }
-            result.value_ptr.* = value_copy;
-            self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
             // Re-assert the composite merge entry from the node's CURRENT values
             // (now including the new value for `key`). No-op until the node carries
             // ALL composite props, or when no composite key is registered.
@@ -15448,13 +16248,8 @@ pub const GraphStore = struct {
             // ENG-3954 / #874: see setNodePropertyNoSave.
             self.edges.lockShardExclusive(edge_id);
             defer self.edges.unlockShardExclusive(edge_id);
-            const result = try edge.properties.getOrPut(key);
-            if (!result.found_existing) {
-                result.key_ptr.* = try self.allocator.dupe(u8, key);
-            } else {
-                freePropertyValue(self, result.value_ptr.*);
-            }
-            result.value_ptr.* = value_copy;
+            // SONNY-6268: failure-atomic (no slot with an undefined key).
+            if (try edge.properties.putValue(self.allocator, key, value_copy)) |old| freePropertyValue(self, old);
         }
     }
 
@@ -15665,6 +16460,35 @@ const AdapterVTable = struct {
 
 var global_adapter: ?*graph_storage_adapter.StorageAdapter = null;
 var global_vtable: ?AdapterVTable = null;
+
+// CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=AdapterFaultSeam; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
+/// SONNY-6302: a test-only fault seam. While set to an operation, the store's
+/// call into the storage adapter for it fails with error.InjectedAdapterFault
+/// instead of writing (after letting `after` such calls through): the engine
+/// is not touched, as with a write the engine refused. `.none` (the default)
+/// is a no-op; only tests set it.
+pub const AdapterWriteFault = enum(u8) { none, set_edge_property, remove_edge_property, delete_node, delete_edge };
+var g_adapter_write_fault = std.atomic.Value(u8).init(0);
+var g_adapter_write_fault_after = std.atomic.Value(usize).init(0);
+
+pub fn setAdapterWriteFaultForTesting(op: AdapterWriteFault, after: usize) void {
+    g_adapter_write_fault.store(0, .release);
+    g_adapter_write_fault_after.store(after, .release);
+    g_adapter_write_fault.store(@intFromEnum(op), .release);
+}
+
+fn adapterWriteFault(op: AdapterWriteFault) bool {
+    if (g_adapter_write_fault.load(.acquire) != @intFromEnum(op)) return false;
+    var left = g_adapter_write_fault_after.load(.acquire);
+    while (left > 0) {
+        left = g_adapter_write_fault_after.cmpxchgWeak(left, left - 1, .acq_rel, .acquire) orelse return false;
+    }
+    return true;
+}
+
+/// SONNY-6302: the remover key room a delete installed on this thread
+/// (`GraphStore.RemoverKeyRoom`), or null.
+threadlocal var tl_remover_key_room: ?*std.heap.FixedBufferAllocator = null;
 
 pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
     return global_adapter;
@@ -16353,9 +17177,11 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
             return castAdapter(ctx).createEdgeWithPublicId(graph_name, from_id, to_id, label, public_id);
         }
         fn deleteNode(ctx: *anyopaque, graph_name: []const u8, node_id: u64) anyerror!void {
+            if (adapterWriteFault(.delete_node)) return error.InjectedAdapterFault;
             return castAdapter(ctx).deleteNode(graph_name, node_id);
         }
         fn deleteEdge(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64) anyerror!void {
+            if (adapterWriteFault(.delete_edge)) return error.InjectedAdapterFault;
             return castAdapter(ctx).deleteEdge(graph_name, from_id, to_id, edge_id);
         }
         fn setNodeProperty(ctx: *anyopaque, graph_name: []const u8, node_id: u64, key: []const u8, value: PropertyValue) anyerror!void {
@@ -16365,9 +17191,11 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
             return castAdapter(ctx).removeNodeProperty(graph_name, node_id, key);
         }
         fn setEdgeProperty(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64, key: []const u8, value: PropertyValue) anyerror!void {
+            if (adapterWriteFault(.set_edge_property)) return error.InjectedAdapterFault;
             return castAdapter(ctx).setEdgeProperty(graph_name, from_id, to_id, edge_id, key, value);
         }
         fn removeEdgeProperty(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64, key: []const u8) anyerror!void {
+            if (adapterWriteFault(.remove_edge_property)) return error.InjectedAdapterFault;
             return castAdapter(ctx).removeEdgeProperty(graph_name, from_id, to_id, edge_id, key);
         }
         fn addNodeLabel(ctx: *anyopaque, graph_name: []const u8, node_id: u64, label: []const u8) anyerror!void {
@@ -18160,6 +18988,8 @@ test "clearNodeProperties removes all node properties" {
 }
 
 test "getGlobalStore initializes adapter from data dir override" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -18179,6 +19009,8 @@ test "getGlobalStore initializes adapter from data dir override" {
 }
 
 test "QueryReadSession clones nodes from global store" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -18216,6 +19048,8 @@ test "QueryReadSession clones nodes from global store" {
 }
 
 test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -18469,6 +19303,8 @@ test "loadOneGraphFromAdapterFull: countGraphLabel (label-count fast path) is ex
 test "rollback removes adapter-backed state before reload" {
     const txn_undo_log = @import("txn_undo_log.zig");
 
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -18500,6 +19336,8 @@ test "rollback removes adapter-backed state before reload" {
     try testing.expect(store.getNodePtr(node_id) == null);
 }
 test "listGraphNames merges persisted adapter graphs with local cache" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -19347,6 +20185,8 @@ test "GAP-0839: in-memory createGraph assigns a persistent UUID (no adapter)" {
     // Reset the global singleton so this test owns it, and ensure NO adapter is
     // wired (in-memory mode) — this is the exact deployment that triggered the
     // rejection.
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
     setDataDirOverride(testing.allocator, null);
@@ -19371,6 +20211,8 @@ test "GAP-0839: in-memory createGraph assigns a persistent UUID (no adapter)" {
 }
 
 test "GAP-0839: default graph has a persistent UUID in in-memory mode" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
     setDataDirOverride(testing.allocator, null);
@@ -19384,6 +20226,8 @@ test "GAP-0839: default graph has a persistent UUID in in-memory mode" {
 }
 
 test "GAP-0839: dropGraph clears the persistent-UUID entry" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
     setDataDirOverride(testing.allocator, null);
@@ -19397,6 +20241,8 @@ test "GAP-0839: dropGraph clears the persistent-UUID entry" {
 }
 
 test "GAP-0839: adapter-backed createGraph yields a persistent UUID" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 

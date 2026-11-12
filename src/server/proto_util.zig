@@ -9,6 +9,8 @@ const heap = @import("../storage/heap.zig");
 const type_helpers = @import("../eval/type_helpers.zig");
 const eval_extended = @import("../eval_extended.zig");
 const property_codec = @import("../property_value_codec.zig");
+const unique_constraints = @import("../execution/unique_constraints.zig");
+const fle_integration = @import("../fle_integration.zig");
 
 pub const ParamBindings = struct {
     names: []const []const u8,
@@ -214,6 +216,27 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // SONNY-3038: geode.auth.revoke could not save the revoke.
         error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph; the privilege may return at the next start. Retry it" },
+        // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
+        // SONNY-6324: the FLE catalog fails closed (58030 io_error, as the
+        // other "could not be saved / read" refusals).
+        error.FleCatalogNotPersisted => .{ .code = "58030", .message = "The FLE catalog could not be saved; the change was not applied. Retry it" },
+        error.FleRevokeNotPersisted => .{ .code = "58030", .message = "The plaintext-access revoke is in effect but could not be saved to the FLE catalog; the role regains access at the next start unless the revoke is retried and saved. Retry it" },
+        // CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6335: no index or UNIQUE constraint over an encrypted field.
+        // SONNY-6362: MERGE cannot match a randomized FLE ciphertext.
+        error.MergeOnEncryptedField => .{ .code = "0A000", .message = "MERGE on an FLE-encrypted property is not supported: the stored value is randomized ciphertext, so a pattern value never matches it and MERGE would create a duplicate. MERGE on an unencrypted key and set the encrypted property with ON CREATE SET / SET" },
+        error.IndexOnEncryptedField => .{ .code = "0A000", .message = "The field is FLE-encrypted: an index or UNIQUE / NODE KEY constraint over it would hold ciphertext (or plaintext); none can be created. Use a searchable (blind-index) field for equality" },
+        error.EncryptedFieldIndexed => .{ .code = "0A000", .message = "The field has an index or a UNIQUE / NODE KEY constraint over it; drop it before encrypting the field" },
+        // SONNY-6341: CALL geode.fle.grantRole / revokeRole.
+        error.FleRoleGrantNotPersisted => .{ .code = "58030", .message = "The FLE role grant could not be saved to the security graph; it was not applied. Retry it" },
+        error.FleRoleRevokeNotPersisted => .{ .code = "58030", .message = "The FLE role revoke is in effect but could not be saved to the security graph; the role may return at the next start. Retry it" },
+        error.FleRoleUserNotFound => .{ .code = "42704", .message = "User does not exist" },
+        error.InvalidFleRole => .{ .code = "22023", .message = "An FLE role name is non-empty and uses only letters, digits, '_' and '-'" },
+        error.FleCatalogUnavailable => .{ .code = "58030", .message = "The FLE catalog could not be loaded, so which fields are encrypted is unknown; string property writes and reads are refused until it is restored (see the server log)" },
+        // SONNY-6327: an encrypted value the principal may read does not
+        // decrypt (damaged, or written under another key or identity).
+        error.FleDecryptionFailed => .{ .code = "58030", .message = "An encrypted property value could not be decrypted (damaged, or written under another FLE key); the read is refused (see the server log)" },
+        error.EncryptionRequired => .{ .code = "58030", .message = "The value must be stored encrypted and could not be encrypted (FLE catalog or keys unavailable); nothing was written" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
         // SONNY-3134: or another session's open transaction.
         error.ObjectInUse => .{ .code = "55006", .message = "Object in use: an open transaction (this session's or another's) changed the graph; it can be dropped or replaced once that transaction commits or rolls back" },
@@ -233,9 +256,40 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GraphBound => .{ .code = "42000", .message = "USE GRAPH not allowed: session is bound to a graph via DSN connection string" },
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
-        error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
+        error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name: an index of this name exists in the graph (index names are unique per graph, across labels)" },
+        error.IndexAlreadyExists => .{ .code = "42P07", .message = "Duplicate index name" },
+        // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+        // SONNY-6294: a missing index or constraint is undefined_object
+        // (42704); both reached clients as 58000 (system error).
+        error.IndexNotFound => .{ .code = "42704", .message = "Index does not exist" },
+        error.ConstraintNotFound => .{ .code = "42704", .message = "Constraint does not exist in the session's graph" },
+        error.FulltextIndexInDefaultGraph => .{ .code = "0A000", .message = "A fulltext index lives in the default graph: drop it from the default graph (USE GRAPH default; DROP INDEX <name>)" },
+        // SONNY-1319: the name is held in another graph by an index whose
+        // runtime structure is keyed by name alone (vector and other advanced
+        // indexes), so it cannot be created in this graph too.
+        error.IndexNameInUseByOtherGraph => .{ .code = "42P07", .message = "Index name is in use in another graph by an index type whose runtime structure is shared by name (vector and other advanced indexes); choose another name" },
         // SONNY-2809: a second CREATE CONSTRAINT with the same name.
-        error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name" },
+        error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name: a constraint of this name exists in the graph (constraint names are unique per graph, across labels)" },
+        // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=UniqueViolationCode; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=engine; UPDATED=2026-11-11
+        // SONNY-2846: a statement that would give two nodes one UNIQUE key,
+        // or a CREATE CONSTRAINT over existing duplicates. 23505 is SQL's
+        // unique_violation. The message names the constraint (or how many
+        // duplicate groups there are), never a value.
+        error.UniqueConstraintViolation => .{ .code = "23505", .message = unique_constraints.violationMessage() },
+        error.UniqueConstraintCheckFailed => .{ .code = "58030", .message = "the UNIQUE constraint check could not read the store; the statement was not applied" },
+        // CANARY: REQ=REQ-SONNY-6281-EXISTENCE-CONSTRAINTS; FEATURE="ConstraintEnforcement"; ASPECT=NotNullViolationCode; STATUS=TESTED; TEST=tests/test_sonny6281_existence_constraints.zig; OWNER=engine; UPDATED=2026-11-12
+        // SONNY-6281: a statement that would leave a node without a property
+        // a NOT NULL / EXISTS / NODE KEY constraint requires, or a CREATE
+        // CONSTRAINT over nodes that lack it. 23502 is SQL's
+        // not_null_violation. The message names the constraint, never a value.
+        error.NotNullConstraintViolation => .{ .code = "23502", .message = unique_constraints.notNullMessage() },
+        // SONNY-6281: CREATE UNIQUE INDEX built a plain index and ignored
+        // UNIQUE; it is refused, and uniqueness is a constraint.
+        error.UniqueIndexNotSupported => .{ .code = "0A000", .message = "CREATE UNIQUE INDEX is not supported: declare uniqueness with CREATE CONSTRAINT <name> FOR (n:Label) REQUIRE n.prop IS UNIQUE (enforced), or create a plain index with CREATE INDEX" },
+        // SONNY-2846: a bulk fast-path write that reached a graph a UNIQUE
+        // constraint was just created in; a retry runs through the executor,
+        // which checks it.
+        error.UniqueConstraintFastPathConflict => .{ .code = "40001", .message = "UniqueConstraintFastPathConflict: a constraint (UNIQUE, NODE KEY, NOT NULL or EXISTS) now applies in this graph; the write was not applied, retry it" },
         // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
         error.PolicyAlreadyExists => .{ .code = "42710", .message = "Duplicate policy name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
@@ -335,7 +389,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // edges) or on a path variable.
         // SONNY-3248 (round-4a review M-2): one SET clause assigned one
         // property of an element twice; the second silently won.
-        error.RepeatedSetTarget => .{ .code = "22G03", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
+        // SONNY-6368: 22G0M, data exception - multiple assignments to a
+        // graph element property (ISO/IEC 39075:2024 13.3 General Rule 7 a).
+        // It answered 22G03 (invalid value type).
+        error.RepeatedSetTarget => .{ .code = "22G0M", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
         error.OptionalPathVariable => .{ .code = "0A000", .message = "A path variable on an OPTIONAL MATCH pattern after the first is not supported; return the pattern's nodes and relationships instead" },
         error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
         // SONNY-3384: a SET or REMOVE before a DELETE in one query runs only
@@ -701,7 +758,9 @@ fn nodeToProto(allocator: std.mem.Allocator, node: graph_store.Node) !schema.Nod
     var it = node.properties.iterator();
     while (it.next()) |entry| {
         const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const val = try propertyValueToProto(allocator, entry.value_ptr.*);
+        // SONNY-6327: a string through the FLE read policy (RETURN n sent
+        // the stored bytes: ciphertext, to every principal).
+        const val = try entityPropertyToProto(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", node.id, entry.key_ptr.*, entry.value_ptr.*);
         try props.append(allocator, .{ .key = key, .value = val });
     }
     return .{
@@ -716,7 +775,7 @@ fn edgeToProto(allocator: std.mem.Allocator, edge: graph_store.Edge) !schema.Edg
     var it = edge.properties.iterator();
     while (it.next()) |entry| {
         const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const val = try propertyValueToProto(allocator, entry.value_ptr.*);
+        const val = try entityPropertyToProto(allocator, .edge, edge.label, edge.id, entry.key_ptr.*, entry.value_ptr.*);
         try props.append(allocator, .{ .key = key, .value = val });
     }
     return .{
@@ -726,6 +785,25 @@ fn edgeToProto(allocator: std.mem.Allocator, edge: graph_store.Edge) !schema.Edg
         .label = try allocator.dupe(u8, edge.label),
         .properties = props,
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=WireEncoding; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6327: a property of a whole node, edge or path on the wire. A
+/// string goes through the shared FLE read policy for a whole entity
+/// (`fle_integration.readStoredStringForEntity`).
+fn entityPropertyToProto(
+    allocator: std.mem.Allocator,
+    kind: fle_integration.EntityKind,
+    type_name: []const u8,
+    id: u64,
+    key: []const u8,
+    value: graph_store.PropertyValue,
+) !schema.Value {
+    if (value == .String) {
+        const shown = try fle_integration.readStoredStringForEntity(allocator, kind, type_name, key, value.String, id);
+        return .{ .kind = .{ .string_val = .{ .value = shown, .kind = .STRING } } };
+    }
+    return propertyValueToProto(allocator, value);
 }
 
 fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.PropertyValue) !schema.Value {

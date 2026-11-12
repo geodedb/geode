@@ -71,6 +71,47 @@ const cluster_mod = @import("../distributed/cluster.zig");
 // procedures stay open. Standalone mode is unaffected (gate is a no-op).
 // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateStorageProcs; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
 // ---------------------------------------------------------------------------
+const tde_mutating_set = std.StaticStringMap(void).initComptime(.{
+    .{ "tde.initialize_key_hierarchy", {} },
+    .{ "tde.rotate_keys", {} },
+    .{ "tde.configure_kms", {} },
+    .{ "tde.configure_key_provider", {} },
+    .{ "tde.configure_mock_kms", {} }, // writes mock_kms_config.json on disk
+    .{ "tde.configure_rotation_schedule", {} },
+    .{ "tde.configure_adaptive_rotation", {} },
+    .{ "tde.configure_provider", {} },
+    .{ "tde.configure_rotation", {} },
+    .{ "tde.configure_external_kms", {} },
+    .{ "tde.zeroize_keys", {} },
+    .{ "tde.cleanup_key_hierarchy", {} },
+    .{ "tde.backup_encrypted", {} },
+    .{ "tde.encrypt_backup", {} },
+    .{ "tde.create_encrypted_backup", {} },
+    .{ "tde.restore_with_keys", {} },
+    .{ "tde.restore_with_historical_keys", {} },
+});
+
+/// SONNY-6334: the FLE procedures that change who reads what in plaintext.
+const fle_mutating_set = std.StaticStringMap(void).initComptime(.{
+    .{ "geode.fle.configurefield", {} },
+    .{ "geode.fle.grantplaintext", {} },
+    .{ "geode.fle.revokeplaintext", {} },
+    // SONNY-6341: who may act under which FLE role.
+    .{ "geode.fle.grantrole", {} },
+    .{ "geode.fle.revokerole", {} },
+});
+
+/// SONNY-6334: FLE and TDE key administration, Admin only
+/// (`fle_admin.requireAdmin`). `proc_name` is lowercase.
+pub fn isKeyAdministrationProcedure(proc_name: []const u8) bool {
+    return fle_mutating_set.has(proc_name) or tde_mutating_set.has(proc_name);
+}
+
+/// SONNY-6334: the FLE procedures whose every run is an audit event.
+pub fn isAuditedFleChange(proc_name: []const u8) bool {
+    return fle_mutating_set.has(proc_name);
+}
+
 const cdc_mutating_set = std.StaticStringMap(void).initComptime(.{
     .{ "cdc.enable", {} },
     .{ "cdc.disable", {} },
@@ -1408,8 +1449,13 @@ fn parseFLEConfigMap(allocator: std.mem.Allocator, map_props: []const ast.Proper
                 algorithm = fle_annotations.EncryptionConfig.Algorithm.fromString(prop.value.String) catch .aes256_gcm;
             }
         } else if (std.mem.eql(u8, prop.key, "visibility")) {
-            if (prop.value.* == .List) {
-                visibility_roles = try parseVisibilityList(allocator, prop.value.List);
+            // SONNY-6334: a list literal parses as `.ArrayLit`; only `.List`
+            // was read, so `{visibility: [...]}` was dropped and the field
+            // was readable by nobody.
+            switch (prop.value.*) {
+                .List => |items| visibility_roles = try parseVisibilityList(allocator, items),
+                .ArrayLit => |items| visibility_roles = try parseVisibilityList(allocator, items),
+                else => {},
             }
         } else if (std.mem.eql(u8, prop.key, "searchable")) {
             // SONNY-6348: equality search on encrypted fields (blind
@@ -1436,6 +1482,9 @@ const FleHandler = *const fn (std.mem.Allocator, ast.CallProcedure) anyerror!Exe
 const fle_table = std.StaticStringMap(FleHandler).initComptime(.{
     .{ "geode.fle.configurefield", handleGeodeFleConfigurefield },
     .{ "geode.fle.grantplaintext", handleGeodeFleGrantplaintext },
+    .{ "geode.fle.revokeplaintext", handleGeodeFleRevokeplaintext },
+    .{ "geode.fle.grantrole", handleGeodeFleGrantrole },
+    .{ "geode.fle.revokerole", handleGeodeFleRevokerole },
     .{ "geode.fle.getfieldconfig", handleGeodeFleGetfieldconfig },
     .{ "geode.fle.listencryptedfields", handleGeodeFleListencryptedfields },
 });
@@ -1450,11 +1499,7 @@ pub fn executeFle(
         // Cluster fail-closed: see GateStorageProcs. configureField writes the
         // durable HMAC-chained FLE field catalog; getfieldconfig /
         // listencryptedfields are reads and stay open.
-        if (std.mem.eql(u8, proc_name, "geode.fle.configurefield") or
-            std.mem.eql(u8, proc_name, "geode.fle.grantplaintext"))
-        {
-            try cluster_mod.gateUnreplicatedWrite();
-        }
+        if (fle_mutating_set.has(proc_name)) try cluster_mod.gateUnreplicatedWrite();
         return try handler(allocator, call_stmt);
     }
     return null;
@@ -1489,6 +1534,21 @@ fn handleGeodeFleConfigurefield(allocator: std.mem.Allocator, call_stmt: ast.Cal
                 algorithm = config.algorithm;
                 visibility_roles = config.visibility_roles;
             }
+        }
+    }
+
+    // CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=ConfigureFieldRefused; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6335: a field with an index or a UNIQUE / NODE KEY constraint
+    // over it is not encrypted until that is dropped: the index would keep
+    // (or get) the field's plaintext, or index ciphertext.
+    if (execution.existingCatalogInstance()) |schema_catalog| {
+        if (try schema_catalog.indexOrUniqueOnField(allocator, type_name, field_name)) |name| {
+            log.warn("FLE configureField refused: the field has an index or unique constraint; drop it first", &.{
+                Attr.string("type", type_name),
+                Attr.string("field", field_name),
+                Attr.string("index", name),
+            });
+            return error.EncryptedFieldIndexed;
         }
     }
 
@@ -1540,7 +1600,8 @@ fn handleGeodeFleGrantplaintext(allocator: std.mem.Allocator, call_stmt: ast.Cal
     // calls catalog.grantPlaintextAccess(...) — the exact same call the offline CLI
     // makes (src/admin/fle_commands.zig grantPlaintext). The grant is persisted via
     // saveCatalog inside grantPlaintextAccess, so it survives restart and is
-    // byte-for-byte identical to the offline grant.
+    // byte-for-byte identical to the offline grant. SONNY-6324: a failed save
+    // undoes the grant and fails the call (FleCatalogNotPersisted, 58030).
     //
     // Example: CALL geode.fle.grantPlaintext('User', 'ssn', 'analyst')
 
@@ -1584,6 +1645,125 @@ fn handleGeodeFleGrantplaintext(allocator: std.mem.Allocator, call_stmt: ast.Cal
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
+// CANARY: REQ=REQ-SONNY-6327-FLE-ONLINE-REVOKE; FEATURE="FieldLevelEncryption"; ASPECT=RevokePlaintextProcedure; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+fn handleGeodeFleRevokeplaintext(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+    // geode.fle.revokePlaintext(type_name, field_name, role) -> status
+    // SONNY-6327: the ONLINE equivalent of the offline `geode fle
+    // revoke-plaintext` command, mirroring geode.fle.grantPlaintext: the
+    // same GPS gate (a mutating procedure: `.write`, see
+    // procedure_access.classifyProcedureName; not on any read-only list),
+    // the same cluster refusal (executeFle), the same global catalog the
+    // read path consults, and the same call the offline command makes
+    // (SchemaCatalog.revokePlaintextAccess). The role loses plaintext access
+    // for every read that starts after this returns: the catalog is the
+    // only decision source (no decision cache). SONNY-6324: it fails
+    // closed: a save that fails leaves the revoke applied in memory and
+    // reports FleRevokeNotPersisted (58030); a retry saves it.
+    //
+    // Example: CALL geode.fle.revokePlaintext('User', 'ssn', 'analyst')
+    var type_name: []const u8 = "unknown";
+    var field_name: []const u8 = "unknown";
+    var role: []const u8 = "unknown";
+
+    if (call_stmt.procedure == .Call) {
+        const args = call_stmt.procedure.Call.args;
+        if (args.len >= 3) {
+            if (args[0].* == .String) {
+                type_name = args[0].String;
+            }
+            if (args[1].* == .String) {
+                field_name = args[1].String;
+            }
+            if (args[2].* == .String) {
+                role = args[2].String;
+            }
+        }
+    }
+
+    const catalog = try fle_catalog.globalCatalog(allocator);
+    catalog.revokePlaintextAccess(type_name, field_name, role) catch |err| {
+        if (err == error.FleRevokeNotPersisted) {
+            log.warn("FLE plaintext access revoked (online) but not saved", &.{
+                Attr.string("type", type_name),
+                Attr.string("field", field_name),
+                Attr.string("role", role),
+            });
+        }
+        return err;
+    };
+
+    log.info("FLE plaintext access revoked (online)", &.{
+        Attr.string("type", type_name),
+        Attr.string("field", field_name),
+        Attr.string("role", role),
+    });
+
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "status");
+    const row = try allocator.alloc(Value, 1);
+    row[0] = Value{ .Str = "revoked" };
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
+// CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-GRANT-PROC; FEATURE="FieldLevelEncryption"; ASPECT=GrantRevokeFleRole; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6341: the (user, role) arguments of grantRole / revokeRole: two
+/// string literals, the role in the HELLO role alphabet, and (with
+/// authentication on) a user that exists.
+fn fleRoleArgs(call_stmt: ast.CallProcedure) ![2][]const u8 {
+    if (call_stmt.procedure != .Call) return error.InvalidArgs;
+    const args = call_stmt.procedure.Call.args;
+    if (args.len != 2 or args[0].* != .String or args[1].* != .String) return error.InvalidArgs;
+    const user = args[0].String;
+    const role = fle_integration.helloFleRole(args[1].String) orelse return error.InvalidFleRole;
+    const user_mgmt = @import("../security/user_management.zig");
+    if (user.len == 0) return error.FleRoleUserNotFound;
+    if (user_mgmt.isAuthEnabled() and user_mgmt.getUser(user) == null) return error.FleRoleUserNotFound;
+    return .{ user, role };
+}
+
+fn statusResult(allocator: std.mem.Allocator, status: []const u8) !ExecutionResult {
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "status");
+    const row = try allocator.alloc(Value, 1);
+    row[0] = Value{ .Str = status };
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
+fn handleGeodeFleGrantrole(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+    // geode.fle.grantRole(user, role) -> status
+    // SONNY-6341: `user` may act under FLE role `role` (the role its HELLO
+    // names). Admin only and audited (procedure_registry: fle_admin),
+    // refused in cluster mode (executeFle), stored in the security graph
+    // before it takes effect: a failed save applies nothing (58030).
+    const args = try fleRoleArgs(call_stmt);
+    const fle_role_grants = @import("../security/fle_role_grants.zig");
+    fle_role_grants.grant(args[0], args[1]) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => {
+            log.warn("FLE role grant not saved", &.{Attr.string("error", @errorName(err))});
+            return error.FleRoleGrantNotPersisted;
+        },
+    };
+    return statusResult(allocator, "granted");
+}
+
+fn handleGeodeFleRevokerole(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+    // geode.fle.revokeRole(user, role) -> status
+    // SONNY-6341: the mirror of grantRole. In force at once (every session
+    // of `user` stops acting under `role` from its next request); a save
+    // that fails leaves it in force and reports 58030.
+    if (call_stmt.procedure != .Call) return error.InvalidArgs;
+    const args = call_stmt.procedure.Call.args;
+    if (args.len != 2 or args[0].* != .String or args[1].* != .String) return error.InvalidArgs;
+    const fle_role_grants = @import("../security/fle_role_grants.zig");
+    const held = try fle_role_grants.revoke(args[0].String, args[1].String);
+    return statusResult(allocator, if (held) "revoked" else "not granted");
+}
+
 fn handleGeodeFleGetfieldconfig(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
     // geode.fle.getFieldConfig(type_name, field_name) -> encrypted, algorithm, searchable
     // CANARY: REQ=REQ-FLE-PROC-003; FEATURE="FLEProcedures"; ASPECT=GetFieldConfig; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -1608,12 +1788,14 @@ fn handleGeodeFleGetfieldconfig(allocator: std.mem.Allocator, call_stmt: ast.Cal
     var algorithm_str: []const u8 = "none";
     var searchable = false;
 
-    if (catalog.getFieldMetadata(type_name, field_name)) |field_meta| {
-        encrypted = field_meta.isEncrypted();
-        if (field_meta.algorithm()) |alg| {
-            algorithm_str = @tagName(alg);
+    // SONNY-6327: the policy by value, read under the catalog mutex (it
+    // returned the catalog's field struct, borrowed, after unlocking).
+    if (catalog.fieldPolicy(type_name, field_name)) |policy| {
+        encrypted = policy.encrypted;
+        if (policy.encrypted) {
+            algorithm_str = @tagName(policy.algorithm);
         }
-        searchable = field_meta.isSearchable();
+        searchable = policy.searchable;
     }
 
     const columns = try allocator.alloc([]const u8, 3);
@@ -1652,13 +1834,15 @@ fn handleGeodeFleListencryptedfields(allocator: std.mem.Allocator, call_stmt: as
 
     var rows_list = std.ArrayList([]Value).empty;
 
-    if (catalog.getType(type_name)) |type_meta| {
-        var it = type_meta.fields.iterator();
-        while (it.next()) |entry| {
-            const field_meta = entry.value_ptr.*;
+    // SONNY-6327: copies made under the catalog mutex, in the query's
+    // allocator (it iterated the catalog's own field map after unlocking,
+    // and the rows borrowed field names a reconfigure frees).
+    if (try catalog.copyTypeFields(allocator, type_name)) |fields| {
+        defer fle_catalog.freeFieldCopies(allocator, fields);
+        for (fields) |field_meta| {
             if (field_meta.isEncrypted()) {
                 const row = try allocator.alloc(Value, 3);
-                row[0] = Value{ .Str = field_meta.field_name };
+                row[0] = Value{ .Str = try allocator.dupe(u8, field_meta.field_name) };
                 row[1] = Value{ .Str = if (field_meta.algorithm()) |alg| @tagName(alg) else "none" };
                 row[2] = Value{ .Bool = field_meta.isSearchable() };
                 try rows_list.append(allocator, row);

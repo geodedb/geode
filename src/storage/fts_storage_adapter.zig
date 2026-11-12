@@ -180,6 +180,15 @@ pub const FtsStorageAdapter = struct {
     /// Limitations).
     rebuilds: std.StringHashMapUnmanaged(std.AutoHashMapUnmanaged(u64, void)) = .{},
 
+    /// SONNY-6368: the rebuilding indexes (keys of `rebuilds`) that must be
+    /// rebuilt again once the running pass's backfill is done, because
+    /// something changed the store under that backfill in a way the pending
+    /// set cannot carry: an undo, whose repair would rebuild the index and
+    /// is refused while a rebuild runs (`requestRebuildAgain`). The running
+    /// rebuild takes the request with its pass (`finishRebuildPass`) and
+    /// starts over from the store. Guarded by `mu`; keys owned.
+    rebuild_again: std.StringHashMapUnmanaged(void) = .{},
+
     pub const IndexEngine = struct {
         engine: *fts.Engine,
         /// `{base_dir}/<name>`. Opened by the adapter; closed in `deinit`.
@@ -284,6 +293,9 @@ pub const FtsStorageAdapter = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.rebuilds.deinit(self.allocator);
+        var ait = self.rebuild_again.keyIterator();
+        while (ait.next()) |k| self.allocator.free(k.*);
+        self.rebuild_again.deinit(self.allocator);
 
         self.allocator.free(self.base_path);
         self.allocator.destroy(self);
@@ -586,6 +598,13 @@ pub const FtsStorageAdapter = struct {
     pub fn endRebuild(self: *FtsStorageAdapter, index_name: []const u8, allocator: std.mem.Allocator) ![]u64 {
         self.mu.lockUncancelable(self.io);
         defer self.mu.unlock(self.io);
+        // SONNY-6368: a request to run again ends with the rebuild (this is
+        // the end of a failed rebuild, or of one that took its passes).
+        if (self.rebuild_again.fetchRemove(index_name)) |kv| self.allocator.free(kv.key);
+        return self.endRebuildLocked(index_name, allocator);
+    }
+
+    fn endRebuildLocked(self: *FtsStorageAdapter, index_name: []const u8, allocator: std.mem.Allocator) ![]u64 {
         const kv = self.rebuilds.fetchRemove(index_name) orelse return &[_]u64{};
         var pending = kv.value;
         defer pending.deinit(self.allocator);
@@ -596,6 +615,52 @@ pub const FtsStorageAdapter = struct {
         var i: usize = 0;
         while (it.next()) |k| : (i += 1) out[i] = k.*;
         return out;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6368-REBUILD-AGAIN; FEATURE="FullText"; ASPECT=RebuildAgainRequest; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+    /// SONNY-6368: ask the rebuild running for `index_name` to run again
+    /// from the store once its current pass is done. Returns true when one
+    /// is running and took the request, false when none is (the caller
+    /// rebuilds itself). For a change the pending set cannot carry: an undo,
+    /// whose repair rebuilds the index and was refused, and dropped, while a
+    /// rebuild ran (that rebuild's backfill may have read the undone value).
+    pub fn requestRebuildAgain(self: *FtsStorageAdapter, index_name: []const u8) !bool {
+        self.mu.lockUncancelable(self.io);
+        defer self.mu.unlock(self.io);
+        if (!self.rebuilds.contains(index_name)) return false;
+        if (self.rebuild_again.contains(index_name)) return true;
+        const name_copy = try self.allocator.dupe(u8, index_name);
+        errdefer self.allocator.free(name_copy);
+        try self.rebuild_again.put(self.allocator, name_copy, {});
+        return true;
+    }
+
+    /// SONNY-6368: one pass of a rebuild is done. When nobody asked for
+    /// another (`requestRebuildAgain`), this is `endRebuild`: the rebuild
+    /// ends and `pending` is its queue. Otherwise the rebuild stays armed
+    /// (writers keep queueing), the request is taken, `again` is true, and
+    /// `pending` is the queue so far, which the next pass's backfill covers.
+    /// One critical section, so a request is either taken by this pass or
+    /// finds no rebuild running.
+    pub const RebuildPass = struct { pending: []u64, again: bool };
+
+    pub fn finishRebuildPass(self: *FtsStorageAdapter, index_name: []const u8, allocator: std.mem.Allocator) !RebuildPass {
+        self.mu.lockUncancelable(self.io);
+        defer self.mu.unlock(self.io);
+        if (!self.rebuild_again.contains(index_name))
+            return .{ .pending = try self.endRebuildLocked(index_name, allocator), .again = false };
+        var out: []u64 = &[_]u64{};
+        if (self.rebuilds.getPtr(index_name)) |queued| {
+            out = try allocator.alloc(u64, queued.count());
+            var it = queued.keyIterator();
+            var i: usize = 0;
+            while (it.next()) |k| : (i += 1) out[i] = k.*;
+            queued.clearRetainingCapacity();
+        }
+        // Taken only once nothing below can fail: a request is never lost.
+        const kv = self.rebuild_again.fetchRemove(index_name).?;
+        self.allocator.free(kv.key);
+        return .{ .pending = out, .again = true };
     }
 
     /// Segment-order guard helper (see `IndexEngine.max_doc_id_since_flush`):

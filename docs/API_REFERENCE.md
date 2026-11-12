@@ -9,16 +9,23 @@ Creates an index on node properties for improved query performance.
 #### Syntax
 
 ```gql
-CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name
+CREATE INDEX [IF NOT EXISTS] index_name
 ON label(property[, ...])
 [USING {btree | hash | fulltext | spatial | vector}]
 ```
 
 #### Parameters
 
-- `UNIQUE`: Optional. Creates a unique constraint on the indexed property
+- `CREATE UNIQUE INDEX` is refused with `0A000` (`UniqueIndexNotSupported`,
+  SONNY-6281): it used to build a plain index and ignore `UNIQUE`. Declare
+  uniqueness with `CREATE CONSTRAINT ... IS UNIQUE` (enforced; see
+  Constraint Operations below)
 - `IF NOT EXISTS`: Optional. Prevents error if index already exists
-- `index_name`: Name of the index to create
+- `index_name`: Name of the index to create. A name is one index of a
+  graph (SONNY-6294): a second `CREATE INDEX` with a name the graph already
+  uses, on any label, is refused with 42P07 (`DuplicateIndex`), and with
+  `IF NOT EXISTS` does nothing. Another graph may use the name, except for
+  vector and the other advanced index types (`IndexNameInUseByOtherGraph`).
 - `label`: Node label to index
 - `property`: Property or properties to index
 - `USING`: Optional. Specifies index type (default: btree)
@@ -80,10 +87,170 @@ DROP INDEX [IF EXISTS] index_name
 - `IF EXISTS`: Optional. Prevents error if index doesn't exist
 - `index_name`: Name of the index to drop
 
+#### Behaviour
+
+- **Resolution:** the session graph's index of that name, else an
+  engine-wide one (written by an older, engine-global catalog), else a
+  fulltext index of the default graph. Another graph's index is not found.
+- **Missing name:** refused with 42704 (`IndexNotFound`); with `IF EXISTS`
+  the statement does nothing and succeeds.
+- **One name on several labels** (only in a catalog written before index
+  names were unique per graph): every row of the name in the resolved scope
+  is dropped, and the result carries a note saying so (SONNY-6294).
+- **Locking:** the server takes the session graph's write lock (SONNY-6294;
+  it took the default graph's). A fulltext index lives in the default
+  graph: from a session on another graph its DROP is refused (0A000); run
+  `USE GRAPH default; DROP INDEX <name>`.
+
 #### Example
 
 ```gql
 DROP INDEX IF EXISTS person_age_idx;
+```
+
+## Constraint Operations
+
+### CREATE CONSTRAINT
+
+Records a constraint in the session graph's catalog. A name is one
+constraint of a graph (SONNY-6294): a second `CREATE CONSTRAINT` with a
+name the graph already uses, on any label, is refused with 42710
+(`ConstraintAlreadyExists`), and with `IF NOT EXISTS` does nothing.
+
+#### Syntax
+
+```gql
+CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE n.prop IS UNIQUE
+CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE (n.a, n.b) IS NODE KEY
+CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT prop IS UNIQUE
+CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT (a, b) IS UNIQUE
+CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE n.prop IS NOT NULL
+CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT EXISTS (prop)
+```
+
+#### UNIQUE enforcement
+
+A `UNIQUE` constraint, and the uniqueness half of `NODE KEY`, is enforced
+on every write (SONNY-2846):
+
+- **When:** at the end of each statement, before its changes are kept (the
+  SQL rule for a constraint that is not deferred). A statement that would
+  leave two nodes with one key fails with SQLSTATE `23505`
+  (`unique_violation`) and none of its changes are kept, also for a
+  multi-element `CREATE`. A swap (`SET a.id = b.id, b.id = a.id`) is
+  allowed. `CREATE`, `MERGE` (when it creates), `MERGE ... ON CREATE SET` /
+  `ON MATCH SET`, `SET n.prop = ...`, `SET n:Label` and procedures are all
+  checked; so are the server's bulk write fast paths, which hand such a
+  write to the executor.
+- **Scope:** per graph (the constraint's own; a row written by an older,
+  engine-global catalog applies in every graph, each graph checked on its
+  own) and per tenant tag: nodes of two tenants may hold the same value, so
+  a refusal never tells one tenant what another holds. In a single-tenant
+  deployment this is graph-wide.
+- **NULL:** a missing or `NULL` property is never a conflict. A composite
+  key conflicts only when every property is present and equal.
+- **Equality:** the rule MERGE and inline property maps match by: numbers
+  by exact value (`1` = `1.0`, `1.5` = `1.50`; a DOUBLE `0.1` is not the
+  decimal `0.1`), strings byte for byte (an NFC and an NFD spelling are two
+  values, though the `=` operator compares them equal), `'1'` is not `1`.
+- **Existing data:** `CREATE CONSTRAINT ... IS UNIQUE` (or `NODE KEY`) over
+  nodes that already share a value is refused with `23505`, naming how many
+  groups of nodes share one; remove the duplicates first.
+- **Cost:** the other holder is found through the exact node-property index
+  (one lookup per checked node) when it can answer: full index mode, the
+  index built, and a number, string or boolean value. Otherwise (lean mode,
+  `GEODE_INDEX_MERGE_KEYS_ONLY=1`; the index still rebuilding after a
+  restart; an in-memory session; a list, temporal or other value) by a scan
+  of the label's nodes, for each node the statement wrote under a
+  constrained label.
+- **Fast paths:** the server's simple-CREATE, bulk MERGE, `/*+BATCH*/` and
+  `USE GRAPH g; MERGE` fast paths do not serve a graph that has a UNIQUE
+  constraint; those writes run through the executor (slower). A fast-path
+  write already past that check when the constraint is created is refused
+  with `40001`; retry it.
+- **Cluster mode:** constraint DDL is refused in cluster mode. A leader
+  refuses (`40001`, `ClusterWriteNotReplicable`) a replicated write, other
+  than a delete, on a graph a UNIQUE constraint applies in.
+
+#### NOT NULL, EXISTS and NODE KEY enforcement
+
+`REQUIRE n.prop IS NOT NULL`, the legacy `ASSERT EXISTS (prop)` and the
+existence half of `NODE KEY` are enforced on every write (SONNY-6281):
+
+- **Rule:** every node of the label in the constraint's graph holds each
+  named property with a value that is not `NULL`. GQL treats a property
+  whose value is null as absent, so a missing and a `NULL` property are the
+  same violation.
+- **When:** at the end of each statement, like UNIQUE. A statement that
+  would leave such a node without the property fails with SQLSTATE `23502`
+  (`not_null_violation`, `NotNullConstraintViolation`; the message names
+  the constraint, never a value) and none of its changes are kept.
+  `CREATE`, `MERGE` when it creates (unless `ON CREATE SET` supplies the
+  property), `SET n.prop = NULL`, `SET n = {...}` without it, `REMOVE
+  n.prop` and `SET n:Label` on a node without it are refused. A statement
+  may create a node and set the property later in the same statement.
+  `REMOVE n:Label` frees the node from the constraint.
+- **Existing data:** `CREATE CONSTRAINT` of these kinds over nodes that
+  lack the property is refused with `23502`, naming how many nodes lack
+  it; set the property or remove those nodes first.
+- **Fast paths and cluster mode:** as for UNIQUE: every enforced
+  constraint, of any kind, sends the server's node-writing fast paths to
+  the executor (`40001` for a write already past that check), and a leader
+  refuses a replicated non-delete write on a graph a constraint applies in.
+- **NODE KEY:** both halves: a missing key property is `23502`, a duplicate
+  key `23505`.
+- **Standard:** ISO/IEC 39075:2024 defines no `CREATE CONSTRAINT` (these
+  statements are Geode extensions in the openCypher form); the rule follows
+  its `NOT NULL` property value types.
+
+#### Example
+
+```gql
+CREATE CONSTRAINT person_email FOR (p:Person) REQUIRE p.email IS UNIQUE;
+CREATE (:Person {email: 'a@example.com'});
+CREATE (:Person {email: 'a@example.com'});  -- 23505, nothing written
+```
+
+### DROP CONSTRAINT
+
+Removes a constraint from the session graph's catalog (SONNY-6270).
+
+#### Syntax
+
+```gql
+DROP CONSTRAINT [IF EXISTS] name
+```
+
+#### Behaviour
+
+- **Resolution:** the session graph's constraint of that name, else an
+  engine-wide one (written by an older, engine-global catalog). A
+  constraint of another graph is not found. Constraints of one name on
+  several labels of the graph (only in a catalog written before constraint
+  names were unique per graph, SONNY-6294) are all dropped.
+- **Missing name:** refused with 42704 (`ConstraintNotFound`), as DROP
+  INDEX refuses a missing index (`IndexNotFound`); with `IF EXISTS` the
+  statement does nothing and succeeds.
+- **Engine-wide row:** dropped from any graph, it is gone for every graph.
+- **Enforcement:** a UNIQUE or NODE KEY constraint stops being enforced as
+  soon as the statement succeeds. When no UNIQUE constraint applies in the
+  graph any more, the server's bulk write fast paths serve it again.
+- **Durability:** the catalog is saved before the statement succeeds; a
+  dropped constraint stays dropped after a restart. If the save fails the
+  statement fails and the constraint stays, enforced.
+- **Permissions:** as CREATE CONSTRAINT: schema on the session's graph and
+  on the database; an engine-wide constraint also needs schema on
+  `default`. Checked before the name is looked up.
+- **Transactions:** DDL is not transactional. A ROLLBACK does not bring
+  back a constraint dropped in the transaction; DROP CONSTRAINT is refused
+  inside a `START TRANSACTION { ... }` body.
+- **Cluster mode:** refused, as all constraint DDL is.
+
+#### Example
+
+```gql
+DROP CONSTRAINT person_email;
+DROP CONSTRAINT IF EXISTS person_email;  -- no error
 ```
 
 ## Backup and Restore
@@ -684,6 +851,7 @@ Geode follows ISO/IEC SQL error code standards:
 - `0A000`: Feature not supported
 - `22000`: Data exception
 - `23000`: Integrity constraint violation
+- `23505`: Unique violation (a UNIQUE constraint, see Constraint Operations)
 - `42000`: Syntax error or access rule violation
 - `42P01`: Undefined table
 - `42P07`: Duplicate table/index
@@ -696,7 +864,7 @@ Geode follows ISO/IEC SQL error code standards:
 ### Index Usage
 
 1. Create indexes on frequently queried properties
-2. Use unique indexes for properties with high cardinality
+2. Use a UNIQUE constraint (not an index) for a property that must not repeat
 3. Use hash indexes for exact match queries only
 4. Use btree indexes for range queries and sorting
 5. Use vector indexes for similarity search

@@ -101,6 +101,18 @@ pub fn sessionAllowsKeyResolvedWrites(ctx: *const execution.ExecutionContext) bo
     return !(has_user and execution.activeRlsPoliciesConfigured());
 }
 
+// CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=FastPathDecline; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=transport; UPDATED=2026-11-11
+/// SONNY-2846: must the server's node-writing fast paths (simple CREATE,
+/// bulk MERGE, `/*+BATCH*/` MERGE, `USE GRAPH g; MERGE`) decline `graph`,
+/// sending the write to the executor? Yes when a UNIQUE or NODE KEY
+/// constraint, or (SONNY-6281) a NOT NULL or EXISTS one, applies in it:
+/// only the executor checks one (at the end of
+/// the statement, `unique_constraints`). The adapter's bulk helpers check
+/// again under the graph lock (`graph_store.refuseIfUniqueFenced`).
+pub fn uniqueConstraintsDeclineFastPath(graph: []const u8) bool {
+    return @import("unique_constraints.zig").graphFenced(graph);
+}
+
 /// The set of bulk-ingest shapes we know how to fast-path.  `none` means
 /// the statement is not in a fast-path form; callers must fall back to the
 /// regular executor.
@@ -404,6 +416,13 @@ fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
     if (q.ret.distinct) return null;
     // The MERGE itself must not RETURN.
     if (merge_stmt.return_clause != null) return null;
+    // SONNY-3241: one SET clause at most (as the node MERGE fast path,
+    // `buildSimpleNodeMergeSpec`), and only a bare one: the adapter writes
+    // the SET's properties on the edge it creates AND on the one it
+    // matches, which is a bare SET's meaning; an ON CREATE SET ran on a
+    // matched edge too, and `ON CREATE SET r.c = 1 SET r.b = 2` set c there.
+    if (!write_shape.onlyFieldsOf(ast.MergeStatement, merge_stmt.*, &.{ "pattern", "on_create", "on_match", "set_is_bare" })) return null;
+    if (merge_stmt.on_create.len != 0 and !merge_stmt.set_is_bare) return null;
 
     // MATCH: exactly two simple node-pattern chains (the two endpoints).
     const match_chains = q.match.chains;
@@ -427,10 +446,12 @@ fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
     if (hop.rel.dir != .right) return null;
     if (hop.rel.types.len != 1) return null;
     if (hop.rel.min_len != null or hop.rel.max_len != null) return null;
+    // SONNY-3357: a relationship's properties are part of the pattern MERGE
+    // matches, and the adapter's edge MERGE matches on endpoints and type
+    // only (it wrote them onto whichever edge it found). Such a statement is
+    // the executor's (`crud_operations.findExistingEdge`).
     if (hop.rel.props) |eprops| {
-        for (eprops) |ep| {
-            if (!isScalarPropExpr(ep.value.*)) return null;
-        }
+        if (eprops.len != 0) return null;
     }
 
     // MERGE endpoints must be bare refs to the matched vars.

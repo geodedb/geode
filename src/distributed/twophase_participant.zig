@@ -291,7 +291,10 @@ pub const ParticipantNode = struct {
                         }
                     },
                     .DELETE => {
-                        store.deleteNode(node_op.node_id);
+                        // SONNY-6302: a failed delete fails the commit, as a
+                        // failed CREATE or UPDATE does (the void form only
+                        // logged it and the commit reported success).
+                        try store.deleteNodeChecked(node_op.node_id);
                     },
                     else => {},
                 }
@@ -314,7 +317,7 @@ pub const ParticipantNode = struct {
                         }
                     },
                     .DELETE => {
-                        store.deleteEdge(edge_op.edge_id);
+                        try store.deleteEdgeChecked(edge_op.edge_id); // SONNY-6302
                     },
                     else => {},
                 }

@@ -333,16 +333,18 @@ dangling. The corrected semantics:
   expr-RLS hierarchy engine is wired — the durable registry's parent links are
   the source of truth for the hierarchy.
 
-> **Failure-path residual (operator note).** The adapter-tier `deleteEdge` /
-> `deleteNode` calls follow the codebase-wide delete posture: a *storage-adapter*
-> delete failure is logged and swallowed rather than propagated. Consequently a
-> cascade drop running against a failing adapter can **over-report** the
-> `nodes_deleted` / `edges_deleted` counts and still proceed to remove the
-> registry record. In-memory / out-of-memory failures, by contrast, surface
-> during the up-front per-tenant scan (`getAllEdgesForTenant` /
-> `getAllNodesForTenant`, which are fallible) and **abort the drop cleanly before
-> any registry record is removed**. Treat the returned counts as best-effort, not
-> a transactional guarantee, when investigating an adapter-error window.
+> **Failure path (operator note, SONNY-6302).** A cascade drop deletes the
+> tenant's rows with the checked store deletes. A delete that fails (the
+> storage engine refused it, or out of memory) **fails the drop before the
+> hierarchy node and the registry record are removed**: the tenant stays
+> registered, the rows already deleted stay deleted (each delete is atomic in
+> memory and in the engine), the rest remain, and
+> `tenant_admin.drop_delete_failed` is logged with the error and the deleted
+> and remaining counts. Re-run the drop to finish it. (Before SONNY-6302 an
+> engine delete failure was logged and swallowed, so the drop removed the
+> tenant and reported success with rows left behind.) A drop that removes a
+> parent's children first and then fails on the parent leaves those children
+> dropped.
 
 `drop` returns a row with `tenant_id`, `dropped`, `nodes_deleted`,
 `edges_deleted`. Examples:

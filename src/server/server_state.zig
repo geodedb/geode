@@ -581,6 +581,101 @@ pub const ServerState = struct {
 
     /// SONNY-2776: the session's graph: the executor session's, or
     /// `current_graph` (the copy QUIC syncs; gRPC never sets it).
+    // CANARY: REQ=REQ-SONNY-6334-FLE-REQUEST-CONTEXT; FEATURE="FieldLevelEncryption"; ASPECT=OneRequestContextForQuicAndGrpc; STATUS=TESTED; TEST=tests/test_sonny6334_fle_authorization.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-6334: the session's request context on this thread, for the
+    /// FLE reads made outside the executor's active context (the result
+    /// encoding) and for audit events: the tenant (GAP-0281/0282), the FLE
+    /// role its HELLO named, and the GPS decrypt_field gate for its
+    /// authenticated principal, asked live (policy changes and USE GRAPH
+    /// count). QUIC and gRPC both install it at the start of every request
+    /// that runs or encodes a statement, and `clearRequestThreadState` on
+    /// every exit, so a pooled thread never carries one request's role into
+    /// the next. `self` must outlive the request (both keep the session's
+    /// state for its lifetime).
+    pub fn installRequestThreadState(self: *const ServerState) void {
+        const fle_integration = @import("../fle_integration.zig");
+        const audit_mod = @import("../security/audit.zig");
+        const tenant = if (self.session_config) |cfg| cfg.tenant_id else null;
+        fle_integration.setCurrentTenantId(tenant);
+        audit_mod.setCurrentAuditTenantId(tenant);
+        fle_integration.setCurrentUserRole(self.effectiveFleRole());
+        fle_integration.setCurrentPlaintextGate(.{ .ctx = self, .allows = sessionAllowsDecrypt });
+    }
+
+    // CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-BINDING; FEATURE="FieldLevelEncryption"; ASPECT=FleRoleBoundToPrincipal; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6341: the FLE role this session's requests act under: the one
+    /// its HELLO named, when the authenticated user holds it (an Admin's
+    /// `CALL geode.fle.grantRole`, `security/fle_role_grants.zig`); else
+    /// none, and encrypted fields read as for a role not in their list.
+    /// Asked for every request, so a grant or revoke counts from the next
+    /// one. With authentication off every session is an implicit admin and
+    /// keeps the role it named; `--insecure-allow-all` bypasses this as it
+    /// bypasses all authorization. The Admin builtin role holds no FLE role
+    /// implicitly: an Admin grants one to itself, audited, like to anyone.
+    pub fn effectiveFleRole(self: *const ServerState) ?[]const u8 {
+        const role = self.fle_user_role orelse return null;
+        const user_mgmt = @import("../security/user_management.zig");
+        const gps = @import("../security/gps.zig");
+        const fle_role_grants = @import("../security/fle_role_grants.zig");
+        if (!user_mgmt.isAuthEnabled() or gps.isInsecureAllowAll()) return role;
+        const user = self.authenticated_user orelse return null;
+        if (fle_role_grants.holds(user, role)) return role;
+        return null;
+    }
+
+    /// SONNY-6341: at HELLO, a named FLE role the user does not hold is an
+    /// `access_denied` audit event (user, requested role); the session goes
+    /// on with no FLE role, so a client that always sends one still
+    /// connects. Called once per HELLO by both transports.
+    pub fn auditUnheldFleRole(self: *const ServerState) void {
+        const requested = self.fle_user_role orelse return;
+        if (self.effectiveFleRole() != null) return;
+        const audit_mod = @import("../security/audit.zig");
+        var buf: [192]u8 = undefined;
+        const details = std.fmt.bufPrint(&buf, "fle role not held: {s}", .{requested}) catch "fle role not held";
+        audit_mod.logSecurityGraphEvent(self.allocator, .{
+            .event_type = .access_denied,
+            .action = "fle_role",
+            .username = self.authenticated_user orelse "",
+            .details = details,
+            .result_failure = true,
+        });
+        @import("logging").scoped("server_state").warn("HELLO named an FLE role the user does not hold; the session has no FLE role", &.{@import("logging").Attr.string("user", self.authenticated_user orelse "")});
+    }
+
+    /// SONNY-6334: undoes `installRequestThreadState`.
+    pub fn clearRequestThreadState() void {
+        const fle_integration = @import("../fle_integration.zig");
+        const audit_mod = @import("../security/audit.zig");
+        fle_integration.clearCurrentThreadState();
+        audit_mod.setCurrentAuditTenantId(null);
+    }
+
+    /// GPS decrypt_field for the session's authenticated principal on its
+    /// graph. With authentication off every session is an implicit admin;
+    /// with it on, an unauthenticated session is refused.
+    fn sessionAllowsDecrypt(ctx: ?*const anyopaque) bool {
+        const fle_integration = @import("../fle_integration.zig");
+        const user_mgmt = @import("../security/user_management.zig");
+        const principal_derive = @import("../security/principal_derive.zig");
+        const self: *const ServerState = @ptrCast(@alignCast(ctx orelse return false));
+        if (!user_mgmt.isAuthEnabled()) return true;
+        const username = self.authenticated_user orelse return false;
+        const role_raw = self.authenticated_role orelse return false;
+        const role_names = [_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(role_raw)))};
+        const graph = self.sessionGraph();
+        const principal = principal_derive.derivePrincipal(.{
+            .username = username,
+            .role_names = &role_names,
+            .tenant_id = if (self.session_config) |cfg| cfg.tenant_id else null,
+            .active_graph = graph,
+            .auth_version = self.authenticated_auth_version,
+            .auth_method = .password,
+            .source = .internal_service,
+        });
+        return fle_integration.decryptAllowedFor(&principal, graph);
+    }
+
     pub fn sessionGraph(self: *const ServerState) []const u8 {
         const graph_store_mod = @import("../graph_store.zig");
         if (self.exec_session) |*sess| return sess.graph orelse graph_store_mod.DEFAULT_GRAPH_NAME;

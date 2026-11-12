@@ -569,7 +569,15 @@ fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
                 log.info("2PC undo: deleting created node", &.{
                     Attr.int("node_id", @intCast(node_op.node_id)),
                 });
-                gs.deleteNode(node_op.node_id);
+                // SONNY-6302: best-effort like the other undo branches (abort
+                // proceeds), but a failed delete is logged as an incomplete
+                // undo with its error: the created node remains.
+                gs.deleteNodeChecked(node_op.node_id) catch |err| {
+                    log.err("2PC undo: failed to delete created node; it remains (undo incomplete)", &.{
+                        Attr.int("node_id", @intCast(node_op.node_id)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             },
             .UPDATE => {
                 const props = entry.pre_image_props orelse {
@@ -636,7 +644,12 @@ fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
                 log.info("2PC undo: deleting created edge", &.{
                     Attr.int("edge_id", @intCast(edge_op.edge_id)),
                 });
-                gs.deleteEdge(edge_op.edge_id);
+                gs.deleteEdgeChecked(edge_op.edge_id) catch |err| { // SONNY-6302
+                    log.err("2PC undo: failed to delete created edge; it remains (undo incomplete)", &.{
+                        Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             },
             .UPDATE => {
                 const props = entry.pre_image_props orelse {
