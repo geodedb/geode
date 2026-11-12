@@ -4881,7 +4881,9 @@ pub const StorageAdapter = struct {
             }
         }
 
-        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |probe_id| {
+        // SONNY-2976: match only within the request's tenant (see
+        // `mergeTenantScope`); a same-key node of another tenant is a miss.
+        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value, mergeTenantScope(request_tenant))) |probe_id| {
             if (apply_on_match) {
                 try store.setNodeProperty(probe_id, merge_key, merge_value);
                 for (on_create_props) |kv| {
@@ -5047,7 +5049,8 @@ pub const StorageAdapter = struct {
             }
         }
 
-        const existing_id = try findNodeMatchingMergeProps(self, self.allocator, mg, store, graph_name, label, merge_props);
+        // SONNY-2976: match only within the request's tenant.
+        const existing_id = try findNodeMatchingMergeProps(self, self.allocator, mg, store, graph_name, label, merge_props, mergeTenantScope(request_tenant));
         if (existing_id) |existing| {
             // GAP-0900 coalesce-upsert: apply the SET props to the existing
             // node on the match branch, mirroring the single-key path
@@ -5269,6 +5272,29 @@ pub const StorageAdapter = struct {
         }
     }
 
+    /// SONNY-2976: `lookupNodeByMergeKey` for a request of `request_tenant`
+    /// (the tag its writes carry): only a node of that tenant answers, unless
+    /// the request is unscoped (`mergeTenantScope`). The bulk MERGE's phase-1
+    /// probe and the bulk edge paths' endpoint resolution use it, so a key
+    /// held only by another tenant's node is a miss.
+    pub fn lookupNodeByMergeKeyForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: graph_store.PropertyValue,
+        request_tenant: []const u8,
+        missing_err: anyerror,
+    ) !u64 {
+        _ = self;
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        var id: u64 = undefined;
+        switch (store.lookupMergeCandidateForTenant(graph_name, label, prop_key, prop_value, mergeTenantScope(request_tenant), &id)) {
+            .found => return id,
+            .not_found, .not_indexable => return missing_err,
+        }
+    }
+
     /// Task 15/16 (enterprise-ingest-throughput): write-phase counterpart of
     /// `bulkInsertEdge` that skips the MATCH lookups.
     ///
@@ -5385,6 +5411,10 @@ pub const StorageAdapter = struct {
     /// then the first bulk `MERGE (:T {x: 1.5})` created a second node; and
     /// while the index is deferred or rebuilding, the search does not build
     /// it under the caller's graph lock.
+    ///
+    /// SONNY-2976: `tenant` (from `mergeTenantScope`) confines the match to
+    /// the nodes tagged with it, as the executor's MERGE confines it to the
+    /// session's tenant; null matches in every tenant (an unscoped request).
     fn findMergeNode(
         self: *StorageAdapter,
         store: *graph_store.GraphStore,
@@ -5392,17 +5422,18 @@ pub const StorageAdapter = struct {
         label: []const u8,
         key: []const u8,
         value: graph_store.PropertyValue,
+        tenant: ?[]const u8,
     ) !?u64 {
         _ = self;
         var id: u64 = 0;
-        switch (store.lookupMergeCandidate(graph_name, label, key, value, &id)) {
+        switch (store.lookupMergeCandidateForTenant(graph_name, label, key, value, tenant, &id)) {
             .found => return id,
             .not_found => return null,
             // Any other value the index cannot key (a null, a list, a key
             // past 1024 bytes) is refused, as before.
             .not_indexable => if (!graph_store.GraphStore.isNumberProperty(value)) return error.MergeValueNotIndexable,
         }
-        return store.lowestMergeHolderByValue(graph_name, label, key, value);
+        return store.lowestMergeHolderByValueForTenant(graph_name, label, key, value, tenant);
     }
 
     // CANARY: REQ=REQ-SONNY-2806-MERGE-RESOLVE-EXACT; FEATURE="MergeIdempotency"; ASPECT=ExactIndexCandidates; STATUS=TESTED; TEST=tests/test_sonny2806_merge_resolve.zig; OWNER=storage; UPDATED=2026-09-27
@@ -5522,6 +5553,11 @@ pub const StorageAdapter = struct {
         graph_store.registerMergeIndexKey(merge_key);
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        // GAP-0891 (RC-1) / SONNY-2976: the request's tenant, resolved on this
+        // (handler) thread: the tag a created node carries and the scope a
+        // match is confined to.
+        const request_tenant = fle_integration.tenantPreferringActiveContext();
+        const tenant_scope = mergeTenantScope(request_tenant);
 
         // Phase 1 (inline): merge-prop index probe.  `.not_indexable`
         // means the value type (list / map) cannot use the index; the
@@ -5537,7 +5573,7 @@ pub const StorageAdapter = struct {
         if (!apply_on_match) {
             // Task 4 review Finding 1: this early return only runs when
             // `!apply_on_match`, so it is always a pure hit with no write.
-            if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |existing_id| {
+            if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value, tenant_scope)) |existing_id| {
                 return .{ .id = existing_id, .wrote = false };
             }
         }
@@ -5572,7 +5608,7 @@ pub const StorageAdapter = struct {
         // apply_on_match callers this is the only probe (Phase 1 was
         // skipped) and on hit we apply the SET clauses to the existing
         // node before returning (true upsert semantics).
-        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |existing_id| {
+        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value, tenant_scope)) |existing_id| {
             if (apply_on_match) {
                 try store.setNodeProperty(existing_id, merge_key, merge_value);
                 for (on_create_props) |kv| {
@@ -5595,7 +5631,7 @@ pub const StorageAdapter = struct {
         // ExecutionContext / per-thread tenant is valid here — resolve it
         // explicitly and tag the merged node with it (instead of relying on the
         // implicit resolution inside createNodeWithGraph).
-        const node_id = try store.createNodeForRequestTenant(&labels, graph_name, fle_integration.tenantPreferringActiveContext());
+        const node_id = try store.createNodeForRequestTenant(&labels, graph_name, request_tenant);
 
         // Write the merge key as a regular property (msft-graph's node_id
         // is both the merge key and a node property) and then all
@@ -11449,8 +11485,24 @@ fn copySmallestExactCandidates(
         try allocator.alloc(u64, 0);
 }
 
-fn nodeMatchesMergeProps(node: *const graph_store.Node, graph_name: []const u8, label: []const u8, props: []const StorageAdapter.PropKV) bool {
+// CANARY: REQ=REQ-SONNY-2976-MERGE-TENANT-SCOPE; FEATURE="MergeRowVisibility"; ASPECT=BulkMergeTenantScope; STATUS=TESTED; TEST=tests/test_sonny2976_merge_fast_path_tenant_scope.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2976: the tenant a bulk MERGE of a request tagged `request_tenant`
+/// matches within: that tenant, or null (every tenant) for an unscoped
+/// request (`default` or empty). The same rule as
+/// `tenancy.resolveTenantFilter` in non-strict mode (under strict tenancy
+/// the QUIC gate refuses an unscoped request before any fast path), and as
+/// the general executor's MERGE, which confines a match to the session's
+/// exact tenant (`crud_operations.nodeMatchesPattern`). MERGE's property
+/// index has no tenant in its key, so without this a request of tenant B
+/// matched, rewrote and answered tenant A's node.
+fn mergeTenantScope(request_tenant: []const u8) ?[]const u8 {
+    if (request_tenant.len == 0 or std.mem.eql(u8, request_tenant, graph_store.DEFAULT_TENANT_ID)) return null;
+    return request_tenant;
+}
+
+fn nodeMatchesMergeProps(node: *const graph_store.Node, graph_name: []const u8, label: []const u8, props: []const StorageAdapter.PropKV, tenant: ?[]const u8) bool {
     if (!std.mem.eql(u8, node.graph_name, graph_name)) return false;
+    if (tenant) |t| if (!std.mem.eql(u8, node.tenant_id, t)) return false;
     var has_label = false;
     for (node.labels) |actual| {
         if (std.mem.eql(u8, actual, label)) {
@@ -11475,6 +11527,7 @@ fn findNodeMatchingMergeProps(
     graph_name: []const u8,
     label: []const u8,
     props: []const StorageAdapter.PropKV,
+    tenant: ?[]const u8,
 ) !?u64 {
     // CANARY: REQ=REQ-QUIC-HC-111; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeIndexedProbe; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
     //
@@ -11514,7 +11567,12 @@ fn findNodeMatchingMergeProps(
             // result and durability are unchanged.
             .found => {
                 _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
-                return cid;
+                // SONNY-2976: the composite entry names the lowest holder in
+                // ANY tenant. Of another tenant, it is not this request's
+                // match and does not prove it has none: search the request's
+                // holders below.
+                const t = tenant orelse return cid;
+                if (try store.nodeTaggedTenant(cid, t)) return cid;
             },
             .not_found => {
                 _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
@@ -11538,7 +11596,7 @@ fn findNodeMatchingMergeProps(
     // written, so the MERGE that registers the key would find none of them
     // and create a second node (`{a: 1.5, b: 'k'}` after
     // `CREATE (:T {a: 1.5, b: 'k'})`). Scan the label instead.
-    if (graph_store.leanIndexingEnabled()) return lowestLabelNodeMatchingMergeProps(allocator, store, graph_name, label, props);
+    if (graph_store.leanIndexingEnabled()) return lowestLabelNodeMatchingMergeProps(allocator, store, graph_name, label, props, tenant);
 
     // Multi-property MERGE used to scan every node carrying `label` on each
     // miss. Under fan-out this made unique tuple inserts O(label cardinality).
@@ -11576,7 +11634,7 @@ fn findNodeMatchingMergeProps(
         // deferred reopen) the matching node need not be resident; a plain
         // `getPtr` would miss it and the MERGE would wrongly create a duplicate.
         const node = (store.nodes.getOrHydratePtr(public_id) catch null) orelse continue;
-        if (nodeMatchesMergeProps(node, graph_name, label, props)) lowest = public_id;
+        if (nodeMatchesMergeProps(node, graph_name, label, props, tenant)) lowest = public_id;
     }
     return lowest;
 }
@@ -11589,6 +11647,7 @@ fn lowestLabelNodeMatchingMergeProps(
     graph_name: []const u8,
     label: []const u8,
     props: []const StorageAdapter.PropKV,
+    tenant: ?[]const u8,
 ) !?u64 {
     const ids = (try store.snapshotNodesByLabel(allocator, graph_name, label)) orelse return null;
     defer allocator.free(ids);
@@ -11596,12 +11655,13 @@ fn lowestLabelNodeMatchingMergeProps(
         graph_name: []const u8,
         label: []const u8,
         props: []const StorageAdapter.PropKV,
+        tenant: ?[]const u8,
 
         fn matches(c: @This(), node: *const graph_store.Node) bool {
-            return nodeMatchesMergeProps(node, c.graph_name, c.label, c.props);
+            return nodeMatchesMergeProps(node, c.graph_name, c.label, c.props, c.tenant);
         }
     };
-    const check = Check{ .graph_name = graph_name, .label = label, .props = props };
+    const check = Check{ .graph_name = graph_name, .label = label, .props = props, .tenant = tenant };
     for (ids) |id| {
         if (try store.residentNodeSatisfies(id, check, Check.matches)) return id;
     }

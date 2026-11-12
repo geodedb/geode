@@ -562,11 +562,14 @@ pub const ShardedCoordinator = struct {
             // MATCH), like bulk_insert_edge — nothing to resolve at submit.
             .bulk_merge_edge => {},
             .bulk_match_create_edge => |*p| {
-                if (self.adapter.lookupNodeByMergeKey(
+                // SONNY-2976: an endpoint is found only in the request's
+                // tenant (stamped above), never another tenant's node.
+                if (self.adapter.lookupNodeByMergeKeyForTenant(
                     self.graph_name,
                     p.src_label,
                     p.src_filter_key,
                     p.src_filter_value,
+                    p.tenant,
                     error.SourceNodeNotFound,
                 )) |sid| {
                     p.source_id = sid;
@@ -907,11 +910,12 @@ pub const ShardedCoordinator = struct {
                 .bulk_match_create_edge => |p| {
                     var target_id = p.target_id;
                     if (target_id == 0) {
-                        if (self.adapter.lookupNodeByMergeKey(
+                        if (self.adapter.lookupNodeByMergeKeyForTenant(
                             self.graph_name,
                             p.dst_label,
                             p.dst_filter_key,
                             p.dst_filter_value,
+                            p.tenant,
                             error.TargetNodeNotFound,
                         )) |tid| {
                             target_id = tid;

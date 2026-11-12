@@ -6479,7 +6479,7 @@ pub const GraphStore = struct {
     ) MergeLookupResult {
         // A failed read leaves the entry as it is: the index cannot answer,
         // and the caller falls back as for a value it cannot key.
-        const found = self.findMergeHolders(graph_name, label, source) catch return .not_indexable;
+        const found = self.findMergeHolders(graph_name, label, source, null) catch return .not_indexable;
         _ = self.merge_prop_index.settle(probe, seen, found);
         out_node_id.* = found.lowest orelse return .not_found;
         return .found;
@@ -6493,11 +6493,61 @@ pub const GraphStore = struct {
     /// index when it can answer and otherwise by a label scan (lean mode, or
     /// the index deferred or rebuilding; `findMergeHolders`).
     pub fn lowestMergeHolderByValue(self: *GraphStore, graph_name: []const u8, label: []const u8, key: []const u8, value: PropertyValue) !?u64 {
+        return self.lowestMergeHolderByValueForTenant(graph_name, label, key, value, null);
+    }
+
+    /// SONNY-2976: `lowestMergeHolderByValue` among the nodes tagged `tenant`
+    /// only (null: every tenant), for a MERGE run by a tenant-scoped session.
+    pub fn lowestMergeHolderByValueForTenant(self: *GraphStore, graph_name: []const u8, label: []const u8, key: []const u8, value: PropertyValue, tenant: ?[]const u8) !?u64 {
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         var buf: [1024]u8 = undefined;
         const len = writeMergeValue(&buf, value) orelse return error.MergeValueNotIndexable;
-        const found = try self.findMergeHolders(graph_name, label, .{ .property = .{ .key = key, .value = value, .value_key = buf[0..len] } });
+        const found = try self.findMergeHolders(graph_name, label, .{ .property = .{ .key = key, .value = value, .value_key = buf[0..len] } }, tenant);
         return found.lowest;
+    }
+
+    // CANARY: REQ=REQ-SONNY-2976-MERGE-TENANT-SCOPE; FEATURE="MergeRowVisibility"; ASPECT=TenantScopedMergeLookup; STATUS=TESTED; TEST=tests/test_sonny2976_merge_fast_path_tenant_scope.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-2976: `lookupMergeCandidate` for a MERGE run by a session whose
+    /// tenant scope is `tenant` (null: unscoped, every tenant): the lowest
+    /// node holding the key AND tagged exactly `tenant`, the node the general
+    /// executor's MERGE matches (`crud_operations.findMergeMatch` confines a
+    /// candidate to the session's exact tenant).
+    ///
+    /// MERGE's index has no tenant in its key and names ONE node, the lowest
+    /// holder in ANY tenant, so its answer alone is wrong for a scoped
+    /// session: another tenant's node hit is not this session's match, and it
+    /// does not prove that the session has none. When the index names a node
+    /// of another tenant, the session's holders are searched as an
+    /// unresolved entry's are (`findMergeHolders`: the exact node-property
+    /// index, or a scan of the label's postings where it cannot answer), with
+    /// the tenant tag checked on each candidate (hydrated when evicted). An
+    /// authoritative miss stays a miss: no node holds the key in any tenant.
+    /// The index entry itself is never settled from a tenant-filtered answer.
+    pub fn lookupMergeCandidateForTenant(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, tenant: ?[]const u8, out_node_id: *u64) MergeLookupResult {
+        const result = self.lookupMergeCandidate(graph_name, label, prop_key, prop_value, out_node_id);
+        const tid = tenant orelse return result;
+        if (result != .found) return result;
+        if (self.nodeTaggedTenant(out_node_id.*, tid) catch return .not_indexable) return .found;
+        var buf: [1024]u8 = undefined;
+        const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
+        // The value's bytes end the key (`buildMergeIndexKey`).
+        const value_key = probe[graph_name.len + label.len + prop_key.len + 3 ..];
+        const found = self.findMergeHolders(graph_name, label, .{ .property = .{ .key = prop_key, .value = prop_value, .value_key = value_key } }, tid) catch return .not_indexable;
+        out_node_id.* = found.lowest orelse return .not_found;
+        return .found;
+    }
+
+    /// SONNY-2976: whether node `id` is tagged exactly `tenant` (false when
+    /// it does not exist). Hydrates an evicted node; see
+    /// `residentNodeSatisfies`.
+    pub fn nodeTaggedTenant(self: *GraphStore, id: u64, tenant: []const u8) !bool {
+        const Check = struct {
+            tenant: []const u8,
+            fn tagged(c: @This(), node: *const Node) bool {
+                return std.mem.eql(u8, node.tenant_id, c.tenant);
+            }
+        };
+        return self.residentNodeSatisfies(id, Check{ .tenant = tenant }, Check.tagged);
     }
 
     /// SONNY-2806 (round 8): the nodes of `label` holding the key `source`
@@ -6520,7 +6570,11 @@ pub const GraphStore = struct {
     /// here would hold the caller's graph lock, and so stall the graph's
     /// writers, for the whole build. Also without a storage adapter (the
     /// in-memory store).
-    fn findMergeHolders(self: *GraphStore, graph_name: []const u8, label: []const u8, source: MergeKeySource) !MergeHolders {
+    ///
+    /// SONNY-2976: with `tenant`, only nodes tagged exactly `tenant` count as
+    /// holders (a tenant-scoped MERGE); such an answer must not settle the
+    /// tenant-blind index entry.
+    fn findMergeHolders(self: *GraphStore, graph_name: []const u8, label: []const u8, source: MergeKeySource, tenant: ?[]const u8) !MergeHolders {
         if (self.exactIndexAdapter()) |adapter| {
             const PropKV = graph_storage_adapter.StorageAdapter.PropKV;
             var props_buf: [composite_index_max_props]PropKV = undefined;
@@ -6540,7 +6594,7 @@ pub const GraphStore = struct {
                 var found: MergeHolders = .{};
                 var holders: usize = 0;
                 for (ids) |id| {
-                    if (!try self.holdsMergeKey(id, graph_name, label, source)) continue;
+                    if (!try self.holdsMergeKey(id, graph_name, label, source, tenant)) continue;
                     holders += 1;
                     if (found.lowest == null or id < found.lowest.?) found.lowest = id;
                 }
@@ -6554,7 +6608,7 @@ pub const GraphStore = struct {
         const ids = (try self.snapshotNodesByLabel(self.allocator, graph_name, label)) orelse return .{};
         defer self.allocator.free(ids);
         for (ids) |id| {
-            if (try self.holdsMergeKey(id, graph_name, label, source)) return .{ .lowest = id };
+            if (try self.holdsMergeKey(id, graph_name, label, source, tenant)) return .{ .lowest = id };
         }
         return .{};
     }
@@ -6575,15 +6629,17 @@ pub const GraphStore = struct {
     }
 
     /// Whether node `id` of `graph_name` carries `label` and holds the key
-    /// `source` describes.
-    fn holdsMergeKey(self: *GraphStore, id: u64, graph_name: []const u8, label: []const u8, source: MergeKeySource) !bool {
+    /// `source` describes (SONNY-2976: and, with `tenant`, is tagged with it).
+    fn holdsMergeKey(self: *GraphStore, id: u64, graph_name: []const u8, label: []const u8, source: MergeKeySource, tenant: ?[]const u8) !bool {
         const Check = struct {
             graph_name: []const u8,
             label: []const u8,
             source: MergeKeySource,
+            tenant: ?[]const u8,
 
             fn holds(c: @This(), node: *const Node) bool {
                 if (!std.mem.eql(u8, node.graph_name, c.graph_name)) return false;
+                if (c.tenant) |t| if (!std.mem.eql(u8, node.tenant_id, t)) return false;
                 // The label's postings and the exact index can still list a
                 // node that no longer carries the label (a rolled-back
                 // `SET n:L`, SONNY-3059), and MERGE matches only a node that
@@ -6607,7 +6663,7 @@ pub const GraphStore = struct {
                 }
             }
         };
-        return self.residentNodeSatisfies(id, Check{ .graph_name = graph_name, .label = label, .source = source }, Check.holds);
+        return self.residentNodeSatisfies(id, Check{ .graph_name = graph_name, .label = label, .source = source, .tenant = tenant }, Check.holds);
     }
 
     /// Whether `pred(context, node)` holds for node `id`, or false when no

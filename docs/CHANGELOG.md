@@ -287,6 +287,33 @@
   now gated (it was not; no such session arises today). See
   docs/security/gps-decide.md, "Authentication disabled".
   Regression: `zig build test-sonny2782-auth-disabled-transport-parity`.
+- **The server's bulk MERGE matches a node only in the session's tenant
+  (SONNY-2976, SONNY-2724).** MERGE's property index has no tenant in its
+  key and names one node per key, the lowest id in any tenant, and the
+  storage adapter's bulk MERGE (`bulkMergeNodeWithReservedIdForTenant`,
+  the multi-property variant, `bulkMergeNode`) took that node as the match.
+  A MERGE run for tenant B matched tenant A's node with the same key,
+  rewrote its properties (`ON MATCH SET`, bare `SET`) and answered its id,
+  and tenant B got no node of its own. **Security fix for v0.8.22 users:**
+  v0.8.22 let any tenant-scoped QUIC client reach this through a simple
+  MERGE; v0.8.23 refused tenant sessions at the QUIC dispatcher (SONNY-2686)
+  but left the adapter wrong. The adapter now matches as the general
+  executor's MERGE does: a request with a concrete tenant matches only a
+  node tagged with exactly that tenant (the lowest such id, found through
+  the exact node-property index or a label scan when the index names
+  another tenant's node), and otherwise creates its own node tagged with
+  it; an unscoped request (`default`) still matches the lowest holder in
+  any tenant. The bulk edge paths' endpoint lookups and the bulk MERGE's
+  first probe are confined the same way. **Behaviour change:** the node
+  MERGE fast paths (node, graph-selector and `/*+BATCH*/` MERGE) serve
+  tenant-scoped sessions again, under strict tenancy too, so bulk ingest
+  from them is fast again; the relationship MERGE and MATCH … CREATE edge
+  fast paths, and every fast path for a user while an RLS policy is
+  installed, still take the executor. A tenant MERGE of a key whose lowest
+  holder belongs to another tenant now searches that key's holders (the
+  exact node-property index, or in lean mode a label scan) on each call.
+  Regressions: `zig build test-sonny2976-merge-fast-path-tenant-scope`,
+  `zig build test-sonny2724-quic-fast-path-gate`.
 
 ### Added
 

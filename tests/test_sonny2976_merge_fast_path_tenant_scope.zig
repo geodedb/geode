@@ -425,6 +425,35 @@ test "SONNY-2976: concurrent same-key MERGEs make exactly one node per tenant" {
     try f.check("concurrent MERGE");
 }
 
+test "SONNY-2976: the bulk edge paths resolve an endpoint only in the request's tenant" {
+    // The MATCH ... CREATE edge fast path (and the group-commit edge ops)
+    // resolve each endpoint by merge key through
+    // `lookupNodeByMergeKeyForTenant`: a tenant-B request cannot attach an
+    // edge to tenant A's node by naming its key.
+    harness.silenceEngineLogs();
+    var f: Failures = .{};
+    defer f.deinit();
+    for (modes) |mode| {
+        var s = try Session.init(mode);
+        defer s.deinit();
+        const a1 = try bulkMerge(.single, "E2976", TA, "a", false);
+        try s.reopen();
+        const a = try adapter();
+        if (a.lookupNodeByMergeKeyForTenant(G, "E2976", "k", .{ .Int = 1 }, TB, error.Missing)) |id| {
+            try f.add("[{s}] tenant B resolved tenant A's node {d} as an endpoint", .{ @tagName(mode), id });
+        } else |err| if (err != error.Missing) return err;
+        const got_a = try a.lookupNodeByMergeKeyForTenant(G, "E2976", "k", .{ .Int = 1 }, TA, error.Missing);
+        if (got_a != a1.id) try f.add("[{s}] tenant A resolved {d}, want {d}", .{ @tagName(mode), got_a, a1.id });
+        const got_u = try a.lookupNodeByMergeKeyForTenant(G, "E2976", "k", .{ .Int = 1 }, UNSCOPED, error.Missing);
+        if (got_u != a1.id) try f.add("[{s}] unscoped resolved {d}, want {d}", .{ @tagName(mode), got_u, a1.id });
+        // Once tenant B has its own node, B resolves that one.
+        const b1 = try bulkMerge(.single, "E2976", TB, "b", false);
+        const got_b = try a.lookupNodeByMergeKeyForTenant(G, "E2976", "k", .{ .Int = 1 }, TB, error.Missing);
+        if (got_b != b1.id) try f.add("[{s}] tenant B resolved {d}, want its node {d}", .{ @tagName(mode), got_b, b1.id });
+    }
+    try f.check("edge endpoint resolution");
+}
+
 test "SONNY-2976: timing of unscoped single-key bulk MERGE (SONNY2976_TIMING=N to run)" {
     // Not an assertion: prints the wall time of N distinct-key unscoped bulk
     // MERGEs through the group-commit primitive, the single-tenant ingest hot

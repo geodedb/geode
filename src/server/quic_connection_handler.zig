@@ -838,21 +838,25 @@ fn executeBulkMatchCreateEdge(
     const resolved = blk: {
         const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_edge);
         defer graph_store.releaseGraphLock(read_handle);
-        const s = adapter.lookupNodeByMergeKey(
+        // SONNY-2976: endpoints only in the request's tenant.
+        const request_tenant = fle_integration.getCurrentTenantIdCtx(&ctx);
+        const s = adapter.lookupNodeByMergeKeyForTenant(
             query_graph_name,
             spec.source.label,
             spec.source.filter_key,
             src_filter_pv,
+            request_tenant,
             error.SourceNodeNotFound,
         ) catch |err| switch (err) {
             error.SourceNodeNotFound => break :blk null,
             else => return err,
         };
-        const t = adapter.lookupNodeByMergeKey(
+        const t = adapter.lookupNodeByMergeKeyForTenant(
             query_graph_name,
             spec.target.label,
             spec.target.filter_key,
             dst_filter_pv,
+            request_tenant,
             error.TargetNodeNotFound,
         ) catch |err| switch (err) {
             error.TargetNodeNotFound => break :blk null,
@@ -1288,11 +1292,15 @@ fn executeBulkSimpleMerge(
     if (!spec.apply_on_match and merge_kvs.len == 1) {
         const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_merge);
         defer graph_store.releaseGraphLock(read_handle);
-        const res = adapter.lookupNodeByMergeKey(
+        // SONNY-2976: a hit counts only in the session's tenant; another
+        // tenant's node with this key would end the MERGE with no node of
+        // the session's own.
+        const res = adapter.lookupNodeByMergeKeyForTenant(
             query_graph_name,
             spec.label,
             spec.merge_key,
             merge_value_pv,
+            fle_integration.getCurrentTenantIdCtx(&ctx),
             error.MergeCandidateMissing,
         );
         if (res) |_| {
@@ -6689,6 +6697,17 @@ fn keyResolvedWriteFastPathServes(state: *const ServerState, exec_context: *cons
     return geode.bulk_ingest.sessionAllowsKeyResolvedWrites(exec_context);
 }
 
+// CANARY: REQ=REQ-SONNY-2724-NODE-MERGE-TENANT-FAST-PATH; FEATURE="MergeRowVisibility"; ASPECT=NodeMergeFastPathGate; STATUS=TESTED; TEST=tests/test_sonny2724_quic_fast_path_gate.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2724: may the node MERGE fast paths serve this request? As
+/// `keyResolvedWriteFastPathServes`, except that a concrete tenant scope no
+/// longer declines: their adapter primitives match only within the session's
+/// tenant (SONNY-2976), as the executor's MERGE does (see
+/// `bulk_ingest.sessionAllowsTenantScopedNodeMerges`).
+fn nodeMergeFastPathServes(state: *const ServerState, exec_context: *const execution.ExecutionContext) bool {
+    if (authenticatedReadNeedsRlsSnapshot(state)) return false;
+    return geode.bulk_ingest.sessionAllowsTenantScopedNodeMerges(exec_context);
+}
+
 /// GAP-0900 (scan-no-clone): true iff this read will be served by the
 /// engine-backed `node_scan_stream` path in the `.rows` arm, so the handler
 /// can skip the O(graph) `QueryReadSession` deep-clone. The conditions are a
@@ -7866,6 +7885,10 @@ fn handleClientMessage(
             // merge key (every MERGE shape, and MATCH … CREATE edge) serve a
             // session only when no tenant scope or RLS policy restricts it.
             const key_resolved_writes_ok = is_mutation and keyResolvedWriteFastPathServes(state, &exec_context);
+            // SONNY-2724: the node MERGE fast paths (node, graph-selector and
+            // /*+BATCH*/ MERGE) match only within the session's tenant
+            // (SONNY-2976), so they also serve a tenant-scoped session.
+            const node_merge_writes_ok = is_mutation and nodeMergeFastPathServes(state, &exec_context);
 
             // GAP-0900 lever (c): opt-in concurrent batch-merge fast path.
             // A client signals "this program is a batch of independent simple
@@ -7885,7 +7908,7 @@ fn handleClientMessage(
             const batch_requested = std.mem.startsWith(u8, query_text, BATCH_SENTINEL);
             if (batch_requested and
                 is_mutation and
-                key_resolved_writes_ok and
+                node_merge_writes_ok and
                 !state.in_txn and
                 graph_store.getGlobalAdapter() != null and
                 geode.distributed.cluster.getGlobalClusterCoordinator() == null)
@@ -8111,7 +8134,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok) {
+                if (bulk_shape == .simple_node_merge and node_merge_writes_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -8165,7 +8188,7 @@ fn handleClientMessage(
                         return;
                     }
                 }
-                if (bulk_shape == .simple_node_merge and key_resolved_writes_ok) {
+                if (bulk_shape == .simple_node_merge and node_merge_writes_ok) {
                     if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
                         return;
@@ -8190,7 +8213,7 @@ fn handleClientMessage(
             // falls through so the graph-access check + session rebind run in
             // the regular executor. Same gating as the single-statement fast
             // paths: autocommit, non-cluster (cluster writes must reach Raft).
-            if (is_mutation and key_resolved_writes_ok and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
+            if (is_mutation and node_merge_writes_ok and !state.in_txn and !cluster_active and graph_store.getGlobalAdapter() != null) {
                 if (geode.bulk_ingest.matchGraphSelectorThenMerge(&parse_result.program)) |gs| {
                     if (std.mem.eql(u8, gs.graph_name, query_graph_name)) {
                         try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, gs.merge, query_graph_name, exec_context);
