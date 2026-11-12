@@ -10169,6 +10169,19 @@ pub fn build(b: *std.Build) void {
     const sonny6338_step = b.step("test-sonny6338-tenant-visibility-consistency", "Run SONNY-6338 / SONNY-2820 / SONNY-2848 regression (a tenant-scoped session's MERGE, knn() and subqueries see exactly the rows its MATCH sees, with a tenant hierarchy: a parent's MERGE binds its child's node, knn ranks the k nearest visible rows, subqueries count the session's own rows; the node MERGE fast paths decline a tenant with descendants)");
     sonny6338_step.dependOn(&run_sonny6338_tests.step);
 
+    // SONNY-2742: a property-map MATCH with WHERE, ORDER BY and LIMIT
+    // returns every matching row, in order (admin and tenant sessions,
+    // persisted, after a reopen).
+    const sonny2742_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2742_propmap_orderby_limit.zig"), .target = target, .optimize = optimize });
+    sonny2742_mod.addImport("geode", root_mod);
+    sonny2742_mod.addImport("rls", rls_mod);
+    sonny2742_mod.addImport("rls_types", rls_types_mod);
+    const sonny2742_tests = b.addTest(.{ .root_module = sonny2742_mod });
+    const run_sonny2742_tests = b.addRunArtifact(sonny2742_tests);
+    shardDep(test_step, &run_sonny2742_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2742_step = b.step("test-sonny2742-propmap-orderby-limit", "Run SONNY-2742 regression (MATCH (n:L {tag: ...}) WHERE ... RETURN n.id ORDER BY n.id LIMIT k returns every row the property map and the WHERE admit, in order, not only the newest matching node; admin and tenant sessions, persisted and after a reopen)");
+    sonny2742_step.dependOn(&run_sonny2742_tests.step);
+
     // SONNY-2848: intentionally RED TDD reproduction (docs/KNOWN_TEST_ISSUES.md):
     // kept out of `shardDep` until the commit that fixes it; compiled by
     // `test-compile` meanwhile.
