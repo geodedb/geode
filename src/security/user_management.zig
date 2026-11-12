@@ -152,6 +152,16 @@ pub const User = struct {
     password_reset_required: bool = false,
     auth_version: u64 = 1,
 
+    fn clone(self: User, allocator: std.mem.Allocator) !User {
+        var owned = self;
+        owned.username = try allocator.dupe(u8, self.username);
+        errdefer allocator.free(owned.username);
+        owned.password_hash = try allocator.dupe(u8, self.password_hash);
+        errdefer allocator.free(owned.password_hash);
+        owned.email = try allocator.dupe(u8, self.email);
+        return owned;
+    }
+
     pub fn deinit(self: *User, allocator: std.mem.Allocator) void {
         allocator.free(self.username);
         allocator.free(self.password_hash);
@@ -267,9 +277,13 @@ const UserCache = struct {
 
         const result = try allocator.alloc(User, self.entries.count());
         var i: usize = 0;
+        errdefer {
+            for (result[0..i]) |*user| user.deinit(allocator);
+            allocator.free(result);
+        }
         var node = self.head;
         while (node) |current| {
-            result[i] = current.user;
+            result[i] = try current.user.clone(allocator);
             i += 1;
             node = current.next;
         }
@@ -925,15 +939,26 @@ pub fn getUser(username: []const u8) ?User {
     return getUserInternal(username) catch null;
 }
 
-/// GAP-0270: List all users in the in-memory store
+/// Legacy snapshot allocated with the user store's allocator, including all
+/// strings. Release with freeUsersSnapshot and that allocator. Prefer the
+/// explicit request-allocator form listUsersAlloc.
 pub fn listUsers() ![]const User {
     return listUsersUsingAllocator(null);
 }
 
-/// A snapshot array owned by the caller's allocator. User strings remain
-/// borrowed from the cache, as with listUsers; free the array only.
+/// Deep snapshot owned by the caller's allocator. All strings are copied under
+/// user_store_mutex and survive deletion/eviction. Release with freeUsersSnapshot.
+// CANARY: REQ=REQ-SONNY-6312; FEATURE="Auth list ownership"; ASPECT=LockedSnapshot; STATUS=TESTED; TEST=tests/test_sonny6312_user_list_ownership.zig; OWNER=security; UPDATED=2026-11-11
 pub fn listUsersAlloc(allocator: std.mem.Allocator) ![]const User {
     return listUsersUsingAllocator(allocator);
+}
+
+pub fn freeUsersSnapshot(allocator: std.mem.Allocator, users: []const User) void {
+    for (users) |user| {
+        var owned = user;
+        owned.deinit(allocator);
+    }
+    allocator.free(users);
 }
 
 fn listUsersUsingAllocator(allocator: ?std.mem.Allocator) ![]const User {

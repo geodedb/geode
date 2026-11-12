@@ -608,25 +608,39 @@ fn handleUserImport(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
-fn handleUserList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    // geode.auth.user_list() -> username, email, role, active
-    const columns = try allocator.alloc([]const u8, 4);
-    columns[0] = try allocator.dupe(u8, "username");
-    columns[1] = try allocator.dupe(u8, "email");
-    columns[2] = try allocator.dupe(u8, "role");
-    columns[3] = try allocator.dupe(u8, "active");
-    var rows_list = std.ArrayList([]Value).empty;
-    const users = try user_mgmt.listUsersAlloc(allocator);
-    defer allocator.free(users);
-    for (users) |user| {
-        const row = try allocator.alloc(Value, 4);
-        row[0] = Value{ .Str = user.username };
-        row[1] = Value{ .Str = user.email };
-        row[2] = Value{ .Str = user.role.toString() };
-        row[3] = Value{ .Bool = user.active };
-        try rows_list.append(allocator, row);
+/// Initialize a fully owned result, including safe partial-allocation cleanup.
+fn ownedAuthTable(allocator: std.mem.Allocator, column_names: []const []const u8, row_count: usize) !ExecutionResult {
+    var result = ExecutionResult{ .columns = &.{}, .rows = &.{}, .flags = .empty, .owns_value_memory = true };
+    errdefer result.deinit(allocator);
+    result.columns = try allocator.alloc([]const u8, column_names.len);
+    @memset(result.columns, "");
+    for (column_names, result.columns) |name, *column| column.* = try allocator.dupe(u8, name);
+    result.rows = try allocator.alloc([]Value, row_count);
+    @memset(result.rows, &.{});
+    for (result.rows) |*row| {
+        row.* = try allocator.alloc(Value, column_names.len);
+        @memset(row.*, .Null);
     }
-    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    return result;
+}
+
+fn handleUserList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+    const users = try user_mgmt.listUsersAlloc(allocator);
+    defer user_mgmt.freeUsersSnapshot(allocator, users);
+    var result = try ownedAuthTable(allocator, &.{ "username", "email", "role", "active" }, users.len);
+    errdefer result.deinit(allocator);
+    for (users, result.rows) |user, row| {
+        // Complete each fallible allocation before changing the union tag;
+        // cleanup must only see fully initialized owned Str values.
+        const username = try allocator.dupe(u8, user.username);
+        row[0] = .{ .Str = username };
+        const email = try allocator.dupe(u8, user.email);
+        row[1] = .{ .Str = email };
+        const role = try allocator.dupe(u8, user.role.toString());
+        row[2] = .{ .Str = role };
+        row[3] = .{ .Bool = user.active };
+    }
+    return result;
 }
 
 fn handleUserDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -1141,29 +1155,35 @@ fn handleRoleDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
 }
 
 fn handleRoleList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    // geode.auth.role_list() -> role_name (built-in + custom)
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "role_name");
     const builtin_roles = [_][]const u8{ "admin", "user", "readwrite", "readonly" };
-    var rows_list = std.ArrayList([]Value).empty;
-    for (builtin_roles) |rn| {
-        const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = rn };
-        try rows_list.append(allocator, row);
-    }
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureRolesInit(allocator);
-    var it = g_custom_roles.iterator();
-    while (it.next()) |entry| {
-        // Defensive dedup: skip any custom entry whose name collides with a built-in
-        // (guards against state left over before hardening was in place).
-        if (isBuiltinRoleName(entry.key_ptr.*)) continue;
-        const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = entry.key_ptr.* };
-        try rows_list.append(allocator, row);
+    // A read must not initialize a long-lived map with a request allocator.
+    var count: usize = builtin_roles.len;
+    if (g_custom_roles_init) {
+        var it = g_custom_roles.iterator();
+        while (it.next()) |entry| {
+            if (!isBuiltinRoleName(entry.key_ptr.*)) count += 1;
+        }
     }
-    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    var result = try ownedAuthTable(allocator, &.{"role_name"}, count);
+    errdefer result.deinit(allocator);
+    for (builtin_roles, 0..) |name, i| {
+        const owned = try allocator.dupe(u8, name);
+        result.rows[i][0] = .{ .Str = owned };
+    }
+    var i: usize = builtin_roles.len;
+    if (g_custom_roles_init) {
+        var it = g_custom_roles.iterator();
+        while (it.next()) |entry| {
+            if (isBuiltinRoleName(entry.key_ptr.*)) continue;
+            // Copy while the role lock still protects the map key from DROP ROLE.
+            const owned = try allocator.dupe(u8, entry.key_ptr.*);
+            result.rows[i][0] = .{ .Str = owned };
+            i += 1;
+        }
+    }
+    return result;
 }
 
 // GPS Phase 4 (Task 4-4): geode.auth.policy_* procedures now delegate to the

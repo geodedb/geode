@@ -68,12 +68,16 @@ test proves Admin listing/profile/permission reads succeed while mutations
 remain refused. That regression failed before separating these decisions.
 
 The positive Admin list test also exposed a leaked cache-allocated snapshot.
-The handler now requests a caller-allocated snapshot array and frees it; its
-borrowed user strings retain the existing cache ownership. The old public
-`listUsers()` signature is preserved, and lookup failures propagate rather than
-becoming an empty success result.
+The initial handler fix requested a caller-allocated snapshot array and freed
+it. SONNY-6312 then identified the remaining borrowed-string lifetime problem.
+The final snapshot now deep-copies all user strings while holding the user
+store lock; the handler releases that snapshot and returns owned row strings.
+`listUsers()` keeps its signature but now also returns a deep snapshot, released
+with `freeUsersSnapshot` and its store allocator. Lookup failures propagate
+rather than becoming an empty success result. See the
+[ownership receipt](2026-11-11-auth-list-ownership.md).
 
-The final adjacent run passed all 66 build steps: 476 tests passed, with two
+The adjacent run on historical head `f37510c1` passed all 66 build steps: 476 tests passed, with two
 existing graph-store tests skipped. All fifteen new auth regressions ran and
 passed, including the additional cluster case and user-management coverage.
 The exact command is the combined command in the checked-delete receipt with
