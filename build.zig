@@ -9433,6 +9433,23 @@ pub fn build(b: *std.Build) void {
     const sonny6332_step = b.step("test-sonny6332-no-fixed-ports", "Run SONNY-6332 regression (no test the build compiles binds a literal port; geode serve on port 0 reports the bound port; the embedded LSP listener is off for test servers via GEODE_LSP_PORT=0, moved by GEODE_LSP_PORT, and --lsp-port wins)");
     sonny6332_step.dependOn(&run_sonny6332_tests.step);
 
+    // SONNY-3379: the I-4 vector case over in-process gRPC (the shared
+    // round-12 fixture), in two fixture lifetimes; the fixture leaves no
+    // index manager pointing into its freed request arena.
+    const sonny3379_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3379_grpc_vector_index_teardown.zig"), .target = target, .optimize = optimize });
+    sonny3379_test_mod.link_libc = true;
+    sonny3379_test_mod.addImport("geode", root_mod);
+    sonny3379_test_mod.addImport("schema", schema_mod);
+    sonny3379_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3379_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3379_test_mod.addImport("logging", logging_mod);
+    sonny3379_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3379_tests = b.addTest(.{ .root_module = sonny3379_test_mod });
+    const run_sonny3379_tests = b.addRunArtifact(sonny3379_tests);
+    shardDep(test_step, &run_sonny3379_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3379_step = b.step("test-sonny3379-grpc-vector-index-teardown", "Run SONNY-3379 regression (the I-4 vector case runs over in-process gRPC through the shared round-12 fixture, twice in one process; the fixture tears down the index manager before freeing the request arena it lives in)");
+    sonny3379_step.dependOn(&run_sonny3379_tests.step);
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per
