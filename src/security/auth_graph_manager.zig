@@ -353,7 +353,17 @@ pub const AuthGraphManager = struct {
     /// If we can't grab the exclusive lock within the bound, we skip this verify
     /// round and retry next interval (logged, never silent) rather than becoming
     /// a blocking writer.
+    // CANARY: REQ=REQ-SONNY-6352-AUTH-READERS-LOCKED; FEATURE="GQL Auth DDL Persistence"; ASPECT=VerifyRoundHoldsAuthDdlLock; STATUS=TESTED; TEST=tests/test_sonny6352_auth_verify_locking.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6352: `verifyChain` reads the role, policy and permission caches
+    /// and `graph_grant_nodes`, which the auth DDL changes under
+    /// `auth_ddl_lock` (SONNY-6329). The round holds that lock too, taken
+    /// BEFORE the store lock (the lock order: `auth_ddl_lock` is never taken
+    /// while holding a graph lock). Without it a round racing a GRANT, REVOKE
+    /// or role / policy change read the maps mid-change: a rehash under the
+    /// iteration, or a count that did not match the records it then read.
     pub fn runVerifyRound(self: *Self) void {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
         const deadline_ns = graph_store.monoNanosNowPub() + VERIFY_LOCK_ACQUIRE_BOUND_NS;
         graph_store.acquireStoreWriteLockCancelable(deadline_ns) catch |lock_err| {
             log.warn("Periodic HMAC verification skipped this round: could not acquire exclusive store lock within bound (retrying next interval)", &.{
@@ -543,6 +553,12 @@ pub const AuthGraphManager = struct {
 
         // Verify graph grant records
         try self.verifyGraphGrantRecords(hmac_key, &hmac_list);
+
+        // SONNY-6352: the records read must be the records counted. A
+        // mismatch (the maps changed between the count and the reads) fails
+        // the verification; it reached `computeChainHashChecked`'s
+        // `catch unreachable` and crashed the verifying thread.
+        if (hmac_list.items.len != total_records) return error.RecordCountMismatch;
 
         // Sort HMACs by their byte representation for deterministic ordering
         sortHmacs(hmac_list.items);
@@ -1925,6 +1941,7 @@ pub const AuthGraphManager = struct {
         return self.storage.listGraphGrants(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-6352-AUTH-READERS-LOCKED; FEATURE="GQL Auth DDL Persistence"; ASPECT=CanUserAccessGraphLocked; STATUS=TESTED; TEST=tests/test_sonny6352_auth_verify_locking.zig; OWNER=security; UPDATED=2026-11-12
     // CANARY: REQ=REQ-LSP-PERM-GRAPH-VISIBILITY-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=CoarseGraphVisibilityGate; STATUS=TESTED; TEST=tests/test_auth_graph_manager_unit.zig; OWNER=security; UPDATED=2026-06-11
     /// Returns true if `user` is a superuser (admin) or holds at least one
     /// persisted grant of any action on `graph_name`. Intended as a COARSE
@@ -1942,11 +1959,14 @@ pub const AuthGraphManager = struct {
     /// dedicated (user_id, graph_name) index can be added later if this
     /// becomes a hot path.
     ///
-    /// Locking: takes no AuthGraphManager-level lock (the manager has
-    /// none on the grant path). The underlying GraphStore reads are
-    /// safe under the global store rwlock convention used elsewhere in
-    /// this file — `revokeGraphGrant` scans the same data the same way.
+    /// Locking (SONNY-6352): holds `auth_ddl_lock` for the scan, as GRANT /
+    /// REVOKE hold it while they change `graph_grant_nodes`; it iterated
+    /// the map unlocked. Callers (LSP / schema introspection) hold no
+    /// graph lock here, as the lock order requires.
     pub fn canUserAccessGraph(self: *Self, user: []const u8, graph_name: []const u8) bool {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+
         // Resolve username -> user_id and short-circuit if the user is a
         // superuser. getUserByUsername is itself a thin wrapper over the
         // cache, so the cost is a single hashmap scan.

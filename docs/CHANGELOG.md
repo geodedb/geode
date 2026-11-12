@@ -4,6 +4,21 @@
 
 ### Security
 
+- **The periodic auth chain verification and `canUserAccessGraph` hold the
+  auth DDL lock (SONNY-6352, items 1 and 2).** `AuthGraphManager.runVerifyRound`
+  -> `verifyChain` read the role, policy and permission caches and the
+  per-graph grant map, and `canUserAccessGraph` (LSP / schema visibility)
+  iterated the grant map, without `auth_ddl_lock`, under which CREATE /
+  DROP ROLE, CREATE / DROP POLICY, GRANT and REVOKE change them (SONNY-6329).
+  A verification racing one of them could read a map mid-rehash, or count
+  records that changed before it read them; the count mismatch reached a
+  `catch unreachable` and crashed the verifying thread. Both now hold
+  `auth_ddl_lock` (the round takes it before the store lock), and
+  `verifyChain` fails with `RecordCountMismatch` instead of crashing when
+  the records read do not match the count. A verification round now waits
+  for an auth change in progress (and delays one for at most its bounded
+  store-lock wait).
+  Regression: `zig build test-sonny6352-auth-verify-locking`.
 - **Offline auth CLI uses the server's data directory; `geode auth verify`
   no longer passes a store with no auth state; GRANT of a missing user is an
   error; auth DDL results own their rows (SONNY-6345).** (1) **Behaviour
