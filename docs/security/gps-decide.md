@@ -95,8 +95,9 @@ but does not disable authentication.
 Authentication disabled (`user_management.setAuthEnabled(false)`) is the
 in-process, single-user mode: embedders and tests. It is not a serving
 mode. `geode serve` enables authentication at startup whatever its flags
-(`src/server/main.zig`); its `--no-auth` is refused outside Debug builds
-and, in a Debug build, logs a warning and leaves authentication enabled.
+(`src/server/main.zig`); `geode serve --no-auth` fails at startup in
+every build mode (SONNY-6329; it used to log "Authentication disabled" in a
+Debug build and leave authentication enabled).
 `--insecure-allow-all` is a different switch: authentication stays on and
 `decide` allows everything (see above).
 

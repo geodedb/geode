@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const policy_catalog = @import("../security/policy_catalog.zig");
+const auth_ddl_lock = @import("../security/auth_ddl_lock.zig");
 const logging = @import("logging");
 const log = logging.scoped("execution");
 const Attr = logging.Attr;
@@ -29,6 +30,10 @@ const PolicyCatalog = policy_catalog.PolicyCatalog;
 /// expression that compiles, a unique name), then the write-through. If the
 /// write-through fails the policy is taken out again and the error returned.
 pub fn create(pol_cat: *PolicyCatalog, spec: policy_catalog.PolicySpec) !void {
+    // SONNY-6329: the lookup, the catalog change, the write-through and the
+    // undo are one step against every other auth / policy change.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
     try pol_cat.addPolicyStrict(spec);
     const hooks = policy_catalog.getWriteThroughHooks() orelse return;
     hooks.persist(hooks.ctx, spec) catch |err| {
@@ -49,6 +54,10 @@ pub const DropOutcome = enum { removed, not_found };
 /// stored record (the write-through reports PolicyNotFound) is dropped from
 /// the catalog. `if_exists`: a missing policy is `.not_found`, not an error.
 pub fn drop(pol_cat: *PolicyCatalog, name: []const u8, if_exists: bool) !DropOutcome {
+    // SONNY-6329: the lookup, the catalog change, the write-through and the
+    // undo are one step against every other auth / policy change.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
     // SONNY-2756: a locked lookup; the policy is not held past it.
     if (!pol_cat.contains(name)) {
         if (if_exists) return .not_found;
@@ -76,6 +85,10 @@ pub fn drop(pol_cat: *PolicyCatalog, name: []const u8, if_exists: bool) !DropOut
 /// the name's length); if the write-through then fails, the catalog is put
 /// back as it was (the name and the enabled flag) and the error returned.
 pub fn alter(pol_cat: *PolicyCatalog, name: []const u8, set_enabled: ?bool, rename_to: ?[]const u8) !void {
+    // SONNY-6329: the lookup, the catalog change, the write-through and the
+    // undo are one step against every other auth / policy change.
+    const ddl_guard = auth_ddl_lock.acquire();
+    defer ddl_guard.release();
     // SONNY-2756: the flag is copied under the catalog's lock; a pointer to
     // the policy was kept past it before.
     const old_enabled = pol_cat.enabledOf(name) orelse return error.PolicyNotFound;

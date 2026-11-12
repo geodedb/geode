@@ -68,6 +68,7 @@ const schema_change_notifier = @import("schema_change_notifier.zig");
 const Value = value_types.Value;
 
 const user_mgmt = @import("../security/user_management.zig");
+const auth_ddl_lock = @import("../security/auth_ddl_lock.zig");
 const mfa_mod = @import("mfa");
 const cluster_mod = @import("../distributed/cluster.zig");
 
@@ -582,6 +583,11 @@ pub fn execute(
         // via callAuthProcedure — identical error, harmless.
         // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateAuthProcedures; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
         if (!read_only_set.has(proc_name)) try cluster_mod.gateUnreplicatedWrite();
+
+        // SONNY-6329: one security change at a time, its write-through and
+        // undo included (auth_ddl_lock.zig has the lock order).
+        const ddl_guard: ?auth_ddl_lock.Guard = if (read_only_set.has(proc_name)) null else auth_ddl_lock.acquire();
+        defer if (ddl_guard) |g| g.release();
 
         if (dispatch_table.get(proc_name)) |handler| {
             return try handler(allocator, proc_name, call_stmt, context);

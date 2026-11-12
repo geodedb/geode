@@ -559,8 +559,12 @@ pub const AuthGraphManager = struct {
     }
 
     fn verifyUserRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
-        var it = self.storage.userIterator();
-        while (it.next()) |record| {
+        // SONNY-6329: ids under the cache's lock; the loop reads graph nodes.
+        const ids = try self.storage.cachedUserIds(self.allocator);
+        defer self.allocator.free(ids);
+        for (ids) |user_id| {
+            const user_copy = self.storage.getUser(user_id) orelse continue;
+            const record = &user_copy;
             const computed = computeUserHmac(hmac_key, record);
 
             // Get stored HMAC from graph node
@@ -841,17 +845,13 @@ pub const AuthGraphManager = struct {
 
     fn sealUserRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
         // Collect user IDs first to avoid iterator invalidation
-        var ids: std.ArrayList(u64) = .empty;
-        defer ids.deinit(self.allocator);
-        {
-            var it = self.storage.user_cache.keyIterator();
-            while (it.next()) |key| {
-                try ids.append(self.allocator, key.*);
-            }
-        }
+        // SONNY-6329: the ids copied under the cache's lock, each record
+        // copied out by `getUser` (the loop writes graph nodes).
+        const ids = try self.storage.cachedUserIds(self.allocator);
+        defer self.allocator.free(ids);
 
-        for (ids.items) |user_id| {
-            const record = self.storage.user_cache.get(user_id) orelse continue;
+        for (ids) |user_id| {
+            const record = self.storage.getUser(user_id) orelse continue;
             const computed = computeUserHmac(hmac_key, &record);
             const computed_hex = auth_hmac.hmacToHex(&computed);
 
@@ -1114,7 +1114,7 @@ pub const AuthGraphManager = struct {
         record.password_reset_required = !password_from_env;
         record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
         record.password_changed_at = compat_milliTimestamp();
-        try self.storage.user_cache.put(user_id, record);
+        try self.storage.putCachedUser(user_id, record);
         try self.storage.upsertUserNode(record);
 
         // Re-persist HMAC with updated fields
@@ -1179,7 +1179,7 @@ pub const AuthGraphManager = struct {
             var record = self.storage.getUser(user_id) orelse return error.UserNotFound;
             record.is_superuser = true;
             record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
-            try self.storage.user_cache.put(user_id, record);
+            try self.storage.putCachedUser(user_id, record);
             try self.storage.upsertUserNode(record);
             try self.recomputeAndStoreUserHmac(user_id, hmac_key);
         }
@@ -1194,7 +1194,7 @@ pub const AuthGraphManager = struct {
 
     /// Returns true if any User nodes exist in __geode_security.
     pub fn hasAuthRecords(self: *Self) bool {
-        return self.storage.user_cache.count() > 0;
+        return self.storage.cachedUserCount() > 0;
     }
 
     // -- Internal Helpers --
@@ -1204,7 +1204,7 @@ pub const AuthGraphManager = struct {
         // (HashMap.Size), so four-operand u32 addition can overflow when the
         // total exceeds ~4 billion records. Casting first lifts the arithmetic
         // to u64, preventing the panic in safe/debug builds.
-        return @as(u64, self.storage.user_cache.count()) +
+        return @as(u64, self.storage.cachedUserCount()) +
             @as(u64, self.storage.role_cache.count()) +
             @as(u64, self.storage.permission_cache.count()) +
             @as(u64, self.storage.policy_cache.count()) +
@@ -1212,7 +1212,7 @@ pub const AuthGraphManager = struct {
     }
 
     fn recomputeAndStoreUserHmac(self: *Self, user_id: u64, hmac_key: *const [32]u8) !void {
-        const record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
         const computed = computeUserHmac(hmac_key, &record);
         const computed_hex = auth_hmac.hmacToHex(&computed);
         const node_id = self.storage.user_nodes.get(user_id) orelse return error.UserNotFound;
@@ -1285,11 +1285,11 @@ pub const AuthGraphManager = struct {
     /// Update a user record's login state (failed_attempts, lockout_until) in the graph store.
     /// Recomputes the record HMAC and reseals the chain.
     pub fn updateUserLoginState(self: *Self, hmac_key: *const [32]u8, user_id: u64, failed_attempts: u16, lockout_until: i64) !void {
-        var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        var record = self.storage.getUser(user_id) orelse return error.UserNotFound;
         record.failed_login_attempts = failed_attempts;
         record.lockout_until = lockout_until;
         record.updated_at = compat_milliTimestamp();
-        try self.storage.user_cache.put(user_id, record);
+        try self.storage.putCachedUser(user_id, record);
         try self.storage.upsertUserNode(record);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1312,7 +1312,7 @@ pub const AuthGraphManager = struct {
     /// so the reseal below is mandatory: a bare property write would fail
     /// `verifyChain` and brick the next startup.
     pub fn updateUserPassword(self: *Self, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) !u64 {
-        const old = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
         // SONNY-3038: all of it or none of it.
         errdefer self.restoreUserRecord(hmac_key, old);
         var record = old;
@@ -1321,7 +1321,7 @@ pub const AuthGraphManager = struct {
         record.password_changed_at = compat_milliTimestamp();
         record.updated_at = compat_milliTimestamp();
         record.auth_version += 1;
-        try self.storage.user_cache.put(user_id, record);
+        try self.storage.putCachedUser(user_id, record);
         try self.storage.upsertUserNode(record);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1350,7 +1350,7 @@ pub const AuthGraphManager = struct {
     /// matched (the next start's verification failed), or a change that was
     /// in force after the restart although the statement failed.
     fn restoreUserRecord(self: *Self, hmac_key: *const [32]u8, old: UserStorageBackend.UserRecord) void {
-        self.storage.user_cache.put(old.id, old) catch |err| logRestoreFailure("user record", err);
+        self.storage.putCachedUser(old.id, old) catch |err| logRestoreFailure("user record", err);
         self.storage.upsertUserNode(old) catch |err| logRestoreFailure("user node", err);
         self.recomputeAndStoreUserHmac(old.id, hmac_key) catch |err| logRestoreFailure("user HMAC", err);
         self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
@@ -1367,7 +1367,7 @@ pub const AuthGraphManager = struct {
     /// Set a user's active state. Bumps auth_version so existing sessions are
     /// invalidated when a user is disabled. Reseals the chain.
     pub fn setUserActive(self: *Self, hmac_key: *const [32]u8, user_id: u64, active: bool) !u64 {
-        const old = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
         // SONNY-3038: all of it or none of it.
         errdefer self.restoreUserRecord(hmac_key, old);
         try self.storage.updateUser(user_id, null, null, active, null, null);
@@ -1412,9 +1412,9 @@ pub const AuthGraphManager = struct {
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-013; FEATURE="AuthDDLPersistence"; ASPECT=FindUserIdByName; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Look up a user id by username. Returns null if not found.
+    /// SONNY-6329: under the user cache's lock, copying the id alone.
     pub fn findUserIdByName(self: *Self, username: []const u8) !?u64 {
-        const record = self.storage.getUserByUsername(username) orelse return null;
-        return record.id;
+        return self.storage.findUserIdByUsername(username);
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-014; FEATURE="AuthDDLPersistence"; ASPECT=CreateRole; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11

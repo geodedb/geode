@@ -191,6 +191,30 @@
   status rows of `CREATE ROLE` / `DROP ROLE` and the permission rows of
   `SHOW PERMISSIONS` are freed with their result (they leaked).
   Regression: `zig build test-sonny6312-user-list-ownership`.
+- **Auth user lookups and auth DDL are serialized; `geode serve --no-auth`
+  fails (SONNY-6329).** (1) The auth manager's user cache had no lock:
+  `graphGrantCheck` resolved the user on every policy decision the decision
+  cache missed by walking it while `CREATE` / `DROP` / `ALTER USER` on other
+  connections changed it (a reader in a rehashed or freed map, in an
+  authorization path). It now has a leaf reader-writer lock: lookups hold
+  it shared and copy the id or record, writers hold it exclusively for the
+  map change only. (2) An auth or policy change (the change in memory, the
+  write-through to `__geode_security`, the undo when that fails) was not
+  serialized across connections: a `CREATE POLICY x` and a `DROP POLICY x`
+  could interleave and leave the catalog and the security graph
+  disagreeing (or the chain unverifiable) until the next start. Every
+  `geode.auth.*` procedure that changes state (and so `CREATE` / `ALTER` /
+  `DROP USER`, `CREATE` / `DROP ROLE`, `GRANT`, `REVOKE`) and `CREATE` /
+  `ALTER` / `DROP POLICY` now run one at a time under one lock
+  (`security/auth_ddl_lock.zig`, which states its lock order). (3)
+  **Behaviour change:** `geode serve --no-auth` now fails at startup in
+  every build mode. It was refused outside Debug builds, and in a Debug
+  build it logged "Authentication disabled" while authentication stayed
+  on. The unused `ServerConfig.enable_auth` field is removed;
+  `--enable-auth` is still accepted and does nothing (authentication is
+  always on). `geode lsp --no-auth` and `geode mcp --no-auth` are
+  unchanged.
+  Regression: `zig build test-sonny6329-user-cache-and-ddl-serialization`.
 - **A read-only request refuses the security DDL (SONNY-2751).** The
   statement classifier behind the per-request read-only floor
   (`ExecuteRequest.read_only`, QUIC and gRPC) and the MCP read-only mode

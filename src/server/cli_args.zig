@@ -49,9 +49,6 @@ pub const ServerConfig = struct {
     // Query behavior
     order_keys_mode_expr: bool = false, // ident-only by default; env/flag can enable
 
-    // Authentication (enabled by default for security; use --no-auth to disable)
-    enable_auth: bool = true,
-
     // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
     // --insecure-allow-all: when true, gps.decide() returns allow for every
     // request regardless of principal or resource. Default false (fail-closed).
@@ -300,7 +297,6 @@ pub fn printHelp() void {
     std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
     std.debug.print("  --cluster-port <port>        Raft cluster listen port (also requires GEODE_CLUSTER_TOKEN to activate)\n", .{});
     std.debug.print("  --peers <h:p,h:p,...>        Comma-separated list of cluster peers (cluster ports, not client ports)\n", .{});
-    std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
     std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});
     std.debug.print("  --strict-tenancy             Reject tenant-scoped ops with no tenant scope (also GEODE_STRICT_TENANCY=1)\n", .{});
     std.debug.print("  --require-capability-profile <path>  Refuse startup unless the required capability profile is satisfied (also GEODE_REQUIRE_CAPABILITY_PROFILE)\n", .{});
@@ -516,14 +512,16 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
             config._allocated_peers = true;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--enable-auth")) {
-            config.enable_auth = true;
+            // Authentication is always on; accepted for old scripts.
         } else if (std.mem.eql(u8, arg, "--no-auth")) {
-            if (@import("builtin").mode != .Debug) {
-                std.debug.print("Error: --no-auth is only available in debug builds. Use proper credentials for production.\n", .{});
-                std.process.exit(1);
-            }
-            config.enable_auth = false;
-            std.log.warn("Authentication disabled via --no-auth. This is NOT recommended for production use.", .{});
+            // CANARY: REQ=REQ-SONNY-6329-NO-AUTH-REFUSED; FEATURE="ServerCli"; ASPECT=NoAuthFlagRefused; STATUS=TESTED; TEST=tests/test_sonny6329_user_cache_and_ddl_serialization.zig; OWNER=security; UPDATED=2026-11-12
+            // SONNY-6329: `geode serve --no-auth` set a field nothing read and
+            // logged "Authentication disabled" while authentication stayed
+            // on (in a Debug build; other builds exited). A flag that claims
+            // to disable authentication must not be accepted either way: it
+            // fails at startup in every build mode.
+            std.debug.print("Error: geode serve --no-auth is not supported: authentication cannot be disabled on a server. For local development, set GEODE_ADMIN_PASSWORD (or use the generated bootstrap credentials) and connect with them.\n", .{});
+            return error.NoAuthUnsupported;
         } else if (std.mem.eql(u8, arg, "--insecure-allow-all")) {
             // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
             config.insecure_allow_all = true;
