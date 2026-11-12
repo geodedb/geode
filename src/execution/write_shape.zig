@@ -301,10 +301,10 @@ pub fn fieldRole(comptime field: []const u8) FieldRole {
         "optional_match",      "match",          "unwind_clause",  "where_clause",  "filter_clause",   "with_clause",
         "inline_let_bindings", "group_by",       "having",         "path_variable", "is_initial_with", "call_clause",
         "initial_with",        "initial_where",  "pre_with_where", "with_where",    "chained_write",   "split_create",
-        "select_projection",   "optional_where",
+        "select_projection",   "optional_where", "match_clauses",
         // SONNY-3384: DETACH on the part's DELETE; every executor that
         // applies `.delete` (match_delete, match_create) honours it.
-        "detach_delete",
+         "detach_delete",
     };
     const nested = [_][]const u8{ "next_query", "for_statement", "initial_call_subquery", "cte_list" };
     // SONNY-3242: `set_clause_ends`, where each SET clause ends, orders the
@@ -1259,6 +1259,10 @@ fn partFacts(facts: *Facts, q: ast.Query, ex: Executor) void {
             if (v) facts.insert(.select);
         } else if (comptime is(name, "optional_where")) {
             if (v) facts.insert(.optional_where);
+        } else if (comptime is(name, "match_clauses")) {
+            // SONNY-3184: each MATCH / OPTIONAL MATCH clause's own WHERE,
+            // already in `where_clause` (and `optional_where`) and the chains'
+            // `is_optional`: no fact of its own.
         } else if (comptime is(name, "set_clause_ends")) {
             // Where each SET clause ends: the order the SET's values are
             // evaluated in (every executor applies it), not a shape.

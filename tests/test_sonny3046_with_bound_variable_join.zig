@@ -364,8 +364,11 @@ const chains = [_]Case{
     .{ .q = "MATCH (q:Q) WITH q MATCH (q)-[:R]->(x) WITH q, x MATCH (y)-[:R]->(q) RETURN y.k AS y, x.k AS x", .want = pairs4 },
     .{ .q = "MATCH (q:Q) WITH q MATCH (q)-[:R]->(x) WITH x MATCH (x) RETURN count(*) AS c", .want = &.{"4"} },
     .{ .q = "PROFILE MATCH (q:Q) WITH q MATCH (q) RETURN count(*) AS c", .any_rows = true },
-    // Refused (0A000) rather than answered by binding the name again.
-    .{ .q = "MATCH (q:Q) WITH q MATCH (q)-[:S]->(t) OPTIONAL MATCH (t)-[:R]->(x) RETURN count(*) AS c", .err = error.UnsupportedBoundVariableJoin },
+    // SONNY-3184: an OPTIONAL MATCH beside a part that names a bound
+    // variable is the left outer join of the two (Q0 -> Q1 -> X1, Q3 -> Q3 ->
+    // X3); it was refused (0A000) until then.
+    .{ .q = "MATCH (q:Q) WITH q MATCH (q)-[:S]->(t) OPTIONAL MATCH (t)-[:R]->(x) RETURN count(*) AS c", .want = &.{"2"} },
+    .{ .q = "MATCH (q:Q) WITH q MATCH (q)-[:S]->(t) OPTIONAL MATCH (t)-[:R]->(x) RETURN q.k AS q, x.k AS x", .want = &.{ "0, 1", "3, 3" } },
     .{ .q = "EXPLAIN MATCH (q:Q) WITH q MATCH (q)-[:R]->(x) RETURN x.k", .any_rows = true },
 };
 

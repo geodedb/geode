@@ -2261,6 +2261,9 @@ pub const Parser = struct {
         var with_where: ?ast.Expr = null;
         // SONNY-3184: a WHERE after an OPTIONAL MATCH.
         var optional_where = false;
+        // SONNY-3184, SONNY-6337: each MATCH / OPTIONAL MATCH clause and its
+        // own WHERE (`ast.Query.match_clauses`).
+        var match_clauses = std.ArrayList(ast.MatchClause).empty;
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;
         var path_variable: ?[]const u8 = null;
@@ -2317,6 +2320,9 @@ pub const Parser = struct {
             for (first_gp.chains) |chain| {
                 try all_chains.append(self.arena.allocator(), chain);
             }
+            // A part that starts with OPTIONAL MATCH (after WITH, or a
+            // statement of its own) is one optional clause.
+            try match_clauses.append(self.arena.allocator(), .{ .optional = optional_match, .end = all_chains.items.len });
 
             // Check for additional MATCH or OPTIONAL MATCH clauses and combine their chains
             // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-002; FEATURE="OptionalMatchParsing"; ASPECT=ChainMarking; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-22
@@ -2357,6 +2363,7 @@ pub const Parser = struct {
                             _ = try self.expect(.r_brace);
                         }
                         optional_match = true;
+                        try match_clauses.append(self.arena.allocator(), .{ .optional = true, .end = all_chains.items.len });
                         continue;
                     }
                     if (self.cur.kind != .MATCH) {
@@ -2377,6 +2384,7 @@ pub const Parser = struct {
                         try all_chains.append(self.arena.allocator(), chain);
                     }
                 }
+                try match_clauses.append(self.arena.allocator(), .{ .optional = is_currently_optional, .end = all_chains.items.len });
             }
 
             var combined_gp = ast.GraphPattern{ .chains = try all_chains.toOwnedSlice(self.arena.allocator()) };
@@ -2392,56 +2400,43 @@ pub const Parser = struct {
                 for (combined_gp.chains) |chain| {
                     if (chain.is_optional) optional_where = true;
                 }
+                // It is the last clause's own WHERE.
+                if (match_clauses.items.len > 0) match_clauses.items[match_clauses.items.len - 1].where = where_expr;
             }
 
-            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
-            // Check for OPTIONAL MATCH after WHERE clause
-            // e.g., MATCH (e) WHERE e.x = 1 OPTIONAL MATCH (e)-[:R]->(m) RETURN ...
-            if (self.cur.kind == .OPTIONAL) {
+            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=parser; UPDATED=2026-11-11
+            // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-11-11
+            // More MATCH and OPTIONAL MATCH clauses after a WHERE, each with a
+            // WHERE of its own: `MATCH (e) WHERE e.x = 1 OPTIONAL MATCH
+            // (e)-[:R]->(m) WHERE m.y = 2 MATCH (d {k: e.k}) WHERE ...`.
+            // SONNY-3184: an OPTIONAL MATCH here took no WHERE (a syntax
+            // error) and was not followed by a MATCH.
+            if (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
                 var post_where_chains = std.ArrayList(ast.Chain).empty;
                 // First add the existing chains
                 for (combined_gp.chains) |chain| {
                     try post_where_chains.append(self.arena.allocator(), chain);
                 }
-                // Parse OPTIONAL MATCH clauses
-                while (self.cur.kind == .OPTIONAL) {
-                    self.advance(); // consume OPTIONAL
-                    if (self.cur.kind == .MATCH) {
-                        self.advance(); // consume MATCH
-                        const opt_gp = try self.parseGraphPattern();
-                        for (opt_gp.chains) |chain| {
-                            var optional_chain = chain;
-                            optional_chain.is_optional = true;
-                            try post_where_chains.append(self.arena.allocator(), optional_chain);
-                        }
-                    } else {
-                        return error.UnexpectedToken;
-                    }
-                }
-                combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
-            }
-
-            // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-26
-            // Check for required MATCH after WHERE clause
-            // e.g., MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN ...
-            if (self.cur.kind == .MATCH) {
-                var post_where_chains = std.ArrayList(ast.Chain).empty;
-                // First add the existing chains
-                for (combined_gp.chains) |chain| {
-                    try post_where_chains.append(self.arena.allocator(), chain);
-                }
-                // Parse additional MATCH clauses
                 // SONNY-3181: each WHERE below is ANDed onto the WHERE so far,
                 // one link per MATCH: the conditions count as one expression
                 // (`max_expr_links`), whatever the MATCH clauses parse.
                 self.enterExpr();
                 defer self.leaveExpr();
-                while (self.cur.kind == .MATCH) {
+                while (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
+                    const clause_optional = self.cur.kind == .OPTIONAL;
+                    if (clause_optional) {
+                        self.advance(); // consume OPTIONAL
+                        if (self.cur.kind != .MATCH) return error.UnexpectedToken;
+                        optional_match = true;
+                    }
                     self.advance(); // consume MATCH
                     const additional_pattern = try self.parseGraphPattern();
                     for (additional_pattern.chains) |additional_chain| {
-                        try post_where_chains.append(self.arena.allocator(), additional_chain);
+                        var chain = additional_chain;
+                        if (clause_optional) chain.is_optional = true;
+                        try post_where_chains.append(self.arena.allocator(), chain);
                     }
+                    var clause_where: ?ast.Expr = null;
                     // Check for WHERE clause after this MATCH
                     if (self.cur.kind == .WHERE) {
                         self.advance();
@@ -2451,12 +2446,14 @@ pub const Parser = struct {
                         }
                         // Combine with existing where_expr using AND
                         const new_where = try self.parseOrExpr();
+                        clause_where = new_where;
                         if (where_expr) |existing_where| {
                             where_expr = try self.makeBinary(.And, existing_where, new_where);
                         } else {
                             where_expr = new_where;
                         }
                     }
+                    try match_clauses.append(self.arena.allocator(), .{ .optional = clause_optional, .end = post_where_chains.items.len, .where = clause_where });
                 }
                 combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
             }
@@ -2621,7 +2618,9 @@ pub const Parser = struct {
             // CANARY: REQ=REQ-GQL-WITH-CHAIN-001; FEATURE="ChainedWithClauses"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
             // Check for query chaining: WITH ... WITH/MATCH/CREATE/FOR ...
             // If we see WITH, MATCH, CREATE, or FOR after WITH, parse it as a chained query or statement
-            if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR or self.cur.kind == .MERGE) {
+            // SONNY-6337: and OPTIONAL MATCH (`MATCH (q) WITH q OPTIONAL MATCH
+            // (q)-[:S]->(t)`), which was a syntax error.
+            if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL or self.cur.kind == .CREATE or self.cur.kind == .FOR or self.cur.kind == .MERGE) {
                 if (self.cur.kind == .FOR) {
                     // FOR needs special handling as it's a statement, not a query
                     next_query_ptr = try self.parseForContinuation();
@@ -2961,6 +2960,7 @@ pub const Parser = struct {
             .initial_where = if (select_mode) null else initial_where_expr,
             .select_projection = select_mode,
             .optional_where = optional_where,
+            .match_clauses = try match_clauses.toOwnedSlice(self.arena.allocator()),
             .pre_with_where = pre_with_where,
             .with_where = with_where,
             .split_create = split_create,

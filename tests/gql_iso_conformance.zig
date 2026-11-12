@@ -96,6 +96,15 @@ test "ISO Sec 7.9: Optional MATCH" {
     try expectParseOk("MATCH (n:Person) OPTIONAL MATCH (n)-[:HAS]->(p) RETURN n, p");
 }
 
+// SONNY-3184 / SONNY-6337: an optional match statement after a WITH (the
+// linear query's next statement), one with its own WHERE, and several in
+// sequence, each with its own WHERE.
+test "ISO Sec 7.9: OPTIONAL MATCH after WITH and with its own WHERE" {
+    try expectParseOk("MATCH (n:Person) WITH n OPTIONAL MATCH (n)-[:HAS]->(p) RETURN n, p");
+    try expectParseOk("MATCH (n:Person) OPTIONAL MATCH (n)-[:HAS]->(p) WHERE p.k > 1 RETURN n, p");
+    try expectParseOk("MATCH (n:Person) WHERE n.a > 1 OPTIONAL MATCH (n)-[:HAS]->(p) WHERE p.k > 1 OPTIONAL MATCH (p)-[:OF]->(q) WHERE q.k = 2 RETURN n, p, q");
+}
+
 test "ISO Sec 7.10: Pattern with alias" {
     try expectParseOk("MATCH p = (a)-[:KNOWS]->(b) RETURN p");
 }

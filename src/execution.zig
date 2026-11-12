@@ -3832,6 +3832,10 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         var list = std.ArrayList(Value).initCapacity(allocator, group_rows.len) catch return Value{ .List = &.{} };
         for (group_rows) |row| {
             const val = try evalAggregateArgument(allocator, arg_ptr.?.*, rowEnv(allocator, columns, row, param_names, param_values));
+            // SONNY-3184: a set function eliminates NULLs (ISO/IEC 39075),
+            // collect too: `OPTIONAL MATCH ... RETURN collect(t.k)` listed a
+            // NULL for every record the OPTIONAL MATCH left unbound.
+            if (val == .Null) continue;
             if (distinct) |*d| {
                 if (!try d.add(val)) continue;
             }

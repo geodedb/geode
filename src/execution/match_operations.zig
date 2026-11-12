@@ -153,6 +153,7 @@ const executeWithClause = execution.executeWithClause;
 // Import pattern matching helpers (extracted for modularity)
 // CANARY: REQ=REQ-REFACTOR-MATCH-008; FEATURE="MatchOperationsRefactor"; ASPECT=PatternHelpersImport; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
 const pattern_helpers = @import("pattern_helpers.zig");
+const optional_match = @import("optional_match.zig");
 pub const PatternInfo = pattern_helpers.PatternInfo;
 pub const DispatchResult = pattern_helpers.DispatchResult;
 pub const extractPatternInfo = pattern_helpers.extractPatternInfo;
@@ -838,7 +839,7 @@ fn fastPathClause(comptime field: []const u8) FastPathClause {
         // WHERE after an OPTIONAL MATCH); the fast paths check a read's shape
         // themselves.
         // SONNY-3242: where each SET clause ends (comes only with a SET).
-         "select_projection",   "optional_where",    "set_clause_ends",
+         "select_projection",   "optional_where",    "set_clause_ends", "match_clauses",
         // SONNY-3384: a flag of `delete_items`, which declines on its own.
         "detach_delete",
     };
@@ -9720,6 +9721,28 @@ fn executeReturnOverBindings(
     return projectReturnOverRows(allocator, q, &bindings.rows, param_names, param_values);
 }
 
+/// SONNY-3167, SONNY-3184: a part whose WITH runs in the shared WITH stage
+/// (`readWithStageRows`). A chained part (its RETURN is the WITH's items, the
+/// columns the next part reads) returns the stage's rows as they are; any
+/// other RETURN is projected over them (`executeReturnOverBindings`).
+fn executeWithStageOrReturn(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    inline_let_bindings: []ast.LetBinding,
+    current_graph: ?[]const u8,
+) anyerror!ExecutionResult {
+    if (q.with_clause) |wc| {
+        if (q.ret.items.ptr == wc.items.ptr and q.ret.items.len == wc.items.len) {
+            const bindings = try readPatternBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            allocator.free(bindings.items);
+            return bindings.rows;
+        }
+    }
+    return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+}
+
 /// The rows `readPatternBindings` read: one per match. `items` is the RETURN
 /// the read projected, which the rows' columns were named from.
 pub const PatternBindings = struct {
@@ -10669,6 +10692,22 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     if (setRemoveNeedsWriteStep(q)) {
         _ = g_legacy_write_scan_total.fetchAdd(1, .monotonic);
         return executeSetRemoveStep(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+    }
+    // CANARY: REQ=REQ-SONNY-3184-OPTIONAL-MATCH; FEATURE="OptionalMatchLeftOuterJoin"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-3184, SONNY-6337: a part with an OPTIONAL MATCH clause is the
+    // left outer join of its clauses (`optional_match.readOptionalRows`),
+    // each clause joined to the record before it (a variable a WITH bound
+    // too), its own WHERE restricting its own match only. A WITH, an
+    // aggregate, grouping, DISTINCT and ORDER BY go through the shared
+    // projection over those records. A SET or REMOVE after it reads its rows
+    // here too (`executeSetRemoveStep` above, without them).
+    if (q.set_clauses.len == 0 and q.remove_clauses.len == 0 and optional_match.hasOptionalClause(q)) {
+        if (q.with_clause != null and !q.is_initial_with) {
+            return executeWithStageOrReturn(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        }
+        var rows = try optional_match.readOptionalRows(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        defer rows.deinit(allocator);
+        return projectReturnOverRows(allocator, q, &rows, param_names, param_values);
     }
     // CANARY: REQ=REQ-SONNY-3046-WITH-BOUND-JOIN; FEATURE="ChainedMatchJoin"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_sonny3046_with_bound_variable_join.zig; OWNER=engine; UPDATED=2026-11-11
     // SONNY-3046, SONNY-3376, SONNY-3388: a pattern that names a node,

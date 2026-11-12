@@ -154,12 +154,28 @@ pub const Query = struct {
     // it joined with the MATCH's and it filters the whole row, not only the
     // optional part, so the write-shape allowlist refuses a write after one.
     optional_where: bool = false,
+    // SONNY-3184, SONNY-6337: the MATCH and OPTIONAL MATCH clauses of the
+    // part, in order: each owns `match.chains[previous end..end]` and the
+    // WHERE written after it. `where_clause` keeps them all joined by AND for
+    // every other reader; the OPTIONAL MATCH executor needs each one, since
+    // an OPTIONAL MATCH's WHERE restricts its own match only. Empty when the
+    // parser recorded none (no MATCH, or an `OPTIONAL { }` block first).
+    match_clauses: []const MatchClause = &.{},
     // SONNY-3242 (round-3 review I2): where each SET clause in `set_clauses`
     // ends, when the part has more than one (`SET a.x = 1 SET a.y = a.x` is two
     // clauses, the second reading what the first wrote); empty for one clause
     // or none. Every value of one clause is evaluated against the bindings as
     // they stood before it, then its assignments apply (`SetClauseGroups`).
     set_clause_ends: []const usize = &.{},
+};
+
+/// SONNY-3184: one MATCH or OPTIONAL MATCH clause of a query part
+/// (`Query.match_clauses`): the chains up to `end` (from the previous
+/// clause's end) and its own WHERE.
+pub const MatchClause = struct {
+    optional: bool,
+    end: usize,
+    where: ?Expr = null,
 };
 
 // CANARY: REQ=REQ-SONNY-3242-SET-SEMANTICS; FEATURE="SetClauseSemantics"; ASPECT=ClauseGroups; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=parser; UPDATED=2026-09-28

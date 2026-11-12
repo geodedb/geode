@@ -214,6 +214,30 @@
   chained part stay refused (0A000) until SONNY-3111. Regression (in-memory,
   persisted warm and reloaded, tenant-scoped and RLS sessions, leak-checked):
   `zig build test-sonny3046-with-bound-variable-join`.
+- **OPTIONAL MATCH is a left outer join, after WITH too (SONNY-6337,
+  SONNY-3184):** `MATCH (q:Q) WITH q OPTIONAL MATCH (q)-[:S]->(t)` was a
+  syntax error (42601), and a part with an OPTIONAL MATCH naming a variable a
+  WITH bound was refused (0A000). A WHERE written on an OPTIONAL MATCH
+  filtered the whole row, so `MATCH (q) OPTIONAL MATCH (q)-[:S]->(t) WHERE
+  t.k > 1` dropped every q without such a t instead of returning it with t
+  NULL; an OPTIONAL MATCH chained on another (or with a second hop) bound
+  NULL; a FILTER after one was ignored. Per ISO/IEC 39075, the MATCH and
+  OPTIONAL MATCH clauses of a part are now joined left to right, each
+  matched from the variables of the record before it (a variable a WITH
+  bound too) with its own WHERE restricting its own match: a record with no
+  surviving match is kept once with the clause's new variables NULL, and a
+  pattern starting from a NULL variable matches nothing. A FILTER or a
+  `WITH ... WHERE` after it drops records. Nodes and relationships it
+  reaches pass the session's tenant scope and row-level security as in any
+  MATCH, so a hidden one leaves the optional side NULL. `collect()` skips
+  NULLs, like every set function. An OPTIONAL MATCH may now follow a WHERE
+  with a WHERE of its own. Refused with 0A000: a path variable in a part with
+  an OPTIONAL MATCH (on the optional pattern as before,
+  `OptionalPathVariable`; on the MATCH beside it,
+  `UnsupportedOptionalMatchShape`) and an inline LET there. An error in an
+  OPTIONAL MATCH's WHERE fails the statement. Regression (in-memory,
+  persisted, tenant-scoped and RLS sessions, leak-checked):
+  `zig build test-sonny3184-optional-match-distinct-call`.
 
 ---
 
@@ -2513,10 +2537,10 @@ run inside an explicit transaction again.
 - **Reads that are wrong on the legacy path (SONNY-3167, SONNY-3184):** a
   read through a hop pattern ignores WITH DISTINCT on the in-memory and RLS
   paths (X2); `CALL { }` returns the subquery's rows instead of the outer
-  RETURN; EXISTS { MATCH ... WHERE <inner variable> } is always false; an
-  OPTIONAL MATCH chained on another OPTIONAL MATCH binds null; a WHERE after
-  an OPTIONAL MATCH filters the whole row; a WHERE after `WITH ...` before
-  a FOR is not applied. Writes in these shapes are refused. v0.8.24.
+  RETURN; a WHERE after `WITH ...` before a FOR is not applied. Writes in
+  these shapes are refused. v0.8.24. (Unreleased: EXISTS { } with an inner
+  WHERE is answered correctly since SONNY-2707, and the OPTIONAL MATCH reads
+  since SONNY-3184.)
 - **A plain RETURN after MATCH ... CREATE is one row (SONNY-3025):** a RETURN
   that neither aggregates nor is DISTINCT is evaluated once, over the last
   row's created and matched elements; the CREATE itself runs once per
