@@ -1005,6 +1005,18 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
             .Query => |query| {
                 // Check if query has MATCH clause - if so, execute full query with parameters
                 if (query.match.chains.len > 0) {
+                    // The VALUES rows are this branch's own: they are bound
+                    // as parameters for each run below and never returned.
+                    // They leaked. (Their values are not freed: a row of the
+                    // result may share one, such as a string it projects.)
+                    defer {
+                        for (result_rows.items) |row| allocator.free(row);
+                        result_rows.deinit(allocator);
+                    }
+                    // SONNY-2682: the RETURN is checked as any query's is: a
+                    // mix of aggregates and plain items with no GROUP BY is
+                    // refused (42000), as without the VALUES.
+                    try execution.validateGroupBy(query.ret, query.group_by);
                     // VALUES ... MATCH pattern: execute MATCH for each VALUES row and collect results
                     var final_rows = try std.ArrayList([]Value).initCapacity(allocator, result_rows.items.len * 4); // Estimate
                     var final_columns: ?[]const []const u8 = null;

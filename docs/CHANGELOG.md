@@ -280,6 +280,14 @@
   it was sorted as NULL. Not covered: a WITH's ORDER BY key error on some
   paths (`MATCH (z) WITH z ORDER BY <overflow> RETURN ...` still answers).
   Regression: `zig build test-sonny2672-read-semantics-batch`.
+- **Implicit grouping is refused on every entry point (SONNY-2682):** a
+  RETURN mixing aggregates with plain items and no GROUP BY is refused with
+  42000 (`GroupingError`) on the in-memory, persisted, tenant-scoped and RLS
+  sessions alike. Two entry points grouped it implicitly instead: the last
+  part of a chained query (`MATCH (q) WITH q MATCH (q)-[:R]->(x) RETURN
+  q.f, count(*)`) and VALUES ... MATCH. **Behaviour change:** those two now
+  refuse it too; write the GROUP BY. Regression:
+  `zig build test-sonny2672-read-semantics-batch`.
 
 ---
 

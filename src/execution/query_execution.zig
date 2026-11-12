@@ -262,6 +262,11 @@ fn chainFinalAggregate(allocator: std.mem.Allocator, current_result_in: Executio
     }
     const last = prev_copy.?;
     const final_query = last.*;
+    // SONNY-2682: the last RETURN is checked as a single query's is: plain
+    // items beside an aggregate need a GROUP BY (42000). It was grouped
+    // implicitly here.
+    const is_chaining_return = if (final_query.with_clause) |wc| final_query.ret.items.ptr == wc.items.ptr and final_query.ret.items.len == wc.items.len else false;
+    if (!is_chaining_return) try validateGroupBy(final_query.ret, final_query.group_by);
     var names: std.ArrayList([]const u8) = .empty;
     if (last.with_clause != null) {
         for (try partOutputNames(aa, last.*, incoming)) |n| try appendNameOnce(aa, &names, n);
