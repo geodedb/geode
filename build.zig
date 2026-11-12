@@ -9824,6 +9824,19 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6422-backup-docs-truth", "Run SONNY-6422 item 9 regression (TODO, GQL_COMPLIANCE, SERVER_FEATURES, DOCKER_OVERVIEW and NIX_DEPLOYMENT present no S3 / DigitalOcean Spaces backup target, option or variable, and the FLE PQC research spec does not present tde_kms_integration.zig as current code)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6430 item 9: deployment config and docs describe only settings
+    // the server has.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_deploy_docs_truth.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6430_dd_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6430-deploy-docs-truth", "Run SONNY-6430 item 9 regression (the compose files pass no S3_* variable to geode; SERVER_FEATURES 1.3 names GEODE_TDE_KEY, no GEODE_DISK_KEY_HEX, KMS integration or automatic rotation; NIX_DEPLOYMENT says the Nix packaging is gone and has no federation block; the security inventory names no GEODE_WAL_KEY)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per
