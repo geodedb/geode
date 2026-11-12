@@ -15976,6 +15976,31 @@ const AdapterVTable = struct {
 var global_adapter: ?*graph_storage_adapter.StorageAdapter = null;
 var global_vtable: ?AdapterVTable = null;
 
+// CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=AdapterFaultSeam; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
+/// SONNY-6302: a test-only fault seam. While set to an operation, the store's
+/// call into the storage adapter for it fails with error.InjectedAdapterFault
+/// instead of writing (after letting `after` such calls through): the engine
+/// is not touched, as with a write the engine refused. `.none` (the default)
+/// is a no-op; only tests set it.
+pub const AdapterWriteFault = enum(u8) { none, set_edge_property, remove_edge_property, delete_node, delete_edge };
+var g_adapter_write_fault = std.atomic.Value(u8).init(0);
+var g_adapter_write_fault_after = std.atomic.Value(usize).init(0);
+
+pub fn setAdapterWriteFaultForTesting(op: AdapterWriteFault, after: usize) void {
+    g_adapter_write_fault.store(0, .release);
+    g_adapter_write_fault_after.store(after, .release);
+    g_adapter_write_fault.store(@intFromEnum(op), .release);
+}
+
+fn adapterWriteFault(op: AdapterWriteFault) bool {
+    if (g_adapter_write_fault.load(.acquire) != @intFromEnum(op)) return false;
+    var left = g_adapter_write_fault_after.load(.acquire);
+    while (left > 0) {
+        left = g_adapter_write_fault_after.cmpxchgWeak(left, left - 1, .acq_rel, .acquire) orelse return false;
+    }
+    return true;
+}
+
 pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
     return global_adapter;
 }
@@ -16663,9 +16688,11 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
             return castAdapter(ctx).createEdgeWithPublicId(graph_name, from_id, to_id, label, public_id);
         }
         fn deleteNode(ctx: *anyopaque, graph_name: []const u8, node_id: u64) anyerror!void {
+            if (adapterWriteFault(.delete_node)) return error.InjectedAdapterFault;
             return castAdapter(ctx).deleteNode(graph_name, node_id);
         }
         fn deleteEdge(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64) anyerror!void {
+            if (adapterWriteFault(.delete_edge)) return error.InjectedAdapterFault;
             return castAdapter(ctx).deleteEdge(graph_name, from_id, to_id, edge_id);
         }
         fn setNodeProperty(ctx: *anyopaque, graph_name: []const u8, node_id: u64, key: []const u8, value: PropertyValue) anyerror!void {
@@ -16675,9 +16702,11 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
             return castAdapter(ctx).removeNodeProperty(graph_name, node_id, key);
         }
         fn setEdgeProperty(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64, key: []const u8, value: PropertyValue) anyerror!void {
+            if (adapterWriteFault(.set_edge_property)) return error.InjectedAdapterFault;
             return castAdapter(ctx).setEdgeProperty(graph_name, from_id, to_id, edge_id, key, value);
         }
         fn removeEdgeProperty(ctx: *anyopaque, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64, key: []const u8) anyerror!void {
+            if (adapterWriteFault(.remove_edge_property)) return error.InjectedAdapterFault;
             return castAdapter(ctx).removeEdgeProperty(graph_name, from_id, to_id, edge_id, key);
         }
         fn addNodeLabel(ctx: *anyopaque, graph_name: []const u8, node_id: u64, label: []const u8) anyerror!void {
