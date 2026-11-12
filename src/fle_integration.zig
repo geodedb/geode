@@ -1012,9 +1012,8 @@ fn unsetenvForTest(name: [*:0]const u8) c_int {
 test "GAP-0886: hasEncryptedFields reflects catalog state (flag self-heal + setter)" {
     const testing = std.testing;
 
-    // Isolate catalog persistence: point GEODE_DATA_DIR at a tmp dir so
-    // configureField's saveCatalog never touches a real data dir and the lazy
-    // path never loads a real persisted catalog from /tmp.
+    // Isolate catalog persistence: point the catalog at a tmp dir so
+    // configureField's saveCatalog never touches a real data dir.
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     // std.Io.Dir has no realpath in Zig 0.16; TmpDir.sub_path is relative to
@@ -1029,10 +1028,13 @@ test "GAP-0886: hasEncryptedFields reflects catalog state (flag self-heal + sett
         .{ cwd_buf[0..cwd_len], &tmp.sub_path },
     );
     defer testing.allocator.free(data_dir);
-    const data_dir_z = try testing.allocator.dupeZ(u8, data_dir);
-    defer testing.allocator.free(data_dir_z);
-    try testing.expectEqual(@as(c_int, 0), setenvForTest("GEODE_DATA_DIR", data_dir_z.ptr));
-    defer _ = unsetenvForTest("GEODE_DATA_DIR");
+    // SONNY-6336: the catalog's data-directory override wins over
+    // GEODE_DATA_DIR and is process-global, and an earlier test in this
+    // binary may have left one naming a directory it removed: set this
+    // test's own, and restore the previous one on exit.
+    const saved_override = fle_catalog.saveDataDirOverride();
+    defer saved_override.restore();
+    fle_catalog.setDataDirOverride(data_dir);
 
     // Clean global FLE state; restore it for sibling tests in this binary.
     fle_catalog.resetGlobalCatalog(testing.allocator);
@@ -1170,10 +1172,13 @@ fn configureAndEncrypt(
         .{ cwd_buf[0..cwd_len], &tmp.sub_path },
     );
     defer allocator.free(data_dir);
-    const data_dir_z = try allocator.dupeZ(u8, data_dir);
-    defer allocator.free(data_dir_z);
-    _ = setenvForTest("GEODE_DATA_DIR", data_dir_z.ptr);
-    defer _ = unsetenvForTest("GEODE_DATA_DIR");
+    // SONNY-6336: the catalog's data-directory override wins over
+    // GEODE_DATA_DIR and is process-global, and an earlier test in this
+    // binary may have left one naming a directory it removed: set this
+    // test's own, and restore the previous one on exit.
+    const saved_override = fle_catalog.saveDataDirOverride();
+    defer saved_override.restore();
+    fle_catalog.setDataDirOverride(data_dir);
 
     // Reset global catalog + key-manager state for isolation.
     fle_catalog.resetGlobalCatalog(allocator);

@@ -876,6 +876,30 @@ pub fn ensureDataDir(path: []const u8) !void {
     };
 }
 
+/// The data-directory override as it was when `saveDataDirOverride` ran.
+/// The override is process-global and `initGlobalStore` sets it, while
+/// `deinitGlobalStore` leaves it: a test that sets it (directly or through
+/// `initGlobalStore`) restores the previous value with `restore`
+/// (SONNY-6336). Restoring also restores the FLE catalog's override, which
+/// `setDataDirOverride` forwards.
+pub const DataDirOverrideSnapshot = struct {
+    buf: [512]u8 = undefined,
+    len: usize = 0,
+    set: bool = false,
+
+    pub fn restore(self: *const DataDirOverrideSnapshot) void {
+        setDataDirOverride(std.heap.smp_allocator, if (self.set) self.buf[0..self.len] else null);
+    }
+};
+
+pub fn saveDataDirOverride() DataDirOverrideSnapshot {
+    g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_data_dir_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    var snap: DataDirOverrideSnapshot = .{ .len = g_override_data_dir_len, .set = g_override_data_dir_set };
+    @memcpy(snap.buf[0..g_override_data_dir_len], g_override_data_dir_buf[0..g_override_data_dir_len]);
+    return snap;
+}
+
 /// Get the current data directory override (or null if using env var)
 pub fn getDataDirOverride() ?[]const u8 {
     g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -18599,6 +18623,8 @@ test "clearNodeProperties removes all node properties" {
 }
 
 test "getGlobalStore initializes adapter from data dir override" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -18618,6 +18644,8 @@ test "getGlobalStore initializes adapter from data dir override" {
 }
 
 test "QueryReadSession clones nodes from global store" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -18655,6 +18683,8 @@ test "QueryReadSession clones nodes from global store" {
 }
 
 test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -18908,6 +18938,8 @@ test "loadOneGraphFromAdapterFull: countGraphLabel (label-count fast path) is ex
 test "rollback removes adapter-backed state before reload" {
     const txn_undo_log = @import("txn_undo_log.zig");
 
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -18939,6 +18971,8 @@ test "rollback removes adapter-backed state before reload" {
     try testing.expect(store.getNodePtr(node_id) == null);
 }
 test "listGraphNames merges persisted adapter graphs with local cache" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -19786,6 +19820,8 @@ test "GAP-0839: in-memory createGraph assigns a persistent UUID (no adapter)" {
     // Reset the global singleton so this test owns it, and ensure NO adapter is
     // wired (in-memory mode) — this is the exact deployment that triggered the
     // rejection.
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
     setDataDirOverride(testing.allocator, null);
@@ -19810,6 +19846,8 @@ test "GAP-0839: in-memory createGraph assigns a persistent UUID (no adapter)" {
 }
 
 test "GAP-0839: default graph has a persistent UUID in in-memory mode" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
     setDataDirOverride(testing.allocator, null);
@@ -19823,6 +19861,8 @@ test "GAP-0839: default graph has a persistent UUID in in-memory mode" {
 }
 
 test "GAP-0839: dropGraph clears the persistent-UUID entry" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
     setDataDirOverride(testing.allocator, null);
@@ -19836,6 +19876,8 @@ test "GAP-0839: dropGraph clears the persistent-UUID entry" {
 }
 
 test "GAP-0839: adapter-backed createGraph yields a persistent UUID" {
+    const saved_override = saveDataDirOverride();
+    defer saved_override.restore();
     deinitGlobalStore();
     defer deinitGlobalStore();
 

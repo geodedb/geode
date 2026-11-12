@@ -776,6 +776,27 @@ pub fn setDataDirOverride(dir: ?[]const u8) void {
     g_data_dir_len = n;
 }
 
+/// The data-directory override as it was when `saveDataDirOverride` ran.
+/// The override is process-global: a test that sets one restores the
+/// previous value with `restore` (SONNY-6336), or a later test in the same
+/// binary saves its catalog into a directory that no longer exists.
+pub const DataDirOverrideSnapshot = struct {
+    buf: [std.fs.max_path_bytes]u8 = undefined,
+    len: usize = 0,
+
+    pub fn restore(self: *const DataDirOverrideSnapshot) void {
+        setDataDirOverride(if (self.len > 0) self.buf[0..self.len] else null);
+    }
+};
+
+pub fn saveDataDirOverride() DataDirOverrideSnapshot {
+    g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_data_dir_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    var snap: DataDirOverrideSnapshot = .{ .len = g_data_dir_len };
+    @memcpy(snap.buf[0..g_data_dir_len], g_data_dir_buf[0..g_data_dir_len]);
+    return snap;
+}
+
 /// The catalog file path, or null when the catalog is memory-only (no data
 /// directory). The caller frees the path.
 pub fn catalogFilePath(allocator: std.mem.Allocator) !?[]u8 {

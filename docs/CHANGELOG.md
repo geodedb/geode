@@ -134,6 +134,16 @@
 
 ### Fixed
 
+- **`zig build test-graph-store` is green again (SONNY-6336, tests
+  only):** seven inline tests set the process-global data-directory
+  override through `initGlobalStore` and left it naming their removed
+  scratch directory, so the later FLE inline test (GAP-0886), whose catalog
+  save now fails closed (SONNY-6324), failed with `FileNotFound`. Those
+  tests now restore the previous override
+  (`graph_store.saveDataDirOverride` / `restore`), and the FLE inline tests
+  point the FLE catalog at their own scratch directory and restore the
+  previous one (`fle_catalog.saveDataDirOverride`). No product change.
+
 - **Index and constraint catalogs are graph-scoped (SONNY-1319):** the
   catalog keyed a row `<label>:<name>` with no graph, so with two graphs
   `CREATE INDEX IF NOT EXISTS i ...` in one was a silent no-op when the other

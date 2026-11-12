@@ -1712,6 +1712,8 @@ const Catalog = @import("../schema/catalog.zig").Catalog;
 const testing = std.testing;
 
 test "executeShow tables reads persisted snapshot state" {
+    const saved_override = graph_store.saveDataDirOverride();
+    defer saved_override.restore();
     graph_store.deinitGlobalStore();
     defer graph_store.deinitGlobalStore();
 
