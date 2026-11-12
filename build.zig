@@ -13371,6 +13371,24 @@ pub fn build(b: *std.Build) void {
     const sonny6329_step = b.step("test-sonny6329-user-cache-and-ddl-serialization", "Run the SONNY-6329 regression (user lookups wait for user-cache writers and never miss a user under CREATE/DROP USER; policy DDL waits for an auth change in progress and racing CREATE/DROP POLICY leave catalog and __geode_security agreeing; geode serve --no-auth fails)");
     sonny6329_step.dependOn(&run_sonny6329_tests.step);
 
+    // SONNY-6293: removing a policy, role, user or permission record checks
+    // its node delete; a failed delete leaves the record stored and in force
+    // and the chain verifying.
+    const sonny6293_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6293_checked_auth_deletes.zig"), .target = target, .optimize = optimize });
+    sonny6293_test_mod.link_libc = true;
+    sonny6293_test_mod.addImport("geode", root_mod);
+    sonny6293_test_mod.addImport("schema", schema_mod);
+    sonny6293_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6293_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6293_test_mod.addImport("logging", logging_mod);
+    sonny6293_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6293_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    const sonny6293_tests = b.addTest(.{ .root_module = sonny6293_test_mod });
+    const run_sonny6293_tests = b.addRunArtifact(sonny6293_tests);
+    shardDep(test_step, &run_sonny6293_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6293_step = b.step("test-sonny6293-checked-auth-deletes", "Run the SONNY-6293 regression (DROP POLICY / DROP ROLE / user removal whose security-graph node delete fails: 58030, the record stays stored and enforced, the chain verifies, the retry succeeds)");
+    sonny6293_step.dependOn(&run_sonny6293_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
