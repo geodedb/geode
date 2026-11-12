@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T21:14:06.228012916Z",
+  "generated_at": "2026-11-12T22:49:22.741461912Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -40829,18 +40829,31 @@
       "features": [
         {
           "feature": "MFA admin policy",
-          "aspect": "SECURITY",
+          "aspect": "RoleMatchAndCache",
           "status": "TESTED",
           "files": [
-            "src/security/geode_auth_lib.zig",
             "tests/test_mfa_policies.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAllRoles|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAnyRole"
+            "TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAnyRole|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAllRoles"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-26"
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MFA admin policy",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "src/security/geode_auth_lib.zig"
+          ],
+          "tests": [
+            "tests/test_mfa_policies.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -41017,21 +41030,14 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/mfa.zig",
-            "tests/canary_mfa_core_additional.zig"
+            "src/security/mfa.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_MFA_CORE_001_DynamicPolicyCacheBypass",
-            "TestCANARY_REQ_GQL_MFA_CORE_001_ElevationTtlExpiry",
-            "TestCANARY_REQ_GQL_MFA_CORE_001_EndToEndElevationFlow",
-            "TestCANARY_REQ_GQL_MFA_CORE_001_ReauthIntervalPolicyTrigger",
-            "TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeConcurrencyRace",
-            "TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeSingleUse",
-            "TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeSingleUse|TestCANARY_REQ_GQL_MFA_CORE_001_ReauthIntervalPolicyTrigger|TestCANARY_REQ_GQL_MFA_CORE_001_ElevationTtlExpiry|TestCANARY_REQ_GQL_MFA_CORE_001_DynamicPolicyCacheBypass|TestCANARY_REQ_GQL_MFA_CORE_001_EndToEndElevationFlow"
+            "tests/canary_mfa_recovery_code_contention.zig|tests/canary_mfa_risk_stepup.zig"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-26"
+          "updated": "2026-11-12"
         },
         {
           "feature": "MfaRecoveryCodeContention",
@@ -41131,19 +41137,31 @@
       "features": [
         {
           "feature": "MfaPolicyEngine",
-          "aspect": "SECURITY",
+          "aspect": "DynamicConditions",
           "status": "TESTED",
           "files": [
-            "src/security/geode_auth_lib.zig",
             "tests/test_mfa_policies.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval",
-            "geodetestlab/specs/geode_auth_security.yml"
+            "TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-26"
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MfaPolicyEngine",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "src/security/geode_auth_lib.zig"
+          ],
+          "tests": [
+            "tests/test_mfa_policies.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -43634,23 +43652,21 @@
             "src/security/kms_remote.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect"
+            "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-26"
+          "updated": "2026-11-12"
         },
         {
           "feature": "PrivilegedUnwrapPath",
           "aspect": "TEST",
           "status": "TESTED",
           "files": [
-            "tests/canary_remote_kms.zig",
-            "tests/test_remote_kms_unwrap_attest.zig"
+            "tests/canary_remote_kms.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap",
-            "TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect"
+            "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap"
           ],
           "benches": [],
           "owner": "security",
@@ -44221,28 +44237,38 @@
           "aspect": "SECURITY",
           "status": "TESTED",
           "files": [
-            "src/security/kms_remote.zig",
-            "tests/test_remote_kms_attestation.zig"
+            "src/security/kms_remote.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify",
-            "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect"
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-26"
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "RemoteKmsAttestation",
+          "aspect": "SignatureVerifyTamperDetect",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_remote_kms_hardening.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
         },
         {
           "feature": "RemoteKmsAttestation",
           "aspect": "TEST",
           "status": "TESTED",
           "files": [
-            "tests/canary_remote_kms.zig",
-            "tests/test_remote_kms_unwrap_attest.zig"
+            "tests/canary_remote_kms.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub",
-            "TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect"
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub"
           ],
           "benches": [],
           "owner": "security",
@@ -44286,20 +44312,6 @@
     {
       "id": "REQ-GQL-TDE-EXT-KMS-REMOTE-001",
       "features": [
-        {
-          "feature": "RemoteKMSAuthGuard",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "tests/test_remote_kms_auth_negative.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        },
         {
           "feature": "RemoteKMSPrototype",
           "aspect": "ConcurrencyStressVariance",
@@ -44351,11 +44363,11 @@
             "src/security/kms_remote.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_AuthNegative"
+            "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-26"
+          "updated": "2026-11-12"
         },
         {
           "feature": "RemoteKMSPrototype",
@@ -44404,20 +44416,6 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_TDE_OLTP_PERF_001"
           ],
-          "owner": "perf",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "TDEOlptOverheadValidation",
-          "aspect": "PERFORMANCE",
-          "status": "TESTED",
-          "files": [
-            "tests/test_tde_oltp_overhead_threshold.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_Threshold"
-          ],
-          "benches": [],
           "owner": "perf",
           "updated": "2025-09-26"
         },
@@ -60882,23 +60880,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-06-19"
-        }
-      ]
-    },
-    {
-      "id": "REQ-PERF-WAL-002",
-      "features": [
-        {
-          "feature": "WriteAheadLog",
-          "aspect": "MutationCallback",
-          "status": "IMPL",
-          "files": [
-            "src/graph_store.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-11-12"
         }
       ]
     },
@@ -84105,6 +84086,134 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6430-DEPLOY-DOCS-TRUTH",
+      "features": [
+        {
+          "feature": "Docs",
+          "aspect": "NoUnreadDeployConfig",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6430_deploy_docs_truth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6430_deploy_docs_truth.zig"
+          ],
+          "benches": [],
+          "owner": "docs",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6430-MASTER-KEY-FORMAT",
+      "features": [
+        {
+          "feature": "Key configuration",
+          "aspect": "ExplicitFormatNoSilentKeyChange",
+          "status": "TESTED",
+          "files": [
+            "src/keys/manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6430_master_key_format.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "ServerStartupRefusalAndLegacyWarning",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6430_master_key_format.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6430-MIGRATE-CREATE-SIGNED",
+      "features": [
+        {
+          "feature": "Migrations",
+          "aspect": "NoKeyNoFile",
+          "status": "TESTED",
+          "files": [
+            "src/cli/backup_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6430_cli_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6430-REGISTRY-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "Storage Adapter",
+          "aspect": "UnloadableRegistryRefuses",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6430_storage_open_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "Security Graph Audit",
+          "aspect": "NoUnauditedOpen",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6430_storage_open_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6430-STORAGE-VERIFY-DATA-DIR",
+      "features": [
+        {
+          "feature": "Storage CLI",
+          "aspect": "VerifiesTheServersDataDir",
+          "status": "TESTED",
+          "files": [
+            "src/cli/storage_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6430_cli_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -91789,8 +91898,8 @@
       "BENCHED": 215,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 337,
-      "TESTED": 4770
+      "IMPL": 336,
+      "TESTED": 4778
     },
     "by_aspect": {
       "2PC": 3,
@@ -92817,6 +92926,7 @@
       "DurablePersistTestSuite": 1,
       "DurableRegistry": 1,
       "DurableRenameCollisionRejected": 1,
+      "DynamicConditions": 1,
       "DynamicIndexSelection": 1,
       "E2E": 8,
       "E2ECommunityDetection": 1,
@@ -93049,6 +93159,7 @@
       "ExplicitCertLoadAsIs": 1,
       "ExplicitCertNotDiscarded": 1,
       "ExplicitCertTracking": 1,
+      "ExplicitFormatNoSilentKeyChange": 1,
       "ExportCleanup": 1,
       "ExportDiagnostics": 1,
       "ExporterEscaping": 1,
@@ -93991,7 +94102,6 @@
       "MultiplexingGate": 1,
       "MutatingClassification": 1,
       "Mutation": 1,
-      "MutationCallback": 1,
       "MutationClassification": 2,
       "MutationGateViaDecide": 1,
       "MutationIsolation": 1,
@@ -94048,6 +94158,7 @@
       "NoInMemoryFallback": 1,
       "NoInPlaceRestoreOneSyncTimeouts": 1,
       "NoKeyBeforeVerify": 1,
+      "NoKeyNoFile": 1,
       "NoKeyOverExistingRecords": 1,
       "NoLeakOnInitDeinit": 1,
       "NoLegacyAlias": 1,
@@ -94069,7 +94180,9 @@
       "NoSaveOperations": 2,
       "NoSilentResubmission": 1,
       "NoTmpCertFallback": 1,
+      "NoUnauditedOpen": 1,
       "NoUncompiledPersistenceOrSimulatedKmsClaims": 1,
+      "NoUnreadDeployConfig": 1,
       "NodeCache": 1,
       "NodeCapture": 1,
       "NodeCompare": 1,
@@ -94221,7 +94334,7 @@
       "Ownership": 1,
       "PARAM_REUSE": 1,
       "PARSER": 1,
-      "PERFORMANCE": 5,
+      "PERFORMANCE": 4,
       "PROCEDURE_REGISTRY": 1,
       "PTXKernel": 2,
       "PageFreesReturnedNode": 1,
@@ -94986,6 +95099,7 @@
       "RoleCreatePersist": 1,
       "RoleDeletePersist": 1,
       "RoleManagement": 2,
+      "RoleMatchAndCache": 1,
       "RolePersistCallbacks": 1,
       "RoleResolverModule": 1,
       "RoleU8Enforcement": 1,
@@ -95023,7 +95137,7 @@
       "SCC_WRAPPER": 1,
       "SCHEMA": 2,
       "SEARCH": 2,
-      "SECURITY": 38,
+      "SECURITY": 37,
       "SERVER_INIT": 1,
       "SERVER_STATE": 1,
       "SERVER_STATE_STRUCT": 1,
@@ -95149,6 +95263,7 @@
       "ServerStartupCache": 1,
       "ServerStartupCatalog": 1,
       "ServerStartupRefusal": 2,
+      "ServerStartupRefusalAndLegacyWarning": 1,
       "ServerStderrPassThrough": 1,
       "ServerUnpack": 1,
       "ServerUserStore": 1,
@@ -95252,6 +95367,7 @@
       "SignalInstall": 1,
       "SignatureSigning": 1,
       "SignatureVerification": 2,
+      "SignatureVerifyTamperDetect": 1,
       "SilentSuccess": 1,
       "SimpleMatchPath": 1,
       "SimpleNodeCheck": 1,
@@ -95673,6 +95789,7 @@
       "UnknownLabel": 1,
       "UnknownMeansEncrypted": 1,
       "UnknownPropertyDiagnostic": 1,
+      "UnloadableRegistryRefuses": 1,
       "UnrelatedIndexMustNotShadowScan": 2,
       "UnresolvableEndpointFailsLoud": 1,
       "UnsavedRestrictions": 1,
@@ -95767,6 +95884,7 @@
       "VendorParallelPoolGating": 1,
       "Verification": 3,
       "VerifiedPrincipalGate": 1,
+      "VerifiesTheServersDataDir": 1,
       "Verify": 1,
       "VerifyBeforeChange": 1,
       "VerifyCreatesNothing": 1,
