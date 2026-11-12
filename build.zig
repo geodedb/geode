@@ -15233,6 +15233,17 @@ pub fn build(b: *std.Build) void {
     const sonny6359_step = b.step("test-sonny6359-auth-residuals", "Run the SONNY-6359 regression (an Admin's ALTER USER <other> SET PASSWORD over QUIC and gRPC runs as user_reset_password with the policy; user_change_password always checks the old password; auth procedure failures are GQLSTATUS errors, not 00000 'error:' rows; one passphrase word count; hasGraphGrant and the grant listings wait for auth_ddl_lock; auth verify saves and leaks nothing; in-repo script admin seeds meet the policy; spawns a server and the CLI)");
     sonny6359_step.dependOn(&run_sonny6359_tests.step);
 
+    // SONNY-6436 item 1: every admin password and auth-chain HMAC key the
+    // in-repo scripts and fixtures seed is one the server accepts (a scan of
+    // tests/**, scripts/**, deployment/**, docker-compose*, Makefile).
+    const sonny6436_secrets_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_fixture_secrets.zig"), .target = target, .optimize = optimize });
+    sonny6436_secrets_test_mod.addImport("geode_auth", auth_mod);
+    const sonny6436_secrets_tests = b.addTest(.{ .root_module = sonny6436_secrets_test_mod });
+    const run_sonny6436_secrets_tests = b.addRunArtifact(sonny6436_secrets_tests);
+    shardDep(test_step, &run_sonny6436_secrets_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6436_secrets_step = b.step("test-sonny6436-fixture-secrets", "Run the SONNY-6436 item 1 regression (every admin password and auth-chain HMAC key the in-repo scripts and fixtures seed is one the server accepts: 64 hex characters, a passphrase meeting the password policy)");
+    sonny6436_secrets_step.dependOn(&run_sonny6436_secrets_tests.step);
+
     // SONNY-6358: the offline `geode user create` / `geode user update
     // --password` store an Argon2id hash and seal the chain, so the server
     // starts and logs the user in. Spawns the CLI and a server.
