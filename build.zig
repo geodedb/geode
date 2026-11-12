@@ -10129,6 +10129,19 @@ pub fn build(b: *std.Build) void {
     const sonny2806_holders_step = b.step("test-sonny2806-merge-equal-holders", "Run SONNY-2806 round-7 regression (MERGE matches the lowest node id among the nodes holding a key after a delete or a SET, on the executor, the server's bulk MERGE and a reopened store; MERGE's index keeps no number that is not an integer; the multi-property MERGE fallback compares by value)");
     sonny2806_holders_step.dependOn(&run_sonny2806_holders_tests.step);
 
+    // SONNY-2976 (with SONNY-2724): the storage adapter's bulk MERGE
+    // primitives match a node only in the merging session's tenant; a
+    // same-key node of another tenant is a miss, never matched or rewritten.
+    const sonny2976_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2976_merge_fast_path_tenant_scope.zig"), .target = target, .optimize = optimize });
+    sonny2976_mod.addImport("geode", root_mod);
+    sonny2976_mod.addImport("logging", logging_mod);
+    sonny2976_mod.link_libc = true;
+    const sonny2976_tests = b.addTest(.{ .root_module = sonny2976_mod });
+    const run_sonny2976_tests = b.addRunArtifact(sonny2976_tests);
+    shardDep(test_step, &run_sonny2976_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2976_step = b.step("test-sonny2976-merge-fast-path-tenant-scope", "Run SONNY-2976 regression (the server's bulk MERGE primitives match only a node of the merging session's tenant: a same-key node of another tenant is never matched, rewritten or answered; an unscoped MERGE matches the lowest holder; persisted, unbounded cache, lean indexing, reopened; parity with the executor; concurrent same-key MERGEs give one node per tenant)");
+    sonny2976_step.dependOn(&run_sonny2976_tests.step);
+
     // SONNY-2806 (round 8): the duplicate paths of the round-7 re-review. A
     // lookup's settle does not drop the entry of a holder inserted while it
     // resolves; equal values in two forms take one MERGE tuple lock; lean
