@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T19:08:43.664885498Z",
+  "generated_at": "2026-11-12T19:10:14.494364859Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79243,6 +79243,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6386-LATENCY-BOUND-METHODOLOGY",
+      "features": [
+        {
+          "feature": "Perf Gates",
+          "aspect": "JsonAndSchedulerLatencyBoundsBatched",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_latency_bound_methodology.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_latency_bound_methodology.zig"
+          ],
+          "benches": [],
+          "owner": "performance",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC",
       "features": [
         {
@@ -86970,7 +86989,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4474
+      "TESTED": 4475
     },
     "by_aspect": {
       "2PC": 3,
@@ -88692,6 +88711,7 @@
       "Jan2026Fixes": 1,
       "JoinAuditTextUnambiguous": 1,
       "JoinKind": 1,
+      "JsonAndSchedulerLatencyBoundsBatched": 1,
       "JsonFieldExtraction": 1,
       "JsonMemberAccess": 1,
       "JsonNumbers": 1,

@@ -9496,6 +9496,20 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny2439-perf-methodology", "Run SONNY-2439 partial regression (every gated perf claim times with a monotonic clock; the gated benchmarks of test-local code are gone; every step the enforced perf-gate job runs exists)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6386 item 6: the JSON and scheduler latency bounds SONNY-2439 left
+    // open are batched through tests/perf_gate.zig from the production
+    // allocator and claim on the median.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_latency_bound_methodology.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6386_lb_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6386-latency-bound-methodology", "Run SONNY-6386 item 6 regression (the JSON optimization and scheduler-overhead latency bounds sample batches through perf_gate from perf_gate.bench_allocator, take no reading from their own clock, and claim on the median with a robust envelope)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2441: KMSProvider has no dead remote path, every provider type
     // round-trips the caller's key or refuses, and the KMS tests are built.
     const sonny2441_kms_mod = b.createModule(.{ .root_source_file = b.path("src/security/kms.zig"), .target = target, .optimize = optimize });
