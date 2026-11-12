@@ -696,12 +696,20 @@ pub const server = struct {
     // Note: connection_handler imported directly by server files to avoid circular dependency
 };
 
+// CANARY: REQ=REQ-SONNY-6351-PARSE-GQL-DEFAULT; FEATURE="Pagination Legality (US001)"; ASPECT=EmbeddedOrderKeyDefault; STATUS=TESTED; TEST=tests/test_sonny6351_labels_parse_default.zig; OWNER=planner; UPDATED=2026-11-12
+/// Parse `src` with the server's default ORDER BY key policy: a sort key is
+/// any value expression (ISO/IEC 39075:2024 16.16 <order by clause>).
+/// `GEODE_ORDER_KEYS_EXPR` set to anything but empty, `1`, `true` or `on`
+/// selects the opt-in identifier-only policy, read as the server reads it
+/// (`server_init.zig`). SONNY-6351 item 3: the embedded default was the
+/// identifier-only policy unless the variable was set (to any value), so
+/// `ORDER BY n.prop` was a syntax error to an embedded caller and accepted by
+/// the server.
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {
-    // Enforce ident-only ORDER BY keys and forbid function calls unless explicitly relaxed
     const allow_expr = if (getEnvVarOwned(allocator, "GEODE_ORDER_KEYS_EXPR")) |v| blk: {
         defer allocator.free(v);
-        break :blk true;
-    } else |_| false;
+        break :blk v.len == 0 or std.ascii.eqlIgnoreCase(v, "1") or std.ascii.eqlIgnoreCase(v, "true") or std.ascii.eqlIgnoreCase(v, "on");
+    } else |_| true;
     const opts: ParseOptions = if (allow_expr) .{} else .{ .ident_order_only = true, .forbid_orderby_calls = true };
     return parseGqlOptions(src, allocator, opts);
 }

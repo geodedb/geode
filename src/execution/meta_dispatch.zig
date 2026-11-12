@@ -25,6 +25,8 @@ const value_types = @import("../value_types.zig");
 const language_metadata = @import("../gql/language_metadata.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
+// SONNY-6351 item 2: the session's RLS label policies.
+const rls_types = @import("rls_types");
 
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -107,6 +109,20 @@ pub fn executeDbLabelsForTest(allocator: std.mem.Allocator, store: *graph_store.
     return executeDbLabels(allocator, store, ctx);
 }
 
+// CANARY: REQ=REQ-SONNY-6351-DB-LABELS-RLS; FEATURE="GPS Metadata Isolation"; ASPECT=DbLabelsRLSDeny; STATUS=TESTED; TEST=tests/test_sonny6351_labels_parse_default.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6351 item 2: the RLS label policies that apply to the session's user
+/// in the session's graph, or null when no RLS engine is configured or the
+/// session has no user (no policy applies, as for a MATCH: `passesRLSFilter`).
+/// The user is the forwarded principal's when one is attached (GPS Phase 7),
+/// else the connection's.
+fn sessionLabelPolicies(allocator: std.mem.Allocator, ctx: ExecutionContext) !?rls_types.RLSFilterEngine.LabelPolicySnapshot {
+    const engine = rls_types.getGlobalRLSFilterEngine() orelse return null;
+    const principal_user: ?[]const u8 = if (ctx.principal) |p| p.username else null;
+    const username = principal_user orelse ctx.user orelse return null;
+    const graph: []const u8 = if (ctx.session_state) |session| session.graph orelse graph_store.DEFAULT_GRAPH_NAME else graph_store.DEFAULT_GRAPH_NAME;
+    return try engine.snapshotLabelPolicies(allocator, graph, username);
+}
+
 fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
     // GAP-0840: route through the shared strict-tenancy decision instead of
     // passing raw ctx.tenant_id. An unscoped/"default" session would otherwise
@@ -120,10 +136,20 @@ fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         allocator.free(labels);
     }
 
+    // SONNY-6351 item 2: a label the session's RLS policy denies is omitted.
+    // A deny entry hides every node carrying the label (`passesRLSFilter`:
+    // every label's policies apply), so no row of it is visible; the label
+    // was listed all the same.
+    var policies = try sessionLabelPolicies(allocator, ctx);
+    defer if (policies) |*p| p.deinit();
+
     // listNodeLabels returns labels in hash-iteration order; sort for stability.
     var sorted = try std.ArrayList([]const u8).initCapacity(allocator, labels.len);
     defer sorted.deinit(allocator);
-    for (labels) |lbl| try sorted.append(allocator, lbl);
+    for (labels) |lbl| {
+        if (policies) |*p| if (p.entries(lbl).denied) continue;
+        try sorted.append(allocator, lbl);
+    }
     std.mem.sort([]const u8, sorted.items, {}, lessThanString);
 
     const columns = try allocator.alloc([]const u8, 1);

@@ -317,11 +317,16 @@
   (a MATCH variable was NULL: the executor matched the first node of each
   chain, ran the procedure once and leaked its rows; it also applied SKIP
   and LIMIT a second time). **Behaviour change:** MATCH ... CALL now yields
-  one set of procedure rows per MATCH row, not one set in total. Not
-  covered: `CALL db.labels()` lists a label the session's RLS policy denies
-  (item 2), and the embedded `geode.parseGql` refuses an expression ORDER BY
-  key unless `GEODE_ORDER_KEYS_EXPR` is set (item 3). Regression:
-  `zig build test-sonny2672-read-semantics-batch`.
+  one set of procedure rows per MATCH row, not one set in total. (2)
+  `CALL db.labels()` omits a label the session's RLS label policy denies (it
+  listed it; a deny entry hides every node carrying the label). (3) The
+  embedded `geode.parseGql` accepts an expression ORDER BY key by default, as
+  the server does; `GEODE_ORDER_KEYS_EXPR` set to anything but empty, `1`,
+  `true` or `on` selects the identifier-only policy, read as the server reads
+  it. **Behaviour change** (embedded callers): `ORDER BY n.prop` parses; it
+  was a syntax error unless the variable was set (to any value, `0`
+  included). Regression: `zig build test-sonny2672-read-semantics-batch`,
+  `zig build test-sonny6351-labels-parse-default`.
 - **A parsed MATCH takes the engine-direct fast paths again (SONNY-6383):**
   since the parser records each MATCH clause of a part (SONNY-3184, unreleased),
   the field allowlists of the engine-direct node scan stream and of the bulk

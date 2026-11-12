@@ -394,9 +394,9 @@ const sonny6351_return_errors = [_]Case{
 // SONNY-2779: a CALL's window, leak-checked. SONNY-6351 item 6: a
 // standalone CALL's YIELD aliases and RETURN items, and MATCH ... CALL ...
 // YIELD, which runs the procedure for each MATCH row and extends the row
-// with what it yields. `db.labels()` lists Q, X, Y, Z (and, on the RLS
-// session, `Hidden`, which sorts first: the windows below read from the top
-// of a descending order so the answer is the same on every session).
+// with what it yields. `db.labels()` lists Q, X, Y, Z (on the RLS session
+// `Hidden` is omitted since SONNY-6351: its user may not read it; the
+// windows below read from the top of a descending order).
 const sonny2779 = [_]Case{
     .{ .q = "CALL db.labels() YIELD label RETURN label ORDER BY label DESC LIMIT 2", .want = &.{ "'Z'", "'Y'" }, .ordered = true },
     .{ .q = "CALL db.labels() YIELD label RETURN label ORDER BY label DESC LIMIT 3 OFFSET 1", .want = &.{ "'Y'", "'X'", "'Q'" }, .ordered = true },

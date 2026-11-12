@@ -5,7 +5,7 @@
 - **`Action.bind_graph`** evaluated in `decide()`: Admin always allowed; non-admin requires a Read grant on the target graph via `graph_grant_check_fn`. Codified in `src/security/gps.zig`.
 - **`USE GRAPH` gated**: `src/execution.zig` `.UseGraph` branch calls `gps.decide(.bind_graph)` before switching when a Principal is attached. Legacy/test paths without a Principal preserve current behavior.
 - **`Action.show_metadata`** evaluated in `decide()`: always allowed for authenticated principals; filtering happens row-by-row downstream.
-- **`db.labels()` / `db.relationshipTypes()` / `db.propertyKeys()`** filter by `ctx.tenant_id`. Admin with null tenant still sees everything; tenant-bound users see only their tenant.
+- **`db.labels()` / `db.relationshipTypes()` / `db.propertyKeys()`** filter by `ctx.tenant_id`. Admin with null tenant still sees everything; tenant-bound users see only their tenant. `db.labels()` also omits a label the session user's RLS label policy denies in the session graph (SONNY-6351); `db.relationshipTypes()` and `db.propertyKeys()` do not apply RLS label policies yet.
 - **`SHOW GRAPHS`** filters by `decide(.bind_graph)` per graph.
 - **`SHOW INDEXES` / `SHOW CONSTRAINTS`** filter by tenant.
 

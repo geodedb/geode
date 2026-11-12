@@ -216,7 +216,7 @@ URL('https://example.com')
 
 ```bash
 # Query behavior
-export GEODE_ORDER_KEYS_EXPR=1       # Allow ORDER BY expressions
+export GEODE_ORDER_KEYS_EXPR=0       # Identifier-only ORDER BY keys (expressions are the default)
 
 # Performance
 export GEODE_TELEMETRY_PAGING=1      # Enable telemetry
