@@ -13355,6 +13355,22 @@ pub fn build(b: *std.Build) void {
     const sonny6312_step = b.step("test-sonny6312-user-list-ownership", "Run the SONNY-6312 regression (SHOW USERS / geode.auth.user_list leak nothing into the user store; SHOW USERS, user_show and SHOW ROLES rows stay valid after DROP USER / DROP ROLE; concurrent listing vs CREATE/DROP USER stress)");
     sonny6312_step.dependOn(&run_sonny6312_tests.step);
 
+    // SONNY-6329: the auth manager's user cache has a reader-writer lock;
+    // auth / policy DDL holds one lock across its write-through and undo;
+    // geode serve --no-auth fails.
+    const sonny6329_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6329_user_cache_and_ddl_serialization.zig"), .target = target, .optimize = optimize });
+    sonny6329_test_mod.link_libc = true;
+    sonny6329_test_mod.addImport("geode", root_mod);
+    sonny6329_test_mod.addImport("logging", logging_mod);
+    sonny6329_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6329_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    sonny6329_test_mod.addImport("cli_args", cli_args_mod);
+    const sonny6329_tests = b.addTest(.{ .root_module = sonny6329_test_mod });
+    const run_sonny6329_tests = b.addRunArtifact(sonny6329_tests);
+    shardDep(test_step, &run_sonny6329_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6329_step = b.step("test-sonny6329-user-cache-and-ddl-serialization", "Run the SONNY-6329 regression (user lookups wait for user-cache writers and never miss a user under CREATE/DROP USER; policy DDL waits for an auth change in progress and racing CREATE/DROP POLICY leave catalog and __geode_security agreeing; geode serve --no-auth fails)");
+    sonny6329_step.dependOn(&run_sonny6329_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
