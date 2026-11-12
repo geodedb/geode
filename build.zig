@@ -9451,6 +9451,22 @@ pub fn build(b: *std.Build) void {
     const sonny6332_step = b.step("test-sonny6332-no-fixed-ports", "Run SONNY-6332 regression (no test the build compiles binds a literal port; geode serve on port 0 reports the bound port; the embedded LSP listener is off for test servers via GEODE_LSP_PORT=0, moved by GEODE_LSP_PORT, and --lsp-port wins)");
     sonny6332_step.dependOn(&run_sonny6332_tests.step);
 
+    // SONNY-6374: the embedded LSP listener's AuthProvider outlives every LSP
+    // session (it was freed as soon as the listener thread was spawned), and
+    // SIGTERM closes open sessions and stops the listener before freeing it.
+    const sonny6374_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6374_lsp_auth_provider_lifetime.zig"), .target = target, .optimize = optimize });
+    sonny6374_test_mod.link_libc = true;
+    sonny6374_test_mod.addImport("geode", root_mod);
+    sonny6374_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6374_test_mod.addImport("schema", schema_mod);
+    sonny6374_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6374_tests = b.addTest(.{ .root_module = sonny6374_test_mod });
+    const run_sonny6374_tests = b.addRunArtifact(sonny6374_tests);
+    spawnsBuiltGeode(sonny6374_tests);
+    shardDep(test_step, &run_sonny6374_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6374_step = b.step("test-sonny6374-lsp-auth-provider-lifetime", "Run SONNY-6374 regression (the embedded LSP AuthProvider outlives every session: two sessions get a -32002 answer to initialize, and SIGTERM with a session open closes it, stops the listener and frees the provider)");
+    sonny6374_step.dependOn(&run_sonny6374_tests.step);
+
     // SONNY-3379: the I-4 vector case over in-process gRPC (the shared
     // round-12 fixture), in two fixture lifetimes; the fixture leaves no
     // index manager pointing into its freed request arena.
