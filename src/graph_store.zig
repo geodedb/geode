@@ -7950,10 +7950,9 @@ pub const GraphStore = struct {
         // adapter's left the engine and the node disagreeing; and a failed
         // merge-index or counter insert was swallowed, so MERGE trusted a
         // miss for a value the node holds.)
-        const node_meta = self.nodes.get(node_id) orelse {
-            if (global_vtable != null) return error.NodeNotFound;
-            return;
-        };
+        // SONNY-6421: also without a storage engine; a write to an id that
+        // names no node succeeded silently there.
+        const node_meta = self.nodes.get(node_id) orelse return error.NodeNotFound;
         const prep = try self.preparePropertyPut(&node_meta.properties, key, effective_value);
         var committed = false;
         errdefer if (!committed) self.cancelPropertyPut(&node_meta.properties, prep);

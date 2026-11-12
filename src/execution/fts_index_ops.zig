@@ -411,6 +411,30 @@ pub fn queueRebuildForRemovedText(graph_name: []const u8, labels: []const []cons
     }
 }
 
+// CANARY: REQ=REQ-SONNY-6421-REMOVE-LABEL-MAINTENANCE; FEATURE="FullText"; ASPECT=RemovedLabelRebuildQueue; STATUS=TESTED; TEST=tests/test_sonny6421_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6421: node `node_id` of `graph_name` left `label` (REMOVE n:L):
+/// queue every full-text index on `label` that holds text of the node (a
+/// non-empty string in one of its properties) for a rebuild at the end of
+/// the statement, as `queueRebuildForRemovedText` does for a removed
+/// property. Call it after the label is removed: the properties stay. Never
+/// fails the write.
+pub fn queueRebuildForRemovedLabel(store: *graph_store.GraphStore, graph_name: []const u8, node_id: u64, label: []const u8) void {
+    const adapter = graph_store.getGlobalAdapter() orelse return;
+    const mg = adapter.lookupManagedGraph(graph_name) catch return;
+    if (mg.fts_adapter == null) return;
+    const specs = mg.coveringFtsIndexes(label) orelse return;
+    for (specs) |spec| {
+        for (spec.properties) |p| {
+            const pv = store.getNodeProperty(node_id, p) orelse continue;
+            if (pv != .String or pv.String.len == 0) continue;
+            queueRebuild(graph_name, spec.name) catch |err| {
+                log.err("fulltext index '{s}' could not be queued for a rebuild after a REMOVE of its label: {}; it holds the node's text until rebuilt (searches skip the node)", .{ spec.name, err });
+            };
+            break;
+        }
+    }
+}
+
 fn queueRebuild(graph_name: []const u8, index_name: []const u8) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
     queue_mutex.lockUncancelable(io);

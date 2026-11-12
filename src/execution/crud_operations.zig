@@ -1740,7 +1740,7 @@ pub fn executeCreateQuery(
             .Labels => |label_removal| {
                 if (created_nodes.get(label_removal.node)) |node_id| {
                     for (label_removal.labels) |label| {
-                        try store.removeNodeLabel(node_id, label);
+                        try property_mutation.removeNodeLabel(store, node_id, label);
                     }
                 }
             },

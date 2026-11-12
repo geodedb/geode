@@ -6773,7 +6773,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 },
                 .Labels => |label_removal| {
                     if (binding.vars.get(label_removal.node)) |target_node| {
-                        for (label_removal.labels) |label| try store.removeNodeLabel(target_node.id, label);
+                        for (label_removal.labels) |label| try property_mutation.removeNodeLabel(store, target_node.id, label);
                     }
                 },
             }
@@ -8969,7 +8969,7 @@ fn applyPathEndWrites(
                 property_mutation.removeNodeProperty(store, node, prop.property);
             },
             .Labels => |lr| if (pathEnd(lr.node, left, right, left_var, right_var)) |node| {
-                for (lr.labels) |label| try store.removeNodeLabel(node.id, label);
+                for (lr.labels) |label| try property_mutation.removeNodeLabel(store, node.id, label);
             },
         }
     }
@@ -9298,7 +9298,7 @@ fn executeSingleHopEdgeTraversal(
                         else
                             null;
                         if (target_id) |id| {
-                            for (label_removal.labels) |label| try store.removeNodeLabel(id, label);
+                            for (label_removal.labels) |label| try property_mutation.removeNodeLabel(store, id, label);
                         }
                     },
                 }
@@ -9930,7 +9930,7 @@ pub fn applySetRemoveOverRows(
                         const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
                         property_mutation.removeNodeProperty(store, node_ptr, prop.property);
                     },
-                    .Labels => |lr| for (lr.labels) |label| try store.removeNodeLabel(node.id, label),
+                    .Labels => |lr| for (lr.labels) |label| try property_mutation.removeNodeLabel(store, node.id, label),
                 },
                 .Edge => |edge| switch (rc) {
                     .Property => |prop| {
@@ -11998,7 +11998,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .Labels => |label_removal| {
                             if (std.mem.eql(u8, label_removal.node, match_variable orelse "")) {
                                 for (label_removal.labels) |label| {
-                                    try store.removeNodeLabel(node.id, label);
+                                    try property_mutation.removeNodeLabel(store, node.id, label);
                                 }
                             }
                         },
@@ -12644,7 +12644,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .Labels => |label_removal| {
                             if (std.mem.eql(u8, label_removal.node, match_variable orelse "")) {
                                 for (label_removal.labels) |label| {
-                                    try store.removeNodeLabel(node.id, label);
+                                    try property_mutation.removeNodeLabel(store, node.id, label);
                                 }
                             }
                         },

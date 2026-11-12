@@ -583,6 +583,27 @@
 
 ### Fixed
 
+- **Full-text and vector indexes follow `REMOVE n:L` and a `SET` that
+  replaces indexed text; an undo repair survives a background vector
+  rebuild (SONNY-6421).** `REMOVE n:L` called the store alone, so a
+  full-text search still found the node by L's index and L's vector index
+  still held it: it now rebuilds the vector indexes on L and queues every
+  full-text index on L holding text of the node for a rebuild at the end of
+  the statement, and `geode.fts.search` / `phrase` / `proximity` answer only
+  nodes that carry the index's label. A `SET` that replaces a non-empty
+  indexed string (by another value, a non-string, or `SET n = {map}`
+  dropping or changing it) left the old words findable (the documented
+  residual): it now queues the covering indexes for the same statement-end
+  rebuild as `REMOVE n.prop`. A ROLLBACK whose vector-index repair landed
+  while a non-blocking background rebuild was building from an earlier
+  snapshot was overwritten by that rebuild's swap; an in-place rebuild or
+  an overwrite of an indexed id during the window now makes the background
+  rebuild run again from the store after its swap. The `IndexOnEncryptedField`
+  refusal no longer tells users to "use a searchable (blind-index) field",
+  which cannot be declared. On a store with no storage engine,
+  `GraphStore.setNodeProperty` on an id that names no node answers
+  `NodeNotFound` instead of succeeding. `docs/FULLTEXT_SEARCH.md` updated.
+  Regression: `zig build test-sonny6421-index-maintenance`.
 - **`ORDER BY <indexed> LIMIT` served from the value-ordered index no
   longer reads a freed or changing tree (SONNY-6375, geode side).**
   graph_storage's `OrderedBTree` has no locking of its own, and its cursor

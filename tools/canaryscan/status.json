@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:50:16.332043707Z",
+  "generated_at": "2026-11-12T20:52:24.698627435Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81283,6 +81283,96 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6421-FTS-LABEL-FILTER",
+      "features": [
+        {
+          "feature": "FullText",
+          "aspect": "SearchLabelFilter",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6421-INDEX-MAINTENANCE",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "IndexMaintenanceRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6421-REMOVE-LABEL-MAINTENANCE",
+      "features": [
+        {
+          "feature": "Execution",
+          "aspect": "RemoveLabel",
+          "status": "TESTED",
+          "files": [
+            "src/execution/property_mutation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FullText",
+          "aspect": "RemovedLabelRebuildQueue",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_index_ops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6421-VECTOR-REBUILD-AGAIN",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "RebuildAgainAfterSwap",
+          "status": "TESTED",
+          "files": [
+            "src/index/index_manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6421_index_maintenance.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -88938,7 +89028,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4595
+      "TESTED": 4600
     },
     "by_aspect": {
       "2PC": 3,
@@ -90624,7 +90714,7 @@
       "IndexKeyGate": 1,
       "IndexLookup": 1,
       "IndexMaintenance": 4,
-      "IndexMaintenanceRegression": 1,
+      "IndexMaintenanceRegression": 2,
       "IndexManagement": 1,
       "IndexMetadata": 1,
       "IndexOptimization": 2,
@@ -91883,6 +91973,7 @@
       "RealityFreshnessGuard": 1,
       "ReasonCodePresent": 1,
       "Rebalance": 1,
+      "RebuildAgainAfterSwap": 1,
       "RebuildAgainRequest": 1,
       "RebuildBackfill": 1,
       "RebuildGuard": 1,
@@ -91942,10 +92033,12 @@
       "RemoveExecution": 2,
       "RemoveFiltering": 1,
       "RemoveGraph": 1,
+      "RemoveLabel": 1,
       "RemoveNoReturn": 1,
       "RemoveProperty": 1,
       "RemoveRole": 1,
       "RemoveUser": 1,
+      "RemovedLabelRebuildQueue": 1,
       "RemovedTextRebuildQueue": 1,
       "RenameAndToggleTogether": 1,
       "RenameSurvivesRestartNoStale": 1,
@@ -92123,6 +92216,7 @@
       "SearchHitHydrate": 1,
       "SearchHitHydrateNegativeControl": 1,
       "SearchHitHydrateTenantScoped": 1,
+      "SearchLabelFilter": 1,
       "SearchLatencyGate": 1,
       "SearchRowFilter": 1,
       "SearchSigintCheck": 1,

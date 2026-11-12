@@ -159,6 +159,12 @@ pub const IndexManager = struct {
     /// `rebuild_mutex` and then this one; nothing ever takes `rebuild_mutex`
     /// while holding this.
     rebuild_window_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// SONNY-6421: the armed windows whose rebuild must run again from the
+    /// store after its swap (`requestRebuildAgain`): its shadow was built
+    /// from a snapshot that an in-place rebuild (an undo repair, a REMOVE)
+    /// or an overwrite of an indexed id has since superseded, and the swap
+    /// would put the snapshot's rows back. Guarded by `rebuild_window_mutex`.
+    rebuild_again: std.StringHashMapUnmanaged(void) = .{},
 
     // GAP-0918: entry in the vector dimension-validation registry.
     pub const VectorDimEntry = struct {
@@ -397,6 +403,9 @@ pub const IndexManager = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.rebuild_windows.deinit(self.allocator);
+        var rebuild_again_it = self.rebuild_again.keyIterator();
+        while (rebuild_again_it.next()) |k| self.allocator.free(k.*);
+        self.rebuild_again.deinit(self.allocator);
 
         // Cleanup advanced type indexes
         var adv_vector_it = self.advanced_vector_indexes.iterator();
@@ -2116,6 +2125,12 @@ pub const IndexManager = struct {
             // here would be thrown away at the swap. `endRebuild`'s drain
             // re-applies the queued ids to the new wrapper.
             if (self.queueIfRebuilding(meta.name, entity_id)) {
+                // SONNY-6421: an id the index already holds is an overwrite:
+                // the shadow carries the snapshot's vector, and the drain
+                // skips an id the shadow carries, so the rebuild runs again.
+                if (self.advanced_vector_indexes.get(meta.name)) |live| {
+                    if (live.contains(entity_id)) _ = self.requestRebuildAgain(meta.name);
+                }
                 handled_any = true;
                 continue;
             }
@@ -2185,6 +2200,23 @@ pub const IndexManager = struct {
         return true;
     }
 
+    // CANARY: REQ=REQ-SONNY-6421-VECTOR-REBUILD-AGAIN; FEATURE="VectorIndex"; ASPECT=RebuildAgainAfterSwap; STATUS=TESTED; TEST=tests/test_sonny6421_index_maintenance.zig; OWNER=index; UPDATED=2026-11-12
+    /// SONNY-6421: have `index_name`'s armed non-blocking rebuild run again
+    /// from the store after its swap. False when no window is armed (nothing
+    /// to supersede: an in-place rebuild then stands as built).
+    pub fn requestRebuildAgain(self: *IndexManager, index_name: []const u8) bool {
+        self.rebuild_window_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rebuild_window_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (!self.rebuild_windows.contains(index_name)) return false;
+        if (self.rebuild_again.contains(index_name)) return true;
+        const key = self.allocator.dupe(u8, index_name) catch return false;
+        self.rebuild_again.put(self.allocator, key, {}) catch {
+            self.allocator.free(key);
+            return false;
+        };
+        return true;
+    }
+
     /// True when `index_name` currently has an armed rebuild window.
     pub fn isRebuilding(self: *IndexManager, index_name: []const u8) bool {
         self.rebuild_window_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -2197,8 +2229,20 @@ pub const IndexManager = struct {
     /// frees). A name that was never armed returns an empty slice.
     // CANARY: REQ=REQ-GEODE-875-NONBLOCKING-BACKFILL; FEATURE="VectorIndex"; ASPECT=RebuildWindowApi; STATUS=TESTED; TEST=tests/test_geode875_nonblocking_backfill.zig; OWNER=index; UPDATED=2026-09-01
     pub fn endRebuild(self: *IndexManager, index_name: []const u8, allocator: std.mem.Allocator) ![]u64 {
+        var again = false;
+        return self.endRebuildEx(index_name, allocator, &again);
+    }
+
+    /// `endRebuild`, also reporting in `again` whether the rebuild was asked
+    /// to run again (`requestRebuildAgain`, SONNY-6421); the request is
+    /// consumed with the window.
+    pub fn endRebuildEx(self: *IndexManager, index_name: []const u8, allocator: std.mem.Allocator, again: *bool) ![]u64 {
         self.rebuild_window_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rebuild_window_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (self.rebuild_again.fetchRemove(index_name)) |r| {
+            self.allocator.free(r.key);
+            again.* = true;
+        }
         const kv = self.rebuild_windows.fetchRemove(index_name) orelse return &[_]u64{};
         var pending = kv.value;
         defer pending.deinit(self.allocator);
@@ -2236,6 +2280,10 @@ pub const IndexManager = struct {
         self.rebuild_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rebuild_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         const meta = self.advanced_property_indexes.get(index_name) orelse return 0;
+        // SONNY-6421: this rebuild reads the store as it is now; a
+        // non-blocking rebuild of the index building from an older snapshot
+        // would swap that snapshot back in, so it runs again after its swap.
+        _ = self.requestRebuildAgain(index_name);
         const index_name_copy = try self.allocator.dupe(u8, index_name);
         defer self.allocator.free(index_name_copy);
         const label_copy = try self.allocator.dupe(u8, meta.label);
@@ -2469,7 +2517,8 @@ pub const IndexManager = struct {
         // --- 5. Disarm the window and re-apply the writes it captured. The
         //     SHARED lock is retaken per id (each hold covers one property read
         //     plus one HNSW insert) — never re-held across the whole drain.
-        const drained = try self.endRebuild(index_name, allocator);
+        var again = false;
+        const drained = try self.endRebuildEx(index_name, allocator, &again);
         window_armed = false;
         defer allocator.free(drained);
         for (drained) |entity_id| {
@@ -2485,6 +2534,17 @@ pub const IndexManager = struct {
             // so a write captured by the window AND visible to the snapshot is
             // never double-inserted.
             _ = self.tryIncrementalInsertForProperty(label, property, entity_id, prop);
+        }
+
+        // --- 6. SONNY-6421: an in-place rebuild (an undo repair, a REMOVE)
+        //     or an overwrite of an indexed id landed in the window, so the
+        //     shadow put superseded rows back: rebuild from the store under
+        //     the SHARED lock (writers wait; it converges), as the other
+        //     index types do.
+        if (again) {
+            const lock = graph_store.acquireGraphReadLockTagged(graph_name, .misc);
+            defer graph_store.releaseGraphLock(lock);
+            return self.rebuildAdvancedIndexCounted(graph_store.getGlobalStore(allocator), index_name);
         }
 
         return indexed;
