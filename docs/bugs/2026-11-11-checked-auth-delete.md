@@ -59,3 +59,11 @@ continues to disclose four existing invalid/example markers; this patch adds no
 invalid marker. Full required CI remains a prerequisite to merge and Done. No
 aggregate/platform local pass is claimed. No dependency, license, storage format
 or migration changes are introduced.
+
+The final qualification review found that CI ran aggregate shards without the
+separate `zig build test-compile` sweep required by AGENTS.md. A required
+`test-zig-compile` job now runs that command alone on the existing dedicated
+Linux pool for source/build changes and tags, with one compiler step at a time
+and a retained result log. Its large disposable outputs are not uploaded as a
+cache. Passing this job is an additional merge prerequisite; the local host
+does not have space for the full sweep.

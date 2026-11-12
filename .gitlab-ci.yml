@@ -1247,6 +1247,40 @@ test-zig-release-safe:
       # investigation; MR/main still gate.
       allow_failure: true
 
+test-zig-compile:
+  # AGENTS.md requires this sweep in addition to running the aggregate shards:
+  # it also compiles executable targets that the shards do not run. Keep it
+  # alone in its job and avoid uploading its large disposable compiler outputs.
+  stage: test
+  image: $ZIG_IMAGE
+  tags: *dedicated-test-tags
+  resource_group: test-zig-compile
+  timeout: 6h
+  allow_failure: false
+  cache:
+    - *zig-protoc-cache
+  variables:
+    ZIG_BUILD_JOBS: "1"
+  before_script:
+    - *zig-cache-writer-before-script
+    - *zig-vendor-cache
+  script:
+    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_compile.log -- zig build -j${ZIG_BUILD_JOBS} test-compile --summary all --error-style verbose
+  artifacts:
+    when: always
+    expire_in: 1 week
+    paths:
+      - reports/zig_test_compile.log
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" || $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+      changes:
+        - build.zig
+        - build.zig.zon
+        - src/**/*.zig
+        - tests/**/*.zig
+        - .gitlab-ci.yml
+    - if: '$CI_COMMIT_TAG'
+
 # =============================================================================
 # Test Stage - Enforced perf gates (SCHEDULED pipelines only)
 # SONNY-2394 / SONNY-2439: tests/perf_gate.zig only REPORTS perf-ratio /
