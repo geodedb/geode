@@ -776,10 +776,12 @@ pub const shapes = [_]Shape{
     },
     .{
         .id = .create_then_set,
-        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] CREATE <pattern> [WITH <the created variables>] [SET/REMOVE <a created node>] [RETURN ...]",
+        .text = "[WITH <values> [WHERE ...] [SKIP/LIMIT] [UNWIND <list> AS x]] CREATE <pattern> [WITH <the created variables>] [SET/REMOVE <a created node>] [RETURN ... [ORDER BY ...] [SKIP/LIMIT]]",
         .executor = .create,
         .must = fs(&.{.create}),
-        .may = may(&.{ &initial_with_facts, &set_facts, &.{ .create_rel, .with_after_write, .ret, .unwind } }),
+        // SONNY-6351 item 5: the RETURN's ORDER BY (the dispatcher sorts the
+        // created rows) and its window (the statement applies it).
+        .may = may(&.{ &initial_with_facts, &set_facts, &.{ .create_rel, .with_after_write, .ret, .ret_order, .ret_window, .unwind } }),
     },
     .{
         // A MERGE in query form: after an initial WITH, or as a FOR body (the

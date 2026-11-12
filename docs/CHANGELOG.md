@@ -277,8 +277,8 @@
   (a RETURN that is DISTINCT or aggregates is unchanged). **Behaviour
   change:** an error evaluating an ORDER BY key (for example 22003 integer
   overflow in `ORDER BY n.k + 9223372036854775807`) now fails the statement;
-  it was sorted as NULL. Not covered: a WITH's ORDER BY key error on some
-  paths (`MATCH (z) WITH z ORDER BY <overflow> RETURN ...` still answers).
+  it was sorted as NULL. A WITH's ORDER BY key error is covered since
+  SONNY-6351 (below).
   Regression: `zig build test-sonny2672-read-semantics-batch`.
 - **Implicit grouping is refused on every entry point (SONNY-2682):** a
   RETURN mixing aggregates with plain items and no GROUP BY is refused with
@@ -291,10 +291,36 @@
 - **A procedure CALL's window (SONNY-2779):** `CALL p() YIELD x RETURN x
   ... OFFSET n` past the last row returned every row (now none), LIMIT and
   OFFSET leaked the rows they dropped, a SKIP or LIMIT parameter was
-  ignored, and `SKIP n LIMIT m` after the RETURN was a syntax error. Not
-  covered (follow-ups): the standalone CALL ignores its RETURN clause, so
-  `YIELD x AS y RETURN y` keeps the column `x`; MATCH ... CALL ... YIELD
-  binds no MATCH variable and leaks. Regression:
+  ignored, and `SKIP n LIMIT m` after the RETURN was a syntax error. The
+  standalone CALL's RETURN clause and MATCH ... CALL ... YIELD are covered
+  since SONNY-6351 (below). Regression:
+  `zig build test-sonny2672-read-semantics-batch`.
+- **Read-semantics residuals (SONNY-6351):** (1) on the legacy executor
+  (in-memory, tenant-scoped and RLS sessions) an error evaluating a RETURN
+  item, or an ORDER BY key computed with the projection, leaked the column
+  names and the rows projected so far; they are freed. (4) VALUES ...
+  MATCH leaked what a VALUES row computed (`VALUES ('a' || 'b') AS (s)
+  MATCH ...`): it moves to the query's scratch arena, released after the
+  result is sent (embedded callers that install none keep the leak). (5)
+  `CREATE (n:W
+  {i: 1}) RETURN n.i AS i ORDER BY n.i` was a syntax error even with the
+  server's parse options; a CREATE ... RETURN takes ORDER BY, SKIP and
+  LIMIT (the created rows are sorted, the statement windows them). (6) an
+  error in a WITH's ORDER BY key is no longer sorted as NULL: it fails the
+  statement (22003 for an overflow), and the key sees the query's
+  parameters. A standalone procedure CALL applies its RETURN clause and its
+  YIELD aliases (`CALL db.labels() YIELD label AS l RETURN l` returns the
+  column `l`; it kept `label` and returned the procedure's rows as they
+  came). MATCH ... CALL ... YIELD runs the procedure once for each MATCH
+  row (read under the session's tenant scope, RLS policies and WHERE, every
+  chain and hop) with the row's variables bound, and its RETURN reads both
+  (a MATCH variable was NULL: the executor matched the first node of each
+  chain, ran the procedure once and leaked its rows; it also applied SKIP
+  and LIMIT a second time). **Behaviour change:** MATCH ... CALL now yields
+  one set of procedure rows per MATCH row, not one set in total. Not
+  covered: `CALL db.labels()` lists a label the session's RLS policy denies
+  (item 2), and the embedded `geode.parseGql` refuses an expression ORDER BY
+  key unless `GEODE_ORDER_KEYS_EXPR` is set (item 3). Regression:
   `zig build test-sonny2672-read-semantics-batch`.
 - **A GROUP BY after a RETURN that follows a WITH (SONNY-2698):** the parser
   kept one GROUP BY / HAVING per query part whichever clause it followed,

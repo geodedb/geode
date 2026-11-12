@@ -23,6 +23,8 @@ const ExecutionContext = execution.ExecutionContext;
 const admin_ddl = @import("admin_ddl.zig");
 const planned_read_runtime = @import("planned_read_runtime.zig");
 const result_utils = @import("result_utils.zig");
+const value_utilities = @import("value_utilities.zig");
+const query_arena = @import("../server/query_arena.zig");
 
 // Import helper functions used by statement handlers
 const getCatalog = execution.getCatalog;
@@ -1012,6 +1014,26 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                     defer {
                         for (result_rows.items) |row| allocator.free(row);
                         result_rows.deinit(allocator);
+                    }
+                    // CANARY: REQ=REQ-SONNY-6351-VALUES-MATCH-STRINGS; FEATURE="ValuesStatement"; ASPECT=RowValueOwnership; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+                    // SONNY-6351 item 4: what a VALUES row computed (a string
+                    // concatenation, a list or map literal, an allocating
+                    // call) moves to the query's scratch arena, which the
+                    // transports release after the result is sent, and its
+                    // first copy is freed: a row of the result may borrow it,
+                    // so it cannot be freed here, and it leaked. As a WITH
+                    // stage's computed values do (SONNY-3148,
+                    // `match_operations.ownWithStageValues`); without a
+                    // scratch arena it stays where it is.
+                    if (query_arena.currentScratchAllocator()) |scratch| {
+                        for (values_stmt.rows, result_rows.items) |row_exprs, row_values| {
+                            for (row_exprs, row_values) |expr, *cell| {
+                                if (!value_utilities.evaluatesFresh(expr)) continue;
+                                const computed = cell.*;
+                                cell.* = try value_utilities.duplicateValue(scratch, computed);
+                                value_utilities.freeEvaluatedValue(allocator, expr, computed);
+                            }
+                        }
                     }
                     // SONNY-2682: the RETURN is checked as any query's is: a
                     // mix of aggregates and plain items with no GROUP BY is

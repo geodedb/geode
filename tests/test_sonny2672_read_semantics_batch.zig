@@ -1,5 +1,5 @@
 // SONNY-2672, SONNY-2680, SONNY-2811, SONNY-2779, SONNY-3128, SONNY-2695,
-// SONNY-2698, SONNY-2682, SONNY-2699, SONNY-2688, SONNY-3127: read and
+// SONNY-2698, SONNY-2682, SONNY-2699, SONNY-2688, SONNY-3127, SONNY-6351: read and
 // write-RETURN semantics, one case list per ticket, each run in the
 // in-memory, persisted (warm), tenant-scoped and RLS-policy sessions through
 // `executeProgramWithContext`, the entry the QUIC and gRPC servers call.
@@ -178,11 +178,6 @@ pub const Case = struct {
     params: []const Param = &.{},
     /// The expected column names, when the case checks them.
     columns: ?[]const []const u8 = null,
-    /// Runs on an arena, its answer checked but not its memory: on the
-    /// legacy executor an error evaluating a RETURN item leaks the rows
-    /// projected so far (`executeMatchQueryImpl`, pre-existing, reported
-    /// separately; not this test's subject).
-    known_leak: bool = false,
 };
 
 const Failures = struct {
@@ -208,9 +203,7 @@ const Failures = struct {
 fn runCase(s: *Session, f: *Failures, c: Case) !void {
     const aa = s.arena.allocator();
     var gpa: std.heap.DebugAllocator(.{}) = .init;
-    var leak_arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer leak_arena.deinit();
-    const result_allocator = if (c.known_leak) leak_arena.allocator() else gpa.allocator();
+    const result_allocator = gpa.allocator();
     var scratch = std.heap.ArenaAllocator.init(testing.allocator);
     defer scratch.deinit();
     const names = try aa.alloc([]const u8, c.params.len);
@@ -378,17 +371,32 @@ const sonny2811 = [_]Case{
     .{ .q = "MATCH (q:Q {k: 0})-[r:R]->(x) RETURN x.k AS k ORDER BY r.w", .want = &.{"0"} },
     .{ .q = "MATCH (z:Z) RETURN z.k * 10 AS k ORDER BY 7 - z.k", .want = &.{ "70", "60", "50", "40", "30", "20", "10", "0" }, .ordered = true },
     // An error in a key fails the statement.
-    .{ .q = "MATCH (z:Z) RETURN z.k AS k ORDER BY z.k + " ++ overflow, .err = error.IntegerOverflow, .known_leak = true },
+    .{ .q = "MATCH (z:Z) RETURN z.k AS k ORDER BY z.k + " ++ overflow, .err = error.IntegerOverflow },
     .{ .q = "MATCH (z:Z) RETURN z.k AS k ORDER BY k + " ++ overflow, .err = error.IntegerOverflow },
-    .{ .q = "MATCH (z:Z) WHERE z.k < 4 RETURN z.k AS k ORDER BY z.k + " ++ overflow ++ " LIMIT 2", .err = error.IntegerOverflow, .known_leak = true },
-    .{ .q = "MATCH (q:Q)-[:R]->(x:X) RETURN x.k AS k ORDER BY q.k + " ++ overflow, .err = error.IntegerOverflow, .known_leak = true },
+    .{ .q = "MATCH (z:Z) WHERE z.k < 4 RETURN z.k AS k ORDER BY z.k + " ++ overflow ++ " LIMIT 2", .err = error.IntegerOverflow },
+    .{ .q = "MATCH (q:Q)-[:R]->(x:X) RETURN x.k AS k ORDER BY q.k + " ++ overflow, .err = error.IntegerOverflow },
+    // SONNY-6351 item 6: and in a WITH's ORDER BY (the legacy WITH stage
+    // sorted a failing key as NULL).
+    .{ .q = "MATCH (z:Z) WITH z ORDER BY z.k + " ++ overflow ++ " RETURN z.k AS k", .err = error.IntegerOverflow },
 };
 
-// SONNY-2779: a CALL's window, leak-checked (the YIELD rename and
-// MATCH ... CALL are in tests/test_sonny2672_read_semantics_red.zig). `db.labels()`
-// lists Q, X, Y, Z (and, on the RLS session, `Hidden`, which sorts first:
-// the windows below read from the top of a descending order so the answer
-// is the same on every session).
+// SONNY-6351 item 1: an error evaluating a RETURN item fails the statement
+// and frees the column names and the rows projected so far (each case runs
+// on a leak-checked allocator); on the legacy executor (in-memory,
+// tenant-scoped, RLS sessions) both leaked. The ORDER BY key cases above are
+// leak-checked too: a key the RETURN does not project is a hidden item.
+const sonny6351_return_errors = [_]Case{
+    .{ .q = "MATCH (z:Z) RETURN z.k + " ++ overflow ++ " AS k", .err = error.IntegerOverflow },
+    .{ .q = "MATCH (q:Q)-[:R]->(x:X) RETURN x.k + " ++ overflow ++ " AS k", .err = error.IntegerOverflow },
+    .{ .q = "MATCH (z:Z) WITH z RETURN z.k + " ++ overflow ++ " AS k", .err = error.IntegerOverflow },
+};
+
+// SONNY-2779: a CALL's window, leak-checked. SONNY-6351 item 6: a
+// standalone CALL's YIELD aliases and RETURN items, and MATCH ... CALL ...
+// YIELD, which runs the procedure for each MATCH row and extends the row
+// with what it yields. `db.labels()` lists Q, X, Y, Z (and, on the RLS
+// session, `Hidden`, which sorts first: the windows below read from the top
+// of a descending order so the answer is the same on every session).
 const sonny2779 = [_]Case{
     .{ .q = "CALL db.labels() YIELD label RETURN label ORDER BY label DESC LIMIT 2", .want = &.{ "'Z'", "'Y'" }, .ordered = true },
     .{ .q = "CALL db.labels() YIELD label RETURN label ORDER BY label DESC LIMIT 3 OFFSET 1", .want = &.{ "'Y'", "'X'", "'Q'" }, .ordered = true },
@@ -398,16 +406,22 @@ const sonny2779 = [_]Case{
     .{ .q = "CALL db.labels() YIELD label RETURN label SKIP 10", .want = &.{} },
     .{ .q = "CALL db.labels() YIELD label RETURN label LIMIT 0", .want = &.{} },
     .{ .q = "CALL db.labels() YIELD label RETURN label ORDER BY label DESC LIMIT $l", .params = &p2, .want = &.{ "'Z'", "'Y'" }, .ordered = true },
+    .{ .q = "CALL db.labels() YIELD label AS l RETURN l ORDER BY l DESC LIMIT 1", .want = &.{"'Z'"}, .columns = &.{"l"} },
+    .{ .q = "CALL db.labels() YIELD label AS l RETURN l AS m ORDER BY m DESC LIMIT 1", .want = &.{"'Z'"}, .columns = &.{"m"} },
+    .{ .q = "CALL db.labels() YIELD label RETURN label AS x, 1 AS one ORDER BY x DESC LIMIT 1", .want = &.{"'Z', 1"}, .columns = &.{ "x", "one" } },
+    .{ .q = "MATCH (q:Q {k: 0}) CALL db.labels() YIELD label RETURN q.k AS k, label ORDER BY label DESC LIMIT 1", .want = &.{"0, 'Z'"} },
+    .{ .q = "MATCH (q:Q) WHERE q.k < 2 CALL db.labels() YIELD label RETURN q.k AS k, label ORDER BY label DESC, k LIMIT 2", .want = &.{ "0, 'Z'", "1, 'Z'" }, .ordered = true },
 };
 
 // SONNY-3128: ORDER BY a property after a write RETURN, with the server's
-// parse options (CREATE ... RETURN ... ORDER BY n.i is in
-// tests/test_sonny2672_read_semantics_red.zig).
+// parse options; SONNY-6351 item 5: after CREATE ... RETURN too (a syntax
+// error).
 const sonny3128 = [_]Case{
     .{ .q = "MATCH (z:Z) WHERE z.k < 3 SET z.m = 1 RETURN z.k AS k ORDER BY z.k DESC", .want = &.{ "2", "1", "0" }, .ordered = true },
     .{ .q = "MATCH (z:Z) WHERE z.k < 3 SET z.m = 1 RETURN z ORDER BY z.r", .want = &.{ "<Node>", "<Node>", "<Node>" } },
     .{ .q = "MATCH (z:Z) WHERE z.k < 3 SET z.m = z.r RETURN z.k AS k ORDER BY z.m", .want = &.{ "2", "1", "0" }, .ordered = true },
     .{ .q = "MATCH (z:Z) WHERE z.k < 3 SET z.m = 1 RETURN z.k AS k ORDER BY z.r LIMIT 1", .want = &.{"2"}, .ordered = true },
+    .{ .q = "CREATE (n:W {i: 1}) RETURN n.i AS i ORDER BY n.i", .want = &.{"1"} },
 };
 
 // SONNY-2695: the RETURN after SET / REMOVE / MERGE ... SET sees the new
@@ -457,6 +471,14 @@ const sonny2682 = [_]Case{
     // Aggregates only: one group over every row.
     .{ .q = "MATCH (q:Q)-[:R]->(x) RETURN count(*) AS c, sum(x.k) AS s", .want = &.{"4, 6"} },
     .{ .q = "VALUES (1) AS (v) MATCH (q:Q) RETURN count(*) AS c", .want = &.{"4"} },
+};
+
+// SONNY-6351 item 4: VALUES ... MATCH frees the strings its rows computed
+// (leak-checked; a result row may project one).
+const sonny6351_values = [_]Case{
+    .{ .q = "VALUES ('a') AS (s) MATCH (q:Q {k: 0}) RETURN s AS s, q.k AS k", .want = &.{"'a', 0"} },
+    .{ .q = "VALUES ('a' || 'b'), ('c') AS (s) MATCH (q:Q {k: 0}) RETURN s AS s", .want = &.{ "'ab'", "'c'" } },
+    .{ .q = "VALUES ('a') AS (s) MATCH (q:Q) WHERE q.k < 2 RETURN q.k AS k", .want = &.{ "0", "1" } },
 };
 
 // SONNY-2688 (confirm): an inline node property filters a relationship
@@ -547,6 +569,14 @@ test "SONNY-2680: SKIP / OFFSET / LIMIT parameters window every path" {
 
 test "SONNY-2811: an unprojected ORDER BY key sorts and a key error fails the statement" {
     try inEveryMode("SONNY-2811", &sonny2811);
+}
+
+test "SONNY-6351: a RETURN item error frees what was projected" {
+    try inEveryMode("SONNY-6351", &sonny6351_return_errors);
+}
+
+test "SONNY-6351: VALUES ... MATCH frees its rows' strings" {
+    try inEveryMode("SONNY-6351 VALUES", &sonny6351_values);
 }
 
 test "SONNY-2779: CALL ... YIELD windows, renames and joins" {

@@ -2066,7 +2066,17 @@ pub fn executeLegacyQueryWithResolvedParams(
         .create => {
             const create_pattern = q.create_pattern.?;
             const create_graph = if (context.session_state) |session| session.graph else null;
-            return executeCreateQuery(allocator, q, create_pattern, null, param_names.items, param_values.items, create_graph);
+            var created = try executeCreateQuery(allocator, q, create_pattern, null, param_names.items, param_values.items, create_graph);
+            // SONNY-6351 item 5 (SONNY-3128 residual): the RETURN's ORDER BY,
+            // over the created rows; the statement applies its window. The
+            // parser refused the ORDER BY, and the executor never sorted.
+            if (q.order_by) |order| {
+                execution.sortRowsEx(allocator, &created, order, q.ret.items) catch |err| {
+                    created.deinit(allocator);
+                    return err;
+                };
+            }
+            return created;
         },
 
         // GAP #57: Check if there's a MERGE statement in the query chain

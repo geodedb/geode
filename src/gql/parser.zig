@@ -1850,6 +1850,103 @@ pub const Parser = struct {
         };
     }
 
+    /// The ORDER BY, LIMIT and OFFSET / SKIP after a RETURN of `return_len`
+    /// items (a parsed query's, and SONNY-6351: a CREATE ... RETURN's).
+    const OrderAndPage = struct {
+        order_by: ?ast.OrderBy,
+        limit: ?usize,
+        offset: ?usize,
+        limit_param: ?[]const u8,
+        offset_param: ?[]const u8,
+    };
+
+    fn parseOrderAndPage(self: *Parser, return_len: usize) ParserError!OrderAndPage {
+        var ord: ?ast.OrderBy = null;
+        if (self.cur.kind == .ORDER) {
+            self.advance();
+            _ = try self.expect(.BY);
+            var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
+            // first expression key - allow expressions now
+            const expr1 = try self.parseOrExpr();
+            // Parse-time enforcement: forbid function calls inside ORDER BY keys when policy active.
+            // We examine the AST recursively; if any call node appears, raise an IllegalOrderKey style error.
+            if (self.forbid_orderby_calls and self.containsCall(expr1)) {
+                // Message string matched in diagnostics mapping path (server expects substring)
+                self.last_error = "function calls in ORDER BY are disabled"; // triggers IllegalOrderKey diagnostic
+                return error.UnexpectedToken;
+            }
+            // Check if it's an ordinal
+            if (expr1 == .Int and self.isValidOrdinal(expr1.Int, return_len)) {
+                self.has_ordinal_sort_key = true;
+            }
+            const mods1 = try self.parseOrderKeyModifiers();
+            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = mods1.desc, .nulls = mods1.nulls });
+            while (self.cur.kind == .comma) {
+                self.advance();
+                const exprk = try self.parseOrExpr();
+                if (self.forbid_orderby_calls and self.containsCall(exprk)) {
+                    self.last_error = "function calls in ORDER BY are disabled";
+                    return error.UnexpectedToken;
+                }
+                // Check if it's an ordinal
+                if (exprk == .Int and self.isValidOrdinal(exprk.Int, return_len)) {
+                    self.has_ordinal_sort_key = true;
+                }
+                const modsk = try self.parseOrderKeyModifiers();
+                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = modsk.desc, .nulls = modsk.nulls });
+            }
+            ord = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+        }
+
+        var limit: ?usize = null;
+        var offset: ?usize = null;
+        var limit_param: ?[]const u8 = null;
+        var offset_param: ?[]const u8 = null;
+
+        // Additional legality enforcement: when ident_order_only policy active, reject any ORDER BY key that is not a bare identifier.
+        if (ord) |ob| {
+            if (self.ident_order_only) {
+                var i_chk: usize = 0;
+                while (i_chk < ob.keys.len) : (i_chk += 1) {
+                    const ke = ob.keys[i_chk].expr;
+                    if (ke != .Ident) {
+                        if (self.containsCall(ke)) {
+                            self.last_error = "function calls in ORDER BY are disabled";
+                        } else {
+                            self.last_error = "ORDER BY key must be identifier";
+                        }
+                        return error.UnexpectedToken;
+                    }
+                }
+            }
+        }
+
+        // Parse LIMIT and OFFSET in any order
+        // First check for LIMIT
+        if (self.cur.kind == .LIMIT) {
+            self.advance();
+            const lim = try self.parseLimitValue();
+            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
+            limit_param = lim.param;
+        }
+        // Check for OFFSET/SKIP
+        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
+            self.advance();
+            const off = try self.parseLimitValue();
+            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
+            offset_param = off.param;
+        }
+        // Check for LIMIT again (in case it comes after OFFSET)
+        if (limit == null and limit_param == null and self.cur.kind == .LIMIT) {
+            self.advance();
+            const lim = try self.parseLimitValue();
+            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
+            limit_param = lim.param;
+        }
+
+        return .{ .order_by = ord, .limit = limit, .offset = offset, .limit_param = limit_param, .offset_param = offset_param };
+    }
+
     fn handleQueryResult(self: *Parser, first: ast.Query) ParserError!ast.Statement {
         if (self.cur.kind == .UNION or self.cur.kind == .INTERSECT or self.cur.kind == .EXCEPT) {
             // CANARY: REQ=REQ-GQL-100; FEATURE="UNION Query Operations"; ASPECT=Parser; STATUS=TESTED; TEST=gql_conformance.T1; OWNER=parser; UPDATED=2025-10-14
@@ -2904,88 +3001,12 @@ pub const Parser = struct {
             unreachable;
         }
 
-        var ord: ?ast.OrderBy = null;
-        if (self.cur.kind == .ORDER) {
-            self.advance();
-            _ = try self.expect(.BY);
-            var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
-            // first expression key - allow expressions now
-            const expr1 = try self.parseOrExpr();
-            // Parse-time enforcement: forbid function calls inside ORDER BY keys when policy active.
-            // We examine the AST recursively; if any call node appears, raise an IllegalOrderKey style error.
-            if (self.forbid_orderby_calls and self.containsCall(expr1)) {
-                // Message string matched in diagnostics mapping path (server expects substring)
-                self.last_error = "function calls in ORDER BY are disabled"; // triggers IllegalOrderKey diagnostic
-                return error.UnexpectedToken;
-            }
-            // Check if it's an ordinal
-            if (expr1 == .Int and self.isValidOrdinal(expr1.Int, return_clause.items.len)) {
-                self.has_ordinal_sort_key = true;
-            }
-            const mods1 = try self.parseOrderKeyModifiers();
-            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = mods1.desc, .nulls = mods1.nulls });
-            while (self.cur.kind == .comma) {
-                self.advance();
-                const exprk = try self.parseOrExpr();
-                if (self.forbid_orderby_calls and self.containsCall(exprk)) {
-                    self.last_error = "function calls in ORDER BY are disabled";
-                    return error.UnexpectedToken;
-                }
-                // Check if it's an ordinal
-                if (exprk == .Int and self.isValidOrdinal(exprk.Int, return_clause.items.len)) {
-                    self.has_ordinal_sort_key = true;
-                }
-                const modsk = try self.parseOrderKeyModifiers();
-                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = modsk.desc, .nulls = modsk.nulls });
-            }
-            ord = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
-        }
-
-        var limit: ?usize = null;
-        var offset: ?usize = null;
-        var limit_param: ?[]const u8 = null;
-        var offset_param: ?[]const u8 = null;
-
-        // Additional legality enforcement: when ident_order_only policy active, reject any ORDER BY key that is not a bare identifier.
-        if (ord) |ob| {
-            if (self.ident_order_only) {
-                var i_chk: usize = 0;
-                while (i_chk < ob.keys.len) : (i_chk += 1) {
-                    const ke = ob.keys[i_chk].expr;
-                    if (ke != .Ident) {
-                        if (self.containsCall(ke)) {
-                            self.last_error = "function calls in ORDER BY are disabled";
-                        } else {
-                            self.last_error = "ORDER BY key must be identifier";
-                        }
-                        return error.UnexpectedToken;
-                    }
-                }
-            }
-        }
-
-        // Parse LIMIT and OFFSET in any order
-        // First check for LIMIT
-        if (self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
-        }
-        // Check for OFFSET/SKIP
-        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-            self.advance();
-            const off = try self.parseLimitValue();
-            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
-            offset_param = off.param;
-        }
-        // Check for LIMIT again (in case it comes after OFFSET)
-        if (limit == null and limit_param == null and self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
-        }
+        const page = try self.parseOrderAndPage(return_clause.items.len);
+        const ord = page.order_by;
+        const limit = page.limit;
+        const offset = page.offset;
+        const limit_param = page.limit_param;
+        const offset_param = page.offset_param;
 
         // Keep let_bindings and inline_let_bindings separate for proper evaluation timing
         // Parameter bindings (before MATCH) are evaluated once upfront
@@ -5134,6 +5155,13 @@ pub const Parser = struct {
             // Check if RETURN is followed by UNION, ORDER BY, LIMIT, or OFFSET
             // If so, convert to Query and handle through handleQueryResult
             if (self.cur.kind == .UNION or self.cur.kind == .ORDER or self.cur.kind == .LIMIT or self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
+                // CANARY: REQ=REQ-SONNY-6351-CREATE-RETURN-ORDER; FEATURE="CreateReturn"; ASPECT=OrderAndPage; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=parser; UPDATED=2026-11-12
+                // SONNY-6351 item 5 (SONNY-3128 residual): the RETURN's ORDER
+                // BY, LIMIT and OFFSET / SKIP are the query's, parsed here as
+                // after any RETURN (`parseOrderAndPage`). `handleQueryResult`
+                // parses them only after a UNION, so `CREATE (n) RETURN n.i
+                // ORDER BY n.i` stopped at ORDER (UnexpectedToken).
+                const page = try self.parseOrderAndPage(return_clause.?.items.len);
                 // Convert CREATE ... RETURN to a Query
                 const query = ast.Query{
                     .optional_match = false,
@@ -5142,12 +5170,14 @@ pub const Parser = struct {
                     .with_clause = null,
                     .create_pattern = pattern,
                     .ret = return_clause.?,
-                    .order_by = null,
-                    .limit = null,
-                    .offset = null,
+                    .order_by = page.order_by,
+                    .limit = page.limit,
+                    .offset = page.offset,
+                    .limit_param = page.limit_param,
+                    .offset_param = page.offset_param,
                     .next_query = null,
                 };
-                // handleQueryResult will parse UNION, ORDER BY, LIMIT, OFFSET
+                // handleQueryResult parses a UNION after it
                 return self.handleQueryResult(query);
             }
         }

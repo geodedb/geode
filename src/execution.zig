@@ -75,6 +75,7 @@ const order_key_columns = @import("execution/order_key_columns.zig");
 pub const write_shape = @import("execution/write_shape.zig");
 pub const write_walk = @import("execution/write_walk.zig");
 const value_utilities = @import("execution/value_utilities.zig");
+const result_utils = @import("execution/result_utils.zig");
 // SONNY-2696: the query's scratch arena (GAP-0755), for a lifted item's
 // hidden aggregates.
 const query_arena = @import("server/query_arena.zig");
@@ -1012,6 +1013,59 @@ pub fn windowParam(name: ?[]const u8, context: ExecutionContext) !?usize {
 
 /// A query's SKIP and LIMIT, resolved (`windowParam`).
 pub const QueryWindow = struct { start: usize, limit: ?usize };
+
+// CANARY: REQ=REQ-SONNY-6351-CALL-RETURN; FEATURE="ProcedureYield"; ASPECT=StandaloneCallReturn; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+/// SONNY-6351 item 6 (SONNY-2779 residual): a standalone procedure CALL's
+/// YIELD aliases and RETURN clause, over the rows the procedure yielded. The
+/// RETURN was ignored, so `CALL db.labels() YIELD label AS l RETURN l ORDER
+/// BY l DESC` kept the column `label`, sorted by an `l` no row had, and
+/// returned the procedure's rows as they came. Each yielded column is named
+/// by its YIELD alias; the RETURN (or, with none, the aliased columns) is
+/// projected by the shared projection, which evaluates each item, aggregates
+/// and fails on an item that fails, then DISTINCT. ORDER BY and the window
+/// follow (the caller).
+fn projectCallReturn(allocator: std.mem.Allocator, result: *ExecutionResult, proc: ast.CallProcedure, context: ExecutionContext) !void {
+    const yield_items: []const ast.ReturnItem = proc.yield_items orelse &.{};
+    const aliased = for (yield_items) |item| {
+        if (item.alias != null) break true;
+    } else false;
+    if (proc.return_clause == null and !aliased) return;
+    // The yielded columns as the YIELD names them.
+    const names = try allocator.alloc([]const u8, result.columns.len);
+    defer allocator.free(names);
+    @memcpy(names, result.columns);
+    for (yield_items) |item| {
+        const alias = item.alias orelse continue;
+        const source = switch (item.expr) {
+            .Ident => |id| id.orig,
+            .Member => |m| m.field,
+            else => continue,
+        };
+        for (result.columns, names) |column, *name| {
+            if (std.mem.eql(u8, column, source)) name.* = alias;
+        }
+    }
+    var view = result.*;
+    view.columns = names;
+    var identity: ?[]ast.ReturnItem = null;
+    defer if (identity) |items| allocator.free(items);
+    const items: []ast.ReturnItem = if (proc.return_clause) |rc| rc.items else blk: {
+        const own = try allocator.alloc(ast.ReturnItem, names.len);
+        for (names, own) |name, *item| item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = name } }, .alias = null };
+        identity = own;
+        break :blk own;
+    };
+    var projected = try executeWithClauseWithGroupByAndParams(allocator, view, .{ .items = items }, null, null, context.query_param_names, context.query_param_values);
+    errdefer projected.deinit(allocator);
+    try value_utilities.adoptProjectionRowValues(allocator, &projected, items);
+    projected.owned_graph_entities = result.owned_graph_entities;
+    result.owned_graph_entities = null;
+    if (proc.return_clause) |rc| {
+        if (rc.distinct) try result_utils.applyDistinct(allocator, &projected);
+    }
+    result.deinit(allocator);
+    result.* = projected;
+}
 
 pub fn queryWindow(q: ast.Query, context: ExecutionContext) !QueryWindow {
     return .{
@@ -2488,6 +2542,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     };
                     result = try executeCallStatement(allocator, call_stmt, context);
                     errdefer result.deinit(allocator);
+                    try projectCallReturn(allocator, &result, proc, context);
                     if (proc.order_by) |order| try sortRows(allocator, &result, order);
                     try applyQueryWindow(allocator, &result, window);
                 },
@@ -4510,12 +4565,37 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         const columns_slice = try new_columns.toOwnedSlice(allocator);
         const rows_slice = try new_rows.toOwnedSlice(allocator);
 
-        // Sort rows according to ORDER BY keys
+        // CANARY: REQ=REQ-SONNY-6351-WITH-ORDER-KEY-ERROR; FEATURE="WithOrderBy"; ASPECT=KeyErrorFailsStatement; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+        // Sort rows according to ORDER BY keys. SONNY-6351 (SONNY-2811
+        // residual): an error evaluating a key fails the statement, as a
+        // RETURN's ORDER BY does (`sortRowsEx`); it was sorted as NULL, so
+        // `WITH z ORDER BY z.k + 9223372036854775807` answered every row
+        // unsorted. The keys see the query's parameters.
+        var key_error: ?anyerror = null;
         const SortContext = struct {
             order_keys: []ast.OrderBy.OrderKey,
             columns: []const []const u8,
             rows: [][]Value,
             allocator: std.mem.Allocator,
+            param_names: []const []const u8,
+            param_values: []const Value,
+            /// The first error evaluating a key; the comparator cannot
+            /// return it.
+            key_error: *?anyerror,
+
+            fn evalKey(context: @This(), expr: ast.Expr, row: []Value) Value {
+                const env = Env{
+                    .names = context.columns,
+                    .values = row,
+                    .param_names = context.param_names,
+                    .param_values = context.param_values,
+                    .allocator = context.allocator,
+                };
+                return eval.evalExpr(context.allocator, expr, env) catch |err| {
+                    if (context.key_error.* == null) context.key_error.* = err;
+                    return Value{ .Null = {} };
+                };
+            }
         };
 
         const ctx = SortContext{
@@ -4523,25 +4603,16 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             .columns = columns_slice,
             .rows = rows_slice,
             .allocator = allocator,
+            .param_names = param_names,
+            .param_values = param_values,
+            .key_error = &key_error,
         };
 
         std.mem.sort([]Value, rows_slice, ctx, struct {
             fn lessThan(context: SortContext, a: []Value, b: []Value) bool {
                 for (context.order_keys) |key| {
-                    // Create environment for evaluating order key expression
-                    const env_a = Env{
-                        .names = context.columns,
-                        .values = a,
-                        .allocator = context.allocator,
-                    };
-                    const env_b = Env{
-                        .names = context.columns,
-                        .values = b,
-                        .allocator = context.allocator,
-                    };
-
-                    const val_a = eval.evalExpr(context.allocator, key.expr, env_a) catch Value{ .Null = {} };
-                    const val_b = eval.evalExpr(context.allocator, key.expr, env_b) catch Value{ .Null = {} };
+                    const val_a = context.evalKey(key.expr, a);
+                    const val_b = context.evalKey(key.expr, b);
 
                     // Compare values: returns -1 if a < b, 0 if a == b, 1 if a > b
                     const cmp: i8 = blk: {
@@ -4597,6 +4668,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
 
         new_columns = std.ArrayList([]const u8).fromOwnedSlice(columns_slice);
         new_rows = std.ArrayList([]Value).fromOwnedSlice(rows_slice);
+        if (key_error) |err| return err;
     }
 
     // SONNY-3248 (round 4b-1 review m-3): a SKIP or LIMIT parameter on the
