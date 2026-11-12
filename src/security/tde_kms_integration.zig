@@ -73,6 +73,7 @@ pub const TDEKeyManager = struct {
     pub fn deinit(self: *TDEKeyManager) void {
         if (self.kms_provider) |provider| {
             provider.deinit();
+            self.allocator.destroy(provider);
         }
         if (self.key_status.key_id) |key_id| {
             self.allocator.free(key_id);
@@ -86,15 +87,17 @@ pub const TDEKeyManager = struct {
         // Initialize KMS provider
         var provider = try kms.KMSProvider.init(self.allocator, kms_config);
 
-        // Generate or fetch master key
+        // Generate or fetch master key. external_kms allocates the id unless
+        // the config names one (see KMSProvider.wrapDataKey).
         const master_key_id = try provider.fetchActiveMasterKey();
+        defer if (kms_config.master_key_id == null and kms_config.provider_type == .external_kms) self.allocator.free(master_key_id);
 
         // Generate a new data encryption key (DEK)
         const dek_plaintext = try self.generateDataEncryptionKey();
         defer self.allocator.free(dek_plaintext);
 
         // Wrap the DEK with KMS
-        const wrapped_key = try provider.wrapDataKey(dek_plaintext);
+        var wrapped_key = try provider.wrapDataKey(dek_plaintext);
         defer wrapped_key.deinit(self.allocator);
 
         // Create key hierarchy from the DEK
@@ -162,7 +165,7 @@ pub const TDEKeyManager = struct {
         defer self.allocator.free(new_dek);
 
         // Wrap with KMS
-        const wrapped_key = try self.kms_provider.?.wrapDataKey(new_dek);
+        var wrapped_key = try self.kms_provider.?.wrapDataKey(new_dek);
         defer wrapped_key.deinit(self.allocator);
 
         // Update hierarchy
@@ -290,12 +293,6 @@ pub fn createLocalDevTDE(allocator: std.mem.Allocator) !TDEKeyManager {
 pub fn createExternalKMSTDE(allocator: std.mem.Allocator, seed: u64) !TDEKeyManager {
     var manager = TDEKeyManager.init(allocator);
     try manager.initializeWithKMS(kms.KMSConfig{ .provider_type = .external_kms, .seed = seed });
-    return manager;
-}
-
-pub fn createRemoteKMSTDE(allocator: std.mem.Allocator, endpoint: []const u8, port: u16, auth_token: ?[]const u8) !TDEKeyManager {
-    var manager = TDEKeyManager.init(allocator);
-    try manager.initializeWithKMS(kms.KMSConfig{ .provider_type = .remote_kms, .endpoint = endpoint, .port = port, .auth_token = auth_token });
     return manager;
 }
 

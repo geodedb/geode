@@ -9477,6 +9477,20 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny2441-kms-provider-paths", "Run SONNY-2441 regression (KMSProvider offers no remote_kms provider, every provider type round-trips the caller's key or refuses, and the KMS provider and TDE-KMS tests are built)").dependOn(&run_tests.step);
     }
 
+    // SONNY-2441: the KMSProvider and TDEKeyManager unit suites, built and run.
+    for ([_]struct { name: []const u8, path: std.Build.LazyPath, desc: []const u8 }{
+        .{ .name = "test-kms-provider", .path = b.path("tests/test_kms_provider.zig"), .desc = "Run the KMSProvider local_dev / external_kms unit suite (SONNY-2441: registered)" },
+        .{ .name = "test-tde-kms-integration", .path = b.path("tests/test_tde_kms_integration.zig"), .desc = "Run the TDEKeyManager / TDEOperations unit suite (SONNY-2441: registered)" },
+    }) |t| {
+        const mod = b.createModule(.{ .root_source_file = t.path, .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("security/tde_kms_integration", sonny2441_tde_kms_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(t.name, t.desc).dependOn(&run_tests.step);
+    }
+
     // SONNY-6272: the unbuildable Dockerfile.prod and its references are gone.
     {
         const opts = b.addOptions();

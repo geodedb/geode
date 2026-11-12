@@ -1756,7 +1756,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,909
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,13964
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,13978
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,196
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2091
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1497
@@ -1907,7 +1907,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,114
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,13973
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,13987
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1680
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1922
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1034
@@ -1920,7 +1920,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,202
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7582
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,167
 REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,179
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,13985
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,13999
 REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,395
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecutePlan,IMPL,,,security,2026-05-21,src/distributed/enhanced_query_coordinator.zig,250
 REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,EXEMPT,,,security,2026-06-11,src/distributed/query_transport.zig,141
@@ -2913,12 +2913,12 @@ REQ-GQL-KEYS-003,KeysFunction,NodeEdgeMapKeys,TESTED,,,eval,2025-12-28,src/eval.
 REQ-GQL-KEYWORD-001,GQL Keyword Handling,Parser,TESTED,,,parser,2025-01-03,tests/gql_keyword_regression_test.zig,6
 REQ-GQL-KMS-BACKEND-001,KMS Backend Safety Check,SECURITY,TESTED,,,security,2026-01-15,src/security/external_kms_client.zig,74
 REQ-GQL-KMS-CONFIG-001,KMS Configuration,SECURITY,TESTED,,,security,2026-01-15,src/security/external_kms_client.zig,91
-REQ-GQL-KMS-LOCALDEV-001,AES-GCM Local KMS,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,182
-REQ-GQL-KMS-LOCALDEV-002,AES-GCM Local KMS Unwrap,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,209
+REQ-GQL-KMS-LOCALDEV-001,AES-GCM Local KMS,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,156
+REQ-GQL-KMS-LOCALDEV-002,AES-GCM Local KMS Unwrap,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,183
 REQ-GQL-KMS-LOCALSIM-001,LocalSimulated KMS Client,SECURITY,TESTED,,,security,2026-01-15,src/security/external_kms_client.zig,854
 REQ-GQL-KMS-PRODSAFE-001,LocalSimulated KMS Production Block,SECURITY,TESTED,,,security,2026-01-16,src/security/external_kms_client.zig,855
-REQ-GQL-KMS-PRODSAFE-001,Production KMS Safety Check,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,46
-REQ-GQL-KMS-PRODSAFE-002,KMS Provider Init Safety,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,88
+REQ-GQL-KMS-PRODSAFE-001,Production KMS Safety Check,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,44
+REQ-GQL-KMS-PRODSAFE-002,KMS Provider Init Safety,SECURITY,TESTED,,,security,2026-01-12,src/security/kms.zig,77
 REQ-GQL-KSHELL-001,KShellDecomposition,Community,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig,2665
 REQ-GQL-LARGE-DATASET,LargeDataset,Scalability,TESTED,,,team,2025-10-02,tests/integration/test_large_social_network.zig,525
 REQ-GQL-LAST-001,ListFunctions,LastElement,TESTED,,,eval,2025-12-24,src/eval.zig,4851
@@ -3151,7 +3151,7 @@ REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,SECURITY,TESTED,,,secur
 REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,TEST,TESTED,,,security,2025-09-26,tests/test_key_rotation_persistence.zig,4
 REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,TEST,TESTED,,,security,2025-09-26,tests/test_key_rotation_persistence.zig,34
 REQ-GQL-SEC-KEYROT-STATE-CHK-001,KeyRotationStateChecksum,SECURITY,TESTED,,,security,2025-09-26,tests/test_key_rotation_checksum.zig,4
-REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,,,security,2025-10-05,src/security/kms.zig,19
+REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,,,security,2025-10-05,src/security/kms.zig,18
 REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,,,security,2025-10-05,tests/test_kms_provider.zig,5
 REQ-GQL-SEC-TDE-OVERHEAD-001,TDEEncryptBenchmark,PERFORMANCE,BENCHED,,,security,2025-09-26,benchmarks/benchmark_tde_encrypt_pages.zig,9
 REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,SECURITY,TESTED,,,security,2025-09-26,docs/SECURITY_PROGRESS.md,47

@@ -4,6 +4,22 @@
 
 ### Security
 
+- **BREAKING (library API): `KMSProvider` has no `remote_kms` provider
+  (SONNY-2441).** `wrapDataKey` with `remote_kms` ignored the key it was
+  given and returned one the remote KMS generated (the remote protocol has
+  GENERATE and UNWRAP, no WRAP), so unwrapping never returned the caller's
+  key; nothing called it, and the CANARYs claiming it TESTED cited test
+  files no build step compiled. The provider, `remoteKMSProvider`,
+  `createRemoteKMSTDE` and the `KMSConfig` port/remote-timeout fields are
+  removed; the remote KMS client (`kms_remote.zig`, `test-remote-kms`)
+  stays. `tests/test_kms_provider.zig` and `tests/test_tde_kms_integration.zig`
+  are built and run (`test-kms-provider` 10/10, `test-tde-kms-integration`
+  8/8); building them exposed and fixed two compile errors and three leaks
+  in `TDEKeyManager` (the provider struct and the external-KMS key id were
+  never freed). `docs/KMS_PROVIDER_SYSTEM.md` now says what `KMSProvider`
+  does: local_dev and external_kms only (Vault/AWS/Azure configurations are
+  refused), and neither it nor `TDEKeyManager` is used by the server.
+  Regression: `zig build test-sonny2441-kms-provider-paths`.
 - **A corrupt stored Argon2id hash is refused, not a panic; GEODE_ENABLE_ABAC
   no longer claims enforcement; `serve --help` (SONNY-6374 items 3-8).**
   `verifyPasswordArgon2id` narrowed the stored hash's `p` into Argon2's u24
