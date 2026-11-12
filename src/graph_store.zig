@@ -15166,13 +15166,27 @@ pub const GraphStore = struct {
 
     /// Delete a node and mark store dirty
     pub fn deleteNode(self: *GraphStore, node_id: u64) void {
-        if (statementWritesFenced()) return; // SONNY-3348
+        // Preserve the legacy void surface and its statement-error relay.
+        // Security-record writers use the checked surface directly.
+        self.deleteNodeChecked(node_id) catch |err| {
+            if (@import("eval.zig").limitAsEvalError(err)) |limit| {
+                @import("eval.zig").recordLimitError(limit);
+            }
+        };
+    }
+
+    /// Delete a node, returning failures before callers discard their records.
+    pub fn deleteNodeChecked(self: *GraphStore, node_id: u64) !void {
+        try statementWriteFence();
         self.ensureNodeGraphHydrated(node_id); // PHASE 1b chokepoint (before any cache read)
         // SONNY-3348 (round 18): the node, and the edges it takes with it.
-        self.undoRecordDeleteNode(node_id) catch return undoRecordFailed();
+        self.undoRecordDeleteNode(node_id) catch |err| {
+            undoRecordFailed();
+            return err;
+        };
         // Capture graph_name before deletion for WAL notification and handle routing.
         // SONNY-3233 (round 15): a copy: the delete frees the node's own.
-        const gn: []const u8 = if (self.nodes.get(node_id)) |n| (self.allocator.dupe(u8, n.graph_name) catch "") else "";
+        const gn: []const u8 = if (self.nodes.get(node_id)) |n| try self.allocator.dupe(u8, n.graph_name) else "";
         defer if (gn.len > 0) self.allocator.free(gn);
 
         if (global_vtable) |vt| {
@@ -15183,7 +15197,7 @@ pub const GraphStore = struct {
                     Attr.int("node_id", @intCast(node_id)),
                     Attr.string("graph", adapter_gn),
                 });
-                return;
+                return err;
             };
             vt.deleteNodeFn(vt.ctx, adapter_gn, slot_id) catch |err| {
                 log.err("adapter deleteNode failed", &.{
@@ -15191,7 +15205,7 @@ pub const GraphStore = struct {
                     Attr.int("node_id", @intCast(node_id)),
                     Attr.string("graph", adapter_gn),
                 });
-                return;
+                return err;
             };
             // Remove from IdMap
             if (self.getIdMap(adapter_gn)) |im| {

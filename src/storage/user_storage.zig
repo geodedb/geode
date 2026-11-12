@@ -1279,11 +1279,13 @@ pub const UserStorageBackend = struct {
         try self.upsertRoleNode(record);
     }
 
+    // CANARY: REQ=REQ-SONNY-6293-CHECKED-AUTH-DELETE; FEATURE="Checked security record deletion"; ASPECT=Role; STATUS=TESTED; TEST=tests/test_sonny6293_checked_auth_delete.zig; OWNER=security; UPDATED=2026-11-11
     pub fn removeRole(self: *Self, role_id: u64) !void {
-        _ = self.role_cache.remove(role_id);
-        if (self.role_nodes.fetchRemove(role_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.role_nodes.get(role_id)) |node_id| {
+            try self.store.deleteNodeChecked(node_id);
+            _ = self.role_nodes.remove(role_id);
         }
+        _ = self.role_cache.remove(role_id);
     }
 
     pub fn getRole(self: *Self, role_id: u64) ?RoleRecord {
@@ -1448,11 +1450,13 @@ pub const UserStorageBackend = struct {
         try self.upsertPolicyNode(record);
     }
 
+    // CANARY: REQ=REQ-SONNY-6293-CHECKED-AUTH-DELETE; FEATURE="Checked security record deletion"; ASPECT=Policy; STATUS=TESTED; TEST=tests/test_sonny6293_checked_auth_delete.zig; OWNER=security; UPDATED=2026-11-11
     pub fn removePolicy(self: *Self, policy_id: u64) !void {
-        _ = self.policy_cache.remove(policy_id);
-        if (self.policy_nodes.fetchRemove(policy_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.policy_nodes.get(policy_id)) |node_id| {
+            try self.store.deleteNodeChecked(node_id);
+            _ = self.policy_nodes.remove(policy_id);
         }
+        _ = self.policy_cache.remove(policy_id);
     }
 
     pub fn getPolicy(self: *Self, policy_id: u64) ?PolicyRecord {
