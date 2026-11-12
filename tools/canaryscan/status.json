@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T15:19:35.016432028Z",
+  "generated_at": "2026-11-12T15:46:07.949065205Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -30499,38 +30499,6 @@
           "updated": "2025-09-24"
         },
         {
-          "feature": "Path Execution",
-          "aspect": "PathVariableLengthPropertyPredicate",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_path_varlen_predicate.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicate"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicateVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Path Execution",
-          "aspect": "PathVariableLengthPropertyPredicateVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_path_varlen_predicate.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicate"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicateVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
           "feature": "Property Access",
           "aspect": "Engine",
           "status": "TESTED",
@@ -31803,22 +31771,6 @@
           ],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadOptimizationDeltaVarianceEnvelope"
-          ],
-          "owner": "storage",
-          "updated": "2026-02-04"
-        },
-        {
-          "feature": "Storage/Recovery",
-          "aspect": "SnapshotLoadOptimizationDeltaVariance",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_storage_redo_delta.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_022_RedoOptimizationDeltaSmoke"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope"
           ],
           "owner": "storage",
           "updated": "2026-02-04"
@@ -73405,6 +73357,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2439-PERF-METHODOLOGY",
+      "features": [
+        {
+          "feature": "Perf Gates",
+          "aspect": "MonotonicClockNoTestLocalBenchmarks",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2439_perf_methodology.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2439_perf_methodology.zig"
+          ],
+          "benches": [],
+          "owner": "performance",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2441-KMS-REMOTE-PATH",
+      "features": [
+        {
+          "feature": "KMSProviderSystem",
+          "aspect": "NoDeadRemotePath",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2441_kms_provider_paths.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2441_kms_provider_paths.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2463-BARE-NODE-LEAK",
       "features": [
         {
@@ -81002,6 +80992,25 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-29"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6272-NO-DOCKERFILE-PROD",
+      "features": [
+        {
+          "feature": "Container Images",
+          "aspect": "UnsupportedImageRemoved",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6272_dockerfile_prod.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6272_dockerfile_prod.zig"
+          ],
+          "benches": [],
+          "owner": "release",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -89959,11 +89968,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 230,
+      "BENCHED": 227,
       "COMPLETE": 2,
       "EXEMPT": 247,
       "IMPL": 188,
-      "TESTED": 4762
+      "TESTED": 4765
     },
     "by_aspect": {
       "2PC": 3,
@@ -92063,6 +92072,7 @@
       "ModuleSplit": 1,
       "ModuleStructure": 3,
       "ModuleSystem": 1,
+      "MonotonicClockNoTestLocalBenchmarks": 1,
       "MultiByteRange": 1,
       "MultiChain": 2,
       "MultiChainDispatch": 1,
@@ -92135,6 +92145,7 @@
       "NoAutoCreate": 1,
       "NoCatalog": 1,
       "NoDeadBackupTestsOrStaleCanaryRows": 1,
+      "NoDeadRemotePath": 1,
       "NoEnvOverride": 1,
       "NoFabricatedKeyManagement": 1,
       "NoFabricatedResults": 1,
@@ -92422,8 +92433,6 @@
       "PathTraversal": 1,
       "PathType": 1,
       "PathVariable": 1,
-      "PathVariableLengthPropertyPredicate": 1,
-      "PathVariableLengthPropertyPredicateVarianceEnvelope": 1,
       "PathZeroLengthInclusionPolicy": 1,
       "Paths": 1,
       "PatriciaTrie": 1,
@@ -93357,7 +93366,6 @@
       "SnapshotFlushQueueDepthVarianceEnvelope": 1,
       "SnapshotIOThrottleVarianceEnvelope": 1,
       "SnapshotInstallation": 1,
-      "SnapshotLoadOptimizationDeltaVariance": 1,
       "SnapshotOwnsLabels": 1,
       "SnapshotReadView": 1,
       "SnapshotRestore": 1,
@@ -93729,6 +93737,7 @@
       "UnsupportedAggregateReject": 1,
       "UnsupportedAlgorithm": 2,
       "UnsupportedFailLoud": 1,
+      "UnsupportedImageRemoved": 1,
       "UnsupportedSignal": 2,
       "UnsupportedVersion": 1,
       "UnweightedBFSPaths": 2,

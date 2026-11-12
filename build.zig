@@ -5030,8 +5030,6 @@ pub fn build(b: *std.Build) void {
     const planner_enumerator_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_enumerator.zig"), .target = target, .optimize = optimize }) });
     planner_enumerator_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     planner_enumerator_tests.root_module.addImport("perf_gate", perf_gate_mod);
-    const path_varlen_predicate_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_path_varlen_predicate.zig"), .target = target, .optimize = optimize }) });
-    path_varlen_predicate_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const txn_manager_mod_for_write_skew = b.createModule(.{ .root_source_file = b.path("src/transactions/manager.zig"), .target = target, .optimize = optimize });
     txn_manager_mod_for_write_skew.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     txn_manager_mod_for_write_skew.addImport("range_tracker", range_tracker_mod_for_tests);
@@ -5040,8 +5038,6 @@ pub fn build(b: *std.Build) void {
     const write_skew_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_write_skew.zig"), .target = target, .optimize = optimize }) });
     write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
     write_skew_tests.root_module.addImport("perf_gate", perf_gate_mod);
-    const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
-    redo_delta_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const recovery_corrupt_latency_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_recovery_corrupt_latency.zig"), .target = target, .optimize = optimize }) });
     recovery_corrupt_latency_tests.root_module.addImport("geode", root_mod);
     recovery_corrupt_latency_tests.root_module.addImport("perf_gate", perf_gate_mod);
@@ -5071,18 +5067,10 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_planner_enumerator_tests.step, 1, test_shard_loads, test_shard_index);
     const planner_enumerator_tests_step = b.step("test-canary-planner-enumerator", "Run cost-based plan enumeration engine CANARY tests (REQ-GQL-024)");
     planner_enumerator_tests_step.dependOn(&run_planner_enumerator_tests.step);
-    const run_path_varlen_predicate_tests = b.addRunArtifact(path_varlen_predicate_tests);
-    shardDep(test_step, &run_path_varlen_predicate_tests.step, 1, test_shard_loads, test_shard_index);
-    const path_varlen_predicate_tests_step = b.step("test-canary-path-varlen-predicate", "Run variable-length path property predicate CANARY tests (REQ-GQL-017)");
-    path_varlen_predicate_tests_step.dependOn(&run_path_varlen_predicate_tests.step);
     const run_write_skew_tests = b.addRunArtifact(write_skew_tests);
     shardDep(test_step, &run_write_skew_tests.step, 1, test_shard_loads, test_shard_index);
     const write_skew_tests_step = b.step("test-canary-txn-write-skew", "Run MVCC write-skew detection CANARY tests (REQ-GQL-025)");
     write_skew_tests_step.dependOn(&run_write_skew_tests.step);
-    const run_redo_delta_tests = b.addRunArtifact(redo_delta_tests);
-    shardDep(test_step, &run_redo_delta_tests.step, 1, test_shard_loads, test_shard_index);
-    const redo_delta_tests_step = b.step("test-canary-storage-redo-delta", "Run redo optimization delta CANARY tests (REQ-GQL-022)");
-    redo_delta_tests_step.dependOn(&run_redo_delta_tests.step);
     const run_recovery_corrupt_latency_tests = b.addRunArtifact(recovery_corrupt_latency_tests);
     shardDep(test_step, &run_recovery_corrupt_latency_tests.step, 1, test_shard_loads, test_shard_index);
     const recovery_corrupt_latency_tests_step = b.step("test-canary-recovery-corrupt-latency", "Run corrupt-page recovery latency CANARY tests (REQ-GQL-028)");

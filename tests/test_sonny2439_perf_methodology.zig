@@ -56,7 +56,9 @@ test "SONNY-2439 (1) every file that makes a gated perf claim times with a monot
         defer walker.deinit();
         while (try walker.next(io())) |entry| {
             if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+            // The gate itself, and this file's own search strings.
             if (std.mem.eql(u8, entry.basename, "perf_gate.zig")) continue;
+            if (std.mem.eql(u8, entry.basename, "test_sonny2439_perf_methodology.zig")) continue;
             const src = dir.readFileAlloc(io(), entry.path, allocator, .limited(64 << 20)) catch continue;
             defer allocator.free(src);
             if (std.mem.indexOf(u8, src, "perf_gate.check(") == null and std.mem.indexOf(u8, src, "perf_gate.envelope(") == null) continue;

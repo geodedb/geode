@@ -9,8 +9,8 @@
 //! therefore no evidence of a product regression until SONNY-2439 fixes the
 //! methodology. Enforcing them whenever `CI` was unset (the rule until then)
 //! made local runs of the gated named steps fail on noise alone, with no
-//! product change (test-canary-path-varlen-predicate: CV 0.30-0.51 against
-//! a 0.22 bound).
+//! product change (test-canary-path-varlen-predicate, since removed as a
+//! benchmark of test-local code: CV 0.30-0.51 against a 0.22 bound).
 //!
 //! The scheduled-pipeline job `test-perf-gates-enforced` (.gitlab-ci.yml) runs
 //! every gated step with the override, so the claims can still be enforced on

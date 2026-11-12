@@ -2000,8 +2000,6 @@ REQ-GQL-017,MatchSafetyGuards,EngineGuardInit,TESTED,src/server/graph/exec.zig,T
 REQ-GQL-017,OPTIONAL MATCH + VarLen NullPreserve,ProtocolE2E_GRPC,TESTED,tests/e2e_protocol_optional_varlen.zig,TestCANARY_REQ_GQL_017_OptionalVarLenNull_GRPC,,engine,2025-09-24
 REQ-GQL-017,OPTIONAL MATCH + VarLen NullPreserve,ProtocolE2E_QUIC,TESTED,tests/e2e_protocol_optional_varlen.zig,TestCANARY_REQ_GQL_017_OptionalVarLenNull_QUIC,,engine,2025-09-24
 REQ-GQL-017,OPTIONAL MATCH null-preserve,ProtocolE2E_QUIC,TESTED,tests/e2e_protocol_match_quic.zig,TestCANARY_REQ_GQL_017_OptionalMatchNullPreserve_QUIC,,engine,2025-09-24
-REQ-GQL-017,Path Execution,PathVariableLengthPropertyPredicate,BENCHED,tests/canary_path_varlen_predicate.zig,TestCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicate,BenchmarkCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicateVarianceEnvelope,planner,2025-09-21
-REQ-GQL-017,Path Execution,PathVariableLengthPropertyPredicateVarianceEnvelope,BENCHED,tests/canary_path_varlen_predicate.zig,TestCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicate,BenchmarkCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicateVarianceEnvelope,planner,2025-09-21
 REQ-GQL-017,Property Access,Engine,TESTED,src/canary.zig,TestCANARY_REQ_GQL_017_PropertyAccess,,engine,2025-09-20
 REQ-GQL-017,Property Access,Engine,TESTED,src/server/graph/exec.zig,TestCANARY_REQ_GQL_017_PropertyAccessDecimalFormat,,engine,2025-09-20
 REQ-GQL-017,Property Access,Engine,TESTED,,TestCANARY_REQ_GQL_017_PropertyAccessMissing,,engine,2025-09-20
@@ -2095,7 +2093,6 @@ REQ-GQL-021,QueryOptimization,ParallelismPlanning,TESTED,tests/query_plan_cache_
 REQ-GQL-022,DistributedQueryPlanning,FederationAwareOptimization,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_022_FederationAwareOptimization,,distributed,2025-10-05
 REQ-GQL-022,GraphStore Snapshot Load,LoadCorrectnessAndVariance,BENCHED,tests/canary_physiological_redo.zig,TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness,BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope,storage,2026-02-04
 REQ-GQL-022,Storage Snapshot Load,GraphStoreLoadOptimizationDeltaVarianceEnvelope,BENCHED,tests/benchmark_redo_optimization_delta.zig,TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness,BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadOptimizationDeltaVarianceEnvelope,storage,2026-02-04
-REQ-GQL-022,Storage/Recovery,SnapshotLoadOptimizationDeltaVariance,BENCHED,tests/canary_storage_redo_delta.zig,TestCANARY_REQ_GQL_022_RedoOptimizationDeltaSmoke,BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope,storage,2026-02-04
 REQ-GQL-023,DistributedQueryPlanning,ShardAffinityAnalysis,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_023_ShardAffinityAnalysis,,distributed,2025-10-05
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,BENCHED,tests/canary_txn_phantom_anomaly.zig,TestCANARY_REQ_GQL_023_PhantomDetection,BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope,txn,2025-09-21
 REQ-GQL-023,MVCC Phantom Prevention,PredicateRangeDetection,BENCHED,src/transactions/manager.zig,TestCANARY_REQ_GQL_023_PhantomDetection,BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope,txn,2025-09-26
@@ -4730,6 +4727,8 @@ REQ-SONNY-1326-EXPRESSION-TENANCY,ExpressionPathTenantScope,ScopeResolution,TEST
 REQ-SONNY-1326-EXPRESSION-TENANCY,ExpressionPathTenantScope,SharedVisibilityPredicate,TESTED,src/execution/tenant_visibility.zig,tests/test_sonny1326_expression_tenancy.zig,,security,2026-09-13
 REQ-SONNY-1330-PARALLEL-UNION-ARM-SAFETY,ParallelUnionArms,ReadOnlyArmHydration,TESTED,tests/test_sonny1330_parallel_union.zig,tests/test_sonny1330_parallel_union.zig,,execution,2026-09-14
 REQ-SONNY-2394-VARLEN-ROW-OWNERSHIP,VariableLengthPathRowOwnership,Regression,TESTED,tests/test_sonny2394_varlen_rel_list_ownership.zig,tests/test_sonny2394_varlen_rel_list_ownership.zig,,engine,2026-09-23
+REQ-SONNY-2439-PERF-METHODOLOGY,Perf Gates,MonotonicClockNoTestLocalBenchmarks,TESTED,tests/test_sonny2439_perf_methodology.zig,tests/test_sonny2439_perf_methodology.zig,,performance,2026-11-12
+REQ-SONNY-2441-KMS-REMOTE-PATH,KMSProviderSystem,NoDeadRemotePath,TESTED,tests/test_sonny2441_kms_provider_paths.zig,tests/test_sonny2441_kms_provider_paths.zig,,security,2026-11-12
 REQ-SONNY-2463-BARE-NODE-LEAK,EngineDirectNodeOwnership,PageFreesReturnedNode,TESTED,src/server/node_scan_stream.zig,tests/test_sonny2463_bare_node_leak.zig,,engine,2026-09-25
 REQ-SONNY-2463-BARE-NODE-LEAK,EngineDirectNodeOwnership,Regression,TESTED,tests/test_sonny2463_bare_node_leak.zig,tests/test_sonny2463_bare_node_leak.zig,,engine,2026-09-25
 REQ-SONNY-2463-MATERIALIZE-OOM,EngineDirectNodeOwnership,PartialNodeFreed,TESTED,src/server/node_scan_stream.zig,tests/test_sonny2463_materialize_oom.zig,,engine,2026-09-25
@@ -5213,6 +5212,7 @@ REQ-SONNY-3384-SET-DELETE-RETURN,DELETE in Query,Regression,TESTED,tests/test_so
 REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,OwnedGraphEntities,TESTED,src/execution/value_utilities.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,transport,2026-09-29
 REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,RealServer,TESTED,tests/test_sonny_write_allowlist_r4_transport.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,transport,2026-09-29
 REQ-SONNY-3386-MULTI-CHAIN-WITH,MultiChainRelationshipMatch,WithStage,TESTED,src/execution/match_operations.zig,tests/test_sonny_write_allowlist_r4b.zig,,engine,2026-09-29
+REQ-SONNY-6272-NO-DOCKERFILE-PROD,Container Images,UnsupportedImageRemoved,TESTED,tests/test_sonny6272_dockerfile_prod.zig,tests/test_sonny6272_dockerfile_prod.zig,,release,2026-11-12
 REQ-SONNY-6290-BACKUP-DOC-COMMANDS,CLI Backup,DocumentedCommandsExist,TESTED,tests/test_sonny6290_backup_doc_commands.zig,tests/test_sonny6290_backup_doc_commands.zig,,cli,2026-11-12
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,ManagerRestoreIsStaged,TESTED,src/storage/backup.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,NoInPlaceRestoreOneSyncTimeouts,TESTED,tests/test_sonny6300_staged_restore_paths.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12

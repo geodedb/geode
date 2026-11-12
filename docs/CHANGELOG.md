@@ -362,6 +362,20 @@
 
 ### Fixed
 
+- **The perf-gated benchmarks time with a monotonic clock, and the two that
+  timed only test-local code are removed (SONNY-2439, partial).** Every
+  benchmark that makes a claim through `tests/perf_gate.zig` read
+  `CLOCK_REALTIME`, which NTP slews and steps; they read `CLOCK_MONOTONIC`.
+  `tests/canary_storage_redo_delta.zig` (a synthetic `simulateRedo` loop
+  whose result was discarded) and `tests/canary_path_varlen_predicate.zig`
+  (a 4-node test-local DFS) imported no product code, so a missed claim
+  could not mean a product regression; they, their steps
+  (`test-canary-storage-redo-delta`, `test-canary-path-varlen-predicate`) and
+  their entries in the scheduled `test-perf-gates-enforced` job are removed.
+  Still open: batch timing, the production allocator, interleaved A/B with
+  median/IQR, calibrated thresholds, the phantom-range baseline that never
+  enables phantom prevention, and the job's GitLab schedule. Regression:
+  `zig build test-sonny2439-perf-methodology`.
 - **BREAKING: `Dockerfile.prod` and `make docker-build-prod` are removed
   (SONNY-6272).** The image could not build: it installed Zig 0.15.2
   (build.zig.zon requires 0.16.0) and copied a `vendor/` directory that does
