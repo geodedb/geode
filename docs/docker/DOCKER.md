@@ -477,7 +477,6 @@ deploy:
 - `Dockerfile` - Multi-stage production build
 - `Dockerfile.dev` - Development environment
 - `Dockerfile.simple` - Fallback with inline Zig installation
-- `Dockerfile.prod` - Distroless production image
 - `docker-compose.yml` - Standard deployment
 - `docker-compose.dev.yml` - Development orchestration
 - `docker-compose.distributed.yml` - 3-node cluster

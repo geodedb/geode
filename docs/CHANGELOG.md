@@ -346,6 +346,15 @@
 
 ### Fixed
 
+- **BREAKING: `Dockerfile.prod` and `make docker-build-prod` are removed
+  (SONNY-6272).** The image could not build: it installed Zig 0.15.2
+  (build.zig.zon requires 0.16.0) and copied a `vendor/` directory that does
+  not exist, its builder (ubuntu:26.04) and runtime (cuda
+  base-ubuntu24.04, `libssl3`) did not match, and no CI job built it or
+  checked it. The supported GPU image is `Dockerfile.release.gpu`, under
+  `release/dockerfile_manifest.json` and its compatibility checks.
+  `docker-compose.example.yml` now builds `Dockerfile` like the other
+  compose files. Regression: `zig build test-sonny6272-dockerfile-prod`.
 - **The QUIC test client fails at once on a connection the server closed
   (SONNY-6374 item 2).** `QuicProtoClient` (tests/proto_test_util.zig)
   waited for a reply until the 120 s liveness cap whenever the server was
