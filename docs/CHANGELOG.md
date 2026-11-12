@@ -238,6 +238,16 @@
   OPTIONAL MATCH's WHERE fails the statement. Regression (in-memory,
   persisted, tenant-scoped and RLS sessions, leak-checked):
   `zig build test-sonny3184-optional-match-distinct-call`.
+- **WITH DISTINCT on every session (SONNY-3167, SONNY-6296 item 1):** on
+  the in-memory, tenant-scoped and RLS sessions (the legacy executor) a WITH
+  DISTINCT after a hop or comma pattern, or projecting a value, was ignored:
+  `MATCH (q:Q),(z:Z) WITH DISTINCT q MATCH (q) RETURN count(*)` counted 32
+  instead of 4, and `MATCH (q:Q)-[:R]->(x) WITH DISTINCT q.f AS f RETURN f`
+  returned every duplicate. Such a WITH now runs in the shared WITH stage
+  the planned read uses (projection, DISTINCT with NULLs equal, ORDER BY,
+  SKIP, LIMIT), whatever the pattern. Regression (in-memory, persisted,
+  tenant-scoped and RLS sessions, leak-checked):
+  `zig build test-sonny3184-optional-match-distinct-call`.
 
 ---
 

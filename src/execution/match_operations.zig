@@ -10709,6 +10709,18 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         defer rows.deinit(allocator);
         return projectReturnOverRows(allocator, q, &rows, param_names, param_values);
     }
+    // CANARY: REQ=REQ-SONNY-3167-WITH-DISTINCT; FEATURE="LegacyWithDistinct"; ASPECT=SharedWithStage; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-3167, SONNY-6296 item 1: a WITH DISTINCT after the MATCH runs
+    // in the shared WITH stage (`readWithStageRows`: the projection,
+    // DISTINCT, ORDER BY, SKIP and LIMIT), as the planned read runs it. The
+    // pattern executors below projected the WITH's items and dropped the
+    // DISTINCT: `MATCH (q:Q),(z:Z) WITH DISTINCT q MATCH (q) RETURN
+    // count(*)` counted 32, not 4, on the in-memory, tenant and RLS sessions.
+    if (q.with_clause) |wc| {
+        if (wc.distinct and !q.is_initial_with and q.set_clauses.len == 0 and q.remove_clauses.len == 0 and sharedProjectionServes(q)) {
+            return executeWithStageOrReturn(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        }
+    }
     // CANARY: REQ=REQ-SONNY-3046-WITH-BOUND-JOIN; FEATURE="ChainedMatchJoin"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_sonny3046_with_bound_variable_join.zig; OWNER=engine; UPDATED=2026-11-11
     // SONNY-3046, SONNY-3376, SONNY-3388: a pattern that names a node,
     // relationship or path variable the incoming row binds (a chained part
