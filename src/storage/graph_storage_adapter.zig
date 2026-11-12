@@ -10271,7 +10271,15 @@ pub const StorageAdapter = struct {
 
     /// Attempt to create a per-graph audit logger. Returns null on failure
     /// (soft failure — the graph remains usable without per-graph audit).
-    fn initAuditForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) ?*audit.AuditLogger {
+    /// SONNY-6422: except when GEODE_AUDIT_PUB/GEODE_AUDIT_SEC are set but
+    /// unusable (one of the pair, malformed, or not a pair): that is an
+    /// error, so the graph does not open unaudited under a key configuration
+    /// the operator believes is in force.
+    fn initAuditForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) !?*audit.AuditLogger {
+        if (try audit.AuditLogger.loadEnvSigningKey(allocator)) |kp| {
+            var k = kp;
+            k.deinit();
+        }
         const graph_dir = graphDirPath(allocator, data_dir, graph_uuid) catch |err| {
             log.warn("failed to build graph dir path for audit: {}", .{err});
             return null;
@@ -10461,7 +10469,7 @@ pub const StorageAdapter = struct {
             .merge_tuple_locks = merge_tuple_locks,
             .name = owned_name,
             .uuid = graph_uuid,
-            .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
+            .audit_logger = if (is_security_graph) try initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
             .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
@@ -10562,7 +10570,7 @@ pub const StorageAdapter = struct {
             .merge_tuple_locks = merge_tuple_locks,
             .name = owned_name,
             .uuid = graph_uuid,
-            .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
+            .audit_logger = if (is_security_graph) try initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
             .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 

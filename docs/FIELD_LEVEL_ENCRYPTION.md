@@ -25,12 +25,22 @@ This feature is implemented with regression testing and follows NIST cryptograph
 ### 1. Key Hierarchy
 
 ```
-Master Key (ENV or KMS)
+Master Key (GEODE_MASTER_KEY)
  └─ TRK (Tenant Root Key) [KEK]
      └─ SK (Schema Key) [KEK], per (tenant, schema)
          ├─ FEK (Field Encryption Key) [DEK], per (tenant, schema, field, version)
          └─ BIK (Blind Index Key) [HMAC key], per searchable field
 ```
+
+**Master key:** the first 32 bytes of `GEODE_MASTER_KEY`, used as raw bytes
+(the value is not hex-decoded: a 64-character hex string contributes its
+first 32 characters). It must be at least 32 bytes long (SONNY-6422): a
+shorter value used to be hashed with SHA-256 into a key, so any short string
+worked as the master key. Now `geode serve` refuses to start with
+`[startup] GEODE_MASTER_KEY is set but unusable: it is N bytes and must be at
+least 32 bytes` (the value is never printed) and the key loader returns
+`MasterKeyTooShort`. An empty value counts as unset (`MasterKeyRequired`).
+No KMS supplies the master key in this release.
 
 **Derivation:** HKDF-SHA256 with context strings:
 

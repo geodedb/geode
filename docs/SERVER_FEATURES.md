@@ -149,41 +149,22 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 - All database files created with mode 0o600 (owner-only access)
 - Parent directory fsync for durability guarantees
 
-### 1.4 S3 Cloud Backup
+### 1.4 Backup (local files only)
 
-**Implementation**: `/src/storage/s3_backup.zig`
-**CANARY**: `REQ-GQL-S3-001`
+**Status (2026-11-12, SONNY-6422):** there is no S3 / DigitalOcean Spaces
+backup. This section used to describe `src/storage/s3_backup.zig` (multipart
+upload, retries, Raft-snapshot backups, incremental and point-in-time
+recovery, upload throughput) as a working backup target; no command reaches
+that code or any object storage (SONNY-6290). Real object-storage support is
+story SONNY-6356.
 
-**Backup Types**:
-
-1. **Full Backup**: Complete database snapshot
-2. **Incremental Backup**: Delta changes since last backup
-3. **Point-in-Time Recovery**: Restore to any LSN
-
-**S3 Features**:
-
-- Multipart upload for files >5MB (configurable)
-- Exponential backoff retry (base 100ms, max 3 retries)
-- Compression: `none` or `gzip` only (GAP-0880) — the backup engine applies a
-  real gzip/DEFLATE encoder when requested and records the codec actually
-  applied; `zstd`/`lz4`/`snappy` encoders are NOT bundled and are rejected
-  with `UnsupportedCompression`
-- Encryption: AES-256 with envelope encryption
-- Checksum validation: SHA-256
-
-**Backup Process**:
-
-1. Create Raft snapshot for consistency
-2. Archive data files (tar format)
-3. Calculate checksum
-4. Upload to S3 with metadata
-5. Store backup manifest
-
-**Performance**:
-
-- Multipart upload: 50-100MB/s throughput
-- Compression ratio: 3-5x for graph data
-- Incremental backup: 90-95% smaller than full
+What exists: `geode backup create` writes a local backup file (an `s3://` or
+`http(s)://` `--output` is refused), with `none` or `gzip` payload
+compression (GAP-0880; `zstd`/`lz4`/`snappy` are rejected with
+`UnsupportedCompression`) and encryption under `GEODE_TDE_KEY` when it is set
+(SONNY-6355). `geode restore` restores a local backup file offline into a new
+or empty directory. Copy backup files to object storage with your own tool
+(see [USAGE.md](USAGE.md)).
 
 ---
 

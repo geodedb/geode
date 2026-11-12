@@ -73,6 +73,64 @@ pub fn refuseUnusableTdeKey(allocator: std.mem.Allocator) !void {
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED; FEATURE="Key configuration"; ASPECT=ServerStartupRefusal; STATUS=TESTED; TEST=tests/test_sonny6422_env_key_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6422: refuse to start when a key variable is set but unusable, the
+/// same way `refuseUnusableTdeKey` does, before the data directory is
+/// created. No value is printed.
+///   - GEODE_AUDIT_PUB / GEODE_AUDIT_SEC: one without the other, a
+///     malformed value, or a public key that is not the seed's. The audit
+///     logger used to generate file-based keys instead.
+///   - GEODE_MASTER_KEY: shorter than 32 bytes. It used to be hashed into a
+///     key, so any short value worked as the FLE master key.
+///   - GEODE_WAL_KEY: read by nothing in the server (the storage-engine WAL
+///     is encrypted with GEODE_TDE_KEY), so a server given only
+///     GEODE_WAL_KEY wrote its WAL in plaintext.
+/// Unset (or empty) variables pass.
+pub fn refuseUnusableKeyConfig(allocator: std.mem.Allocator) !void {
+    if (geode.security.audit.AuditLogger.loadEnvSigningKey(allocator)) |maybe_kp| {
+        if (maybe_kp) |kp| {
+            var k = kp;
+            k.deinit();
+        }
+    } else |err| {
+        std.debug.print(
+            "[startup] GEODE_AUDIT_PUB / GEODE_AUDIT_SEC unusable ({s}): set both or neither; GEODE_AUDIT_SEC is the 64 hex character Ed25519 seed " ++
+                "and GEODE_AUDIT_PUB the 64 hex character public key of that seed. Refusing to start: the audit log would otherwise be signed with " ++
+                "file-based keys you did not configure. Nothing was written (docs/AUDIT_LOGGING.md).\n",
+            .{@errorName(err)},
+        );
+        log.err("audit signing key configuration unusable: refusing to start", &.{Attr.string("error", @errorName(err))});
+        return error.AuditKeyConfigInvalid;
+    }
+
+    if (std.c.getenv("GEODE_MASTER_KEY")) |raw| {
+        const len = std.mem.span(raw).len;
+        if (len != 0 and len < geode.fle_key_manager.master_key_min_len) {
+            std.debug.print(
+                "[startup] GEODE_MASTER_KEY is set but unusable: it is {d} bytes and must be at least {d} bytes (the first 32 bytes are the FLE master key). " ++
+                    "Refusing to start: a short master key is a weak field-level-encryption key. Nothing was written. " ++
+                    "Fix the key, or unset GEODE_MASTER_KEY to run without FLE (docs/FIELD_LEVEL_ENCRYPTION.md).\n",
+                .{ len, geode.fle_key_manager.master_key_min_len },
+            );
+            log.err("GEODE_MASTER_KEY too short: refusing to start", &.{Attr.int("length", @intCast(len))});
+            return error.MasterKeyTooShort;
+        }
+    }
+
+    if (std.c.getenv("GEODE_WAL_KEY")) |raw| {
+        if (std.mem.span(raw).len != 0) {
+            std.debug.print(
+                "[startup] GEODE_WAL_KEY is set, but the server does not use it: the storage-engine WAL is encrypted with GEODE_TDE_KEY, together with the pages. " ++
+                    "Refusing to start rather than let you believe the WAL is encrypted with GEODE_WAL_KEY. Nothing was written. " ++
+                    "Unset GEODE_WAL_KEY and set GEODE_TDE_KEY (docs/TDE_FILE_LEVEL_ENCRYPTION.md).\n",
+                .{},
+            );
+            log.err("GEODE_WAL_KEY is not used by the server: refusing to start", &.{});
+            return error.WalKeyUnsupported;
+        }
+    }
+}
+
 /// SONNY-6339: the startup refusal for any other failure to establish the
 /// durable auth state. No secrets.
 fn printAuthStateUnavailable(data_dir: []const u8, what: []const u8, err: anyerror) void {

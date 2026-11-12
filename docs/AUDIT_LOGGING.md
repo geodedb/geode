@@ -88,9 +88,18 @@ seed. So, with the trusted `--pubkey` values:
 ### Signing Configuration
 
 - Signing enabled by default
-- Keys from environment: `GEODE_AUDIT_PUB` (hex32), `GEODE_AUDIT_SEC` (hex64)
-- If missing in non-test builds: CONFIG_ERROR SIGNING_KEYS_MISSING (exit 78)
-- Test builds derive a deterministic key from a fixed seed
+- Keys from environment: `GEODE_AUDIT_SEC`, the Ed25519 seed (64 hex
+  characters; the legacy 128-character secret key is accepted), and
+  `GEODE_AUDIT_PUB`, the public key of that seed (64 hex characters)
+- Set both or neither (an empty value counts as unset). With neither, the
+  log uses file-backed keys (below). Only one of them set, a malformed value,
+  or a `GEODE_AUDIT_PUB` that is not the seed's public key is an error
+  (SONNY-6422): `geode serve` refuses to start before it creates the data
+  directory (`[startup] GEODE_AUDIT_PUB / GEODE_AUDIT_SEC unusable
+  (AuditKeyPairIncomplete | AuditKeyInvalid | AuditKeyMismatch) ...`, no
+  value printed), and the `__geode_security` graph does not open without
+  its audit logger. One of the pair alone used to fall back silently to
+  file-backed keys.
 
 ### File-Backed Keys and Key Epochs (SONNY-6322)
 

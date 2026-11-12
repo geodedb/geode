@@ -464,7 +464,7 @@ Skipped: 46 (setup requirements not met)
 
 ### Completed Enterprise Features (2025)
 
-- ✅ **S3 Cloud Backup**: Production-ready with Digital Ocean Spaces integration
+- ❌ **Cloud (S3 / DigitalOcean Spaces) Backup**: NOT implemented. Backups are local files (`geode backup create` / `geode restore`); no command reaches object storage (SONNY-6290, corrected SONNY-6422). Real support is story SONNY-6356
 - ✅ **Vector Operations**: HNSW indexing with 6 distance metrics
 - ✅ **Performance Optimization**: 13.18x I/O improvement, memory-mapped operations
 - ✅ **ML Graph Embeddings**: Node2Vec, GraphSAGE, DeepWalk

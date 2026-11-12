@@ -22,7 +22,7 @@ At-rest TDE encrypts storage with **one master key** for the whole instance:
   by `tde.loadKey` and wired into **every** per-graph storage engine through a
   single `GraphConfig.encryption_key` in
   [`src/graph_store.zig`](../../src/graph_store.zig) (`initGlobalAdapter`). Every
-  graph's pages are encrypted under that same key (the WAL honors `GEODE_WAL_KEY` as an instance-wide override before falling back to `GEODE_TDE_KEY`) — there is no
+  graph's pages and its storage-engine WAL are encrypted under that same key (there is no separate WAL key; a set `GEODE_WAL_KEY` refuses startup, SONNY-6422) — there is no
   per-graph or per-tenant key at the page boundary.
 - The key hierarchy
   ([`src/security/tde_hierarchy.zig`](../../src/security/tde_hierarchy.zig))

@@ -235,13 +235,9 @@ services.geode = {
     ];
   };
 
-  # S3 backups
-  backup = {
-    enable = true;
-    s3Bucket = "prod-geode-backups";
-    s3Region = "us-west-2";
-    schedule = "0 2 * * *";   # Daily at 2 AM
-  };
+  # No backup option: geode has no S3 / object-storage backup (backups are
+  # local files written by `geode backup create`; SONNY-6290). Schedule that
+  # command yourself and copy the file with your own tool.
 
   # Change Data Capture
   cdc = {

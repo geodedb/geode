@@ -1385,6 +1385,9 @@ pub fn main() !void {
     // before the data directory is created: it used to open the store with
     // no page key and write every page in plaintext.
     try server_init.refuseUnusableTdeKey(gpa);
+    // SONNY-6422: likewise a half-configured audit key pair, a short
+    // GEODE_MASTER_KEY, or a GEODE_WAL_KEY nothing reads.
+    try server_init.refuseUnusableKeyConfig(gpa);
     const data_dir: []const u8 = try resolveServerDataDir(gpa, &config);
     graph_store.setDataDirOverride(gpa, data_dir);
 
@@ -2597,9 +2600,9 @@ pub fn main() !void {
         eval.setGlobalTimeseriesStore(&ts_store);
         defer eval.setGlobalTimeseriesStore(null);
 
-        // GAP-0268: Wire WAL persistence hooks for checkpoint truncation.
-        // The hooks allow the persistence loop to sync and truncate the WAL
-        // after each successful checkpoint, preventing unbounded WAL growth.
+        // GAP-0268: Wire the persistence-loop hooks: a light (O(dirty))
+        // engine checkpoint on every persistence tick, which also truncates
+        // the storage-engine WAL (SONNY-6422: no logical WAL is behind them).
         // CANARY: REQ=REQ-WAL-HOOKS-001; FEATURE="WAL Persistence Hooks"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_wal.zig; OWNER=storage; UPDATED=2026-06-11
         const wal_mod = geode.wal;
         wal_mod.installPersistenceHooks();

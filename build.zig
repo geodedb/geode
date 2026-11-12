@@ -5042,6 +5042,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_phantom_range_tests.step, 1, test_shard_loads, test_shard_index);
     const phantom_range_tests_step = b.step("test-canary-txn-phantom-range", "Run MVCC phantom-prevention range tracker CANARY tests (REQ-GQL-023)");
     phantom_range_tests_step.dependOn(&run_phantom_range_tests.step);
+    // SONNY-6422 item 7: the phantom check looks the range list up once per
+    // commit, not once per concurrent write.
+    const sonny6422_phantom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_phantom_check_once_per_commit.zig"), .target = target, .optimize = optimize }) });
+    sonny6422_phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_range_tests);
+    sonny6422_phantom_tests.root_module.addImport("perf_gate", perf_gate_mod);
+    const run_sonny6422_phantom_tests = b.addRunArtifact(sonny6422_phantom_tests);
+    shardDep(test_step, &run_sonny6422_phantom_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6422-phantom-check-once-per-commit", "Run SONNY-6422 item 7 regression (a transaction with no range reads checks no concurrent writes against ranges at commit, so its phantom check stays flat as the write history grows 64x; a write inside a read range still fails the commit)").dependOn(&run_sonny6422_phantom_tests.step);
     const run_planner_enumerator_tests = b.addRunArtifact(planner_enumerator_tests);
     shardDep(test_step, &run_planner_enumerator_tests.step, 1, test_shard_loads, test_shard_index);
     const planner_enumerator_tests_step = b.step("test-canary-planner-enumerator", "Run cost-based plan enumeration engine CANARY tests (REQ-GQL-024)");
@@ -9778,6 +9786,33 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6386-dead-mock-and-stale-docs", "Run SONNY-6386 items 4 and 8 regression (the unbuilt mock backup integration test is removed and no status row cites it; CURRENT_ARCHITECTURE.md describes the real backup path and Zig 0.16; the CHANGELOG does not claim a test-tde-kms-integration run)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6422 items 3-5: the dead WriteAheadLog wrapper is gone, the
+    // unbuilt duplicate key-rotation schedule test is gone, and every
+    // TESTED marker in docs/SECURITY_PROGRESS.md cites a compiled test.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_dead_wal_and_false_markers.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6422_dw_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6422-dead-wal-and-false-markers", "Run SONNY-6422 items 3-5 regression (src/wal.zig has no WriteAheadLog wrapper or mutation callback and nothing refers to them; tests/test_key_rotation_schedule.zig and its made-up test name are gone; every TESTED marker in docs/SECURITY_PROGRESS.md cites a test a build step compiles)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6422 item 9: no doc presents S3 / Spaces as a backup target or
+    // the removed TDE-KMS integration as current code.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_backup_docs_truth.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6422_bd_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6422-backup-docs-truth", "Run SONNY-6422 item 9 regression (TODO, GQL_COMPLIANCE, SERVER_FEATURES, DOCKER_OVERVIEW and NIX_DEPLOYMENT present no S3 / DigitalOcean Spaces backup target, option or variable, and the FLE PQC research spec does not present tde_kms_integration.zig as current code)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per
@@ -9868,8 +9903,26 @@ pub fn build(b: *std.Build) void {
     const run_sonny6386_tde_tests = b.addRunArtifact(sonny6386_tde_tests);
     spawnsBuiltGeode(sonny6386_tde_tests);
     shardDep(test_step, &run_sonny6386_tde_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6386_tde_step = b.step("test-sonny6386-tde-key-fail-closed", "Run SONNY-6386 item 1 regression (spawns servers: a set but malformed GEODE_TDE_KEY refuses startup, names the variable, never echoes it and creates nothing; the adapter, WAL and HMAC key loaders refuse a malformed key instead of falling back to no encryption or another key)");
+    const sonny6386_tde_step = b.step("test-sonny6386-tde-key-fail-closed", "Run SONNY-6386 item 1 regression (spawns servers: a set but malformed GEODE_TDE_KEY refuses startup, names the variable, never echoes it and creates nothing; the adapter and HMAC key loaders refuse a malformed key instead of falling back to no encryption or another key)");
     sonny6386_tde_step.dependOn(&run_sonny6386_tde_tests.step);
+    const sonny6422_env_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_env_key_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6422_env_test_mod.link_libc = true;
+    sonny6422_env_test_mod.addImport("geode", root_mod);
+    sonny6422_env_test_mod.addImport("logging", logging_mod);
+    const sonny6422_env_tests = b.addTest(.{ .root_module = sonny6422_env_test_mod });
+    const run_sonny6422_env_tests = b.addRunArtifact(sonny6422_env_tests);
+    spawnsBuiltGeode(sonny6422_env_tests);
+    shardDep(test_step, &run_sonny6422_env_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6422_env_step = b.step("test-sonny6422-env-key-fail-closed", "Run SONNY-6422 items 1-2 regression (spawns servers: a half-configured or mismatched GEODE_AUDIT_PUB/SEC pair, a GEODE_MASTER_KEY under 32 bytes and an unread GEODE_WAL_KEY refuse startup before the data directory exists; the audit logger, the security graph, the FLE master-key loader and geode migrate create refuse instead of falling back to file keys, a hashed short key or no signature)");
+    sonny6422_env_step.dependOn(&run_sonny6422_env_tests.step);
+    const sonny6422_dd_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_cli_data_dir_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6422_dd_test_mod.link_libc = true;
+    const sonny6422_dd_tests = b.addTest(.{ .root_module = sonny6422_dd_test_mod });
+    const run_sonny6422_dd_tests = b.addRunArtifact(sonny6422_dd_tests);
+    spawnsBuiltGeode(sonny6422_dd_tests);
+    shardDep(test_step, &run_sonny6422_dd_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6422_dd_step = b.step("test-sonny6422-cli-data-dir-fail-closed", "Run SONNY-6422 item 6 regression (geode storage verify on a data directory whose adapter cannot open exits non-zero naming it, instead of verifying an empty in-memory store; an openable directory still verifies)");
+    sonny6422_dd_step.dependOn(&run_sonny6422_dd_tests.step);
     const sonny6386_fle_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_fle_rotate_key_unsupported.zig"), .target = target, .optimize = optimize });
     sonny6386_fle_test_mod.link_libc = true;
     sonny6386_fle_test_mod.addImport("geode", root_mod);
@@ -9892,6 +9945,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6386_rb_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6386_rb_step = b.step("test-sonny6386-remote-backup-atomic-output", "Run SONNY-6386 item 3 regression (spawns a server: geode backup create --server receives into a synced temporary file and renames it onto --output, so a previous backup is never truncated in place, the result is a complete 0600 backup with nothing left beside it, and a failed backup leaves --output untouched)");
     sonny6386_rb_step.dependOn(&run_sonny6386_rb_tests.step);
+    const sonny6422_bp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_remote_backup_progress.zig"), .target = target, .optimize = optimize });
+    sonny6422_bp_test_mod.link_libc = true;
+    sonny6422_bp_test_mod.addImport("geode", root_mod);
+    sonny6422_bp_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6422_bp_test_mod.addImport("schema", schema_mod);
+    sonny6422_bp_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6422_bp_tests = b.addTest(.{ .root_module = sonny6422_bp_test_mod });
+    const run_sonny6422_bp_tests = b.addRunArtifact(sonny6422_bp_tests);
+    spawnsBuiltGeode(sonny6422_bp_tests);
+    shardDep(test_step, &run_sonny6422_bp_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6422_bp_step = b.step("test-sonny6422-remote-backup-progress", "Run SONNY-6422 item 8 regression (spawns a server, seeds several MiB, then geode backup create --server prints each 10% progress step at most once, in order, ending at 100%)");
+    sonny6422_bp_step.dependOn(&run_sonny6422_bp_tests.step);
     const sonny6386_rh_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"), .target = target, .optimize = optimize });
     sonny6386_rh_test_mod.link_libc = true;
     sonny6386_rh_test_mod.addImport("geode", root_mod);
@@ -12787,7 +12852,7 @@ pub fn build(b: *std.Build) void {
     // the blocked monolithic `test` step (per-step sweep is the canonical gate).
     const run_wal_tests = b.addRunArtifact(wal_tests);
     shardDep(test_step, &run_wal_tests.step, 1, test_shard_loads, test_shard_index);
-    const wal_test_step = b.step("test-wal", "Run WAL unit tests (append, deprecated no-op replay, checkpoint, CRC)");
+    const wal_test_step = b.step("test-wal", "Run the persistence-loop hook tests (src/wal.zig: light checkpoint every tick; SONNY-6422 removed the dead CDC WriteAheadLog wrapper and its tests)");
     wal_test_step.dependOn(&run_wal_tests.step);
 
     // Issue #460: Shared cross-connection optimizer unit tests

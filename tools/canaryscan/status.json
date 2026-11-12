@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T20:59:51.82942015Z",
+  "generated_at": "2026-11-12T21:14:06.228012916Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -43580,20 +43580,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-06-10"
-        },
-        {
-          "feature": "KeyRotationScheduling",
-          "aspect": "TEST",
-          "status": "TESTED",
-          "files": [
-            "tests/test_key_rotation_schedule.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_002_Schedule"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
         }
       ]
     },
@@ -60900,65 +60886,19 @@
       ]
     },
     {
-      "id": "REQ-PERF-WAL-001",
-      "features": [
-        {
-          "feature": "WriteAheadLog",
-          "aspect": "DeltaPersistence",
-          "status": "TESTED",
-          "files": [
-            "src/wal.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-03-31"
-        },
-        {
-          "feature": "WriteAheadLog",
-          "aspect": "UnitTest",
-          "status": "TESTED",
-          "files": [
-            "tests/test_wal.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-02-17"
-        }
-      ]
-    },
-    {
       "id": "REQ-PERF-WAL-002",
       "features": [
         {
           "feature": "WriteAheadLog",
           "aspect": "MutationCallback",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/graph_store.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-02-17"
-        }
-      ]
-    },
-    {
-      "id": "REQ-PERF-WAL-006",
-      "features": [
-        {
-          "feature": "WriteAheadLog",
-          "aspect": "LibExport",
-          "status": "TESTED",
-          "files": [
-            "src/lib.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-02-17"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -83994,6 +83934,177 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6422-BACKUP-DOCS-TRUTH",
+      "features": [
+        {
+          "feature": "Docs",
+          "aspect": "NoObjectStorageOrRemovedTestClaims",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_backup_docs_truth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_backup_docs_truth.zig"
+          ],
+          "benches": [],
+          "owner": "docs",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6422-CLI-DATA-DIR-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "DataDir",
+          "aspect": "NoInMemoryFallback",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig",
+            "tests/test_sonny6422_cli_data_dir_fail_closed.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_cli_data_dir_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6422-DEAD-WAL-FALSE-MARKERS",
+      "features": [
+        {
+          "feature": "Governance",
+          "aspect": "NoDeadWalWrapperOrFalseTestedMarkers",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_dead_wal_and_false_markers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_dead_wal_and_false_markers.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "Key configuration",
+          "aspect": "AuditKeyPairComplete",
+          "status": "TESTED",
+          "files": [
+            "src/security/audit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "MasterKeyMinimumLength",
+          "status": "TESTED",
+          "files": [
+            "src/keys/manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "MigrationHmacKey",
+          "status": "TESTED",
+          "files": [
+            "src/cli/backup_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "ServerStartupRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "SetButUnusableKeyRefuses",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6422-PHANTOM-ONCE-PER-COMMIT",
+      "features": [
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "RangeLookupOncePerCommit",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_phantom_check_once_per_commit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_phantom_check_once_per_commit.zig"
+          ],
+          "benches": [],
+          "owner": "txn",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6422-REMOTE-BACKUP-PROGRESS",
+      "features": [
+        {
+          "feature": "CLI Backup",
+          "aspect": "ProgressPrintedOncePerStep",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_remote_backup_progress.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_remote_backup_progress.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -86120,18 +86231,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-01-28"
-        },
-        {
-          "feature": "TDEEnforcement",
-          "aspect": "WALEncryption",
-          "status": "TESTED",
-          "files": [
-            "src/wal.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-02-19"
         }
       ]
     },
@@ -91105,6 +91204,34 @@
       "features": [
         {
           "feature": "WAL Persistence Hooks",
+          "aspect": "CheckpointPolicy",
+          "status": "TESTED",
+          "files": [
+            "src/wal.zig"
+          ],
+          "tests": [
+            "tests/test_wal.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "WAL Persistence Hooks",
+          "aspect": "LibExport",
+          "status": "TESTED",
+          "files": [
+            "src/lib.zig"
+          ],
+          "tests": [
+            "tests/test_wal.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "WAL Persistence Hooks",
           "aspect": "ServerInit",
           "status": "TESTED",
           "files": [
@@ -91116,6 +91243,20 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-06-11"
+        },
+        {
+          "feature": "WAL Persistence Hooks",
+          "aspect": "UnitTest",
+          "status": "TESTED",
+          "files": [
+            "tests/test_wal.zig"
+          ],
+          "tests": [
+            "tests/test_wal.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -91648,8 +91789,8 @@
       "BENCHED": 215,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 336,
-      "TESTED": 4763
+      "IMPL": 337,
+      "TESTED": 4770
     },
     "by_aspect": {
       "2PC": 3,
@@ -91827,6 +91968,7 @@
       "AuditFormatting": 1,
       "AuditIndep": 1,
       "AuditIntegration": 1,
+      "AuditKeyPairComplete": 1,
       "AuditLog": 2,
       "AuditLogging": 6,
       "AuditSeedEpochsAndHmacStartup": 1,
@@ -92127,6 +92269,7 @@
       "CheckedRecordRemoval": 1,
       "CheckedResult": 1,
       "CheckedStoredCasts": 1,
+      "CheckpointPolicy": 1,
       "ChecksOnThrowawayCopy": 1,
       "ChildVerifier": 1,
       "ChunkFailureDetection": 1,
@@ -92537,7 +92680,6 @@
       "DeleteReturnBeforePropose": 1,
       "DeleteRoundTrip": 1,
       "DeltaGuardPreview": 1,
-      "DeltaPersistence": 1,
       "Density": 1,
       "DenyOverridesAllow": 1,
       "DependencyGraph": 1,
@@ -93691,6 +93833,7 @@
       "MapMerge": 1,
       "MapProjection": 1,
       "MapType": 1,
+      "MasterKeyMinimumLength": 1,
       "MasterKeyRequired": 2,
       "Match": 1,
       "MatchAfterWhere": 1,
@@ -93784,6 +93927,7 @@
       "MicroBenchmarks": 1,
       "MidRunWriteFailure": 1,
       "Migration": 6,
+      "MigrationHmacKey": 1,
       "MigrationModule": 2,
       "MigrationScript": 1,
       "MigrationTesting": 1,
@@ -93890,6 +94034,7 @@
       "NoCatalog": 1,
       "NoDeadBackupTestsOrStaleCanaryRows": 1,
       "NoDeadRemotePath": 1,
+      "NoDeadWalWrapperOrFalseTestedMarkers": 1,
       "NoEnvOverride": 1,
       "NoFabricatedKeyManagement": 1,
       "NoFabricatedKmsSelfTestTruth": 1,
@@ -93900,6 +94045,7 @@
       "NoGrantDeny": 1,
       "NoGroupByAgg": 1,
       "NoGroupedReturn": 1,
+      "NoInMemoryFallback": 1,
       "NoInPlaceRestoreOneSyncTimeouts": 1,
       "NoKeyBeforeVerify": 1,
       "NoKeyOverExistingRecords": 1,
@@ -93908,6 +94054,7 @@
       "NoMatchAll": 1,
       "NoMockBackupTestNoStaleArchitectureDocs": 1,
       "NoNodeWalk": 1,
+      "NoObjectStorageOrRemovedTestClaims": 1,
       "NoPerEdgePropsPage": 1,
       "NoPerTableCacheOfRowVerdict": 1,
       "NoPlaintextFallback": 1,
@@ -94460,6 +94607,7 @@
       "ProgramGraphGate": 1,
       "ProgramReadGate": 1,
       "ProgramWriteLock": 1,
+      "ProgressPrintedOncePerStep": 1,
       "ProgressTracking": 2,
       "ProjectionWalker": 1,
       "PrometheusBridge": 1,
@@ -94638,6 +94786,7 @@
       "RandomizedEncryption": 1,
       "RangeCheckedHeaderDecode": 1,
       "RangeLatencyGate": 1,
+      "RangeLookupOncePerCommit": 1,
       "RangeOperatorsFailClosed": 1,
       "RangeOverlap": 1,
       "RangeQueryValidation": 1,
@@ -94999,7 +95148,7 @@
       "ServerStartup": 5,
       "ServerStartupCache": 1,
       "ServerStartupCatalog": 1,
-      "ServerStartupRefusal": 1,
+      "ServerStartupRefusal": 2,
       "ServerStderrPassThrough": 1,
       "ServerUnpack": 1,
       "ServerUserStore": 1,
@@ -95025,6 +95174,7 @@
       "SessionTimeout": 2,
       "SessionToken": 1,
       "Set": 2,
+      "SetButUnusableKeyRefuses": 1,
       "SetClauses": 1,
       "SetExecution": 2,
       "SetFiltering": 1,
@@ -95307,7 +95457,7 @@
       "SyslogTests": 1,
       "TDE": 2,
       "TDERotationVarianceEnvelope": 1,
-      "TEST": 12,
+      "TEST": 11,
       "TESTING": 13,
       "TLS": 1,
       "TLSConnection": 1,
@@ -95627,7 +95777,6 @@
       "VisibleDegree": 1,
       "VisibleTenantTags": 1,
       "VulkanCompute": 1,
-      "WALEncryption": 1,
       "WaitForApplied": 1,
       "WalLsnAnchorAtOpen": 1,
       "WallClockTiming": 1,

@@ -28,6 +28,18 @@ const hkdf = @import("fle_hkdf");
 pub const Error = fle.key_manager.Error;
 pub const KeyManager = fle.KeyManager;
 
+/// The minimum GEODE_MASTER_KEY length in bytes (SONNY-6422).
+pub const master_key_min_len: usize = 32;
+
+// CANARY: REQ=REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED; FEATURE="Key configuration"; ASPECT=MasterKeyMinimumLength; STATUS=TESTED; TEST=tests/test_sonny6422_env_key_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
+/// The FLE master key: the first 32 bytes of GEODE_MASTER_KEY, which must be
+/// at least `master_key_min_len` (32) bytes long. The value is used as raw
+/// bytes, not hex-decoded.
+///
+/// SONNY-6422: a shorter value is `error.MasterKeyTooShort`. It used to be
+/// hashed with SHA-256 into a key, so a 3-character value was accepted as a
+/// working master key. An empty value is unset (`MasterKeyRequired`); it was
+/// hashed into the same constant key for every deployment.
 pub fn loadMasterKeyFromEnv(allocator: std.mem.Allocator) ![32]u8 {
     var master_key: [32]u8 = undefined;
     if (getEnvVarOwned(allocator, "GEODE_MASTER_KEY")) |env_key| {
@@ -35,11 +47,10 @@ pub fn loadMasterKeyFromEnv(allocator: std.mem.Allocator) ![32]u8 {
             cb.secureZero(env_key);
             allocator.free(env_key);
         }
-        if (env_key.len >= master_key.len) {
-            @memcpy(&master_key, env_key[0..master_key.len]);
-        } else {
-            _ = try cb.Hash.digest(.sha256, env_key, &master_key);
-        }
+        if (env_key.len == 0) return Error.MasterKeyRequired;
+        // The caller reports the error (`geode serve` refuses to start).
+        if (env_key.len < master_key_min_len) return error.MasterKeyTooShort;
+        @memcpy(&master_key, env_key[0..master_key.len]);
         return master_key;
     } else |_| {
         std.log.err(

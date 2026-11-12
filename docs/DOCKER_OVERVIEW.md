@@ -161,7 +161,7 @@ the container for future use (GAP-0878).
 | `GEODE_TDE_KEY` | - | AES-256-GCM encryption key (64 hex chars / 32 bytes) |
 | `GEODE_ENABLE_TDE` | `false` | Enable Transparent Data Encryption |
 | `GEODE_KMS_PROVIDER` | - | KMS provider: `local`, `vault`, `external`, `remote` |
-| `GEODE_MASTER_KEY` | - | Master encryption key (hex) |
+| `GEODE_MASTER_KEY` | - | FLE master key: at least 32 bytes, the first 32 used as raw bytes (not hex-decoded); a shorter value refuses startup (SONNY-6422) |
 
 ### Encryption - KMS Integration
 
@@ -192,10 +192,10 @@ the container for future use (GAP-0878).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `S3_ENDPOINT` | - | S3-compatible backup endpoint |
-| `S3_ACCESS_KEY` | - | S3 access key |
-| `S3_SECRET_KEY` | - | S3 secret key |
-| `S3_BUCKET` | - | S3 bucket for backups |
+| `S3_ENDPOINT` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
+| `S3_ACCESS_KEY` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
+| `S3_SECRET_KEY` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
+| `S3_BUCKET` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
 | `REDIS_URL` | - | Redis cache connection string |
 
 ### GPU Configuration (GPU image only)

@@ -17415,14 +17415,22 @@ pub fn deinitGlobalAdapter() void {
     }
 }
 
+// CANARY: REQ=REQ-SONNY-6422-CLI-DATA-DIR-FAIL-CLOSED; FEATURE="DataDir"; ASPECT=NoInMemoryFallback; STATUS=TESTED; TEST=tests/test_sonny6422_cli_data_dir_fail_closed.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6422: a data directory whose adapter cannot open ends the process
+/// (exit 1, the directory and the reason on stderr). This path serves
+/// `getGlobalStore` callers that name a data directory without
+/// `initGlobalStore` (CLI commands); it used to log a warning and go on with
+/// an empty in-memory store, so `geode storage verify` reported a store it
+/// never opened as OK. `initGlobalStore` returns the error instead.
 fn syncGlobalAdapterForDataDir(data_dir: ?[]const u8) void {
     if (data_dir) |dir| {
         _ = initGlobalAdapter(global_allocator(), dir) catch |err| {
-            log.warn("Failed to initialize engine-backed adapter", &.{
+            log.err("cannot open the data directory; refusing to continue on an empty in-memory store", &.{
                 Attr.string("error", @errorName(err)),
                 Attr.string("data_dir", dir),
             });
-            return;
+            std.debug.print("Error: cannot open the data directory {s} ({s}); refusing to continue on an empty in-memory store.\n", .{ dir, @errorName(err) });
+            std.process.exit(1);
         };
     } else if (global_adapter != null) {
         deinitGlobalAdapter();
@@ -17758,7 +17766,8 @@ pub fn bumpSchemaEpoch() void {
     _ = g_schema_epoch.fetchAdd(1, .monotonic);
 }
 
-// CANARY: REQ=REQ-PERF-WAL-002; FEATURE="WriteAheadLog"; ASPECT=MutationCallback; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
+// CANARY: REQ=REQ-PERF-WAL-002; FEATURE="WriteAheadLog"; ASPECT=MutationCallback; STATUS=IMPL; OWNER=storage; UPDATED=2026-11-12
+// SONNY-6422: nothing installs a callback since the WAL wrapper was removed.
 // Issue #445: Mutation notification callback for WAL integration.
 // Instead of instrumenting every mutation call site, the store's mutation functions
 // call this callback after each successful mutation. The WAL installs a callback

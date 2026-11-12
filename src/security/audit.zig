@@ -446,40 +446,78 @@ pub const AuditLogger = struct {
     }
 
     fn loadKeys(self: *AuditLogger) !void {
-        const pub_hex = getEnvVarOwned(self.allocator, "GEODE_AUDIT_PUB") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => null,
-            else => return err,
-        };
-        defer if (pub_hex) |p| self.allocator.free(p);
-
-        const sec_hex = getEnvVarOwned(self.allocator, "GEODE_AUDIT_SEC") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => null,
-            else => return err,
-        };
-        defer if (sec_hex) |s| self.allocator.free(s);
-
-        if (pub_hex != null and sec_hex != null) {
-            if (pub_hex.?.len != 64 or (sec_hex.?.len != 64 and sec_hex.?.len != 128)) {
-                log.err("Invalid key length in env vars", &.{
-                    Attr.int("pub_key_len", @intCast(pub_hex.?.len)),
-                    Attr.int("sec_key_len", @intCast(sec_hex.?.len)),
-                    Attr.int("expected_pub_len", 64),
-                    Attr.int("expected_sec_len", 64),
-                });
-                return error.ConfigError;
-            }
-            const seed_hex: []const u8 = if (sec_hex.?.len == 128) blk: {
-                log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
-                break :blk sec_hex.?[0..64];
-            } else sec_hex.?;
-            var seed: [32]u8 = undefined;
-            _ = try std.fmt.hexToBytes(&seed, seed_hex);
-            const kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
+        if (try loadEnvSigningKey(self.allocator)) |kp| {
             self.signing_key = kp;
             return;
         }
-
         try self.loadOrCreateFileBackedKeys();
+    }
+
+    // CANARY: REQ=REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED; FEATURE="Key configuration"; ASPECT=AuditKeyPairComplete; STATUS=TESTED; TEST=tests/test_sonny6422_env_key_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
+    /// The audit signing key from GEODE_AUDIT_PUB (64 hex characters, the
+    /// Ed25519 public key) and GEODE_AUDIT_SEC (64 hex characters, the seed;
+    /// the legacy 128-character secret key is accepted), or null when
+    /// neither is set (an empty value counts as unset): the logger then uses
+    /// file-based keys beside the log.
+    ///
+    /// SONNY-6422: only one of the two set, a malformed value, or a public
+    /// key that is not the seed's is an error. One of the pair alone used to
+    /// fall back to generating file-based keys, so a half-configured pair
+    /// signed with a key the operator never saw. No key bytes are logged.
+    pub fn loadEnvSigningKey(allocator: Allocator) !?cb.Sig.KeyPair {
+        const pub_raw = getEnvVarOwned(allocator, "GEODE_AUDIT_PUB") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => null,
+            else => return err,
+        };
+        defer if (pub_raw) |p| allocator.free(p);
+        const sec_raw = getEnvVarOwned(allocator, "GEODE_AUDIT_SEC") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => null,
+            else => return err,
+        };
+        defer if (sec_raw) |s| {
+            std.crypto.secureZero(u8, s);
+            allocator.free(s);
+        };
+        const pub_hex: ?[]const u8 = if (pub_raw) |p| (if (p.len == 0) null else p) else null;
+        const sec_hex: ?[]const u8 = if (sec_raw) |s| (if (s.len == 0) null else s) else null;
+
+        if (pub_hex == null and sec_hex == null) return null;
+        if (pub_hex == null or sec_hex == null) {
+            log.err("GEODE_AUDIT_PUB and GEODE_AUDIT_SEC must be set together; only one is set", &.{
+                Attr.boolean("pub_set", pub_hex != null),
+                Attr.boolean("sec_set", sec_hex != null),
+            });
+            return error.AuditKeyPairIncomplete;
+        }
+        const ph = pub_hex.?;
+        const sh = sec_hex.?;
+        if (ph.len != 64 or (sh.len != 64 and sh.len != 128)) {
+            log.err("Invalid key length in env vars", &.{
+                Attr.int("pub_key_len", @intCast(ph.len)),
+                Attr.int("sec_key_len", @intCast(sh.len)),
+                Attr.int("expected_pub_len", 64),
+                Attr.int("expected_sec_len", 64),
+            });
+            return error.AuditKeyInvalid;
+        }
+        const seed_hex: []const u8 = if (sh.len == 128) blk: {
+            log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
+            break :blk sh[0..64];
+        } else sh;
+        var seed: [32]u8 = undefined;
+        defer std.crypto.secureZero(u8, &seed);
+        _ = std.fmt.hexToBytes(&seed, seed_hex) catch return error.AuditKeyInvalid;
+        var want_pub: [32]u8 = undefined;
+        _ = std.fmt.hexToBytes(&want_pub, ph) catch return error.AuditKeyInvalid;
+        var kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
+        errdefer kp.deinit();
+        var got_pub: [32]u8 = undefined;
+        _ = try kp.publicBytes(&got_pub);
+        if (!std.mem.eql(u8, &got_pub, &want_pub)) {
+            log.err("GEODE_AUDIT_PUB is not the public key of GEODE_AUDIT_SEC", &.{});
+            return error.AuditKeyMismatch;
+        }
+        return kp;
     }
 
     fn loadOrCreateFileBackedKeys(self: *AuditLogger) !void {

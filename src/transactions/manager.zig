@@ -444,12 +444,15 @@ pub const Manager = struct {
                 }
             }
         }
-        if (self.rtracker) |*rt| {
+        // SONNY-6422: the transaction's ranges are looked up once per
+        // commit (not once per write); with none, no write is checked.
+        const ranges_opt = if (self.rtracker) |*rt| rt.rangesFor(txn.id) else null;
+        if (ranges_opt) |ranges| {
             for (self.writes.items) |w| {
                 if (w.txn_id == txn.id) continue;
                 if (w.commit_ts == 0) continue;
                 if (w.commit_ts <= txn.start_ts) continue;
-                if (rt.keyInRanges(txn.id, w.key)) {
+                if (range_tracker.RangeTracker.keyInEntries(ranges, w.key)) {
                     // Phase C2: phantom write inside a tracked range scan.
                     otel_metrics.recordSerializationConflict("phantom_range");
                     return error.SerializationFailure;

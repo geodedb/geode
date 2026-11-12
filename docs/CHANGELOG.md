@@ -4,6 +4,30 @@
 
 ### Security
 
+- **BREAKING (operator): half-configured audit keys, a short
+  `GEODE_MASTER_KEY`, a `GEODE_WAL_KEY` and a malformed
+  `GEODE_MIGRATION_HMAC_KEY` are refused instead of falling back to a weaker
+  mode (SONNY-6422 items 1-2).** With only one of `GEODE_AUDIT_PUB` /
+  `GEODE_AUDIT_SEC` set the audit logger generated file-based keys, and the
+  `__geode_security` graph opened with no audit logger at all; a
+  `GEODE_AUDIT_PUB` that was not the seed's public key was never checked.
+  `GEODE_MASTER_KEY` accepted any length and hashed a short value into the
+  FLE master key. `GEODE_WAL_KEY` is read by nothing in the server (the
+  storage-engine WAL is encrypted with `GEODE_TDE_KEY`), so a server given
+  only `GEODE_WAL_KEY` wrote its WAL in plaintext. A
+  `GEODE_MIGRATION_HMAC_KEY` that was not 64 hex characters made
+  `geode migrate create` write an unsigned migration, or sign with
+  `.hmac_key` instead. Now `geode serve` refuses to start before it creates
+  the data directory, naming the variable and the required form and never
+  printing the value: set both audit variables or neither (the public key
+  must be the seed's: `AuditKeyPairIncomplete` / `AuditKeyInvalid` /
+  `AuditKeyMismatch`), give `GEODE_MASTER_KEY` at least 32 bytes
+  (`MasterKeyTooShort`; an empty value is unset), and unset `GEODE_WAL_KEY`.
+  The `__geode_security` graph does not open on a bad audit pair, and the
+  `geode migrate` commands exit 1 on an unusable key env var or `.hmac_key`
+  file. `docs/AUDIT_LOGGING.md`, `docs/FIELD_LEVEL_ENCRYPTION.md`,
+  `docs/TDE_FILE_LEVEL_ENCRYPTION.md` and `docs/DOCKER_OVERVIEW.md` document
+  it. Regression: `zig build test-sonny6422-env-key-fail-closed`.
 - **BREAKING (operator): a set but malformed `GEODE_TDE_KEY` refuses
   startup instead of writing plaintext pages (SONNY-6386 item 1).**
   `initGlobalAdapter` loaded the page key with `catch null`, so a value that
@@ -1608,6 +1632,58 @@
 
 ### Fixed
 
+- **Docs no longer present S3 / DigitalOcean Spaces as a backup target or
+  the removed TDE-KMS integration as current code (SONNY-6422 item 9).**
+  No command reaches object storage (SONNY-6290; real support is story
+  SONNY-6356), yet `docs/TODO.md` listed "S3 Cloud Backup: Production-ready
+  with Digital Ocean Spaces integration", `docs/GQL_COMPLIANCE.md` said
+  `geode backup create` had S3 / Spaces upload targets,
+  `docs/SERVER_FEATURES.md` §1.4 described `s3_backup.zig` multipart uploads,
+  incremental and point-in-time backups and their throughput,
+  `docs/DOCKER_OVERVIEW.md` listed `S3_*` variables as geode's backup
+  endpoint (geode reads none of them), and `docs/NIX_DEPLOYMENT.md` showed a
+  `backup.s3Bucket` option no module defines. They now describe local backup
+  files. `specs/security/field-level-enc-research-report-pqc-PR.md` cited
+  `tde_kms_integration.zig` and its test as current; it carries a note that
+  both were never compiled and were removed (SONNY-6298). Regression:
+  `zig build test-sonny6422-backup-docs-truth`.
+- **`geode backup create --server` prints each 10% progress step once
+  (SONNY-6422 item 8).** `executeRemoteBackup` printed `Progress: N%` after
+  every received chunk that left the running percentage on a multiple of 10,
+  so a backup received in many 64 KiB chunks repeated lines (a 10 MB backup
+  printed 22 lines, 11 of them repeats), and a chunk that crossed a step
+  without landing on its exact multiple printed nothing. It now prints each
+  reached step once, in order, ending with `Progress: 100%`. Regression:
+  `zig build test-sonny6422-remote-backup-progress`.
+- **The phantom check looks a transaction's read ranges up once per commit
+  (SONNY-6422 item 7).** `Manager.detectPhantoms` called
+  `RangeTracker.keyInRanges` for every write committed since the transaction
+  began, and each call looked the transaction's range list up in the
+  tracker's hash map again, so a transaction with no range reads paid one
+  hash lookup per concurrent write. The list is now looked up once
+  (`RangeTracker.rangesFor`), and with no ranges no write is checked.
+  Measured with `zig build test-sonny6422-phantom-check-once-per-commit`
+  (Debug, perf_gate interleaved medians, 4096 committed writes in the
+  history): the no-range check went from 738,793 ns to 220 ns and stays flat
+  from 64 to 4096 writes (64.8x growth before, 0.97x after); the per-write
+  cost of a check with two read ranges went from 334.6 ns to 90.9 ns. The
+  `test-canary-txn-phantom-range` / `-anomaly` benchmarks commit no
+  concurrent writes, so their overhead figures are unchanged within noise
+  (0.61 / 0.60 before, 0.68 / 0.67 after on the same loaded host).
+  Detection is unchanged: a write inside a read range still fails the commit.
+- **A CLI command fails on a data directory it cannot open instead of
+  working on an empty in-memory store (SONNY-6422 item 6).** A command that
+  reached the store through `getGlobalStore` with a data directory
+  (`GEODE_DATA_DIR`) but no `initGlobalStore` opened the storage adapter in
+  `graph_store.syncGlobalAdapterForDataDir`, and when that failed logged a
+  warning and carried on in memory: `geode storage verify --check
+  graph_store` printed `{"graph_store_ok":true,"node_count":0}` for a
+  directory it never opened. That path now exits 1 with `Error: cannot open
+  the data directory <dir> (<reason>); refusing to continue on an empty
+  in-memory store.` The offline auth, API-key and tenant commands
+  (`initCliAuthManager`) fell back the same way when `initGlobalStore`
+  failed; they now report the directory and the error and change nothing.
+  Regression: `zig build test-sonny6422-cli-data-dir-fail-closed`.
 - **The long write suites finish in minutes on a loaded host
   (SONNY-6333).** `tests/sonny738_write_harness.zig` opens, writes, reloads
   and closes a persisted store for every case in three sessions; on a
@@ -2468,6 +2544,23 @@
 
 ### Removed
 
+- **The logical CDC `WriteAheadLog` wrapper in `src/wal.zig`, an unbuilt
+  duplicate test, and false TESTED markers (SONNY-6422 items 3-5).** The
+  wrapper (record types and serialization, the global instance, the
+  `graph_store` mutation callback and the `GEODE_WAL_KEY` loader) had no
+  production caller since `initGlobalWal` was removed (SONNY-6325); only
+  `tests/test_wal.zig` opened one. `src/wal.zig` keeps the persistence-loop
+  hooks the server installs (a light engine checkpoint every tick, the
+  behaviour they had with no WAL behind them), and `zig build test-wal` now
+  tests those. Crash recovery and WAL encryption are the storage engine's
+  (its WAL, encrypted with `GEODE_TDE_KEY`). `tests/test_key_rotation_schedule.zig`
+  was built by no step and claimed TESTED with a made-up test name; its two
+  assertions are those `zig build test-gap0890` runs, so it is removed. The
+  CANARY block of `docs/SECURITY_PROGRESS.md` cited tests that do not exist
+  or that no step compiles: each TESTED marker now cites compiled tests, and
+  WAL encryption, MFA audit logging, the MFA policy engine and the OLTP
+  overhead validation are IMPL, with the matrix rows corrected. Regression:
+  `zig build test-sonny6422-dead-wal-and-false-markers`.
 - **Federated / scatter-gather query coordination code (SONNY-6279).**
   `src/distributed/federation.zig`, `federation_merge.zig`,
   `merge_strategies.zig`, `query_coordinator.zig`,
