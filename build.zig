@@ -10589,6 +10589,18 @@ pub fn build(b: *std.Build) void {
     const bounded_analytical_step = b.step("test-gap0902-bounded-analytical", "Run GAP-0902 bounded-cache analytical reads regression (string ORDER BY correctness + no whole-graph clone for ORDER BY/DISTINCT/multi-aggregate/WHERE-count)");
     bounded_analytical_step.dependOn(&run_bounded_analytical_tests.step);
 
+    // SONNY-6383: a parsed simple MATCH is served by the engine-direct node
+    // scan stream (asserted, rows equal the executor's), shapes it cannot
+    // serve are refused, and the bulk MATCH ... CREATE / MERGE edge paths
+    // classify a parsed MATCH (the `match_clauses` field allowlist gap).
+    const sonny6383_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6383_scan_stream_match_clauses.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    sonny6383_test_mod.addImport("geode", root_mod);
+    const sonny6383_tests = b.addTest(.{ .root_module = sonny6383_test_mod });
+    const run_sonny6383_tests = b.addRunArtifact(sonny6383_tests);
+    shardDep(test_step, &run_sonny6383_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6383_step = b.step("test-sonny6383-scan-stream-match-clauses", "Run SONNY-6383 node scan stream / bulk edge fast-path match_clauses gate regression");
+    sonny6383_step.dependOn(&run_sonny6383_tests.step);
+
     // GAP-0902 concurrency regression: analytical reads (ORDER BY top-K,
     // DISTINCT, multi-aggregate, WHERE-count) under a small node cache cap +
     // concurrent ingest + concurrent grace-point reclaim must not crash or
