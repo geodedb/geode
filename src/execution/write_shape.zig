@@ -1990,6 +1990,26 @@ pub fn onlyFields(q: ast.Query, comptime allowed: []const []const u8) bool {
     return onlyFieldsOf(ast.Query, q, allowed);
 }
 
+// CANARY: REQ=REQ-SONNY-6383-PLAIN-MATCH-CLAUSES; FEATURE="WriteShapeAllowlist"; ASPECT=MatchClauseRecord; STATUS=TESTED; TEST=tests/test_sonny6383_scan_stream_match_clauses.zig; OWNER=engine; UPDATED=2026-11-12
+/// SONNY-6383: whether `q.match_clauses` says nothing `q.match` and
+/// `q.where_clause` do not: every clause a MATCH (not OPTIONAL), each owning
+/// at least one chain, the last ending at the pattern's last chain, and no
+/// clause with a WHERE the query's WHERE does not hold. Plain MATCH clauses
+/// are one inner join, their WHEREs one conjunction, so a fast path that
+/// reads only `match` and `where_clause` may list `match_clauses` in its
+/// `onlyFields` allowlist when this holds. Since 0df2ad6a the parser records
+/// every MATCH there, and no allowlist named it: no parsed MATCH took the
+/// node scan stream or the bulk MATCH ... CREATE / MERGE edge paths.
+pub fn plainMatchClauses(q: ast.Query) bool {
+    var end: usize = 0;
+    for (q.match_clauses) |clause| {
+        if (clause.optional or clause.end <= end) return false;
+        if (clause.where != null and q.where_clause == null) return false;
+        end = clause.end;
+    }
+    return q.match_clauses.len == 0 or end == q.match.chains.len;
+}
+
 /// `onlyFields` for any AST struct (the fast paths' MERGE statement).
 pub fn onlyFieldsOf(comptime T: type, value: T, comptime allowed: []const []const u8) bool {
     @setEvalBranchQuota(40_000);

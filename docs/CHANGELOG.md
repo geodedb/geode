@@ -322,6 +322,16 @@
   (item 2), and the embedded `geode.parseGql` refuses an expression ORDER BY
   key unless `GEODE_ORDER_KEYS_EXPR` is set (item 3). Regression:
   `zig build test-sonny2672-read-semantics-batch`.
+- **A parsed MATCH takes the engine-direct fast paths again (SONNY-6383):**
+  since the parser records each MATCH clause of a part (SONNY-3184, unreleased),
+  the field allowlists of the engine-direct node scan stream and of the bulk
+  `MATCH ... CREATE` / `MATCH ... MERGE` edge paths refused every parsed
+  MATCH, so every simple scan, filtered count and bulk edge write went
+  through the executor (slower; the GAP-ENT-0055 O(1) filtered count was
+  lost). The clause record is accepted when it describes plain MATCH clauses
+  only; an OPTIONAL MATCH still goes to the executor. Regression:
+  `zig build test-sonny6383-scan-stream-match-clauses`,
+  `zig build test-gap0902-bounded-analytical`.
 - **A GROUP BY after a RETURN that follows a WITH (SONNY-2698):** the parser
   kept one GROUP BY / HAVING per query part whichever clause it followed,
   and every executor gave it to the WITH, so `MATCH (z) WITH z WHERE z.k >= 2

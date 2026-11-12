@@ -378,7 +378,10 @@ fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
     // Must be a MATCH + MERGE(relationship) shape with nothing else attached.
     const merge_stmt = q.merge_statement orelse return null;
     // SONNY-3166: every other field of the query empty (compile-time field walk).
-    if (!write_shape.onlyFields(q, &.{ "match", "merge_statement" })) return null;
+    // SONNY-6383: the parser's record of the MATCH clauses, when they are
+    // plain MATCHes (an OPTIONAL MATCH keeps a record it matches nothing for).
+    if (!write_shape.onlyFields(q, &.{ "match", "match_clauses", "merge_statement" })) return null;
+    if (!write_shape.plainMatchClauses(q)) return null;
 
     // Disqualify every clause the full executor might mutate/materialize.
     if (q.create_pattern != null) return null;
@@ -794,7 +797,9 @@ fn matchEdgeSpecFromQuery(q: ast.Query) ?MatchCreateEdgeSpec {
     // SONNY-3166: every other field of the query empty (compile-time field
     // walk, so a new field is refused until named here); the checks below
     // stay as the documented shape.
-    if (!write_shape.onlyFields(q, &.{ "match", "create_pattern" })) return null;
+    // SONNY-6383: as in `matchMergeEdgeSpecFromQuery`.
+    if (!write_shape.onlyFields(q, &.{ "match", "match_clauses", "create_pattern" })) return null;
+    if (!write_shape.plainMatchClauses(q)) return null;
     if (q.where_clause != null) return null;
     if (q.filter_clause != null) return null;
     if (q.with_clause != null) return null;

@@ -1335,13 +1335,18 @@ pub fn isEligible(q: *const ast.Query, session_tenant_id: ?[]const u8) bool {
 /// gRPC `LET $x = 1 IN (... SET ...) MATCH (n:G) RETURN count(*)` was
 /// answered here before the write-shape validator could refuse it, and
 /// `LET $x = 2 MATCH (n:G) WHERE n.i = $x RETURN n` read $x as unbound.
+/// SONNY-6383: `match_clauses` is listed and must describe the single plain
+/// MATCH (`write_shape.plainMatchClauses`); unlisted, it refused every
+/// parsed MATCH once the parser recorded it (0df2ad6a).
 const stream_fields = [_][]const u8{
-    "match", "where_clause", "filter_clause", "ret",
-    "limit", "offset",       "limit_param",   "offset_param",
+    "match",        "match_clauses", "where_clause", "filter_clause",
+    "ret",          "limit",         "offset",       "limit_param",
+    "offset_param",
 };
 
 fn eligibleQuery(q: *const ast.Query) ?Eligibility {
     if (!write_shape.onlyFields(q.*, &stream_fields)) return null;
+    if (!write_shape.plainMatchClauses(q.*)) return null;
     // One predicate: a WHERE and a FILTER together are both to hold, and the
     // stream applies one (`WHERE n.i > 0 FILTER n.i < 3` returned 9 rows).
     if (q.where_clause != null and q.filter_clause != null) return null;
