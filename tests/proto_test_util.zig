@@ -1236,6 +1236,29 @@ pub const QuicProtoClient = struct {
         graph: ?[]const u8,
         tenant: ?[]const u8,
     ) !HelloResult {
+        return self.helloFull(allocator, username, password, graph, tenant, null);
+    }
+
+    /// HELLO naming an FLE role (HelloRequest.role; SONNY-6334).
+    pub fn helloAs(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        username: []const u8,
+        password: []const u8,
+        fle_role: []const u8,
+    ) !HelloResult {
+        return self.helloFull(allocator, username, password, null, null, fle_role);
+    }
+
+    fn helloFull(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        username: []const u8,
+        password: []const u8,
+        graph: ?[]const u8,
+        tenant: ?[]const u8,
+        fle_role: ?[]const u8,
+    ) !HelloResult {
         const req = schema.HelloRequest{
             .username = username,
             .password = password,
@@ -1244,6 +1267,7 @@ pub const QuicProtoClient = struct {
             .client_version = "0.0.0",
             .wanted_conformance = "min",
             .graph = graph,
+            .role = fle_role,
         };
         try self.writeMessage(.{ .hello = req });
 
