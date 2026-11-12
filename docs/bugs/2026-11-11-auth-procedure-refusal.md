@@ -83,3 +83,23 @@ passed, including the additional cluster case and user-management coverage.
 The exact command is the combined command in the checked-delete receipt with
 `test-user-management` added. Full required CI, including the standalone
 compile sweep, still gates merge and Done.
+
+## Required compile-gate disk correction
+
+Pipeline 3057222441 on source 79d17457 reached 40 successful jobs, then its
+required test-zig-compile job 17953781495 exhausted the AWS autoscaler instance's
+Docker filesystem. The log writer and Docker exec both reported ENOSPC; the
+remaining 18 jobs were canceled by the existing fail-fast policy. This pipeline
+is failed, and its canceled checks are not passes.
+
+The compile job now uses `-Dtest-compile-strip=true` to omit debug symbols from
+its disposable compile/link outputs. It still compiles and links every aggregate
+artifact and executable, in the selected Debug optimization mode with the same
+safety checks; nothing is removed from the gate or run with allow_failure.
+Runtime and coverage shards keep their existing debug-symbol configuration.
+The default local build is unchanged. A focused executable proof on the same
+source passed all six real auth tests (`geode-auth-strip-proof`, 35/35 steps),
+and its ELF has no .debug_info. The matching unstripped test executable is
+197316962 bytes; the stripped executable is 96105421 bytes. This is local proof
+of the symbol/size correction, not a replacement for a fresh full compile gate.
+All required CI must pass on the new source before merge or Done.

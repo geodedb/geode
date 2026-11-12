@@ -1265,7 +1265,7 @@ test-zig-compile:
     - *zig-cache-writer-before-script
     - *zig-vendor-cache
   script:
-    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_compile.log -- zig build -j${ZIG_BUILD_JOBS} test-compile --summary all --error-style verbose
+    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_compile.log -- zig build -j${ZIG_BUILD_JOBS} test-compile -Dtest-compile-strip=true --summary all --error-style verbose
   artifacts:
     when: always
     expire_in: 1 week

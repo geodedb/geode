@@ -174,6 +174,7 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
 /// Set once in build() right after the `test` step is created; shardDep adds
 /// each registered Run step's artifact to it.
 var g_test_compile_step: ?*std.Build.Step = null;
+var g_test_compile_strip: bool = false;
 
 /// SRE-187: `-Dtest-coverage=true` turns the aggregate `test` step into the
 /// kcov coverage lane. Every Run step this shard selects is executed under
@@ -387,6 +388,37 @@ fn addExecutablesToTestCompile(b: *std.Build, target: std.Build.ResolvedTarget) 
         if (!found) std.debug.panic("SONNY-2746: rotted_executables names '{s}', which is no executable of this build; remove it from the list", .{name});
     }
     for (exes.items) |step| compile_all.dependOn(step);
+    if (g_test_compile_strip) stripCompileDebugInfo(b, compile_all);
+}
+
+/// Keep every compile and link in the gate while omitting debug symbols from
+/// disposable artifacts. Hundreds of full DWARF binaries exhausted the CI
+/// runner disk. Optimization mode, safety checks and artifact coverage stay
+/// unchanged; normal runtime/coverage shards keep their normal debug symbols.
+fn stripCompileDebugInfo(b: *std.Build, root: *std.Build.Step) void {
+    var seen_steps: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer seen_steps.deinit(b.allocator);
+    var seen_modules: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
+    defer seen_modules.deinit(b.allocator);
+    var steps: std.ArrayList(*std.Build.Step) = .empty;
+    defer steps.deinit(b.allocator);
+    var modules: std.ArrayList(*std.Build.Module) = .empty;
+    defer modules.deinit(b.allocator);
+    steps.append(b.allocator, root) catch @panic("OOM");
+    while (steps.pop()) |step| {
+        const seen = seen_steps.getOrPut(b.allocator, step) catch @panic("OOM");
+        if (seen.found_existing) continue;
+        steps.appendSlice(b.allocator, step.dependencies.items) catch @panic("OOM");
+        if (step.cast(std.Build.Step.Compile)) |compile| {
+            modules.append(b.allocator, compile.root_module) catch @panic("OOM");
+        }
+    }
+    while (modules.pop()) |module| {
+        const seen = seen_modules.getOrPut(b.allocator, module) catch @panic("OOM");
+        if (seen.found_existing) continue;
+        module.strip = true;
+        modules.appendSlice(b.allocator, module.import_table.values()) catch @panic("OOM");
+    }
 }
 
 /// SONNY-2746: executables that did not compile when test-compile first took
@@ -3921,6 +3953,7 @@ pub fn build(b: *std.Build) void {
     // SRE-187: deferred so the manifest lists every shardDep call below.
     defer installTestCoverageManifest(b, test_step);
     g_test_compile_step = b.step("test-compile", "Compile every artifact the aggregate `test` step runs, in all shards, and every executable target, without running any of them (SONNY-2394, SONNY-2746)");
+    g_test_compile_strip = b.option(bool, "test-compile-strip", "Omit debug symbols from the compile gate's disposable binaries; keep all compiles, links, optimization modes and safety checks (default false)") orelse false;
     // SONNY-2746: deferred so it runs once every step of build() exists.
     defer addExecutablesToTestCompile(b, target);
     shardDep(test_step, &run_show_capabilities_tests.step, 1, test_shard_loads, test_shard_index);
