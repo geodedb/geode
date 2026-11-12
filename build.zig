@@ -9456,6 +9456,18 @@ pub fn build(b: *std.Build) void {
     const sonny6374_step = b.step("test-sonny6374-lsp-auth-provider-lifetime", "Run SONNY-6374 regression (the embedded LSP AuthProvider outlives every session: two sessions get a -32002 answer to initialize, and SIGTERM with a session open closes it, stops the listener and frees the provider)");
     sonny6374_step.dependOn(&run_sonny6374_tests.step);
 
+    // SONNY-6272: the unbuildable Dockerfile.prod and its references are gone.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6272_dockerfile_prod.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6272_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6272-dockerfile-prod", "Run SONNY-6272 regression (the unbuildable Dockerfile.prod is removed and no Makefile target, compose file, operator doc or Dockerfile test names it)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6374 items 3-8: serve --help, the ABAC startup log, a corrupt
     // Argon2id parameter, always-true assertions, CANARY tokens naming
     // missing files, and dead modules.
