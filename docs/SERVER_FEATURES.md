@@ -812,7 +812,7 @@ pub const Config = struct {
 
 - **Page-Level**: XTS-AES-256 for storage pages
 - **WAL-Level**: AES-256-GCM for log records
-- **Backup-Level**: AES-256-CTR with envelope encryption
+- **Backup-Level**: AES-256-GCM over the whole backup payload under `GEODE_TDE_KEY` when it is set (no envelope or derived backup key; an unusable key fails the backup). Without `GEODE_TDE_KEY` backups are unencrypted (SONNY-6355)
 
 **Key Hierarchy**:
 

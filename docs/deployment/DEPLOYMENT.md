@@ -511,7 +511,7 @@ docker-compose exec geode geode admin check
 6. **Regularly update images** for security patches
 7. **Use secrets rotation** for credentials
 8. **Enable network encryption** between services
-9. **Encrypt backup files** before copying them to object storage: `geode backup create` and the server write them unencrypted (owner-only, mode 0600)
+9. **Set `GEODE_TDE_KEY`** so backups are encrypted: with it set, `geode backup create` and the server encrypt the backup payload with AES-256-GCM under it (owner-only file, mode 0600), and restoring needs the same key; without it a backup is written unencrypted (SONNY-6355). Keep the key apart from the backups
 10. **Use RBAC** for Grafana and Prometheus
 
 ## Production Checklist

@@ -4670,8 +4670,8 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         // GAP-0880: gzip is the only compression codec with a real encoder;
         // never request zstd (no encoder — UnsupportedCompression).
         .compression = if (req.compress) .gzip else .none,
-        .encryption = false,
-        .retention_days = 30,
+        // SONNY-6355: encrypted under GEODE_TDE_KEY when it is set.
+        .encryption = backup_mgr.encryptionFromEnv(),
     }) catch |err| {
         const msg = try std.fmt.allocPrint(allocator, "Backup init failed: {s}", .{@errorName(err)});
         const resp = schema.BackupResponse{ .success = false, .message = msg };

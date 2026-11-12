@@ -4,11 +4,17 @@
 
 ### Backup Encryption (`GEODE_TDE_KEY`)
 
-**Breaking Change:** If encryption is enabled/implemented, a Transparent Data Encryption (TDE) key is now required for backup and restore operations.
+**Breaking Change (SONNY-6355):** when `GEODE_TDE_KEY` is set, `geode backup
+create` (local and server) and the server's QUIC/gRPC backups encrypt the
+backup payload with AES-256-GCM under it, and restoring such a backup needs
+the same key (`geode restore` and the server restore refuse it without the
+key). A `GEODE_TDE_KEY` that is not 64 hex characters fails the backup rather
+than writing it in plaintext. Without `GEODE_TDE_KEY`, backups are unencrypted.
+Before this, every backup was written unencrypted, whatever the key.
 
 **Action Required:**
 
-- Set the `GEODE_TDE_KEY` environment variable before running the server or backup tools.
+- Set the `GEODE_TDE_KEY` environment variable before running the server or backup tools, and keep it to restore.
 - The key must be a 64-character hexadecimal string.
 - Example: `export GEODE_TDE_KEY=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`
 

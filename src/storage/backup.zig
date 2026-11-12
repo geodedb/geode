@@ -106,12 +106,23 @@ pub const BackupConfig = struct {
     /// `.gzip`).
     compression: CompressionType = .none,
 
-    /// Encryption for backup files
+    /// Encrypt the backup payload with AES-256-GCM under GEODE_TDE_KEY.
+    /// Callers set it from `encryptionFromEnv()` (SONNY-6355): a store whose
+    /// pages are encrypted under GEODE_TDE_KEY must not be backed up in
+    /// plaintext. `init` refuses a missing or unusable key when it is set.
     encryption: bool = false,
 
-    /// Retention policy in days
-    retention_days: u32 = 30,
+    // SONNY-6355: `retention_days` was removed; nothing applied it after
+    // the dead runRetention went (SONNY-6323).
 };
+
+/// Whether backups are to be encrypted: GEODE_TDE_KEY is set (to anything
+/// non-empty). An unusable value is not ignored: `BackupManager.init` then
+/// fails, so no backup is written in plaintext by mistake (SONNY-6355).
+pub fn encryptionFromEnv() bool {
+    const raw = std.c.getenv("GEODE_TDE_KEY") orelse return false;
+    return std.mem.span(raw).len != 0;
+}
 
 pub const CompressionType = enum(u32) {
     none = 0,
@@ -366,6 +377,7 @@ pub const BackupManager = struct {
 
     /// Clean up backup manager resources
     pub fn deinit(self: *BackupManager) void {
+        cb.secureZero(&self.enc_key);
         self.metadata_log.deinit(self.allocator);
         self.allocator.free(self.backup_dir);
     }
@@ -377,7 +389,8 @@ pub const BackupManager = struct {
         const backup_id = generateBackupId();
         const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
         defer self.allocator.free(backup_path);
-        const metadata = try self.writeFullBackup(backup_path, backup_id, .{});
+        // SONNY-6355: synced, like writeFullBackupFile's.
+        const metadata = try self.writeFullBackup(backup_path, backup_id, .{ .sync = true });
 
         try self.metadata_log.append(self.allocator, metadata);
         try self.writeMetadata();
@@ -589,6 +602,7 @@ pub const BackupManager = struct {
         const json_str = try std.json.Stringify.valueAlloc(self.allocator, self.metadata_log.items, .{});
         defer self.allocator.free(json_str);
         try file.writeStreamingAll(io_wm, json_str);
+        try file.sync(io_wm);
     }
 
     fn metadataPath(self: *BackupManager) ![]u8 {

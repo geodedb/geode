@@ -169,7 +169,9 @@ test "SONNY-6355 (1) with GEODE_TDE_KEY set a backup is encrypted under it, rest
     const t = try join(allocator, cwd, "T");
     defer allocator.free(t);
     {
-        const r = try runGeode(&.{ geode_binary, "restore", out, "--data-dir", t, "--yes", "--hmac-key-file", hk }, cwd, &key_env);
+        // GEODE_TDE_KEY is also the auth-chain HMAC key source, so no
+        // --hmac-key-file (restore refuses both).
+        const r = try runGeode(&.{ geode_binary, "restore", out, "--data-dir", t, "--yes" }, cwd, &key_env);
         defer r.deinit();
         if (r.code != @as(?u8, 0)) r.dump("restore of an encrypted backup with GEODE_TDE_KEY");
         try testing.expectEqual(@as(?u8, 0), r.code);

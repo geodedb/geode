@@ -302,7 +302,13 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "fall back to a local backup.\n" ++
                 "\n" ++
                 "--output is a local file. geode does not write to object storage (s3://,\n" ++
-                "http(s)://): copy the backup file there with your own tool.\n" ++
+                "http(s)://): copy the backup file there with your own tool. Its directory\n" ++
+                "must exist.\n" ++
+                "\n" ++
+                "Encryption: with GEODE_TDE_KEY set (64 hex characters), the backup is\n" ++
+                "encrypted with AES-256-GCM under it (for a server backup, the server's\n" ++
+                "GEODE_TDE_KEY), and restoring it needs the same key. Without it the backup\n" ++
+                "is not encrypted.\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--output")) {
@@ -406,6 +412,20 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     if (isRemoteUri(output.?)) {
         std.debug.print("Error: --output {s}: writing a backup to object storage is not supported; write a local file and copy it with your own tool\n", .{output.?});
         std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    // SONNY-6355: the --output directory must exist, on both paths, and is
+    // checked before any work. --local used to create it (as a side effect
+    // of BackupManager.init), while a server backup was taken and then
+    // failed to land when it was missing.
+    {
+        const out_dir = std.fs.path.dirname(output.?) orelse ".";
+        const io_out = std.Io.Threaded.global_single_threaded.io();
+        if (std.Io.Dir.cwd().openDir(io_out, out_dir, .{})) |d| {
+            d.close(io_out);
+        } else |err| {
+            std.debug.print("Error: --output directory {s} does not exist or is not a directory ({s}); create it first\n", .{ out_dir, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
     }
 
     // S-7: Use consolidated password resolution
@@ -2204,8 +2224,9 @@ fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, m
         // GAP-0880: gzip is the only compression codec with a real encoder;
         // never request zstd (no encoder — UnsupportedCompression).
         .compression = if (compress) .gzip else .none,
-        .encryption = false,
-        .retention_days = 30,
+        // SONNY-6355: encrypted under GEODE_TDE_KEY when it is set; an
+        // unusable key fails the backup rather than writing plaintext.
+        .encryption = backup_types.encryptionFromEnv(),
     };
 
     const backup_dir = std.fs.path.dirname(dest) orelse ".";

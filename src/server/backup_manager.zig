@@ -92,6 +92,9 @@ pub fn serverBackupDir(allocator: std.mem.Allocator) ![]u8 {
 }
 
 /// Simplified backup manager for server integration (GraphStore only).
+/// SONNY-6355: whether server backups are encrypted (GEODE_TDE_KEY set).
+pub const encryptionFromEnv = backup.encryptionFromEnv;
+
 pub const SimplifiedBackupManager = struct {
     inner: backup.BackupManager,
 

@@ -4,6 +4,23 @@
 
 ### Security
 
+- **BREAKING (operator): backups are encrypted under `GEODE_TDE_KEY` when it
+  is set (SONNY-6355 items 1, 2, 5, 6).** `BackupManager` has encrypted the
+  payload with AES-256-GCM under `GEODE_TDE_KEY` (and every restore path
+  decrypts with it) since GAP-005, but the CLI local backup and the QUIC and
+  gRPC server backups all passed `.encryption = false`, so a server whose
+  pages are encrypted under the key wrote plaintext backups. With
+  `GEODE_TDE_KEY` set a backup is now encrypted, and restoring it needs the
+  key; a value that is not 64 hex characters fails the backup instead of
+  writing plaintext. Without the key nothing changes. The server's
+  `createFullBackup` file and `metadata.json` are now fsynced, the unread
+  `BackupConfig.retention_days` is removed, and `geode backup create`
+  refuses a missing `--output` directory on both paths before doing any
+  work (`--local` used to create it; a server backup was taken and then
+  failed to land). `docs/deployment/DEPLOYMENT.md`, `docs/SERVER_FEATURES.md`
+  (which said AES-256-CTR with envelope encryption) and
+  `docs/MIGRATION_GUIDE.md` say what is done. Regression:
+  `zig build test-sonny6355-backup-encryption-fsync-output`.
 - **BREAKING (operator): a symbolic `GEODE_KMS_URL` (`aws`, `azure`, `gcp`,
   `hashicorp`, `local`) refuses startup (SONNY-6348 items 1, 4-6).**
   `configureKMS` reported such a name configured after a local AES-GCM

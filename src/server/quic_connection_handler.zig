@@ -9398,8 +9398,9 @@ fn handleClientMessage(
                 // encoder; never request zstd (no encoder — it would fail
                 // with UnsupportedCompression).
                 .compression = if (backup_req.compress) .gzip else .none,
-                .encryption = false,
-                .retention_days = 30,
+                // SONNY-6355: encrypted under GEODE_TDE_KEY when it is set
+                // (it was always false: a TDE server wrote plaintext backups).
+                .encryption = @import("storage/backup").encryptionFromEnv(),
             };
 
             // SONNY-6299: under the data directory the engine has open (or
