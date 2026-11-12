@@ -12788,6 +12788,15 @@ pub fn build(b: *std.Build) void {
     const sonny6270_step = b.step("test-sonny6270-drop-constraint", "Run SONNY-6270 regression (DROP CONSTRAINT removes the session graph's or an engine-wide row, saves the catalog under its lock and refuses when the save fails; a dropped constraint stops being enforced and stays dropped after a restart; the UNIQUE fast-path fence comes down with the last applicable row; db.constraints() copies rows under the catalog lock; schema permission required)");
     sonny6270_step.dependOn(&run_sonny6270_tests.step);
 
+    const sonny2847_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2847_merge_index_multi_holder.zig"), .target = target, .optimize = optimize });
+    sonny2847_test_mod.link_libc = true; // setenv/unsetenv
+    sonny2847_test_mod.addImport("geode", root_mod);
+    const sonny2847_tests = b.addTest(.{ .root_module = sonny2847_test_mod });
+    const run_sonny2847_tests = b.addRunArtifact(sonny2847_tests);
+    shardDep(test_step, &run_sonny2847_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2847_step = b.step("test-sonny2847-merge-index-multi-holder", "Run SONNY-2847 regression (two CREATEd nodes hold one MERGE key; deleting, SETting or REMOVEing either leaves MERGE matching the other, on the executor, a registered composite key and the server's bulk MERGE helpers, in-memory and persisted)");
+    sonny2847_step.dependOn(&run_sonny2847_tests.step);
+
     const sonny6268_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6268_graph_store_failure_atomicity.zig"), .target = target, .optimize = optimize });
     sonny6268_test_mod.addImport("geode", root_mod);
     const sonny6268_tests = b.addTest(.{ .root_module = sonny6268_test_mod });
