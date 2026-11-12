@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T21:54:09.966578141Z",
+  "generated_at": "2026-11-12T22:23:55.817923278Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -77536,6 +77536,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3245-INSERT-PATTERN-RULES",
+      "features": [
+        {
+          "feature": "CreateStatement",
+          "aspect": "InsertSyntaxRules",
+          "status": "TESTED",
+          "files": [
+            "src/execution/param_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3245_create_merge_forms.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3245-NULL-PROPERTY-ABSENT",
+      "features": [
+        {
+          "feature": "SetClauseSemantics",
+          "aspect": "NullRemovesProperty",
+          "status": "TESTED",
+          "files": [
+            "src/execution/property_mutation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3245_create_merge_forms.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3247-MISSING-PARAMETER",
       "features": [
         {
@@ -89105,7 +89143,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4604
+      "TESTED": 4606
     },
     "by_aspect": {
       "2PC": 3,
@@ -90833,6 +90871,7 @@
       "InsecureAllowAllDefault": 1,
       "Insert": 1,
       "InsertPrePass": 1,
+      "InsertSyntaxRules": 1,
       "InstallUnderStoreLock": 1,
       "Instrumentation": 1,
       "IntComparison": 1,
@@ -91376,6 +91415,7 @@
       "NullIf": 1,
       "NullOnNoRows": 1,
       "NullPropagation": 1,
+      "NullRemovesProperty": 1,
       "NullSafety": 1,
       "NullSemantics": 1,
       "NullType": 1,

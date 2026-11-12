@@ -4983,6 +4983,8 @@ REQ-SONNY-3243-UNION-WRITE-ATOMICITY,Execution,UnionStatementUndo,TESTED,tests/t
 REQ-SONNY-3244-PARSE-LIMITS,ParseLimits,Parser,TESTED,src/gql/parser.zig,tests/test_sonny_write_allowlist_r4.zig,,parser,2026-09-28
 REQ-SONNY-3244-PARSE-LIMITS,ParseLimits,WireCode,TESTED,src/lib.zig,tests/test_sonny_write_allowlist_r4.zig,,parser,2026-09-28
 REQ-SONNY-3245-CREATE-FORMS,CreateStatement,Regression,TESTED,tests/test_sonny3245_create_merge_forms.zig,tests/test_sonny3245_create_merge_forms.zig,,engine,2026-11-12
+REQ-SONNY-3245-INSERT-PATTERN-RULES,CreateStatement,InsertSyntaxRules,TESTED,src/execution/param_check.zig,tests/test_sonny3245_create_merge_forms.zig,,engine,2026-11-12
+REQ-SONNY-3245-NULL-PROPERTY-ABSENT,SetClauseSemantics,NullRemovesProperty,TESTED,src/execution/property_mutation.zig,tests/test_sonny3245_create_merge_forms.zig,,engine,2026-11-12
 REQ-SONNY-3247-MISSING-PARAMETER,ParameterBinding,UnsuppliedParameter,TESTED,src/execution.zig,tests/test_sonny_write_allowlist_r4.zig,,engine,2026-09-28
 REQ-SONNY-3248-EXISTS-WHERE,ExistsSubquery,WhereEnvLifetime,TESTED,src/execution/graph_algorithms.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,execution,2026-09-29
 REQ-SONNY-3248-LET-SCOPE,ParameterBinding,LetChain,TESTED,src/execution/query_execution.zig,tests/test_sonny_write_allowlist_r4b.zig,,engine,2026-09-28

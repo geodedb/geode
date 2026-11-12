@@ -360,6 +360,15 @@ pub fn setNodePropertyFromValue(
     key: []const u8,
     value: Value,
 ) !void {
+    // CANARY: REQ=REQ-SONNY-3245-NULL-PROPERTY-ABSENT; FEATURE="SetClauseSemantics"; ASPECT=NullRemovesProperty; STATUS=TESTED; TEST=tests/test_sonny3245_create_merge_forms.zig; OWNER=engine; UPDATED=2026-11-12
+    // SONNY-3245: a property whose value is null is absent (GQL; the NOT NULL
+    // constraint already reads it so). `SET n.p = null` kept p with a null
+    // value and `CREATE (n {p: null})` stored it, so `keys(n)` named p.
+    if (value == .Null) {
+        const node = (store.nodes.getOrHydratePtr(node_id) catch null) orelse return error.NodeNotFound;
+        if (node.properties.contains(key)) removeNodeProperty(store, node, key);
+        return;
+    }
     // GAP-0854 follow-up: resolve the node's graph so the FLE hook can exclude
     // the internal __geode_security graph. Cheap pointer lookup; the security
     // graph must never receive an FLE envelope (its records feed the auth HMAC
@@ -508,6 +517,12 @@ pub fn setEdgePropertyFromValue(
     key: []const u8,
     value: Value,
 ) !void {
+    // SONNY-3245: a null value makes the property absent, as on a node.
+    if (value == .Null) {
+        const edge = store.getEdgePtrHydrated(edge_id) orelse return error.EdgeNotFound;
+        if (edge.properties.contains(key)) removeEdgeProperty(store, edge, key);
+        return;
+    }
     // GAP-0854 follow-up: resolve the edge's graph so the FLE hook can exclude
     // the internal __geode_security graph (HAS_ROLE etc. feed the auth chain).
     const edge_graph: ?[]const u8 = if (store.getEdgePtr(edge_id)) |e| e.graph_name else null;

@@ -362,6 +362,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3367: a pattern names one variable as two kinds of element
         // (a relationship reused as a node pattern bound every node of the
         // graph). A syntax error, refused before anything runs.
+        // SONNY-3245: ISO/IEC 39075:2024 16.5 <insert graph pattern>.
+        error.InvalidInsertPattern => .{ .code = "42000", .message = "Invalid CREATE / INSERT pattern: a variable a MATCH bound, or one declared earlier in the pattern, takes no label or property (use SET), and an inserted relationship points left or right and has one type (ISO/IEC 39075 16.5)" },
         error.VariableKindConflict => .{ .code = "42000", .message = "Variable kind conflict: a pattern names one variable as two kinds of element (a node, a relationship, a variable-length relationship list or a path), or names a variable that holds a value (a WITH expression's alias, a FOR variable); name each element with a variable of its own" },
         // SONNY-3248 (round 4b-1 review m-2): a SKIP or LIMIT parameter that
         // is no non-negative integer read as "no window" (every row).

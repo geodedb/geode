@@ -583,6 +583,24 @@
 
 ### Fixed
 
+- **BREAKING (query): invalid CREATE / INSERT patterns are refused, a path's
+  unnamed middle node is one node, `<-[:R]-` after a MATCH points left, and
+  a null property value is absent (SONNY-3245).** Per ISO/IEC 39075:2024
+  16.5, these now fail with `42000` (`InvalidInsertPattern`) and change
+  nothing: a MATCH-bound variable given a label or property in CREATE
+  (`MATCH (n) CREATE (n:Extra)` did nothing; `CREATE (n {extra: 1})`
+  changed the matched node; use `SET`), a later occurrence of a variable
+  given a label or property (`CREATE (a:R), (a:R)` made two nodes), an
+  undirected inserted edge `-[:T]-` (stored a directed one) and several
+  types `[:T|U]` (stored a T edge). `CREATE (a)-[:R]->(:M)-[:S]->(b)` made
+  two M nodes, so the path did not exist; it makes one (standalone CREATE,
+  INSERT, MATCH ... CREATE and the cluster-replicated CREATE). After a
+  MATCH, `(a)<-[:R]-(b)` was stored a -> b; it is stored b -> a. `CREATE (n
+  {p: null})` stored p and `SET n.p = null` kept it with a null value; a
+  null value now leaves the property absent (nodes and relationships).
+  Still open: MERGE on a null key creates a node, MERGE on a list key
+  never matches, and `FOR u IN [...] CREATE ... RETURN u` returns null for
+  `u`. Regression: `zig build test-sonny3245-create-merge-forms`.
 - **An index-served read no longer waits for an exact-index build
   (SONNY-6362 item 6).** While a deferred build or a late-key catch-up of a
   graph's exact node-property index held its build mutex (an O(graph)
