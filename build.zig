@@ -9720,6 +9720,21 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6355-dead-backup-tests", "Run SONNY-6355 item 4 regression (no mock S3 backup tests, tests/all_tests.zig imports only existing files, every canaryscan status row names an existing source file)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6386 items 4 and 8: the self-contained mock backup integration
+    // test is gone and nothing cites it; CURRENT_ARCHITECTURE.md and the
+    // CHANGELOG no longer describe an S3 backup path, Zig 0.15 or a
+    // test-tde-kms-integration step.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_dead_mock_and_stale_docs.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6386_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6386-dead-mock-and-stale-docs", "Run SONNY-6386 items 4 and 8 regression (the unbuilt mock backup integration test is removed and no status row cites it; CURRENT_ARCHITECTURE.md describes the real backup path and Zig 0.16; the CHANGELOG does not claim a test-tde-kms-integration run)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per

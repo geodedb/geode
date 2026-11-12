@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:50:56.12302945Z",
+  "generated_at": "2026-11-12T18:53:14.443312153Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79327,6 +79327,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6386-DEAD-MOCK-STALE-DOCS",
+      "features": [
+        {
+          "feature": "Test Hygiene",
+          "aspect": "NoMockBackupTestNoStaleArchitectureDocs",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_dead_mock_and_stale_docs.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_dead_mock_and_stale_docs.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED",
       "features": [
         {
@@ -87055,7 +87074,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4476
+      "TESTED": 4477
     },
     "by_aspect": {
       "2PC": 3,
@@ -89197,6 +89216,7 @@
       "NoLeakOnInitDeinit": 1,
       "NoLegacyAlias": 1,
       "NoMatchAll": 1,
+      "NoMockBackupTestNoStaleArchitectureDocs": 1,
       "NoNodeWalk": 1,
       "NoPerEdgePropsPage": 1,
       "NoPlaintextFallback": 1,
