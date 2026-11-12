@@ -15766,7 +15766,7 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
             // shared global and fall through to the legacy global-only
             // exclusive path below.
             releaseStoreLock();
-            if (err == error.GraphNotFound and materializeGraphForWriteLock(adapter, graph_name)) {
+            if (err == error.GraphNotFound and materializeGraphForWriteLock(adapter, graph_name) == .ready) {
                 acquireStoreLock();
                 if (adapter.acquireGraphWriteLock(graph_name)) |mg| {
                     return .{
@@ -15994,20 +15994,40 @@ pub fn acquireProgramWriteLockCancelable(lock_graph: []const u8, session_graph: 
 fn materializeGraphForWriteLock(
     adapter: *graph_storage_adapter.StorageAdapter,
     graph_name: []const u8,
-) bool {
+) Materialized {
     // SONNY-3191 (N-7): a statement naming a reserved graph name (CREATE or
     // DROP GRAPH CURRENT_GRAPH, which the executor refuses) locks the name
     // first; its lock must not create the graph in the engine.
-    if (isReservedGraphName(graph_name)) return false;
+    if (isReservedGraphName(graph_name)) return .failed;
+    // CANARY: REQ=REQ-SONNY-3122-NO-RECREATE-ON-WRITE; FEATURE="MultiGraphIsolation"; ASPECT=MaterializeKnownOnly; STATUS=TESTED; TEST=tests/test_sonny3122_dropped_graph_not_recreated.zig; OWNER=storage; UPDATED=2026-11-12
+    // SONNY-3122: only a graph the engine knows but has not opened (one in
+    // its registry, its load deferred) or the default graph (a fresh
+    // server's first statements) is materialized. A graph that exists
+    // nowhere, one another session dropped, was created again here, so a
+    // session left on it, or a writer that waited for its lock while the
+    // drop ran (V12), brought it back without the schema permission. Only
+    // CREATE GRAPH (and a HELLO allowed to) creates a graph.
+    if (!std.mem.eql(u8, graph_name, DEFAULT_GRAPH_NAME) and !adapter.graphExists(graph_name)) return .missing;
     _ = adapter.getOrCreateGraph(graph_name) catch |err| {
         log.warn("write-lock graph materialization failed; using legacy global-exclusive lock", &.{
             Attr.string("graph", graph_name),
             Attr.string("error", @errorName(err)),
         });
-        return false;
+        return .failed;
     };
-    return true;
+    return .ready;
 }
+
+/// What `materializeGraphForWriteLock` did.
+const Materialized = enum {
+    /// The graph is open: take its per-graph lock.
+    ready,
+    /// SONNY-3122: it exists nowhere: GraphNotFound.
+    missing,
+    /// It could not be opened (or the name is reserved): the legacy global
+    /// lock is the fail-safe.
+    failed,
+};
 
 /// R2 (2026-04-22): deadline-aware variant of `acquireGraphWriteLock`.
 /// Returns `error.Deadline` if the per-graph write lock cannot be
@@ -16056,7 +16076,10 @@ pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns:
                 // interleaved and duplicated the first contended merge key.
                 // Materialize, then take the normal per-graph path. See
                 // `materializeGraphForWriteLock`.
-                if (err == error.GraphNotFound and materializeGraphForWriteLock(adapter, graph_name)) {
+                const materialized: Materialized = if (err == error.GraphNotFound) materializeGraphForWriteLock(adapter, graph_name) else .failed;
+                // SONNY-3122: a write to a graph that no longer exists fails.
+                if (materialized == .missing) return error.GraphNotFound;
+                if (materialized == .ready) {
                     acquireStoreLock();
                     if (adapter.acquireGraphWriteLockCancelable(graph_name, deadline_mono_ns)) |mg| {
                         return .{
@@ -16070,7 +16093,11 @@ pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns:
                             releaseStoreLock();
                             return error.Deadline;
                         },
-                        else => releaseStoreLock(),
+                        else => {
+                            releaseStoreLock();
+                            // SONNY-3122: dropped between the two attempts.
+                            if (err2 == error.GraphNotFound) return error.GraphNotFound;
+                        },
                     }
                 }
             },

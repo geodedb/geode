@@ -642,6 +642,13 @@ fn executeBulkSimpleCreate(
                 try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
                 return;
             }
+            // SONNY-3122: the session's graph was dropped; it is not
+            // created again (GraphNotFound, a GQLSTATUS error).
+            if (err == error.GraphNotFound) {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            }
             return err;
         };
         mut_sample.markLockAcquired();
@@ -891,6 +898,13 @@ fn executeBulkMatchCreateEdge(
                     Attr.uint("timeout_ns", write_lock_timeout_ns),
                 });
                 try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                return;
+            }
+            // SONNY-3122: the session's graph was dropped; it is not
+            // created again (GraphNotFound, a GQLSTATUS error).
+            if (err == error.GraphNotFound) {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return;
             }
             return err;
@@ -1401,6 +1415,12 @@ fn executeBulkSimpleMerge(
                         Attr.uint("timeout_ns", write_lock_timeout_ns),
                     });
                     try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                    return;
+                }
+                // SONNY-3122: as in executeBulkSimpleCreate.
+                if (err == error.GraphNotFound) {
+                    const info = proto_util.mapError(err);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                     return;
                 }
                 return err;

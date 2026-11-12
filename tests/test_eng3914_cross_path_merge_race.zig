@@ -779,11 +779,17 @@ test "ENG-3914 T2b regression: cross-path SINGLE-property MERGE of the SAME key 
 // The legacy global-exclusive escalation is now reached only when there is NO
 // adapter at all.
 
-/// A graph name no harness step creates, so the adapter genuinely does not
-/// know it when the writers arrive — the production shape is `default` on a
-/// fresh server, but pinning a dedicated name keeps the precondition
-/// assertable instead of dependent on store-init internals.
-const window_graph_name = "eng3914_window";
+/// The graph the writers race to materialize: `default` on a fresh store,
+/// the production shape (the first statements of a fresh server). Each test
+/// asserts the precondition that the adapter does not know it yet.
+///
+/// SONNY-3122: this was a dedicated name no harness step creates. The write
+/// lock no longer creates a graph that exists nowhere (a session can only be
+/// on a graph that existed when it bound it, so one that is gone was
+/// dropped, and creating it again brought a dropped graph back); it
+/// materializes the default graph and a graph the engine knows but has not
+/// opened.
+const window_graph_name = graph_store.DEFAULT_GRAPH_NAME;
 
 fn bulkMergeWindow(adapter: *adapter_mod.StorageAdapter, k: Key) !u64 {
     const merge_props = [_]PropKV{

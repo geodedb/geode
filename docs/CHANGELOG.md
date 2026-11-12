@@ -96,6 +96,21 @@
   first and released last; a missing graph is not locked (and not
   created). The raft apply already took the lock (SONNY-3350).
   `test-sonny3135-lockless-drop-waits`.
+- **A write never creates a dropped graph again (SONNY-3122).** A session
+  left on a graph another session dropped took the graph's write lock for
+  its next write; the adapter no longer had the graph, and
+  `materializeGraphForWriteLock` created it again so the write could go
+  ahead, bringing the graph back for a principal without the schema
+  permission (the SONNY-3033 class). A writer waiting for the lock while the
+  drop ran was told the graph was gone and then created it the same way
+  (review probe V12). The write lock now materializes only a graph the
+  engine knows but has not opened (in its registry) and the default graph
+  (ENG-3914 RC-3); for any other it answers GraphNotFound, also when the
+  graph goes between its two attempts. **Behaviour change:** a write (or
+  MERGE) from a session whose graph was dropped fails with GraphNotFound,
+  over gRPC and over QUIC's general and fast paths alike; only CREATE GRAPH
+  (and a HELLO allowed to create its graph) creates a graph.
+  `test-sonny3122-dropped-graph-not-recreated`.
 - **`geode query` exit code, superuser roles, procedure errors, EXPLAIN
   POLICY's executor checks, legacy hashes (SONNY-6369).** (1) **Behaviour
   change:** `geode query` exits 1 when the server answers the query with an
