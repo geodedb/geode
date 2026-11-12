@@ -42,9 +42,9 @@ const util = @import("proto_test_util.zig");
 
 const linux = std.os.linux;
 
-const binary_path = "./zig-out/bin/geode";
-const admin_user = util.DefaultAuth.username;
-const admin_pw = util.DefaultAuth.password;
+pub const binary_path = "./zig-out/bin/geode";
+pub const admin_user = util.DefaultAuth.username;
+pub const admin_pw = util.DefaultAuth.password;
 
 fn nowMillis() i64 {
     var ts: linux.timespec = .{ .sec = 0, .nsec = 0 };
@@ -64,11 +64,11 @@ fn getenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
 }
 
-const Run = struct { code: u8, output: []const u8 };
+pub const Run = struct { code: u8, output: []const u8 };
 
 /// Run the geode binary with `args` and wait for it (`deadline_ms` at most).
 /// stdout and stderr are merged into one transcript.
-fn runGeode(aa: std.mem.Allocator, args: []const []const u8, deadline_ms: i64) !Run {
+pub fn runGeode(aa: std.mem.Allocator, args: []const []const u8, deadline_ms: i64) !Run {
     var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();
@@ -132,12 +132,12 @@ fn runGeode(aa: std.mem.Allocator, args: []const []const u8, deadline_ms: i64) !
     return .{ .code = code, .output = output.items };
 }
 
-fn skipWithoutBinary() !void {
+pub fn skipWithoutBinary() !void {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), binary_path, .{}) catch return error.SkipZigTest;
 }
 
-fn freshDir(aa: std.mem.Allocator, tag: []const u8) ![]const u8 {
+pub fn freshDir(aa: std.mem.Allocator, tag: []const u8) ![]const u8 {
     const io = std.Io.Threaded.global_single_threaded.io();
     const dir = try std.fmt.allocPrint(aa, "/tmp/geode-sonny6377-{s}-{d}", .{ tag, nowMillis() });
     std.Io.Dir.cwd().deleteTree(io, dir) catch {};
@@ -145,11 +145,11 @@ fn freshDir(aa: std.mem.Allocator, tag: []const u8) ![]const u8 {
     return dir;
 }
 
-fn removeDir(dir: []const u8) void {
+pub fn removeDir(dir: []const u8) void {
     std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), dir) catch {};
 }
 
-fn contains(haystack: []const u8, needle: []const u8) bool {
+pub fn contains(haystack: []const u8, needle: []const u8) bool {
     return std.mem.indexOf(u8, haystack, needle) != null;
 }
 
@@ -165,7 +165,7 @@ fn countFromJson(transcript: []const u8) ?i64 {
     return std.fmt.parseInt(i64, transcript[start..i], 10) catch null;
 }
 
-fn readCount(aa: std.mem.Allocator, addr: []const u8, label: []const u8) !i64 {
+pub fn readCount(aa: std.mem.Allocator, addr: []const u8, label: []const u8) !i64 {
     const q = try std.fmt.allocPrint(aa, "MATCH (n:{s}) RETURN count(n) AS c", .{label});
     const r = try runGeode(aa, &.{ binary_path, "query", "--server", addr, "--insecure", "--no-saved-session", "--format", "json", "-U", admin_user, "-P", admin_pw, q }, 120_000);
     if (r.code != 0) {
@@ -196,12 +196,12 @@ fn settledCount(aa: std.mem.Allocator, addr: []const u8, label: []const u8) !i64
     return last;
 }
 
-const Server = struct {
+pub const Server = struct {
     proc: util.ServerHandle,
     addr: []const u8,
     grpc_addr: ?[]const u8 = null,
 
-    fn start(allocator: std.mem.Allocator, dir: []const u8, grpc_port: ?u16) !Server {
+    pub fn start(allocator: std.mem.Allocator, dir: []const u8, grpc_port: ?u16) !Server {
         const port = try util.getRandomPort();
         const addr = try util.formatAddr(allocator, port);
         errdefer allocator.free(addr);
@@ -221,7 +221,7 @@ const Server = struct {
         return .{ .proc = proc, .addr = addr, .grpc_addr = grpc_addr };
     }
 
-    fn stop(self: *Server, allocator: std.mem.Allocator) void {
+    pub fn stop(self: *Server, allocator: std.mem.Allocator) void {
         self.proc.deinit();
         allocator.free(self.addr);
         if (self.grpc_addr) |g| allocator.free(g);
@@ -234,7 +234,7 @@ const Server = struct {
 
 /// 400 padded CREATEs: over the 16 KiB chunking threshold, inside one 32 KiB
 /// chunk (the shape of test_cli_file_chunked.zig's fixture).
-fn buildChunk(aa: std.mem.Allocator, label: []const u8) ![]const u8 {
+pub fn buildChunk(aa: std.mem.Allocator, label: []const u8) ![]const u8 {
     var buf = std.ArrayList(u8).empty;
     var line: [256]u8 = undefined;
     for (0..400) |i| {
@@ -356,7 +356,7 @@ fn writeAllFd(fd: std.posix.fd_t, bytes: []const u8) bool {
 /// with ECONNRESET after its request was applied. Not a mock: the CLI, the
 /// wire protocol and the server are real; the relay injects one transport
 /// fault and counts the Execute requests the server received.
-const ResetProxy = struct {
+pub const ResetProxy = struct {
     server: std.Io.net.Server,
     port: u16,
     upstream_port: u16,
@@ -365,7 +365,7 @@ const ResetProxy = struct {
     accept_thread: ?std.Thread = null,
     gpa: std.mem.Allocator,
 
-    fn start(gpa: std.mem.Allocator, upstream_port: u16) !*ResetProxy {
+    pub fn start(gpa: std.mem.Allocator, upstream_port: u16) !*ResetProxy {
         const self = try gpa.create(ResetProxy);
         errdefer gpa.destroy(self);
         var bound: u16 = 0;
@@ -384,7 +384,7 @@ const ResetProxy = struct {
         return self;
     }
 
-    fn stop(self: *ResetProxy) void {
+    pub fn stop(self: *ResetProxy) void {
         self.stop_flag.store(true, .release);
         var addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", self.port) catch unreachable;
         if (std.Io.net.IpAddress.connect(&addr, netIo(), .{ .mode = .stream })) |s| {

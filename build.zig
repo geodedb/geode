@@ -13685,6 +13685,21 @@ pub fn build(b: *std.Build) void {
     const sonny6384_step = b.step("test-sonny6384-offline-change-crash-durability", "Run the SONNY-6384 item 1 regression (after an offline geode user change, CREATE USER and ALTER USER over the wire survive a SIGKILL, the next start loads the security graph and the chain verifies; spawns the CLI and a server)");
     sonny6384_step.dependOn(&run_sonny6384_tests.step);
 
+    // SONNY-6384 (item 6): a gRPC chunk whose connection fails after it was
+    // sent stops the run and still prints the chunked summary.
+    const sonny6384_chunk_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6384_grpc_chunk_summary.zig"), .target = target, .optimize = optimize });
+    sonny6384_chunk_test_mod.link_libc = true;
+    sonny6384_chunk_test_mod.addImport("geode", root_mod);
+    sonny6384_chunk_test_mod.addImport("schema", schema_mod);
+    sonny6384_chunk_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6384_chunk_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6384_chunk_tests = b.addTest(.{ .root_module = sonny6384_chunk_test_mod });
+    const run_sonny6384_chunk_tests = b.addRunArtifact(sonny6384_chunk_tests);
+    run_sonny6384_chunk_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6384_chunk_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6384_chunk_step = b.step("test-sonny6384-grpc-chunk-summary", "Run the SONNY-6384 item 6 regression (geode query --grpc --file: a chunk whose connection fails after it was sent is not sent again, the run stops and the chunked summary is printed; spawns the CLI, a server and a TCP relay)");
+    sonny6384_chunk_step.dependOn(&run_sonny6384_chunk_tests.step);
+
     // SONNY-3135 (N6, N7d): the RLS policy cache owns its keys; a per-graph
     // grant on graph '*' is refused.
     const sonny3135_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3135_policy_cache_keys_grant_wildcard.zig"), .target = target, .optimize = optimize });
