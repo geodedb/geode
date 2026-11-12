@@ -9523,6 +9523,21 @@ pub fn build(b: *std.Build) void {
     const sonny6289_step = b.step("test-sonny6289-backup-cleanup-info", "Run SONNY-6289 regression (geode backup cleanup needs --dir and --older-than, lists without --yes, deletes only old geode backups directly in --dir and never the newest, updates metadata.json and fails non-zero on a failed deletion; backup info/list decode the header range-checked and fail cleanly on a damaged one; no header byte flip or truncation crashes the decode)");
     sonny6289_step.dependOn(&run_sonny6289_tests.step);
 
+    // SONNY-6300: BackupManager has no in-place restore (its restore is the
+    // staged, verified one, into a new or empty directory only); a staged
+    // restore syncs the filesystem once instead of every file; the CLI's
+    // wait for a server's backup/restore answer takes --timeout.
+    const sonny6300_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6300_staged_restore_paths.zig"), .target = target, .optimize = optimize });
+    sonny6300_test_mod.link_libc = true;
+    sonny6300_test_mod.addImport("geode", root_mod);
+    sonny6300_test_mod.addImport("storage/backup", storage_backup_mod);
+    const sonny6300_tests = b.addTest(.{ .root_module = sonny6300_test_mod });
+    const run_sonny6300_tests = b.addRunArtifact(sonny6300_tests);
+    spawnsBuiltGeode(sonny6300_tests);
+    shardDep(test_step, &run_sonny6300_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6300_step = b.step("test-sonny6300-staged-restore-paths", "Run SONNY-6300 regression (BackupManager has no in-place restore: its restore refuses the live data directory, leaving it byte for byte, and restores a new directory staged and verified; a staged restore of 700 files issues a constant number of syncs; geode restore --server and geode backup create take --timeout <seconds> and refuse a non-positive one)");
+    sonny6300_step.dependOn(&run_sonny6300_tests.step);
+
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
     // look inside PROFILE and EXPLAIN. The real gRPC handler in process
