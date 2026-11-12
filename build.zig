@@ -5890,6 +5890,15 @@ pub fn build(b: *std.Build) void {
     // GAP-0510 Task D1: Make rls (expression engine) available to the server binary so
     // main.zig can initialize the global expression RLS engine at startup.
     geode_exe.root_module.addImport("rls", rls_mod);
+    // SONNY-6433: the storage adapter now reaches security/audit.zig, which
+    // imports `rls` (SONNY-6422: `initAuditForGraph` checks the audit
+    // signing keys through `AuditLogger.loadEnvSigningKey`), so every module
+    // that compiles the adapter as its own source needs it: the graph_store
+    // module, the graph_store.zig and eval.zig inline-test roots. rls_mod is
+    // declared after them, so the imports are wired here.
+    graph_store_mod.addImport("rls", rls_mod);
+    graph_store_unit_tests.root_module.addImport("rls", rls_mod);
+    eval_handler_mod.addImport("rls", rls_mod);
 
     // rls_core.zig's inline tests (the GAP-0496 QueryRewriter tests went with
     // the dead QueryRewriter, SONNY-3038).

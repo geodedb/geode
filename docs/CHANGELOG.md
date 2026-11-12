@@ -1632,6 +1632,23 @@
 
 ### Fixed
 
+- **`zig build test-graph-store` and `zig build test-compile` compile again
+  (SONNY-6433 item 4).** SONNY-6422 made the storage adapter check the
+  audit signing keys (`AuditLogger.loadEnvSigningKey`), which reaches
+  `src/security/audit.zig` and its `@import("rls")`. Three modules compile
+  the adapter as their own source and had no `rls` import: the
+  `graph_store` module (`test_graph_algorithms.zig`,
+  `test_point_read_view_zero_copy.zig`,
+  `test_point_read_view_mutation_invalidation.zig`) and the `graph_store.zig`
+  and `eval.zig` inline-test roots (`test-graph-store`, `test-gap0866`), so
+  those five artifacts, and with them `zig build test-compile` and the
+  aggregate `zig build test`, failed to compile. They now import it.
+  `tests/test_process_args.zig` still asserted that `serve --no-auth`
+  disables authentication in a Debug build, through the `enable_auth` field
+  SONNY-6329 removed; it now asserts the flag is refused
+  (`NoAuthUnsupported`) in every build mode. All 829 `test-compile`
+  artifacts and the artifacts of the named steps outside the aggregate
+  compile.
 - **Docs no longer present S3 / DigitalOcean Spaces as a backup target or
   the removed TDE-KMS integration as current code (SONNY-6422 item 9).**
   No command reaches object storage (SONNY-6290; real support is story
