@@ -161,7 +161,8 @@ the container for future use (GAP-0878).
 | `GEODE_TDE_KEY` | - | AES-256-GCM encryption key (64 hex chars / 32 bytes) |
 | `GEODE_ENABLE_TDE` | `false` | Enable Transparent Data Encryption |
 | `GEODE_KMS_PROVIDER` | - | KMS provider: `local`, `vault`, `external`, `remote` |
-| `GEODE_MASTER_KEY` | - | FLE master key: at least 32 bytes, the first 32 used as raw bytes (not hex-decoded); a shorter value refuses startup (SONNY-6422) |
+| `GEODE_MASTER_KEY` | - | FLE master key. With `GEODE_MASTER_KEY_FORMAT` unset: at least 32 bytes, the first 32 used as raw bytes (a longer value warns; a shorter one refuses startup, SONNY-6422) |
+| `GEODE_MASTER_KEY_FORMAT` | - | How `GEODE_MASTER_KEY` is read: `hex` (64 hex characters), `base64` (32 bytes) or `raw` (exactly 32 bytes); a value that does not match refuses startup (SONNY-6430, docs/FIELD_LEVEL_ENCRYPTION.md) |
 
 ### Encryption - KMS Integration
 

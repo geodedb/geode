@@ -4,6 +4,22 @@
 
 ### Security
 
+- **`GEODE_MASTER_KEY_FORMAT` reads a full 256-bit FLE master key, and an
+  existing key never changes (SONNY-6430 item 2).** `GEODE_MASTER_KEY` was
+  always used as raw bytes and only its first 32 counted, so the usual
+  `openssl rand -hex 32` value gave a key of its first 32 hex characters
+  (128 bits) and the rest was silently ignored. `GEODE_MASTER_KEY_FORMAT`
+  now selects `hex` (exactly 64 hex characters), `base64` (32 bytes) or
+  `raw` (exactly 32 bytes); a value that does not match, an unknown format
+  or a format without a key refuses startup without printing the value.
+  The format is never inferred from the value: with it unset the legacy
+  reading is unchanged (reading an existing 64-hex value as hex would be a
+  different key and make every encrypted field unreadable), and a value
+  longer than 32 bytes starts with a warning that only its first 32 bytes
+  are the key. `docs/FIELD_LEVEL_ENCRYPTION.md` ("Master key format") and
+  `docs/DOCKER_OVERVIEW.md` document it. Regression:
+  `zig build test-sonny6430-master-key-format` (includes a real FLE round
+  trip: a field encrypted under a legacy 64-hex key stays readable).
 - **BREAKING (operator): half-configured audit keys, a short
   `GEODE_MASTER_KEY`, a `GEODE_WAL_KEY` and a malformed
   `GEODE_MIGRATION_HMAC_KEY` are refused instead of falling back to a weaker

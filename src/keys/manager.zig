@@ -31,17 +31,87 @@ pub const KeyManager = fle.KeyManager;
 /// The minimum GEODE_MASTER_KEY length in bytes (SONNY-6422).
 pub const master_key_min_len: usize = 32;
 
+/// How GEODE_MASTER_KEY is read (GEODE_MASTER_KEY_FORMAT, SONNY-6430).
+pub const MasterKeyFormat = enum {
+    /// GEODE_MASTER_KEY_FORMAT unset: at least 32 bytes, the first 32 used
+    /// as raw bytes. Kept unchanged so every deployment keeps the key its
+    /// encrypted fields were written with; a longer value warns at startup.
+    legacy,
+    /// Exactly 32 bytes, used as they are.
+    raw,
+    /// Exactly 64 hex characters (either case), decoded to 32 bytes.
+    hex,
+    /// Standard base64 (padded) of exactly 32 bytes.
+    base64,
+
+    /// The format GEODE_MASTER_KEY_FORMAT names; null for an unknown one.
+    pub fn parse(name: []const u8) ?MasterKeyFormat {
+        if (std.mem.eql(u8, name, "raw")) return .raw;
+        if (std.mem.eql(u8, name, "hex")) return .hex;
+        if (std.mem.eql(u8, name, "base64")) return .base64;
+        return null;
+    }
+};
+
+/// The format GEODE_MASTER_KEY_FORMAT selects: `.legacy` when it is unset or
+/// empty, `error.MasterKeyFormatUnknown` for a name that is not raw, hex or
+/// base64.
+pub fn masterKeyFormatFromEnv() error{MasterKeyFormatUnknown}!MasterKeyFormat {
+    const raw = std.c.getenv("GEODE_MASTER_KEY_FORMAT") orelse return .legacy;
+    const name = std.mem.span(raw);
+    if (name.len == 0) return .legacy;
+    return MasterKeyFormat.parse(name) orelse error.MasterKeyFormatUnknown;
+}
+
+pub const MasterKeyParseError = error{ MasterKeyRequired, MasterKeyTooShort, MasterKeyInvalid };
+
+// CANARY: REQ=REQ-SONNY-6430-MASTER-KEY-FORMAT; FEATURE="Key configuration"; ASPECT=ExplicitFormatNoSilentKeyChange; STATUS=TESTED; TEST=tests/test_sonny6430_master_key_format.zig; OWNER=security; UPDATED=2026-11-12
+/// The 32-byte FLE master key `value` holds in `format`. Errors name no
+/// part of the value. See docs/FIELD_LEVEL_ENCRYPTION.md "Master key format".
+pub fn parseMasterKey(value: []const u8, format: MasterKeyFormat) MasterKeyParseError![32]u8 {
+    if (value.len == 0) return error.MasterKeyRequired;
+    var key: [32]u8 = undefined;
+    switch (format) {
+        .legacy => {
+            if (value.len < master_key_min_len) return error.MasterKeyTooShort;
+            @memcpy(&key, value[0..key.len]);
+        },
+        .raw => {
+            if (value.len != key.len) return error.MasterKeyInvalid;
+            @memcpy(&key, value);
+        },
+        .hex => {
+            if (value.len != key.len * 2) return error.MasterKeyInvalid;
+            _ = std.fmt.hexToBytes(&key, value) catch return error.MasterKeyInvalid;
+        },
+        .base64 => {
+            const dec = std.base64.standard.Decoder;
+            const n = dec.calcSizeForSlice(value) catch return error.MasterKeyInvalid;
+            if (n != key.len) return error.MasterKeyInvalid;
+            dec.decode(&key, value) catch return error.MasterKeyInvalid;
+        },
+    }
+    return key;
+}
+
 // CANARY: REQ=REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED; FEATURE="Key configuration"; ASPECT=MasterKeyMinimumLength; STATUS=TESTED; TEST=tests/test_sonny6422_env_key_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
-/// The FLE master key: the first 32 bytes of GEODE_MASTER_KEY, which must be
-/// at least `master_key_min_len` (32) bytes long. The value is used as raw
-/// bytes, not hex-decoded.
+/// The FLE master key from GEODE_MASTER_KEY, read in the format
+/// GEODE_MASTER_KEY_FORMAT names (`parseMasterKey`). Unset, the value is
+/// used as raw bytes and only its first 32 bytes count (the legacy reading,
+/// unchanged).
 ///
 /// SONNY-6422: a shorter value is `error.MasterKeyTooShort`. It used to be
 /// hashed with SHA-256 into a key, so a 3-character value was accepted as a
 /// working master key. An empty value is unset (`MasterKeyRequired`); it was
 /// hashed into the same constant key for every deployment.
+///
+/// SONNY-6430: a 64-hex-character value gave a key of 32 hex characters
+/// (128 bits) with no word that the rest was ignored. The full-entropy
+/// readings are opt-in through GEODE_MASTER_KEY_FORMAT, never applied to a
+/// value that already works: that would change the key existing encrypted
+/// fields were written with and make them unreadable.
 pub fn loadMasterKeyFromEnv(allocator: std.mem.Allocator) ![32]u8 {
-    var master_key: [32]u8 = undefined;
+    const format = try masterKeyFormatFromEnv();
     if (getEnvVarOwned(allocator, "GEODE_MASTER_KEY")) |env_key| {
         defer {
             cb.secureZero(env_key);
@@ -49,9 +119,7 @@ pub fn loadMasterKeyFromEnv(allocator: std.mem.Allocator) ![32]u8 {
         }
         if (env_key.len == 0) return Error.MasterKeyRequired;
         // The caller reports the error (`geode serve` refuses to start).
-        if (env_key.len < master_key_min_len) return error.MasterKeyTooShort;
-        @memcpy(&master_key, env_key[0..master_key.len]);
-        return master_key;
+        return parseMasterKey(env_key, format);
     } else |_| {
         std.log.err(
             "SECURITY CRITICAL: GEODE_MASTER_KEY environment variable is REQUIRED. " ++
