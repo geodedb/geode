@@ -3681,9 +3681,16 @@ pub const StorageAdapter = struct {
         errdefer self.registry.deinit();
         errdefer allocator.free(self.registry_path);
 
+        // CANARY: REQ=REQ-SONNY-6430-REGISTRY-FAIL-CLOSED; FEATURE="Storage Adapter"; ASPECT=UnloadableRegistryRefuses; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=storage; UPDATED=2026-11-12
+        // SONNY-6430: a registry that exists but cannot be loaded is an
+        // error. It was a warning, and the adapter started with no graphs.
         self.loadRegistry() catch |err| switch (err) {
             error.FileNotFound => {},
-            else => log.warn("failed to load graph registry {s}: {}", .{ self.registry_path, err }),
+            else => {
+                // The caller reports the refusal (the server exits with it).
+                log.warn("cannot load the graph registry {s}: {}; refusing to open the data directory without its graphs", .{ self.registry_path, err });
+                return err;
+            },
         };
 
         // LEAN-MERGE-KEY-SEEK (Part 1): re-register the persisted merge-key set
@@ -10424,31 +10431,30 @@ pub const StorageAdapter = struct {
         }
     }
 
-    /// Attempt to create a per-graph audit logger. Returns null on failure
-    /// (soft failure — the graph remains usable without per-graph audit).
-    /// SONNY-6422: except when GEODE_AUDIT_PUB/GEODE_AUDIT_SEC are set but
-    /// unusable (one of the pair, malformed, or not a pair): that is an
-    /// error, so the graph does not open unaudited under a key configuration
-    /// the operator believes is in force.
+    // CANARY: REQ=REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED; FEATURE="Security Graph Audit"; ASPECT=NoUnauditedOpen; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
+    /// The security graph's audit logger (only `__geode_security` has one).
+    /// Every failure is an error, so the graph never opens unaudited.
+    /// SONNY-6422 made an unusable GEODE_AUDIT_PUB/GEODE_AUDIT_SEC pair an
+    /// error; SONNY-6430: so is everything else. An audit log that cannot be
+    /// opened (EACCES, a read-only directory), whose tail does not verify, or
+    /// any allocation failure returned null, and the security graph opened
+    /// with no audit logger: every auth change went unaudited. No error is
+    /// one to carry on past: the open fails and the caller (the server's
+    /// startup, or the CLI) reports it.
     fn initAuditForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) !?*audit.AuditLogger {
         if (try audit.AuditLogger.loadEnvSigningKey(allocator)) |kp| {
             var k = kp;
             k.deinit();
         }
-        const graph_dir = graphDirPath(allocator, data_dir, graph_uuid) catch |err| {
-            log.warn("failed to build graph dir path for audit: {}", .{err});
-            return null;
-        };
+        const graph_dir = try graphDirPath(allocator, data_dir, graph_uuid);
         defer allocator.free(graph_dir);
 
-        const al = allocator.create(audit.AuditLogger) catch |err| {
-            log.warn("failed to allocate per-graph audit logger: {}", .{err});
-            return null;
-        };
+        const al = try allocator.create(audit.AuditLogger);
+        errdefer allocator.destroy(al);
         al.* = audit.AuditLogger.initForGraph(allocator, graph_dir) catch |err| {
-            log.warn("failed to init per-graph audit logger: {}", .{err});
-            allocator.destroy(al);
-            return null;
+            // The caller reports the refusal (the server does not start).
+            log.warn("cannot open the security graph's audit log in {s}: {}; refusing to open the graph unaudited", .{ graph_dir, err });
+            return err;
         };
         return al;
     }

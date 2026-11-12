@@ -13,6 +13,16 @@ fn compat_milliTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
+/// Monotonic milliseconds, for deadlines.
+fn monoMs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        if (std.os.linux.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    } else {
+        if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return 0;
+    }
+    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000;
+}
 fn compat_microTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
@@ -299,7 +309,8 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "  --local                Back up a local data directory instead of a server\n" ++
                 "                         (no server is contacted)\n" ++
                 "  --data-dir <path>      Data directory for --local (default: $GEODE_DATA_DIR)\n" ++
-                "  --timeout <seconds>    How long to wait for the server's answer (default: 300)\n" ++
+                "  --timeout <seconds>    How long the whole remote backup may take: the server's\n" ++
+                "                         answer and every byte of the file (default: 300)\n" ++
                 "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
                 "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
                 "  --ca-cert <path>       CA certificate path for server verification\n" ++
@@ -1834,11 +1845,13 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
                 "\n" ++
                 "Options:\n" ++
                 "  --dir <path>           Migrations directory (default: ./migrations)\n" ++
-                "  --no-sign              Skip auto-signing (dev only, not recommended)\n" ++
+                "  --no-sign              Create the file unsigned (dev only; `migrate run` refuses it\n" ++
+                "                         without --allow-unsigned)\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n" ++
-                "Requires HMAC key (GEODE_MIGRATION_HMAC_KEY env var or <dir>/.hmac_key file).\n" ++
-                "Created migrations are automatically signed unless --no-sign is specified.\n" ++
+                "Requires an HMAC key (GEODE_MIGRATION_HMAC_KEY env var, 64 hex characters, or\n" ++
+                "<dir>/.hmac_key): the created migration is signed with it. Without a key the\n" ++
+                "command fails and writes nothing, unless --no-sign is given.\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--dir") and i + 1 < argv.len) {
@@ -1862,15 +1875,23 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // SEC-MIG-03: Use HMAC key for migrate create when available.
-    // If an HMAC key is configured, sign the created migration file.
-    // If no key is configured, create unsigned (operators who want signing
-    // must set up a key via env var or .hmac_key file).
+    // CANARY: REQ=REQ-SONNY-6430-MIGRATE-CREATE-SIGNED; FEATURE="Migrations"; ASPECT=NoKeyNoFile; STATUS=TESTED; TEST=tests/test_sonny6430_cli_fail_closed.zig; OWNER=cli; UPDATED=2026-11-12
+    // SEC-MIG-03: the created migration is signed with the HMAC key, which
+    // is required. SONNY-6430: with no key configured this created an
+    // unsigned file and exited 0, though the help (and SEC-MIG-03's
+    // resolution) said the key is required. --no-sign is the explicit way
+    // to create an unsigned file.
     var hmac_key_buf: [32]u8 = undefined;
     var hmac_key_ptr: ?*const [32]u8 = null;
     if (!no_sign) {
         hmac_key_ptr = loadMigrationHmacKey(&hmac_key_buf, migrations_dir, allocator);
-        // If no key is configured, proceed without signing (graceful degradation)
+        if (hmac_key_ptr == null) {
+            std.debug.print("Error: No HMAC key to sign the migration with; nothing was created.\n" ++
+                "  Set GEODE_MIGRATION_HMAC_KEY (64 hex chars), or\n" ++
+                "  create {s}/.hmac_key, or\n" ++
+                "  use --no-sign to create an unsigned migration (dev only).\n", .{migrations_dir});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
     }
 
     // Validate migration name for path traversal (GAP-0285/0301)
@@ -1961,19 +1982,23 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
-    printStdout("Created migration file: {s}\n", .{filename});
-
-    // SEC-MIG-03: Auto-sign the newly created migration file
+    // SEC-MIG-03: sign the newly created migration file
     if (hmac_key_ptr) |key| {
         const cfg = migration.MigrationConfig{
             .migrations_dir = migrations_dir,
             .hmac_key = key,
         };
         migration.signMigrationFile(allocator, cfg, basename) catch |err| {
-            std.debug.print("Warning: Failed to auto-sign migration: {}\n", .{err});
+            // SONNY-6430: no unsigned file is left behind.
+            std.Io.Dir.cwd().deleteFile(io_wf, filename) catch {};
+            std.debug.print("Error: Failed to sign the migration ({}); nothing was created.\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
+        printStdout("Created migration file: {s}\n", .{filename});
         printStdout("  Signed: {s}\n", .{basename});
+    } else {
+        printStdout("Created migration file: {s}\n", .{filename});
+        printStdout("  Not signed (--no-sign): unsigned; `geode migrate run` refuses it without --allow-unsigned\n", .{});
     }
 
     std.process.exit(@intFromEnum(ExitCode.success));
@@ -2165,8 +2190,12 @@ fn executeRemoteBackup(
         std.debug.print("Error: Failed to send BACKUP request: {}\n", .{err});
         return err;
     };
+    // SONNY-6430: --timeout bounds the whole backup, the server's answer and
+    // every byte of the file. Each 64 KiB chunk had a fixed 30 s of its own,
+    // whatever --timeout said.
+    const deadline_ms = monoMs() + @as(u64, timeout_s) * 1000;
 
-    const backup_resp_msg = readProtoMessage(arena.allocator(), &client, @as(u64, timeout_s) * 1000) catch |err| {
+    const backup_resp_msg = readProtoMessage(arena.allocator(), &client, @max(deadline_ms -| monoMs(), 1)) catch |err| {
         std.debug.print("Error: Failed to receive backup response: {}\n", .{err});
         return err;
     };
@@ -2229,8 +2258,13 @@ fn executeRemoteBackup(
         const remaining = backup_size - bytes_received;
         const chunk_size = @min(remaining, chunk_buf.len);
 
-        const bytes_read = client.receiveRawBytes(chunk_buf[0..chunk_size], 30000) catch |err| {
-            std.debug.print("Error: Failed to receive backup data: {}\n", .{err});
+        const left_ms = deadline_ms -| monoMs();
+        const bytes_read = (if (left_ms == 0) error.ReceiveTimeout else client.receiveRawBytes(chunk_buf[0..chunk_size], left_ms)) catch |err| {
+            if (err == error.ReceiveTimeout) {
+                std.debug.print("Error: the backup did not arrive within --timeout {d} s ({d} of {d} bytes received); raise --timeout for a large store\n", .{ timeout_s, bytes_received, backup_size });
+            } else {
+                std.debug.print("Error: Failed to receive backup data: {}\n", .{err});
+            }
             return err;
         };
 

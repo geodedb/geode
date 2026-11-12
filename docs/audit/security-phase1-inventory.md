@@ -56,7 +56,7 @@
 | Store | Type | Connection Pool | Credential Source | File:Line |
 |-------|------|-----------------|-------------------|-----------|
 | Local graph store (page-backed + MVCC) | File-mmap + WAL | Per-graph rwlock; `graph_handles_mutex` | `GEODE_DATA_DIR` | `src/graph_store.zig:102`, vendor `graph_storage` |
-| WAL | Append-only encrypted | Single writer | `GEODE_WAL_KEY` (hex) | `src/wal.zig:39,136` |
+| WAL | Append-only, encrypted with the pages | Single writer | `GEODE_TDE_KEY` (64 hex); `GEODE_WAL_KEY` is read by nothing and refuses startup (corrected 2026-11-12, SONNY-6422/SONNY-6430: the `WriteAheadLog` wrapper that read it was never instantiated and was removed) | vendor `graph_storage` WAL; `src/storage/tde_file_encryption.zig` (`loadKey`) |
 | TDE-encrypted backup files | AES-256-GCM | — | `GEODE_TDE_KEY`, or KMS-wrapped DEK | `src/security/tde.zig:54-100` ; `src/storage/tde_file_encryption.zig` |
 | WAL / snapshot backup (local & S3) | Checkpoint | — | Envelope-wrapped keys | `src/storage/backup.zig`, `src/storage/s3_backup.zig` |
 | User storage | JSON on disk | `user_store_mutex` (Tier 5) | Argon2id PHC (legacy blake2b migration) | `src/storage/user_storage.zig`, `src/security/user_management.zig:556-575` |
@@ -84,7 +84,7 @@
 | docker-compose.yml | local dev stack | Uses `${REDIS_PASSWORD:?...}` from `.env`; does not commit secrets | `docker-compose.yml:59,198` |
 | .gitlab-ci.yml | GitLab CI | Uses `$CI_JOB_TOKEN` via `git config` URL insteadOf; no static secrets in file | `.gitlab-ci.yml:75-77,473-482` |
 | Self-signed TLS fallback | auto-gen on first start if certs missing | `certs/server.crt`, `certs/server.key` (0600) | `src/transport/quic.zig:251-299`, `src/tools/cert_gen.zig` |
-| Env-driven secrets | `getEnvVarOwned` wrapper | `GEODE_ADMIN_PASSWORD`, `GEODE_MASTER_KEY`, `GEODE_WAL_KEY`, `GEODE_TDE_KEY`, `GEODE_CLUSTER_TOKEN`, `GEODE_CLUSTER_INSECURE`, `GEODE_MTLS_REQUIRED`, `VAULT_TOKEN`, `GEODE_DEFAULT_PASSWORD`, `GEODE_AUTH_CACHE_SIZE`, `GEODE_PASSWORD_MIN_LENGTH/WORDS` | `src/compat.zig:11-15` ; 26 consumers (see Grep) |
+| Env-driven secrets | `getEnvVarOwned` wrapper | `GEODE_ADMIN_PASSWORD`, `GEODE_MASTER_KEY` (+ `GEODE_MASTER_KEY_FORMAT`), `GEODE_TDE_KEY`, `GEODE_CLUSTER_TOKEN`, `GEODE_CLUSTER_INSECURE`, `GEODE_MTLS_REQUIRED`, `VAULT_TOKEN`, `GEODE_DEFAULT_PASSWORD`, `GEODE_AUTH_CACHE_SIZE`, `GEODE_PASSWORD_MIN_LENGTH/WORDS` | `src/compat.zig:11-15` ; 26 consumers (see Grep) |
 | Subprocess use (supply-chain hazard) | `std.ChildProcess.exec` calls `vault kv {list,get,put}` | Key-name regex: `[A-Za-z0-9._/-]`; rejects leading `-` (Issue #435) | `src/security/vault_kms_provider.zig:38-47,163,251,270` |
 | In-repo artefacts | `audit.jsonl`, `audit.jsonl.key` (0600), `audit.jsonl.pub`, `certs/server.key` (0600) | These are dev-only — must NOT ship to production | `/` repo root |
 
@@ -100,7 +100,7 @@
 | Authenticated user records | High | `user_storage` (Argon2id hashes) |
 | Session tokens + API keys | High | in-memory + session files |
 | FLE field keys (per tenant) | Critical | wrapped via KMS; `fle_catalog` |
-| WAL/TDE master keys | Critical | env `GEODE_WAL_KEY`, KMS (Vault/remote/local) |
+| WAL/TDE master key | Critical | env `GEODE_TDE_KEY` (one key for pages and WAL; no KMS source is wired into the server; corrected 2026-11-12, SONNY-6430) |
 | Cluster token | Critical | `GEODE_CLUSTER_TOKEN` (grants node-trust) |
 | Audit log integrity | High | Ed25519-signed, HMAC-chained |
 | TLS server private key | Critical | `certs/server.key` |

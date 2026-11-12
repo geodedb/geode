@@ -222,7 +222,7 @@ COMMIT;
 
 ### **Data Protection**
 
-- **Transparent Data Encryption (TDE)** - <5% TDE overhead on OLTP workloads (the validated target: `tests/test_tde_oltp_overhead_threshold.zig`, [BENCHMARK_REPORT.md](BENCHMARK_REPORT.md))
+- **Transparent Data Encryption (TDE)** - <5% TDE overhead on OLTP workloads as a target, not yet measured by a geode test or benchmark ([BENCHMARK_REPORT.md](BENCHMARK_REPORT.md))
 - **Key Management System (KMS)** - KMS provider clients (local, external, remote over QUIC, Vault). The TDE master key comes from `GEODE_TDE_KEY`; it is not fetched from or wrapped by a KMS (see [docs/KMS_PROVIDER_SYSTEM.md](docs/KMS_PROVIDER_SYSTEM.md))
 - **Audit Logging** - Comprehensive compliance tracking
 - **Data Classification** - 5-level security classification system

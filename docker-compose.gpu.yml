@@ -40,10 +40,9 @@ services:
       - VAULT_ADDR=http://vault:8200
       - VAULT_TOKEN=${VAULT_TOKEN:?set VAULT_TOKEN in .env}
       - REDIS_URL=redis://${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
-      - S3_BUCKET=geode-backups-gpu
+      # geode reads no S3_* variable: backups are local files written by
+      # `geode backup create` (SONNY-6290); copy them to object storage yourself
+      # (scripts/init-minio.sh sets up the MinIO bucket). SONNY-6430.
       - FIPS_MODE=enabled
       - GPU_ENABLED=true
       - CUDA_VISIBLE_DEVICES=0

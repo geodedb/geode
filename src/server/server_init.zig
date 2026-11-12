@@ -103,19 +103,7 @@ pub fn refuseUnusableKeyConfig(allocator: std.mem.Allocator) !void {
         return error.AuditKeyConfigInvalid;
     }
 
-    if (std.c.getenv("GEODE_MASTER_KEY")) |raw| {
-        const len = std.mem.span(raw).len;
-        if (len != 0 and len < geode.fle_key_manager.master_key_min_len) {
-            std.debug.print(
-                "[startup] GEODE_MASTER_KEY is set but unusable: it is {d} bytes and must be at least {d} bytes (the first 32 bytes are the FLE master key). " ++
-                    "Refusing to start: a short master key is a weak field-level-encryption key. Nothing was written. " ++
-                    "Fix the key, or unset GEODE_MASTER_KEY to run without FLE (docs/FIELD_LEVEL_ENCRYPTION.md).\n",
-                .{ len, geode.fle_key_manager.master_key_min_len },
-            );
-            log.err("GEODE_MASTER_KEY too short: refusing to start", &.{Attr.int("length", @intCast(len))});
-            return error.MasterKeyTooShort;
-        }
-    }
+    try refuseUnusableMasterKey();
 
     if (std.c.getenv("GEODE_WAL_KEY")) |raw| {
         if (std.mem.span(raw).len != 0) {
@@ -128,6 +116,71 @@ pub fn refuseUnusableKeyConfig(allocator: std.mem.Allocator) !void {
             log.err("GEODE_WAL_KEY is not used by the server: refusing to start", &.{});
             return error.WalKeyUnsupported;
         }
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6430-MASTER-KEY-FORMAT; FEATURE="Key configuration"; ASPECT=ServerStartupRefusalAndLegacyWarning; STATUS=TESTED; TEST=tests/test_sonny6430_master_key_format.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6422 / SONNY-6430: GEODE_MASTER_KEY read in the format
+/// GEODE_MASTER_KEY_FORMAT names (`fle_key_manager.parseMasterKey`). A
+/// value that does not match its format, an unknown format, a format without
+/// a key and an unformatted value under 32 bytes refuse startup. An
+/// unformatted value over 32 bytes starts with the key it always gave (its
+/// first 32 bytes) and a warning that the rest is ignored. No value is
+/// printed.
+fn refuseUnusableMasterKey() !void {
+    const km = geode.fle_key_manager;
+    const docs = "docs/FIELD_LEVEL_ENCRYPTION.md, \"Master key format\"";
+    const format = km.masterKeyFormatFromEnv() catch {
+        std.debug.print(
+            "[startup] GEODE_MASTER_KEY_FORMAT is set but unusable: it must be raw, hex or base64 (or unset). Refusing to start. Nothing was written ({s}).\n",
+            .{docs},
+        );
+        log.err("GEODE_MASTER_KEY_FORMAT unknown: refusing to start", &.{});
+        return error.MasterKeyFormatUnknown;
+    };
+    const value: []const u8 = if (std.c.getenv("GEODE_MASTER_KEY")) |raw| std.mem.span(raw) else "";
+    if (value.len == 0) {
+        if (format == .legacy) return;
+        std.debug.print(
+            "[startup] GEODE_MASTER_KEY_FORMAT is set but GEODE_MASTER_KEY is not. Refusing to start: set the key, or unset GEODE_MASTER_KEY_FORMAT to run without FLE. Nothing was written ({s}).\n",
+            .{docs},
+        );
+        log.err("GEODE_MASTER_KEY_FORMAT without GEODE_MASTER_KEY: refusing to start", &.{});
+        return error.MasterKeyRequired;
+    }
+    _ = km.parseMasterKey(value, format) catch |err| {
+        switch (format) {
+            .legacy => std.debug.print(
+                "[startup] GEODE_MASTER_KEY is set but unusable: it is {d} bytes and must be at least {d} bytes (the first 32 bytes are the FLE master key), " ++
+                    "or set GEODE_MASTER_KEY_FORMAT to hex (64 hex characters) or base64 (32 bytes). " ++
+                    "Refusing to start: a short master key is a weak field-level-encryption key. Nothing was written. " ++
+                    "Fix the key, or unset GEODE_MASTER_KEY to run without FLE ({s}).\n",
+                .{ value.len, km.master_key_min_len, docs },
+            ),
+            .raw, .hex, .base64 => std.debug.print(
+                "[startup] GEODE_MASTER_KEY is set but does not match GEODE_MASTER_KEY_FORMAT={s}: {s}. Refusing to start. Nothing was written ({s}).\n",
+                .{ @tagName(format), switch (format) {
+                    .raw => "raw takes exactly 32 bytes",
+                    .hex => "hex takes exactly 64 hex characters",
+                    else => "base64 takes the standard (padded) base64 of exactly 32 bytes",
+                }, docs },
+            ),
+        }
+        log.err("GEODE_MASTER_KEY unusable: refusing to start", &.{
+            Attr.string("format", @tagName(format)),
+            Attr.int("length", @intCast(value.len)),
+        });
+        return err;
+    };
+    if (format == .legacy and value.len > km.master_key_min_len) {
+        std.debug.print(
+            "[startup] WARNING: GEODE_MASTER_KEY is {d} bytes and GEODE_MASTER_KEY_FORMAT is not set, so only its first 32 bytes are the FLE master key and the rest is ignored " ++
+                "(a 64-character hex value gives 128 bits, not 256). This is the key your encrypted fields were written with, so it is kept. " ++
+                "To say so explicitly, set GEODE_MASTER_KEY to its first 32 characters with GEODE_MASTER_KEY_FORMAT=raw (the same key). " ++
+                "GEODE_MASTER_KEY_FORMAT=hex reads the full value as a different key: only for a new deployment, or after re-encrypting ({s}).\n",
+            .{ value.len, docs },
+        );
+        log.warn("GEODE_MASTER_KEY longer than 32 bytes without GEODE_MASTER_KEY_FORMAT: only the first 32 bytes are the key", &.{Attr.int("length", @intCast(value.len))});
     }
 }
 

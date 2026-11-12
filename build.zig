@@ -534,6 +534,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -6489,6 +6490,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_auth_test.step, 1, test_shard_loads, test_shard_index);
     const auth_test_step = b.step("test-geode-auth-lib", "Run geode_auth_lib.zig inline unit tests");
     auth_test_step.dependOn(&run_auth_test.step);
+    // SONNY-6430 (4): MFA admin-policy evaluation against the real
+    // SecurityManager (the file was cited by TESTED markers and never built).
+    const mfa_policies_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_mfa_policies.zig"), .target = target, .optimize = optimize });
+    mfa_policies_test_mod.link_libc = true;
+    mfa_policies_test_mod.addImport("geode_auth", auth_mod);
+    const mfa_policies_tests = b.addTest(.{ .root_module = mfa_policies_test_mod });
+    const run_mfa_policies_tests = b.addRunArtifact(mfa_policies_tests);
+    shardDep(test_step, &run_mfa_policies_tests.step, 1, test_shard_loads, test_shard_index);
+    const mfa_policies_step = b.step("test-mfa-policies", "Run MFA admin-policy evaluation tests (role match and cache, all-roles, time window, risk score, re-auth interval) against the real SecurityManager");
+    mfa_policies_step.dependOn(&run_mfa_policies_tests.step);
 
     const rls_test = b.addTest(.{
         .root_module = rls_mod,
@@ -9815,6 +9826,19 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6422-backup-docs-truth", "Run SONNY-6422 item 9 regression (TODO, GQL_COMPLIANCE, SERVER_FEATURES, DOCKER_OVERVIEW and NIX_DEPLOYMENT present no S3 / DigitalOcean Spaces backup target, option or variable, and the FLE PQC research spec does not present tde_kms_integration.zig as current code)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6430 item 9: deployment config and docs describe only settings
+    // the server has.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_deploy_docs_truth.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6430_dd_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6430-deploy-docs-truth", "Run SONNY-6430 item 9 regression (the compose files pass no S3_* variable to geode; SERVER_FEATURES 1.3 names GEODE_TDE_KEY, no GEODE_DISK_KEY_HEX, KMS integration or automatic rotation; NIX_DEPLOYMENT says the Nix packaging is gone and has no federation block; the security inventory names no GEODE_WAL_KEY)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per
@@ -9959,6 +9983,50 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6422_bp_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6422_bp_step = b.step("test-sonny6422-remote-backup-progress", "Run SONNY-6422 item 8 regression (spawns a server, seeds several MiB, then geode backup create --server prints each 10% progress step at most once, in order, ending at 100%)");
     sonny6422_bp_step.dependOn(&run_sonny6422_bp_tests.step);
+    const sonny6430_bl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_remote_backup_large.zig"), .target = target, .optimize = optimize });
+    sonny6430_bl_test_mod.link_libc = true;
+    sonny6430_bl_test_mod.addImport("geode", root_mod);
+    sonny6430_bl_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6430_bl_test_mod.addImport("schema", schema_mod);
+    sonny6430_bl_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6430_bl_tests = b.addTest(.{ .root_module = sonny6430_bl_test_mod });
+    const run_sonny6430_bl_tests = b.addRunArtifact(sonny6430_bl_tests);
+    spawnsBuiltGeode(sonny6430_bl_tests);
+    // SONNY-6430 item 1: intentionally red (docs/KNOWN_TEST_ISSUES.md): the
+    // stall is in the vendored QUIC library. Not in shardDep until the
+    // library fix lands; compiled by test-compile.
+    if (g_test_compile_step) |c| c.dependOn(&sonny6430_bl_tests.step);
+    const sonny6430_bl_step = b.step("test-sonny6430-remote-backup-large", "Run SONNY-6430 item 1 reproduction, intentionally red until the QUIC library fix (spawns a server, seeds 10 MiB of incompressible data, a backup of about 24 MB, then geode backup create --server must complete and write every announced byte; GEODE_TEST_SONNY6430_MB raises the size)");
+    sonny6430_bl_step.dependOn(&run_sonny6430_bl_tests.step);
+    const sonny6430_mk_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_master_key_format.zig"), .target = target, .optimize = optimize });
+    sonny6430_mk_test_mod.link_libc = true;
+    sonny6430_mk_test_mod.addImport("geode", root_mod);
+    sonny6430_mk_test_mod.addImport("logging", logging_mod);
+    const sonny6430_mk_tests = b.addTest(.{ .root_module = sonny6430_mk_test_mod });
+    const run_sonny6430_mk_tests = b.addRunArtifact(sonny6430_mk_tests);
+    spawnsBuiltGeode(sonny6430_mk_tests);
+    shardDep(test_step, &run_sonny6430_mk_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6430_mk_step = b.step("test-sonny6430-master-key-format", "Run SONNY-6430 item 2 regression (GEODE_MASTER_KEY_FORMAT=hex|base64|raw decode a full 32-byte FLE master key, a mismatched value or unknown format refuses startup, an unformatted value keeps its legacy key with a startup warning, and a field encrypted under a legacy 64-hex key stays readable through the real FLE path)");
+    sonny6430_mk_step.dependOn(&run_sonny6430_mk_tests.step);
+    const sonny6430_so_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_storage_open_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6430_so_test_mod.link_libc = true;
+    sonny6430_so_test_mod.addImport("geode", root_mod);
+    sonny6430_so_test_mod.addImport("logging", logging_mod);
+    const sonny6430_so_tests = b.addTest(.{ .root_module = sonny6430_so_test_mod });
+    const run_sonny6430_so_tests = b.addRunArtifact(sonny6430_so_tests);
+    shardDep(test_step, &run_sonny6430_so_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6430_so_step = b.step("test-sonny6430-storage-open-fail-closed", "Run SONNY-6430 items 5 and 7 regression (__geode_security does not open without its audit logger when the audit log cannot be opened or created; StorageAdapter.init refuses a graph registry that exists but cannot be loaded)");
+    sonny6430_so_step.dependOn(&run_sonny6430_so_tests.step);
+    const sonny6430_cli_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_cli_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6430_cli_test_mod.link_libc = true;
+    sonny6430_cli_test_mod.addImport("geode", root_mod);
+    sonny6430_cli_test_mod.addImport("logging", logging_mod);
+    const sonny6430_cli_tests = b.addTest(.{ .root_module = sonny6430_cli_test_mod });
+    const run_sonny6430_cli_tests = b.addRunArtifact(sonny6430_cli_tests);
+    spawnsBuiltGeode(sonny6430_cli_tests);
+    shardDep(test_step, &run_sonny6430_cli_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6430_cli_step = b.step("test-sonny6430-cli-fail-closed", "Run SONNY-6430 items 6 and 8 regression (geode storage verify checks the data directory the server would open and refuses when it holds no store; geode migrate create without an HMAC key refuses and writes nothing)");
+    sonny6430_cli_step.dependOn(&run_sonny6430_cli_tests.step);
     const sonny6386_rh_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"), .target = target, .optimize = optimize });
     sonny6386_rh_test_mod.link_libc = true;
     sonny6386_rh_test_mod.addImport("geode", root_mod);

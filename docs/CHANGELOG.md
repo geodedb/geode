@@ -4,6 +4,36 @@
 
 ### Security
 
+- **The security graph never opens unaudited, and an unreadable graph
+  registry refuses startup (SONNY-6430 items 5 and 7).**
+  `StorageAdapter.initAuditForGraph` returned null for any failure other
+  than an unusable audit key pair, so an audit log that could not be opened
+  (EACCES, a read-only graph directory, a tail that does not verify) let
+  `__geode_security` open with no audit logger and every auth change went
+  unaudited; every failure is now an error and the graph does not open
+  (`geode serve` refuses to start). `StorageAdapter.init` only warned when
+  `graph_registry.dat` existed but could not be read or parsed (a flipped
+  byte, a truncated file, EACCES) and started with no graphs, so the first
+  `CREATE GRAPH` rewrote the registry without them; it now fails, and the
+  server exits with `Error: cannot open the data directory ...`. A missing
+  registry is still a fresh data directory. Regression:
+  `zig build test-sonny6430-storage-open-fail-closed`.
+- **`GEODE_MASTER_KEY_FORMAT` reads a full 256-bit FLE master key, and an
+  existing key never changes (SONNY-6430 item 2).** `GEODE_MASTER_KEY` was
+  always used as raw bytes and only its first 32 counted, so the usual
+  `openssl rand -hex 32` value gave a key of its first 32 hex characters
+  (128 bits) and the rest was silently ignored. `GEODE_MASTER_KEY_FORMAT`
+  now selects `hex` (exactly 64 hex characters), `base64` (32 bytes) or
+  `raw` (exactly 32 bytes); a value that does not match, an unknown format
+  or a format without a key refuses startup without printing the value.
+  The format is never inferred from the value: with it unset the legacy
+  reading is unchanged (reading an existing 64-hex value as hex would be a
+  different key and make every encrypted field unreadable), and a value
+  longer than 32 bytes starts with a warning that only its first 32 bytes
+  are the key. `docs/FIELD_LEVEL_ENCRYPTION.md` ("Master key format") and
+  `docs/DOCKER_OVERVIEW.md` document it. Regression:
+  `zig build test-sonny6430-master-key-format` (includes a real FLE round
+  trip: a field encrypted under a legacy 64-hex key stays readable).
 - **BREAKING (operator): half-configured audit keys, a short
   `GEODE_MASTER_KEY`, a `GEODE_WAL_KEY` and a malformed
   `GEODE_MIGRATION_HMAC_KEY` are refused instead of falling back to a weaker
@@ -1632,6 +1662,43 @@
 
 ### Fixed
 
+- **Deployment config and docs describe only settings the server has
+  (SONNY-6430 item 9).** `docker-compose.yml`, `docker-compose.dev.yml` and
+  `docker-compose.gpu.yml` passed `S3_ENDPOINT` / `S3_ACCESS_KEY` /
+  `S3_SECRET_KEY` / `S3_BUCKET` to geode, which reads none of them.
+  `docs/SERVER_FEATURES.md` 1.3 named `GEODE_DISK_KEY_HEX`, XTS-AES, a key
+  hierarchy, Vault / AWS KMS integration and automatic rotation; the key is
+  `GEODE_TDE_KEY` (AES-256-GCM pages and WAL), with no KMS source and no
+  rotation, and Appendix B no longer lists `GEODE_DISK_*` / `GEODE_WAL_*`
+  variables nothing reads. `docs/NIX_DEPLOYMENT.md` now says the Nix
+  packaging was removed (commit `6d7d71dd`) and drops its federation
+  blocks; `docs/audit/security-phase1-inventory.md` names `GEODE_TDE_KEY`,
+  not `GEODE_WAL_KEY`, as the WAL key. Regression:
+  `zig build test-sonny6430-deploy-docs-truth`.
+- **`geode storage verify` checks the server's data directory, and `geode
+  migrate create` refuses to write an unsigned migration without a key
+  (SONNY-6430 items 6 and 8).** `storage verify` used the in-memory store
+  `getGlobalStore` gives with no `GEODE_DATA_DIR` (it ignored
+  `--data-dir`), printed PASS for nothing, and its verbose form exited 0
+  when the check failed. It now opens the directory `geode serve` opens
+  (`--data-dir`, else `GEODE_DATA_DIR`, else the per-user default), names
+  it, takes the data directory's lock, reports the node count, and exits 1
+  on any failure. `migrate create` with no `GEODE_MIGRATION_HMAC_KEY` and no
+  `.hmac_key` wrote an unsigned file and exited 0, although its help said
+  the key is required (SEC-MIG-03); it now exits 1 and writes nothing, and
+  `--no-sign` is the explicit way to create an unsigned file. A file whose
+  signing fails is removed. Regression:
+  `zig build test-sonny6430-cli-fail-closed`.
+- **`geode backup create --server` bounds the whole transfer by `--timeout`
+  (SONNY-6430 item 1, partial).** Each 64 KiB chunk of a remote backup had
+  a fixed 30 s wait of its own, whatever `--timeout` said, so a backup that
+  stalled failed after 30 s and one that only progressed slowly had no
+  overall bound. `--timeout` (default 300 s) now bounds the server's answer
+  and every byte of the file, and a timeout reports how many of the
+  announced bytes arrived. The stall itself is not fixed: a backup of about
+  24 MB still stops after 11-14 MB, in the vendored QUIC library's ACK
+  processing (`docs/KNOWN_TEST_ISSUES.md`,
+  `test-sonny6430-remote-backup-large`, intentionally red).
 - **Docs no longer present S3 / DigitalOcean Spaces as a backup target or
   the removed TDE-KMS integration as current code (SONNY-6422 item 9).**
   No command reaches object storage (SONNY-6290; real support is story
@@ -2626,6 +2693,25 @@
 
 ### Removed
 
+- **Test files no build step compiled, cited by TESTED markers (SONNY-6430
+  item 4).** `tests/test_mfa_policies.zig` now drives the real
+  `SecurityManager` and runs as `zig build test-mfa-policies` (6/6); the
+  attestation signature checks of `tests/test_remote_kms_attestation.zig`
+  run in `test-remote-kms-hardening`
+  (`SignatureVerifyTamperDetect`). Removed, with their markers repointed to
+  tests that run: `tests/canary_mfa_core_additional.zig` (it removed
+  recovery codes itself and called no product code),
+  `tests/test_remote_kms_auth_negative.zig` (covered by `InvalidAuth`),
+  `tests/test_remote_kms_unwrap_attest.zig` and
+  `tests/test_tde_oltp_overhead_threshold.zig` (it asserted `true`). The
+  "<5% TDE overhead" figure in README.md and docs/KMS_PROVIDER_SYSTEM.md is
+  now called a target: no geode test measures it.
+- **The uninstalled mutation-notify callback in `src/graph_store.zig`
+  (SONNY-6430 item 3).** `setMutationNotify` / `setMutationNotifyInhibit`
+  had no caller since the WAL wrapper was removed (SONNY-6422), so the 15
+  `notifyMutation` calls in the store's write paths never did anything; they,
+  the callback type, `MutationOp` and the IMPL marker `REQ-PERF-WAL-002` are
+  gone, with the graph-name copy `deleteEdge` made only for the notification.
 - **The logical CDC `WriteAheadLog` wrapper in `src/wal.zig`, an unbuilt
   duplicate test, and false TESTED markers (SONNY-6422 items 3-5).** The
   wrapper (record types and serialization, the global instance, the

@@ -1,10 +1,13 @@
 const std = @import("std");
 
 // TDE Overhead Published Sync Test
-// Keeps every PUBLISHED TDE-overhead claim in sync with the validated target:
-// < 5% OLTP overhead (tests/test_tde_oltp_overhead_threshold.zig,
-// BENCHMARK_REPORT.md "OLTP Overhead < 5%"). SONNY-2394: README.md and
-// docs/KMS_PROVIDER_SYSTEM.md had drifted to an unmeasured "<1%" claim.
+// Keeps every PUBLISHED TDE-overhead claim in sync with the target:
+// < 5% OLTP overhead (BENCHMARK_REPORT.md "OLTP Overhead < 5%"). It is a
+// target, not a measurement: no geode test measures OLTP overhead
+// (SONNY-6430: tests/test_tde_oltp_overhead_threshold.zig, which no build
+// step compiled, called no benchmark and asserted `true`, was removed).
+// SONNY-2394: README.md and docs/KMS_PROVIDER_SYSTEM.md had drifted to an
+// unmeasured "<1%" claim.
 // CANARY: REQ=REQ-GQL-TDE-OLTP-PERF-001; FEATURE="TDEOlptOverheadValidation"; ASPECT=PublishedSync; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_PublishedOverheadClaimPresent; OWNER=perf; UPDATED=2026-09-23
 
 const published_docs = [_][]const u8{ "README.md", "docs/KMS_PROVIDER_SYSTEM.md" };

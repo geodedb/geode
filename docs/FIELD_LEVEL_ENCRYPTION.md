@@ -42,6 +42,44 @@ least 32 bytes` (the value is never printed) and the key loader returns
 `MasterKeyTooShort`. An empty value counts as unset (`MasterKeyRequired`).
 No KMS supplies the master key in this release.
 
+#### Master key format
+
+`GEODE_MASTER_KEY_FORMAT` says how `GEODE_MASTER_KEY` is read (SONNY-6430):
+
+| `GEODE_MASTER_KEY_FORMAT` | `GEODE_MASTER_KEY` must be | Master key |
+| --- | --- | --- |
+| unset (or empty) | at least 32 bytes | its first 32 bytes, as raw bytes (the legacy reading) |
+| `raw` | exactly 32 bytes | those bytes |
+| `hex` | exactly 64 hex characters (either case) | the 32 bytes they encode |
+| `base64` | standard, padded base64 of exactly 32 bytes (44 characters) | the 32 bytes it encodes |
+
+For a new deployment use a full 256-bit key:
+
+```bash
+export GEODE_MASTER_KEY_FORMAT=hex
+export GEODE_MASTER_KEY=$(openssl rand -hex 32)
+```
+
+Anything else refuses startup before the data directory is opened, naming
+the variables and never printing the value: an unknown format, a value that
+does not match its format (a 63- or 66-character hex value is never
+truncated), or `GEODE_MASTER_KEY_FORMAT` without `GEODE_MASTER_KEY`.
+
+**Existing deployments keep their key.** Before SONNY-6430 the value was
+always read the legacy way, so a 64-character hex value (`openssl rand -hex
+32`) gave a key of its first 32 characters, 128 bits of entropy, and the
+rest was ignored. Reading that same value as hex would give a different key
+and make every field encrypted under the old one unreadable, so the format
+is never inferred from the value: with `GEODE_MASTER_KEY_FORMAT` unset the
+key is exactly what it was. A value longer than 32 bytes now starts with a
+warning (`[startup] WARNING: GEODE_MASTER_KEY is N bytes and
+GEODE_MASTER_KEY_FORMAT is not set, so only its first 32 bytes are the FLE
+master key ...`). To keep the same key and drop the warning, set
+`GEODE_MASTER_KEY` to its first 32 characters and
+`GEODE_MASTER_KEY_FORMAT=raw`. Moving encrypted data to a full-entropy key
+(`hex` or `base64` of a new value) needs the fields re-encrypted; there is
+no master-key rotation command in this release.
+
 **Derivation:** HKDF-SHA256 with context strings:
 
 - TRK: `"geode/trk/{tenant_id}"`

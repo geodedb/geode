@@ -5373,7 +5373,6 @@ pub const GraphStore = struct {
         try self.insertNodeInMemory(reserved_id, labels, graph_name, tenant);
         self.dirty.store(true, .release);
         incrementMutationEpoch();
-        notifyMutation(.create_node, reserved_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
         statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = reserved_id, .graph_name = "" } }); // SONNY-3348 (round 18)
     }
 
@@ -5645,8 +5644,6 @@ pub const GraphStore = struct {
             // counters.
             try self.insertNodeInMemory(public_id, labels, graph_name, tenant);
 
-            // WAL / mutation notification per node.
-            notifyMutation(.create_node, public_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
             statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = public_id, .graph_name = "" } }); // SONNY-3348 (round 18)
         }
 
@@ -8138,9 +8135,6 @@ pub const GraphStore = struct {
         // Mark as dirty - persistence happens at query completion
         self.dirty.store(true, .release);
         incrementMutationEpoch();
-
-        // WAL notification: SetNodeProperty
-        notifyMutation(.set_node_property, node_id, 0, 0, null, key, effective_value, null);
     }
 
     /// SONNY-6268: a property write whose fallible part is done (see
@@ -8290,8 +8284,6 @@ pub const GraphStore = struct {
                             freePropertyValue(self, old);
                         }
                     }
-
-                    notifyMutation(.set_node_property, node_id, 0, 0, null, entry.key, effective, null);
                 } else {
                     // Remove
                     self.nodes.lockShardExclusive(node_id);
@@ -8515,9 +8507,6 @@ pub const GraphStore = struct {
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
             incrementMutationEpoch();
-
-            // WAL notification: RemoveNodeProperty
-            notifyMutation(.remove_node_property, node_id, 0, 0, null, key, null, null);
         }
     }
 
@@ -8641,9 +8630,6 @@ pub const GraphStore = struct {
         // Mark as dirty - persistence happens at query completion
         self.dirty.store(true, .release);
         incrementMutationEpoch();
-
-        // WAL notification: AddNodeLabel
-        notifyMutation(.add_node_label, node_id, 0, 0, label, null, null, null);
     }
 
     const LabelCompensation = enum { add, remove };
@@ -8749,9 +8735,6 @@ pub const GraphStore = struct {
         // Mark as dirty - persistence happens at query completion
         self.dirty.store(true, .release);
         incrementMutationEpoch();
-
-        // WAL notification: RemoveNodeLabel
-        notifyMutation(.remove_node_label, node_id, 0, 0, label, null, null, null);
     }
 
     /// SONNY-3109: record `node` as a holder, under `label`, of MERGE's key
@@ -10354,8 +10337,6 @@ pub const GraphStore = struct {
         self.dirty.store(true, .release);
         incrementMutationEpoch();
 
-        // WAL notification: CreateEdge
-        notifyMutation(.create_edge, id, from_id, to_id, edge_type, null, null, graph_name);
         statement_undo.appendCreated(self, .{ .CreateEdge = .{ .edge_id = id, .graph_name = "" } }); // SONNY-3348 (round 18)
 
         return id;
@@ -11000,9 +10981,6 @@ pub const GraphStore = struct {
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
             incrementMutationEpoch();
-
-            // WAL notification: SetEdgeProperty
-            notifyMutation(.set_edge_property, edge_id, 0, 0, null, key, effective_value, null);
         }
     }
 
@@ -11087,22 +11065,13 @@ pub const GraphStore = struct {
                         // SONNY-6268: failure-atomic.
                         if (try edge_ptr.properties.putValue(self.allocator, entry.key, value_copy)) |old| freePropertyValue(self, old);
                     }
-
-                    notifyMutation(.set_edge_property, edge_id, 0, 0, null, entry.key, effective, null);
                 } else {
                     // Remove
-                    const removed = blk: {
-                        self.edges.lockShardExclusive(edge_id);
-                        defer self.edges.unlockShardExclusive(edge_id);
-                        if (try edge_ptr.properties.fetchRemoveChecked(entry.key)) |kv| {
-                            self.allocator.free(kv.key);
-                            freePropertyValue(self, kv.value);
-                            break :blk true;
-                        }
-                        break :blk false;
-                    };
-                    if (removed) {
-                        notifyMutation(.remove_edge_property, edge_id, 0, 0, null, entry.key, null, null);
+                    self.edges.lockShardExclusive(edge_id);
+                    defer self.edges.unlockShardExclusive(edge_id);
+                    if (try edge_ptr.properties.fetchRemoveChecked(entry.key)) |kv| {
+                        self.allocator.free(kv.key);
+                        freePropertyValue(self, kv.value);
                     }
                 }
             }
@@ -11221,9 +11190,6 @@ pub const GraphStore = struct {
             }
             self.dirty.store(true, .release);
             incrementMutationEpoch();
-
-            // WAL notification: RemoveEdgeProperty
-            notifyMutation(.remove_edge_property, edge_id, 0, 0, null, key, null, null);
         }
     }
 
@@ -15795,7 +15761,6 @@ pub const GraphStore = struct {
     pub fn restoreDeletedEdge(self: *GraphStore, edge_id: u64, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !void {
         try statementWriteFence();
         try self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, true, true, tenant);
-        notifyMutation(.create_edge, edge_id, from_id, to_id, edge_type, null, null, graph_name);
     }
 
     /// The node's property `key` before a SET (`removing` false) or a REMOVE.
@@ -16185,7 +16150,7 @@ pub const GraphStore = struct {
         // SONNY-3348 (round 18): the node, and the edges it takes with it.
         try self.undoRecordDeleteNode(node_id);
         const node = (try self.nodes.getOrHydrate(node_id)) orelse return;
-        // Capture graph_name before deletion for WAL notification and handle routing.
+        // Capture graph_name before deletion for handle routing.
         // SONNY-3233 (round 15): a copy: the delete frees the node's own.
         const gn = try self.allocator.dupe(u8, node.graph_name);
         defer self.allocator.free(gn);
@@ -16210,8 +16175,6 @@ pub const GraphStore = struct {
         keys.uninstall();
         self.dirty.store(true, .release);
         incrementMutationEpoch();
-        // WAL notification: DeleteNode
-        notifyMutation(.delete_node, node_id, 0, 0, null, null, null, gn);
     }
 
     /// Delete an edge and mark the store dirty. See `deleteNode` for how a
@@ -16241,11 +16204,8 @@ pub const GraphStore = struct {
         // SONNY-3233 (round 15): a copy of the edge, read under its shard's
         // lock, not a pointer into the shard: a writer of another graph that
         // inserts into the same shard grows it and moves the entry (two edge
-        // writers on two graphs crashed here). And the graph's name copied
-        // for the notification below: the delete frees the edge's own copy.
+        // writers on two graphs crashed here).
         const edge = (try self.edges.getOrHydrate(edge_id)) orelse return;
-        const gn = try self.allocator.dupe(u8, edge.graph_name);
-        defer self.allocator.free(gn);
         var keys = try RemoverKeyRoom.reserve(self.allocator, longestEdgeRemovalName(&edge)); // SONNY-6302
         defer keys.deinit(self.allocator);
 
@@ -16265,8 +16225,6 @@ pub const GraphStore = struct {
         keys.uninstall();
         self.dirty.store(true, .release);
         incrementMutationEpoch();
-        // WAL notification: DeleteEdge
-        notifyMutation(.delete_edge, edge_id, 0, 0, null, null, null, gn);
     }
 
     /// Set a node property without saving (used during rollback)
@@ -17775,25 +17733,6 @@ pub fn bumpSchemaEpoch() void {
     _ = g_schema_epoch.fetchAdd(1, .monotonic);
 }
 
-// CANARY: REQ=REQ-PERF-WAL-002; FEATURE="WriteAheadLog"; ASPECT=MutationCallback; STATUS=IMPL; OWNER=storage; UPDATED=2026-11-12
-// SONNY-6422: nothing installs a callback since the WAL wrapper was removed.
-// Issue #445: Mutation notification callback for WAL integration.
-// Instead of instrumenting every mutation call site, the store's mutation functions
-// call this callback after each successful mutation. The WAL installs a callback
-// to emit WAL records. A guard flag prevents re-emission during WAL replay.
-pub const MutationOp = enum(u8) {
-    create_node = 1,
-    create_edge = 2,
-    set_node_property = 3,
-    remove_node_property = 4,
-    set_edge_property = 5,
-    remove_edge_property = 6,
-    delete_node = 7,
-    delete_edge = 8,
-    add_node_label = 9,
-    remove_node_label = 10,
-};
-
 /// SONNY-3350 (round 17): a test seam. When set on a thread, the pinned
 /// IdMap readers (`GraphStore.idMapNodeId`, `idMapEdgeId`) call it with the
 /// graph's name between the lookup and the read, so a test can drop the
@@ -17828,42 +17767,6 @@ fn statementWriteFence() @import("eval.zig").StatementFailure!void {
 fn statementWritesFenced() bool {
     if (statement_undo.suspended()) return false;
     return @import("eval.zig").pendingStatementFailure() != null;
-}
-
-/// Callback signature for mutation notifications.
-/// Parameters: op, id1 (node/edge), id2 (to_id for edges, 0 otherwise),
-/// label/key (context string), value (for property ops), graph_name
-pub const MutationNotifyFn = *const fn (
-    op: MutationOp,
-    id1: u64,
-    id2: u64,
-    id3: u64,
-    label: ?[]const u8,
-    key: ?[]const u8,
-    value: ?PropertyValue,
-    graph_name: ?[]const u8,
-) void;
-
-var g_mutation_notify: ?MutationNotifyFn = null;
-var g_mutation_notify_inhibit: bool = false;
-
-/// Set the mutation notification callback (used by WAL to capture mutations)
-pub fn setMutationNotify(f: ?MutationNotifyFn) void {
-    g_mutation_notify = f;
-}
-
-/// Inhibit/enable mutation notifications (set during WAL replay to prevent re-emission)
-pub fn setMutationNotifyInhibit(inhibit: bool) void {
-    g_mutation_notify_inhibit = inhibit;
-}
-
-/// Invoke the mutation callback if installed and not inhibited
-inline fn notifyMutation(op: MutationOp, id1: u64, id2: u64, id3: u64, label: ?[]const u8, key: ?[]const u8, value: ?PropertyValue, graph_name: ?[]const u8) void {
-    if (g_mutation_notify) |notify| {
-        if (!g_mutation_notify_inhibit) {
-            notify(op, id1, id2, id3, label, key, value, graph_name);
-        }
-    }
 }
 
 // GAP-0268: WAL persistence hooks — stored and invoked by the persistence loop
@@ -18050,7 +17953,7 @@ var g_persist_pool: ?*pooled.ThreadPool = null;
 var g_persist_interval_ms: u64 = 5000;
 
 // GAP-0900: deferred-mode auto-checkpoint cadence. The group-commit bulk fast
-// path bypasses notifyMutation / GraphStore.dirty, so the legacy
+// path bypasses GraphStore.dirty, so the legacy
 // `needs_checkpoint` and `persistSplitPhase` triggers never fire during a pure
 // bulk ingest and the engine WAL + dirty pages grow unbounded (RSS ∝ nodes →
 // OOM). The persistence loop also consults the engine-backed cadence
@@ -18211,7 +18114,7 @@ fn persistenceLoop() void {
                         // completely SILENT on success while resetting the
                         // deferred cadence state (pending ops zeroed, clock
                         // restarted), so during the 14.27M edge phase (edge
-                        // creates feed notifyMutation/dirty) it did ALL the
+                        // creates set GraphStore.dirty) it did ALL the
                         // checkpointing at a ~33 s cadence with zero log lines —
                         // which was misread as "auto-checkpoint never re-armed".
                         // Log it like the deferred trigger so the checkpoint
