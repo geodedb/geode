@@ -449,7 +449,7 @@ Skipped: 46 (setup requirements not met)
 - ✅ **Phase 2**: Parser extensions (map literals, deep nesting)
 - ✅ **Phase 3**: Set operations (UNION/INTERSECT/EXCEPT)
 - ✅ **Phase 4**: Transaction isolation (SSI, phantom read prevention)
-- ✅ **Phase 5**: Distributed query coordination (federation-aware optimization)
+- ✅ **Phase 5**: Distributed coordination (Raft, cluster management). The federation-aware query coordination code from this phase was never compiled and was removed 2026-11-11 (SONNY-6279)
 - ✅ **Phase 6**: Materialized view refresh (3 refresh strategies)
 - ✅ **Phase 7**: Graph algorithm enhancements (20-90% performance gains)
 - ✅ **Phase 8**: Mathematical functions (all trig, arithmetic, statistical functions)
@@ -474,7 +474,7 @@ These are intentionally deferred or out of scope:
 ### Advanced Sharding
 
 **Status**: Not planned
-**Reason**: Distributed query coordination (Phase 5) handles federation without requiring full sharding.
+**Reason**: Not planned. Cross-node query coordination is not implemented either (see [DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md)).
 
 ### Recursive Query Support (CTEs)
 

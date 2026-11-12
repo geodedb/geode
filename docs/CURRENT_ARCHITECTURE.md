@@ -99,8 +99,8 @@ src/keys/           - Key management
 **Distributed Systems**:
 
 ```
-src/distributed/    - Federation, sharding, Raft consensus
-src/federation/     - Cross-cluster queries
+src/distributed/    - Raft consensus, cluster management, 2PC (federation code removed 2026-11-11, SONNY-6279)
+src/federation/     - Uncompiled router stub that returns `unsupported`
 ```
 
 **Advanced Features**:
@@ -502,15 +502,19 @@ Query → Planner → IndexOptimizer → Cost Model → Execution Plan
 **Flow**:
 
 ```
-Query → Federation → Sharding → Cross-Shard Coordinator → Results Merge
+Write → Raft proposal (leader) → commit → raft_apply on every node
 ```
+
+Queries are not distributed: a query runs on the node that receives it. The
+federation / cross-shard coordinator code this section used to list was never
+compiled and was removed 2026-11-11 (SONNY-6279).
 
 **Key Files**:
 
-- `src/distributed/federation.zig` (1,171 LOC)
-- `src/distributed/sharding.zig` (868 LOC)
-- `src/distributed/enhanced_query_coordinator.zig` (750 LOC)
-- `src/distributed/raft_consensus.zig` (1,689 LOC)
+- `src/distributed/cluster.zig`
+- `src/distributed/raft_consensus.zig`
+- `src/distributed/raft_apply.zig`
+- `src/distributed/statement_proposals.zig`
 
 **Risk**:
 
@@ -715,9 +719,9 @@ Based on this architecture analysis, the modularization phases should proceed as
 | containers | Container data structures | - | - |
 | crypto | Cryptographic primitives | - | - |
 | dist | Distribution utilities | - | scaffold.zig (563) |
-| distributed | Distributed systems | ~15 | federation.zig (1,171), raft_consensus.zig (1,689) |
+| distributed | Raft and cluster management | 27 | raft_consensus.zig (4,405), cluster.zig (3,217) |
 | execution | Query execution | ~15 | path_and_call_operations.zig (4,725), crud_operations.zig (1,876), match_operations.zig (2,015) |
-| federation | Cross-cluster queries | - | - |
+| federation | Uncompiled router stub (returns `unsupported`) | - | router.zig |
 | fts | Full-text search | ~5 | advanced.zig (519) |
 | fuzz | Fuzzing infrastructure | - | - |
 | gpu | GPU acceleration | ~5 | vulkan_compute.zig (759), vulkan_ffi.zig (687) |

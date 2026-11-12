@@ -1,7 +1,12 @@
 # Distributed Module
 
-This module implements Geode's distributed systems layer: consensus,
-coordination, sharding, federation, and distributed query execution.
+This module implements Geode's cluster layer: Raft consensus, cluster
+membership and health, and Raft-replicated writes within a documented slice.
+Federated / scatter-gather query coordination is **not implemented**: the
+code that described it (`federation.zig`, `query_coordinator.zig`,
+`enhanced_query_coordinator.zig`, `query_transport.zig`, `mod.zig`, …) was
+never compiled into any build artifact and was removed on 2026-11-11
+(SONNY-6279).
 
 > Distributed mode activates when `GEODE_CLUSTER_TOKEN` is set.
 > All inter-node communication is authenticated and encrypted via QUIC+TLS.
@@ -13,7 +18,7 @@ overlap window (`src/distributed/cluster_auth.zig`):
 
 - `GEODE_CLUSTER_TOKEN` — the **primary** token. Required to activate
   distributed mode; always the token **sent** on outbound inter-node
-  traffic (federation HELLO, Raft envelopes, 2PC messages, cluster RPC).
+  traffic (Raft envelopes, 2PC messages, cluster RPC).
 - `GEODE_CLUSTER_TOKEN_PREVIOUS` — optional **secondary** token. During a
   rotation overlap window, inbound validation accepts **either** token
   (both compared constant-time). It never authenticates on its own: if
@@ -43,165 +48,64 @@ handlers), Raft frames, 2PC messages, and cluster RPC frames — all routes
 go through `cluster_auth.validateClusterToken`. Regression:
 `zig build test-sec-infra03` (`tests/test_sec_infra03_token_rotation.zig`).
 
-## Layer Diagram
+## What the live cluster path provides
 
-```
- Client Request
-      |
-      v
-+------------------+
-|   Transport      |  network_transport.zig, query_transport.zig,
-|   (QUIC/TLS)     |  enhanced_query_transport.zig
-+------------------+
-      |
-      v
-+------------------+
-|   Consensus      |  raft_consensus.zig (canonical), raft.zig (shim),
-|   (Raft)         |  raft_persistent.zig
-+------------------+
-      |
-      v
-+------------------+
-|   Cluster        |  cluster.zig, cluster_auth.zig, cluster_health.zig,
-|   Management     |  consistent_hash.zig, sharding.zig, nonce_tracker.zig
-+------------------+
-      |
-      v
-+------------------+
-|   Query          |  enhanced_query_coordinator.zig, query_coordinator.zig,
-|   Coordination   |  query_planner.zig, txn_coordinator.zig,
-|                  |  twophase.zig, twophase_participant.zig
-+------------------+
-      |
-      v
-+------------------+
-|   Federation     |  federation.zig, federation_flag.zig,
-|   & Merge        |  federation_merge.zig, federation_latency_aggregate.zig,
-|                  |  merge_strategies.zig, result_utils.zig, value_convert.zig
-+------------------+
-```
+Reachable from `geode serve` when `GEODE_CLUSTER_TOKEN` is set:
 
-## Coordinator Hierarchy
+- Raft consensus with durable hard state, log and snapshots
+  (`raft_consensus.zig`, `raft_log_storage.zig`, `raft_persistent.zig`,
+  `raft_snapshot_manager.zig`), applied to the graph store by
+  `raft_apply.zig`.
+- `ClusterCoordinator` (`cluster.zig`): node membership, leader tracking,
+  health (`cluster_health.zig`), token authentication (`cluster_auth.zig`,
+  `nonce_tracker.zig`) and replication (`cluster_replication.zig`).
+- Raft-replicated writes within the documented slice; statements are proposed
+  through `statement_proposals.zig`. Write surfaces with no replication slice
+  fail closed (`ClusterNotLeader` / `ClusterWriteNotReplicable`).
+- Principal envelopes (`principal_envelope.zig`). EXPLAIN/PROFILE are
+  node-local; `distributed_explain.zig` defines the error that refuses a
+  remote plan payload (no remote consumer remains to raise it).
 
-### Cluster Coordination
-
-| Coordinator | File | Role | Use When |
-|-------------|------|------|----------|
-| **ClusterCoordinator** | `cluster.zig` | Production coordinator | Production and multi-node deployments |
-| DistributedCoordinator | `mod.zig` | Simplified wrapper (deprecated) | Single-node testing or lightweight integration |
-
-**ClusterCoordinator** is the canonical production coordinator. It manages Raft
-consensus (via `raft_consensus.zig`), node health monitoring, data replication,
-protobuf-based cluster messaging, and network transport. All new production code
-should use `ClusterCoordinator`.
-
-**DistributedCoordinator** is a simpler facade that wraps `raft.zig` (now a thin
-shim over `raft_consensus.zig`) and `twophase.zig`. It is retained for backward
-compatibility and lightweight tests but is **deprecated** in favor of
-`ClusterCoordinator`.
-
-### Query Coordination
-
-| Coordinator | File | Role | Use When |
-|-------------|------|------|----------|
-| **EnhancedQueryCoordinator** | `enhanced_query_coordinator.zig` | Full-featured query coordinator | Production distributed queries |
-| QueryCoordinator | `query_coordinator.zig` | Basic scatter-gather (deprecated) | Simple federation without caching |
-
-**EnhancedQueryCoordinator** is the preferred query coordinator. It is a superset
-of `QueryCoordinator`, adding:
-
-- Distributed query cache (`QueryCache`)
-- Cost-based distributed query optimizer (`DistributedQueryOptimizer`)
-- Shard-aware routing via `ShardRegistry`
-- Node health tracking via `NodeRegistry`
-- Top-K push-down and aggregation push-down
-- Coordinator-level metrics
-
-**QueryCoordinator** provides basic scatter-gather execution with CBO statistics
-integration. It is **deprecated** -- use `EnhancedQueryCoordinator` for new work.
-
-## Module Entrypoint
-
-`mod.zig` re-exports the key types for convenient access:
-
-```zig
-const distributed = @import("distributed");
-
-// Production coordinators (preferred)
-const Cluster = distributed.ClusterCoordinator;
-const QueryCoord = distributed.EnhancedQueryCoordinator;
-
-// Legacy (deprecated)
-const Legacy = distributed.DistributedCoordinator;
-const BasicQuery = distributed.QueryCoordinator;
-```
+Queries execute on the node that receives them. There is no cross-node
+scatter-gather, federated query dispatch, distributed result merge, or
+federation-aware query optimization.
 
 ## File Responsibilities
 
-### Consensus
+### Imported by the geode library / server
 
 | File | Purpose |
 |------|---------|
-| `raft_consensus.zig` | Canonical Raft consensus implementation (leader election, log replication, snapshotting) |
-| `raft.zig` | Thin compatibility shim delegating to `raft_consensus.zig` |
-| `raft_persistent.zig` | Durable Raft log and state persistence (WAL-backed) |
+| `raft_consensus.zig` | Canonical Raft implementation (election, log replication, snapshots) |
+| `raft_log_storage.zig`, `raft_persistent.zig` | Durable Raft log and hard state |
+| `raft_snapshot_manager.zig` | Snapshot creation and installation |
+| `raft_apply.zig` | Applies committed Raft commands to the graph store |
+| `cluster.zig` | `ClusterCoordinator`: node lifecycle, replication, cluster messaging |
+| `cluster_auth.zig` | Cluster token validation (incl. rotation overlap) |
+| `cluster_health.zig` | Node health monitoring and failure detection |
+| `cluster_replication.zig` | Replication of the supported write slice |
+| `statement_proposals.zig` | Proposes statement mutations through Raft |
+| `nonce_tracker.zig` | Replay prevention for cluster frames |
+| `principal_envelope.zig` | Serialized principal carried with cluster requests |
+| `distributed_explain.zig` | `DistributedExplainUnsupported` error and message (mapped in `proto_util.zig`) |
+| `txn_coordinator.zig`, `twophase.zig`, `twophase_participant.zig` | Two-phase commit coordinator and participant |
+| `query_planner.zig` | Partition-aware planning helpers; the QUIC handler creates a `DistributedQueryPlanner` per stream and stores it as an opaque pointer, but no executor consults it |
+| `value_convert.zig` | Value conversion between wire and engine types |
 
-> **Note:** `raft_consensus.zig` is the canonical Raft wrapper. `raft.zig` exists
-> solely as a compatibility shim and should not be extended.
-
-### Cluster Management
-
-| File | Purpose |
-|------|---------|
-| `cluster.zig` | Production cluster coordinator (node lifecycle, replication, messaging) |
-| `cluster_auth.zig` | Intra-cluster authentication and token validation |
-| `cluster_health.zig` | Node health monitoring, failure detection, heartbeat tracking |
-| `consistent_hash.zig` | Consistent hashing ring for shard placement |
-| `sharding.zig` | Hash-based shard management and key-range routing |
-| `nonce_tracker.zig` | Replay-attack prevention via nonce deduplication |
-
-### Transport
+### Compiled only by their own unit-test steps
 
 | File | Purpose |
 |------|---------|
-| `network_transport.zig` | Low-level cluster networking (QUIC streams, connection pooling) |
-| `query_transport.zig` | Inter-node query message transport (request/response framing) |
-| `enhanced_query_transport.zig` | Extended transport with batching and compression |
+| `consistent_hash.zig`, `sharding.zig` | Consistent-hash ring and shard management |
+| `network_transport.zig`, `enhanced_query_transport.zig` | Inter-node transport helpers |
+| `node_registry.zig` | `NodeRegistry` (tested by `test_query_transport_node_registry.zig`) |
+| `federation_flag.zig`, `federation_latency_aggregate.zig` | Mismatch flag and latency aggregates; nothing in the tree sets the flag now |
 
-### Query Coordination
-
-| File | Purpose |
-|------|---------|
-| `enhanced_query_coordinator.zig` | Full-featured distributed query coordinator (caching, CBO, push-down) |
-| `query_coordinator.zig` | Basic scatter-gather query coordinator (deprecated) |
-| `query_planner.zig` | Partition-aware distributed query planning |
-| `txn_coordinator.zig` | Distributed transaction coordination across shards |
-| `twophase.zig` | Two-phase commit coordinator (prepare/commit/abort) |
-| `twophase_participant.zig` | Two-phase commit participant (vote/ack handling) |
-
-### Federation & Merge
+### Not compiled by any build step
 
 | File | Purpose |
 |------|---------|
-| `federation.zig` | Federation configuration, routing, and cross-cluster query dispatch |
-| `federation_flag.zig` | Federation mismatch flag propagation (schema/version divergence) |
-| `federation_merge.zig` | Result merging across federated clusters |
-| `federation_latency_aggregate.zig` | Latency aggregation and percentile tracking for federated queries |
-| `merge_strategies.zig` | Pluggable merge strategies (union, intersection, priority) |
-| `result_utils.zig` | Utility functions for result set manipulation |
-| `value_convert.zig` | Cross-node value type conversion and normalization |
-
-### Module Root
-
-| File | Purpose |
-|------|---------|
-| `mod.zig` | Module entrypoint; re-exports public types; hosts deprecated `DistributedCoordinator` |
-
-### Tests
-
-| File | Purpose |
-|------|---------|
-| `test_federation_auth.zig` | Integration tests for federation authentication flows |
+| `raft.zig` | Old compatibility shim over `raft_consensus.zig`; its only importer (`mod.zig`) was removed |
 
 ## Current Status
 
@@ -209,10 +113,9 @@ const BasicQuery = distributed.QueryCoordinator;
   `raft_persistent.zig` provides durable state across restarts.
 - **Cluster:** `ClusterCoordinator` handles node join/leave, health checks,
   and protobuf-based intra-cluster messaging.
+- **Writes:** Replicated within the documented slice; other write surfaces
+  fail closed in cluster mode.
 - **Two-phase commit:** Coordinator and participant roles are implemented.
   Undo/rollback path is partially implemented.
-- **Distributed query planning:** `query_planner.zig` provides partition-aware
-  planning. The enhanced coordinator adds caching and push-down, but the full
-  cost model integration with the main planner is scaffolded.
-- **Federation:** Cross-cluster query dispatch, mismatch flag propagation, and
-  merge strategies are implemented. Latency tracking is functional.
+- **Distributed / federated query coordination:** not implemented (removed
+  2026-11-11, SONNY-6279; the code was never wired into a build artifact).
