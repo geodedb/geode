@@ -4860,7 +4860,7 @@ REQ-SONNY-1326-EXPRESSION-TENANCY,ExpressionPathTenantScope,ScopeResolution,TEST
 REQ-SONNY-1326-EXPRESSION-TENANCY,ExpressionPathTenantScope,SharedVisibilityPredicate,TESTED,,,security,2026-09-13,src/execution/tenant_visibility.zig,2
 REQ-SONNY-1330-PARALLEL-UNION-ARM-SAFETY,ParallelUnionArms,ReadOnlyArmHydration,TESTED,,,execution,2026-09-14,tests/test_sonny1330_parallel_union.zig,1
 REQ-SONNY-2394-VARLEN-ROW-OWNERSHIP,VariableLengthPathRowOwnership,Regression,TESTED,,,engine,2026-09-23,tests/test_sonny2394_varlen_rel_list_ownership.zig,22
-REQ-SONNY-2439-PERF-METHODOLOGY,Perf Gates,MonotonicClockNoTestLocalBenchmarks,TESTED,,,performance,2026-11-12,tests/test_sonny2439_perf_methodology.zig,20
+REQ-SONNY-2439-PERF-METHODOLOGY,Perf Gates,MonotonicClockNoTestLocalBenchmarks,TESTED,,,performance,2026-11-12,tests/test_sonny2439_perf_methodology.zig,30
 REQ-SONNY-2441-KMS-REMOTE-PATH,KMSProviderSystem,NoDeadRemotePath,TESTED,,,security,2026-11-12,tests/test_sonny2441_kms_provider_paths.zig,24
 REQ-SONNY-2463-BARE-NODE-LEAK,EngineDirectNodeOwnership,PageFreesReturnedNode,TESTED,,,engine,2026-09-25,src/server/node_scan_stream.zig,338
 REQ-SONNY-2463-BARE-NODE-LEAK,EngineDirectNodeOwnership,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2463_bare_node_leak.zig,21

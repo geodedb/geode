@@ -12,10 +12,20 @@
 //       could drop the loop they timed;
 //   (3) every step the scheduled test-perf-gates-enforced job runs exists.
 //
-// Still open (SONNY-2439): batch timing, the production allocator instead of
-// DebugAllocator, interleaved A/B with median/IQR statistics, thresholds
-// calibrated on the quiet CI runner, the phantom-range baseline that never
-// enables phantom prevention, and the GitLab schedule for the enforced job.
+//   (4) the gated benchmarks of the canary suites measure through
+//       tests/perf_gate.zig: batched samples (perf_gate.timeBatch /
+//       sampleBatches / interleavedAB, each result passed to
+//       doNotOptimizeAway) or perf_gate.nowNs, from perf_gate.bench_allocator
+//       (not DebugAllocator / std.testing.allocator), with robust statistics
+//       (perf_gate.robustEnvelope: median and IQR, not mean and CV);
+//   (5) the A/B overhead claims run their arms interleaved;
+//   (6) the phantom-range baseline enables phantom prevention, so the two
+//       arms differ only in the range reads.
+//
+// Still open (SONNY-2439): thresholds calibrated on the quiet CI runner, the
+// latency bounds of src/performance/test_json_optimization.zig and
+// tests/test_performance_optimizations.zig (single-shot timings on the
+// testing allocator), and the GitLab schedule for the enforced job.
 //
 // CANARY: REQ=REQ-SONNY-2439-PERF-METHODOLOGY; FEATURE="Perf Gates"; ASPECT=MonotonicClockNoTestLocalBenchmarks; STATUS=TESTED; TEST=tests/test_sonny2439_perf_methodology.zig; OWNER=performance; UPDATED=2026-11-12
 const std = @import("std");
@@ -61,7 +71,7 @@ test "SONNY-2439 (1) every file that makes a gated perf claim times with a monot
             if (std.mem.eql(u8, entry.basename, "test_sonny2439_perf_methodology.zig")) continue;
             const src = dir.readFileAlloc(io(), entry.path, allocator, .limited(64 << 20)) catch continue;
             defer allocator.free(src);
-            if (std.mem.indexOf(u8, src, "perf_gate.check(") == null and std.mem.indexOf(u8, src, "perf_gate.envelope(") == null) continue;
+            if (std.mem.indexOf(u8, src, "perf_gate.check(") == null and std.mem.indexOf(u8, src, "perf_gate.envelope(") == null and std.mem.indexOf(u8, src, "perf_gate.robustEnvelope(") == null) continue;
             gated += 1;
             var lines = std.mem.splitScalar(u8, src, '\n');
             var n: usize = 0;
@@ -112,5 +122,100 @@ test "SONNY-2439 (3) every step the enforced perf-gate job runs exists" {
         }
     }
     try testing.expect(steps >= 8);
+    try testing.expectEqual(@as(usize, 0), bad);
+}
+
+/// The canary benchmarks SONNY-2439 moved to the perf_gate measurement
+/// helpers, and whether each makes an A/B overhead claim.
+const measured = [_]struct { path: []const u8, ab: bool }{
+    .{ .path = "tests/canary_txn_phantom_range.zig", .ab = true },
+    .{ .path = "tests/canary_txn_phantom_anomaly.zig", .ab = true },
+    .{ .path = "tests/canary_planner_prune.zig", .ab = true },
+    .{ .path = "tests/canary_planner_enumerator.zig", .ab = false },
+    .{ .path = "tests/canary_planner_plan_selection.zig", .ab = false },
+    .{ .path = "tests/canary_planner_pipeline_selection.zig", .ab = false },
+    .{ .path = "tests/canary_physiological_redo.zig", .ab = false },
+    .{ .path = "tests/canary_txn_write_skew.zig", .ab = false },
+    .{ .path = "tests/canary_recovery_corrupt_latency.zig", .ab = false },
+};
+
+/// The `test "..." { ... }` blocks of `src` that make a gated perf claim.
+fn gatedBlocks(allocator: std.mem.Allocator, src: []const u8) !std.ArrayList([]const u8) {
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer out.deinit(allocator);
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, src, at, "\ntest \"")) |start| {
+        const end = std.mem.indexOfPos(u8, src, start + 1, "\n}\n") orelse src.len;
+        const block = src[start..end];
+        at = end;
+        if (std.mem.indexOf(u8, block, "perf_gate.check(") != null or
+            std.mem.indexOf(u8, block, "perf_gate.envelope(") != null or
+            std.mem.indexOf(u8, block, "perf_gate.robustEnvelope(") != null)
+        {
+            try out.append(allocator, block);
+        }
+    }
+    return out;
+}
+
+test "SONNY-2439 (4)(5)(6) the canary benchmarks measure batched or monotonic samples from the production allocator, robustly, interleaving A/B arms" {
+    const allocator = testing.allocator;
+    var bad: usize = 0;
+    for (measured) |m| {
+        const src = try readRepoFile(allocator, m.path);
+        defer allocator.free(src);
+        var blocks = try gatedBlocks(allocator, src);
+        defer blocks.deinit(allocator);
+        if (blocks.items.len == 0) {
+            bad += 1;
+            std.debug.print("SONNY-2439: {s}: no gated benchmark found\n", .{m.path});
+            continue;
+        }
+        for (blocks.items) |block| {
+            const name_end = std.mem.indexOfScalarPos(u8, block, 7, '"') orelse block.len;
+            const name = block[@min(7, block.len)..name_end];
+            for ([_][]const u8{ "DebugAllocator", "testing.allocator" }) |needle| {
+                if (std.mem.indexOf(u8, block, needle) != null) {
+                    bad += 1;
+                    std.debug.print("SONNY-2439: {s} \"{s}\": allocates from {s}, not perf_gate.bench_allocator\n", .{ m.path, name, needle });
+                }
+            }
+            if (std.mem.indexOf(u8, block, "perf_gate.envelope(") != null) {
+                bad += 1;
+                std.debug.print("SONNY-2439: {s} \"{s}\": a mean/CV envelope, not perf_gate.robustEnvelope\n", .{ m.path, name });
+            }
+            for ([_][]const u8{ "compat_nanoTimestamp(", "compat_microTimestamp(", "compat_milliTimestamp(", "monotonicNs(" }) |needle| {
+                if (std.mem.indexOf(u8, block, needle) != null) {
+                    bad += 1;
+                    std.debug.print("SONNY-2439: {s} \"{s}\": times with its own clock ({s}), not perf_gate\n", .{ m.path, name, needle });
+                }
+            }
+            const helper = std.mem.indexOf(u8, block, "perf_gate.interleavedAB(") != null or
+                std.mem.indexOf(u8, block, "perf_gate.sampleBatches(") != null or
+                std.mem.indexOf(u8, block, "perf_gate.nowNs(") != null;
+            if (!helper) {
+                bad += 1;
+                std.debug.print("SONNY-2439: {s} \"{s}\": samples are not taken through perf_gate (sampleBatches / interleavedAB / nowNs)\n", .{ m.path, name });
+            }
+            if (m.ab and std.mem.indexOf(u8, block, "perf_gate.interleavedAB(") == null) {
+                bad += 1;
+                std.debug.print("SONNY-2439: {s} \"{s}\": an A/B claim whose arms are not interleaved\n", .{ m.path, name });
+            }
+        }
+    }
+    // (6) Both arms of the phantom-range benchmark run with phantom
+    // prevention on (the baseline's predicateRead was a no-op without it).
+    {
+        const src = try readRepoFile(allocator, "tests/canary_txn_phantom_range.zig");
+        defer allocator.free(src);
+        var blocks = try gatedBlocks(allocator, src);
+        defer blocks.deinit(allocator);
+        for (blocks.items) |block| {
+            if (std.mem.count(u8, block, "enablePhantomPrevention()") < 2) {
+                bad += 1;
+                std.debug.print("SONNY-2439: tests/canary_txn_phantom_range.zig: the baseline manager does not enable phantom prevention\n", .{});
+            }
+        }
+    }
     try testing.expectEqual(@as(usize, 0), bad);
 }
