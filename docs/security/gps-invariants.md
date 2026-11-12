@@ -76,12 +76,14 @@ items GPS Phase 5 will close.
 
 ## 9. Compatibility mode: "auth disabled means allow all"
 
-`checkPermission` returns early at `src/execution.zig:831` when
-`user_mgmt.isAuthEnabled()` is false. This is the documented development
-default. Production deployments enable auth (CLAUDE.md: "Authentication is
-enabled by default (fail-closed)"). GPS Phase 2 will move the "allow all"
-behavior behind an explicit `--insecure-allow-all` flag and remove the
-implicit branch from `decide()`.
+`decide()` has no implicit allow branch (GPS Phase 2), and
+`checkPermission` is gone (SONNY-2781). Authentication disabled is the
+in-process, single-user mode (embedders and tests; `geode serve` always
+enables authentication). In it the QUIC and gRPC handlers authorize, and
+give the executor, no principal, so no gate refuses a request and GPS
+policies, grants and roles are not consulted, on both transports alike
+(SONNY-2782). See `docs/security/gps-decide.md`, "Authentication
+disabled".
 
 ## 10. What this document does NOT promise
 

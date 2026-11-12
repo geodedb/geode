@@ -3248,6 +3248,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     .source = .grpc_handler,
                 });
             };
+            // SONNY-2782: the principal every gate below and the executor
+            // authorize as; null with authentication disabled (the QUIC
+            // handler decides the same way).
+            const request_principal = execution.session_graph.requestPrincipal(&principal_for_request);
 
             var exec_context = execution.ExecutionContext{
                 .catalog = catalog,
@@ -3269,7 +3273,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 // when populated, else null falls back to the per-thread map —
                 // identical to current behavior.
                 .fle_role = state.fle_user_role,
-                .principal = &principal_for_request,
+                .principal = request_principal,
                 .pending_index_rebuilds = null,
                 // SONNY-2799: see `abortFailedTransaction`.
                 .defer_failed_txn_rollback = true,
@@ -3393,12 +3397,12 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // changes, for every principal; a self-locking CALL needs
             // database-wide write. SONNY-2781: by the actions the program
             // needs (`changePermittedOn`). See the QUIC handler.
+            // SONNY-2782: the shared gate (`session_graph.requestChangePermitted`):
+            // with authentication disabled there is no principal and nothing
+            // is refused, as on QUIC. It refused every change (42501:
+            // decide answered unauthenticated) unless --insecure-allow-all.
             if (is_mutation) {
-                const write_ok = if (stmt_plan.self_locking)
-                    geode.security.gps.writePermitted(std.heap.smp_allocator, &principal_for_request)
-                else
-                    geode.security.gps.changePermittedOn(std.heap.smp_allocator, &principal_for_request, lock_graph, stmt_plan.actions);
-                if (!write_ok) {
+                if (!execution.session_graph.requestChangePermitted(std.heap.smp_allocator, request_principal, stmt_plan.self_locking, lock_graph, stmt_plan.actions)) {
                     var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
@@ -3407,14 +3411,12 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrpcReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
             // A principal with no global Read (a user with no stored role)
             // reads only graphs it holds a READ grant on, the default graph
-            // included. A session with no role (auth disabled) is not gated,
-            // as on QUIC: it has no principal for `gps.decide` to allow.
-            if (role != null) {
-                if (!try execution.session_graph.programReadPermitted(allocator, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
-                    var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
-                    defer resp.deinit(allocator);
-                    return encodeMessage(allocator, resp);
-                }
+            // included. SONNY-2782: the shared gate, as on QUIC: every
+            // session with authentication enabled, none with it disabled.
+            if (!try execution.session_graph.requestReadPermitted(allocator, request_principal, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
+                var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
             }
 
             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26

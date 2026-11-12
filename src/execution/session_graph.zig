@@ -22,6 +22,8 @@ const query_traits = @import("../query/query_traits.zig");
 const gps = @import("../security/gps.zig");
 const principal_mod = @import("../security/principal.zig");
 const ast = @import("../gql/ast.zig");
+const user_mgmt = @import("../security/user_management.zig");
+const write_walk = @import("write_walk.zig");
 
 pub const GraphTarget = query_traits.GraphTarget;
 
@@ -118,6 +120,63 @@ pub fn programReadPermitted(
         if (!gps.graphReadPermitted(allocator, principal, g)) return false;
     }
     return true;
+}
+
+// CANARY: REQ=REQ-SONNY-2782-AUTH-DISABLED-PARITY; FEATURE="StatementAuthorization"; ASPECT=RequestGate; STATUS=TESTED; TEST=tests/test_sonny2782_auth_disabled_transport_parity.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2782: the principal the QUIC and gRPC handlers authorize a request
+/// as, and give the executor: `principal` (the session's) whenever
+/// authentication is enabled, for every session whatever its role (one with
+/// none is refused by every gate); null when authentication is disabled.
+///
+/// Authentication disabled is the in-process, single-user mode (embedders
+/// and tests; `geode serve` always enables authentication). No request is
+/// authenticated and none is authorized per user: with no principal every
+/// gate answers yes, as for an in-process caller (`mayBind`, `maySchema`,
+/// the procedure gate, and the executor's admin gates, which check
+/// `isAuthEnabled` themselves), so every request runs as if by an
+/// administrator, on every transport, and GPS policies, grants and roles
+/// are not consulted. `--insecure-allow-all` changes nothing there. The
+/// HELLO and the `/*+BATCH*/` route already used no principal with
+/// authentication off; the QUIC handler skipped its gates by the session's
+/// role and the gRPC handler ran its write gate anyway (decide answered
+/// unauthenticated, so every change was refused 42501 unless
+/// --insecure-allow-all), and both gave the executor an anonymous principal,
+/// which refused DDL and mutating procedures on both.
+pub fn requestPrincipal(principal: *const principal_mod.Principal) ?*const principal_mod.Principal {
+    return if (user_mgmt.isAuthEnabled()) principal else null;
+}
+
+/// SONNY-2782: the QUIC and gRPC handlers' write gate, for a program that
+/// changes state (`StatementPlan.is_mutation`), as `principal`
+/// (`requestPrincipal`): a self-locking CALL, which writes no one graph,
+/// needs `gps.writePermitted`; any other change `gps.changePermittedOn` on
+/// the graph it changes, by the actions it needs. No principal (authentication
+/// disabled): yes.
+pub fn requestChangePermitted(
+    allocator: std.mem.Allocator,
+    principal: ?*const principal_mod.Principal,
+    self_locking: bool,
+    graph: []const u8,
+    actions: write_walk.Actions,
+) bool {
+    const p = principal orelse return true;
+    if (self_locking) return gps.writePermitted(allocator, p);
+    return gps.changePermittedOn(allocator, p, graph, actions);
+}
+
+/// SONNY-2782: the QUIC and gRPC handlers' read gate
+/// (`programReadPermitted`), as `principal` (`requestPrincipal`). No
+/// principal (authentication disabled): yes.
+pub fn requestReadPermitted(
+    allocator: std.mem.Allocator,
+    principal: ?*const principal_mod.Principal,
+    program: *const ast.Program,
+    analysis: *const query_traits.ProgramAnalysis,
+    start_graph: []const u8,
+    home_graph: []const u8,
+) !bool {
+    const p = principal orelse return true;
+    return programReadPermitted(allocator, p, program, analysis, start_graph, home_graph);
 }
 
 // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=MaySchema; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26

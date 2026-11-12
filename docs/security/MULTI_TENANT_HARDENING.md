@@ -18,7 +18,10 @@ mode). Source findings: [`docs/CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md`](../CAA
    authorization (see below). It exists only for local development / debugging.
 2. **Authentication must be enabled.** It is on by default (fail-closed);
    `--no-auth` is only available in debug builds and must never be used in
-   production.
+   production. (`geode serve` keeps authentication enabled even then; the
+   authentication-disabled mode, in which every request runs with full
+   access on every transport, exists only in process: see
+   `docs/security/gps-decide.md`, "Authentication disabled".)
 3. **Every session must present a concrete `tenant_id`.** A `Principal` with a
    real tenant scope is required for tenant isolation to apply. A session with
    no tenant scope — unset, empty, or the literal `"default"` — is treated as

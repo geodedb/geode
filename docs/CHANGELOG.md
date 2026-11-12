@@ -266,6 +266,27 @@
   half of the ticket was closed by SONNY-3028 (pinned graphs, DROP GRAPH
   waits for the graph's lock holders).
   Regression: `zig build test-sonny2756-policy-catalog-concurrency`.
+- **With authentication disabled QUIC and gRPC treat a request the same
+  (SONNY-2782).** The QUIC handler ran its write and read gates only for a
+  session with a role, so with authentication disabled nothing was gated;
+  the gRPC handler skipped its read gate likewise but ran its write gate for
+  every session, and refused every change (42501) unless
+  `--insecure-allow-all` was set, while it ran reads and every admin
+  procedure. Both handled DDL and changing procedures by handing the
+  executor an anonymous principal, which refused them. Now both handlers
+  authorize through one function (`session_graph.requestPrincipal`,
+  `requestChangePermitted`, `requestReadPermitted`): with authentication
+  enabled every session is gated, whatever its role (one with none is
+  refused); with it disabled there is no principal and every request runs
+  as if by an administrator, on both transports, `--insecure-allow-all` or
+  not. Authentication disabled is an in-process mode (embedders, tests):
+  `geode serve` always enables authentication. Behaviour changes, with
+  authentication disabled only: gRPC runs changes, DDL and changing
+  procedures without `--insecure-allow-all`, and QUIC runs DDL and changing
+  procedures; with authentication enabled, a QUIC session with no role is
+  now gated (it was not; no such session arises today). See
+  docs/security/gps-decide.md, "Authentication disabled".
+  Regression: `zig build test-sonny2782-auth-disabled-transport-parity`.
 
 ### Added
 

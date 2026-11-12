@@ -7658,6 +7658,10 @@ fn handleClientMessage(
                     .source = .quic_handler,
                 });
             };
+            // SONNY-2782: the principal every gate below and the executor
+            // authorize as; null with authentication disabled (the gRPC
+            // handler decides the same way).
+            const request_principal = execution.session_graph.requestPrincipal(&principal_for_request);
 
             var exec_context = execution.ExecutionContext{
                 .catalog = catalog,
@@ -7679,7 +7683,7 @@ fn handleClientMessage(
                 // getCurrentUserRoleCtx, making the context authoritative at the
                 // request boundary (per-thread map remains the fallback).
                 .fle_role = state.fle_user_role,
-                .principal = &principal_for_request,
+                .principal = request_principal,
                 // GAP-0511 Task 3b: Wire expression RLS engine pointer into execution context.
                 // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
                 .rls_engine = @import("rls_types").getGlobalExprRLSEngine(),
@@ -7786,12 +7790,12 @@ fn handleClientMessage(
             // (`changePermittedOn`: CREATE, UPDATE, DELETE, WRITE+SCHEMA for
             // DDL, WRITE for the rest), not `write` alone, so a deny or an
             // allow naming one of them applies.
-            if (is_mutation and state.authenticated_role != null) {
-                const write_ok = if (self_locking)
-                    geode.security.gps.writePermitted(gpa, &principal_for_request)
-                else
-                    geode.security.gps.changePermittedOn(gpa, &principal_for_request, lock_graph, stmt_plan.actions);
-                if (!write_ok) {
+            // SONNY-2782: through the gate the gRPC handler runs
+            // (`session_graph.requestChangePermitted`), for every session
+            // with authentication enabled, and for none with it disabled. It
+            // ran only for a session with a role.
+            if (is_mutation) {
+                if (!execution.session_graph.requestChangePermitted(gpa, request_principal, self_locking, lock_graph, stmt_plan.actions)) {
                     try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     return;
                 }
@@ -7799,12 +7803,10 @@ fn handleClientMessage(
             // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=QuicReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
             // A principal with no global Read (a user with no stored role)
             // reads only graphs it holds a READ grant on, the default graph
-            // included.
-            if (state.authenticated_role != null) {
-                if (!try execution.session_graph.programReadPermitted(gpa, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
-                    try sendExecuteError(gpa, stream, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
-                    return;
-                }
+            // included. SONNY-2782: the shared gate, as for writes.
+            if (!try execution.session_graph.requestReadPermitted(gpa, request_principal, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
+                try sendExecuteError(gpa, stream, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
+                return;
             }
 
             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=QuicHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
@@ -7900,9 +7902,8 @@ fn handleClientMessage(
                 // ops take the graph's lock SHARED, and a writer waits for
                 // them, so holding the write lock across them would deadlock.
                 // No principal with authentication off, as the write gate
-                // above and the HELLO do.
-                const batch_principal: ?*const @TypeOf(principal_for_request) = if (state.authenticated_role != null) &principal_for_request else null;
-                execution.session_graph.requireWritable(batch_principal, catalog, query_graph_name) catch |err| {
+                // above and the HELLO do (SONNY-2782: `request_principal`).
+                execution.session_graph.requireWritable(request_principal, catalog, query_graph_name) catch |err| {
                     const info = proto_util.mapError(err);
                     try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                     return;

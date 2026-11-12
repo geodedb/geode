@@ -131,3 +131,46 @@ test "SONNY-2782: the QUIC and gRPC handlers gate through the one shared request
     }
     try testing.expectEqual(@as(usize, 0), bad);
 }
+
+test "SONNY-2782: the shared request gate both handlers call: no principal with authentication disabled, every session gated with it enabled" {
+    var w: World = undefined;
+    try w.init();
+    defer w.deinit();
+    const session_graph = geode.execution.session_graph;
+    const write_walk = geode.execution.write_walk;
+    const create: write_walk.Actions = .{ .create = true };
+    const schema_change: write_walk.Actions = .{ .schema = true };
+    const a = testing.allocator;
+
+    // What each handler derives for an anonymous session: no user, no role.
+    const anon = wd.principal("", &.{}, 0);
+    var anon_no_user = anon;
+    anon_no_user.username = null;
+    const readonly = wd.principal("otto", &.{"ReadOnly"}, 0);
+
+    for ([_]bool{ false, true }) |allow_all| {
+        gps.setInsecureAllowAll(allow_all);
+        user_mgmt.setAuthEnabled(false);
+        const p = session_graph.requestPrincipal(&anon_no_user);
+        try testing.expect(p == null);
+        try testing.expect(session_graph.requestChangePermitted(a, p, false, "default", create));
+        try testing.expect(session_graph.requestChangePermitted(a, p, false, "default", schema_change));
+        try testing.expect(session_graph.requestChangePermitted(a, p, true, "default", .{ .write = true }));
+        // Even a ReadOnly session's principal is not consulted.
+        try testing.expect(session_graph.requestPrincipal(&readonly) == null);
+    }
+
+    gps.setInsecureAllowAll(false);
+    user_mgmt.setAuthEnabled(true);
+    // With authentication enabled the principal is always used: a session
+    // with no user and no role is refused, and so is ReadOnly's change.
+    const p_anon = session_graph.requestPrincipal(&anon_no_user) orelse return error.ExpectedPrincipal;
+    try testing.expect(!session_graph.requestChangePermitted(a, p_anon, false, "default", create));
+    try testing.expect(!session_graph.requestChangePermitted(a, p_anon, true, "default", .{ .write = true }));
+    const p_ro = session_graph.requestPrincipal(&readonly) orelse return error.ExpectedPrincipal;
+    try testing.expect(!session_graph.requestChangePermitted(a, p_ro, false, "default", create));
+    const rita = wd.principal("rita", &.{"ReadWrite"}, 0);
+    const p_rw = session_graph.requestPrincipal(&rita) orelse return error.ExpectedPrincipal;
+    try testing.expect(session_graph.requestChangePermitted(a, p_rw, false, "default", create));
+    try testing.expect(!session_graph.requestChangePermitted(a, p_rw, false, "default", schema_change));
+}

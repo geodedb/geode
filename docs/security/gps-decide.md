@@ -90,6 +90,44 @@ is intended exclusively for development environments and must NEVER be set in
 production. It is NOT the same as "auth disabled" — it bypasses authorization
 but does not disable authentication.
 
+## Authentication disabled (SONNY-2782)
+
+Authentication disabled (`user_management.setAuthEnabled(false)`) is the
+in-process, single-user mode: embedders and tests. It is not a serving
+mode. `geode serve` enables authentication at startup whatever its flags
+(`src/server/main.zig`); its `--no-auth` is refused outside Debug builds
+and, in a Debug build, logs a warning and leaves authentication enabled.
+`--insecure-allow-all` is a different switch: authentication stays on and
+`decide` allows everything (see above).
+
+With authentication disabled, on every transport (QUIC and gRPC alike):
+
+- no request is authenticated: a session has no user and no role;
+- no request is authorized per user: the handlers authorize, and give the
+  executor, no principal (`session_graph.requestPrincipal`), and with no
+  principal every gate answers yes, as for an in-process caller: the
+  handlers' write and read gates (`requestChangePermitted`,
+  `requestReadPermitted`), graph binding and schema (`mayBind`,
+  `maySchema`), the procedure gate, and the executor's admin gates (policy
+  DDL, `geode.auth.*`, `geode.rls.*`, `geode.tenant.*`), which check
+  `isAuthEnabled` themselves. Every request runs as if by an administrator;
+- GPS policies (allow and deny), per-graph grants and roles are not
+  consulted, and RLS policies that name a user have no user to apply to;
+- `--insecure-allow-all` changes nothing;
+- tenant scoping is unchanged: a session's `tenant_id` still scopes what it
+  sees, and strict tenancy still refuses an unscoped request;
+- the read-only request floor (`ExecuteRequest.read_only`) still refuses a
+  change.
+
+With authentication enabled both handlers gate every session through the
+same functions, whatever its role (a session with none is refused). Before
+SONNY-2782 the QUIC handler gated only a session with a role, and the gRPC
+handler skipped its read gate likewise but ran its write gate for every
+session, so with authentication disabled gRPC refused every change (42501:
+`decide` answered `unauthenticated`) unless `--insecure-allow-all` was set,
+while QUIC ran it; and both handed the executor an anonymous principal,
+which refused DDL and changing procedures on both.
+
 ## `resolveRoleFromGraph` — auth cache and HAS_ROLE edge lookup
 
 Phase 2 also closed a role-resolution bug affecting the QUIC auth cache. When
