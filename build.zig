@@ -477,6 +477,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-first-boot-admin-breadcrumb", .reason = "failing: reset-password checks the password policy before loading the user (KNOWN_TEST_ISSUES)" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
+    .{ .name = "test-sonny6299-backup-excludes-secrets", .reason = "failing: intentionally red SONNY-6299 reproduction (backups archive server.key, .geode_hmac_key and .geode.lock; server backups land in ./server_backups); moves to shardDep with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9331,6 +9332,26 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6288_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6288_step = b.step("test-sonny6288-server-restore-target", "Run SONNY-6288 regression (spawns servers: a QUIC or gRPC restore on a server started with --data-dir, GEODE_DATA_DIR or both restores beside its real data directory, staged and verified, never into ./data or over the live store, reports that directory and leaves the running server's data intact; corrupt, unsafe-entry and non-admin restores write nothing)");
     sonny6288_step.dependOn(&run_sonny6288_tests.step);
+
+    // SONNY-6299: a backup never holds the TLS private key, the auth-chain
+    // HMAC key, the generated admin password or the data-directory lock;
+    // server backups live under the data directory (or an absolute
+    // GEODE_BACKUP_DIR), 0700/0600, whatever the working directory; a
+    // restore of auth state needs the HMAC key and verifies the chain; an
+    // older archive with keys inside still restores, never its lock.
+    const sonny6299_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6299_backup_excludes_secrets.zig"), .target = target, .optimize = optimize });
+    sonny6299_test_mod.link_libc = true;
+    sonny6299_test_mod.addImport("geode", root_mod);
+    sonny6299_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6299_test_mod.addImport("schema", schema_mod);
+    sonny6299_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6299_test_mod.addImport("storage/backup", storage_backup_mod);
+    const sonny6299_tests = b.addTest(.{ .root_module = sonny6299_test_mod });
+    const run_sonny6299_tests = b.addRunArtifact(sonny6299_tests);
+    spawnsBuiltGeode(sonny6299_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6299_tests.step);
+    const sonny6299_step = b.step("test-sonny6299-backup-excludes-secrets", "Run SONNY-6299 regression (spawns servers: a backup holds no TLS key, HMAC key, admin password or lock and never itself; server backups live under the data directory 0700/0600 from any working directory, ./server_backups still read, GEODE_BACKUP_DIR absolute only; geode restore of auth state needs and verifies the HMAC key; an older archive restores with a warning, never its lock)");
+    sonny6299_step.dependOn(&run_sonny6299_tests.step);
 
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
