@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T20:46:12.110815928Z",
+  "generated_at": "2026-11-12T21:01:44.505897051Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81249,6 +81249,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6422-BACKUP-DOCS-TRUTH",
+      "features": [
+        {
+          "feature": "Docs",
+          "aspect": "NoObjectStorageOrRemovedTestClaims",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_backup_docs_truth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_backup_docs_truth.zig"
+          ],
+          "benches": [],
+          "owner": "docs",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6422-CLI-DATA-DIR-FAIL-CLOSED",
       "features": [
         {
@@ -89086,7 +89105,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4605
+      "TESTED": 4606
     },
     "by_aspect": {
       "2PC": 3,
@@ -91294,6 +91313,7 @@
       "NoMatchAll": 1,
       "NoMockBackupTestNoStaleArchitectureDocs": 1,
       "NoNodeWalk": 1,
+      "NoObjectStorageOrRemovedTestClaims": 1,
       "NoPerEdgePropsPage": 1,
       "NoPlaintextFallback": 1,
       "NoPlaintextOnDisk": 1,

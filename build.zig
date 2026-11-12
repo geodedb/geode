@@ -9928,6 +9928,18 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6386_rb_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6386_rb_step = b.step("test-sonny6386-remote-backup-atomic-output", "Run SONNY-6386 item 3 regression (spawns a server: geode backup create --server receives into a synced temporary file and renames it onto --output, so a previous backup is never truncated in place, the result is a complete 0600 backup with nothing left beside it, and a failed backup leaves --output untouched)");
     sonny6386_rb_step.dependOn(&run_sonny6386_rb_tests.step);
+    const sonny6422_bp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_remote_backup_progress.zig"), .target = target, .optimize = optimize });
+    sonny6422_bp_test_mod.link_libc = true;
+    sonny6422_bp_test_mod.addImport("geode", root_mod);
+    sonny6422_bp_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6422_bp_test_mod.addImport("schema", schema_mod);
+    sonny6422_bp_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6422_bp_tests = b.addTest(.{ .root_module = sonny6422_bp_test_mod });
+    const run_sonny6422_bp_tests = b.addRunArtifact(sonny6422_bp_tests);
+    spawnsBuiltGeode(sonny6422_bp_tests);
+    shardDep(test_step, &run_sonny6422_bp_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6422_bp_step = b.step("test-sonny6422-remote-backup-progress", "Run SONNY-6422 item 8 regression (spawns a server, seeds several MiB, then geode backup create --server prints each 10% progress step at most once, in order, ending at 100%)");
+    sonny6422_bp_step.dependOn(&run_sonny6422_bp_tests.step);
     const sonny6386_rh_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"), .target = target, .optimize = optimize });
     sonny6386_rh_test_mod.link_libc = true;
     sonny6386_rh_test_mod.addImport("geode", root_mod);
