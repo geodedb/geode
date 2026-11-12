@@ -12,7 +12,9 @@
 //!     kept (`execution.endStatementSucceeded`): the statement undo record
 //!     (`statement_undo`) lists every node the statement created, changed a
 //!     property of, or added a label to, on every executor (CREATE, MERGE,
-//!     SET, FOR, procedures, PROFILE, the write step, the point-write path).
+//!     SET, FOR, procedures, PROFILE, the write step, the point-write path),
+//!     and on every thread working for the statement (SONNY-6362: the record
+//!     is the statement's, which such a thread joins).
 //!     For each such node that still exists, every constraint whose graph
 //!     and label it is in, and whose properties it holds all of (none NULL),
 //!     must find no OTHER node holding equal values. A violation fails the

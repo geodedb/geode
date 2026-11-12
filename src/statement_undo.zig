@@ -37,8 +37,15 @@
 //! them (round 17 I1: the fence turned a transaction body's rollback into a
 //! no-op).
 //!
-//! The record is per thread: a write another thread makes for the statement
-//! is not in it.
+//! SONNY-6362: the record is the statement's, not the thread's. A thread
+//! that works for the statement joins it (`current` on the statement's
+//! thread, `attach` / `detach` on the worker; the parallel UNION arms,
+//! `set_operations.tryParallelUnion`, do), and its writes are recorded, and
+//! undone, and checked at the statement's end (`unique_constraints`), with the
+//! statement's own. Every change to the record takes its mutex. Only the
+//! statement's thread finishes it, after its workers have joined. (The record
+//! was per thread: a write another thread made for the statement was neither
+//! undone nor seen by the end-of-statement constraint checks.)
 //!
 //! SONNY-3348 (round 19): the record's memory counts against the statement's
 //! write budget (`write_budget`, `GEODE_WRITE_EXECUTOR_BUDGET_MB`, 8192 MB by
@@ -71,21 +78,52 @@ pub const UndoEntry = txn_undo_log.UndoEntry;
 /// the undo log's own allocator.
 pub const allocator: std.mem.Allocator = if (builtin.is_test) std.testing.allocator else std.heap.smp_allocator;
 
-threadlocal var t_active: bool = false;
+// CANARY: REQ=REQ-SONNY-6362-STATEMENT-RECORD; FEATURE="Execution"; ASPECT=StatementScopedRecord; STATUS=TESTED; TEST=tests/test_sonny6362_statement_undo_threads.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-6362: one statement's undo record, shared by the threads that work
+/// for it. Every field is guarded by `mutex`; the statement's own thread
+/// reads it unlocked only once its workers have joined (`entries`,
+/// `pendingCount`, `recordStore`, the finish).
+pub const Record = struct {
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+    entries: std.ArrayListUnmanaged(UndoEntry) = .empty,
+    /// The store the record's changes were made on (the first one recorded).
+    store: ?*graph_store.GraphStore = null,
+    /// SONNY-3348 (round 19): the record's bytes (`entryBytes`), and whether
+    /// a write was refused because the record would not fit the budget.
+    bytes: u64 = 0,
+    budget_exceeded: bool = false,
+    /// Slots `reserve` promised to creates that have not recorded themselves
+    /// yet: with several threads one free slot is not one per create. A
+    /// create that fails after its `reserve` leaves its slot reserved, which
+    /// only keeps the record's capacity one entry larger.
+    reserved: usize = 0,
+
+    fn lock(self: *Record) void {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    fn unlock(self: *Record) void {
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+};
+
+/// The record of the statement open on this thread.
+threadlocal var t_own: Record = .{};
+/// The record this thread's writes go to: `t_own` while its statement is
+/// open, the joined statement's while it works for one (`attach`), else null.
+threadlocal var t_record: ?*Record = null;
+/// This thread works for another thread's statement (`attach`): a statement
+/// scope it opens is nested in that one.
+threadlocal var t_attached: bool = false;
 threadlocal var t_suspended: u32 = 0;
-threadlocal var t_entries: std.ArrayListUnmanaged(UndoEntry) = .empty;
-/// The store the record's changes were made on (the first one recorded).
-threadlocal var t_store: ?*graph_store.GraphStore = null;
-/// SONNY-3348 (round 19): the record's bytes (`entryBytes`), and whether a
-/// write was refused because the record would not fit the budget.
-threadlocal var t_bytes: u64 = 0;
-threadlocal var t_budget_exceeded: bool = false;
 
 /// SONNY-3348: counters for tests and diagnostics (exported as
 /// `statement_undo_*` by the metrics registry, `registerAll`).
 pub var replayed_statements_total: std.atomic.Value(u64) = .init(0);
 pub var replay_failures_total: std.atomic.Value(u64) = .init(0);
 pub var budget_refusals_total: std.atomic.Value(u64) = .init(0);
+/// SONNY-6362: threads that joined a statement's record (tests).
+pub var attached_threads_total: std.atomic.Value(u64) = .init(0);
 
 /// Test seam (test builds only): the next this many undo entries, of a
 /// statement's replay or a transaction's rollback, fail as an engine error
@@ -112,12 +150,16 @@ pub fn registerAll(registry: anytype) !void {
 /// Did the open (or last) statement refuse a write because its record would
 /// not fit the write budget? Its relay then fails it with 53200.
 pub fn budgetExceeded() bool {
-    return t_budget_exceeded;
+    t_own.lock();
+    defer t_own.unlock();
+    return t_own.budget_exceeded;
 }
 
 /// The record's bytes so far (tests).
 pub fn recordBytes() u64 {
-    return t_bytes;
+    t_own.lock();
+    defer t_own.unlock();
+    return t_own.bytes;
 }
 
 fn propertyBytes(p: txn_undo_log.SerializedProperty) u64 {
@@ -152,29 +194,54 @@ fn entryBytes(entry: UndoEntry) u64 {
     return n;
 }
 
-/// Would `extra` more bytes of record take the statement past its write
-/// budget (the record plus the write executor's working set)?
-fn overBudget(extra: u64) bool {
+/// Would `extra` more bytes of `rec` take the statement past its write
+/// budget (the record plus the write executor's working set)? `rec` locked.
+fn overBudget(rec: *const Record, extra: u64) bool {
     const budget = write_budget.budgetBytes();
     if (budget == write_budget.unlimited) return false;
     const live: u64 = if (write_budget.activeScope()) |scope| scope.live_bytes else 0;
-    return t_bytes +| extra +| live > budget;
+    return rec.bytes +| extra +| live > budget;
 }
 
 /// The write the record could not take is not made, and the statement
 /// fails at its relay with the write budget's error (the fence refuses its
-/// other writes meanwhile).
-fn refuseOverBudget() error{OutOfMemory}!void {
-    if (!t_budget_exceeded) _ = budget_refusals_total.fetchAdd(1, .monotonic);
-    t_budget_exceeded = true;
+/// other writes meanwhile). `rec` locked.
+fn refuseOverBudget(rec: *Record) error{OutOfMemory}!void {
+    if (!rec.budget_exceeded) _ = budget_refusals_total.fetchAdd(1, .monotonic);
+    rec.budget_exceeded = true;
     @import("eval.zig").recordLimitError(error.OutOfMemory);
     return error.OutOfMemory;
 }
 
-/// Is a statement's record open on this thread, and not suspended? The store
-/// records a change only then.
+/// Is a statement's record open on this thread (its own, or one it joined),
+/// and not suspended? The store records a change only then.
 pub fn capturing() bool {
-    return t_active and t_suspended == 0;
+    return t_record != null and t_suspended == 0;
+}
+
+/// SONNY-6362: the record of the statement this thread works for, for a
+/// thread it hands part of the statement to (`attach`); null outside one.
+pub fn current() ?*Record {
+    return t_record;
+}
+
+/// SONNY-6362: this thread works for the statement `rec` is the record of,
+/// until `detach`: its writes are recorded there, undone if the statement
+/// fails and checked when it ends. Null (no statement) records nothing. The
+/// statement's thread must not finish the statement before `detach`.
+pub fn attach(rec: ?*Record) void {
+    const r = rec orelse return;
+    if (r == &t_own) return;
+    t_record = r;
+    t_attached = true;
+    _ = attached_threads_total.fetchAdd(1, .monotonic);
+}
+
+/// SONNY-6362: this thread no longer works for the statement it joined.
+pub fn detach() void {
+    if (!t_attached) return;
+    t_record = null;
+    t_attached = false;
 }
 
 /// A replay or a transaction undo is running on this thread: nothing is
@@ -192,20 +259,21 @@ pub fn resumeCapture() void {
 }
 
 /// Open the record for the statement scope `owns` opened. A nested scope
-/// (`owns` false) adds to its enclosing statement's record.
+/// (`owns` false), or one a thread working for another thread's statement
+/// opens, adds to its enclosing statement's record.
 pub fn begin(owns: bool) void {
-    if (!owns) return;
+    if (!owns or t_attached) return;
     discardAll();
-    t_budget_exceeded = false;
-    t_active = true;
+    t_own.budget_exceeded = false;
+    t_record = &t_own;
 }
 
 /// The statement that opened the scope `owns` failed: undo its changes.
 /// False when an entry could not be undone (the statement is then partly
 /// applied, and fails with `error.StatementUndoIncomplete`).
 pub fn finishFailed(owns: bool) bool {
-    if (!owns) return true;
-    t_active = false;
+    if (!owns or t_attached) return true;
+    t_record = null;
     return replay();
 }
 
@@ -214,13 +282,13 @@ pub fn finishFailed(owns: bool) bool {
 /// (out of memory), the statement's changes are undone and the error
 /// returned, so the transaction never keeps a change ROLLBACK cannot undo.
 pub fn finishSucceeded(owns: bool) error{ OutOfMemory, StatementUndoIncomplete }!void {
-    if (!owns) return;
-    t_active = false;
-    if (t_entries.items.len == 0 or !txn_undo_log.threadInTxn()) {
+    if (!owns or t_attached) return;
+    t_record = null;
+    if (t_own.entries.items.len == 0 or !txn_undo_log.threadInTxn()) {
         discardAll();
         return;
     }
-    txn_undo_log.getGlobalUndoLog(allocator).adoptStatementEntries(t_entries.items) catch |err| {
+    txn_undo_log.getGlobalUndoLog(allocator).adoptStatementEntries(t_own.entries.items) catch |err| {
         if (!replay()) return error.StatementUndoIncomplete;
         return err;
     };
@@ -231,8 +299,12 @@ pub fn finishSucceeded(owns: bool) error{ OutOfMemory, StatementUndoIncomplete }
 /// succeeded without an allocation that could fail.
 pub fn reserve(n: usize) error{OutOfMemory}!void {
     if (!capturing()) return;
-    if (overBudget(@as(u64, n) * @sizeOf(UndoEntry))) return refuseOverBudget();
-    try t_entries.ensureUnusedCapacity(allocator, n);
+    const rec = t_record.?;
+    rec.lock();
+    defer rec.unlock();
+    if (overBudget(rec, @as(u64, n) * @sizeOf(UndoEntry))) return refuseOverBudget(rec);
+    try rec.entries.ensureUnusedCapacity(allocator, rec.reserved + n);
+    rec.reserved += n;
 }
 
 /// Record `entry` for `store`. The entry's memory is `allocator`'s and is
@@ -242,40 +314,49 @@ pub fn append(store: *graph_store.GraphStore, entry: UndoEntry) error{OutOfMemor
         txn_undo_log.freeEntryWith(allocator, entry);
         return;
     }
+    const rec = t_record.?;
+    rec.lock();
+    defer rec.unlock();
     const bytes = entryBytes(entry);
-    if (overBudget(bytes)) {
+    if (overBudget(rec, bytes)) {
         txn_undo_log.freeEntryWith(allocator, entry);
-        return refuseOverBudget();
+        return refuseOverBudget(rec);
     }
-    t_entries.append(allocator, entry) catch |err| {
+    // Room promised to a create (`reserve`) stays free for it.
+    rec.entries.ensureUnusedCapacity(allocator, rec.reserved + 1) catch |err| {
         txn_undo_log.freeEntryWith(allocator, entry);
         return err;
     };
-    t_bytes += bytes;
-    if (t_store == null) t_store = store;
+    rec.entries.appendAssumeCapacity(entry);
+    rec.bytes += bytes;
+    if (rec.store == null) rec.store = store;
 }
 
 /// Record a created node or edge, in room `reserve` made. Owns no memory
 /// (the graph's name is not kept: the undo deletes by id).
 pub fn appendCreated(store: *graph_store.GraphStore, entry: UndoEntry) void {
     if (!capturing()) return;
+    const rec = t_record.?;
+    rec.lock();
+    defer rec.unlock();
     // The create happened: it is recorded, so it can be undone, and past
     // the budget the statement fails.
     const bytes = entryBytes(entry);
-    if (overBudget(bytes)) refuseOverBudget() catch {};
-    if (t_entries.unusedCapacitySlice().len > 0) {
-        t_entries.appendAssumeCapacity(entry);
+    if (overBudget(rec, bytes)) refuseOverBudget(rec) catch {};
+    if (rec.reserved > 0 and rec.entries.unusedCapacitySlice().len > 0) {
+        rec.reserved -= 1;
+        rec.entries.appendAssumeCapacity(entry);
     } else {
         // No room reserved (a create path this module does not know):
         // record it if memory allows; otherwise the statement fails with
         // out of memory, and what was recorded is undone.
-        t_entries.append(allocator, entry) catch {
+        rec.entries.append(allocator, entry) catch {
             @import("eval.zig").recordLimitError(error.OutOfMemory);
             return;
         };
     }
-    t_bytes += bytes;
-    if (t_store == null) t_store = store;
+    rec.bytes += bytes;
+    if (rec.store == null) rec.store = store;
 }
 
 /// Undo the record newest first, through the store's logged write methods,
@@ -283,8 +364,8 @@ pub fn appendCreated(store: *graph_store.GraphStore, entry: UndoEntry) void {
 /// skipped, and the rest are undone; false when one could not be.
 fn replay() bool {
     defer discardAll();
-    if (t_entries.items.len == 0) return true;
-    const store = t_store orelse return true;
+    if (t_own.entries.items.len == 0) return true;
+    const store = t_own.store orelse return true;
     suspendCapture();
     defer resumeCapture();
     _ = replayed_statements_total.fetchAdd(1, .monotonic);
@@ -293,10 +374,10 @@ fn replay() bool {
     var repair = txn_undo_log.IndexRepair.init(allocator);
     defer repair.finish(store);
     var complete = true;
-    var i: usize = t_entries.items.len;
+    var i: usize = t_own.entries.items.len;
     while (i > 0) {
         i -= 1;
-        (if (takeTestUndoFailure()) error.InjectedUndoFailure else txn_undo_log.undoEntryLogged(store, t_entries.items[i], &repair)) catch |err| {
+        (if (takeTestUndoFailure()) error.InjectedUndoFailure else txn_undo_log.undoEntryLogged(store, t_own.entries.items[i], &repair)) catch |err| {
             complete = false;
             _ = replay_failures_total.fetchAdd(1, .monotonic);
             log.err("statement undo: an entry could not be undone; the failed statement is partly applied", &.{Attr.string("error", @errorName(err))});
@@ -306,15 +387,16 @@ fn replay() bool {
 }
 
 fn discardAll() void {
-    for (t_entries.items) |entry| txn_undo_log.freeEntryWith(allocator, entry);
-    t_entries.clearAndFree(allocator);
-    t_store = null;
-    t_bytes = 0;
+    for (t_own.entries.items) |entry| txn_undo_log.freeEntryWith(allocator, entry);
+    t_own.entries.clearAndFree(allocator);
+    t_own.store = null;
+    t_own.bytes = 0;
+    t_own.reserved = 0;
 }
 
 /// Entries the open record holds (tests).
 pub fn pendingCount() usize {
-    return t_entries.items.len;
+    return t_own.entries.items.len;
 }
 
 /// SONNY-2846: the open record's entries, oldest first, for the UNIQUE
@@ -322,10 +404,10 @@ pub fn pendingCount() usize {
 /// every node the statement created, changed a property of, or added a
 /// label to is in it. Borrowed; valid until the record is finished.
 pub fn entries() []const UndoEntry {
-    return t_entries.items;
+    return t_own.entries.items;
 }
 
 /// SONNY-2846: the store the open record's changes were made on, if any.
 pub fn recordStore() ?*graph_store.GraphStore {
-    return t_store;
+    return t_own.store;
 }

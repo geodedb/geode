@@ -1,4 +1,5 @@
 const std = @import("std");
+const statement_undo = @import("../statement_undo.zig");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const value_types = @import("../value_types.zig");
@@ -1052,8 +1053,15 @@ const ArmJob = struct {
     /// SONNY-3316: this arm runs on a thread of its own (every arm but the
     /// last, which runs on the calling thread).
     spawned: bool = false,
+    /// SONNY-6362: the statement's undo record, which a spawned arm joins
+    /// (`statement_undo.attach`), so a write it made would be recorded,
+    /// undone and checked with the statement's. The arms are read-only today
+    /// (`unionArmsAreParallelEligible`); the record must not depend on that.
+    undo_record: ?*statement_undo.Record = null,
 
     fn runnerEntry(self: *ArmJob) void {
+        if (self.spawned) statement_undo.attach(self.undo_record);
+        defer if (self.spawned) statement_undo.detach();
         // CANARY: REQ=REQ-SONNY-3316-LIMIT-RELAY; FEATURE="ParallelUnionArms"; ASPECT=ArmLimitRelay; STATUS=TESTED; TEST=tests/test_sonny3316_limit_relay.zig; OWNER=execution; UPDATED=2026-09-28
         // SONNY-3316 (round 16, I4): the statement relay (a limit error a
         // WHERE, a cell or an aggregate swallowed, recorded by `eval`, and an
@@ -1196,9 +1204,10 @@ fn tryParallelUnion(
 
     // Arm 0: the first query. Arms 1..N: each tail's query (preserves
     // original left-to-right order so UNION DISTINCT merge is stable).
-    jobs[0] = .{ .query = union_query.first, .context = context, .allocator = arm_allocator };
+    const undo_record = statement_undo.current(); // SONNY-6362
+    jobs[0] = .{ .query = union_query.first, .context = context, .allocator = arm_allocator, .undo_record = undo_record };
     for (union_query.tails, 0..) |tail, i| {
-        jobs[i + 1] = .{ .query = tail.query, .context = context, .allocator = arm_allocator };
+        jobs[i + 1] = .{ .query = tail.query, .context = context, .allocator = arm_allocator, .undo_record = undo_record };
     }
 
     // Spawn a thread for every arm except the last, which we run on the

@@ -202,6 +202,20 @@
 
 ### Fixed
 
+- **The statement undo record is the statement's, not the thread's
+  (SONNY-6362, item 1).** A write another thread made for a statement was
+  not in the statement's undo record (`statement_undo` kept it in a
+  thread-local), so a statement that failed did not undo it, and the UNIQUE
+  and NOT NULL / EXISTS / NODE KEY checks at the statement's end, which read
+  the record, never saw it. The record is now a `statement_undo.Record` that
+  a thread working for the statement joins (`current` on the statement's
+  thread, `attach` / `detach` on the worker); every change to it takes its
+  mutex, and a create's reserved slot is counted per create, so concurrent
+  threads lose no entry. The parallel UNION arms
+  (`set_operations.tryParallelUnion`), the executor's one path that runs a
+  statement's work on threads of its own, join it; they are read-only today,
+  and the record no longer depends on that. Regression:
+  `zig build test-sonny6362-statement-undo-threads`.
 - **A failed statement and a ROLLBACK leave the full-text and vector
   indexes answering for what the store holds (SONNY-3381).** The executor
   maintains the full-text indexes and the advanced (vector, spatial, ...)

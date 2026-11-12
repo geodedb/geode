@@ -95,7 +95,7 @@ test "SONNY-6362: a failed statement undoes the writes another thread made for i
     // The owner's create, and the worker's three creates, three SETs and the
     // SET on P.
     try testing.expectEqual(@as(usize, 8), statement_undo.pendingCount());
-    try testing.expectError(error.Injected6362, execution.endStatementFailed(true, error.Injected6362));
+    try testing.expect(execution.endStatementFailed(true, error.Injected6362) == error.Injected6362);
 
     try testing.expectEqual(@as(usize, 0), try rowsOf(ga, s, "MATCH (n:A6362) RETURN n"));
     try testing.expectEqual(@as(usize, 0), try rowsOf(ga, s, "MATCH (n:W6362) RETURN n"));
@@ -175,7 +175,7 @@ test "SONNY-6362: threads appending to one statement's record concurrently lose 
     for (&threads) |*t| t.join();
     for (appenders) |a| if (a.err) |e| return e;
     try testing.expectEqual(@as(usize, 4 * per_thread), statement_undo.pendingCount());
-    try testing.expectError(error.Injected6362, execution.endStatementFailed(true, error.Injected6362));
+    try testing.expect(execution.endStatementFailed(true, error.Injected6362) == error.Injected6362);
     try testing.expectEqual(@as(usize, 0), statement_undo.pendingCount());
 }
 
