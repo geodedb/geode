@@ -9992,6 +9992,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6430_so_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6430_so_step = b.step("test-sonny6430-storage-open-fail-closed", "Run SONNY-6430 items 5 and 7 regression (__geode_security does not open without its audit logger when the audit log cannot be opened or created; StorageAdapter.init refuses a graph registry that exists but cannot be loaded)");
     sonny6430_so_step.dependOn(&run_sonny6430_so_tests.step);
+    const sonny6430_cli_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_cli_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6430_cli_test_mod.link_libc = true;
+    sonny6430_cli_test_mod.addImport("geode", root_mod);
+    sonny6430_cli_test_mod.addImport("logging", logging_mod);
+    const sonny6430_cli_tests = b.addTest(.{ .root_module = sonny6430_cli_test_mod });
+    const run_sonny6430_cli_tests = b.addRunArtifact(sonny6430_cli_tests);
+    spawnsBuiltGeode(sonny6430_cli_tests);
+    shardDep(test_step, &run_sonny6430_cli_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6430_cli_step = b.step("test-sonny6430-cli-fail-closed", "Run SONNY-6430 items 6 and 8 regression (geode storage verify checks the data directory the server would open and refuses when it holds no store; geode migrate create without an HMAC key refuses and writes nothing)");
+    sonny6430_cli_step.dependOn(&run_sonny6430_cli_tests.step);
     const sonny6386_rh_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"), .target = target, .optimize = optimize });
     sonny6386_rh_test_mod.link_libc = true;
     sonny6386_rh_test_mod.addImport("geode", root_mod);
