@@ -361,6 +361,9 @@ pub const ResetProxy = struct {
     port: u16,
     upstream_port: u16,
     executes: std.atomic.Value(u32) = .init(0),
+    /// SONNY-6425: Execute requests relayed in full (answered) before the
+    /// relay starts resetting; 0 resets the first one.
+    pass_executes: u32 = 0,
     stop_flag: std.atomic.Value(bool) = .init(false),
     accept_thread: ?std.Thread = null,
     gpa: std.mem.Allocator,
@@ -453,7 +456,9 @@ pub const ResetProxy = struct {
             const stream_id: u32 = (@as(u32, header[5] & 0x7F) << 24) | (@as(u32, header[6]) << 16) | (@as(u32, header[7]) << 8) | @as(u32, header[8]);
             if (length > payload.len) return;
             if (length > 0 and !readExactFd(cfd, payload[0..length])) return;
-            if (frame_type == H2_DATA and stream_id == execute_stream_id and (flags & H2_END_STREAM) != 0) {
+            if (frame_type == H2_DATA and stream_id == execute_stream_id and (flags & H2_END_STREAM) != 0 and
+                self.executes.load(.acquire) > self.pass_executes)
+            {
                 // Withhold the answer from the moment the request is complete.
                 stall.store(true, .release);
             }

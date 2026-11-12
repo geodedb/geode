@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T22:15:24.491591786Z",
+  "generated_at": "2026-11-12T22:25:45.888607598Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84105,6 +84105,101 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6425-CREATE-ONE-SHARD",
+      "features": [
+        {
+          "feature": "StatementTxnBatching",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_create_one_shard_commit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_create_one_shard_commit.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6425-DROP-OWN-READ-LOCK",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_drop_under_own_read_lock.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_drop_under_own_read_lock.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6425-GRPC-RETRY-SUMMARY",
+      "features": [
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_grpc_retry_summary.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_grpc_retry_summary.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6425-LISTINGS-AFTER-REOPEN",
+      "features": [
+        {
+          "feature": "PerTenantIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_tenant_listings_reopen.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_tenant_listings_reopen.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6425-WHERE-TRUTHINESS",
+      "features": [
+        {
+          "feature": "SearchConditionTruth",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_where_truthiness.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_where_truthiness.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6429-MATCH-CREATE-EDGE-SUMMARY",
       "features": [
         {
@@ -91828,7 +91923,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4772
+      "TESTED": 4777
     },
     "by_aspect": {
       "2PC": 3,
@@ -94901,7 +94996,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 273,
+      "Regression": 278,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
