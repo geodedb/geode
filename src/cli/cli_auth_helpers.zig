@@ -102,6 +102,37 @@ pub fn removeRlsPolicyByName(mgr: *AuthGraphManager, name: []const u8) !RemoveOu
     return .removed;
 }
 
+// -- Offline role assignment (SONNY-6367) --
+
+/// The built-in roles, as `server_init.writerSetRole` stores them.
+pub const builtin_role_names = [_][]const u8{ "admin", "readwrite", "user", "readonly" };
+
+/// The stored (lower-case) name of the built-in role `name` names, matched
+/// without regard to case as `user_management.Role.fromString` matches it;
+/// null for any other name.
+pub fn builtinRoleName(name: []const u8) ?[]const u8 {
+    for (builtin_role_names) |b| {
+        if (std.ascii.eqlIgnoreCase(b, name)) return b;
+    }
+    return null;
+}
+
+// CANARY: REQ=REQ-SONNY-6367-OFFLINE-ROLE-ASSIGN; FEATURE="OfflineAuthStoreSafety"; ASPECT=BuiltinRoleAssigned; STATUS=TESTED; TEST=tests/test_sonny6367_offline_user_cli.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6367: give `username` the built-in role `role` offline, as ALTER
+/// USER ... SET ROLE does (`AuthGraphManager.setBuiltinRoleWriteThrough`:
+/// its HAS_ROLE edges to the other built-in roles revoked, one to `role`
+/// assigned, sealed with the key the chain verified with). `geode user
+/// create --role`, `user update --role` and `user assign-role` stored a role
+/// node and no edge, so the user had no role. `error.CustomRoleMembershipNotSupported`
+/// for a role that is not built in (SONNY-6292: a custom role carries no
+/// privileges); `error.UserNotFound` when the user is not stored.
+pub fn assignBuiltinRole(allocator: std.mem.Allocator, mgr: *AuthGraphManager, username: []const u8, role: []const u8) !void {
+    const name = builtinRoleName(role) orelse return error.CustomRoleMembershipNotSupported;
+    if (mgr.storage.findUserIdByUsername(username) == null) return error.UserNotFound;
+    const key = try changeKey(allocator);
+    try mgr.setBuiltinRoleWriteThrough(&key, username, name, &builtin_role_names);
+}
+
 // -- State Path Resolution (for non-auth flat files) --
 
 const STATE_DIR_ENV = "GEODE_STATE_DIR";

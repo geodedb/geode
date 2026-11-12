@@ -4,6 +4,37 @@
 
 ### Security
 
+- **Offline user CLI and the remaining auth procedure failures
+  (SONNY-6367).** (1) **Behaviour change:** `geode user create --role`,
+  `user update --role`, `user import --role` and `user assign-role` stored a
+  role node and never gave it to the user, then reported success: the user
+  had no role. They now assign the built-in role as `ALTER USER ... SET
+  ROLE` does (`cli_auth_helpers.assignBuiltinRole`); `create` / `import`
+  with no `--role` give `user`. A role name that is not built in, and
+  `assign-role` of a missing user, are refused before anything changes.
+  Users created offline before this hold no role. `geode role create` used
+  the next user id as the role id and could overwrite an existing role; it
+  now goes through `AuthGraphManager.createRole`. (2) `geode user list`
+  printed `(role: user)` for everyone and `geode user show` of a missing
+  user printed made-up details and exited 0; they print the role the server
+  resolves, and `show` of a missing user fails. (3) **Behaviour change:**
+  `geode user enable | disable` of a missing user, and
+  `geode.auth.user_enable` / `user_disable`, answered success; they fail
+  (42704 for an Admin over the wire). (4) **Behaviour change:**
+  `geode.auth.user_set_attribute`, `role_create`, `user_import`,
+  `mfa_setup`, `mfa_verify`, `mfa_enable` and `mfa_disable` failures are
+  GQLSTATUS errors (42704, 22023, 42710, 0A000, 55000 not enrolled, 28000
+  invalid code, 53400 locked out) instead of 00000 status rows; a failed
+  `mfa_verify` no longer reads as a pass to a caller that checks the status.
+  Scripts and harness specs that matched those rows must match the error.
+  (5) A user imported with `--algorithm blake2b` could never log in (the
+  login verified only Argon2id); the login now verifies the legacy BLAKE2b
+  format (`geode_auth.verifyPasswordBlake2bLegacy`, constant time, refused
+  under FIPS). (6) The unreferenced `src/cli/user_storage_simple.zig` and
+  `user_storage_secure.zig` were removed. (7) `tests/simple_stdio_test.sh`
+  test 3 read only the first output line (a warning) and always failed.
+  (8) The `gql_conformance` suite count in CLAUDE.md and the status docs is
+  21/21 (T1–T20 and the `ZZ_cleanup` teardown), not 20/20.
 - **Auth residuals (SONNY-6359).** (1) **Behaviour change:** an Admin's
   `ALTER USER <other> SET PASSWORD` over QUIC and gRPC was refused 42501 by
   the password intercept before the parser, although

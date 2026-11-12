@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **DEVELOPMENT READY (single-tenant).** Geode is a **single-tenant** graph database with strong ISO GQL alignment and active development (canonical status: [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md) + [docs/KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)). Multi-tenant hardening landed substantially on the `gap-closure-2026-06-09` branch (strict-tenancy auto-default, tenant-hierarchy enforcement in read paths, FLE request-context, tenant-drop cascade, insecure-allow-all production guard, FLE audit-chain fix, durable `ALTER POLICY`), but multi-tenant deployments, distributed clusters, and the full RLS expression compilation path still carry documented residuals and require operator review before production use — see Known Limitations below.
 
 - **✅ Local test baseline: see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)** (canonical; expected ~175/179 named `zig build test-*` steps pass after the GAP-0863 rebaseline — exact counts refresh at each round's final sweep, failures named with file:line evidence). The monolithic `zig build test` is blocked by a protobuf union-submessage limitation; the per-step sweep is the canonical local gate. A fresh geodetestlab integration-suite (`../geode-test-harness`) run is owed (prior ~97% / 1644-1688 kept as a dated historical snapshot).
-- **✅ ISO/IEC 39075:2024 conformance suite: 96/96** in the named `tests/gql_iso_conformance.zig` suite (`zig build test-iso-conformance`; **parse-only scope** — it asserts parser accept/reject, not executed results). The executed-query `gql_conformance` harness suite is 20/20 after GAP-0892 (`zig build test-gql-conformance`). This scopes "compliance" to those named suites — not a blanket "100% standards-compliant" claim. See [GQL_COMPLIANCE.md](docs/GQL_COMPLIANCE.md) for the verified-forms list and residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`).
+- **✅ ISO/IEC 39075:2024 conformance suite: 96/96** in the named `tests/gql_iso_conformance.zig` suite (`zig build test-iso-conformance`; **parse-only scope** — it asserts parser accept/reject, not executed results). The executed-query `gql_conformance` harness suite is 21/21 after GAP-0892 (T1–T20 plus the `ZZ_cleanup` teardown) (`zig build test-gql-conformance`). This scopes "compliance" to those named suites — not a blanket "100% standards-compliant" claim. See [GQL_COMPLIANCE.md](docs/GQL_COMPLIANCE.md) for the verified-forms list and residual limits (e.g. recursive-CTE working-set model, no `SEARCH`/`CYCLE`).
 - **✅ 5,094 CANARY Markers** tracking requirements (85.2% TESTED, 223 IMPL = 4.4%, plus EXEMPT/BENCHED per `docs/status.csv`; run `make status-generate` for current counts). GAP-0514 (CANARY IMPL governance debt) **closed 2026-06-11** — residual IMPL markers are enumerated per-file in the journal and dominated by vendor-blocked (grpc_zig), PTY-only, and fault-injection-only lanes.
 - **✅ Enterprise Features** implemented (TDE, audit, vector search, backup/restore CLI, enhanced RLS) — see limitations below for multi-tenant and backup caveats
 - **✅ ALL TODO.md PHASES COMPLETE** - All 7 development phases implemented (Phases 2-7)
@@ -163,7 +163,7 @@ See [docs/TIMESERIES.md](docs/TIMESERIES.md) for the full reference.
 
 - **CANARY System**: 5,094 governance markers tracking requirements
 - **Local test baseline**: see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) (canonical; expected ~175/179 named `zig build test-*` steps pass); a fresh geodetestlab harness run is owed (prior ~97% / 1644-1688 is a dated historical snapshot)
-- **ISO conformance suite**: 96/96 in the named `tests/gql_iso_conformance.zig` suite (`zig build test-iso-conformance`; parse-only scope, not a blanket "100% compliant" claim); executed-query `gql_conformance` 20/20 (`zig build test-gql-conformance`)
+- **ISO conformance suite**: 96/96 in the named `tests/gql_iso_conformance.zig` suite (`zig build test-iso-conformance`; parse-only scope, not a blanket "100% compliant" claim); executed-query `gql_conformance` 21/21 (`zig build test-gql-conformance`)
 - **Performance Benchmarks**: Automated regression testing
 - **Status Breakdown**: 85.2% TESTED, 4.4% IMPL (223), plus EXEMPT/BENCHED (run `make status-generate` for current counts; GAP-0514 closed 2026-06-11)
 
@@ -425,7 +425,7 @@ Never hold a higher-tier mutex while acquiring a lower-tier one. Thread-local at
 
 - **Test Coverage**: Keep the local `zig build test-*` baseline green (expected ~175/179 named steps; track the canonical baseline and regressions in [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md)), and pass `zig build test-compile` before calling the aggregate `zig build test` green (see Zig Test Conventions above)
 - **Memory Safety**: Zero memory leaks in test runs
-- **Standards Compliance**: Keep the ISO conformance suite green (96/96 in `tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`) and the executed-query `gql_conformance` suite green (20/20, `zig build test-gql-conformance`)
+- **Standards Compliance**: Keep the ISO conformance suite green (96/96 in `tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`) and the executed-query `gql_conformance` suite green (21/21, `zig build test-gql-conformance`)
 - **Performance**: No regressions in core operations
 
 ## 📍 Current Status

@@ -645,8 +645,17 @@ pub fn hashPassword(allocator: std.mem.Allocator, password: []const u8) ![]const
 
 /// Verify password against stored hash using the canonical Argon2id verification.
 /// Delegates to geode_auth.verifyPasswordArgon2id (single source of truth).
+/// SONNY-6367: a stored hash in the legacy BLAKE2b format (what `user import
+/// --algorithm blake2b` stores) is verified with
+/// geode_auth.verifyPasswordBlake2bLegacy; such a user could never log in.
 // CANARY: REQ=REQ-AUTH-VERIFY-001; FEATURE="SecurePasswordVerify"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-02-24
 pub fn verifyPassword(password: []const u8, stored_hash: []const u8) !bool {
+    if (geode_auth.isLegacyBlake2bHash(stored_hash)) {
+        return geode_auth.verifyPasswordBlake2bLegacy(password, stored_hash) catch |err| {
+            if (err == error.FipsUnsupported) return err;
+            return false;
+        };
+    }
     // Use c_allocator for Argon2id scratch buffers in verification hot paths.
     // This avoids untracked page allocator usage in production runtime paths.
     const allocator = std.heap.c_allocator;

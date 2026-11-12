@@ -616,10 +616,10 @@ fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
 /// graph (`createUserWithHash` -> `persistent_writer.create_fn`).
 ///
 /// The hash is stored VERBATIM — no re-hashing, and no format validation
-/// beyond non-emptiness, exactly like the offline path. A stored hash that no
-/// verifier recognises simply never authenticates (`verifyPasswordArgon2id`
-/// returns false for any non-`$argon2id$` string), so an unusable import is
-/// fail-closed, never fail-open.
+/// beyond non-emptiness, exactly like the offline path. The login verifies an
+/// Argon2id PHC string or a legacy BLAKE2b hash (`user_management.verifyPassword`,
+/// SONNY-6367); a stored hash in neither format never authenticates, so an
+/// unusable import is fail-closed, never fail-open.
 fn handleUserImport(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     var username: []const u8 = "";
     var hash: []const u8 = "";
@@ -635,44 +635,25 @@ fn handleUserImport(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
         if (args.len >= 5 and args[4].* == .String and args[4].String.len > 0) role_str = args[4].String;
     }
 
-    const failure = struct {
-        fn render(a: std.mem.Allocator, user: []const u8, alg: []const u8, message: []const u8) !ExecutionResult {
-            const columns = try a.alloc([]const u8, 3);
-            columns[0] = try a.dupe(u8, "status");
-            columns[1] = try a.dupe(u8, "username");
-            columns[2] = try a.dupe(u8, "algorithm");
-            const row = try a.alloc(Value, 3);
-            row[0] = Value{ .Str = try std.fmt.allocPrint(a, "error: {s}", .{message}) };
-            row[1] = Value{ .Str = try a.dupe(u8, user) };
-            row[2] = Value{ .Str = try a.dupe(u8, alg) };
-            const rows = try a.alloc([]Value, 1);
-            rows[0] = row;
-            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-        }
-    };
-
-    if (username.len == 0) return failure.render(allocator, username, algorithm, "user import requires a username");
-    if (hash.len == 0) return failure.render(allocator, username, algorithm, "user import requires a non-empty hash");
+    // SONNY-6367: every refusal is an error status (an argument 22023, an
+    // existing user 42710, FIPS 0A000); they answered 00000 with a status
+    // row "error: <message>".
+    if (username.len == 0 or hash.len == 0) return error.InvalidArgs;
     // Same accepted set as the offline import (user_mgmt_cli.zig).
     if (!std.mem.eql(u8, algorithm, "argon2id") and !std.mem.eql(u8, algorithm, "blake2b")) {
-        return failure.render(allocator, username, algorithm, "algorithm must be 'argon2id' or 'blake2b'");
+        return error.InvalidArgs;
     }
     // FIPS parity with the offline path: neither primitive is FIPS-approved.
-    if (build_options.fips) {
-        return failure.render(allocator, username, algorithm, "user import is unavailable under FIPS mode (argon2id and blake2b are not FIPS-approved primitives)");
-    }
+    if (build_options.fips) return error.FipsUnsupported;
     // Import refuses to overwrite — a silent credential replacement on an
     // existing principal is an account-takeover primitive.
-    if (user_mgmt.getUser(username) != null) {
-        return failure.render(allocator, username, algorithm, "user already exists; import refuses to overwrite");
-    }
+    if (user_mgmt.getUser(username) != null) return error.UserAlreadyExists;
 
     const role = user_mgmt.Role.fromString(role_str) orelse .User;
     user_mgmt.createUserWithHash(allocator, username, hash, email, role, false) catch |err| {
         log.warn("geode.auth.user_import failed", &.{Attr.string("error", @errorName(err))});
         // SONNY-3038: not saved, so not imported.
-        if (err == error.UserNotPersisted) return err;
-        return failure.render(allocator, username, algorithm, @errorName(err));
+        return err;
     };
 
     const columns = try allocator.alloc([]const u8, 3);
@@ -766,7 +747,7 @@ fn handleUserShow(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
-fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     // geode.auth.user_enable/disable(username) -> status, username
     var username: []const u8 = "";
     if (call_stmt.procedure == .Call) {
@@ -781,16 +762,15 @@ fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, 
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-029; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserEnableDisable; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
-    // Mutate + persist the active flag when the user is present in the in-memory store.
-    // If the user isn't resolvable there (e.g. it lives only in a separate storage path —
-    // the standalone CLI `geode user enable/disable` operates directly on the graph store),
-    // treat it as a no-op success, matching how handleUserDelete/handleRoleDelete degrade
-    // gracefully on a missing entity rather than surfacing an error.
+    // Mutate + persist the active flag.
     user_mgmt.setUserActive(allocator, username, is_enable) catch |err| switch (err) {
-        // setUserActive returns error.Unauthenticated when the user isn't resolvable in the
-        // in-memory store; treat that as a no-op success (the user may live only in a separate
-        // storage path, e.g. the standalone CLI's direct-to-graph backend).
-        error.Unauthenticated => {},
+        // SONNY-6367: setUserActive answers error.Unauthenticated when no
+        // such user is stored (it loads a stored user that is not cached):
+        // 42704 for an Admin (SONNY-6291's rule). It answered "enabled X".
+        error.Unauthenticated => {
+            freeStatusScaffold(allocator, columns, row, rows);
+            return missingUser(allocator, proc_name, context);
+        },
         // SONNY-3038: the change could not be saved (a disable is enforced
         // by locking the user out).
         error.UserNotPersisted => {
@@ -899,7 +879,7 @@ pub fn getUserAttributes(username: []const u8) ?*const std.StringHashMap([]const
     return user_attr_store.get(username);
 }
 
-fn handleUserSetAttribute(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleUserSetAttribute(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     var username: []const u8 = "";
     var key: []const u8 = "";
     var value: []const u8 = "";
@@ -909,19 +889,15 @@ fn handleUserSetAttribute(allocator: std.mem.Allocator, _: []const u8, call_stmt
         if (args.len >= 2 and args[1].* == .String) key = args[1].String;
         if (args.len >= 3 and args[2].* == .String) value = args[2].String;
     }
+    // SONNY-6367: no username or key (22023), no such user (42704 for an
+    // Admin) are error statuses; they answered 00000 with an "error:" row.
+    if (username.len == 0 or key.len == 0) return error.InvalidArgs;
+    if (user_mgmt.getUser(username) == null) return missingUser(allocator, proc_name, context);
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    if (username.len == 0 or key.len == 0) {
-        row[0] = Value{ .Str = try allocator.dupe(u8, "error: username and attribute key required") };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
-    if (user_mgmt.getUser(username) == null) {
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: user '{s}' does not exist", .{username}) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
     try user_attr_store.setAttribute(allocator, username, key, value);
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "set attribute {s}={s} for {s}", .{ key, value, username }) };
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
@@ -1053,7 +1029,7 @@ fn handleUserResetPassword(allocator: std.mem.Allocator, _: []const u8, call_stm
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
-fn handleMfaSetup(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleMfaSetup(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     // geode.auth.mfa_setup(username, opts) -> MFA secret, recovery codes, provisioning URI
     var username: []const u8 = "";
     var opts: []const u8 = "";
@@ -1062,38 +1038,21 @@ fn handleMfaSetup(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.Ca
         if (args.len >= 1 and args[0].* == .String) username = args[0].String;
         if (args.len >= 2 and args[1].* == .String) opts = args[1].String;
     }
-    // Check user exists
-    if (user_mgmt.getUser(username) == null) {
-        const err_columns = try allocator.alloc([]const u8, 1);
-        err_columns[0] = try allocator.dupe(u8, "error");
-        const err_row = try allocator.alloc(Value, 1);
-        err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "User '{s}' does not exist", .{username}) };
-        const err_rows = try allocator.alloc([]Value, 1);
-        err_rows[0] = err_row;
-        return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-    }
+    // SONNY-6367: no such user (42704 for an Admin) and a failed enrollment
+    // or store are error statuses; they answered 00000 with an "error" row.
+    if (user_mgmt.getUser(username) == null) return missingUser(allocator, proc_name, context);
     // GAP-0501: Generate cryptographically random per-user TOTP secret via mfa.enroll().
     // Generates 20 random bytes via std.crypto.random, base32-encodes, produces 8 recovery codes.
     var enrollment = mfa_mod.enroll(allocator, username) catch |err| {
-        const err_columns = try allocator.alloc([]const u8, 1);
-        err_columns[0] = try allocator.dupe(u8, "error");
-        const err_row = try allocator.alloc(Value, 1);
-        err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA enrollment failed: {s}", .{@errorName(err)}) };
-        const err_rows = try allocator.alloc([]Value, 1);
-        err_rows[0] = err_row;
-        return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        log.warn("geode.auth.mfa_setup enrollment failed", &.{Attr.string("error", @errorName(err))});
+        return err;
     };
     defer mfa_mod.freeEnrollment(allocator, &enrollment);
 
     // Store per-user secret and recovery codes for later TOTP verification
     storeMfaCredential(allocator, username, enrollment.secret_base32, enrollment.scratch_codes) catch |err| {
-        const err_columns = try allocator.alloc([]const u8, 1);
-        err_columns[0] = try allocator.dupe(u8, "error");
-        const err_row = try allocator.alloc(Value, 1);
-        err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "Failed to store MFA credential: {s}", .{@errorName(err)}) };
-        const err_rows = try allocator.alloc([]Value, 1);
-        err_rows[0] = err_row;
-        return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        log.warn("geode.auth.mfa_setup could not store the credential", &.{Attr.string("error", @errorName(err))});
+        return err;
     };
 
     const secret = enrollment.secret_base32;
@@ -1134,7 +1093,7 @@ fn handleMfaSetup(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.Ca
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
-fn handleMfaVerify(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+fn handleMfaVerify(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     // GAP-0502: geode.auth.mfa_verify(username, token) -> status
     // Implements RFC 6238 TOTP validation with rate limiting.
     var username: []const u8 = "";
@@ -1147,37 +1106,24 @@ fn handleMfaVerify(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.C
 
     const now_ms = compat_milliTimestamp();
 
+    // SONNY-6367: every outcome but "verified" is an error status: no such
+    // user (42704 for an Admin), locked out (53400), not enrolled (55000), a
+    // code that does not verify (28000). They answered 00000 with a status
+    // row ("rate_limited", "mfa_not_enrolled", "invalid token"), which a
+    // caller that checks the status read as a pass.
+    if (user_mgmt.getUser(username) == null) return missingUser(allocator, proc_name, context);
+
     // Rate limit check: reject if user is locked out from too many failed attempts
     {
         g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
         ensureMfaStoreInit(allocator);
-        if (checkMfaRateLimit(username, now_ms)) {
-            const rl_columns = try allocator.alloc([]const u8, 2);
-            rl_columns[0] = try allocator.dupe(u8, "status");
-            rl_columns[1] = try allocator.dupe(u8, "username");
-            const rl_row = try allocator.alloc(Value, 2);
-            rl_row[0] = Value{ .Str = "rate_limited" };
-            rl_row[1] = Value{ .Str = username };
-            const rl_rows = try allocator.alloc([]Value, 1);
-            rl_rows[0] = rl_row;
-            return .{ .columns = rl_columns, .rows = rl_rows, .flags = std.ArrayList([]const u8).empty };
-        }
+        if (checkMfaRateLimit(username, now_ms)) return error.MfaRateLimited;
     }
 
     // Look up the user's stored TOTP secret
     const stored_secret = getMfaSecret(username);
-    if (stored_secret == null) {
-        const ne_columns = try allocator.alloc([]const u8, 2);
-        ne_columns[0] = try allocator.dupe(u8, "status");
-        ne_columns[1] = try allocator.dupe(u8, "username");
-        const ne_row = try allocator.alloc(Value, 2);
-        ne_row[0] = Value{ .Str = "mfa_not_enrolled" };
-        ne_row[1] = Value{ .Str = username };
-        const ne_rows = try allocator.alloc([]Value, 1);
-        ne_rows[0] = ne_row;
-        return .{ .columns = ne_columns, .rows = ne_rows, .flags = std.ArrayList([]const u8).empty };
-    }
+    if (stored_secret == null) return error.MfaNotEnrolled;
 
     // Parse the 6-digit token string to u32 and validate via RFC 6238 TOTP
     var is_valid = false;
@@ -1208,11 +1154,13 @@ fn handleMfaVerify(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.C
         }
     }
 
+    if (!is_valid) return error.InvalidMfaCode;
+
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "status");
     columns[1] = try allocator.dupe(u8, "username");
     const row = try allocator.alloc(Value, 2);
-    row[0] = Value{ .Str = if (is_valid) "verified" else "invalid token" };
+    row[0] = Value{ .Str = "verified" };
     row[1] = Value{ .Str = username };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
@@ -1228,16 +1176,14 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
         if (args.len >= 1 and args[0].* == .String) role_name = args[0].String;
         if (args.len >= 2 and args[1].* == .String) desc = args[1].String;
     }
+    // SONNY-6367: no name is an error status (22023); it answered 00000
+    // with an "error:" row.
+    if (role_name.len == 0) return error.InvalidArgs;
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-
-    if (role_name.len == 0) {
-        row[0] = Value{ .Str = try allocator.dupe(u8, "error: role name required") };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
-    }
 
     // Built-in role names are idempotent — acknowledge without touching g_custom_roles.
     if (isBuiltinRoleName(role_name)) {
@@ -1747,7 +1693,16 @@ fn handleApikeyNotSupported(_: std.mem.Allocator, _: []const u8, _: ast.CallProc
     return error.ApiKeysNotSupported;
 }
 
-fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+/// Exactly six ASCII digits (a TOTP code).
+fn isSixDigitCode(code: []const u8) bool {
+    if (code.len != 6) return false;
+    for (code) |c| {
+        if (c < '0' or c > '9') return false;
+    }
+    return true;
+}
+
+fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
     // MFA enable/disable — returns status with username
     var username: []const u8 = "";
     var code: []const u8 = "";
@@ -1756,99 +1711,31 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
         if (args.len >= 1 and args[0].* == .String) username = args[0].String;
         if (args.len >= 2 and args[1].* == .String) code = args[1].String;
     }
-    // Check user exists
-    if (user_mgmt.getUser(username) == null) {
-        const err_columns = try allocator.alloc([]const u8, 1);
-        err_columns[0] = try allocator.dupe(u8, "error");
-        const err_row = try allocator.alloc(Value, 1);
-        err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "User '{s}' does not exist", .{username}) };
-        const err_rows = try allocator.alloc([]Value, 1);
-        err_rows[0] = err_row;
-        return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-    }
+    // SONNY-6367: every refusal is an error status: no such user (42704 for
+    // an Admin), a missing or malformed code (22023), no TOTP secret (55000),
+    // a code that does not verify (28000). They answered 00000 with an
+    // "error" row.
+    if (user_mgmt.getUser(username) == null) return missingUser(allocator, proc_name, context);
     const is_enable = std.mem.eql(u8, proc_name, "geode.auth.mfa_enable");
 
     // #838: MFA enable used to accept any 6-digit code with no HMAC verification
     // against the user's stored TOTP secret — admins could "enable" MFA without
     // proving authenticator possession. Require a valid TOTP code on enable.
     if (is_enable) {
-        if (code.len == 0) {
-            const err_columns = try allocator.alloc([]const u8, 1);
-            err_columns[0] = try allocator.dupe(u8, "error");
-            const err_row = try allocator.alloc(Value, 1);
-            err_row[0] = Value{ .Str = "missing code: mfa_enable requires a 6-digit TOTP code from the user's authenticator (run mfa_setup first)" };
-            const err_rows = try allocator.alloc([]Value, 1);
-            err_rows[0] = err_row;
-            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-        }
-        if (code.len != 6) {
-            const err_columns = try allocator.alloc([]const u8, 1);
-            err_columns[0] = try allocator.dupe(u8, "error");
-            const err_row = try allocator.alloc(Value, 1);
-            err_row[0] = Value{ .Str = "invalid code: must be exactly 6 digits" };
-            const err_rows = try allocator.alloc([]Value, 1);
-            err_rows[0] = err_row;
-            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-        }
-        for (code) |c| {
-            if (c < '0' or c > '9') {
-                const err_columns = try allocator.alloc([]const u8, 1);
-                err_columns[0] = try allocator.dupe(u8, "error");
-                const err_row = try allocator.alloc(Value, 1);
-                err_row[0] = Value{ .Str = "invalid code: must be numeric" };
-                const err_rows = try allocator.alloc([]Value, 1);
-                err_rows[0] = err_row;
-                return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-            }
-        }
+        if (!isSixDigitCode(code)) return error.InvalidArgs;
 
         // Verify the code against the user's stored TOTP secret.
-        const stored_secret = getMfaSecret(username) orelse {
-            const err_columns = try allocator.alloc([]const u8, 1);
-            err_columns[0] = try allocator.dupe(u8, "error");
-            const err_row = try allocator.alloc(Value, 1);
-            err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "no TOTP secret stored for '{s}'; run mfa_setup first", .{username}) };
-            const err_rows = try allocator.alloc([]Value, 1);
-            err_rows[0] = err_row;
-            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-        };
+        const stored_secret = getMfaSecret(username) orelse return error.MfaNotEnrolled;
 
         const code_u32 = std.fmt.parseInt(u32, code, 10) catch 0xFFFFFFFF;
         const now_ms = @as(u64, @intCast(compat_milliTimestamp()));
         const ok = mfa_mod.verifyCode(allocator, stored_secret, now_ms, code_u32, 30, 6, 1) catch false;
-        if (!ok) {
-            const err_columns = try allocator.alloc([]const u8, 1);
-            err_columns[0] = try allocator.dupe(u8, "error");
-            const err_row = try allocator.alloc(Value, 1);
-            err_row[0] = Value{ .Str = "invalid TOTP code: HMAC verification failed against stored secret" };
-            const err_rows = try allocator.alloc([]Value, 1);
-            err_rows[0] = err_row;
-            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-        }
+        if (!ok) return error.InvalidMfaCode;
     } else if (code.len > 0) {
         // Disable path still validates format if a code is provided, but
         // does NOT require HMAC verification (separate concern — admins may
         // need to disable MFA for recovery without a valid TOTP).
-        if (code.len != 6) {
-            const err_columns = try allocator.alloc([]const u8, 1);
-            err_columns[0] = try allocator.dupe(u8, "error");
-            const err_row = try allocator.alloc(Value, 1);
-            err_row[0] = Value{ .Str = "invalid code: must be exactly 6 digits" };
-            const err_rows = try allocator.alloc([]Value, 1);
-            err_rows[0] = err_row;
-            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-        }
-        for (code) |c| {
-            if (c < '0' or c > '9') {
-                const err_columns = try allocator.alloc([]const u8, 1);
-                err_columns[0] = try allocator.dupe(u8, "error");
-                const err_row = try allocator.alloc(Value, 1);
-                err_row[0] = Value{ .Str = "invalid code: must be numeric" };
-                const err_rows = try allocator.alloc([]Value, 1);
-                err_rows[0] = err_row;
-                return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-            }
-        }
+        if (!isSixDigitCode(code)) return error.InvalidArgs;
     }
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "status");

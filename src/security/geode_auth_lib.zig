@@ -1436,13 +1436,6 @@ pub const SecurityManager = struct {
         return crypto_backend.timingSafeEql(a, b);
     }
 
-    /// Constant-time comparison for 64-byte hex-encoded hashes. GAP-0440.
-    /// Uses std.crypto.timing_safe.eql to prevent compiler optimisation of the comparison.
-    fn constantTimeEqual64(a: *const [64]u8, b: []const u8) bool {
-        if (b.len != 64) return false;
-        return crypto_backend.timingSafeEql(a, b[0..64]);
-    }
-
     fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
         // SECURITY FIX (C2): Support both Argon2id (PHC format) and legacy Blake2b
         // This enables gradual migration from Blake2b to Argon2id
@@ -1478,27 +1471,9 @@ pub const SecurityManager = struct {
     /// Accounts verified via this path should be flagged for password_reset_required
     /// to force migration to Argon2id on next login.
     fn verifyBlake2bLegacy(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
-        // FIPS: BLAKE2b is not FIPS-approved — fail closed under -Dfips
-        if (build_options.fips) {
-            log.err("password verification unavailable under FIPS: BLAKE2b is not a FIPS-approved primitive", &.{});
-            return error.FipsUnsupported;
-        }
-        const salt = "geode-salt-secure-v2";
-        var hasher = std.crypto.hash.blake2.Blake2b256.init(.{});
-        hasher.update(password);
-        hasher.update(salt);
-        var digest: [32]u8 = undefined;
-        hasher.final(&digest);
-
-        // Convert to hex
-        const hex_chars = "0123456789abcdef";
-        var computed_hex: [64]u8 = undefined;
-        for (digest, 0..) |byte, i| {
-            computed_hex[i * 2] = hex_chars[byte >> 4];
-            computed_hex[i * 2 + 1] = hex_chars[byte & 0xf];
-        }
-
-        const matches = constantTimeEqual64(&computed_hex, stored_hash);
+        // SONNY-6367: the one legacy BLAKE2b verifier (the wire login uses it
+        // too); FIPS fails closed there.
+        const matches = try verifyPasswordBlake2bLegacy(password, stored_hash);
         if (matches) {
             // Flag for migration: legacy Blake2b accounts must re-hash with Argon2id
             self.audit_log.append(.password_migration_needed, 0, "Legacy Blake2b hash verified — account should migrate to Argon2id", .{}) catch |err| {
@@ -2115,6 +2090,44 @@ pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const
         "$argon2id$v=19$m=19456,t=2,p=1${s}${s}",
         .{ &salt_hex, &hash_hex },
     );
+}
+
+/// The static salt of the legacy BLAKE2b password format.
+const legacy_blake2b_salt = "geode-salt-secure-v2";
+
+/// SONNY-6367: whether `stored_hash` is in the legacy BLAKE2b format: 64 hex
+/// digits (BLAKE2b-256 of the password followed by a static salt), the format
+/// `geode user import --algorithm blake2b` and `geode.auth.user_import(...,
+/// 'blake2b')` take for migration.
+pub fn isLegacyBlake2bHash(stored_hash: []const u8) bool {
+    if (stored_hash.len != 64) return false;
+    for (stored_hash) |c| {
+        if (!std.ascii.isHex(c)) return false;
+    }
+    return true;
+}
+
+// CANARY: REQ=REQ-SONNY-6367-BLAKE2B-LOGIN; FEATURE="AdminUserImport"; ASPECT=LegacyBlake2bVerify; STATUS=TESTED; TEST=tests/test_sonny6367_offline_user_cli.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6367: verify `password` against a legacy BLAKE2b hash
+/// (`isLegacyBlake2bHash`; hex digits of either case), comparing the digests
+/// in constant time. The wire login verified only Argon2id, so a user
+/// imported with a BLAKE2b hash could never log in. `error.FipsUnsupported`
+/// under FIPS (BLAKE2b is not a FIPS-approved primitive);
+/// `error.InvalidHashFormat` for any other format.
+pub fn verifyPasswordBlake2bLegacy(password: []const u8, stored_hash: []const u8) !bool {
+    if (build_options.fips) {
+        log.err("password verification unavailable under FIPS: BLAKE2b is not a FIPS-approved primitive", &.{});
+        return error.FipsUnsupported;
+    }
+    if (!isLegacyBlake2bHash(stored_hash)) return error.InvalidHashFormat;
+    var expected: [32]u8 = undefined;
+    _ = std.fmt.hexToBytes(&expected, stored_hash) catch return error.InvalidHashFormat;
+    var hasher = std.crypto.hash.blake2.Blake2b256.init(.{});
+    hasher.update(password);
+    hasher.update(legacy_blake2b_salt);
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return crypto_backend.timingSafeEql(&digest, &expected);
 }
 
 /// Canonical Argon2id password verification against PHC format strings.

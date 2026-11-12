@@ -142,6 +142,24 @@ a user that does not exist with 42704 for an Admin; a privilege other than
 `ALTER USER ... ENABLE | DISABLE` or role change that fails for another
 reason (the security graph cannot be read) fails with that error (58000).
 
+The other `geode.auth.*` procedures follow the same rule (SONNY-6367). A
+user that does not exist fails with 42704 for an Admin (42501 for anyone
+else, as above): `ALTER USER ... ENABLE | DISABLE` /
+`geode.auth.user_enable` / `user_disable` (they answered `enabled <user>`),
+`user_set_attribute`, `mfa_setup`, `mfa_verify`, `mfa_enable` and
+`mfa_disable`. A missing argument fails with 22023: `user_set_attribute`
+without a user or key, `role_create` without a name, `user_import` without
+a user or hash or with an algorithm other than `argon2id` / `blake2b`,
+`mfa_enable` without a six-digit code (and `mfa_disable` with a code that is
+not six digits). `user_import` of a user that exists fails with 42710, and
+under FIPS with 0A000. `mfa_setup` with MFA turned off on the server
+(`GEODE_ENABLE_MFA`) fails with 0A000. `mfa_verify` and `mfa_enable`
+answer success only for a code that verifies: a user with no TOTP secret
+fails with 55000 (`mfa_not_enrolled`), a code that does not verify with
+28000 (`invalid token`), and a user locked out after five failed
+verifications with 53400. They answered 00000 with a status row
+(`rate_limited`, `mfa_not_enrolled`, `invalid token`, or an `error` column).
+
 `GRANT <priv> ON GRAPH g TO <user>` and `REVOKE <priv> ON GRAPH g FROM
 <user>` (and `geode.auth.grant` / `revoke`) of a user that does not exist
 fail with 42704 (`User does not exist`) and change nothing (SONNY-6345).

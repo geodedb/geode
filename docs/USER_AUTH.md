@@ -119,6 +119,22 @@ gets that grant's privileges. Before 2026-10 such a user fell back to
 assigned role are unaffected. See
 [GQL_AUTH_DDL.md](GQL_AUTH_DDL.md#users-with-no-stored-role-fail-closed-default).
 
+The offline `geode user create | import | update --role <role>` and `geode
+user assign-role <user> <role>` give the user a built-in role (`admin`,
+`readwrite`, `user`, `readonly`) as `ALTER USER ... SET ROLE` does: its other
+built-in role is replaced. `create` and `import` with no `--role` give
+`user`, as `CREATE USER` does. Any other role name is refused before
+anything is changed (a custom role carries no privileges), as is
+`assign-role` of a user that does not exist. Until SONNY-6367 these
+commands stored a role node, never gave it to the user, and reported
+success, so the user had no role. A user created offline before that holds
+no role: give it one. `geode user list` and `geode user show` print the
+role the server resolves at login (they printed `user` for everyone), and
+`geode user show | enable | disable` of a user that does not exist fail.
+`geode role create` stores the role under a new role id (it took the next
+user id, which could overwrite an existing role and move its users to the
+new name).
+
 ### Environment Configuration
 
 ```bash
@@ -339,8 +355,14 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
   (`geode_auth.hashPasswordArgon2id`). The offline `geode user create` and
   `geode user update --password` stored the password itself until
   SONNY-6358; such a record cannot log in: set its password again.
-- **Legacy**: an imported BLAKE2b hash (`geode user import --algorithm blake2b`)
-  is accepted for migration only.
+- **Legacy**: an imported BLAKE2b hash (`geode user import --algorithm blake2b`,
+  `geode.auth.user_import(..., 'blake2b')`) is accepted for migration only:
+  64 hex digits of BLAKE2b-256 over the password followed by the static salt
+  `geode-salt-secure-v2`. The login verifies it (SONNY-6367; such a user
+  could not log in before). It is a fast hash with a fixed salt, far weaker
+  than Argon2id: have the user change its password (`ALTER USER <user> SET
+  PASSWORD`), which stores an Argon2id hash. FIPS builds refuse the import
+  and the verification.
 - **FIPS builds**: Argon2id is not FIPS-approved, so setting a password fails
   closed (`FipsUnsupported`).
 - **Validation**: All passwords validated before hashing

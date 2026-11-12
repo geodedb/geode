@@ -494,6 +494,13 @@ test "SONNY-6367: mfa_setup / mfa_verify / mfa_enable / mfa_disable failures are
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_enable('mfa6367', 'abcdef')", "22023");
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_disable('mfa6367', '12')", "22023");
 
+    // MFA turned off on the server: 0A000.
+    const flags = geode.util_feature_flags.global();
+    defer flags.mfa.clearTestOverride();
+    flags.mfa.disableForTests();
+    try expectCode(ga, w.admin, "CALL geode.auth.mfa_setup('mfa6367')", "0A000");
+    flags.mfa.enableForTests();
+
     // Enrolled, a code that does not verify: 28000.
     try fx.expectRuns(ga, w.admin, "CALL geode.auth.mfa_setup('mfa6367')");
     try expectCode(ga, w.admin, "CALL geode.auth.mfa_enable('mfa6367', '000000')", "28000");

@@ -454,6 +454,13 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UserAlreadyExists => .{ .code = "42710", .message = "User already exists" },
         error.ReservedUsername => .{ .code = "42939", .message = "Reserved user name: geode-cluster is the federation node identity and cannot be a user" },
         error.UnknownPrivilege => .{ .code = "22023", .message = "Unknown privilege: expected READ, WRITE, SCHEMA or ALL" },
+        // SONNY-6367: geode.auth.mfa_verify / mfa_enable / user_import
+        // refusals that answered 00000 with a status row.
+        error.InvalidMfaCode => .{ .code = "28000", .message = "invalid token: the MFA code does not verify against the user's TOTP secret" },
+        error.MfaNotEnrolled => .{ .code = "55000", .message = "mfa_not_enrolled: the user has no TOTP secret; run geode.auth.mfa_setup first" },
+        error.MfaRateLimited => .{ .code = "53400", .message = "Too many failed MFA verifications for the user: locked out for 5 minutes" },
+        error.FeatureDisabled => .{ .code = "0A000", .message = "Feature disabled on this server: the operation needs a feature that is turned off (MFA: start the server with GEODE_ENABLE_MFA=1)" },
+        error.FipsUnsupported => .{ .code = "0A000", .message = "Not available under FIPS mode: the operation needs a primitive that is not FIPS-approved (Argon2id, BLAKE2b)" },
         error.GlobalPrivilegeNotSupported => .{ .code = "0A000", .message = "GRANT / REVOKE of a privilege needs ON GRAPH <graph>: there are no global per-privilege grants (global privilege is the user's role: admin, readwrite, user, readonly); nothing was changed" },
         error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
         // GAP-0856: distributed EXPLAIN/PROFILE is intentionally node-local only.
