@@ -41,11 +41,31 @@ pub const all_modes = [_]Mode{ .in_memory, .persisted, .tenant_scoped, .rls_poli
 pub const tenant_a = "tenant_a";
 pub const tenant_b = "tenant_b";
 
+var shm_counter = std.atomic.Value(u32).init(0);
+
+/// A fresh directory on tmpfs (/dev/shm), or null when the host has none.
+fn shmDataDir(allocator: std.mem.Allocator) !?[]u8 {
+    if (comptime @import("builtin").os.tag != .linux) return null;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    std.Io.Dir.cwd().access(io, "/dev/shm", .{}) catch return null;
+    const path = try std.fmt.allocPrint(allocator, "/dev/shm/geode-write-harness-{d}-{d}", .{ std.os.linux.getpid(), shm_counter.fetchAdd(1, .monotonic) });
+    errdefer allocator.free(path);
+    std.Io.Dir.cwd().deleteTree(io, path) catch {};
+    std.Io.Dir.cwd().createDirPath(io, path) catch {
+        allocator.free(path);
+        return null;
+    };
+    return path;
+}
+
 pub const Session = struct {
     mode: Mode,
     arena: std.heap.ArenaAllocator,
     tmp: ?std.testing.TmpDir,
     data_dir: ?[]u8,
+    /// SONNY-6333: a persisted session's data directory on tmpfs, removed
+    /// at deinit (null: the data directory is inside `tmp`).
+    shm_dir: ?[]u8 = null,
     ctx: execution.ExecutionContext,
     rls: ?*rls_types.RLSFilterEngine = null,
 
@@ -68,8 +88,20 @@ pub const Session = struct {
         // that directory instead of inheriting /tmp/geode_catalog.dat from another
         // test or runner account. Keep the graph's storage adapter disabled.
         tmp = std.testing.tmpDir(.{});
-        data_dir = try harness.tmpDirRealpathAlloc(allocator, &tmp.?.sub_path);
         const persisted = mode != .in_memory;
+        var shm_dir: ?[]u8 = null;
+        errdefer if (shm_dir) |d| {
+            std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), d) catch {};
+            allocator.free(d);
+        };
+        // SONNY-6333: a persisted session's store lives on tmpfs when the
+        // host has one. Each case opens, writes, reloads and closes a store,
+        // and on the shared ext4 disk of a loaded host the run spent its time
+        // in fsync (the test thread sat in jbd2_log_wait_commit at ~14% of one
+        // core). The storage code paths are the same; fsync on tmpfs returns
+        // at once.
+        if (persisted) shm_dir = try shmDataDir(allocator);
+        data_dir = if (shm_dir) |d| try allocator.dupe(u8, d) else try harness.tmpDirRealpathAlloc(allocator, &tmp.?.sub_path);
         if (persisted) {
             graph_store.setDataDirOverride(allocator, data_dir.?);
         }
@@ -79,7 +111,7 @@ pub const Session = struct {
         defer if (!persisted) graph_store.setDataDirOverride(allocator, null);
         const catalog = try execution.ensureCatalogInstance(allocator);
         if (persisted != (graph_store.getGlobalAdapter() != null)) return error.WrongDeployment;
-        return .{ .mode = mode, .arena = std.heap.ArenaAllocator.init(allocator), .tmp = tmp, .data_dir = data_dir, .ctx = .{ .catalog = catalog } };
+        return .{ .mode = mode, .arena = std.heap.ArenaAllocator.init(allocator), .tmp = tmp, .data_dir = data_dir, .shm_dir = shm_dir, .ctx = .{ .catalog = catalog } };
     }
 
     pub fn deinit(self: *Session) void {
@@ -93,6 +125,10 @@ pub const Session = struct {
         graph_store.deinitGlobalStore();
         graph_store.setDataDirOverride(testing.allocator, null);
         if (self.data_dir) |d| testing.allocator.free(d);
+        if (self.shm_dir) |d| {
+            std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), d) catch {};
+            testing.allocator.free(d);
+        }
         if (self.tmp) |*t| t.cleanup();
     }
 

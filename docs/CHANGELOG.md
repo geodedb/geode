@@ -362,6 +362,21 @@
 
 ### Fixed
 
+- **The long write suites finish in minutes on a loaded host
+  (SONNY-6333).** `tests/sonny738_write_harness.zig` opens, writes, reloads
+  and closes a persisted store for every case in three sessions; on a
+  loaded host's shared ext4 disk the test thread waited on the journal
+  (`jbd2_log_wait_commit`) at about 14% of one core, and
+  `test-sonny3139-write-shapes` was still running at a 25-minute cap
+  (`test-sonny-write-allowlist` and `-r4b` had hit 50 and 60). A persisted
+  session's store now lives on tmpfs (`/dev/shm`) when the host has one:
+  the storage code paths are the same and fsync there returns at once.
+  Three runs in a row with other builds running (load average 36-481):
+  `test-sonny3139-write-shapes` 43-69 s, `test-sonny-write-allowlist`
+  80-87 s, `test-sonny-write-allowlist-r4b` 285-345 s, all inside a
+  10-minute budget; `test-sonny3040-chained-writes` 7 s (was 11 minutes).
+  `-r4b` still runs 500-900 threads at 12-15 cores (now CPU-bound, not
+  fsync-bound). Regression: `zig build test-sonny6333-write-harness-tmpfs`.
 - **The TDE self-test procedure and FLE CANARYs cite tests that exercise
   them; GAP-0514 is reopened (SONNY-6321).** Twenty markers cited
   `tests/test_tde_kms_integration.zig`, which tests `TDEKeyManager` only.
