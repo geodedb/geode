@@ -9547,7 +9547,15 @@ fn sharedProjectionServes(q: ast.Query) bool {
 /// shapes ignored the GROUP BY, HAVING or WHERE after RETURN, or returned
 /// rows unrelated to the matched ones.
 pub fn validateGroupedReturnShape(q: ast.Query) error{UnsupportedGroupedReturn}!void {
-    if (returnGroupsOrFilters(q) and !sharedProjectionServes(q)) return error.UnsupportedGroupedReturn;
+    if (returnGroupsOrFilters(q) and !sharedProjectionServes(q) and !callSubqueryProjects(q)) return error.UnsupportedGroupedReturn;
+}
+
+/// SONNY-6383 item 2: a statement-level `CALL { } [WITH ...] RETURN ...`
+/// runs its RETURN through the shared projection over the body's rows (the
+/// `.call_subquery` executor, `projectReturnOverRows`), its GROUP BY and
+/// HAVING included, so a grouped RETURN after it is not refused.
+fn callSubqueryProjects(q: ast.Query) bool {
+    return q.unwind_clause == null and write_shape.queryExecutor(q) == .call_subquery;
 }
 
 fn appendNameOnce(allocator: std.mem.Allocator, names: *std.ArrayList([]const u8), name: []const u8) !void {

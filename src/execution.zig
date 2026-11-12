@@ -1023,8 +1023,10 @@ pub const QueryWindow = struct { start: usize, limit: ?usize };
 /// by its YIELD alias; the RETURN (or, with none, the aliased columns) is
 /// projected by the shared projection, which evaluates each item, aggregates
 /// and fails on an item that fails, then DISTINCT. ORDER BY and the window
-/// follow (the caller).
-fn projectCallReturn(allocator: std.mem.Allocator, result: *ExecutionResult, proc: ast.CallProcedure, context: ExecutionContext) !void {
+/// follow (the caller). SONNY-6383 item 7: the projection keeps the
+/// procedure result's flags (each copied: the projection owns its memory);
+/// they were freed with the procedure's rows.
+pub fn projectCallReturn(allocator: std.mem.Allocator, result: *ExecutionResult, proc: ast.CallProcedure, context: ExecutionContext) !void {
     const yield_items: []const ast.ReturnItem = proc.yield_items orelse &.{};
     const aliased = for (yield_items) |item| {
         if (item.alias != null) break true;
@@ -1063,6 +1065,7 @@ fn projectCallReturn(allocator: std.mem.Allocator, result: *ExecutionResult, pro
     if (proc.return_clause) |rc| {
         if (rc.distinct) try result_utils.applyDistinct(allocator, &projected);
     }
+    for (result.flags.items) |flag| try appendFlagIfMissing(allocator, &projected, flag);
     result.deinit(allocator);
     result.* = projected;
 }
@@ -4298,6 +4301,109 @@ fn appendGroupRow(
     try rows.append(allocator, row);
 }
 
+// CANARY: REQ=REQ-SONNY-6351-WITH-ORDER-KEY-ERROR; FEATURE="WithOrderBy"; ASPECT=KeyErrorFailsStatement; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+// CANARY: REQ=REQ-SONNY-6383-WITH-ORDER-KEYS-ONCE; FEATURE="WithOrderBy"; ASPECT=KeysOncePerRow; STATUS=TESTED; TEST=tests/test_sonny6383_query_residuals.zig; OWNER=engine; UPDATED=2026-11-12
+/// Sorts a WITH stage's rows by its ORDER BY keys. SONNY-6351 (SONNY-2811
+/// residual): an error evaluating a key fails the statement, as a RETURN's
+/// ORDER BY does (`sortRowsEx`); it was sorted as NULL. The keys see the
+/// query's parameters. SONNY-6383 item 6: each key is evaluated once per row,
+/// before the sort, and what it computed is freed after it
+/// (`freeEvaluatedValue`); the comparator evaluated both rows' keys at every
+/// comparison and freed none of them, so `ORDER BY upper(z.s)` leaked a
+/// string per comparison for a caller with no scratch arena. The rows are
+/// reordered in place, stably.
+fn sortWithStageRows(
+    allocator: std.mem.Allocator,
+    keys: []const ast.OrderBy.OrderKey,
+    columns: []const []const u8,
+    rows: [][]Value,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !void {
+    const width = keys.len;
+    const key_values = try allocator.alloc(Value, rows.len * width);
+    defer allocator.free(key_values);
+    var computed: usize = 0;
+    defer for (key_values[0..computed], 0..) |value, i| value_utilities.freeEvaluatedValue(allocator, keys[i % width].expr, value);
+    for (rows) |row| {
+        const env = Env{ .names = columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
+        for (keys) |key| {
+            key_values[computed] = try eval.evalExpr(allocator, key.expr, env);
+            computed += 1;
+        }
+    }
+
+    const SortContext = struct {
+        keys: []const ast.OrderBy.OrderKey,
+        values: []const Value,
+        width: usize,
+
+        fn lessThan(context: @This(), a_index: usize, b_index: usize) bool {
+            for (context.keys, 0..) |key, k| {
+                const val_a = context.values[a_index * context.width + k];
+                const val_b = context.values[b_index * context.width + k];
+
+                // Compare values: returns -1 if a < b, 0 if a == b, 1 if a > b
+                const cmp: i8 = blk: {
+                    // Handle NULL comparisons based on NULLS policy
+                    const a_is_null = val_a == .Null;
+                    const b_is_null = val_b == .Null;
+                    if (a_is_null and b_is_null) break :blk 0;
+                    if (a_is_null) {
+                        // NULL handling: by default NULLs sort last
+                        break :blk if (key.nulls == .first) -1 else 1;
+                    }
+                    if (b_is_null) {
+                        break :blk if (key.nulls == .first) 1 else -1;
+                    }
+
+                    // Compare non-null values
+                    if (val_a == .Int and val_b == .Int) {
+                        if (val_a.Int < val_b.Int) break :blk -1;
+                        if (val_a.Int > val_b.Int) break :blk 1;
+                        break :blk 0;
+                    }
+                    if (val_a == .Str and val_b == .Str) {
+                        const ord = std.mem.order(u8, val_a.Str, val_b.Str);
+                        break :blk switch (ord) {
+                            .lt => -1,
+                            .eq => 0,
+                            .gt => 1,
+                        };
+                    }
+                    if (val_a == .Bool and val_b == .Bool) {
+                        if (val_a.Bool == val_b.Bool) break :blk 0;
+                        break :blk if (val_a.Bool) 1 else -1;
+                    }
+                    // SONNY-2769 (round 5): numbers by exact value, as
+                    // RETURN ... ORDER BY orders them. The decimal arm
+                    // cross-multiplied by 10^scale in i128, which
+                    // overflowed and aborted the server; doubles and mixed
+                    // numbers compared as equal.
+                    if (value_order.numberOf(val_a)) |na| {
+                        if (value_order.numberOf(val_b)) |nb| break :blk value_order.compareNumbers(na, nb);
+                    }
+                    // For other types, treat as equal
+                    break :blk 0;
+                };
+
+                if (cmp != 0) {
+                    return if (key.desc) cmp > 0 else cmp < 0;
+                }
+            }
+            return false; // Equal on all keys
+        }
+    };
+    const order = try allocator.alloc(usize, rows.len);
+    defer allocator.free(order);
+    for (order, 0..) |*o, i| o.* = i;
+    std.mem.sort(usize, order, SortContext{ .keys = keys, .values = key_values, .width = width }, SortContext.lessThan);
+    const sorted = try allocator.alloc([]Value, rows.len);
+    defer allocator.free(sorted);
+    for (order, sorted) |i, *row| row.* = rows[i];
+    @memcpy(rows, sorted);
+}
+
 /// Execute WITH clause with optional GROUP BY aggregation and query parameter bindings
 pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
@@ -4564,111 +4670,11 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     if (with_clause.order_by) |order_by| {
         const columns_slice = try new_columns.toOwnedSlice(allocator);
         const rows_slice = try new_rows.toOwnedSlice(allocator);
-
-        // CANARY: REQ=REQ-SONNY-6351-WITH-ORDER-KEY-ERROR; FEATURE="WithOrderBy"; ASPECT=KeyErrorFailsStatement; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
-        // Sort rows according to ORDER BY keys. SONNY-6351 (SONNY-2811
-        // residual): an error evaluating a key fails the statement, as a
-        // RETURN's ORDER BY does (`sortRowsEx`); it was sorted as NULL, so
-        // `WITH z ORDER BY z.k + 9223372036854775807` answered every row
-        // unsorted. The keys see the query's parameters.
-        var key_error: ?anyerror = null;
-        const SortContext = struct {
-            order_keys: []ast.OrderBy.OrderKey,
-            columns: []const []const u8,
-            rows: [][]Value,
-            allocator: std.mem.Allocator,
-            param_names: []const []const u8,
-            param_values: []const Value,
-            /// The first error evaluating a key; the comparator cannot
-            /// return it.
-            key_error: *?anyerror,
-
-            fn evalKey(context: @This(), expr: ast.Expr, row: []Value) Value {
-                const env = Env{
-                    .names = context.columns,
-                    .values = row,
-                    .param_names = context.param_names,
-                    .param_values = context.param_values,
-                    .allocator = context.allocator,
-                };
-                return eval.evalExpr(context.allocator, expr, env) catch |err| {
-                    if (context.key_error.* == null) context.key_error.* = err;
-                    return Value{ .Null = {} };
-                };
-            }
-        };
-
-        const ctx = SortContext{
-            .order_keys = order_by.keys,
-            .columns = columns_slice,
-            .rows = rows_slice,
-            .allocator = allocator,
-            .param_names = param_names,
-            .param_values = param_values,
-            .key_error = &key_error,
-        };
-
-        std.mem.sort([]Value, rows_slice, ctx, struct {
-            fn lessThan(context: SortContext, a: []Value, b: []Value) bool {
-                for (context.order_keys) |key| {
-                    const val_a = context.evalKey(key.expr, a);
-                    const val_b = context.evalKey(key.expr, b);
-
-                    // Compare values: returns -1 if a < b, 0 if a == b, 1 if a > b
-                    const cmp: i8 = blk: {
-                        // Handle NULL comparisons based on NULLS policy
-                        const a_is_null = val_a == .Null;
-                        const b_is_null = val_b == .Null;
-                        if (a_is_null and b_is_null) break :blk 0;
-                        if (a_is_null) {
-                            // NULL handling: by default NULLs sort last
-                            break :blk if (key.nulls == .first) -1 else 1;
-                        }
-                        if (b_is_null) {
-                            break :blk if (key.nulls == .first) 1 else -1;
-                        }
-
-                        // Compare non-null values
-                        if (val_a == .Int and val_b == .Int) {
-                            if (val_a.Int < val_b.Int) break :blk -1;
-                            if (val_a.Int > val_b.Int) break :blk 1;
-                            break :blk 0;
-                        }
-                        if (val_a == .Str and val_b == .Str) {
-                            const ord = std.mem.order(u8, val_a.Str, val_b.Str);
-                            break :blk switch (ord) {
-                                .lt => -1,
-                                .eq => 0,
-                                .gt => 1,
-                            };
-                        }
-                        if (val_a == .Bool and val_b == .Bool) {
-                            if (val_a.Bool == val_b.Bool) break :blk 0;
-                            break :blk if (val_a.Bool) 1 else -1;
-                        }
-                        // SONNY-2769 (round 5): numbers by exact value, as
-                        // RETURN ... ORDER BY orders them. The decimal arm
-                        // cross-multiplied by 10^scale in i128, which
-                        // overflowed and aborted the server; doubles and mixed
-                        // numbers compared as equal.
-                        if (value_order.numberOf(val_a)) |na| {
-                            if (value_order.numberOf(val_b)) |nb| break :blk value_order.compareNumbers(na, nb);
-                        }
-                        // For other types, treat as equal
-                        break :blk 0;
-                    };
-
-                    if (cmp != 0) {
-                        return if (key.desc) cmp > 0 else cmp < 0;
-                    }
-                }
-                return false; // Equal on all keys
-            }
-        }.lessThan);
-
-        new_columns = std.ArrayList([]const u8).fromOwnedSlice(columns_slice);
-        new_rows = std.ArrayList([]Value).fromOwnedSlice(rows_slice);
-        if (key_error) |err| return err;
+        defer {
+            new_columns = std.ArrayList([]const u8).fromOwnedSlice(columns_slice);
+            new_rows = std.ArrayList([]Value).fromOwnedSlice(rows_slice);
+        }
+        try sortWithStageRows(allocator, order_by.keys, columns_slice, rows_slice, param_names, param_values);
     }
 
     // SONNY-3248 (round 4b-1 review m-3): a SKIP or LIMIT parameter on the

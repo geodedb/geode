@@ -332,6 +332,32 @@
   only; an OPTIONAL MATCH still goes to the executor. Regression:
   `zig build test-sonny6383-scan-stream-match-clauses`,
   `zig build test-gap0902-bounded-analytical`.
+- **Query residuals (SONNY-6383 items 2-9):** (2) `CALL { ... } WITH ...
+  RETURN ...` accepted no GROUP BY, ORDER BY, SKIP / OFFSET or LIMIT after
+  the RETURN (a syntax error); they are parsed and applied, the GROUP BY and
+  HAVING being the RETURN's. (3) A RETURN mixing aggregates and plain items
+  was accepted when the only GROUP BY was the WITH's (`WITH g, count(*) AS c
+  GROUP BY g RETURN g, sum(c)`); it is refused with 42000 like any other
+  ungrouped mix. (4) An aggregate's name inside a list comprehension's WHERE
+  or map is the scalar function evaluated per element: `RETURN [x IN [1] |
+  sum([1.5, 2])]` failed with a type error, the sum being computed over the
+  rows; the comprehension's source is still over the rows (`[x IN
+  collect(n.k) | ...]`). **Behaviour change:** an aggregate of the
+  comprehension's variable in a grouped HAVING or beside an aggregate is
+  evaluated per element; it was refused with 0A000. (5) The two legacy
+  RETURN loops reported to leak are out of reach of a parsed query (an
+  OPTIONAL MATCH part goes to the OPTIONAL MATCH executor since SONNY-3184;
+  an aggregating RETURN to the shared projection since SONNY-2734); not
+  changed. (6)
+  A WITH's ORDER BY evaluates each key once per row and frees it; the sort
+  re-evaluated both keys at every comparison and freed none (a leak for an
+  embedded caller with no scratch arena). (7) A standalone CALL's RETURN
+  keeps the procedure result's flags. (8) VALUES ... MATCH frees what its
+  rows computed when no scratch arena is installed (an embedded caller): the
+  result owns copies of its values. (9) `test-sonny2739-float-narrowing` and
+  `test-sonny3251-limit-errors` failed on this branch from items 4 and 1.
+  Regression: `zig build test-sonny6383-query-residuals`,
+  `zig build test-sonny6383-call-return-flags`.
 - **A GROUP BY after a RETURN that follows a WITH (SONNY-2698):** the parser
   kept one GROUP BY / HAVING per query part whichever clause it followed,
   and every executor gave it to the WITH, so `MATCH (z) WITH z WHERE z.k >= 2

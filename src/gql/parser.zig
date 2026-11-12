@@ -1623,6 +1623,18 @@ pub const Parser = struct {
                             where_clause = try self.parseOrExpr();
                         }
 
+                        // CANARY: REQ=REQ-SONNY-6383-CALL-WITH-RETURN; FEATURE="CallSubquery"; ASPECT=ParserReturnTail; STATUS=TESTED; TEST=tests/test_sonny6383_query_residuals.zig; OWNER=parser; UPDATED=2026-11-12
+                        // SONNY-6383 item 2: the RETURN is a full
+                        // <primitive result statement> (ISO/IEC 39075:2024
+                        // 14.10: a <return statement>, its GROUP BY after
+                        // the items (14.11), then the ORDER BY and page
+                        // statement); this parsed its items only, so a GROUP
+                        // BY, ORDER BY, SKIP / OFFSET or LIMIT after it was a
+                        // syntax error. The GROUP BY and HAVING belong to the
+                        // RETURN (`return_grouping`).
+                        var group_by: ?ast.GroupBy = null;
+                        var having: ?ast.Expr = null;
+                        var page: OrderAndPage = .{ .order_by = null, .limit = null, .offset = null, .limit_param = null, .offset_param = null };
                         if (self.cur.kind == .RETURN) {
                             self.advance();
                             const distinct = if (self.cur.kind == .DISTINCT) blk: {
@@ -1635,6 +1647,22 @@ pub const Parser = struct {
                                 .items = try return_items.toOwnedSlice(self.arena.allocator()),
                                 .distinct = distinct,
                             };
+                            if (self.cur.kind == .GROUP) {
+                                self.advance();
+                                _ = try self.expect(.BY);
+                                var keys = std.ArrayList(ast.Expr).empty;
+                                while (true) {
+                                    try keys.append(self.arena.allocator(), try self.parseOrExpr());
+                                    if (self.cur.kind != .comma) break;
+                                    self.advance();
+                                }
+                                group_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+                                if (self.cur.kind == .HAVING) {
+                                    self.advance();
+                                    having = try self.parseOrExpr();
+                                }
+                            }
+                            page = try self.parseOrderAndPage(ret_clause.items.len);
                         }
 
                         // Create a Query with the CALL result as input
@@ -1644,9 +1672,14 @@ pub const Parser = struct {
                             .where_clause = where_clause,
                             .with_clause = with_clause,
                             .ret = ret_clause,
-                            .order_by = null,
-                            .limit = null,
-                            .offset = null,
+                            .group_by = group_by,
+                            .having = having,
+                            .return_grouping = group_by != null,
+                            .order_by = page.order_by,
+                            .limit = page.limit,
+                            .offset = page.offset,
+                            .limit_param = page.limit_param,
+                            .offset_param = page.offset_param,
                             .initial_call_subquery = query_ptr,
                         };
 

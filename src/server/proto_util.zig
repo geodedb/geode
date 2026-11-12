@@ -321,7 +321,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // CANARY: REQ=REQ-SONNY-2675-GROUPED-HAVING; FEATURE="GroupedHaving"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2675_grouped_having.zig; OWNER=engine; UPDATED=2026-09-25
         error.UngroupedHavingReference => .{ .code = "42803", .message = "Grouping error: a HAVING (or a WHERE after an aggregating RETURN) may reference only grouping keys, projected columns and aggregates" },
         error.AggregateInRowFilter => .{ .code = "42803", .message = "Aggregate functions are not allowed in a WHERE after a RETURN that does not aggregate" },
-        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate, or an aggregate of a list comprehension variable, is not supported in a grouped HAVING or beside an aggregate in a RETURN or WITH item" },
+        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate is not supported in a grouped HAVING or beside an aggregate in a RETURN or WITH item" },
         // SONNY-2675: a HAVING (or WHERE after RETURN) name that is no column,
         // binding or parameter; it used to evaluate to NULL (GAP-0926).
         error.UnknownHavingReference => .{ .code = "42703", .message = "A HAVING (or a WHERE after RETURN) names something that is no column, binding or parameter" },

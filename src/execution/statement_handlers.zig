@@ -1023,9 +1023,13 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                     // first copy is freed: a row of the result may borrow it,
                     // so it cannot be freed here, and it leaked. As a WITH
                     // stage's computed values do (SONNY-3148,
-                    // `match_operations.ownWithStageValues`); without a
-                    // scratch arena it stays where it is.
-                    if (query_arena.currentScratchAllocator()) |scratch| {
+                    // `match_operations.ownWithStageValues`). SONNY-6383
+                    // item 8: without a scratch arena (an embedded caller)
+                    // the result copies its rows' values and owns them, and
+                    // what the VALUES rows computed is freed after the last
+                    // MATCH run (it leaked).
+                    const values_scratch = query_arena.currentScratchAllocator();
+                    if (values_scratch) |scratch| {
                         for (values_stmt.rows, result_rows.items) |row_exprs, row_values| {
                             for (row_exprs, row_values) |expr, *cell| {
                                 if (!value_utilities.evaluatesFresh(expr)) continue;
@@ -1038,7 +1042,8 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                     // SONNY-2682: the RETURN is checked as any query's is: a
                     // mix of aggregates and plain items with no GROUP BY is
                     // refused (42000), as without the VALUES.
-                    try execution.validateGroupBy(query.ret, query.group_by);
+                    // SONNY-6383 item 3: the RETURN's own GROUP BY.
+                    try execution.validateGroupBy(query.ret, query.returnStageGroupBy());
                     // VALUES ... MATCH pattern: execute MATCH for each VALUES row and collect results
                     var final_rows = try std.ArrayList([]Value).initCapacity(allocator, result_rows.items.len * 4); // Estimate
                     var final_columns: ?[]const []const u8 = null;
@@ -1086,10 +1091,32 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                         allocator.free(match_result.rows);
                     }
 
+                    var owns_values = false;
+                    if (values_scratch == null) {
+                        const computed_any = computed: {
+                            for (values_stmt.rows) |row_exprs| {
+                                for (row_exprs) |expr| if (value_utilities.evaluatesFresh(expr)) break :computed true;
+                            }
+                            break :computed false;
+                        };
+                        if (computed_any) {
+                            for (final_rows.items) |row| {
+                                for (row) |*cell| cell.* = try value_utilities.duplicateValue(allocator, cell.*);
+                            }
+                            owns_values = true;
+                            for (values_stmt.rows, result_rows.items) |row_exprs, row_values| {
+                                for (row_exprs, row_values) |expr, cell| {
+                                    if (value_utilities.evaluatesFresh(expr)) value_utilities.freeEvaluatedValue(allocator, expr, cell);
+                                }
+                            }
+                        }
+                    }
+
                     return ExecutionResult{
                         .columns = if (final_columns) |cols| @constCast(cols) else try allocator.alloc([]const u8, 0),
                         .rows = try final_rows.toOwnedSlice(allocator),
                         .flags = std.ArrayList([]const u8).empty,
+                        .owns_value_memory = owns_values,
                     };
                 } else {
                     // VALUES ... RETURN pattern (no MATCH): evaluate RETURN for each VALUES row

@@ -45,9 +45,10 @@
 //! single value in the group and is refused with
 //! `error.UnsupportedGroupedHavingPredicate` (SQLSTATE 0A000), as is a pattern
 //! variable named like an output column that does not hold that variable.
-//! A shortest path and a subquery predicate stay refused the same way, and so
-//! does an aggregate of a list comprehension's variable: no input row binds
-//! that variable.
+//! A shortest path and a subquery predicate stay refused the same way. Inside
+//! a list comprehension's WHERE or map an aggregate's name is the scalar
+//! function, evaluated per element (SONNY-6383); only the comprehension's
+//! source is over the group.
 //!
 //! A HAVING that is not over groups (a WHERE after a RETURN that neither groups
 //! nor aggregates, evaluated for each row) may not contain an aggregate
@@ -87,8 +88,7 @@ pub const Error = error{
     UngroupedHavingReference,
     /// An aggregate in a HAVING that is evaluated per row.
     AggregateInRowFilter,
-    /// A pattern or subquery predicate, or an aggregate of a list
-    /// comprehension's variable, in a grouped HAVING.
+    /// A pattern or subquery predicate in a grouped HAVING.
     UnsupportedGroupedHavingPredicate,
     /// An aggregate inside an aggregate's argument (GAP-0926), also through
     /// an alias.
@@ -254,7 +254,11 @@ const Rewriter = struct {
             .In, .InListExpr, .IsNull, .IsUnknown, .StartsWith, .EndsWith, .Contains, .NotIn => {},
             .NotInListExpr, .Case, .Map, .HasLabel, .MapProjection, .ListComprehension => {},
         }
-        if (isAggregateCall(e)) return switch (self.mode) {
+        // SONNY-6383 item 4: inside a comprehension's WHERE or map (a local
+        // in scope) an aggregate's name is the scalar function, evaluated per
+        // element (`containsAggregate`); it was computed over the group, so
+        // `[x IN [1] | sum([1.5, 2])]` summed a list value: TypeMismatch.
+        if (isAggregateCall(e) and self.locals.items.len == 0) return switch (self.mode) {
             .grouped => self.aggregate(e),
             .argument => error.NestedAggregate,
             .row => error.AggregateInRowFilter,
@@ -413,7 +417,6 @@ const Rewriter = struct {
         for (e.Call.args) |arg| {
             if (containsAggregate(arg.*)) return error.NestedAggregate;
         }
-        if (self.locals.items.len != 0 and mentionsAnyName(e, self.locals.items)) return error.UnsupportedGroupedHavingPredicate;
         const call = e.Call;
         const args = try self.arena.alloc(*ast.Expr, call.args.len);
         {
@@ -787,10 +790,10 @@ pub fn containsAggregate(root: ast.Expr) bool {
                 }
                 return false;
             },
-            .ListComprehension => |lc| {
-                if (optContainsAggregate(lc.filter) or optContainsAggregate(lc.map)) return true;
-                at = lc.source;
-            },
+            // SONNY-6383 item 4: only the source is the projection's; the
+            // WHERE and map are evaluated per element, where an aggregate's
+            // name is the scalar function (`sum([1.5, 2])`).
+            .ListComprehension => |lc| at = lc.source,
         }
     }
 }
@@ -876,10 +879,8 @@ pub fn hasNestedAggregate(root: ast.Expr) bool {
                 }
                 return false;
             },
-            .ListComprehension => |lc| {
-                if (optHasNestedAggregate(lc.filter) or optHasNestedAggregate(lc.map)) return true;
-                at = lc.source;
-            },
+            // SONNY-6383 item 4: as `containsAggregate`.
+            .ListComprehension => |lc| at = lc.source,
         }
     }
 }

@@ -272,14 +272,21 @@ test "SONNY-2675: grouped HAVING slots: a key, a projected column, a reused aggr
         try testing.expectEqualStrings(plan.slot_names[0], plan.expr.Binary.right.HasLabel.node);
     }
     // A comprehension's variable named like the input binding is the
-    // element, not the binding; an aggregate of it is refused.
+    // element, not the binding. SONNY-6383: an aggregate's name inside the
+    // comprehension's map is the scalar function over the element, not an
+    // aggregate of the group (it was refused, and one that did not read the
+    // element was computed over the group: `[x IN [1] | sum([1.5, 2])]`
+    // summed a list value).
     {
         const element: ast.Expr = .{ .ListComprehension = .{ .variable = "n", .source = try box(a, .{ .List = &.{} }), .filter = try box(a, .{ .Binary = .{ .op = .Gt, .left = try ungrouped(a), .right = try box(a, .{ .Int = 1 }) } }), .map = null } };
         var plan = try grouped_having.planGrouped(testing.allocator, element, fixture.scope());
         defer plan.deinit();
         try testing.expectEqual(@as(usize, 0), plan.slots.len);
         const summed: ast.Expr = .{ .ListComprehension = .{ .variable = "x", .source = try box(a, .{ .List = &.{} }), .filter = null, .map = try box(a, .{ .Call = .{ .callee = try box(a, ident("sum")), .args = try list(a, &.{try box(a, ident("x"))}) } }) } };
-        try testing.expectError(error.UnsupportedGroupedHavingPredicate, grouped_having.planGrouped(testing.allocator, summed, fixture.scope()));
+        var summed_plan = try grouped_having.planGrouped(testing.allocator, summed, fixture.scope());
+        defer summed_plan.deinit();
+        try testing.expectEqual(@as(usize, 0), summed_plan.slots.len);
+        try testing.expect(summed_plan.expr.ListComprehension.map.?.* == .Call);
     }
     // An aggregate inside an aggregate.
     {

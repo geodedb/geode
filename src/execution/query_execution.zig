@@ -266,7 +266,7 @@ fn chainFinalAggregate(allocator: std.mem.Allocator, current_result_in: Executio
     // items beside an aggregate need a GROUP BY (42000). It was grouped
     // implicitly here.
     const is_chaining_return = if (final_query.with_clause) |wc| final_query.ret.items.ptr == wc.items.ptr and final_query.ret.items.len == wc.items.len else false;
-    if (!is_chaining_return) try validateGroupBy(final_query.ret, final_query.group_by);
+    if (!is_chaining_return) try validateGroupBy(final_query.ret, final_query.returnStageGroupBy());
     var names: std.ArrayList([]const u8) = .empty;
     if (last.with_clause != null) {
         for (try partOutputNames(aa, last.*, incoming)) |n| try appendNameOnce(aa, &names, n);
@@ -1726,7 +1726,11 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     // own GROUP BY when it runs (`executeForReturn`).
     const is_for_return = q.for_statement != null and q.match.chains.len == 0;
     if (!is_chaining_return and !is_for_return) {
-        try validateGroupBy(q.ret, q.group_by);
+        // SONNY-6383 item 3: the RETURN's own GROUP BY, not a WITH's
+        // (`returnStageGroupBy`): `WITH g, count(*) AS c GROUP BY g RETURN
+        // g, sum(c)` mixed an aggregate and a plain item with no GROUP BY of
+        // its own and was accepted.
+        try validateGroupBy(q.ret, q.returnStageGroupBy());
         // GAP-0914: reject GROUP BY keys that resolve to nothing instead of
         // silently collapsing every row into one null group.
         try execution.validateGroupByResolvable(q);
