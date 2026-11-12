@@ -376,7 +376,7 @@ REQ-AUTO-INDEX-SCAN-002,AutoIdIndex,RelationshipLabelIndexScan,TESTED,,,engine,2
 REQ-AUTO-INDEX-SCAN-003,AutoIdIndex,MultiHopGroupByLabelIndex,TESTED,,,engine,2026-06-11,src/execution/match_operations.zig,10548
 REQ-AUTO-INDEX-SCAN-004,AutoIdIndex,MultiHopLabelIndex,TESTED,,,engine,2026-06-11,src/execution/match_operations.zig,10546
 REQ-BACKUP-CLI-001,CLI Backup,RemoteFailureIsAnError,TESTED,,,cli,2026-10-24,tests/test_backup_create_remote_failure.zig,15
-REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,TESTED,,,cli,2026-10-24,src/cli/backup_cli.zig,2273
+REQ-BACKUP-CLI-001,CLI Backup,ServerConnection,TESTED,,,cli,2026-10-24,src/cli/backup_cli.zig,2280
 REQ-BACKUP-CLI-5077,CLI Backup,PrivateCATrust,TESTED,,,cli,2026-11-06,tests/test_backup_create_remote_failure.zig,26
 REQ-BACKUP-COMPRESS-001,BackupGzipCompression,Storage,TESTED,,,storage,2026-06-10,src/storage/backup.zig,1432
 REQ-BACKUP-COMPRESS-001,BackupGzipCompression,TEST,TESTED,,,backup,2026-06-10,tests/test_gap0880_backup_upload.zig,19
@@ -384,7 +384,7 @@ REQ-BACKUP-ERROR-HANDLING-001,BackupErrorHandling,Security,TESTED,,,cli,2026-01-
 REQ-BACKUP-HEADER-001,Backup Restore,RangeCheckedHeaderDecode,TESTED,,,storage,2026-11-11,src/storage/backup.zig,761
 REQ-BACKUP-HEX-001,SecureHexKeyParsing,SECURITY,TESTED,,,storage,2026-01-13,src/storage/backup.zig,65
 REQ-BACKUP-HEX-001,SecureHexKeyParsing,TEST,TESTED,,,storage,2026-01-13,src/storage/backup.zig,1538
-REQ-BACKUP-LOCAL-001,Local Directory Backup,DataExport,TESTED,,,cli,2026-10-24,src/cli/backup_cli.zig,2280
+REQ-BACKUP-LOCAL-001,Local Directory Backup,DataExport,TESTED,,,cli,2026-10-24,src/cli/backup_cli.zig,2287
 REQ-BACKUP-LSN-TEST-001,BackupLSN,LSNTests,IMPL,,,backup,2026-11-12,tests/test_gap_0193_batch2_testing.zig,53
 REQ-BACKUP-PER-GRAPH-001,PerGraphBackup,Storage,TESTED,,,storage,2026-03-16,src/storage/backup.zig,683
 REQ-BACKUP-PER-GRAPH-002,PerGraphRestore,Storage,TESTED,,,storage,2026-11-12,src/storage/backup.zig,954
@@ -392,8 +392,8 @@ REQ-BACKUP-REAL-DATA-001,BackupRealData,ColdRestoreRoundTrip,TESTED,,,backup,202
 REQ-BACKUP-REAL-DATA-001,BackupRealData,DataIntegrity,TESTED,,,backup,2026-01-10,src/server/backup_manager.zig,17
 REQ-BACKUP-REAL-DATA-001,BackupRealData,RestoreDataIntegrity,TESTED,,,backup,2026-06-10,tests/test_gap0862_backup_integrity.zig,14
 REQ-BACKUP-REMOTE-001,RemoteBackup,QUICProtocol,TESTED,,,cli,2026-01-09,src/cli/backup_cli.zig,2083
-REQ-BACKUP-RESTORE-001,Backup Restore,RemoteRestore,TESTED,,,cli,2026-01-09,src/cli/backup_cli.zig,2312
-REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,TESTED,,,cli,2026-11-11,src/cli/backup_cli.zig,2591
+REQ-BACKUP-RESTORE-001,Backup Restore,RemoteRestore,TESTED,,,cli,2026-01-09,src/cli/backup_cli.zig,2319
+REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestore,TESTED,,,cli,2026-11-11,src/cli/backup_cli.zig,2598
 REQ-BACKUP-RESTORE-002,Backup Restore,LocalRestoreWritesAndVerifies,TESTED,,,cli,2026-11-11,tests/test_sonny6280_cli_restore_writes_data.zig,1
 REQ-BACKUP-RESTORE-002,Backup Restore,SharedBackupDecode,TESTED,,,storage,2026-11-11,src/storage/backup.zig,818
 REQ-BACKUP-RESTORE-002,Backup Restore,StagedRestoreIntoEmptyTarget,TESTED,,,storage,2026-11-11,src/storage/backup.zig,1070
@@ -3677,7 +3677,7 @@ REQ-MFA-OUTPUT-001,MFASecureOutput,Security,TESTED,,,cli,2026-01-14,src/cli/user
 REQ-MFA-SETUP-REAL-001,MFARealEnrollment,Security,TESTED,,,cli,2026-01-29,src/cli/user_mgmt_cli.zig,759
 REQ-MFA-TEST-COMPREHENSIVE,MFA Enforcement Verification,SECURITY,TESTED,,,security,2026-01-29,tests/test_mfa_enforcement_comprehensive.zig,2
 REQ-MFA-TOGGLE-001,MFAToggleSecure,Security,TESTED,,,cli,2026-01-14,src/cli/user_mgmt_cli.zig,897
-REQ-MIGRATION-QUIC-STABILITY-001,MigrationQuicStability,UnitTests,TESTED,,,cli,2026-01-25,src/cli/backup_cli.zig,2726
+REQ-MIGRATION-QUIC-STABILITY-001,MigrationQuicStability,UnitTests,TESTED,,,cli,2026-01-25,src/cli/backup_cli.zig,2733
 REQ-MIGRATION-SCHEMA-001,Migration,SchemaMigration,TESTED,,,admin,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,631
 REQ-ML-EMBEDDINGS-001,Graph Embeddings Integration,CoreSystem,TESTED,,,ml,2026-06-11,src/ml/graph_embeddings.zig,7
 REQ-ML-EMBEDDINGS-002,Node2Vec Algorithm,Implementation,TESTED,,,ml,2026-06-11,src/ml/graph_embeddings.zig,8

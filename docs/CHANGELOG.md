@@ -725,6 +725,14 @@
 
 ### Fixed
 
+- **`geode backup create --server` prints each 10% progress step once
+  (SONNY-6422 item 8).** `executeRemoteBackup` printed `Progress: N%` after
+  every received chunk that left the running percentage on a multiple of 10,
+  so a backup received in many 64 KiB chunks repeated lines (a 10 MB backup
+  printed 22 lines, 11 of them repeats), and a chunk that crossed a step
+  without landing on its exact multiple printed nothing. It now prints each
+  reached step once, in order, ending with `Progress: 100%`. Regression:
+  `zig build test-sonny6422-remote-backup-progress`.
 - **The phantom check looks a transaction's read ranges up once per commit
   (SONNY-6422 item 7).** `Manager.detectPhantoms` called
   `RangeTracker.keyInRanges` for every write committed since the transaction

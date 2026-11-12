@@ -2219,6 +2219,11 @@ fn executeRemoteBackup(
     // Receive backup data chunks
     var bytes_received: u64 = 0;
     var chunk_buf: [65536]u8 = undefined;
+    // SONNY-6422: the last 10% step printed. Every chunk that left the
+    // percentage on a multiple of 10 printed it again, and a chunk that
+    // crossed a step without landing on its exact multiple printed nothing.
+    var progress_step_printed: u64 = 0;
+    var progress_printed_any = false;
 
     while (bytes_received < backup_size) {
         const remaining = backup_size - bytes_received;
@@ -2233,10 +2238,12 @@ fn executeRemoteBackup(
         try output_file.writeStreamingAll(io_bf, chunk_buf[0..bytes_read]);
         bytes_received += bytes_read;
 
-        // Progress indicator (every 10%)
-        const progress = (bytes_received * 100) / backup_size;
-        if (progress % 10 == 0) {
-            std.debug.print("  Progress: {}%\n", .{progress});
+        // Progress indicator: each 10% step once, in order.
+        const step = ((bytes_received * 100) / backup_size) / 10 * 10;
+        if (!progress_printed_any or step > progress_step_printed) {
+            std.debug.print("  Progress: {}%\n", .{step});
+            progress_step_printed = step;
+            progress_printed_any = true;
         }
     }
 
