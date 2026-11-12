@@ -29,7 +29,7 @@ const gps = @import("../security/gps.zig");
 // Import recursion handler for member path building
 const recursion_handler = @import("recursion_handler.zig");
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=refactor; UPDATED=2026-01-15
+// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=TESTED; TEST=tests/test_gap0883_algo_procedures.zig; OWNER=refactor; UPDATED=2026-11-12
 
 // ==================== Domain Dispatch Modules ====================
 const algo_dispatch = @import("algo_dispatch.zig");

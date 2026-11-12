@@ -368,6 +368,94 @@
   5 s. The gRPC test client's socket timeout is 120 s instead of 5 s (TCP
   reports an exited server at once). Regression:
   `zig build test-sonny6301-test-ports-and-timeouts`.
+- **No test binds a fixed port, `geode serve` reports the port it bound,
+  and `GEODE_LSP_PORT` sets the embedded LSP port (SONNY-6332).**
+  `canary_remote_kms` (8876-8880), `canary_remote_kms_hardening`
+  (13051-13054), `test_server_memory_pressure` (34717),
+  `test_datadir_lock_subprocess` (23911-23920) and `test_perf_optimizations`
+  (3182-3186) used fixed ports; the QUIC socket binds with `SO_REUSEADDR`,
+  so two concurrent runs of `test-remote-kms-hardening` bound the same UDP
+  port and failed with `RemoteError` / `AuthenticationFailed` from the other
+  run's KMS key. The KMS suites now start on port 0 and dial the bound
+  `RemoteKmsServer.port`; the others take ports from `tests/test_ports.zig`.
+  `geode serve --listen host:0` logged port 0 in its JSON transport banner
+  and `QUIC server started`; both now carry the bound port
+  (`QuicTransport.boundPort`). Every `geode serve` opened the embedded LSP
+  listener on TCP 3142, so concurrent test servers fought over it (the loser
+  logs `LSP listener: bind failed` and runs without LSP): `GEODE_LSP_PORT`
+  now sets the port when `--lsp-port` is absent (the flag wins, 0 disables,
+  a non-number logs a warning and keeps 3142), and the build sets
+  `GEODE_LSP_PORT=0` on every test Run step that spawns geode. With neither
+  set the production default is unchanged (3142), and a failed LSP bind still
+  logs an error and leaves the QUIC server running. Regression:
+  `zig build test-sonny6332-no-fixed-ports` (also scans every test source
+  the build compiles for a literal listen port).
+- **The in-process gRPC test fixtures no longer crash after a vector index
+  is created, and the I-4 vector case runs over gRPC (SONNY-3379).** The
+  executor creates the process-wide index manager on the first CREATE INDEX
+  from that statement's allocator; the fixtures
+  (`tests/sonny738_r12_grpc_fixture.zig` and the round-4a transport test's)
+  hand the gRPC handlers their request arena, so the manager and its HNSW
+  worker pool lived in that arena, which the fixture freed before the
+  catalog cleanup called into the manager (SIGSEGV). The fixtures now create
+  the manager with the test allocator and tear down the catalog and the
+  manager before the arena. `test-sonny-write-allowlist-r4-transport` runs
+  SONNY-3319's label-SET vector check over gRPC as well as QUIC. Regression:
+  `zig build test-sonny3379-grpc-vector-index-teardown`.
+- **Thirteen test files that no build step compiled are built or removed
+  (SONNY-6320).** Password hashing and timing-attack resistance had no
+  running test: `src/security/test_argon2id_hashing.zig` called a removed
+  `Auth` API and `test_timing_attacks.zig` asserted wall-clock variance.
+  Both are replaced by `test-sonny6320-password-hashing`: Argon2id PHC
+  strings with m=19456, t=2, p=1 and a fresh salt, verify refusing near
+  misses and malformed or foreign PHC strings, and a structural check that
+  every verify path compares digests through `timingSafeEql` (no clock).
+  The GAP-0193 parse suites (`test_gap_0193_batch2_engine`,
+  `test_gap_0193_batch2_misc`, `test_gap_0193_impl_verification`) are
+  registered (`test-gap0193-*`) with their Cypher-only syntax replaced by
+  GQL (`FOR ... IN`, `START TRANSACTION`, `EXISTS { }`, `REQUIRE`), their
+  always-true `or true` / module-existence cases removed, and the cases for
+  features Geode does not have (CHECK, range and `=~` constraints, `CREATE
+  MATERIALIZED VIEW`, a bare `SHORTEST` prefix, `SET TRANSACTION ISOLATION
+  LEVEL`) now asserting the parser's refusal.
+  `tests/test_external_kms_provider.zig` is ported to the
+  `external_kms_client` module (`test-external-kms-provider`: wrap/unwrap,
+  tampered tag/ciphertext/nonce, foreign key). Removed as testing nothing
+  live or duplicating registered tests: `test_abac_enforcement.zig` (struct
+  field checks; its SecurityManager authorize/ABAC cases are covered by
+  `tests/e2e_rls_security.zig`), `test_async_connection.zig` (the external
+  thread_pool library), `e2e_rls_enhanced.zig` (imported modules that no
+  longer exist), `canary_federation_latency_aggregate.zig` (duplicates the
+  module's registered inline tests), `priority_implementations.zig`,
+  `test_canary_core.zig` and `test_performance_integration.zig` (no-op,
+  duplicate or mock-module cases). The ABAC-WIRE CANARY markers that cited
+  `test_abac_enforcement.zig` are now IMPL: `SecurityManager.authorize`
+  and its ABAC policies are called by no server request path (authorization
+  is GPS), and `GEODE_ABAC_ENABLED` changes only a startup log line.
+- **The ThreadSanitizer companion steps instrument the code (SONNY-6328).**
+  With Zig 0.16 a Debug x86_64 build uses the self-hosted backend, which
+  ignores `-fsanitize-thread`: the six `test-*-tsan` steps had no TSan
+  instrumentation or runtime and passed while detecting nothing (a
+  deliberate race passed too). They are now built with the LLVM backend
+  (`tsanTest` in `build.zig`), configure refuses a `sanitize_thread` test
+  built any other way, and `test-sonny6328-tsan-detects-race` (in the
+  aggregate) requires ThreadSanitizer to report a deliberate race. The
+  companions now report real races, in the thread_pool dependency's
+  work-stealing queues and graph_storage's ordered B-tree cursor
+  (`docs/KNOWN_TEST_ISSUES.md`), so they stay out of the aggregate and no CI
+  job runs them until those are fixed. Until then concurrency fixes rest on
+  deterministic lock-wait proofs and stress tests. Regression:
+  `zig build test-sonny6328-tsan-detects-race`.
+- **The mock S3 backup tests and the stale canaryscan rows are gone
+  (SONNY-6355 item 4).** `tests/e2e_s3_backup_restore.zig` and
+  `tests/test_s3_backup.zig` exercised a mock S3 client and were imported
+  only by `tests/all_tests.zig`, which nothing compiles; the binary has no
+  object-storage backup path (SONNY-6290). `tools/canaryscan/status.csv`
+  and `status.json`, the scanner's committed output, are regenerated with
+  `tools/canaryscan`: 224 rows named a source file that no longer exists
+  (the backup API tests at rows 476, 1754 and 3429 among them, and rows
+  from dependency checkouts under `zig-pkg/`). Regression:
+  `zig build test-sonny6355-dead-backup-tests`.
 - **The offline `geode user` CLI names the password-policy rule a password
   breaks; `reset-password` and `password` accept `--generate-password`
   (SONNY-6271).** `user create`, `update`, `password` and `reset-password`

@@ -10,3 +10,6 @@ pub const geode_exe: []const u8 = if (std.fs.path.isAbsolute(options.geode_exe))
     options.geode_exe
 else
     options.build_root ++ std.fs.path.sep_str ++ options.geode_exe;
+
+/// The build root (the checkout), for tests that read the sources.
+pub const build_root: []const u8 = options.build_root;

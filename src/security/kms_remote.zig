@@ -319,8 +319,11 @@ pub const RemoteKmsServer = struct {
 
         try qt.listen();
         self.quic_transport = qt;
+        // SONNY-6332: `port` 0 asks the kernel for a free port; `self.port`
+        // is the one the socket is bound to.
+        self.port = qt.boundPort();
 
-        std.debug.print("KMS_SERVER: Listening on port {d}\n", .{port});
+        std.debug.print("KMS_SERVER: Listening on port {d}\n", .{self.port});
     }
 
     /// One serving cycle (SONNY-2394 multi-connection): poll the transport,

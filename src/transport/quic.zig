@@ -882,17 +882,34 @@ pub const QuicTransport = struct {
         // Initialize endpoint using api.endpointInit (heap-allocates the Endpoint struct).
         self.endpoint = try api.endpointInit(&self.allocator, bind_addr, cfg);
 
+        // SONNY-6332: report the port the socket is bound to, not the
+        // configured one: with port 0 the kernel chooses it.
+        const bound_port = self.boundPort();
         tlog.info("QUIC transport listening", &.{
-            Attr.int("port", @intCast(self.config.port)),
+            Attr.int("port", @intCast(bound_port)),
             Attr.string("tls", "true"),
             Attr.string("status", "listening"),
         });
         // Startup banner for operational tooling (JSON on stderr)
-        std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"true\",\"port\":{d},\"library\":\"vendor/quic\",\"api\":\"native-endpoint\",\"status\":\"listening\"}}\n", .{self.config.port});
+        std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"true\",\"port\":{d},\"library\":\"vendor/quic\",\"api\":\"native-endpoint\",\"status\":\"listening\"}}\n", .{bound_port});
         // Register OTel observable gauge for active connection count.
         // Set module-level pointer so the callback can read getConnectionCount().
         g_quic_transport_instance = self;
         @import("otel_metrics").registerTransportConnectionGauge(activeConnectionCountProvider) catch {};
+    }
+
+    /// The UDP port the listening socket is bound to (SONNY-6332). Differs
+    /// from `config.port` when that is 0 (the kernel chooses a free port).
+    /// The configured port before `listen`, or if the socket cannot be read.
+    pub fn boundPort(self: *QuicTransport) u16 {
+        const ep = self.endpoint orelse return self.config.port;
+        const addr = ep.transport.getLocalAddr() catch return self.config.port;
+        const port: u16 = switch (addr.storage.family) {
+            std.posix.AF.INET => std.mem.bigToNative(u16, @as(*const std.posix.sockaddr.in, @ptrCast(@alignCast(&addr.storage))).port),
+            std.posix.AF.INET6 => std.mem.bigToNative(u16, @as(*const std.posix.sockaddr.in6, @ptrCast(@alignCast(&addr.storage))).port),
+            else => 0,
+        };
+        return if (port != 0) port else self.config.port;
     }
 
     fn pollOnce(self: *QuicTransport, timeout_ms: u32) !api.PollStats {

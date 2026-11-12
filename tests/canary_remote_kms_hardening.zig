@@ -24,17 +24,25 @@ const kms_tls = @import("kms_test_tls.zig");
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=ConcurrencyStressVariance; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress; OWNER=security; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=ConcurrencyStressVariance; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance; OWNER=security; UPDATED=2025-09-26
 
-/// Start a KMS server on `port`, serve it from a background thread for the
-/// duration of `body`, then stop + join the thread and deinit the server.
-fn withServer(port: u16, auth: []const u8, body: fn (*kms.RemoteKmsServer) anyerror!void) !void {
+/// Start a KMS server on a port the kernel chooses, serve it from a background
+/// thread for the duration of `body` (which gets the bound port), then stop +
+/// join the thread and deinit the server.
+///
+/// SONNY-6332: these tests used fixed ports 13051-13054. The QUIC socket binds
+/// with SO_REUSEADDR, so a second run on the host (parallel lanes, pre-push
+/// shards) bound the same UDP port and the two servers answered each other's
+/// clients (AuthenticationFailed / RemoteError from the other server's key).
+fn withServer(auth: []const u8, body: fn (*kms.RemoteKmsServer, u16) anyerror!void) !void {
     // A private certificate pair per server (SONNY-2394 review): the
     // aggregate runs the KMS test binaries concurrently.
     var tls = try kms_tls.TestTls.init(std.testing.allocator);
     defer tls.deinit(std.testing.allocator);
     var server = try kms.RemoteKmsServer.init(std.testing.allocator, 0xdeadbeefcafebabe);
     defer server.deinit();
-    try server.startWithOptions(port, tls.startOptions());
+    try server.startWithOptions(0, tls.startOptions());
     try server.server.setAuthToken(auth);
+    const port = server.port;
+    try std.testing.expect(port != 0);
 
     var stop = std.atomic.Value(bool).init(false);
     const serving = try std.Thread.spawn(.{}, kms.RemoteKmsServer.serveUntilStopped, .{ &server, &stop });
@@ -42,7 +50,7 @@ fn withServer(port: u16, auth: []const u8, body: fn (*kms.RemoteKmsServer) anyer
         stop.store(true, .release);
         serving.join();
     }
-    try body(&server);
+    try body(&server, port);
 }
 
 // Clients stay on page_allocator (see the GAP-0514 P3 note in
@@ -57,9 +65,8 @@ fn connectClient(port: u16, auth: ?[]const u8) !kms.RemoteKmsClient {
 }
 
 test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth" {
-    const port: u16 = 13051;
-    try withServer(port, "secret-token", struct {
-        pub fn f(s: *kms.RemoteKmsServer) !void {
+    try withServer("secret-token", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
             std.mem.doNotOptimizeAway(s);
             std.debug.print("[HARDENING] InvalidAuth start\n", .{});
             // Positive client (control)
@@ -82,9 +89,8 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth" {
 
 // Simulate expired attestation by mutating hash after acquisition then verifying unwrap attestation fails
 test "TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation" {
-    const port: u16 = 13052;
-    try withServer(port, "a-token", struct {
-        pub fn f(s: *kms.RemoteKmsServer) !void {
+    try withServer("a-token", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
             var c = try connectClient(port, "a-token");
             defer c.deinit();
             // Perform attestation
@@ -131,9 +137,8 @@ const StressWorker = struct {
 // Concurrency stress: 16 clients -- 16 concurrent connections -- each unwrap
 // the same envelope.
 test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress" {
-    const port: u16 = 13053;
-    try withServer(port, "stress-token", struct {
-        pub fn f(s: *kms.RemoteKmsServer) !void {
+    try withServer("stress-token", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
             std.mem.doNotOptimizeAway(s);
             var main_client = try connectClient(port, "stress-token");
             defer main_client.deinit();
@@ -165,9 +170,8 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress" {
 
 // Benchmark skeleton for concurrency variance (JSON prints; no perf assertion).
 pub fn runUnwrapConcurrencyVariance() !void {
-    const port: u16 = 13054;
-    try withServer(port, "bench-token", struct {
-        pub fn f(s: *kms.RemoteKmsServer) !void {
+    try withServer("bench-token", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
             std.mem.doNotOptimizeAway(s);
             var client = try connectClient(port, "bench-token");
             defer client.deinit();

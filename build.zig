@@ -346,6 +346,61 @@ fn collectRunSteps(
     }
 }
 
+/// SONNY-6328: every ThreadSanitizer test is built through this. With Zig
+/// 0.16 a Debug x86_64 build uses the self-hosted backend, which ignores
+/// `sanitize_thread`: the binary had no TSan instrumentation or runtime, and
+/// the `test-*-tsan` companions passed while detecting nothing (a deliberate
+/// race passed too). The LLVM backend instruments the code and links the
+/// TSan runtime; a race then fails the run with exit 66.
+/// `checkTsanTestsUseLlvm` refuses, at configure time, a sanitize_thread
+/// test that was not built this way.
+fn tsanTest(b: *std.Build, mod: *std.Build.Module) *std.Build.Step.Compile {
+    return b.addTest(.{ .root_module = mod, .use_llvm = true });
+}
+
+/// SONNY-6328: see `tsanTest`. Runs once, when build() returns.
+fn checkTsanTestsUseLlvm(b: *std.Build) void {
+    var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer seen.deinit(b.allocator);
+    var runs: std.ArrayList(*std.Build.Step) = .empty;
+    defer runs.deinit(b.allocator);
+    for (b.top_level_steps.values()) |tls| collectRunSteps(b, &tls.step, &seen, &runs);
+    for (runs.items) |step| {
+        const run = step.cast(std.Build.Step.Run) orelse continue;
+        const artifact = run.producer orelse continue;
+        if (artifact.root_module.sanitize_thread != true) continue;
+        if (artifact.use_llvm == true) continue;
+        const src = if (artifact.root_module.root_source_file) |p| p.getDisplayName() else artifact.name;
+        std.debug.panic("SONNY-6328: {s} is built with sanitize_thread but not the LLVM backend, so ThreadSanitizer instruments nothing; build it with tsanTest()", .{src});
+    }
+}
+
+/// SONNY-6332: every `geode serve` opens its embedded LSP listener on TCP
+/// 3142 unless told otherwise, so test servers started concurrently on one
+/// host (parallel lanes, pre-push shards, CI jobs on a shared runner) fought
+/// over that port, and a test server could take it from a real one. Every
+/// Run step of an artifact that spawns the built geode (`spawnsBuiltGeode`)
+/// gets GEODE_LSP_PORT=0, which the server reads when `--lsp-port` is not
+/// given; children inherit it. A test that exercises the listener passes
+/// `--lsp-port=<free port>`. An explicit GEODE_LSP_PORT in the environment is
+/// kept. Runs once, when build() returns.
+fn disableEmbeddedLspForTestServers(b: *std.Build) void {
+    var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer seen.deinit(b.allocator);
+    var runs: std.ArrayList(*std.Build.Step) = .empty;
+    defer runs.deinit(b.allocator);
+    for (b.top_level_steps.values()) |tls| collectRunSteps(b, &tls.step, &seen, &runs);
+    var it = g_aggregate_runs.keyIterator();
+    while (it.next()) |run| collectRunSteps(b, run.*, &seen, &runs);
+    for (runs.items) |step| {
+        const run = step.cast(std.Build.Step.Run) orelse continue;
+        const artifact = run.producer orelse continue;
+        if (!artifact.root_module.import_table.contains("geode_test_bin")) continue;
+        if (run.getEnvMap().get("GEODE_LSP_PORT") != null) continue;
+        run.setEnvironmentVariable("GEODE_LSP_PORT", "0");
+    }
+}
+
 /// SONNY-2772: every named `test-*` step either runs in the aggregate `test`
 /// step or is listed in `not_in_aggregate_steps` with the reason it stays
 /// out. 97 named steps used to run in no aggregate, pre-push shard or CI job
@@ -422,12 +477,12 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-e2e", .reason = "aggregator: the end-to-end lane (spawned QUIC servers, fuzz targets, benchmarks; Makefile test-e2e)" },
     .{ .name = "test-perf", .reason = "aggregator: perf harness and timing tests; host-load sensitive" },
     // ThreadSanitizer companions: the same file runs uninstrumented in the aggregate.
-    .{ .name = "test-sonny1318-procedure-tenancy-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
-    .{ .name = "test-sonny1330-parallel-union-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
-    .{ .name = "test-startup-lazy-hydrate-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
-    .{ .name = "test-ordered-scan-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
-    .{ .name = "test-ordered-index-autobuild-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
-    .{ .name = "test-parallel-index-rebuild-tsan", .reason = "TSan companion (-fsanitize-thread, slow); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-sonny1318-procedure-tenancy-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-sonny1330-parallel-union-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-startup-lazy-hydrate-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-ordered-scan-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-ordered-index-autobuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-parallel-index-rebuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     // Members of the end-to-end lane (test-e2e).
     .{ .name = "test-gap0203", .reason = "e2e lane (test-e2e): QUIC pipeline suite with a 5 s read deadline, flaky under load (KNOWN_TEST_ISSUES)" },
     .{ .name = "test-gql-conformance", .reason = "e2e lane (test-e2e): spawns QUIC servers per case" },
@@ -4121,6 +4176,10 @@ pub fn build(b: *std.Build) void {
     defer addExecutablesToTestCompile(b, target);
     // SONNY-2772: deferred so it sees every named step and shardDep call.
     defer checkNamedTestStepsInAggregate(b);
+    // SONNY-6332: deferred so it sees every Run step of a geode-spawning test.
+    defer disableEmbeddedLspForTestServers(b);
+    // SONNY-6328: deferred so it sees every TSan Run step.
+    defer checkTsanTestsUseLlvm(b);
     // SONNY-2772: named regression steps declared above that had joined no
     // aggregate shard, so nothing ran them unless someone did by name.
     for ([_]*std.Build.Step.Run{
@@ -4777,6 +4836,8 @@ pub fn build(b: *std.Build) void {
     server_mem_pressure_tests.root_module.link_libc = true;
     const run_server_mem_pressure_tests = b.addRunArtifact(server_mem_pressure_tests);
     spawnsBuiltGeode(server_mem_pressure_tests);
+    // SONNY-6332: tests/test_ports.zig lies outside this module's directory.
+    server_mem_pressure_tests.root_module.addImport("test_ports", b.createModule(.{ .root_source_file = b.path("tests/test_ports.zig"), .target = target, .optimize = optimize }));
     test_e2e_step.dependOn(&run_server_mem_pressure_tests.step);
 
     // Protobuf wire protocol compatibility tests (Phase 6 validation)
@@ -6558,29 +6619,15 @@ pub fn build(b: *std.Build) void {
     const test_cef_tests_step = b.step("test-audit-cef", "Run audit CEF formatting tests (GAP-413)");
     test_cef_tests_step.dependOn(&run_test_cef_tests.step);
 
-    // GAP-413 BLOCKED: test_timing_attacks.zig (6 tests) - hash.zig imports storage/heap.zig outside module path
-    // Requires restructuring types_hash module with proper dependencies from root module
-    // const test_timing_attacks_mod = b.createModule(.{ .root_source_file = b.path("src/security/test_timing_attacks.zig"), .target = target, .optimize = optimize });
-    // test_timing_attacks_mod.addImport("geode_auth", auth_mod);
-    // test_timing_attacks_mod.addImport("types_hash", types_hash_mod);
-    // const test_timing_attacks_tests = b.addTest(.{ .root_module = test_timing_attacks_mod });
-    // test_step.dependOn(&test_timing_attacks_tests.step);
-
-    // GAP-413 REMAINING: 4 orphaned test files (28 test blocks) still need module restructuring:
-    //
-    // Files with module import issues:
-    //   - src/security/test_timing_attacks.zig (6 tests) - hash.zig imports storage/heap.zig outside module
-    //
-    // Files with missing/changed APIs:
-    //   - src/security/test_argon2id_hashing.zig (9 tests) - references non-existent Auth struct
-    //   - src/server/test_abac_enforcement.zig (8 tests) - references non-existent server_init
-    //   - src/server/test_async_connection.zig (5 tests) - module path mismatch
-    //
+    // GAP-413 / SONNY-6320: the orphaned test files are resolved.
+    // test_timing_attacks.zig and test_argon2id_hashing.zig (wall-clock
+    // assertions, a removed Auth API) are replaced by the deterministic
+    // test-sonny6320-password-hashing; test_abac_enforcement.zig (struct
+    // field checks, and SecurityManager authorize/ABAC cases duplicated by
+    // tests/e2e_rls_security.zig) and test_async_connection.zig (the external
+    // thread_pool library) are removed.
     // (src/security/test_tde_nonce.zig was ported to tests/test_tde_nonce.zig,
     // step test-tde-nonce, in SONNY-6298.)
-    //
-    // TOTAL REMAINING: 28 test blocks across 4 files NOT running in CI
-    // REMEDIATION: Requires API updates or test file refactoring
 
     const audit_chain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize });
     audit_chain_test_mod.link_libc = true;
@@ -8680,7 +8727,7 @@ pub fn build(b: *std.Build) void {
     // must touch no tenant predicate, no shared allocator and no storage
     // adapter (scoped degrees are computed on the calling thread) — this step
     // is what proves it rather than asserting it. Opt-in (not part of the
-    // default test_step): TSan adds ~5-8x overhead and needs libtsan at runtime.
+    // default test_step): TSan adds ~5-8x overhead; built with tsanTest() (SONNY-6328).
     // Run via: zig build test-sonny1318-procedure-tenancy-tsan
     const sonny1318_tsan_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_sonny1318_procedure_tenancy.zig"),
@@ -8693,7 +8740,7 @@ pub fn build(b: *std.Build) void {
     sonny1318_tsan_mod.addImport("rls", rls_mod);
     sonny1318_tsan_mod.addImport("rls_types", rls_types_mod);
     sonny1318_tsan_mod.addImport("schema_introspection", schema_introspection_mod);
-    const sonny1318_tsan_tests = b.addTest(.{ .root_module = sonny1318_tsan_mod });
+    const sonny1318_tsan_tests = tsanTest(b, sonny1318_tsan_mod);
     const run_sonny1318_tsan_tests = b.addRunArtifact(sonny1318_tsan_tests);
     const sonny1318_tsan_step = b.step(
         "test-sonny1318-procedure-tenancy-tsan",
@@ -9387,6 +9434,125 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6325_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6325_step = b.step("test-sonny6325-no-fixed-tmp-paths", "Run SONNY-6325 regression (spawns servers: the auto TLS key is created in the data directory exclusive/no-follow/0600, an existing group-readable, linked or half-pair auto key is refused, no /tmp fallback; S3 restore staging is a private temp dir; audit diagnostics write private data-directory files; backup list skips /tmp; the per-user tmp data directory is checked 0700/owner and honours TMPDIR; a backup without a data directory is refused)");
     sonny6325_step.dependOn(&run_sonny6325_tests.step);
+
+    // SONNY-6332: no test binds a literal port (source check over every test
+    // source the build compiles); `geode serve --listen host:0` reports the
+    // bound port; the embedded LSP listener is off for test servers
+    // (GEODE_LSP_PORT=0 from the build), movable by GEODE_LSP_PORT, and
+    // `--lsp-port` wins over the variable.
+    const sonny6332_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6332_no_fixed_ports.zig"), .target = target, .optimize = optimize });
+    sonny6332_test_mod.link_libc = true;
+    sonny6332_test_mod.addImport("geode", root_mod);
+    sonny6332_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6332_test_mod.addImport("schema", schema_mod);
+    sonny6332_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6332_tests = b.addTest(.{ .root_module = sonny6332_test_mod });
+    const run_sonny6332_tests = b.addRunArtifact(sonny6332_tests);
+    spawnsBuiltGeode(sonny6332_tests);
+    shardDep(test_step, &run_sonny6332_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6332_step = b.step("test-sonny6332-no-fixed-ports", "Run SONNY-6332 regression (no test the build compiles binds a literal port; geode serve on port 0 reports the bound port; the embedded LSP listener is off for test servers via GEODE_LSP_PORT=0, moved by GEODE_LSP_PORT, and --lsp-port wins)");
+    sonny6332_step.dependOn(&run_sonny6332_tests.step);
+
+    // SONNY-3379: the I-4 vector case over in-process gRPC (the shared
+    // round-12 fixture), in two fixture lifetimes; the fixture leaves no
+    // index manager pointing into its freed request arena.
+    const sonny3379_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3379_grpc_vector_index_teardown.zig"), .target = target, .optimize = optimize });
+    sonny3379_test_mod.link_libc = true;
+    sonny3379_test_mod.addImport("geode", root_mod);
+    sonny3379_test_mod.addImport("schema", schema_mod);
+    sonny3379_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3379_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3379_test_mod.addImport("logging", logging_mod);
+    sonny3379_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3379_tests = b.addTest(.{ .root_module = sonny3379_test_mod });
+    const run_sonny3379_tests = b.addRunArtifact(sonny3379_tests);
+    shardDep(test_step, &run_sonny3379_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3379_step = b.step("test-sonny3379-grpc-vector-index-teardown", "Run SONNY-3379 regression (the I-4 vector case runs over in-process gRPC through the shared round-12 fixture, twice in one process; the fixture tears down the index manager before freeing the request arena it lives in)");
+    sonny3379_step.dependOn(&run_sonny3379_tests.step);
+
+    // SONNY-6320: Argon2id hashing and constant-time verification checked
+    // deterministically (structural, no wall clock), replacing the
+    // unregistered src/security/test_argon2id_hashing.zig and
+    // test_timing_attacks.zig; and every test file the ticket found in no
+    // build step is removed or built.
+    const sonny6320_opts = b.addOptions();
+    sonny6320_opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+    const sonny6320_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6320_password_hashing.zig"), .target = target, .optimize = optimize });
+    sonny6320_test_mod.addImport("geode_auth", auth_mod);
+    sonny6320_test_mod.addImport("crypto_backend", crypto_backend_mod);
+    sonny6320_test_mod.addImport("build_options", build_options_mod);
+    sonny6320_test_mod.addImport("sonny6320_options", sonny6320_opts.createModule());
+    const sonny6320_tests = b.addTest(.{ .root_module = sonny6320_test_mod });
+    const run_sonny6320_tests = b.addRunArtifact(sonny6320_tests);
+    shardDep(test_step, &run_sonny6320_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6320_step = b.step("test-sonny6320-password-hashing", "Run SONNY-6320 regression (Argon2id PHC strings with the OWASP parameters and a fresh salt, verify refuses near misses and malformed PHC strings, the verify paths compare digests with timingSafeEql (structural, no clock); every test file found in no build step is removed or built)");
+    sonny6320_step.dependOn(&run_sonny6320_tests.step);
+
+    // SONNY-6320: test files that sat in no build step, ported and built.
+    // The GAP-0193 parse suites (their Cypher-only syntax replaced by the
+    // ISO GQL forms, their always-true assertions removed) and the external
+    // KMS client's envelope tamper checks.
+    for ([_]struct { name: []const u8, path: std.Build.LazyPath, desc: []const u8 }{
+        .{ .name = "test-gap0193-batch2-engine", .path = b.path("tests/test_gap_0193_batch2_engine.zig"), .desc = "Run the GAP-0193 batch 2 engine parse suite (SONNY-6320: registered)" },
+        .{ .name = "test-gap0193-batch2-misc", .path = b.path("tests/test_gap_0193_batch2_misc.zig"), .desc = "Run the GAP-0193 batch 2 misc parse suite (SONNY-6320: registered)" },
+        .{ .name = "test-gap0193-impl-verification", .path = b.path("tests/test_gap_0193_impl_verification.zig"), .desc = "Run the GAP-0193 IMPL verification parse suite (SONNY-6320: registered)" },
+    }) |t| {
+        const mod = b.createModule(.{ .root_source_file = t.path, .target = target, .optimize = optimize });
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(t.name, t.desc).dependOn(&run_tests.step);
+    }
+    {
+        const ext_kms_mod = b.createModule(.{ .root_source_file = b.path("src/security/external_kms_client.zig"), .target = target, .optimize = optimize });
+        ext_kms_mod.addImport("crypto_backend", crypto_backend_mod);
+        ext_kms_mod.addImport("logging", logging_mod);
+        ext_kms_mod.addImport("json", json_mod);
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_external_kms_provider.zig"), .target = target, .optimize = optimize });
+        mod.addImport("external_kms_client", ext_kms_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-external-kms-provider", "Run the external KMS client envelope wrap/unwrap and tamper-detection tests (SONNY-6320: registered)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6328: a deliberate data race built exactly like the TSan
+    // companion steps (`test-*-tsan`), run by a checker that requires
+    // ThreadSanitizer to report it. The companions passed while detecting
+    // nothing.
+    {
+        const race_mod = b.createModule(.{
+            .root_source_file = b.path("tests/sonny6328_tsan_race_fixture.zig"),
+            .target = target,
+            .optimize = .Debug,
+            .link_libc = true,
+            .sanitize_thread = true,
+        });
+        const race_fixture = tsanTest(b, race_mod);
+        const opts = b.addOptions();
+        opts.addOptionPath("race_fixture", race_fixture.getEmittedBin());
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6328_tsan_detects_race.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6328_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6328-tsan-detects-race", "Run SONNY-6328 regression (a deliberate data race built like the TSan companion steps must be reported by ThreadSanitizer: exit 66 and a data-race warning)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6355 item 4: the mock S3 backup tests are gone, tests/all_tests.zig
+    // imports only files that exist, and every tools/canaryscan/status.csv
+    // row names a source file that exists.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6355_dead_backup_tests.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6355_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6355-dead-backup-tests", "Run SONNY-6355 item 4 regression (no mock S3 backup tests, tests/all_tests.zig imports only existing files, every canaryscan status row names an existing source file)").dependOn(&run_tests.step);
+    }
 
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
@@ -10863,7 +11029,7 @@ pub fn build(b: *std.Build) void {
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the
     // cross-arm cache mutation this ticket closes rather than merely asserted
     // to produce the right rows. Opt-in (not part of the default test_step):
-    // TSan adds ~5-8x overhead and needs libtsan at runtime.
+    // TSan adds ~5-8x overhead; built with tsanTest() (SONNY-6328).
     // Run via: zig build test-sonny1330-parallel-union-tsan
     const sonny1330_tsan_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_sonny1330_parallel_union.zig"),
@@ -10874,7 +11040,7 @@ pub fn build(b: *std.Build) void {
     });
     sonny1330_tsan_mod.addImport("geode", root_mod);
     sonny1330_tsan_mod.addImport("logging", logging_mod);
-    const sonny1330_tsan_tests = b.addTest(.{ .root_module = sonny1330_tsan_mod });
+    const sonny1330_tsan_tests = tsanTest(b, sonny1330_tsan_mod);
     const run_sonny1330_tsan_tests = b.addRunArtifact(sonny1330_tsan_tests);
     run_sonny1330_tsan_tests.setEnvironmentVariable("GEODE_NODE_CACHE_ENTRIES", "64");
     run_sonny1330_tsan_tests.setEnvironmentVariable("GEODE_EDGE_CACHE_ENTRIES", "64");
@@ -11631,7 +11797,7 @@ pub fn build(b: *std.Build) void {
     // so the "hydrate A || read B" cross-graph hydration race (CWE-362 on the
     // shared `nodes_by_graph` / `label_index` outer maps) runs under the thread
     // sanitizer. Opt-in (not part of the default test_step): TSan adds ~5-8x
-    // overhead and requires libtsan at runtime.
+    // overhead; built with tsanTest() (SONNY-6328).
     // Run via: zig build test-startup-lazy-hydrate-tsan
     const startup_lazy_tsan_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_startup_lazy_hydrate.zig"),
@@ -11642,7 +11808,7 @@ pub fn build(b: *std.Build) void {
     });
     startup_lazy_tsan_mod.addImport("geode", root_mod);
     startup_lazy_tsan_mod.addImport("graph_storage", graph_storage_mod);
-    const startup_lazy_tsan_tests = b.addTest(.{ .root_module = startup_lazy_tsan_mod });
+    const startup_lazy_tsan_tests = tsanTest(b, startup_lazy_tsan_mod);
     const run_startup_lazy_tsan_tests = b.addRunArtifact(startup_lazy_tsan_tests);
     const startup_lazy_tsan_step = b.step(
         "test-startup-lazy-hydrate-tsan",
@@ -11687,7 +11853,7 @@ pub fn build(b: *std.Build) void {
     // test.  Same test file compiled with -fsanitize-thread so the concurrent
     // writer + orderedScan reader case runs under the thread sanitizer.
     // Opt-in step (not part of the default test_step) — TSan adds ~5-8x
-    // overhead and requires libtsan at runtime.
+    // overhead; built with tsanTest() (SONNY-6328).
     // Run via: zig build test-ordered-scan-tsan
     const ordered_scan_tsan_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_ordered_scan.zig"),
@@ -11698,7 +11864,7 @@ pub fn build(b: *std.Build) void {
     });
     ordered_scan_tsan_mod.addImport("geode", root_mod);
     ordered_scan_tsan_mod.addImport("graph_storage", graph_storage_mod);
-    const ordered_scan_tsan_tests = b.addTest(.{ .root_module = ordered_scan_tsan_mod });
+    const ordered_scan_tsan_tests = tsanTest(b, ordered_scan_tsan_mod);
     const run_ordered_scan_tsan_tests = b.addRunArtifact(ordered_scan_tsan_tests);
     const ordered_scan_tsan_step = b.step(
         "test-ordered-scan-tsan",
@@ -11762,8 +11928,8 @@ pub fn build(b: *std.Build) void {
     // -fsanitize-thread so the "concurrent ordered-index build || FULL checkpoint"
     // case exercises the build-vs-checkpoint ordered-rebuild serialization under
     // the thread sanitizer (flags the double-build race pre-fix; clean post-fix).
-    // Opt-in (not in the default test_step) because TSan adds ~5-8x overhead and
-    // requires libtsan at runtime. Run via: zig build test-ordered-index-autobuild-tsan
+    // Opt-in (not in the default test_step) because TSan adds ~5-8x overhead;
+    // built with tsanTest() (SONNY-6328). Run via: zig build test-ordered-index-autobuild-tsan
     const ordered_autobuild_tsan_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_ordered_index_autobuild.zig"),
         .target = target,
@@ -11773,7 +11939,7 @@ pub fn build(b: *std.Build) void {
     });
     ordered_autobuild_tsan_mod.addImport("geode", root_mod);
     ordered_autobuild_tsan_mod.addImport("graph_storage", graph_storage_mod);
-    const ordered_autobuild_tsan_tests = b.addTest(.{ .root_module = ordered_autobuild_tsan_mod });
+    const ordered_autobuild_tsan_tests = tsanTest(b, ordered_autobuild_tsan_mod);
     const run_ordered_autobuild_tsan_tests = b.addRunArtifact(ordered_autobuild_tsan_tests);
     const ordered_autobuild_tsan_step = b.step(
         "test-ordered-index-autobuild-tsan",
@@ -11856,7 +12022,7 @@ pub fn build(b: *std.Build) void {
     // TSan companion: same test file compiled with -fsanitize-thread so the
     // adversarial repeated-rebuild case runs under the thread sanitizer.
     // Wired as an opt-in step (not part of the default test_step) because TSan
-    // adds ~5-8x overhead and requires libtsan at runtime.
+    // adds ~5-8x overhead; built with tsanTest() (SONNY-6328).
     // Run via: zig build test-parallel-index-rebuild-tsan
     const parallel_index_rebuild_tsan_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_parallel_index_rebuild.zig"),
@@ -11867,7 +12033,7 @@ pub fn build(b: *std.Build) void {
     });
     parallel_index_rebuild_tsan_mod.addImport("geode", root_mod);
     parallel_index_rebuild_tsan_mod.addImport("graph_storage", graph_storage_mod);
-    const parallel_index_rebuild_tsan_tests = b.addTest(.{ .root_module = parallel_index_rebuild_tsan_mod });
+    const parallel_index_rebuild_tsan_tests = tsanTest(b, parallel_index_rebuild_tsan_mod);
     const run_parallel_index_rebuild_tsan_tests = b.addRunArtifact(parallel_index_rebuild_tsan_tests);
     const parallel_index_rebuild_tsan_step = b.step(
         "test-parallel-index-rebuild-tsan",
