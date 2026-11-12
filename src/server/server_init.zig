@@ -366,6 +366,14 @@ pub fn initialize(
     // Set data directory for GraphStore persistence (canonical configuration for isolation)
     graph_store.setDataDirOverride(allocator, data_dir);
 
+    // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=StartupLoad; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-6324: load the FLE catalog now, from the data directory just
+    // set, and refuse to start if a catalog file exists and cannot be
+    // loaded: without it the fields configured as encrypted are unknown. It
+    // was loaded lazily on first use and a failure gave an empty catalog, so
+    // those fields were written in plaintext.
+    try geode.fle_integration.catalog_mod.loadGlobalCatalogAtStartup();
+
     // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-007; FEATURE="EngineBackedPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=storage; UPDATED=2026-06-11
     // Initialize global store with engine-backed adapter (creates adapter + loads from engine).
     const store = if (data_dir) |dir|

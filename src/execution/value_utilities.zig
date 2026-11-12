@@ -645,6 +645,8 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                                     if (err == error.SearchNotPermitted) {
                                         break :blk_decrypt "[REDACTED]";
                                     }
+                                    // SONNY-6324: fail closed, never the stored bytes.
+                                    if (err == error.FleCatalogUnavailable) return error.FleCatalogUnavailable;
                                     break :blk_decrypt s;
                                 };
 
@@ -718,6 +720,8 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                                     if (err == error.SearchNotPermitted) {
                                         break :blk_decrypt "[REDACTED]";
                                     }
+                                    // SONNY-6324: fail closed, never the stored bytes.
+                                    if (err == error.FleCatalogUnavailable) return error.FleCatalogUnavailable;
                                     break :blk_decrypt s;
                                 };
 

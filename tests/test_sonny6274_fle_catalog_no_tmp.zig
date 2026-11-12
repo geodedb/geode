@@ -197,12 +197,6 @@ fn modeOf(path: []const u8) !u32 {
 
 test "SONNY-6274: with no data directory the FLE catalog never reads or writes /tmp/geode_fle_catalog.dat" {
     const allocator = testing.allocator;
-    // Catalog instances on an arena: SchemaCatalog.deinit does not free its
-    // field names or role lists (TypeMetadata.deinit frees only the map), a
-    // pre-existing ownership gap outside this regression.
-    var cat_arena = std.heap.ArenaAllocator.init(allocator);
-    defer cat_arena.deinit();
-    const cat_alloc = cat_arena.allocator();
 
     const env = try NoDataDir.enter(allocator);
     defer env.restore(allocator);
@@ -212,7 +206,7 @@ test "SONNY-6274: with no data directory the FLE catalog never reads or writes /
 
     // A fresh session does not load the shared file.
     {
-        var catalog = try freshLoaded(cat_alloc);
+        var catalog = try freshLoaded(allocator);
         defer catalog.deinit();
         if (catalog.count() != 0) {
             std.debug.print("a fresh in-memory session loaded {d} FLE type(s) from {s}\n", .{ catalog.count(), shared_tmp_path });
@@ -223,7 +217,7 @@ test "SONNY-6274: with no data directory the FLE catalog never reads or writes /
 
     // Session A configures an encrypted field. Nothing is written to /tmp.
     {
-        var a = fle_catalog.SchemaCatalog.init(cat_alloc);
+        var a = fle_catalog.SchemaCatalog.init(allocator);
         defer a.deinit();
         try a.configureField("Sonny6274SessionA", encryptedField("ssn"));
         try testing.expect(a.isFieldEncrypted("Sonny6274SessionA", "ssn"));
@@ -233,7 +227,7 @@ test "SONNY-6274: with no data directory the FLE catalog never reads or writes /
     // Session B, another in-memory session (another process), does not see
     // session A's FLE metadata.
     {
-        var b = try freshLoaded(cat_alloc);
+        var b = try freshLoaded(allocator);
         defer b.deinit();
         try testing.expect(!b.isFieldEncrypted("Sonny6274SessionA", "ssn"));
         try testing.expectEqual(@as(usize, 0), b.count());
@@ -244,12 +238,6 @@ test "SONNY-6274: with no data directory the FLE catalog never reads or writes /
 
 test "SONNY-6274: CALL geode.fle.configureField with no data directory stays in memory" {
     const allocator = testing.allocator;
-    // Catalog instances on an arena: SchemaCatalog.deinit does not free its
-    // field names or role lists (TypeMetadata.deinit frees only the map), a
-    // pre-existing ownership gap outside this regression.
-    var cat_arena = std.heap.ArenaAllocator.init(allocator);
-    defer cat_arena.deinit();
-    const cat_alloc = cat_arena.allocator();
 
     const env = try NoDataDir.enter(allocator);
     defer env.restore(allocator);
@@ -272,19 +260,13 @@ test "SONNY-6274: CALL geode.fle.configureField with no data directory stays in 
     try testing.expect(global.isFieldEncrypted("Sonny6274Dispatch", "card"));
     try shared.expectUntouched(allocator);
 
-    var other = try freshLoaded(cat_alloc);
+    var other = try freshLoaded(allocator);
     defer other.deinit();
     try testing.expect(!other.isFieldEncrypted("Sonny6274Dispatch", "card"));
 }
 
 test "SONNY-6274: the store's data directory holds the FLE catalog, mode 0600, across a restart" {
     const allocator = testing.allocator;
-    // Catalog instances on an arena: SchemaCatalog.deinit does not free its
-    // field names or role lists (TypeMetadata.deinit frees only the map), a
-    // pre-existing ownership gap outside this regression.
-    var cat_arena = std.heap.ArenaAllocator.init(allocator);
-    defer cat_arena.deinit();
-    const cat_alloc = cat_arena.allocator();
 
     const env = try NoDataDir.enter(allocator);
     defer env.restore(allocator);
@@ -306,7 +288,7 @@ test "SONNY-6274: the store's data directory holds the FLE catalog, mode 0600, a
     defer _ = umask(old_umask);
 
     {
-        var catalog = try freshLoaded(cat_alloc);
+        var catalog = try freshLoaded(allocator);
         defer catalog.deinit();
         try testing.expectEqual(@as(usize, 0), catalog.count());
         try catalog.configureField("Sonny6274Persisted", encryptedField("ssn"));
@@ -321,7 +303,7 @@ test "SONNY-6274: the store's data directory holds the FLE catalog, mode 0600, a
 
     // Restart: a new process loads it from the data directory.
     {
-        var catalog = try freshLoaded(cat_alloc);
+        var catalog = try freshLoaded(allocator);
         defer catalog.deinit();
         try testing.expect(catalog.isFieldEncrypted("Sonny6274Persisted", "ssn"));
         // A second save rewrites it, still 0600.
@@ -329,7 +311,7 @@ test "SONNY-6274: the store's data directory holds the FLE catalog, mode 0600, a
     }
     try testing.expectEqual(@as(u32, 0o600), try modeOf(catalog_path));
     {
-        var catalog = try freshLoaded(cat_alloc);
+        var catalog = try freshLoaded(allocator);
         defer catalog.deinit();
         try testing.expect(catalog.isFieldEncrypted("Sonny6274Persisted", "ssn"));
         try testing.expect(catalog.isFieldEncrypted("Sonny6274Persisted", "dob"));
@@ -338,7 +320,7 @@ test "SONNY-6274: the store's data directory holds the FLE catalog, mode 0600, a
     // Clearing the data directory makes the next session in memory again.
     graph_store.setDataDirOverride(allocator, null);
     {
-        var catalog = try freshLoaded(cat_alloc);
+        var catalog = try freshLoaded(allocator);
         defer catalog.deinit();
         try testing.expect(!catalog.isFieldEncrypted("Sonny6274Persisted", "ssn"));
     }
@@ -348,7 +330,7 @@ test "SONNY-6274: the store's data directory holds the FLE catalog, mode 0600, a
     defer allocator.free(data_dir_z);
     _ = setenv("GEODE_DATA_DIR", data_dir_z.ptr, 1);
     {
-        var catalog = try freshLoaded(cat_alloc);
+        var catalog = try freshLoaded(allocator);
         defer catalog.deinit();
         try testing.expect(catalog.isFieldEncrypted("Sonny6274Persisted", "ssn"));
     }
@@ -356,12 +338,6 @@ test "SONNY-6274: the store's data directory holds the FLE catalog, mode 0600, a
 
 test "SONNY-6274: a symbolic link planted at the catalog path is neither read nor written through" {
     const allocator = testing.allocator;
-    // Catalog instances on an arena: SchemaCatalog.deinit does not free its
-    // field names or role lists (TypeMetadata.deinit frees only the map), a
-    // pre-existing ownership gap outside this regression.
-    var cat_arena = std.heap.ArenaAllocator.init(allocator);
-    defer cat_arena.deinit();
-    const cat_alloc = cat_arena.allocator();
 
     const env = try NoDataDir.enter(allocator);
     defer env.restore(allocator);
@@ -386,7 +362,7 @@ test "SONNY-6274: a symbolic link planted at the catalog path is neither read no
 
     graph_store.setDataDirOverride(allocator, data_dir);
 
-    var catalog = fle_catalog.SchemaCatalog.init(cat_alloc);
+    var catalog = fle_catalog.SchemaCatalog.init(allocator);
     defer catalog.deinit();
     if (fle_catalog.loadCatalog(&catalog)) |_| {} else |_| {}
     try testing.expect(!catalog.isFieldEncrypted(foreign_type, foreign_field));
@@ -399,7 +375,7 @@ test "SONNY-6274: a symbolic link planted at the catalog path is neither read no
     try testing.expectEqualSlices(u8, victim_bytes, victim_now);
     try testing.expectEqual(@as(u32, 0o600), try modeOf(catalog_path));
 
-    var reloaded = try freshLoaded(cat_alloc);
+    var reloaded = try freshLoaded(allocator);
     defer reloaded.deinit();
     try testing.expect(reloaded.isFieldEncrypted("Sonny6274Link", "ssn"));
     try testing.expect(!reloaded.isFieldEncrypted(foreign_type, foreign_field));

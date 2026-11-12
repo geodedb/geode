@@ -63,6 +63,38 @@
   restarting. `geode fle grant-plaintext` refuses to run without
   `GEODE_DATA_DIR`, where it used to write the grant to `/tmp`.
   Regression: `zig build test-sonny6274-fle-catalog-no-tmp`.
+- **BEHAVIOUR CHANGE: the FLE catalog fails closed (SONNY-6324).**
+  (1) `CALL geode.fle.configureField`, `CALL geode.fle.grantPlaintext`,
+  `geode fle grant-plaintext` and `geode fle revoke-plaintext` logged a
+  failed catalog save and reported success, so the change was lost at the
+  next start: a field the operator was told is encrypted was not, and a
+  revoked role read plaintext again. A failed save is now an error (58030).
+  `configureField` and a grant are undone, so nothing changed; a revoke
+  stays in effect in the running process (`FleRevokeNotPersisted`: it is
+  not saved, and the role has access again after a restart unless a later
+  change of the catalog, such as the retried revoke, is saved). With no data
+  directory the catalog is memory-only and nothing is saved. (2) A catalog
+  file that existed but could not be loaded (corrupt, truncated, written
+  with another `GEODE_TDE_KEY` or with none set, a symbolic link,
+  unreadable) gave an empty catalog, so the fields configured as encrypted
+  were written in plaintext. **The server now refuses to start** and names
+  the file and the cause; an embedded or CLI session gets
+  `FleCatalogUnavailable` (58030) from everything that uses the catalog,
+  and the engine refuses every string property write and every read of a
+  string property while it lasts (it cannot tell which fields are
+  encrypted); other writes run. An absent file is still a fresh, empty
+  catalog. A string value that must be encrypted and cannot be is refused
+  (`EncryptionRequired`, 58030) on the graph store's own write paths too,
+  which wrote it in plaintext. (3) The catalog no longer leaks field names
+  and role lists, and a corrupt enum byte in the file is an error instead
+  of a crash. **Upgrade note (SONNY-6274):** the engine cannot tell that a
+  store holds encrypted values whose catalog was left in
+  `/tmp/geode_fle_catalog.dat` (no cheap, reliable signal: the values are
+  opaque strings, and a key or a `/tmp` file proves nothing about this
+  store), so it does not refuse to start; it warns at startup when the data
+  directory has no catalog and that file exists. Copy it over (after
+  checking it is yours) before serving traffic.
+  Regression: `zig build test-sonny6324-fle-catalog-fail-closed`.
 
 ### Added
 

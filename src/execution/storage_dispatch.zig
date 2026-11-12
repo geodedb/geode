@@ -2969,7 +2969,8 @@ fn handleGeodeFleGrantplaintext(allocator: std.mem.Allocator, call_stmt: ast.Cal
     // calls catalog.grantPlaintextAccess(...) — the exact same call the offline CLI
     // makes (src/admin/fle_commands.zig grantPlaintext). The grant is persisted via
     // saveCatalog inside grantPlaintextAccess, so it survives restart and is
-    // byte-for-byte identical to the offline grant.
+    // byte-for-byte identical to the offline grant. SONNY-6324: a failed save
+    // undoes the grant and fails the call (FleCatalogNotPersisted, 58030).
     //
     // Example: CALL geode.fle.grantPlaintext('User', 'ssn', 'analyst')
 

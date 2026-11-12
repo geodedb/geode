@@ -41,6 +41,10 @@ pub const EvalError = error{
     JsonInvalid,
     XmlNotWellFormed,
     SearchNotPermitted,
+    // SONNY-6324: the FLE catalog cannot be loaded, so whether a string
+    // property is encrypted (and who may read it) is unknown: the read is
+    // refused rather than answered with the stored bytes.
+    FleCatalogUnavailable,
     UrlParseError,
     DomainSyntaxError,
     UuidParseError,

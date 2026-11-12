@@ -1886,6 +1886,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                                     if (err == error.SearchNotPermitted) {
                                         return EvalError.SearchNotPermitted;
                                     }
+                                    // SONNY-6324: fail closed, never the stored bytes.
+                                    if (err == error.FleCatalogUnavailable) return EvalError.FleCatalogUnavailable;
                                     break :blk Value{ .Str = try allocator.dupe(u8, s) };
                                 };
                                 break :blk Value{ .Str = try allocator.dupe(u8, checked_value) };
@@ -2158,6 +2160,8 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
                         if (err == error.SearchNotPermitted) {
                             return EvalError.SearchNotPermitted;
                         }
+                        // SONNY-6324: fail closed, never the stored bytes.
+                        if (err == error.FleCatalogUnavailable) return EvalError.FleCatalogUnavailable;
                         // For other errors, fall back to original value
                         break :blk Value{ .Str = s };
                     };
@@ -2187,6 +2191,8 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
                         if (err == error.SearchNotPermitted) {
                             return EvalError.SearchNotPermitted;
                         }
+                        // SONNY-6324: fail closed, never the stored bytes.
+                        if (err == error.FleCatalogUnavailable) return EvalError.FleCatalogUnavailable;
                         // For other errors, fall back to original value
                         break :blk Value{ .Str = s };
                     };

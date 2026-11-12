@@ -94,7 +94,13 @@ pub fn encryptPropertyIfNeeded(
         // SECURITY FIX: If encryption is REQUIRED for this field but fails,
         // we MUST NOT write plaintext to disk. Return an error instead.
         if (requires_encryption) {
-            std.log.err("SECURITY: Encryption REQUIRED for field {s}.{s} but failed: {}. Refusing to write plaintext.", .{ node_type, field_name, err });
+            // SONNY-6324: the structured security log (an unloadable FLE
+            // catalog makes this the path of every string write).
+            fle_log.err("SECURITY: encryption required but failed; refusing to write plaintext", &.{
+                Attr.string("type", node_type),
+                Attr.string("field", field_name),
+                Attr.string("error", @errorName(err)),
+            });
             return FLEHookError.EncryptionRequired;
         }
         // If field doesn't require encryption, this is just a warning
@@ -151,7 +157,11 @@ pub fn encryptEdgePropertyIfNeeded(
         // SECURITY FIX: If encryption is REQUIRED for this field but fails,
         // we MUST NOT write plaintext to disk. Return an error instead.
         if (requires_encryption) {
-            std.log.err("SECURITY: Encryption REQUIRED for edge property {s}.{s} but failed: {}. Refusing to write plaintext.", .{ edge_type, field_name, err });
+            fle_log.err("SECURITY: encryption required for an edge property but failed; refusing to write plaintext", &.{
+                Attr.string("type", edge_type),
+                Attr.string("field", field_name),
+                Attr.string("error", @errorName(err)),
+            });
             return FLEHookError.EncryptionRequired;
         }
         // If field doesn't require encryption, this is just a warning

@@ -522,6 +522,25 @@ defer std.crypto.secureZero(u8, plaintext);
 - Max plaintext: 64 KiB (configurable)
 - AEAD usage limits enforced (track operations per key)
 
+**The FLE catalog fails closed (SONNY-6324):**
+
+The catalog (`geode_fle_catalog.dat` in the data directory) says which
+fields are encrypted and who may read them in plaintext.
+
+- A change whose save fails is an error (58030). `configureField` and a
+  plaintext grant are undone. A revoke stays in effect in the running
+  process and is reported as not saved (`FleRevokeNotPersisted`): retry it;
+  any later saved change of the catalog also saves it. With no data
+  directory the catalog is memory-only and nothing is saved.
+- A catalog file that exists and cannot be loaded (corrupt, truncated,
+  another or no `GEODE_TDE_KEY`, a symbolic link, unreadable) stops the
+  server at startup with the file and the cause. An embedded or CLI session
+  gets `FleCatalogUnavailable` (58030) from every use of the catalog, and
+  every string property write and string property read is refused until
+  it is restored. An absent file is an empty catalog.
+- A string value that must be encrypted and cannot be is refused
+  (`EncryptionRequired`, 58030), never stored in plaintext.
+
 ---
 
 ## Testing

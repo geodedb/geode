@@ -416,6 +416,11 @@ pub fn grantPlaintext(allocator: std.mem.Allocator, args: PolicyArgs) !void {
             std.debug.print("Error: Field '{s}' not found in schema '{s}'\n", .{ args.field_name, args.schema_name });
             return error.FieldNotFound;
         },
+        // SONNY-6324: it used to report success with the grant unsaved.
+        error.FleCatalogNotPersisted => {
+            std.debug.print("Error: the grant could not be saved to the FLE catalog and was not applied. Fix the data directory and retry\n", .{});
+            return err;
+        },
         else => return err,
     };
 
@@ -438,6 +443,11 @@ pub fn revokePlaintext(allocator: std.mem.Allocator, args: PolicyArgs) !void {
         error.FieldNotFound => {
             std.debug.print("Error: Field '{s}' not found in schema '{s}'\n", .{ args.field_name, args.schema_name });
             return error.FieldNotFound;
+        },
+        // SONNY-6324: it used to report success with the revoke unsaved.
+        error.FleRevokeNotPersisted => {
+            std.debug.print("Error: the revoke could not be saved to the FLE catalog; role '{s}' keeps READ_PLAINTEXT on '{s}.{s}' in the catalog file. Fix the data directory and retry\n", .{ args.role, args.schema_name, args.field_name });
+            return err;
         },
         else => return err,
     };

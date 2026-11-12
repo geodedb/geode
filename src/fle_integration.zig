@@ -36,9 +36,14 @@ pub fn hasEncryptedFields() bool {
         defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (!fle_has_encrypted_fields and !fle_catalog_state_checked) {
+            // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=UnknownMeansEncrypted; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-6324: a catalog that cannot be loaded means "which fields
+            // are encrypted is unknown", not "none are": answer true (and
+            // remember nothing), so callers take the FLE path, which asks
+            // the catalog and refuses. It answered false and cached it, so
+            // every write skipped FLE and went to disk in plaintext.
             const catalog = fle_catalog.globalCatalog(std.heap.c_allocator) catch {
-                fle_catalog_state_checked = true;
-                return fle_has_encrypted_fields;
+                return true;
             };
             fle_has_encrypted_fields = catalog.count() > 0;
             fle_catalog_state_checked = true;
