@@ -20,6 +20,7 @@ const testing = std.testing;
 const schema = @import("schema");
 const grpc = @import("grpc_impl").impl;
 const fx = @import("sonny738_r12_grpc_fixture.zig");
+const geode = @import("geode");
 
 /// The first column of the first row as an integer (the query must run).
 fn firstInt(ga: std.mem.Allocator, s: []const u8, q: []const u8) !?i64 {
@@ -98,4 +99,52 @@ test "SONNY-6433: keys() and properties() omit a removed property (bounded cache
 
 test "SONNY-6433: keys() and properties() omit a removed property (unbounded caches)" {
     try checkRemoved(.{});
+}
+
+/// `.zig-cache/tmp/<sub_path>` as an absolute path. Caller frees.
+fn tmpDataDir(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..cwd_len], sub_path });
+}
+
+test "SONNY-6433: a removed property stays absent when a reopen rebuilds the node from a scan" {
+    const allocator = testing.allocator;
+    const graph_store = geode.graph_store;
+    graph_store.deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        const store = graph_store.getGlobalStore(allocator);
+        const node_id = try store.createNodeWithGraph(&[_][]const u8{"KS6433"}, "g6433");
+        try store.setNodeProperty(node_id, "k", .{ .Int = 1 });
+        try store.setNodeProperty(node_id, "p", .{ .Int = 2 });
+        store.removeNodeProperty(node_id, "p");
+        // The engine pages only (no IdMap or loop2 snapshot), and the
+        // crash-style close: the reopen rebuilds the graph from a scan of
+        // the stored property chains. (Pinned: this path already left the
+        // removed property out before the fix.)
+        try store.saveToFileEx(true);
+        graph_store.deinitGlobalStoreForTestCrash();
+        graph_store.setDataDirOverride(allocator, null);
+    }
+    {
+        graph_store.setDataDirOverride(allocator, data_dir);
+        defer graph_store.setDataDirOverride(allocator, null);
+        graph_store.resetLazyHydrateCounters();
+        const store = graph_store.getGlobalStore(allocator);
+        defer graph_store.deinitGlobalStore();
+        const ids = store.getNodesByLabel("g6433", "KS6433") orelse return error.NoLabelIndex;
+        try testing.expectEqual(@as(usize, 1), ids.len);
+        try testing.expect(graph_store.loop2ScanNodeCount() >= 1);
+        const node = store.getNodePtr(ids[0]) orelse return error.NodeMissing;
+        try testing.expect(node.properties.get("k") != null);
+        if (node.properties.get("p") != null) std.debug.print("p is still a property after the reopen\n", .{});
+        try testing.expect(node.properties.get("p") == null);
+    }
 }

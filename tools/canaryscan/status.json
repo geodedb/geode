@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:43:23.394071793Z",
+  "generated_at": "2026-11-12T23:50:40.575462984Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84325,6 +84325,20 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-12"
+        },
+        {
+          "feature": "PropertyStorage",
+          "aspect": "TombstoneNotAProperty",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_keys_after_remove.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -92014,7 +92028,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4782
+      "TESTED": 4783
     },
     "by_aspect": {
       "2PC": 3,
@@ -95778,6 +95792,7 @@
       "ToUpper": 1,
       "TokenValidation": 2,
       "Tokenize": 1,
+      "TombstoneNotAProperty": 1,
       "ToolDispatch": 1,
       "Tooling": 2,
       "ToolsThreading": 1,

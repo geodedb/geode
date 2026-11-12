@@ -1581,6 +1581,18 @@ fn freeReadPropertyMap(allocator: Allocator, map: *std.StringHashMap(gs.Property
 /// they used to leak).
 fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue), key: []const u8, encoded: []const u8) !void {
     const decoded = try gs.property.decode(allocator, encoded);
+    // CANARY: REQ=REQ-SONNY-6433-KEYS-AFTER-REMOVE; FEATURE="PropertyStorage"; ASPECT=TombstoneNotAProperty; STATUS=TESTED; TEST=tests/test_sonny6433_keys_after_remove.zig; OWNER=storage; UPDATED=2026-11-12
+    // SONNY-6433: a null is the tombstone `removeNodeProperty` (REMOVE, and
+    // SET to null) writes: the property is absent, not present with a null
+    // value. It was copied into the map, so keys() and properties() listed
+    // a removed property.
+    if (decoded.value == .null) {
+        if (map.fetchRemove(key)) |kv| {
+            allocator.free(kv.key);
+            freeOwnedStorageProperty(allocator, kv.value);
+        }
+        return;
+    }
     errdefer freeOwnedStorageProperty(allocator, decoded.value);
     const owned_key = try allocator.dupe(u8, key);
     errdefer allocator.free(owned_key);

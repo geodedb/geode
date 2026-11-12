@@ -1632,6 +1632,19 @@
 
 ### Fixed
 
+- **`keys()` and `properties()` no longer list a property that `REMOVE` or
+  `SET ... = null` took away (SONNY-6433 item 1).** Removing a node
+  property writes a null tombstone into its stored property chain
+  (`StorageAdapter.removeNodeProperty`), and `getAllNodeProperties` /
+  `getAllEdgeProperties`, which every read that
+  rebuilds a node or relationship from storage goes through (a bounded
+  cache's hydrate, the planned read, the node-scan stream), copied the
+  tombstone into the property map: `n.p` read null while `keys(n)` and
+  `properties(n)` still listed `p`. A tombstone now takes the property out
+  of the map (ISO/IEC 39075:2024 13.4: the property is removed from the
+  element's property set). Regression: `zig build
+  test-sonny6433-keys-after-remove`; `test-sonny3245-create-merge-forms`
+  now asserts `keys()` after `SET n.p = null` too.
 - **`zig build test-graph-store` and `zig build test-compile` compile again
   (SONNY-6433 item 4).** SONNY-6422 made the storage adapter check the
   audit signing keys (`AuditLogger.loadEnvSigningKey`), which reaches
