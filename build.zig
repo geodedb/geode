@@ -477,7 +477,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-first-boot-admin-breadcrumb", .reason = "failing: reset-password checks the password policy before loading the user (KNOWN_TEST_ISSUES)" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
-    .{ .name = "test-sonny6299-backup-excludes-secrets", .reason = "failing: intentionally red SONNY-6299 reproduction (backups archive server.key, .geode_hmac_key and .geode.lock; server backups land in ./server_backups); moves to shardDep with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9349,7 +9348,7 @@ pub fn build(b: *std.Build) void {
     const sonny6299_tests = b.addTest(.{ .root_module = sonny6299_test_mod });
     const run_sonny6299_tests = b.addRunArtifact(sonny6299_tests);
     spawnsBuiltGeode(sonny6299_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6299_tests.step);
+    shardDep(test_step, &run_sonny6299_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6299_step = b.step("test-sonny6299-backup-excludes-secrets", "Run SONNY-6299 regression (spawns servers: a backup holds no TLS key, HMAC key, admin password or lock and never itself; server backups live under the data directory 0700/0600 from any working directory, ./server_backups still read, GEODE_BACKUP_DIR absolute only; geode restore of auth state needs and verifies the HMAC key; an older archive restores with a warning, never its lock)");
     sonny6299_step.dependOn(&run_sonny6299_tests.step);
 

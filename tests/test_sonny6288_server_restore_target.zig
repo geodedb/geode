@@ -289,14 +289,15 @@ const Layout = struct {
         self.root.remove();
     }
 
-    /// The server wrote nothing into its working directory but its own
-    /// server-managed backup directory (never ./data).
+    /// The server wrote nothing into its working directory (never ./data;
+    /// since SONNY-6299 its backups live under its data directory, not in
+    /// ./server_backups).
     fn expectCwdClean(self: *Layout, allocator: std.mem.Allocator) !void {
         const data = try join(allocator, self.cwd, "data");
         defer allocator.free(data);
         if (pathExists(data)) std.debug.print("SONNY-6288: restore wrote into the server's ./data ({s})\n", .{data});
         try testing.expect(!pathExists(data));
-        try expectNames(allocator, self.cwd, &.{"server_backups"});
+        try expectNames(allocator, self.cwd, &.{});
     }
 };
 
@@ -497,7 +498,7 @@ test "SONNY-6288 a failed server restore (corrupt backup, unsafe entry names, no
 
     // Corrupt the server's backup: refused, nothing written.
     {
-        const backups = try join(allocator, lay.cwd, "server_backups");
+        const backups = try join(allocator, lay.x, "backups");
         defer allocator.free(backups);
         const names = try listNames(allocator, backups);
         defer freeNames(allocator, names);
@@ -611,7 +612,7 @@ test "SONNY-6288 a server restore is refused in cluster mode before anything is 
     const backups = try join(allocator, root.path(), "server_backups");
     defer allocator.free(backups);
 
-    const result = try geode.backup_manager.restoreForServer(allocator, backups, "", "geode");
+    const result = try geode.backup_manager.restoreForServer(allocator, &.{backups}, "", "geode");
     defer allocator.free(result.message);
     defer allocator.free(result.restore_dir);
     try testing.expect(!result.success);

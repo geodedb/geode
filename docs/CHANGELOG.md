@@ -50,6 +50,36 @@
   backslashes or NUL, and unique (`UnsafeArchiveEntryName`). Restored files
   are created mode 0600 and synced; they used to get the umask default,
   which left `server.key` and `.geode_hmac_key` from a backup world-readable.
+- **BREAKING: backups no longer hold the TLS key, the auth-chain HMAC key,
+  the generated admin password or the lock file; server backups move under
+  the data directory (SONNY-6299).** A backup archived every top-level file
+  of the data directory: `server.key` (the TLS private key), `.geode_hmac_key`
+  (the key that seals the `__geode_security` auth chain, so whoever held a
+  backup could re-seal forged auth records), `.geode_admin_password` and
+  `.geode.lock`, which a restore then planted in the new directory. Backup
+  files were mode 0664. Server backups went to `./server_backups` of the
+  server's working directory, so where they landed, and whether a restore
+  found them, depended on how the server was started. Now a backup holds
+  graph data only (never those files, `server.crt`, or the backup
+  directory itself); backup files and `metadata.json` are 0600; a server
+  writes its backups to `<data dir>/backups/` (0700) of the data directory
+  its engine has open, or to `GEODE_BACKUP_DIR` (absolute, outside the data
+  directory, else `InvalidBackupDir`). A server restore still reads
+  `./server_backups` for one release (newest backup in either); move old
+  backups into `<data dir>/backups/`. **Restoring auth state now needs the
+  HMAC key:** `geode restore <file>` of a backup with `__geode_security`
+  records takes `--hmac-key-file <source data dir>/.geode_hmac_key` or
+  `GEODE_AUTH_HMAC_KEY`/`GEODE_TDE_KEY`, verifies the chain with it before
+  committing (`HmacKeyRequired`, `AuthChainVerificationFailed` otherwise),
+  or, if the key is lost, `--unverified-auth`, after which no server starts
+  until `geode auth reseal --data-dir <dir>` accepts the records. Keep the
+  HMAC key with your key material, apart from the backups. A server restore
+  copies the server's own key file into the restored directory. A restored
+  directory gets a new self-signed TLS certificate on first start; copy
+  `server.crt`/`server.key` over, or use `GEODE_CERT_DIR`, to keep the old
+  identity. Backups written by older binaries still restore, with a
+  warning; their key files are written 0600 and their lock file is not.
+  Regression: `zig build test-sonny6299-backup-excludes-secrets`.
 
 ### Added
 

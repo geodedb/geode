@@ -9418,7 +9418,6 @@ fn handleClientMessage(
             // TODO(P1): Consider multi-graph lock acquisition for backup.
             graph_store.acquireStoreLock();
             defer graph_store.releaseStoreLock();
-            const backup_dir = "./server_backups";
             const backup_config = BackupConfig{
                 // GAP-0880: gzip is the only compression codec with a real
                 // encoder; never request zstd (no encoder — it would fail
@@ -9428,7 +9427,9 @@ fn handleClientMessage(
                 .retention_days = 30,
             };
 
-            var mgr = SimplifiedBackupManager.init(gpa, backup_dir, backup_config) catch |err| {
+            // SONNY-6299: under the data directory the engine has open (or
+            // GEODE_BACKUP_DIR), not ./server_backups of the working directory.
+            var mgr = SimplifiedBackupManager.initForServer(gpa, backup_config) catch |err| {
                 const msg_text = try std.fmt.allocPrint(gpa, "Backup init failed: {s}", .{@errorName(err)});
                 try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = msg_text } });
                 return;
@@ -9463,7 +9464,7 @@ fn handleClientMessage(
 
             // Stream backup file bytes after sending metadata response.
             if (metadata.size_bytes > 0) {
-                const backup_path = try std.fmt.allocPrint(gpa, "{s}/full_{x}.backup", .{ backup_dir, metadata.backup_id });
+                const backup_path = try std.fmt.allocPrint(gpa, "{s}/full_{x}.backup", .{ mgr.backupDir(), metadata.backup_id });
                 defer gpa.free(backup_path);
 
                 const io_bs = std.Io.Threaded.global_single_threaded.io();
@@ -9534,7 +9535,7 @@ fn handleClientMessage(
             // used to be GEODE_DATA_DIR or ./data, written in place while
             // this server kept serving its old data). No store lock: the live
             // store is not touched.
-            const result = try backup_manager.restoreForServer(gpa, "./server_backups", restore_req.target_time, state.authenticated_user orelse "");
+            const result = try backup_manager.restoreForServerDefault(gpa, restore_req.target_time, state.authenticated_user orelse "");
             const ts = compat_milliTimestamp();
             try sendQuicMessage(gpa, stream, .{ .restore = .{
                 .success = result.success,
@@ -9588,7 +9589,7 @@ fn handleClientMessage(
                 return;
             };
 
-            var upload_mgr = SimplifiedBackupManager.init(gpa, "./server_backups", .{}) catch |err| {
+            var upload_mgr = SimplifiedBackupManager.initForServer(gpa, .{}) catch |err| {
                 const msg_text = try std.fmt.allocPrint(gpa, "Upload init failed: {s}", .{@errorName(err)});
                 try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = msg_text } });
                 return;
@@ -9601,7 +9602,7 @@ fn handleClientMessage(
                 return;
             };
 
-            const stored_path = try std.fmt.allocPrint(gpa, "./server_backups/full_{x}.backup", .{ingested.backup_id});
+            const stored_path = try std.fmt.allocPrint(gpa, "{s}/full_{x}.backup", .{ upload_mgr.backupDir(), ingested.backup_id });
             try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = true, .message = try gpa.dupe(u8, "Backup uploaded, verified, and registered"), .upload_path = stored_path } });
         },
         .cancel => |cancel_req| {

@@ -158,6 +158,89 @@ pub const RecoveryPoint = struct {
 pub const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
 pub const BACKUP_VERSION: u16 = 4;
 
+/// Mode for backup files and their metadata: a backup holds every graph's
+/// data, so only the owner may read it (SONNY-6299; was 0664).
+const backup_file_perms: std.Io.File.Permissions = if (builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600);
+
+// CANARY: REQ=REQ-BACKUP-SECRETS-001; FEATURE="Backup Restore"; ASPECT=ExcludeKeyMaterialAndLock; STATUS=TESTED; TEST=tests/test_sonny6299_backup_excludes_secrets.zig; OWNER=storage; UPDATED=2026-11-11
+/// Top-level data-directory files a backup never holds (SONNY-6299):
+/// `.geode.lock` is the running process's data-directory lock;
+/// `.geode_hmac_key` authenticates the `__geode_security` chain (whoever
+/// holds it beside a backup can re-seal forged auth records);
+/// `.geode_admin_password` is the generated first-boot admin password;
+/// `server.key`/`server.crt` are the server's auto-generated TLS identity
+/// (the certificate goes with its key: a server regenerates the pair only
+/// when the certificate is missing). A restore of auth state takes the HMAC
+/// key from the operator instead.
+pub const excluded_data_dir_files = [_][]const u8{ lock_file_name, hmac_key_file_name, ".geode_admin_password", "server.key", "server.crt" };
+pub const lock_file_name = ".geode.lock";
+pub const hmac_key_file_name = ".geode_hmac_key";
+
+/// The server's backup directory inside its data directory (SONNY-6299).
+/// Never archived, so a backup does not hold the previous backups.
+pub const server_backup_dir_name = "backups";
+
+/// Whether the top-level data-directory entry `name` stays out of a backup.
+pub fn isExcludedFromBackup(name: []const u8, kind: std.Io.File.Kind) bool {
+    switch (kind) {
+        .file => {
+            for (excluded_data_dir_files) |f| {
+                if (std.mem.eql(u8, name, f)) return true;
+            }
+            return std.mem.endsWith(u8, name, ".backup") or std.mem.eql(u8, name, "backup_metadata.log");
+        },
+        .directory => return std.mem.eql(u8, name, server_backup_dir_name),
+        else => return true,
+    }
+}
+
+/// Which of the excluded files an archive holds: an archive written before
+/// SONNY-6299 holds them all. A restore still writes the key files (0600)
+/// so such a backup restores as before, warns, and never writes the lock.
+pub const KeyMaterial = struct {
+    hmac_key: bool = false,
+    tls_key: bool = false,
+    tls_cert: bool = false,
+    admin_password: bool = false,
+    lock: bool = false,
+
+    pub fn any(self: KeyMaterial) bool {
+        return self.hmac_key or self.tls_key or self.tls_cert or self.admin_password;
+    }
+
+    /// The key-material file names present, comma separated, into `buf`.
+    pub fn names(self: KeyMaterial, buf: []u8) []const u8 {
+        var w: std.Io.Writer = .fixed(buf);
+        var first = true;
+        const items = [_]struct { bool, []const u8 }{
+            .{ self.hmac_key, hmac_key_file_name },
+            .{ self.tls_key, "server.key" },
+            .{ self.tls_cert, "server.crt" },
+            .{ self.admin_password, ".geode_admin_password" },
+        };
+        for (items) |it| {
+            if (!it[0]) continue;
+            w.print("{s}{s}", .{ if (first) "" else ", ", it[1] }) catch break;
+            first = false;
+        }
+        return w.buffered();
+    }
+};
+
+/// The excluded files present at the top level of a (validated) archive.
+pub fn archiveKeyMaterial(archive: []const u8) !KeyMaterial {
+    var km: KeyMaterial = .{};
+    var it = try ArchiveIterator.init(archive);
+    while (try it.next()) |entry| {
+        if (std.mem.eql(u8, entry.name, hmac_key_file_name)) km.hmac_key = true;
+        if (std.mem.eql(u8, entry.name, "server.key")) km.tls_key = true;
+        if (std.mem.eql(u8, entry.name, "server.crt")) km.tls_cert = true;
+        if (std.mem.eql(u8, entry.name, ".geode_admin_password")) km.admin_password = true;
+        if (std.mem.eql(u8, entry.name, lock_file_name)) km.lock = true;
+    }
+    return km;
+}
+
 /// Backup header with payload length for GraphStore snapshots.
 pub const BackupHeader = extern struct {
     magic: u32,
@@ -266,7 +349,7 @@ pub const BackupManager = struct {
         defer self.allocator.free(backup_path);
 
         const io_bf = std.Io.Threaded.global_single_threaded.io();
-        const file = try std.Io.Dir.cwd().createFile(io_bf, backup_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(io_bf, backup_path, .{ .permissions = backup_file_perms });
         defer file.close(io_bf);
 
         const header = BackupHeader{
@@ -338,7 +421,7 @@ pub const BackupManager = struct {
         defer self.allocator.free(backup_path);
 
         const io_ub = std.Io.Threaded.global_single_threaded.io();
-        const file = try std.Io.Dir.cwd().createFile(io_ub, backup_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(io_ub, backup_path, .{ .permissions = backup_file_perms });
         defer file.close(io_ub);
         try file.writeStreamingAll(io_ub, file_bytes);
         try file.sync(io_ub);
@@ -464,7 +547,7 @@ pub const BackupManager = struct {
         const path = try self.metadataPath();
         defer self.allocator.free(path);
         const io_wm = std.Io.Threaded.global_single_threaded.io();
-        const file = try std.Io.Dir.cwd().createFile(io_wm, path, .{});
+        const file = try std.Io.Dir.cwd().createFile(io_wm, path, .{ .permissions = backup_file_perms });
         defer file.close(io_wm);
         const json_str = try std.json.Stringify.valueAlloc(self.allocator, self.metadata_log.items, .{});
         defer self.allocator.free(json_str);
@@ -597,10 +680,9 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
 
     var root_iter = root.iterate();
     while (try root_iter.next(io_rp)) |entry| {
-        // Never archive prior backup artifacts (defensive: in case a caller
-        // points backup_dir at data_dir).
-        if (std.mem.endsWith(u8, entry.name, ".backup")) continue;
-        if (std.mem.eql(u8, entry.name, "backup_metadata.log")) continue;
+        // SONNY-6299: no key material, lock, or backups (prior backup
+        // artifacts and the server's backup directory).
+        if (isExcludedFromBackup(entry.name, entry.kind)) continue;
 
         const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ data_dir, entry.name });
         defer allocator.free(full_path);
@@ -772,6 +854,7 @@ fn validateArchive(allocator: std.mem.Allocator, payload: []const u8) !ArchiveSt
         }
         const gop = try seen.getOrPut(entry.name);
         if (gop.found_existing) return error.InvalidBackupFile;
+        if (std.mem.eql(u8, entry.name, lock_file_name)) continue;
         stats.files += 1;
         stats.bytes += entry.data.len;
     }
@@ -781,8 +864,10 @@ fn validateArchive(allocator: std.mem.Allocator, payload: []const u8) !ArchiveSt
 /// Restore a per-graph archive payload into restore_dir, recreating
 /// `graph_registry.dat` and every per-graph directory. The whole archive is
 /// validated first (names cannot escape restore_dir). Files are created
-/// 0600 — the archive keeps no modes and holds key material (server.key,
-/// .geode_hmac_key) — and synced before the restore reports success.
+/// 0600 — the archive keeps no modes, and one written before SONNY-6299
+/// holds key material (server.key, .geode_hmac_key) — and synced before the
+/// restore reports success. A `.geode.lock` entry (such an archive's) is
+/// never written: it is the source process's lock, not data.
 // CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=storage; UPDATED=2026-11-11
 fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8) !void {
     _ = try validateArchive(allocator, payload);
@@ -791,6 +876,7 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
     const file_perms: std.Io.File.Permissions = if (comptime builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600);
     var it = try ArchiveIterator.init(payload);
     while (try it.next()) |entry| {
+        if (std.mem.eql(u8, entry.name, lock_file_name)) continue;
         // Build the destination path and ensure parent directories exist.
         const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ restore_dir, entry.name });
         defer allocator.free(full_path);
@@ -817,6 +903,7 @@ fn verifyRestoredArchive(allocator: std.mem.Allocator, dir: []const u8, payload:
     var it = try ArchiveIterator.init(payload);
     var buf: [64 * 1024]u8 = undefined;
     while (try it.next()) |entry| {
+        if (std.mem.eql(u8, entry.name, lock_file_name)) continue;
         const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, entry.name });
         defer allocator.free(full_path);
         const f = try std.Io.Dir.cwd().openFile(io, full_path, .{ .mode = .read_only });
@@ -954,36 +1041,51 @@ pub fn countRestoredStore(allocator: std.mem.Allocator, dir: []const u8) ![]Rest
 /// `target_time` (epoch ms). Reads only. Caller owns the returned path.
 // CANARY: REQ=REQ-PITR-GS-001; FEATURE="Point-in-Time Recovery"; ASPECT=SnapshotSelection; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=backup; UPDATED=2026-11-11
 pub fn selectPointInTimeBackup(allocator: std.mem.Allocator, backup_dir: []const u8, target_time: i64) ![]u8 {
-    const metadata_path = try std.fmt.allocPrint(allocator, "{s}/metadata.json", .{backup_dir});
-    defer allocator.free(metadata_path);
+    return selectPointInTimeBackupIn(allocator, &.{backup_dir}, target_time);
+}
 
-    const io_pt = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.cwd().openFile(io_pt, metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
-        error.FileNotFound => return error.BackupMetadataNotFound,
-        else => return err,
-    };
-    defer file.close(io_pt);
-
-    const file_len = try file.length(io_pt);
-    if (file_len > 2 * 1024 * 1024) return error.OutOfMemory;
-    const data = try allocator.alloc(u8, @intCast(file_len));
-    defer allocator.free(data);
-    _ = try file.readPositionalAll(io_pt, data, 0);
-
-    const parsed = try std.json.parseFromSlice([]BackupMetadata, allocator, data, .{});
-    defer parsed.deinit();
-
+/// `selectPointInTimeBackup` across several backup directories (a server's
+/// own and the pre-SONNY-6299 ./server_backups): the newest full backup at
+/// or before `target_time` in any of them. A directory without
+/// metadata.json is skipped; with none at all, error.BackupMetadataNotFound.
+pub fn selectPointInTimeBackupIn(allocator: std.mem.Allocator, backup_dirs: []const []const u8, target_time: i64) ![]u8 {
     var chosen: ?BackupMetadata = null;
-    for (parsed.value) |entry| {
-        if (entry.backup_type != .full) continue;
-        if (entry.timestamp > target_time) continue;
-        if (chosen == null or entry.timestamp > chosen.?.timestamp) {
-            chosen = entry;
+    var chosen_dir: []const u8 = "";
+    var any_metadata = false;
+    for (backup_dirs) |backup_dir| {
+        const metadata_path = try std.fmt.allocPrint(allocator, "{s}/metadata.json", .{backup_dir});
+        defer allocator.free(metadata_path);
+
+        const io_pt = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(io_pt, metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        defer file.close(io_pt);
+        any_metadata = true;
+
+        const file_len = try file.length(io_pt);
+        if (file_len > 2 * 1024 * 1024) return error.OutOfMemory;
+        const data = try allocator.alloc(u8, @intCast(file_len));
+        defer allocator.free(data);
+        _ = try file.readPositionalAll(io_pt, data, 0);
+
+        const parsed = try std.json.parseFromSlice([]BackupMetadata, allocator, data, .{});
+        defer parsed.deinit();
+
+        for (parsed.value) |entry| {
+            if (entry.backup_type != .full) continue;
+            if (entry.timestamp > target_time) continue;
+            if (chosen == null or entry.timestamp > chosen.?.timestamp) {
+                chosen = entry;
+                chosen_dir = backup_dir;
+            }
         }
     }
+    if (!any_metadata) return error.BackupMetadataNotFound;
 
     const selected = chosen orelse return error.BackupNotFound;
-    return std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, selected.backup_id });
+    return std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ chosen_dir, selected.backup_id });
 }
 
 /// A server restore written into a new directory beside the server's data
@@ -996,6 +1098,10 @@ pub const SideRestore = struct {
     backup_path: []u8,
     stats: ArchiveStats,
     graphs: []RestoredGraph,
+    /// Key material the archive held (an archive from before SONNY-6299).
+    key_material: KeyMaterial = .{},
+    /// The live data directory's `.geode_hmac_key` was copied in.
+    copied_hmac_key: bool = false,
 
     pub fn deinit(self: *SideRestore) void {
         self.allocator.free(self.target_dir);
@@ -1005,7 +1111,32 @@ pub const SideRestore = struct {
     }
 };
 
-/// Restore the newest backup in `backup_dir` taken at or before
+/// Copy `<from_dir>/.geode_hmac_key` into `to_dir` (a fresh staging
+/// directory), mode 0600, never overwriting. Returns false when `from_dir`
+/// has no key file (the key comes from GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY).
+/// The key bytes are never logged.
+fn copyHmacKeyFile(allocator: std.mem.Allocator, from_dir: []const u8, to_dir: []const u8) !bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const src = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ from_dir, hmac_key_file_name });
+    defer allocator.free(src);
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, src, allocator, .limited(256)) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer {
+        std.crypto.secureZero(u8, bytes);
+        allocator.free(bytes);
+    }
+    const dst = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ to_dir, hmac_key_file_name });
+    defer allocator.free(dst);
+    const out = try std.Io.Dir.cwd().createFile(io, dst, .{ .exclusive = true, .permissions = backup_file_perms });
+    defer out.close(io);
+    try out.writeStreamingAll(io, bytes);
+    try out.sync(io);
+    return true;
+}
+
+/// Restore the newest backup in `backup_dirs` taken at or before
 /// `target_time` into a NEW directory beside `live_data_dir`, named
 /// `<live_data_dir>.restored-<backup id>-<ms>` (SONNY-6288). The live data
 /// directory is never written: a running server cannot swap its store under
@@ -1017,19 +1148,26 @@ pub const SideRestore = struct {
 /// (`stageRestore`), open it as a store and count every graph
 /// (`countRestoredStore`), then rename it into place. Any failure leaves
 /// neither the target nor the staging directory behind.
+///
+/// SONNY-6299: backups no longer hold `.geode_hmac_key`. This server
+/// restores its own backups, so its key file (when it has one) is copied
+/// into the restored directory; the restored `__geode_security` chain is
+/// then verified with this server's key when a server starts on it, and a
+/// backup sealed under another key fails that check (AuthChainTampered).
 // CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore"; ASPECT=ServerRestoreBesideDataDir; STATUS=TESTED; TEST=tests/test_sonny6288_server_restore_target.zig; OWNER=storage; UPDATED=2026-11-11
-pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dir: []const u8, live_data_dir: []const u8, target_time: i64) !SideRestore {
+pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dirs: []const []const u8, live_data_dir: []const u8, target_time: i64) !SideRestore {
     const live = std.mem.trimEnd(u8, live_data_dir, "/");
     const base = std.fs.path.basename(live);
     if (live.len == 0 or base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) {
         return error.InvalidRestoreTarget;
     }
 
-    const backup_path = try selectPointInTimeBackup(allocator, backup_dir, target_time);
+    const backup_path = try selectPointInTimeBackupIn(allocator, backup_dirs, target_time);
     errdefer allocator.free(backup_path);
 
     var decoded = try readBackupFile(allocator, backup_path, null);
     defer decoded.deinit(allocator);
+    const key_material = try archiveKeyMaterial(decoded.archive);
 
     const backup_name = std.fs.path.basename(backup_path);
     const id_hex = if (std.mem.startsWith(u8, backup_name, "full_") and std.mem.endsWith(u8, backup_name, ".backup"))
@@ -1045,6 +1183,8 @@ pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dir: []const u8
     var staged = try stageRestore(allocator, decoded.archive, target);
     defer staged.deinit();
 
+    const copied_hmac_key = if (key_material.hmac_key) false else try copyHmacKeyFile(allocator, live, staged.staging_dir);
+
     const graphs = try countRestoredStore(allocator, staged.staging_dir);
     errdefer freeRestoredGraphs(allocator, graphs);
 
@@ -1056,6 +1196,8 @@ pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dir: []const u8
         .backup_path = backup_path,
         .stats = staged.stats,
         .graphs = graphs,
+        .key_material = key_material,
+        .copied_hmac_key = copied_hmac_key,
     };
 }
 

@@ -30,6 +30,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
+const geode = @import("geode");
 const backup = @import("storage/backup");
 const geode_test_bin = @import("geode_test_bin");
 const test_scratch = @import("test_scratch.zig");
@@ -767,5 +768,38 @@ test "SONNY-6299 geode restore of auth state needs the HMAC key it was sealed wi
         const v = try runGeode(&.{ geode_binary, "auth", "verify", "--data-dir", t }, &.{}, fx.cwd);
         defer v.deinit();
         try expectExit(v, 0, "auth verify after an older archive's restore");
+    }
+}
+
+test "SONNY-6299 GEODE_BACKUP_DIR must be absolute, without traversal, and outside the data directory" {
+    const allocator = testing.allocator;
+    const resolve = geode.backup_manager.resolveServerBackupDir;
+    const ok_cases = [_][3][]const u8{
+        .{ "/srv/geode/data", "", "/srv/geode/data/backups" },
+        .{ "/srv/geode/data/", "/srv/geode/data/backups/", "/srv/geode/data/backups" },
+        .{ "/srv/geode/data", "/srv/geode/backups", "/srv/geode/backups" },
+        .{ "/srv/geode/data", "/srv/geode/data-backups", "/srv/geode/data-backups" },
+    };
+    for (ok_cases) |c| {
+        const got = try resolve(allocator, c[0], if (c[1].len == 0) null else c[1]);
+        defer allocator.free(got);
+        try testing.expectEqualStrings(c[2], got);
+    }
+    const bad_cases = [_][]const u8{
+        "rel-backups",
+        "./backups",
+        "/srv/geode/data",
+        "/srv/geode/data/graphs",
+        "/srv/geode",
+        "/srv/geode/../etc",
+        "/srv/./geode/backups",
+        "/srv//geode/backups",
+    };
+    for (bad_cases) |b| {
+        if (resolve(allocator, "/srv/geode/data", b)) |got| {
+            std.debug.print("SONNY-6299: GEODE_BACKUP_DIR '{s}' accepted as '{s}'\n", .{ b, got });
+            allocator.free(got);
+            return error.TestUnexpectedResult;
+        } else |err| try testing.expectEqual(error.InvalidBackupDir, err);
     }
 }

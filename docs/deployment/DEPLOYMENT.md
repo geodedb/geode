@@ -304,8 +304,10 @@ docker-compose stop geode
 
 # Restore data: copy the backup file into the volume first (restoring
 # straight from s3:// is not supported), then restore it offline into a new
-# or empty data directory and point Geode at that directory
-docker-compose run --rm geode geode restore /data/backups/full.backup --data-dir /data/restored --yes
+# or empty data directory and point Geode at that directory. Backups do not
+# hold the auth-chain HMAC key (.geode_hmac_key): give the source server's key
+# file, or set GEODE_AUTH_HMAC_KEY / GEODE_TDE_KEY as the source server had it
+docker-compose run --rm geode geode restore /data/backups/full.backup --data-dir /data/restored --yes --hmac-key-file /secrets/geode_hmac_key
 
 # Start Geode
 docker-compose start geode
