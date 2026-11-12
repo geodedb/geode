@@ -9774,6 +9774,20 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6386-dead-mock-and-stale-docs", "Run SONNY-6386 items 4 and 8 regression (the unbuilt mock backup integration test is removed and no status row cites it; CURRENT_ARCHITECTURE.md describes the real backup path and Zig 0.16; the CHANGELOG does not claim a test-tde-kms-integration run)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6422 items 3-5: the dead WriteAheadLog wrapper is gone, the
+    // unbuilt duplicate key-rotation schedule test is gone, and every
+    // TESTED marker in docs/SECURITY_PROGRESS.md cites a compiled test.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_dead_wal_and_false_markers.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6422_dw_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6422-dead-wal-and-false-markers", "Run SONNY-6422 items 3-5 regression (src/wal.zig has no WriteAheadLog wrapper or mutation callback and nothing refers to them; tests/test_key_rotation_schedule.zig and its made-up test name are gone; every TESTED marker in docs/SECURITY_PROGRESS.md cites a test a build step compiles)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per
