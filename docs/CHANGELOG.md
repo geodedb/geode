@@ -4,6 +4,16 @@
 
 ### Security
 
+- **BREAKING: a corrupt tenant registry line refuses startup (SONNY-6348
+  item 2).** `TenantRegistry.hydrate` skipped a `registry.jsonl` line it
+  could not parse, or that was not an object with a valid string
+  `tenant_id`, with a warning, so that tenant (and its place in the
+  hierarchy) was silently gone. A line that cannot become a tenant (bad
+  JSON, not an object, no or a non-string or invalid `tenant_id`, a
+  non-string `parent`, a repeated id) now fails hydrate with
+  `TenantRegistryCorrupt`, naming the line number, and the server refuses to
+  start (as for an unreadable registry since SONNY-6346). Regression:
+  `zig build test-sonny6348-readonly-restore-checks-registry`.
 - **BREAKING: no silent degrade in the tenant registry and the audit log
   writer (SONNY-6346).** A server whose `<data dir>/tenants` could not be
   created (or whose `registry.jsonl` could not be read) ran with an
