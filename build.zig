@@ -9568,6 +9568,24 @@ pub fn build(b: *std.Build) void {
     const sonny6290_step = b.step("test-sonny6290-backup-doc-commands", "Run SONNY-6290 regression (every geode backup/restore command in USAGE.md, DEPLOYMENT.md, API_REFERENCE.md, README.md and CLAUDE.md names a real subcommand whose --help lists each option, and no s3:// or http(s):// location; geode backup create refuses an unknown option and a URI --output, writing nothing)");
     sonny6290_step.dependOn(&run_sonny6290_tests.step);
 
+    // SONNY-6348 (items 2, 3): the directory a server restore or geode
+    // restore commits is exactly the backup's files (the checks that open
+    // the store run on a throwaway copy); a corrupt tenant registry line
+    // fails hydrate instead of dropping the tenant.
+    const sonny6348_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6348_readonly_restore_checks_registry.zig"), .target = target, .optimize = optimize });
+    sonny6348_test_mod.link_libc = true;
+    sonny6348_test_mod.addImport("geode", root_mod);
+    sonny6348_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6348_test_mod.addImport("schema", schema_mod);
+    sonny6348_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6348_test_mod.addImport("storage/backup", storage_backup_mod);
+    const sonny6348_tests = b.addTest(.{ .root_module = sonny6348_test_mod });
+    const run_sonny6348_tests = b.addRunArtifact(sonny6348_tests);
+    spawnsBuiltGeode(sonny6348_tests);
+    shardDep(test_step, &run_sonny6348_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6348_step = b.step("test-sonny6348-readonly-restore-checks-registry", "Run SONNY-6348 items 2-3 regression (spawns a server: a server restore and geode restore commit exactly the backup's files plus the HMAC key file, nothing written by the checks that open the store, nothing left beside the target; a registry.jsonl line that cannot become a tenant fails hydrate with TenantRegistryCorrupt)");
+    sonny6348_step.dependOn(&run_sonny6348_tests.step);
+
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
     // look inside PROFILE and EXPLAIN. The real gRPC handler in process
