@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T20:25:12.787511163Z",
+  "generated_at": "2026-11-12T20:29:42.780576649Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -43628,20 +43628,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-06-10"
-        },
-        {
-          "feature": "KeyRotationScheduling",
-          "aspect": "TEST",
-          "status": "TESTED",
-          "files": [
-            "tests/test_key_rotation_schedule.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_002_Schedule"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
         }
       ]
     },
@@ -60948,65 +60934,19 @@
       ]
     },
     {
-      "id": "REQ-PERF-WAL-001",
-      "features": [
-        {
-          "feature": "WriteAheadLog",
-          "aspect": "DeltaPersistence",
-          "status": "TESTED",
-          "files": [
-            "src/wal.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-03-31"
-        },
-        {
-          "feature": "WriteAheadLog",
-          "aspect": "UnitTest",
-          "status": "TESTED",
-          "files": [
-            "tests/test_wal.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-02-17"
-        }
-      ]
-    },
-    {
       "id": "REQ-PERF-WAL-002",
       "features": [
         {
           "feature": "WriteAheadLog",
           "aspect": "MutationCallback",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/graph_store.zig"
           ],
           "tests": [],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-02-17"
-        }
-      ]
-    },
-    {
-      "id": "REQ-PERF-WAL-006",
-      "features": [
-        {
-          "feature": "WriteAheadLog",
-          "aspect": "LibExport",
-          "status": "TESTED",
-          "files": [
-            "src/lib.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-02-17"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -81309,6 +81249,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6422-CLI-DATA-DIR-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "DataDir",
+          "aspect": "NoInMemoryFallback",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_cli_data_dir_fail_closed.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_cli_data_dir_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6422-DEAD-WAL-FALSE-MARKERS",
       "features": [
         {
@@ -83529,18 +83488,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-01-28"
-        },
-        {
-          "feature": "TDEEnforcement",
-          "aspect": "WALEncryption",
-          "status": "TESTED",
-          "files": [
-            "src/wal.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-02-19"
         }
       ]
     },
@@ -88514,6 +88461,34 @@
       "features": [
         {
           "feature": "WAL Persistence Hooks",
+          "aspect": "CheckpointPolicy",
+          "status": "TESTED",
+          "files": [
+            "src/wal.zig"
+          ],
+          "tests": [
+            "tests/test_wal.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "WAL Persistence Hooks",
+          "aspect": "LibExport",
+          "status": "TESTED",
+          "files": [
+            "src/lib.zig"
+          ],
+          "tests": [
+            "tests/test_wal.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "WAL Persistence Hooks",
           "aspect": "ServerInit",
           "status": "TESTED",
           "files": [
@@ -88525,6 +88500,20 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-06-11"
+        },
+        {
+          "feature": "WAL Persistence Hooks",
+          "aspect": "UnitTest",
+          "status": "TESTED",
+          "files": [
+            "tests/test_wal.zig"
+          ],
+          "tests": [
+            "tests/test_wal.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -89057,8 +89046,8 @@
       "BENCHED": 215,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 336,
-      "TESTED": 4605
+      "IMPL": 337,
+      "TESTED": 4603
     },
     "by_aspect": {
       "2PC": 3,
@@ -89525,6 +89514,7 @@
       "CheckedNarrowing": 1,
       "CheckedResult": 1,
       "CheckedStoredCasts": 1,
+      "CheckpointPolicy": 1,
       "ChecksOnThrowawayCopy": 1,
       "ChildVerifier": 1,
       "ChunkFailureDetection": 1,
@@ -89927,7 +89917,6 @@
       "DeleteReturnBeforePropose": 1,
       "DeleteRoundTrip": 1,
       "DeltaGuardPreview": 1,
-      "DeltaPersistence": 1,
       "Density": 1,
       "DenyOverridesAllow": 1,
       "DependencyGraph": 1,
@@ -91257,6 +91246,7 @@
       "NoGrantDeny": 1,
       "NoGroupByAgg": 1,
       "NoGroupedReturn": 1,
+      "NoInMemoryFallback": 1,
       "NoInPlaceRestoreOneSyncTimeouts": 1,
       "NoKeyBeforeVerify": 1,
       "NoKeyOverExistingRecords": 1,
@@ -92620,7 +92610,7 @@
       "SyslogTests": 1,
       "TDE": 2,
       "TDERotationVarianceEnvelope": 1,
-      "TEST": 12,
+      "TEST": 11,
       "TESTING": 13,
       "TLS": 1,
       "TLSConnection": 1,
@@ -92923,7 +92913,6 @@
       "ViewRefreshWiring": 1,
       "VisibleDegree": 1,
       "VulkanCompute": 1,
-      "WALEncryption": 1,
       "WaitForApplied": 1,
       "WallClockTiming": 1,
       "WatchdogExitCode": 1,

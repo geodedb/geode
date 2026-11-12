@@ -17623,7 +17623,8 @@ pub fn bumpSchemaEpoch() void {
     _ = g_schema_epoch.fetchAdd(1, .monotonic);
 }
 
-// CANARY: REQ=REQ-PERF-WAL-002; FEATURE="WriteAheadLog"; ASPECT=MutationCallback; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
+// CANARY: REQ=REQ-PERF-WAL-002; FEATURE="WriteAheadLog"; ASPECT=MutationCallback; STATUS=IMPL; OWNER=storage; UPDATED=2026-11-12
+// SONNY-6422: nothing installs a callback since the WAL wrapper was removed.
 // Issue #445: Mutation notification callback for WAL integration.
 // Instead of instrumenting every mutation call site, the store's mutation functions
 // call this callback after each successful mutation. The WAL installs a callback

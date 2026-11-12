@@ -46,9 +46,9 @@ encryption.
 
 The storage-engine WAL is encrypted with `GEODE_TDE_KEY`, together with the
 pages. There is no separate WAL key: `GEODE_WAL_KEY` was read only by the
-`WriteAheadLog` wrapper in `src/wal.zig`, which nothing in the server
-instantiates, so a server given `GEODE_WAL_KEY` and no `GEODE_TDE_KEY` wrote
-its WAL in plaintext. A non-empty `GEODE_WAL_KEY` now refuses startup
+logical `WriteAheadLog` wrapper formerly in `src/wal.zig`, which nothing in
+the server instantiated (removed, SONNY-6422), so a server given
+`GEODE_WAL_KEY` and no `GEODE_TDE_KEY` wrote its WAL in plaintext. A non-empty `GEODE_WAL_KEY` now refuses startup
 (`[startup] GEODE_WAL_KEY is set, but the server does not use it ...`,
 SONNY-6422); unset it and set `GEODE_TDE_KEY`.
 

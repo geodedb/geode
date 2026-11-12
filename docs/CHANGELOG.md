@@ -1585,6 +1585,23 @@
 
 ### Removed
 
+- **The logical CDC `WriteAheadLog` wrapper in `src/wal.zig`, an unbuilt
+  duplicate test, and false TESTED markers (SONNY-6422 items 3-5).** The
+  wrapper (record types and serialization, the global instance, the
+  `graph_store` mutation callback and the `GEODE_WAL_KEY` loader) had no
+  production caller since `initGlobalWal` was removed (SONNY-6325); only
+  `tests/test_wal.zig` opened one. `src/wal.zig` keeps the persistence-loop
+  hooks the server installs (a light engine checkpoint every tick, the
+  behaviour they had with no WAL behind them), and `zig build test-wal` now
+  tests those. Crash recovery and WAL encryption are the storage engine's
+  (its WAL, encrypted with `GEODE_TDE_KEY`). `tests/test_key_rotation_schedule.zig`
+  was built by no step and claimed TESTED with a made-up test name; its two
+  assertions are those `zig build test-gap0890` runs, so it is removed. The
+  CANARY block of `docs/SECURITY_PROGRESS.md` cited tests that do not exist
+  or that no step compiles: each TESTED marker now cites compiled tests, and
+  WAL encryption, MFA audit logging, the MFA policy engine and the OLTP
+  overhead validation are IMPL, with the matrix rows corrected. Regression:
+  `zig build test-sonny6422-dead-wal-and-false-markers`.
 - **Federated / scatter-gather query coordination code (SONNY-6279).**
   `src/distributed/federation.zig`, `federation_merge.zig`,
   `merge_strategies.zig`, `query_coordinator.zig`,

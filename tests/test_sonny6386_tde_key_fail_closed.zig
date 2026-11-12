@@ -6,7 +6,9 @@
 // and every page was written in plaintext while the operator believed TDE
 // was on. The same class of swallow sat in two other key loaders:
 //   - `wal.loadWalKey`: a GEODE_WAL_KEY of the wrong length was skipped, so
-//     the WAL fell back to GEODE_TDE_KEY or, when that was unset, plaintext;
+//     the WAL fell back to GEODE_TDE_KEY or, when that was unset, plaintext
+//     (SONNY-6422 removed that dead WriteAheadLog wrapper; a set
+//     GEODE_WAL_KEY now refuses startup, tests/test_sonny6422_env_key_fail_closed.zig);
 //   - `AuthGraphManager.resolveHmacKey`: a GEODE_TDE_KEY of the wrong length
 //     was skipped and the auth chain was sealed with the file key instead.
 //
@@ -247,47 +249,6 @@ test "SONNY-6386 (1) initGlobalAdapter fails with InvalidKey on a malformed GEOD
         _ = try graph_store.initGlobalAdapter(allocator, root.path());
         graph_store.deinitGlobalAdapter();
     }
-}
-
-test "SONNY-6386 (1) a GEODE_WAL_KEY of the wrong length fails the WAL open instead of falling back to GEODE_TDE_KEY or plaintext" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
-    clearKeyEnv();
-    defer clearKeyEnv();
-    const allocator = testing.allocator;
-    var root = try test_scratch.ScratchDir.create("sonny6386-wal");
-    defer root.remove();
-    const wal_path = try std.fmt.allocPrint(allocator, "{s}/graph.wal", .{root.path()});
-    defer allocator.free(wal_path);
-
-    {
-        const g = EnvGuard.set("GEODE_WAL_KEY", "abcdef");
-        defer g.restore();
-        if (geode.wal.WriteAheadLog.init(allocator, wal_path)) |w| {
-            var wal = w;
-            wal.deinit();
-            std.debug.print("SONNY-6386: a 6-character GEODE_WAL_KEY opened the WAL without encryption\n", .{});
-            return error.TestExpectedError;
-        } else |err| {
-            try testing.expectEqual(error.InvalidKey, err);
-        }
-    }
-    // With a valid GEODE_TDE_KEY to fall back to, a bad GEODE_WAL_KEY is
-    // still refused (not silently replaced by the other key).
-    {
-        const t = EnvGuard.set("GEODE_TDE_KEY", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff");
-        defer t.restore();
-        const g = EnvGuard.set("GEODE_WAL_KEY", "abcdef");
-        defer g.restore();
-        if (geode.wal.WriteAheadLog.init(allocator, wal_path)) |w| {
-            var wal = w;
-            wal.deinit();
-            std.debug.print("SONNY-6386: a 6-character GEODE_WAL_KEY was replaced by GEODE_TDE_KEY\n", .{});
-            return error.TestExpectedError;
-        } else |err| {
-            try testing.expectEqual(error.InvalidKey, err);
-        }
-    }
-    try testing.expect(!pathExists(wal_path));
 }
 
 test "SONNY-6386 (1) resolveHmacKey refuses a GEODE_TDE_KEY of the wrong length instead of sealing with the file key" {

@@ -867,8 +867,8 @@ pub const tenancy = @import("execution/tenancy.zig");
 // the notify() call sites.
 pub const schema_change_notifier = @import("execution/schema_change_notifier.zig");
 pub const uuid = @import("uuid");
-// CANARY: REQ=REQ-PERF-WAL-006; FEATURE="WriteAheadLog"; ASPECT=LibExport; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
-// Re-export WAL for server initialization and tests
+// CANARY: REQ=REQ-WAL-HOOKS-001; FEATURE="WAL Persistence Hooks"; ASPECT=LibExport; STATUS=TESTED; TEST=tests/test_wal.zig; OWNER=storage; UPDATED=2026-11-12
+// Re-export the persistence-loop hooks for server initialization and tests
 pub const wal = @import("wal.zig");
 pub const fle_integration = @import("fle_integration.zig");
 pub const fle_commands = @import("admin/fle_commands.zig");

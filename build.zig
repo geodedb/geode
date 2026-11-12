@@ -9878,7 +9878,7 @@ pub fn build(b: *std.Build) void {
     const run_sonny6386_tde_tests = b.addRunArtifact(sonny6386_tde_tests);
     spawnsBuiltGeode(sonny6386_tde_tests);
     shardDep(test_step, &run_sonny6386_tde_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6386_tde_step = b.step("test-sonny6386-tde-key-fail-closed", "Run SONNY-6386 item 1 regression (spawns servers: a set but malformed GEODE_TDE_KEY refuses startup, names the variable, never echoes it and creates nothing; the adapter, WAL and HMAC key loaders refuse a malformed key instead of falling back to no encryption or another key)");
+    const sonny6386_tde_step = b.step("test-sonny6386-tde-key-fail-closed", "Run SONNY-6386 item 1 regression (spawns servers: a set but malformed GEODE_TDE_KEY refuses startup, names the variable, never echoes it and creates nothing; the adapter and HMAC key loaders refuse a malformed key instead of falling back to no encryption or another key)");
     sonny6386_tde_step.dependOn(&run_sonny6386_tde_tests.step);
     const sonny6422_env_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_env_key_fail_closed.zig"), .target = target, .optimize = optimize });
     sonny6422_env_test_mod.link_libc = true;
@@ -12696,7 +12696,7 @@ pub fn build(b: *std.Build) void {
     // the blocked monolithic `test` step (per-step sweep is the canonical gate).
     const run_wal_tests = b.addRunArtifact(wal_tests);
     shardDep(test_step, &run_wal_tests.step, 1, test_shard_loads, test_shard_index);
-    const wal_test_step = b.step("test-wal", "Run WAL unit tests (append, deprecated no-op replay, checkpoint, CRC)");
+    const wal_test_step = b.step("test-wal", "Run the persistence-loop hook tests (src/wal.zig: light checkpoint every tick; SONNY-6422 removed the dead CDC WriteAheadLog wrapper and its tests)");
     wal_test_step.dependOn(&run_wal_tests.step);
 
     // Issue #460: Shared cross-connection optimizer unit tests
