@@ -186,6 +186,34 @@
   rewrite the data. Regression (in-memory, persisted warm and reloaded,
   tenant-scoped and RLS sessions, leak-checked):
   `zig build test-sonny6295-create-path-middle-node`.
+- **A variable a WITH passes on is joined in the next MATCH (SONNY-3046,
+  SONNY-3376, SONNY-3388):** a node, relationship or path variable bound
+  before a chained MATCH (after `WITH` or `NEXT`) was bound again by that
+  MATCH unless it was a hop's start node, so the next part matched every
+  element and multiplied the rows: `MATCH (q:Q) WITH q MATCH (q) RETURN
+  count(*)` counted every node once per q, `MATCH (g:G {i: 1}) WITH g MATCH
+  (g:X)` matched the X nodes, `... WITH r MATCH ()-[r]->()` and `WITH *`
+  matched every relationship, `(y)-[:R]->(q)` with q bound matched every
+  `:R`, and `MATCH p = ... WITH p MATCH p = ...` every path. Per ISO/IEC
+  39075, a variable already bound is now a join wherever the next pattern
+  names it: alone, at either end or in the middle of a hop, twice in one
+  pattern, as a relationship or as a path; labels, a property map, a
+  relationship type or a direction on it filter the bound element (no row
+  when it does not match), and a node or relationship the pattern reaches
+  from it is checked for tenant scope and row-level security like any other.
+  The walk starts at the bound node (or at a bound relationship's endpoint)
+  rather than scanning. A chain whose
+  last part aggregates now computes the aggregate over the joined rows with
+  the shared projection (any aggregate expression, GROUP BY, DISTINCT,
+  ORDER BY), where it applied a part's WITH before its MATCH and read freed
+  memory on a three-part chain; the chain no longer leaks the nodes a
+  persisted read hands it. Refused with 0A000 instead of answered wrongly: a
+  bound variable named as a variable-length relationship, a path variable
+  named as a node or relationship (or the reverse), and a part with an
+  `OPTIONAL MATCH` that names a bound variable. Writes in a
+  chained part stay refused (0A000) until SONNY-3111. Regression (in-memory,
+  persisted warm and reloaded, tenant-scoped and RLS sessions, leak-checked):
+  `zig build test-sonny3046-with-bound-variable-join`.
 
 ---
 
@@ -2489,9 +2517,6 @@ run inside an explicit transaction again.
   OPTIONAL MATCH chained on another OPTIONAL MATCH binds null; a WHERE after
   an OPTIONAL MATCH filters the whole row; a WHERE after `WITH ...` before
   a FOR is not applied. Writes in these shapes are refused. v0.8.24.
-- **A chained MATCH does not join on the WITH's variables (SONNY-3046):**
-  `MATCH (q:Q) WITH q MATCH (q) RETURN count(*)` counts every node for each
-  q. v0.8.24; a chained MATCH that writes is refused until then.
 - **A plain RETURN after MATCH ... CREATE is one row (SONNY-3025):** a RETURN
   that neither aggregates nor is DISTINCT is evaluated once, over the last
   row's created and matched elements; the CREATE itself runs once per

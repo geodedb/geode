@@ -5703,7 +5703,12 @@ const MultiChainJoin = struct {
 
     /// One step of the join: a chain's first node pattern (the chain after
     /// it walks from there), or a hop from the node the chain reached.
-    const Step = union(enum) { start: ast.NodePattern, hop: ast.Hop };
+    /// `edge_end`: a chain's first node pattern when the hop after it names
+    /// a relationship the incoming row binds (SONNY-3376): its candidates
+    /// are that relationship's endpoints, not every node.
+    const Step = union(enum) { start: ast.NodePattern, hop: ast.Hop, edge_end: EdgeEnd };
+
+    const EdgeEnd = struct { node: ast.NodePattern, rel: []const u8, dir: ast.RelDir };
 
     /// What a step binds, one way (a node the chain reaches; the
     /// relationship, or the relationship list, it walked).
@@ -5765,6 +5770,27 @@ const MultiChainJoin = struct {
                 try out.ensureUnusedCapacity(self.allocator, start_cands.*.?.items.len);
                 for (start_cands.*.?.items) |node| out.appendAssumeCapacity(.{ .node = node });
             },
+            .edge_end => |end| {
+                if (boundAsRelationship(B, b, end.node.name)) return;
+                const edge = b.edge_vars.get(end.rel) orelse return;
+                // The node the hop starts from: the edge's source for `-[]->`,
+                // its target for `<-[]-`, either for an undirected hop.
+                var ids: [2]u64 = undefined;
+                var n: usize = 0;
+                if (end.dir == .right or end.dir == .undirected) {
+                    ids[n] = edge.from_id;
+                    n += 1;
+                }
+                if ((end.dir == .left or end.dir == .undirected) and !(n == 1 and ids[0] == edge.to_id)) {
+                    ids[n] = edge.to_id;
+                    n += 1;
+                }
+                for (ids[0..n]) |id| {
+                    const node = try self.nodes.get(id) orelse continue;
+                    if (end.node.name) |v| if (b.vars.get(v)) |bound| if (bound.id != node.id) continue;
+                    if (self.nodeFits(scratch, node, end.node)) try out.append(self.allocator, .{ .node = node });
+                }
+            },
             .hop => |hop| {
                 const left = b.vars.get(tracker) orelse return;
                 if (!matchesLabels(left, hop.left.labels)) return;
@@ -5822,6 +5848,7 @@ const MultiChainJoin = struct {
         level.undo_len = 0;
         switch (step) {
             .start => |start| if (start.name) |v| try bindNode(B, b, level, v, choice.node),
+            .edge_end => |end| if (end.node.name) |v| try bindNode(B, b, level, v, choice.node),
             .hop => |hop| {
                 if (hop.right.name) |v| try bindNode(B, b, level, v, choice.node);
                 if (hop.rel.name) |rn| {
@@ -5902,7 +5929,7 @@ const MultiChainJoin = struct {
         for (steps, 0..) |step, i| {
             const start = switch (step) {
                 .start => |p| p,
-                .hop => continue,
+                .hop, .edge_end => continue,
             };
             if (start.name) |name| if (bindsBefore(B, &seeds[0], steps[0..i], name)) continue;
             var cands: std.ArrayList(*graph_store.Node) = .empty;
@@ -5964,6 +5991,7 @@ const MultiChainJoin = struct {
         if (seed.vars.contains(name) or seed.edge_vars.contains(name) or seed.rel_list_vars.contains(name)) return true;
         for (steps) |step| switch (step) {
             .start => |p| if (p.name) |n| if (std.mem.eql(u8, n, name)) return true,
+            .edge_end => |end| if (end.node.name) |n| if (std.mem.eql(u8, n, name)) return true,
             .hop => |hop| {
                 for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |maybe| {
                     if (maybe) |n| if (std.mem.eql(u8, n, name)) return true;
@@ -5973,6 +6001,182 @@ const MultiChainJoin = struct {
         return false;
     }
 };
+
+// CANARY: REQ=REQ-SONNY-3046-WITH-BOUND-JOIN; FEATURE="ChainedMatchJoin"; ASPECT=BoundElement; STATUS=TESTED; TEST=tests/test_sonny3046_with_bound_variable_join.zig; OWNER=engine; UPDATED=2026-11-11
+/// SONNY-3046, SONNY-3376, SONNY-3388: the element `name` is already bound
+/// to by the row this pattern reads from, or null. A chained part (after
+/// WITH or NEXT) receives the incoming row among its parameters; a node, a
+/// relationship or a path value there is an element variable bound before
+/// the pattern (ISO/IEC 39075: the pattern is joined to it), anything else
+/// (a request parameter, a WITH's value) is not.
+fn boundElement(name: ?[]const u8, param_names: []const []const u8, param_values: []const Value) ?Value {
+    const n = name orelse return null;
+    for (param_names, param_values) |pn, pv| {
+        if (!std.mem.eql(u8, pn, n)) continue;
+        switch (pv) {
+            .Node, .Edge, .Path => return pv,
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// Whether `name` is bound to a relationship list (a variable-length
+/// relationship variable the incoming row carries).
+fn boundRelationshipList(name: ?[]const u8, param_names: []const []const u8, param_values: []const Value) bool {
+    const n = name orelse return false;
+    for (param_names, param_values) |pn, pv| {
+        if (!std.mem.eql(u8, pn, n)) continue;
+        if (pv == .List and pv.List.len > 0 and pv.List[0] == .Edge) return true;
+    }
+    return false;
+}
+
+/// SONNY-3046, SONNY-3376, SONNY-3388: whether `q`'s pattern names a node,
+/// relationship or path variable the incoming row binds. Such a pattern is
+/// joined to the bound elements (`executeMultiChainRelationshipMatch`, seeded
+/// with them); the other executors bind every name the pattern has again, so
+/// `MATCH (q:Q) WITH q MATCH (q) RETURN count(*)` counted every node once
+/// per q.
+///
+/// A shortest-path chain keeps its own executor (`handleShortestPathAssignment`
+/// reads its bound endpoints from the row).
+pub fn patternJoinsBoundElement(q: ast.Query, param_names: []const []const u8, param_values: []const Value) bool {
+    if (param_names.len == 0) return false;
+    for (q.match.chains) |chain| if (chain.is_shortest) return false;
+    for (q.match.chains, 0..) |chain, ci| {
+        if (boundElement(chainPathName(q, chain, ci), param_names, param_values) != null) return true;
+        if (chain.head) |head| if (boundElement(head.name, param_names, param_values) != null) return true;
+        for (chain.hops) |hop| {
+            if (boundElement(hop.left.name, param_names, param_values) != null) return true;
+            if (boundElement(hop.rel.name, param_names, param_values) != null) return true;
+            if (boundElement(hop.right.name, param_names, param_values) != null) return true;
+            if (boundRelationshipList(hop.rel.name, param_names, param_values)) return true;
+        }
+    }
+    return false;
+}
+
+/// SONNY-3046: a pattern that names a bound variable where the join cannot
+/// constrain it is refused (0A000) rather than answered by binding the name
+/// again: a variable-length relationship variable, a path variable named as
+/// a node or a relationship (or the reverse), and any OPTIONAL MATCH in the
+/// part (the join is an inner join; it would drop the rows an OPTIONAL MATCH
+/// keeps).
+fn refuseUnjoinableBoundElement(q: ast.Query, param_names: []const []const u8, param_values: []const Value) error{UnsupportedBoundVariableJoin}!void {
+    for (q.match.chains) |chain| if (chain.is_optional) return error.UnsupportedBoundVariableJoin;
+    for (q.match.chains, 0..) |chain, ci| {
+        var names_bound = false;
+        if (boundElement(chainPathName(q, chain, ci), param_names, param_values)) |v| {
+            if (v != .Path) return error.UnsupportedBoundVariableJoin;
+            names_bound = true;
+        }
+        if (chain.head) |head| if (boundElement(head.name, param_names, param_values)) |v| {
+            if (v == .Path) return error.UnsupportedBoundVariableJoin;
+            names_bound = true;
+        };
+        for (chain.hops) |hop| {
+            for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |name| {
+                if (boundElement(name, param_names, param_values)) |v| {
+                    if (v == .Path) return error.UnsupportedBoundVariableJoin;
+                    names_bound = true;
+                }
+            }
+            const quantified = hop.rel.min_len != null or hop.rel.max_len != null;
+            if (quantified and (boundRelationshipList(hop.rel.name, param_names, param_values) or boundElement(hop.rel.name, param_names, param_values) != null)) return error.UnsupportedBoundVariableJoin;
+        }
+        if (names_bound and chain.is_shortest) return error.UnsupportedBoundVariableJoin;
+    }
+}
+
+/// Whether two paths are the same nodes and relationships in the same order.
+fn samePath(got: Value, want: Value) bool {
+    if (got != .Path or want != .Path) return false;
+    if (got.Path.nodes.len != want.Path.nodes.len or got.Path.edges.len != want.Path.edges.len) return false;
+    for (got.Path.nodes, want.Path.nodes) |a, b| if (a.id != b.id) return false;
+    for (got.Path.edges, want.Path.edges) |a, b| if (a.id != b.id) return false;
+    return true;
+}
+
+/// SONNY-3046: a path variable the incoming row binds, and the chain the
+/// pattern binds it to again: a binding whose path differs is no match.
+const BoundPath = struct { chain: ast.Chain, want: Value };
+
+/// SONNY-3046, SONNY-3376, SONNY-3388: the join steps of `chain` when the
+/// incoming row binds some of its variables (`bound` holds every name bound
+/// so far, and gets the names these steps bind). The chain is walked from a
+/// bound node: from its first node when that is bound; otherwise, for a
+/// chain without a variable-length hop, from the first bound node along it,
+/// forward to the end and then back to its start, each hop reversed. With
+/// no bound node, a first hop whose relationship is bound starts at that
+/// relationship's endpoint (`edge_end`). Otherwise the chain starts from
+/// every node its first pattern matches, and a bound node or relationship
+/// further on filters the walk (correct, but a scan per incoming row).
+fn appendBoundChainSteps(
+    allocator: std.mem.Allocator,
+    steps: *std.ArrayList(MultiChainJoin.Step),
+    chain: ast.Chain,
+    bound: *std.StringHashMap(void),
+    edge_bound: *const std.StringHashMap(*graph_store.Edge),
+) !void {
+    if (chain.hops.len == 0) {
+        const head = chain.head orelse return;
+        try steps.append(allocator, .{ .start = head });
+        if (head.name) |n| try bound.put(n, {});
+        return;
+    }
+    const hops = chain.hops;
+    var quantified = false;
+    for (hops) |hop| {
+        if (hop.rel.min_len != null or hop.rel.max_len != null) quantified = true;
+    }
+    // The first bound node along the chain: node i is hops[0].left for
+    // i == 0, hops[i - 1].right otherwise.
+    var anchor: ?usize = null;
+    for (0..hops.len + 1) |i| {
+        const node = if (i == 0) hops[0].left else hops[i - 1].right;
+        if (node.name) |n| if (bound.contains(n)) {
+            anchor = i;
+            break;
+        };
+    }
+    const from = if (quantified) 0 else anchor orelse 0;
+    if (from == 0) {
+        const first = hops[0];
+        const first_quantified = first.rel.min_len != null or first.rel.max_len != null;
+        const via_edge = anchor == null and !first_quantified and
+            (if (first.rel.name) |rn| edge_bound.contains(rn) else false);
+        if (via_edge) {
+            try steps.append(allocator, .{ .edge_end = .{ .node = first.left, .rel = first.rel.name.?, .dir = first.rel.dir } });
+        } else {
+            try steps.append(allocator, .{ .start = first.left });
+        }
+        for (hops) |hop| try steps.append(allocator, .{ .hop = hop });
+    } else {
+        const anchor_node = hops[from - 1].right;
+        try steps.append(allocator, .{ .start = anchor_node });
+        for (hops[from..]) |hop| try steps.append(allocator, .{ .hop = hop });
+        try steps.append(allocator, .{ .start = anchor_node });
+        var i = from;
+        while (i > 0) {
+            i -= 1;
+            var reversed = hops[i];
+            reversed.left = hops[i].right;
+            reversed.right = hops[i].left;
+            reversed.rel.dir = switch (hops[i].rel.dir) {
+                .right => .left,
+                .left => .right,
+                .undirected => .undirected,
+            };
+            try steps.append(allocator, .{ .hop = reversed });
+        }
+    }
+    for (hops) |hop| {
+        for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |name| {
+            if (name) |n| try bound.put(n, {});
+        }
+    }
+}
 
 // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-001; FEATURE="MultiChainRelationshipMatch"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
 // Handle multiple chains with relationships that share variables
@@ -6119,11 +6323,63 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-3046-WITH-BOUND-JOIN; FEATURE="ChainedMatchJoin"; ASPECT=SeededJoin; STATUS=TESTED; TEST=tests/test_sonny3046_with_bound_variable_join.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-3046, SONNY-3376, SONNY-3388: a node or relationship variable the
+    // incoming row binds (a chained part's WITH or NEXT columns) is the one
+    // binding the join starts from, and every chain, the first too, is joined
+    // to it: a pattern that names the variable constrains it (labels,
+    // properties, type and direction filter it) and never binds it again. A
+    // bound path variable must be the path the chain binds (`bound_paths`).
+    // The element is looked up again by id, so it is the store's copy, and
+    // one that no longer exists matches nothing.
+    const seeded = patternJoinsBoundElement(q, param_names, param_values);
+    var bound_paths: std.ArrayList(BoundPath) = .empty;
+    defer bound_paths.deinit(allocator);
+    if (seeded) {
+        try refuseUnjoinableBoundElement(q, param_names, param_values);
+        var seed = MatchBinding.init(allocator);
+        var resolvable = true;
+        for (q.match.chains, 0..) |chain, ci| {
+            if (boundElement(chainPathName(q, chain, ci), param_names, param_values)) |v| {
+                for (path_specs.items) |spec| if (std.mem.eql(u8, spec.name, chainPathName(q, chain, ci).?)) {
+                    try bound_paths.append(allocator, .{ .chain = spec.chain, .want = v });
+                };
+            }
+            var names: std.ArrayList(?[]const u8) = .empty;
+            defer names.deinit(allocator);
+            if (chain.head) |head| try names.append(allocator, head.name);
+            for (chain.hops) |hop| try names.appendSlice(allocator, &.{ hop.left.name, hop.rel.name, hop.right.name });
+            for (names.items) |maybe| {
+                const name = maybe orelse continue;
+                switch (boundElement(name, param_names, param_values) orelse continue) {
+                    .Node => |n| {
+                        const node = try node_cache.get(n.id) orelse {
+                            resolvable = false;
+                            continue;
+                        };
+                        try seed.vars.put(name, node);
+                    },
+                    .Edge => |e| {
+                        const edge = store.getEdgePtrHydrated(e.id) orelse {
+                            resolvable = false;
+                            continue;
+                        };
+                        try seed.edge_vars.put(name, edge);
+                    },
+                    else => {},
+                }
+            }
+        }
+        if (resolvable) try bindings.append(allocator, seed) else seed.deinit();
+    }
+
     const first_chain = q.match.chains[0];
     // Synthetic key for tracking the rightmost node across hops (supports anonymous intermediates)
     const chain_last_right_key = "__chain_last_right__";
     const needs_hop_tracking = first_chain.hops.len > 1;
-    if (first_chain.hops.len > 0) {
+    if (seeded) {
+        // The seed above; every chain is a join step below.
+    } else if (first_chain.hops.len > 0) {
         // First chain has relationships
         const hop = first_chain.hops[0];
         // SONNY-3318 (round 4b-1b review I-D): `(n)-[:R*]->(n)` names one node at
@@ -6503,13 +6759,31 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     };
     var steps: std.ArrayList(MultiChainJoin.Step) = .empty;
     defer steps.deinit(allocator);
-    if (first_chain.hops.len > 1) {
-        for (first_chain.hops[1..]) |extra_hop| try steps.append(allocator, .{ .hop = extra_hop });
-    }
-    for (q.match.chains[1..]) |chain| {
-        const start: ast.NodePattern = if (chain.hops.len > 0) chain.hops[0].left else chain.head orelse continue;
-        try steps.append(allocator, .{ .start = start });
-        for (chain.hops) |hop| try steps.append(allocator, .{ .hop = hop });
+    if (seeded) {
+        // SONNY-3046: every chain from a bound node where it has one.
+        var bound_names = std.StringHashMap(void).init(allocator);
+        defer bound_names.deinit();
+        var seed_edges = std.StringHashMap(*graph_store.Edge).init(allocator);
+        defer seed_edges.deinit();
+        if (bindings.items.len > 0) {
+            var it = bindings.items[0].vars.keyIterator();
+            while (it.next()) |k| try bound_names.put(k.*, {});
+            var eit = bindings.items[0].edge_vars.iterator();
+            while (eit.next()) |e| {
+                try bound_names.put(e.key_ptr.*, {});
+                try seed_edges.put(e.key_ptr.*, e.value_ptr.*);
+            }
+        }
+        for (q.match.chains) |chain| try appendBoundChainSteps(allocator, &steps, chain, &bound_names, &seed_edges);
+    } else {
+        if (first_chain.hops.len > 1) {
+            for (first_chain.hops[1..]) |extra_hop| try steps.append(allocator, .{ .hop = extra_hop });
+        }
+        for (q.match.chains[1..]) |chain| {
+            const start: ast.NodePattern = if (chain.hops.len > 0) chain.hops[0].left else chain.head orelse continue;
+            try steps.append(allocator, .{ .start = start });
+            for (chain.hops) |hop| try steps.append(allocator, .{ .hop = hop });
+        }
     }
 
     // #560: env lists allocated once, reused per binding (the WHERE below and
@@ -6577,6 +6851,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             param_names: []const []const u8,
             param_values: []const Value,
             cap: ?usize,
+            /// SONNY-3046: path variables the incoming row binds; a binding
+            /// whose path is another is no match.
+            bound_paths: []const BoundPath,
             /// SONNY-3368 (round 4b-1b review I-B): what evaluating one
             /// binding's WHERE and FILTER allocates, reset for the next. It
             /// was allocated from the statement's allocator and kept to the
@@ -6588,6 +6865,12 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
 
             fn accept(self: *@This(), binding: *const MatchBinding) !bool {
                 if (self.cap) |c| if (self.out.items.len >= c) return false;
+                if (self.bound_paths.len > 0) {
+                    _ = self.scratch.reset(.retain_capacity);
+                    for (self.bound_paths) |bp| {
+                        if (!samePath(try bindPath(self.scratch.allocator(), self.store, bp.chain, binding), bp.want)) return true;
+                    }
+                }
                 if (self.where != null or self.filter != null) {
                     _ = self.scratch.reset(.retain_capacity);
                     const sa = self.scratch.allocator();
@@ -6638,6 +6921,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             .param_names = param_names,
             .param_values = param_values,
             .cap = join_cap,
+            .bound_paths = bound_paths.items,
             .scratch = std.heap.ArenaAllocator.init(allocator),
         };
         defer sink.scratch.deinit();
@@ -10385,6 +10669,23 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     if (setRemoveNeedsWriteStep(q)) {
         _ = g_legacy_write_scan_total.fetchAdd(1, .monotonic);
         return executeSetRemoveStep(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+    }
+    // CANARY: REQ=REQ-SONNY-3046-WITH-BOUND-JOIN; FEATURE="ChainedMatchJoin"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_sonny3046_with_bound_variable_join.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-3046, SONNY-3376, SONNY-3388: a pattern that names a node,
+    // relationship or path variable the incoming row binds (a chained part
+    // after WITH or NEXT) is joined to it, by the multi-chain executor seeded
+    // with the bound elements, before any fast path or one-pattern traversal
+    // below binds the name again (they read only a hop's start node from the
+    // row, if that). An aggregate, a grouping RETURN or a WITH goes through
+    // the shared projection over the rows that join binds, as for any
+    // multi-pattern read. A SET or REMOVE reads its rows through here too
+    // (`executeSetRemoveStep` above).
+    if (q.set_clauses.len == 0 and q.remove_clauses.len == 0 and patternJoinsBoundElement(q, param_names, param_values)) {
+        try refuseUnjoinableBoundElement(q, param_names, param_values);
+        if (projectionAggregates(q) or returnUsesSharedProjection(q) or multiChainWithStage(q)) {
+            return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        }
+        return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
     }
     // The graph and tenant every read and write below is scoped to, derived
     // once, here: the session's graph (else "default") and its tenant filter

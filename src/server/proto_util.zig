@@ -340,6 +340,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3248 (round-4a review M-2): one SET clause assigned one
         // property of an element twice; the second silently won.
         error.RepeatedSetTarget => .{ .code = "22G03", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
+        // SONNY-3046: a pattern naming a variable the incoming row binds where
+        // the join cannot constrain it is refused, not answered by binding
+        // the name again.
+        error.UnsupportedBoundVariableJoin => .{ .code = "0A000", .message = "A variable bound before this MATCH (passed on by WITH or NEXT) is named in a part with an OPTIONAL MATCH, a shortest path, a variable-length relationship, or as a path where it is a node or relationship (or the reverse); joining it there is not supported. Match the pattern with a new variable and compare it in a WHERE" },
         error.OptionalPathVariable => .{ .code = "0A000", .message = "A path variable on an OPTIONAL MATCH pattern after the first is not supported; return the pattern's nodes and relationships instead" },
         error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
         // SONNY-3384: a SET or REMOVE before a DELETE in one query runs only

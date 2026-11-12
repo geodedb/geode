@@ -4612,7 +4612,9 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     if (with_offset) |offset_val| {
         const offset_usize = @min(offset_val, new_rows.items.len);
         if (offset_usize > 0) {
-            // Remove the first offset_usize rows
+            // Remove the first offset_usize rows (SONNY-3046: and free them;
+            // they were dropped and leaked)
+            for (new_rows.items[0..offset_usize]) |row| allocator.free(row);
             const remaining = new_rows.items[offset_usize..];
             // GAP-0220 FIX: Use try for proper error propagation
             var remaining_rows = try std.ArrayList([]Value).initCapacity(allocator, remaining.len);
@@ -4626,7 +4628,9 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     if (with_limit) |limit_val| {
         const limit_usize = @min(limit_val, new_rows.items.len);
         if (limit_usize < new_rows.items.len) {
-            // Keep only the first limit_usize rows
+            // Keep only the first limit_usize rows (SONNY-3046: and free the
+            // rest; they were dropped and leaked)
+            for (new_rows.items[limit_usize..]) |row| allocator.free(row);
             const limited = new_rows.items[0..limit_usize];
             // GAP-0220 FIX: Use try for proper error propagation
             var limited_rows = try std.ArrayList([]Value).initCapacity(allocator, limited.len);
