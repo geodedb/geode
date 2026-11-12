@@ -92,14 +92,17 @@ was meant to become a BI token lookup.
   `CALL geode.fle.configureField` reads only `algorithm` and `visibility`
   from its config map, so every field it configures reports
   `searchable = false` in `getFieldConfig` / `listEncryptedFields`
-  (SONNY-6335 item 5). The `@searchable` annotation belongs to the FLE DDL,
+  (SONNY-6335 item 5). A `searchable` key other than `false` is refused
+  with `error.SearchableFieldsUnsupported` (SONNY-6348; it used to be
+  dropped silently). The `@searchable` annotation belongs to the FLE DDL,
   which is not available.
 - Query planning does not use blind indexes: no `WHERE` predicate on an
   encrypted field is rewritten to a blind-index lookup. The predicate rewrite
   that was meant to do it (`planner/rewrite.zig` `performFLERewrite`, with
   `fle_integration.computeBlindIndex`) had no caller and did not compile; it
   was removed. `fle_integration.lookupEncryptedField` /
-  `matchesEncryptedField` exist but no query path calls them.
+  `matchesEncryptedField`, which no query path called, were removed too
+  (SONNY-6348).
 - So equality search through blind indexes is not available.
 
 ---

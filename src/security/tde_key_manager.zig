@@ -151,89 +151,55 @@ pub fn loadRawKey(allocator: std.mem.Allocator) !?[KeyBytes]u8 {
 
 /// Configure KMS integration for key management.
 ///
-/// GAP-0296: When `provider` looks like a URL or `host:port` reachable
-/// endpoint, attempt a TCP probe with a short timeout. If the endpoint
-/// is unreachable, the caller (server startup) must refuse to start
-/// (fail-closed contract). Symbolic provider names ("aws", "azure",
-/// "gcp", "hashicorp") keep the legacy local-roundtrip simulation
-/// because the real cloud SDKs are not linked in.
+/// GAP-0296: `provider` must be a reachable endpoint (`host:port` or
+/// `<scheme>://host:port[/path]`); it is probed with a TCP connect, and an
+/// unreachable endpoint reports configured=false so server startup refuses
+/// to start (fail-closed contract). Reachability is all that is checked: no
+/// key is fetched from or wrapped by the endpoint.
+///
+/// SONNY-6348: a symbolic provider name ("aws", "azure", "gcp",
+/// "hashicorp", "local") used to report configured=true after a local
+/// AES-GCM round trip with a random key, so startup logged "KMS configured"
+/// without contacting any KMS. No cloud KMS SDK is linked in; such a name
+/// now reports configured=false and startup refuses it.
 pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !ConfigureKMSResult {
-    // Detect the symbolic provider set vs an actual endpoint string.
     const is_symbolic = std.mem.eql(u8, provider, "aws") or
         std.mem.eql(u8, provider, "azure") or
         std.mem.eql(u8, provider, "gcp") or
         std.mem.eql(u8, provider, "hashicorp") or
         std.mem.eql(u8, provider, "local");
 
-    if (!is_symbolic) {
-        // Treat as a reachability probe. Accept either `host:port` or
-        // `<scheme>://host:port[/path]`.  Anything else fails closed.
-        const reachable = probeKmsReachable(allocator, provider) catch false;
-        if (!reachable) {
-            return .{
-                .provider_name = try allocator.dupe(u8, provider),
-                .configured = false,
-                .endpoint = try allocator.dupe(u8, provider),
-                .test_result = try std.fmt.allocPrint(
-                    allocator,
-                    "FAILED: KMS endpoint unreachable ({s})",
-                    .{provider},
-                ),
-            };
-        }
+    if (is_symbolic) {
         return .{
             .provider_name = try allocator.dupe(u8, provider),
-            .configured = true,
-            .endpoint = try allocator.dupe(u8, provider),
-            .test_result = try allocator.dupe(u8, "SUCCESS: KMS endpoint reachable"),
+            .configured = false,
+            .endpoint = try allocator.dupe(u8, ""),
+            .test_result = try std.fmt.allocPrint(
+                allocator,
+                "FAILED: '{s}' is a provider name, not a KMS endpoint; no {s} KMS client is built in (GEODE_KMS_URL must be host:port or scheme://host:port)",
+                .{ provider, provider },
+            ),
         };
     }
 
-    // Configure endpoint based on provider
-    const endpoint = if (std.mem.eql(u8, provider, "aws"))
-        try allocator.dupe(u8, "kms.us-east-1.amazonaws.com")
-    else if (std.mem.eql(u8, provider, "azure"))
-        try allocator.dupe(u8, "vault.azure.net")
-    else if (std.mem.eql(u8, provider, "gcp"))
-        try allocator.dupe(u8, "cloudkms.googleapis.com")
-    else if (std.mem.eql(u8, provider, "hashicorp"))
-        try allocator.dupe(u8, "vault.local:8200")
-    else
-        try allocator.dupe(u8, "local://keys");
-
-    // Test KMS connection using inline encryption (avoiding circular dependency)
-    const test_data = "test_data";
-    const test_result = blk: {
-        // Test encrypt/decrypt roundtrip using AES-256-GCM
-        // SEC-06: Use ephemeral random key and nonce instead of static values
-        var key: [32]u8 = undefined;
-        var nonce: [12]u8 = undefined;
-        try cb.Csprng.bytes(&key);
-        try cb.Csprng.bytes(&nonce);
-
-        // Encrypt test data
-        var encrypted: [test_data.len]u8 = undefined;
-        var tag: [16]u8 = undefined;
-        try cb.Aead.seal(.aes_256_gcm, &key, &nonce, &.{}, test_data, &encrypted, &tag);
-
-        // Decrypt test data
-        var decrypted: [test_data.len]u8 = undefined;
-        cb.Aead.open(.aes_256_gcm, &key, &nonce, &.{}, &encrypted, &tag, &decrypted) catch {
-            break :blk try allocator.dupe(u8, "FAILED: Decryption failed");
+    const reachable = probeKmsReachable(allocator, provider) catch false;
+    if (!reachable) {
+        return .{
+            .provider_name = try allocator.dupe(u8, provider),
+            .configured = false,
+            .endpoint = try allocator.dupe(u8, provider),
+            .test_result = try std.fmt.allocPrint(
+                allocator,
+                "FAILED: KMS endpoint unreachable ({s})",
+                .{provider},
+            ),
         };
-
-        if (std.mem.eql(u8, &decrypted, test_data)) {
-            break :blk try allocator.dupe(u8, "SUCCESS: Encrypt/decrypt roundtrip passed");
-        } else {
-            break :blk try allocator.dupe(u8, "FAILED: Data mismatch");
-        }
-    };
-
+    }
     return .{
         .provider_name = try allocator.dupe(u8, provider),
         .configured = true,
-        .endpoint = endpoint,
-        .test_result = test_result,
+        .endpoint = try allocator.dupe(u8, provider),
+        .test_result = try allocator.dupe(u8, "SUCCESS: KMS endpoint reachable (TCP connect only; no key is fetched from it)"),
     };
 }
 
@@ -483,7 +449,7 @@ test "deriveKey - invalid length" {
     try testing.expectError(error.InvalidKey, deriveKey(hex, &key));
 }
 
-test "configureKMS - AWS provider" {
+test "configureKMS - a symbolic provider name is not a configured KMS" {
     const testing = std.testing;
 
     const result = try configureKMS(testing.allocator, "aws");
@@ -492,8 +458,8 @@ test "configureKMS - AWS provider" {
     defer testing.allocator.free(result.test_result);
 
     try testing.expect(std.mem.eql(u8, result.provider_name, "aws"));
-    try testing.expect(result.configured);
-    try testing.expect(std.mem.indexOf(u8, result.endpoint, "kms.us-east-1") != null);
+    try testing.expect(!result.configured);
+    try testing.expect(std.mem.startsWith(u8, result.test_result, "FAILED"));
 }
 
 // =============================================================================

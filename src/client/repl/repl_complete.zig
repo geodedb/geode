@@ -722,13 +722,27 @@ test "file path completion - absolute path subdir" {
     var state = try MockState.init(allocator, "\\source ");
     defer state.deinit();
 
-    // Test completion in /tmp if it exists
-    try generateFilePathCandidates(&state, "/tmp/");
+    // SONNY-6348: a private directory with a known entry, not whatever the
+    // shared /tmp happens to hold.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tio = std.Io.Threaded.global_single_threaded.io();
+    const f = try tmp.dir.createFile(tio, "sonny6348.gql", .{});
+    f.close(tio);
+    var abs_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const abs_len = try tmp.dir.realPath(tio, &abs_buf);
+    var prefix_buf: [std.fs.max_path_bytes + 1]u8 = undefined;
+    const prefix = try std.fmt.bufPrint(&prefix_buf, "{s}/", .{abs_buf[0..abs_len]});
 
-    // All candidates should start with "/tmp/"
+    try generateFilePathCandidates(&state, prefix);
+
+    // Every candidate is under the directory, and its entry is offered.
+    var found = false;
     for (state.completion_ctx.candidates.items) |candidate| {
-        try std.testing.expect(std.mem.startsWith(u8, candidate, "/tmp/"));
+        try std.testing.expect(std.mem.startsWith(u8, candidate, prefix));
+        if (std.mem.endsWith(u8, candidate, "sonny6348.gql")) found = true;
     }
+    try std.testing.expect(found);
 }
 
 test "file path completion - hidden files only with dot prefix" {

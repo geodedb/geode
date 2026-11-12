@@ -4,6 +4,31 @@
 
 ### Security
 
+- **BREAKING (operator): a symbolic `GEODE_KMS_URL` (`aws`, `azure`, `gcp`,
+  `hashicorp`, `local`) refuses startup (SONNY-6348 items 1, 4-6).**
+  `configureKMS` reported such a name configured after a local AES-GCM
+  round trip with a random key, and startup logged "KMS configured" without
+  contacting any KMS; no client for those providers is built in. An endpoint
+  value is still probed with a TCP connect only, and the log now says "KMS
+  endpoint reachable" (the configureKMS result strings are also freed).
+  `tde.simulate_oltp_workload` ignored `concurrent_transactions`; it now
+  runs that many worker threads (1-64, else `InvalidArgs`) and reports
+  `concurrent_transactions` and `transactions` columns.
+  `tde.encrypt_page_test` / `tde.encrypt_backup_test` gave every run id 1;
+  each run now gets its own sequence number. Seven procedures the server
+  refuses (`audit.get_recent_events`, `audit.verify_hash_chain`,
+  `audit.comprehensive_integrity_check`, `tde.get_encryption_status`,
+  `tde.verify_encrypted_state`, `tde.get_rotation_state`,
+  `tde.audit_plaintext_keys`) are no longer classified read-only.
+  `geode.fle.configureField` refuses `searchable` other than `false`
+  (`SearchableFieldsUnsupported`) instead of dropping it, and the uncalled
+  `fle_integration.lookupEncryptedField` / `matchesEncryptedField` and the
+  unused audit imports are removed. The timeseries persistence and REPL
+  path-completion inline tests use private temp dirs instead of fixed /tmp
+  paths and now run (`test-sonny6348-inline-tmp`); the other files the
+  ticket named were already removed (SONNY-6298). `docs/FEATURES_OVERVIEW.md`
+  claimed searchable encryption and predicate rewriting; neither exists.
+  Regression: `zig build test-sonny6348-kms-tmp-selftests-stale`.
 - **A stored Argon2id hash outside the parameter bounds fails verification;
   startup log lines are written; the server frees its RBAC policy and
   proto-reader registry at exit (SONNY-6378).** `verifyPasswordArgon2id`

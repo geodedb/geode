@@ -45,8 +45,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 
 const cb = @import("crypto_backend");
 const rls = @import("rls");
-const audit_formatter = @import("audit_formatter.zig");
-const audit_sink = @import("audit_sink.zig");
 const Allocator = std.mem.Allocator;
 const pooled = @import("transport/thread_pool");
 const logging = @import("logging");

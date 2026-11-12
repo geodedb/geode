@@ -81,10 +81,13 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Field-Level Encryption (FLE)** ✅ January 2026
 
-- **Searchable Encryption**: Blind index for encrypted field queries
-- **Predicate Rewriting**: Automatic WHERE clause transformation
+- **Searchable Encryption**: not available. Blind indexes are designed but
+  no field can be made searchable and no query uses them (see
+  `docs/FIELD_LEVEL_ENCRYPTION.md`, "Searchable fields today")
+- **Predicate Rewriting**: not available (the planner rewrite was removed;
+  it never compiled)
 - **RBAC Integration**: Role-based decryption permissions
-- **Implementation**: `src/planner/rewrite.zig`, `src/fle_integration.zig`
+- **Implementation**: `src/fle_integration.zig`
 
 ## 📦 Data Integrity & Recovery
 

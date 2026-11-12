@@ -479,6 +479,12 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
 // ========== TDE TEST PROCEDURES - REAL IMPLEMENTATIONS ==========
 // CANARY: REQ=REQ-TDE-TEST-IMPL; FEATURE="TDETestImplementations"; ASPECT=RealFunctionality; STATUS=EXEMPT; OWNER=tde; UPDATED=2025-11-12
 
+// SONNY-6348: the page and backup self tests reported id 1 on every run.
+// Each run now gets its own sequence number (per process, from 1), which
+// identifies the synthetic page or backup payload that run encrypted.
+var page_test_seq = std.atomic.Value(i64).init(0);
+var backup_test_seq = std.atomic.Value(i64).init(0);
+
 /// Test block-level encryption
 pub fn encryptPageTest(allocator: std.mem.Allocator) !struct {
     page_id: i64,
@@ -504,7 +510,7 @@ pub fn encryptPageTest(allocator: std.mem.Allocator) !struct {
     const integrity_ok = std.mem.eql(u8, page_data, decrypted);
 
     return .{
-        .page_id = 1,
+        .page_id = page_test_seq.fetchAdd(1, .monotonic) + 1,
         .encryption_status = try allocator.dupe(u8, if (integrity_ok) "encrypted" else "failed"),
         .page_size_encrypted = @intCast(encrypted.data.len),
         .integrity_check = integrity_ok,
@@ -536,7 +542,7 @@ pub fn encryptBackupTest(allocator: std.mem.Allocator) !struct {
     const integrity_ok = std.mem.eql(u8, backup_data, decrypted);
 
     return .{
-        .backup_id = 1,
+        .backup_id = backup_test_seq.fetchAdd(1, .monotonic) + 1,
         .encryption_status = try allocator.dupe(u8, if (integrity_ok) "encrypted" else "failed"),
         .backup_size = @intCast(encrypted.data.len),
         .integrity_verified = integrity_ok,
@@ -612,55 +618,132 @@ pub fn measureOverhead(allocator: std.mem.Allocator) !struct {
     };
 }
 
-/// Simulate OLTP workload with encryption
+/// The most concurrent transactions `simulateOLTPWorkload` runs (one
+/// thread each); more is refused with error.InvalidArgs (SONNY-6348).
+pub const max_oltp_concurrency: u32 = 64;
+
+fn monoNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+const OltpWorker = struct {
+    transactions: u64,
+    encrypt: bool,
+    elapsed_ns: u64 = 0,
+    err: ?anyerror = null,
+
+    fn run(self: *OltpWorker) void {
+        self.runInner() catch |e| {
+            self.err = e;
+        };
+    }
+
+    fn runInner(self: *OltpWorker) !void {
+        // smp_allocator: the workers run concurrently, and the caller's
+        // allocator (often a per-query arena) is not thread-safe.
+        const a = std.heap.smp_allocator;
+        var data: [256]u8 = undefined;
+        // fips-exempt: non-security test-plaintext fill
+        compat_fillRandom(&data);
+        const start = monoNs();
+        for (0..self.transactions) |_| {
+            if (self.encrypt) {
+                const enc = try encrypt(a, &data, "oltp_test");
+                defer a.free(enc.data);
+                const dec = try decrypt(a, enc, "oltp_test");
+                a.free(dec);
+            } else {
+                const copy = try a.alloc(u8, data.len);
+                @memcpy(copy, &data);
+                std.mem.doNotOptimizeAway(copy.ptr);
+                a.free(copy);
+            }
+        }
+        self.elapsed_ns = monoNs() - start;
+    }
+};
+
+/// Run `transactions` transactions split across `workers` concurrent threads
+/// and return the wall time in ns and the summed per-worker busy time.
+fn runOltpPhase(workers: []OltpWorker, threads: []std.Thread, total: u64, encrypt_phase: bool) !struct { wall_ns: u64, busy_ns: u64 } {
+    const n: u64 = workers.len;
+    for (workers, 0..) |*w, i| {
+        // Spread the remainder over the first workers.
+        w.* = .{ .transactions = total / n + @intFromBool(i < total % n), .encrypt = encrypt_phase };
+    }
+    var spawned: usize = 0;
+    const start = monoNs();
+    errdefer for (threads[0..spawned]) |t| t.join();
+    for (workers, 0..) |*w, i| {
+        threads[i] = try std.Thread.spawn(.{}, OltpWorker.run, .{w});
+        spawned += 1;
+    }
+    for (threads[0..spawned]) |t| t.join();
+    spawned = 0;
+    const wall = monoNs() - start;
+    var busy: u64 = 0;
+    for (workers) |w| {
+        if (w.err) |e| return e;
+        busy += w.elapsed_ns;
+    }
+    return .{ .wall_ns = @max(wall, 1), .busy_ns = busy };
+}
+
+/// Simulate an OLTP workload with encryption: `duration_seconds * 10`
+/// transactions (a 256-byte encrypt + decrypt each), run by
+/// `concurrent_transactions` threads at once, against the same workload of
+/// plain copies.
+///
+/// SONNY-6348: `concurrent_transactions` was ignored (every transaction ran
+/// on the caller's thread). It is now the number of concurrent workers,
+/// 1..max_oltp_concurrency (anything else is error.InvalidArgs), and is
+/// reported back with the number of transactions run.
 pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32, concurrent_transactions: u32) !struct {
     avg_transaction_time_ms: f64,
     tps_with_encryption: i64,
     tps_without_encryption: i64,
     degradation_percentage: f64,
+    concurrent_transactions: u32,
+    transactions: u64,
 } {
     if (!enabled()) return error.FeatureDisabled;
-
-    _ = concurrent_transactions;
-
-    const test_data = try allocator.alloc(u8, 256);
-    defer allocator.free(test_data);
-    // fips-exempt: non-security test-plaintext fill
-    compat_fillRandom(test_data);
+    if (concurrent_transactions == 0 or concurrent_transactions > max_oltp_concurrency) return error.InvalidArgs;
 
     // SONNY-2739: u64, so a large duration cannot overflow the product.
-    const iterations = @as(u64, duration_seconds) * 10; // Simulate transactions
+    const total = @as(u64, duration_seconds) * 10;
+    // More workers than transactions would leave workers with nothing to do.
+    const n: usize = @intCast(@max(@min(@as(u64, concurrent_transactions), total), 1));
 
-    // Without encryption
-    const unencrypted_start = compat_milliTimestamp();
-    for (0..iterations) |_| {
-        const copy = try allocator.alloc(u8, test_data.len);
-        @memcpy(copy, test_data);
-        allocator.free(copy);
-    }
-    const unencrypted_time = compat_milliTimestamp() - unencrypted_start;
+    const workers = try allocator.alloc(OltpWorker, n);
+    defer allocator.free(workers);
+    const threads = try allocator.alloc(std.Thread, n);
+    defer allocator.free(threads);
 
-    // With encryption
-    const encrypted_start = compat_milliTimestamp();
-    for (0..iterations) |_| {
-        const enc = try encrypt(allocator, test_data, "oltp_test");
-        const dec = try decrypt(allocator, enc, "oltp_test");
-        allocator.free(enc.data);
-        allocator.free(dec);
-    }
-    const encrypted_time = compat_milliTimestamp() - encrypted_start;
+    const plain = try runOltpPhase(workers, threads, total, false);
+    const enc = try runOltpPhase(workers, threads, total, true);
 
-    // SONNY-2739: a loop timed at 0 ms made the rate infinite; see above.
-    const tps_unencrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(@max(unencrypted_time, 1)))) * 1000.0;
-    const tps_encrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(@max(encrypted_time, 1)))) * 1000.0;
-    const avg_time = @as(f64, @floatFromInt(encrypted_time)) / @as(f64, @floatFromInt(iterations));
-    const degradation = ((tps_unencrypted - tps_encrypted) / tps_unencrypted) * 100.0;
+    const ns_per_s: f64 = @floatFromInt(std.time.ns_per_s);
+    const total_f: f64 = @floatFromInt(total);
+    const tps_unencrypted = total_f / (@as(f64, @floatFromInt(plain.wall_ns)) / ns_per_s);
+    const tps_encrypted = total_f / (@as(f64, @floatFromInt(enc.wall_ns)) / ns_per_s);
+    // Mean latency of one transaction: the workers' busy time over the
+    // transactions they ran.
+    const avg_time_ms = if (total == 0) 0.0 else @as(f64, @floatFromInt(enc.busy_ns)) / total_f / 1_000_000.0;
+    const degradation = if (total == 0) 0.0 else ((tps_unencrypted - tps_encrypted) / tps_unencrypted) * 100.0;
 
     return .{
-        .avg_transaction_time_ms = avg_time,
+        .avg_transaction_time_ms = avg_time_ms,
         .tps_with_encryption = std.math.lossyCast(i64, tps_encrypted),
         .tps_without_encryption = std.math.lossyCast(i64, tps_unencrypted),
         .degradation_percentage = degradation,
+        .concurrent_transactions = @intCast(n),
+        .transactions = total,
     };
 }
 

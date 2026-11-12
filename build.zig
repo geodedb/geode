@@ -9573,6 +9573,21 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6348-kms-tmp-selftests-stale", "Run SONNY-6348 items 1, 4-6 regression (a symbolic GEODE_KMS_URL is refused, not reported configured; no fixed /tmp path in inline tests; simulate_oltp_workload runs the requested concurrency and the page/backup self tests give each run an id; refused procedures are not read-only; dead FLE lookups and unused audit imports are gone; configureField refuses searchable)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6348 item 4: the two inline tests that used fixed /tmp paths,
+    // which no named step ran.
+    {
+        const ts_inline = b.addTest(.{ .root_module = timeseries_wrapper_mod, .filters = &.{"ts: persist-restart-query via StoreConfig"} });
+        const run_ts_inline = b.addRunArtifact(ts_inline);
+        // repl_complete.zig imports only std and builtin, so it roots its own module.
+        const repl_inline = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/client/repl/repl_complete.zig"), .target = target, .optimize = optimize, .link_libc = true }), .filters = &.{"file path completion - absolute path subdir"} });
+        const run_repl_inline = b.addRunArtifact(repl_inline);
+        shardDep(test_step, &run_ts_inline.step, 1, test_shard_loads, test_shard_index);
+        shardDep(test_step, &run_repl_inline.step, 1, test_shard_loads, test_shard_index);
+        const step = b.step("test-sonny6348-inline-tmp", "Run SONNY-6348 item 4 regression (the timeseries persistence and REPL path-completion inline tests use private temporary directories, not fixed /tmp paths)");
+        step.dependOn(&run_ts_inline.step);
+        step.dependOn(&run_repl_inline.step);
+    }
+
     // SONNY-3379: the I-4 vector case over in-process gRPC (the shared
     // round-12 fixture), in two fixture lifetimes; the fixture leaves no
     // index manager pointing into its freed request arena.

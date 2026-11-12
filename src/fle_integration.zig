@@ -616,74 +616,9 @@ pub fn decryptFieldIfNeeded(
     return plaintext;
 }
 
-/// Check if a field value matches a query value using blind index
-/// Returns a list of record IDs that match the query value
-pub fn lookupEncryptedField(
-    ctx: EncryptionContext,
-    type_name: []const u8,
-    field_name: []const u8,
-    query_value: []const u8,
-) !?[]const []const u8 {
-    // 1. Get global catalog
-    const catalog = try fle_catalog.globalCatalog(ctx.allocator);
-
-    // 2. Check if field is searchable
-    if (!catalog.isFieldSearchable(type_name, field_name)) {
-        return null; // Not searchable, fall back to full scan
-    }
-
-    // 3. Check RBAC - user must have READ_PLAINTEXT privilege to search encrypted fields
-    if (!canReadPlaintext(ctx, type_name, field_name)) {
-        // fle v0.1.7 (98dd8af) dropped the never-raised SearchNotPermitted from
-        // its aead.Error set; raise geode's own error (handled downstream).
-        return error.SearchNotPermitted;
-    }
-
-    // 4. Get BIK from key manager
-    const key_manager = try getGlobalKeyManager(ctx.allocator);
-    const key_ids = key_types.KeyIds{
-        .tenant = ctx.tenant_id,
-        .schema = ctx.schema_name,
-        .field = field_name,
-        .version = 1,
-    };
-    const bik = try key_manager.getBIK(key_ids);
-
-    // 5. Get blind index
-    const blind_index = try getGlobalBlindIndex(ctx.allocator);
-
-    // 6. Lookup record IDs
-    const record_ids = try blind_index.lookup(
-        ctx.schema_name,
-        field_name,
-        bik,
-        query_value,
-    );
-
-    return record_ids;
-}
-
-/// Check if a field value matches a query value using blind index (legacy API)
-/// Returns true if the field is searchable and matches, false otherwise
-pub fn matchesEncryptedField(
-    ctx: EncryptionContext,
-    type_name: []const u8,
-    field_name: []const u8,
-    encrypted_value: []const u8,
-    query_value: []const u8,
-) !bool {
-    _ = encrypted_value; // Not used in this implementation
-
-    const record_ids_opt = try lookupEncryptedField(ctx, type_name, field_name, query_value);
-
-    if (record_ids_opt) |record_ids| {
-        // If we got results, it means the field is searchable and has matches
-        return record_ids.len > 0;
-    }
-
-    // Field is not searchable, return false (fall back to full scan)
-    return false;
-}
+// SONNY-6348: lookupEncryptedField / matchesEncryptedField (blind-index
+// equality lookups) were removed: no query path called them, and no field
+// can be made searchable (geode.fle.configureField refuses `searchable`).
 
 /// Helper to construct AAD (Additional Authenticated Data) for AEAD
 fn makeAAD(
@@ -835,9 +770,6 @@ test "FLE integration placeholder" {
 
     const decrypt_result = try decryptFieldIfNeeded(ctx, "Person", "ssn", "123-45-6789", "node_1", false);
     try testing.expectEqualStrings("123-45-6789", decrypt_result);
-
-    const match_result = try matchesEncryptedField(ctx, "Person", "ssn", "encrypted", "123-45-6789");
-    try testing.expect(!match_result);
 }
 
 // GAP-0285: Verify that clearCurrentThreadState removes stale per-thread role and tenant entries.

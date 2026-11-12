@@ -1072,19 +1072,19 @@ test "ts: timeBucketAvg — boundary: point exactly at bucket start" {
 test "ts: persist-restart-query via StoreConfig" {
     const allocator = std.testing.allocator;
 
-    const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
+    // SONNY-6348: a private, randomly named directory (std.testing.tmpDir,
+    // under .zig-cache/tmp), not a predictable /tmp/geode_ts_persist_<pid>
+    // that was deleted and recreated whoever owned it.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
     var path_buf: [128]u8 = undefined;
-    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/geode_ts_persist_{d}", .{pid}) catch unreachable;
+    const test_dir = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     const tio = std.Io.Threaded.global_single_threaded.io();
-    // Ensure a clean directory exists for this PID's persistence test —
     // ts_storage.engine.Engine.init requires both the parent data_dir AND
     // its internal /timeseries subdir to exist before construction.
-    std.Io.Dir.cwd().deleteTree(tio, test_dir) catch {};
-    try std.Io.Dir.cwd().createDirPath(tio, test_dir);
     var ts_subdir_buf: [192]u8 = undefined;
-    const ts_subdir = std.fmt.bufPrint(&ts_subdir_buf, "{s}/timeseries", .{test_dir}) catch unreachable;
+    const ts_subdir = try std.fmt.bufPrint(&ts_subdir_buf, "{s}/timeseries", .{test_dir});
     try std.Io.Dir.cwd().createDirPath(tio, ts_subdir);
-    defer std.Io.Dir.cwd().deleteTree(tio, test_dir) catch {};
 
     const key = SeriesKey{ .device_id = 7, .metric = "voltage" };
 

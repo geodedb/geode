@@ -71,9 +71,11 @@ What the server does:
 - When `GEODE_KMS_URL` is set, server startup calls
   `tde_key_manager.configureKMS`, which only checks that the endpoint accepts a
   TCP connection and refuses to start if it does not. No key is fetched from
-  or wrapped by that endpoint. For the symbolic provider names (`aws`, `azure`,
-  `gcp`, `hashicorp`, `local`) it runs a local AES-256-GCM round trip with an
-  ephemeral key.
+  or wrapped by that endpoint; the startup log says "KMS endpoint reachable",
+  not "KMS configured". A symbolic provider name (`aws`, `azure`, `gcp`,
+  `hashicorp`, `local`) is not an endpoint and no client for it is built in:
+  startup refuses it (SONNY-6348; it used to run a local AES-256-GCM round
+  trip with an ephemeral key and log "KMS configured").
 - The providers in `src/security/kms.zig` are reached from the
   `tde.configure_kms`, `tde.configure_mock_kms` and `tde.test_kms_wrap_unwrap`
   procedures

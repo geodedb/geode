@@ -1711,6 +1711,11 @@ pub fn main() !void {
             });
             return err;
         };
+        defer {
+            gpa.free(result.provider_name);
+            gpa.free(result.endpoint);
+            gpa.free(result.test_result);
+        }
         if (!result.configured) {
             log.err("KMS configuration unsuccessful; refusing to start", &.{
                 Attr.string("test_result", result.test_result),
@@ -1718,8 +1723,9 @@ pub fn main() !void {
             });
             return error.KmsUnreachable;
         }
-        log.info("KMS configured", &.{
-            Attr.string("provider", result.provider_name),
+        // SONNY-6348: only reachability is checked; say so rather than
+        // "KMS configured" (no key is fetched from or wrapped by it).
+        log.info("KMS endpoint reachable (TCP only; TDE keys still come from GEODE_TDE_KEY)", &.{
             Attr.string("endpoint", result.endpoint),
             Attr.string("test_result", result.test_result),
         });

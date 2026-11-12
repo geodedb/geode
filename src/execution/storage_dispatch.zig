@@ -603,7 +603,7 @@ fn handleTdeMeasureOverhead(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 
 fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-TDE-PROC-046; FEATURE="TDETestProcedures"; ASPECT=SimulateOLTPWorkload; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-12
-    // tde.simulate_oltp_workload(duration_seconds, concurrent_transactions) -> avg_transaction_time_ms, tps_with_encryption, tps_without_encryption, degradation_percentage
+    // tde.simulate_oltp_workload(duration_seconds, concurrent_transactions) -> avg_transaction_time_ms, tps_with_encryption, tps_without_encryption, degradation_percentage, concurrent_transactions, transactions
 
     // Extract parameters
     const args = switch (call_stmt.procedure) {
@@ -636,20 +636,26 @@ fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.Ca
     } else 10;
 
     // Call real TDE function
+    // SONNY-6348: concurrent_transactions is honoured (1..64 worker threads,
+    // else error.InvalidArgs) and reported back with the transactions run.
     const result = try tde_mod.simulateOLTPWorkload(allocator, duration_seconds, concurrent_transactions);
 
-    const columns = try allocator.alloc([]const u8, 4);
+    const columns = try allocator.alloc([]const u8, 6);
     columns[0] = try allocator.dupe(u8, "avg_transaction_time_ms");
     columns[1] = try allocator.dupe(u8, "tps_with_encryption");
     columns[2] = try allocator.dupe(u8, "tps_without_encryption");
     columns[3] = try allocator.dupe(u8, "degradation_percentage");
+    columns[4] = try allocator.dupe(u8, "concurrent_transactions");
+    columns[5] = try allocator.dupe(u8, "transactions");
 
     const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 4);
+    const row = try allocator.alloc(Value, 6);
     row[0] = Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(result.avg_transaction_time_ms, 100.0), .scale = 2 } };
     row[1] = Value{ .Int = result.tps_with_encryption };
     row[2] = Value{ .Int = result.tps_without_encryption };
     row[3] = Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(result.degradation_percentage, 100.0), .scale = 2 } };
+    row[4] = Value{ .Int = result.concurrent_transactions };
+    row[5] = Value{ .Int = std.math.cast(i64, result.transactions) orelse return error.InvalidArgs };
     rows[0] = row;
 
     return ExecutionResult{
@@ -1405,6 +1411,13 @@ fn parseFLEConfigMap(allocator: std.mem.Allocator, map_props: []const ast.Proper
             if (prop.value.* == .List) {
                 visibility_roles = try parseVisibilityList(allocator, prop.value.List);
             }
+        } else if (std.mem.eql(u8, prop.key, "searchable")) {
+            // SONNY-6348: equality search on encrypted fields (blind
+            // indexes) is not available, and the key used to be dropped
+            // silently, configuring a field that reported searchable=false.
+            // Refuse a request for it rather than pretend; `false` is the
+            // only behaviour there is.
+            if (!(prop.value.* == .Bool and !prop.value.Bool)) return error.SearchableFieldsUnsupported;
         }
     }
 
