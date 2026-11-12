@@ -9450,6 +9450,24 @@ pub fn build(b: *std.Build) void {
     const sonny3379_step = b.step("test-sonny3379-grpc-vector-index-teardown", "Run SONNY-3379 regression (the I-4 vector case runs over in-process gRPC through the shared round-12 fixture, twice in one process; the fixture tears down the index manager before freeing the request arena it lives in)");
     sonny3379_step.dependOn(&run_sonny3379_tests.step);
 
+    // SONNY-6320: Argon2id hashing and constant-time verification checked
+    // deterministically (structural, no wall clock), replacing the
+    // unregistered src/security/test_argon2id_hashing.zig and
+    // test_timing_attacks.zig; and every test file the ticket found in no
+    // build step is removed or built.
+    const sonny6320_opts = b.addOptions();
+    sonny6320_opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+    const sonny6320_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6320_password_hashing.zig"), .target = target, .optimize = optimize });
+    sonny6320_test_mod.addImport("geode_auth", auth_mod);
+    sonny6320_test_mod.addImport("crypto_backend", crypto_backend_mod);
+    sonny6320_test_mod.addImport("build_options", build_options_mod);
+    sonny6320_test_mod.addImport("sonny6320_options", sonny6320_opts.createModule());
+    const sonny6320_tests = b.addTest(.{ .root_module = sonny6320_test_mod });
+    const run_sonny6320_tests = b.addRunArtifact(sonny6320_tests);
+    shardDep(test_step, &run_sonny6320_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6320_step = b.step("test-sonny6320-password-hashing", "Run SONNY-6320 regression (Argon2id PHC strings with the OWASP parameters and a fresh salt, verify refuses near misses and malformed PHC strings, the verify paths compare digests with timingSafeEql (structural, no clock); every test file found in no build step is removed or built)");
+    sonny6320_step.dependOn(&run_sonny6320_tests.step);
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per
