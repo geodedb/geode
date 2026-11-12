@@ -304,6 +304,117 @@ pub fn tenantHasDescendants(filter_tenant: ?[]const u8) bool {
     return hm.hasChildren(tid);
 }
 
+// CANARY: REQ=REQ-SONNY-6344-TENANT-LISTINGS; FEATURE="PerTenantIsolation"; ASPECT=VisibleTenantTags; STATUS=TESTED; TEST=tests/test_sonny6344_tenant_schema_listings.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6344: the tenant tags whose rows the session sees, for a listing
+/// that reads per-tenant structures by EXACT tag (`listNodeLabels`,
+/// `listEdgeTypes`, `listPropertiesForLabel`): the session's tenant and,
+/// when it is registered in the hierarchy, every descendant (children, their
+/// children, ...). Null for an unscoped session (every tag). The caller
+/// unions the per-tag listings and frees the result with `freeTenantTags`.
+pub fn visibleTenantTagsAlloc(allocator: std.mem.Allocator, filter_tenant: ?[]const u8) !?[][]const u8 {
+    const tid = filter_tenant orelse return null;
+    var tags: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (tags.items) |t| allocator.free(t);
+        tags.deinit(allocator);
+    }
+    try tags.append(allocator, try allocator.dupe(u8, tid));
+    if (hierarchyForFilter(tid)) |hm| {
+        // Breadth-first over the children lists; `tags` doubles as the queue.
+        var next: usize = 0;
+        while (next < tags.items.len) : (next += 1) {
+            const children = try hm.getChildrenAlloc(allocator, tags.items[next]);
+            defer allocator.free(children);
+            var taken: usize = 0;
+            errdefer for (children[taken..]) |c| allocator.free(c);
+            for (children) |child| {
+                if (containsTag(tags.items, child)) {
+                    allocator.free(child);
+                } else {
+                    try tags.append(allocator, child);
+                }
+                taken += 1;
+            }
+        }
+    }
+    return try tags.toOwnedSlice(allocator);
+}
+
+pub fn freeTenantTags(allocator: std.mem.Allocator, tags: ?[][]const u8) void {
+    const list = tags orelse return;
+    for (list) |t| allocator.free(t);
+    allocator.free(list);
+}
+
+fn containsTag(tags: []const []const u8, tag: []const u8) bool {
+    for (tags) |t| {
+        if (std.mem.eql(u8, t, tag)) return true;
+    }
+    return false;
+}
+
+/// SONNY-6344: the node labels a session sees (`listNodeLabels` over every
+/// visible tenant tag, deduplicated). Caller owns the slice and its strings.
+pub fn listNodeLabelsVisible(allocator: std.mem.Allocator, store: *graph_store.GraphStore, filter_tenant: ?[]const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, {}, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, _: void) anyerror![][]const u8 {
+            return s.listNodeLabels(a, tag);
+        }
+    }.list);
+}
+
+/// SONNY-6344: the relationship types a session sees.
+pub fn listEdgeTypesVisible(allocator: std.mem.Allocator, store: *graph_store.GraphStore, filter_tenant: ?[]const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, {}, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, _: void) anyerror![][]const u8 {
+            return s.listEdgeTypes(a, tag);
+        }
+    }.list);
+}
+
+/// SONNY-6344: the property keys of `label` a session sees.
+pub fn listPropertiesForLabelVisible(allocator: std.mem.Allocator, store: *graph_store.GraphStore, filter_tenant: ?[]const u8, label: []const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, label, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, lbl: []const u8) anyerror![][]const u8 {
+            return s.listPropertiesForLabel(a, tag, lbl);
+        }
+    }.list);
+}
+
+fn unionOverVisibleTags(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    filter_tenant: ?[]const u8,
+    extra: anytype,
+    comptime list: fn (std.mem.Allocator, *graph_store.GraphStore, ?[]const u8, @TypeOf(extra)) anyerror![][]const u8,
+) ![][]const u8 {
+    const tags = try visibleTenantTagsAlloc(allocator, filter_tenant);
+    defer freeTenantTags(allocator, tags);
+    const visible = tags orelse return list(allocator, store, null, extra);
+    if (visible.len == 1) return list(allocator, store, visible[0], extra);
+
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (out.items) |s| allocator.free(s);
+        out.deinit(allocator);
+    }
+    for (visible) |tag| {
+        const items = try list(allocator, store, tag, extra);
+        defer allocator.free(items);
+        var moved: usize = 0;
+        errdefer for (items[moved..]) |s| allocator.free(s);
+        for (items) |item| {
+            if (containsTag(out.items, item)) {
+                allocator.free(item);
+            } else {
+                try out.append(allocator, item);
+            }
+            moved += 1;
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 /// GAP-0279 / GAP-0846: is this node visible to the session's tenant scope?
 pub inline fn passesTenantFilter(node: graph_store.Node, filter_tenant: ?[]const u8) bool {
     return passesTenantFilterSlice(node.tenant_id, filter_tenant);

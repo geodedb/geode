@@ -707,6 +707,44 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                     }
                 }
 
+                // CANARY: REQ=REQ-SONNY-6344-COUNT-HOP-PATHS; FEATURE="CountSubquery"; ASPECT=UncorrelatedHopCountsPaths; STATUS=TESTED; TEST=tests/test_sonny6344_tenant_schema_listings.zig; OWNER=execution; UPDATED=2026-11-12
+                // SONNY-6344 (item 1): a pattern with a relationship whose
+                // start node no outer variable binds (`COUNT { (a:S)-[:T]->(b:S) }`)
+                // counts its matching paths from every visible start node, as
+                // the bound case does. It counted the start nodes matching the
+                // head and ignored the hop.
+                if (matches and chain.hops.len > 0) {
+                    const hop = chain.hops[0];
+                    var start_env = env;
+                    var start_names: []([]const u8) = &.{};
+                    var start_values: []Value = &.{};
+                    defer if (start_names.len > 0) {
+                        allocator.free(start_names);
+                        allocator.free(start_values);
+                    };
+                    if (node_pattern.name) |start_name| {
+                        const names_buf = try allocator.alloc([]const u8, env.names.len + 1);
+                        const values_buf = allocator.alloc(Value, env.values.len + 1) catch |err| {
+                            allocator.free(names_buf);
+                            return err;
+                        };
+                        start_names = names_buf;
+                        start_values = values_buf;
+                        @memcpy(start_names[0..env.names.len], env.names);
+                        @memcpy(start_values[0..env.values.len], env.values);
+                        start_names[env.names.len] = start_name;
+                        start_values[env.values.len] = Value{ .Node = entry.value_ptr };
+                        start_env.names = start_names;
+                        start_env.values = start_values;
+                    }
+                    const is_var_length = hop.rel.min_len != null or hop.rel.max_len != null;
+                    count += if (is_var_length)
+                        try countVariableLengthPathMatches(allocator, entry.value_ptr, hop, hop.rel.types, where_filter, start_env, store, &scope)
+                    else
+                        try countSingleHopMatches(allocator, entry.value_ptr, hop, hop.rel.types, where_filter, start_env, store, &scope);
+                    continue;
+                }
+
                 if (matches) {
                     // Check WHERE filter if present
                     if (where_filter) |wf| {

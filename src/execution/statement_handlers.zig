@@ -5,6 +5,7 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
+const tenant_visibility = @import("tenant_visibility.zig");
 const value_types = @import("../value_types.zig");
 
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
@@ -244,7 +245,8 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // than leaking every tenant's label set (same footgun as the
             // read paths).
             const session_tenant: ?[]const u8 = try tenancy.resolveTenantFilter(context.tenant_id);
-            const labels = read_store.listNodeLabels(allocator, session_tenant) catch &.{};
+            // SONNY-6344: a parent tenant also lists its descendants' labels.
+            const labels = tenant_visibility.listNodeLabelsVisible(allocator, read_store, session_tenant) catch &.{};
             defer {
                 for (labels) |label| {
                     allocator.free(label);

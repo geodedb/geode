@@ -5,7 +5,7 @@
 - **`Action.bind_graph`** evaluated in `decide()`: Admin always allowed; non-admin requires a Read grant on the target graph via `graph_grant_check_fn`. Codified in `src/security/gps.zig`.
 - **`USE GRAPH` gated**: `src/execution.zig` `.UseGraph` branch calls `gps.decide(.bind_graph)` before switching when a Principal is attached. Legacy/test paths without a Principal preserve current behavior.
 - **`Action.show_metadata`** evaluated in `decide()`: always allowed for authenticated principals; filtering happens row-by-row downstream.
-- **`db.labels()` / `db.relationshipTypes()` / `db.propertyKeys()`** filter by `ctx.tenant_id`. Admin with null tenant still sees everything; tenant-bound users see only their tenant.
+- **`db.labels()` / `db.relationshipTypes()` / `db.propertyKeys()`** (and SHOW TABLES and the LSP's schema completion) filter by `ctx.tenant_id` with the MATCH rule: a tenant-bound user sees its own tenant's labels, types and keys and, when its tenant is registered in the tenant hierarchy, its descendants' (SONNY-6344; they matched the exact tag, so a parent missed its children's). Admin with null tenant still sees everything.
 - **`SHOW GRAPHS`** filters by `decide(.bind_graph)` per graph.
 - **`SHOW INDEXES` / `SHOW CONSTRAINTS`** filter by tenant.
 

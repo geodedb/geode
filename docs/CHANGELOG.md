@@ -4,6 +4,24 @@
 
 ### Security
 
+- **Tenant schema listings show what the session's MATCH sees; COUNT { hop }
+  counts paths (SONNY-6344 items 1-2).** (2) `CALL db.labels()`,
+  `db.relationshipTypes()`, `db.propertyKeys()`, SHOW TABLES and the LSP's
+  schema completion read per-tenant structures by exact tag, and the edge
+  property keys compared each edge's tag exactly, so a parent tenant listed
+  only the labels, types and keys of rows tagged with its own tenant while
+  its MATCH returns its descendants' rows too (GAP-0846). They now union
+  the session's tenant and, when it is registered in the hierarchy, every
+  descendant (`tenant_visibility.visibleTenantTagsAlloc`); a child and an
+  unrelated tenant are unchanged. (1) An uncorrelated `COUNT { (a:S)-[:T]->(b) }`
+  (and `EXISTS { ... }`) whose start node no outer variable binds counted
+  the start nodes matching its head and ignored the relationship; it now
+  counts the matching paths from every visible start node, as the
+  correlated form does. **Behaviour change:** `RETURN COUNT { ()-[:L]->() }`
+  answers the number of `:L` paths the session can walk, not the number of
+  visible nodes. `test-sonny6344-tenant-schema-listings`; the two
+  `test-sonny1326-expression-tenancy` assertions that pinned the node count
+  now pin the path count.
 - **Writes made after a checkpoint and a crash survive the next crash
   (SONNY-6384).** After an offline `geode user` change on a data directory,
   the server's later writes to `__geode_security` (CREATE USER, ALTER USER)

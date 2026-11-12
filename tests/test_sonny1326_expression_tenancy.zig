@@ -392,17 +392,14 @@ test "SONNY-1326: COUNT{} counts only the session tenant's matches" {
     // Anonymous relationship shape.
     //
     // NOTE (pre-existing engine behaviour, NOT a SONNY-1326 regression):
-    // `COUNT { ()-[:L]->() }` counts the LEFT NODE pattern, not the
-    // relationship. `countPatternMatches` derives `node_pattern_opt` from
-    // `chain.hops[0].left` whenever `chain.head` is null, and `hops[0].left` is
-    // a non-optional `NodePattern`, so the relationship-counting arm (the
-    // `store.allEdgeIds` loop) is unreachable from GQL. What this pins is
-    // therefore the tenant scope on the bare-node loop for this shape: tenant A
-    // sees its own two nodes, never all four.
+    // `COUNT { ()-[:L]->() }` counts the matching PATHS (SONNY-6344 item 1;
+    // it counted the start nodes and ignored the hop, so this pinned 2, A's
+    // two nodes). Tenant A walks a1 -> a2; the A-tagged bridge a2 -> b1 ends
+    // at a node A cannot see, so it is not a match.
     {
         var res = try h.runAs(aa, tenant_a, "RETURN COUNT { ()-[:L]->() } AS c");
         defer res.deinit(aa);
-        try testing.expectEqual(@as(i64, 2), try scalarInt(res));
+        try testing.expectEqual(@as(i64, 1), try scalarInt(res));
     }
 }
 
@@ -601,12 +598,13 @@ test "SONNY-1326: non-strict deployment with no tenant scope is unchanged" {
             try testing.expectEqual(@as(i64, 1), row[1].Int);
         }
     }
-    // The anonymous shape STILL sees every tenant (see the note in test 2 on
-    // what this shape actually counts).
+    // The anonymous shape STILL sees every tenant: its three paths (a1 -> a2,
+    // b1 -> b2 and the bridge a2 -> b1); it counted the four start nodes
+    // before SONNY-6344.
     {
         var res = try h.runAs(aa, null, "RETURN COUNT { ()-[:L]->() } AS c");
         defer res.deinit(aa);
-        try testing.expectEqual(@as(i64, 4), try scalarInt(res));
+        try testing.expectEqual(@as(i64, 3), try scalarInt(res));
     }
     // The comprehension STILL yields the other tenant's element.
     {
