@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T22:51:40.727798147Z",
+  "generated_at": "2026-11-12T23:24:01.054348708Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -44218,6 +44218,20 @@
     {
       "id": "REQ-GQL-TDE-ATTEST-001",
       "features": [
+        {
+          "feature": "RemoteKmsAttestation",
+          "aspect": "ClientVerifiesPinnedFreshAttestation",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6435_kms_attestation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_kms_attestation.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
         {
           "feature": "RemoteKmsAttestation",
           "aspect": "ExpiredAttestation",
@@ -92104,7 +92118,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4789
+      "TESTED": 4790
     },
     "by_aspect": {
       "2PC": 3,
@@ -92621,6 +92635,7 @@
       "ClientSession": 1,
       "ClientTestZig": 3,
       "ClientTimeoutBranch": 1,
+      "ClientVerifiesPinnedFreshAttestation": 1,
       "ClientWriteCongestionDeadline": 1,
       "ClosedConnectionFailFast": 1,
       "Closeness": 1,

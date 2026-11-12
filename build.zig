@@ -5722,6 +5722,19 @@ pub fn build(b: *std.Build) void {
     const remote_kms_hardening_tests_step = b.step("test-remote-kms-hardening", "Run remote KMS hardening tests (negative auth, expired attestation, concurrent unwrap)");
     remote_kms_hardening_tests_step.dependOn(&run_remote_kms_hardening_tests.step);
 
+    // SONNY-6435 (1): the remote KMS client verifies a fresh, nonce-bound
+    // attestation under a pinned key, and fails closed without one.
+    {
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_kms_attestation.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("transport/quic", transport_quic_mod);
+        tests.root_module.addImport("vendor_quic", quic_ext_mod);
+        tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+        tests.root_module.link_libc = true;
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6435-kms-attestation", "Run SONNY-6435 item 1 regression (RemoteKmsClient.attest refuses without a pinned key, rejects another server's key, a tampered or replayed attestation and a nonce-less Attest, and accepts the pinned server's fresh attestation, over real QUIC)").dependOn(&run_tests.step);
+    }
+
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
     const remote_kms_concurrency_bench = b.addExecutable(.{ .name = "bench_remote_kms_unwrap_concurrency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_remote_kms_unwrap_concurrency.zig"), .target = target, .optimize = optimize }) });
     remote_kms_concurrency_bench.root_module.addImport("transport/quic", transport_quic_mod);
