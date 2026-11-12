@@ -13424,6 +13424,19 @@ pub fn build(b: *std.Build) void {
     const sonny6331_step = b.step("test-sonny6331-password-policy-paths", "Run the SONNY-6331 regression (CREATE USER, ALTER USER SET PASSWORD and geode.auth.user_create / user_reset_password / user_change_password apply the documented password policy, answer 22000 naming the broken rule with the configured limits and never the password; generated passwords meet it; a first-boot seed that breaks it forces a reset)");
     sonny6331_step.dependOn(&run_sonny6331_tests.step);
 
+    // SONNY-6292: GRANT ROLE / ALTER USER SET ROLE / user_assign_role of a
+    // custom role is refused (0A000) instead of recording a membership that
+    // was never saved, survived DROP ROLE and conferred nothing.
+    const sonny6292_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6292_custom_role_membership.zig"), .target = target, .optimize = optimize });
+    sonny6292_test_mod.link_libc = true;
+    sonny6292_test_mod.addImport("geode", root_mod);
+    sonny6292_test_mod.addImport("logging", logging_mod);
+    const sonny6292_tests = b.addTest(.{ .root_module = sonny6292_test_mod });
+    const run_sonny6292_tests = b.addRunArtifact(sonny6292_tests);
+    shardDep(test_step, &run_sonny6292_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6292_step = b.step("test-sonny6292-custom-role-membership", "Run the SONNY-6292 regression (GRANT ROLE / ALTER USER SET ROLE / geode.auth.user_assign_role of a custom role answers 0A000 and changes nothing; a dropped and re-created role has no members; built-in roles are still granted)");
+    sonny6292_step.dependOn(&run_sonny6292_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
