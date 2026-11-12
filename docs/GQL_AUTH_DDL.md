@@ -211,6 +211,18 @@ function sets `user.role` to the requested role and bumps `auth_version` to
 invalidate live sessions; re-assigning the current role is a no-op (no version
 bump).
 
+Only a built-in role (`admin`, `readwrite`, `user`, `readonly`) can be granted
+to a user. A role made with `CREATE ROLE <custom-name>` carries no privileges
+(it stores a name and a description; per-graph privileges are granted to users
+with `GRANT ... ON GRAPH`), so granting it would confer nothing:
+`GRANT ROLE <custom> TO <user>`, `ALTER USER <user> SET ROLE <custom>` and
+`geode.auth.user_assign_role(<user>, <custom>)` fail with SQLSTATE 0A000 and
+change nothing (SONNY-6292). They used to answer `assigned custom role ...`
+and keep the name in an in-memory table that was never saved, survived
+`DROP ROLE` (a role re-created under the same name went back to its old
+members) and was read by no authorization path. A role name that is neither
+built-in nor custom is still an error (`UnknownRole`).
+
 ---
 
 ## Persistence
@@ -360,12 +372,14 @@ create/revoke) are wired at startup in `server_init`.
    and returns an explanatory note. Global privilege is governed by the user's
    role — there is no per-privilege override model at the global level.
 
-2. **Custom role membership beyond the built-in role field is not modeled.**
-   Roles created via `CREATE ROLE <custom-name>` are stored in the role catalog,
-   but the user record's `role` field only tracks the four built-in roles.
-   Assigning a custom role via `ALTER USER ... SET ROLE` or `GRANT ROLE ... TO ...`
-   returns an acknowledgement noting the assignment is not yet structurally
-   tracked on the user record.
+2. **Custom roles carry no privileges and cannot be granted to users.**
+   Roles created via `CREATE ROLE <custom-name>` are stored (and persisted) in
+   the role catalog, but there is no privilege model for them and no
+   membership: the user record's `role` field holds one of the four built-in
+   roles. Granting a custom role (`ALTER USER ... SET ROLE`, `GRANT ROLE ... TO
+   ...`, `geode.auth.user_assign_role`) is refused with SQLSTATE 0A000
+   (SONNY-6292). Privileged custom roles with persisted membership are a
+   feature that is not implemented.
 
 3. **Policy DDL persistence is implemented (GAP-0858, closed 2026-06-09).**
    `CREATE POLICY` / `ALTER POLICY ... SET ENABLED true|false` /

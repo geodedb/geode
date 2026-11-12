@@ -78,22 +78,16 @@ pub var g_custom_roles: std.StringHashMap([]const u8) = undefined;
 pub var g_custom_roles_init: bool = false;
 pub var g_custom_roles_mu: std.Io.Mutex = std.Io.Mutex.init;
 
-// #826: Custom-role membership store (username -> list of custom role names).
-// Built-in role lives in user_management.User.role (a fixed Role enum); custom
-// roles cannot fit there, so this side-table carries the assignment. Session-
-// bind code consults getCustomRolesForUser at authenticate-time and merges the
-// custom-role privileges with the built-in role's. Without this store the
-// "assigned" message in handleUserAssignRole was misleading -- the user's
-// effective role silently stayed at whatever built-in value they had
-// (typically .User by default).
-pub var g_custom_role_members: std.StringHashMap(std.ArrayList([]const u8)) = undefined;
-pub var g_custom_role_members_init: bool = false;
-pub var g_custom_role_members_mu: std.Io.Mutex = std.Io.Mutex.init;
+// SONNY-6292: there is no custom-role membership. `GRANT ROLE <custom role>`
+// recorded the name in an in-memory side-table that DROP ROLE did not clear
+// (a re-created role went back to its old members), that was never saved,
+// and that no authorization path read (a custom role carries no
+// privileges), and reported the grant: it is refused now
+// (`error.CustomRoleMembershipNotSupported`, 0A000).
 
 // CANARY: REQ=REQ-SONNY-6278-CUSTOM-ROLE-LIFETIME; FEATURE="GQL Auth DDL"; ASPECT=CustomRoleStoreOwnsMemory; STATUS=TESTED; TEST=tests/test_sonny6278_custom_role_lifetime.zig; OWNER=security; UPDATED=2026-11-11
-/// SONNY-6278: the allocator that owns the custom-role store and its
-/// membership side-table (the tables, every key and every value). Both
-/// outlive every request, so it is process-lifetime, as for the ABAC
+/// SONNY-6278: the allocator that owns the custom-role store (the table,
+/// every key and every value). It outlives every request, so it is process-lifetime, as for the ABAC
 /// attribute store (GAP-0284) and the user store's side-tables. They used
 /// the allocator of whichever request (or the startup hydration) came
 /// first, and copied names with the request's arena: once the request
@@ -101,37 +95,8 @@ pub var g_custom_role_members_mu: std.Io.Mutex = std.Io.Mutex.init;
 /// GRANT ROLE and DROP ROLE then read.
 var g_role_store_alloc: std.mem.Allocator = std.heap.c_allocator;
 
-fn ensureCustomRoleMembersInit() void {
-    if (!g_custom_role_members_init) {
-        g_custom_role_members = std.StringHashMap(std.ArrayList([]const u8)).init(g_role_store_alloc);
-        g_custom_role_members_init = true;
-    }
-}
-
-/// Record a custom-role assignment. Idempotent: re-assigning the same role
-/// to the same user is a no-op. Caller must hold g_custom_role_members_mu.
-fn recordCustomRoleMemberLocked(username: []const u8, role_name: []const u8) !void {
-    const a = g_role_store_alloc;
-    ensureCustomRoleMembersInit();
-    const entry = try g_custom_role_members.getOrPut(username);
-    if (!entry.found_existing) {
-        entry.key_ptr.* = a.dupe(u8, username) catch |err| {
-            g_custom_role_members.removeByPtr(entry.key_ptr);
-            return err;
-        };
-        entry.value_ptr.* = std.ArrayList([]const u8).empty;
-    }
-    // Idempotent: skip if already a member.
-    for (entry.value_ptr.items) |existing| {
-        if (std.mem.eql(u8, existing, role_name)) return;
-    }
-    const role_copy = try a.dupe(u8, role_name);
-    errdefer a.free(role_copy);
-    try entry.value_ptr.append(a, role_copy);
-}
-
-/// SONNY-6278: free the custom-role store and its membership side-table,
-/// with everything they own (process teardown, tests).
+/// SONNY-6278: free the custom-role store with everything it owns (process
+/// teardown, tests).
 pub fn deinitCustomRoleStore() void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const a = g_role_store_alloc;
@@ -146,38 +111,16 @@ pub fn deinitCustomRoleStore() void {
         g_custom_roles.deinit();
         g_custom_roles_init = false;
     }
-    g_custom_role_members_mu.lockUncancelable(io);
-    defer g_custom_role_members_mu.unlock(io);
-    if (g_custom_role_members_init) {
-        var it = g_custom_role_members.iterator();
-        while (it.next()) |e| {
-            for (e.value_ptr.items) |role| a.free(role);
-            e.value_ptr.deinit(a);
-            a.free(e.key_ptr.*);
-        }
-        g_custom_role_members.deinit();
-        g_custom_role_members_init = false;
-    }
 }
 
 /// SONNY-6278: let a test own the custom-role store with its own allocator
 /// (to check what DROP ROLE frees). Only while the store is empty
 /// (`deinitCustomRoleStore` first).
 pub fn setCustomRoleStoreAllocatorForTesting(a: std.mem.Allocator) void {
-    std.debug.assert(!g_custom_roles_init and !g_custom_role_members_init);
+    std.debug.assert(!g_custom_roles_init);
     g_role_store_alloc = a;
 }
 
-/// Return the list of custom roles assigned to `username`, or null if none.
-/// Returned slice is owned by the membership store -- do NOT free.
-pub fn getCustomRolesForUser(username: []const u8) ?[]const []const u8 {
-    g_custom_role_members_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_custom_role_members_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (!g_custom_role_members_init) return null;
-    const entry = g_custom_role_members.get(username) orelse return null;
-    if (entry.items.len == 0) return null;
-    return entry.items;
-}
 // GAP-0270 / GPS Phase 4 (Task 4-4): g_policies replaced by policy_catalog.PolicyCatalog.
 // The geode.auth.policy_* procedure handlers below now delegate to the global
 // PolicyCatalog singleton (bootstrapped in server/main.zig at startup).
@@ -915,22 +858,25 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     }
 
-    // Custom roles: persist the membership in the side-table so
-    // getCustomRolesForUser returns it later (#826). Built-in
-    // .User.role stays at its current value; downstream privilege
-    // computation merges built-in + custom-role grants.
-    g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureRolesInit();
-    if (g_custom_roles.contains(role_name)) {
-        g_custom_role_members_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer g_custom_role_members_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-        recordCustomRoleMemberLocked(username, role_name) catch |err| {
-            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: failed to record custom-role membership: {s}", .{@errorName(err)}) };
-            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-        };
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "assigned custom role {s} to {s}", .{ role_name, username }) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    // CANARY: REQ=REQ-SONNY-6292-CUSTOM-ROLE-GRANT-REFUSED; FEATURE="GQL Auth DDL"; ASPECT=CustomRoleGrantRefused; STATUS=TESTED; TEST=tests/test_sonny6292_custom_role_membership.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6292: a custom role cannot be granted to a user. It carries no
+    // privileges (CREATE ROLE stores a name and a description; GRANT ... ON
+    // GRAPH grants to users), so a membership would confer nothing; the
+    // statement is refused (0A000) instead of reporting a grant. It answered
+    // "assigned custom role" and kept the name in an in-memory side-table
+    // that was never saved, survived DROP ROLE and was read by nothing.
+    const is_custom = blk: {
+        g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        ensureRolesInit();
+        break :blk g_custom_roles.contains(role_name);
+    };
+    if (is_custom) {
+        allocator.free(row);
+        allocator.free(rows);
+        allocator.free(columns[0]);
+        allocator.free(columns);
+        return error.CustomRoleMembershipNotSupported;
     }
     // #835: unknown role must NOT silently retain the prior role. Free the
     // pre-allocated success-row scaffolding and return a Zig error so the

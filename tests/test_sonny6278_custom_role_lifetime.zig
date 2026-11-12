@@ -1,14 +1,14 @@
-// SONNY-6278: the custom-role store (`auth_dispatch.g_custom_roles`, and its
-// membership side-table `g_custom_role_members`) is process-global and
-// outlives every request, so it must own its keys and values.
+// SONNY-6278: the custom-role store (`auth_dispatch.g_custom_roles`) is
+// process-global and outlives every request, so it must own its keys and
+// values.
 //
-// Before the fix, CREATE ROLE (`handleRoleCreate`), `GRANT ROLE <custom> TO
-// <user>` (`recordCustomRoleMemberLocked`) and the startup hydration
-// (`hydrateCustomRolesFromGraph`) copied the role name, description and
-// member names with the allocator they were handed: for a statement, the
-// request's arena. Once the request ended the store held freed memory, and a
-// later SHOW ROLES, lookup, GRANT ROLE or DROP ROLE read it. DROP ROLE freed
-// nothing.
+// Before the fix, CREATE ROLE (`handleRoleCreate`) and the startup hydration
+// (`hydrateCustomRolesFromGraph`) copied the role name and description with
+// the allocator they were handed: for a statement, the request's arena. Once
+// the request ended the store held freed memory, and a later SHOW ROLES,
+// lookup, GRANT ROLE or DROP ROLE read it. DROP ROLE freed nothing. (The
+// membership side-table `GRANT ROLE <custom>` filled had the same defect;
+// SONNY-6292 removed it: that statement is refused now.)
 //
 // Each request below runs through the real executor
 // (`executeStatementWithContext`, authorization on, an Admin caller) with an
@@ -210,16 +210,9 @@ test "SONNY-6278: a custom role created, assigned and hydrated in one request is
     try testing.expect(auth_dispatch.g_custom_roles.contains("auditors6278"));
     try testing.expectEqualStrings("reads the audit log", auth_dispatch.g_custom_roles.get("auditors6278").?);
 
-    // Assign it in another request; the membership is intact afterwards.
-    freeNames(try w.request("GRANT ROLE auditors6278 TO dave"));
-    {
-        const members = auth_dispatch.getCustomRolesForUser("dave") orelse return error.MembershipLost;
-        try testing.expectEqual(@as(usize, 1), members.len);
-        try testing.expectEqualStrings("auditors6278", members[0]);
-    }
-    // Re-assigning finds the (intact) member entry: still one.
-    freeNames(try w.request("GRANT ROLE auditors6278 TO dave"));
-    try testing.expectEqual(@as(usize, 1), auth_dispatch.getCustomRolesForUser("dave").?.len);
+    // Looked up in another request (SONNY-6292: a grant of it is refused,
+    // after finding the intact role).
+    try testing.expectError(error.CustomRoleMembershipNotSupported, w.request("GRANT ROLE auditors6278 TO dave"));
 
     // A role hydrated with a request's allocator is owned by the store too.
     g_stored_roles = &.{.{ .id = 7, .name = "ops6278", .description = "operators" }};
@@ -308,8 +301,9 @@ test "SONNY-6278: DROP ROLE frees the role's copies, re-creating a role leaks no
     try testing.expectEqual(base, counting.live);
     try testing.expectEqualStrings("second", auth_dispatch.g_custom_roles.get("keep6278").?);
 
-    freeNames(try w.request("GRANT ROLE keep6278 TO dave"));
-    try testing.expect(counting.live > base);
+    // SONNY-6292: a refused grant of it allocates nothing in the store.
+    try testing.expectError(error.CustomRoleMembershipNotSupported, w.request("GRANT ROLE keep6278 TO dave"));
+    try testing.expectEqual(base, counting.live);
 
     auth_dispatch.deinitCustomRoleStore();
     try testing.expectEqual(@as(usize, 0), counting.live);

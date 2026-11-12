@@ -4,6 +4,20 @@
 
 ### Security
 
+- **`GRANT ROLE <custom role>` is refused instead of reporting a grant that
+  confers nothing (SONNY-6292).** A custom role (`CREATE ROLE`) carries no
+  privileges. `GRANT ROLE <custom> TO <user>`, `ALTER USER <user> SET ROLE
+  <custom>` and `geode.auth.user_assign_role(<user>, <custom>)` answered
+  `assigned custom role ...` and kept the name in an in-memory table that was
+  never saved (gone at restart), was not cleared by `DROP ROLE` (a role
+  re-created under the same name went back to its old members), was read by
+  no authorization path, and was read through a slice returned after its
+  lock was released. **Behaviour change:** they now fail with SQLSTATE 0A000
+  and change nothing; the table and `auth_dispatch.getCustomRolesForUser` are
+  removed. Built-in roles are granted as before; an unknown role is still an
+  error. Privileged custom roles with persisted membership remain
+  unimplemented (docs/GQL_AUTH_DDL.md, Known Limitations).
+  Regression: `zig build test-sonny6292-custom-role-membership`.
 - **BREAKING: one password policy on every path that sets a password
   (SONNY-6331).** The documented policy (docs/USER_AUTH.md section 2: at
   least 20 characters, an upper and a lower case letter, at least 3

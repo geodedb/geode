@@ -429,6 +429,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DivisionByZero => .{ .code = "22012", .message = "Division by zero" },
         // SONNY-6291: the geode.auth.apikey_* procedures (no server-side
         // API-key store).
+        // SONNY-6292: GRANT ROLE / ALTER USER SET ROLE / user_assign_role
+        // of a custom role (it answered "assigned" and conferred nothing).
+        error.CustomRoleMembershipNotSupported => .{ .code = "0A000", .message = "A custom role cannot be granted to a user: custom roles carry no privileges, so the grant would confer nothing. Grant a built-in role (admin, readwrite, user, readonly) or per-graph privileges (GRANT READ | WRITE | SCHEMA | ALL ON GRAPH <g> TO <user>)" },
         error.ApiKeysNotSupported => .{ .code = "0A000", .message = "API keys are not supported by the server: the geode.auth.apikey_* procedures create, list, check and revoke nothing, and the handshake does not authenticate by key" },
         // SONNY-6291: user_show / user_permissions (SHOW PERMISSIONS FOR) of
         // a user that does not exist, for an Admin.
