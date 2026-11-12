@@ -5385,6 +5385,7 @@ REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED,Key configuration,ServerStartupRefusal,TESTED
 REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED,Key configuration,SetButUnusableKeyRefuses,TESTED,tests/test_sonny6422_env_key_fail_closed.zig,tests/test_sonny6422_env_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-6422-PHANTOM-ONCE-PER-COMMIT,MVCC Phantom Prevention,RangeLookupOncePerCommit,TESTED,tests/test_sonny6422_phantom_check_once_per_commit.zig,tests/test_sonny6422_phantom_check_once_per_commit.zig,,txn,2026-11-12
 REQ-SONNY-6422-REMOTE-BACKUP-PROGRESS,CLI Backup,ProgressPrintedOncePerStep,TESTED,tests/test_sonny6422_remote_backup_progress.zig,tests/test_sonny6422_remote_backup_progress.zig,,cli,2026-11-12
+REQ-SONNY-6429-MATCH-CREATE-EDGE-SUMMARY,WriteFastPathParity,MatchCreateEdgeSummaryRow,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6429_sole_holder_tenant_wire.zig,,transport,2026-11-12
 REQ-SONNY-6429-SOLE-HOLDER-TENANT,WriteFastPathParity,SoleHolderTenantRegression,TESTED,tests/test_sonny6429_sole_holder_tenant_wire.zig,tests/test_sonny6429_sole_holder_tenant_wire.zig,,storage,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

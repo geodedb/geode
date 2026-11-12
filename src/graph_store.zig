@@ -7116,6 +7116,9 @@ pub const GraphStore = struct {
     /// so such a key answers here once more.)
     pub fn lookupOnlyMergeHolder(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
+        // SONNY-6429: under lean indexing a key no MERGE registered is not in
+        // the index at all, so its absence there says nothing.
+        if (!shouldIndexProperty(prop_key)) return .not_indexable;
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable; // SONNY-3056
         var buf: [1024]u8 = undefined;
@@ -7139,6 +7142,7 @@ pub const GraphStore = struct {
     pub fn lookupOnlyMergeHolderForTenant(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, tenant: ?[]const u8, out_node_id: *u64) MergeLookupResult {
         const tid = tenant orelse return self.lookupOnlyMergeHolder(graph_name, label, prop_key, prop_value, out_node_id);
         if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
+        if (!shouldIndexProperty(prop_key)) return .not_indexable; // SONNY-6429, as above
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable; // SONNY-3056
         var buf: [1024]u8 = undefined;

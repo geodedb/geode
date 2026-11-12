@@ -5447,7 +5447,8 @@ pub const StorageAdapter = struct {
     /// key's only holder; `missing_err` when no node holds it (the executor's
     /// MATCH has no row, and creates nothing); `error.MergeKeyNotUnique` when
     /// more nodes may hold it, or MERGE's index cannot hold the value (a
-    /// non-integer number, an over-long key). The executor creates an edge
+    /// non-integer number, an over-long key, or, SONNY-6429, a key lean
+    /// indexing leaves out of it). The executor creates an edge
     /// per matched pair, and finds a value the index cannot hold by a scan,
     /// so the caller declines to it. (The lowest holder was taken as the
     /// only one, and an unindexable value as none.)
@@ -5460,6 +5461,11 @@ pub const StorageAdapter = struct {
         missing_err: anyerror,
     ) !u64 {
         _ = self;
+        // SONNY-6429: a key lean indexing leaves out of MERGE's index (no
+        // MERGE registered it) has no entry whoever holds it; the probe
+        // below would answer that as no holder, and the edge was skipped
+        // where the executor makes it.
+        if (!graph_store.shouldIndexProperty(prop_key)) return error.MergeKeyNotUnique;
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         var id: u64 = undefined;
         // Settles an entry left unresolved by a removed holder first.
@@ -5519,6 +5525,7 @@ pub const StorageAdapter = struct {
     ) !u64 {
         const scope = mergeTenantScope(request_tenant) orelse
             return self.lookupSoleNodeByMergeKey(graph_name, label, prop_key, prop_value, missing_err);
+        if (!graph_store.shouldIndexProperty(prop_key)) return error.MergeKeyNotUnique; // SONNY-6429, as above
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         var id: u64 = undefined;
         // Settles an entry left unresolved by a removed holder first.
@@ -7576,7 +7583,13 @@ pub const StorageAdapter = struct {
         // endpoint key {source, source_id} has a UNIQUE source_id, so the O(1)
         // merge-seek above handles the hot path; this O(label) scan is the rare
         // correctness fallback, not the steady state.
+        //
+        // SONNY-6429: the scan reads every candidate, and a second node
+        // matching every filter is `error.MergeKeyNotUnique`: the executor's
+        // MATCH binds each, and MERGEs an edge per matched pair, where the
+        // first match alone was taken (the caller declines to the executor).
         const label_nodes = store.getNodesByLabel(graph_name, label) orelse return missing_err;
+        var matched: ?u64 = null;
         for (label_nodes) |node_id| {
             var all_match = true;
             for (filters) |f| {
@@ -7587,9 +7600,11 @@ pub const StorageAdapter = struct {
                     break;
                 }
             }
-            if (all_match) return node_id;
+            if (!all_match) continue;
+            if (matched != null) return error.MergeKeyNotUnique;
+            matched = node_id;
         }
-        return missing_err;
+        return matched orelse missing_err;
     }
 
     /// Verify a single `(f.key == f.value)` filter against the PUBLIC node id's

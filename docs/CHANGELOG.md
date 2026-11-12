@@ -1632,6 +1632,27 @@
 
 ### Fixed
 
+- **A write inside an explicit transaction no longer crashes the server,
+  and the MATCH ... CREATE / MATCH ... MERGE edge fast paths answer and
+  write what the executor does (SONNY-6429 item 1).** The process-global
+  transaction undo log kept the allocator of whichever call first touched
+  it; in the server that could be a per-query scratch arena, so after an
+  autocommit executor write the first statement inside `BEGIN` that recorded
+  undo entries called through a reset arena and the server died with a
+  segfault (`txn_undo_log.getGlobalUndoLog` now allocates from the process
+  allocator in the server). The MATCH ... CREATE edge fast path answered no
+  columns and no row where the executor answers its summary row
+  (`nodes_created`, `relationships_created`); it now sends `0`, `1` when it
+  wrote the edge (and, as before, nothing when an endpoint is missing, as
+  the executor). The MATCH ... MERGE edge fast path took the first of
+  several nodes an endpoint's properties match and MERGEd one edge where the
+  executor MERGEs one per matched pair; it now declines such a statement to
+  the executor. Under lean indexing (`GEODE_INDEX_MERGE_KEYS_ONLY=1`) the
+  MATCH ... CREATE edge fast path's sole-holder lookup answered "no holder"
+  for a key no MERGE had registered, so the edge was silently not created;
+  such a key now declines to the executor. The tenant-scoped lookup
+  (`lookupSoleNodeByMergeKeyForTenant`) never answers another tenant's node.
+  Regression: `zig build test-sonny6429-sole-holder-tenant-wire`.
 - **Docs no longer present S3 / DigitalOcean Spaces as a backup target or
   the removed TDE-KMS integration as current code (SONNY-6422 item 9).**
   No command reaches object storage (SONNY-6290; real support is story
