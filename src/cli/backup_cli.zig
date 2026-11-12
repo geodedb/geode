@@ -303,7 +303,9 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "\n" ++
                 "--output is a local file. geode does not write to object storage (s3://,\n" ++
                 "http(s)://): copy the backup file there with your own tool. Its directory\n" ++
-                "must exist.\n" ++
+                "must exist. The backup is written to a temporary file in that directory,\n" ++
+                "synced, and renamed onto --output: an existing file there is replaced only\n" ++
+                "by a complete backup, and is left as it was when the backup fails.\n" ++
                 "\n" ++
                 "Encryption: with GEODE_TDE_KEY set (64 hex characters), the backup is\n" ++
                 "encrypted with AES-256-GCM under it (for a server backup, the server's\n" ++
@@ -459,6 +461,12 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         executeBackup(allocator, output.?, backup_type_str, server, compress, tls_config, username, password, timeout_s) catch |err| {
+            if (err == error.BackupDirSyncFailed) {
+                // SONNY-6386: the complete backup is at --output; only the
+                // sync of its directory (making the rename durable) failed.
+                std.debug.print("Error: the backup is complete at {s}, but syncing its directory failed, so the rename may not survive a crash; sync the filesystem before relying on it.\n", .{output.?});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
             std.debug.print("Error: Backup from server {s} failed: {}. No backup was created.\n", .{ server, err });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -2152,13 +2160,36 @@ fn executeRemoteBackup(
     const backup_size = backup_resp.size_bytes;
     std.debug.print("Receiving backup ({} bytes) from {s}...\n", .{ backup_size, server });
 
-    // Create destination file
+    // CANARY: REQ=REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC; FEATURE="CLI Backup"; ASPECT=RemoteOutputAtomicDurable; STATUS=TESTED; TEST=tests/test_sonny6386_remote_backup_atomic_output.zig; OWNER=cli; UPDATED=2026-11-12
+    // SONNY-6386: the backup used to be streamed into --output in place
+    // (truncating a previous backup there as soon as the transfer started,
+    // deleting it if the transfer failed) and never synced. It is received
+    // into a private temporary file beside --output (0600, created
+    // exclusively), synced, renamed onto --output, and the directory is
+    // synced, so --output holds either the previous file or the complete
+    // new backup, durably.
     const io_bf = std.Io.Threaded.global_single_threaded.io();
+    const out_dir = std.fs.path.dirname(dest) orelse ".";
+    var rnd: [8]u8 = undefined;
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.getrandom(&rnd, rnd.len, 0);
+    } else {
+        std.c.arc4random_buf(&rnd, rnd.len);
+    }
+    const tmp_path = try std.fmt.allocPrint(allocator, "{s}/.{s}.tmp-{x}", .{ out_dir, std.fs.path.basename(dest), std.mem.readInt(u64, &rnd, .little) });
+    defer allocator.free(tmp_path);
     // SONNY-6299: a backup holds every graph's data; owner-only.
-    const output_file = try std.Io.Dir.cwd().createFile(io_bf, dest, .{ .permissions = if (comptime builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600) });
-    // Do not leave a truncated file behind under the requested backup name.
-    errdefer std.Io.Dir.cwd().deleteFile(io_bf, dest) catch {};
-    defer output_file.close(io_bf);
+    const output_file = try std.Io.Dir.cwd().createFile(io_bf, tmp_path, .{
+        .exclusive = true,
+        .permissions = if (comptime builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600),
+    });
+    var output_open = true;
+    var renamed = false;
+    errdefer {
+        if (output_open) output_file.close(io_bf);
+        // Only our temporary file; --output is left as it was.
+        if (!renamed) std.Io.Dir.cwd().deleteFile(io_bf, tmp_path) catch {};
+    }
 
     // Receive backup data chunks
     var bytes_received: u64 = 0;
@@ -2182,6 +2213,19 @@ fn executeRemoteBackup(
         if (progress % 10 == 0) {
             std.debug.print("  Progress: {}%\n", .{progress});
         }
+    }
+
+    try output_file.sync(io_bf);
+    output_file.close(io_bf);
+    output_open = false;
+    try std.Io.Dir.cwd().rename(tmp_path, std.Io.Dir.cwd(), dest, io_bf);
+    renamed = true;
+    if (comptime builtin.os.tag == .linux) {
+        // `.iterate` opens a real directory descriptor (not O_PATH), which
+        // fsync accepts.
+        var d = std.Io.Dir.cwd().openDir(io_bf, out_dir, .{ .iterate = true }) catch return error.BackupDirSyncFailed;
+        defer d.close(io_bf);
+        if (std.os.linux.errno(std.os.linux.fsync(d.handle)) != .SUCCESS) return error.BackupDirSyncFailed;
     }
 
     std.debug.print("Backup completed: {s} ({} bytes)\n", .{ dest, bytes_received });

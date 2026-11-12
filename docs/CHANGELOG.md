@@ -34,6 +34,18 @@
   rotation is story SONNY-6387. `docs/GAP_ANALYSIS_RESOLVED.md` (GAP-0083,
   GAP-0004) is corrected. Regression:
   `zig build test-sonny6386-fle-rotate-key-unsupported`.
+- **`geode backup create --server` writes `--output` atomically and durably
+  (SONNY-6386 item 3).** It opened `--output` with a truncating create,
+  streamed the server's backup into it in place, never synced it, and
+  deleted it when the transfer failed: a previous backup at that path was
+  destroyed as soon as a transfer started (and lost for good if it then
+  failed), and a crash after "Backup completed" could leave a short file
+  under the backup's name. The backup is now received into a private
+  temporary file beside `--output` (`.<name>.tmp-<random>`, 0600, created
+  exclusively), synced, renamed onto `--output`, and the directory is
+  synced; a failure removes only the temporary file. `--local` already wrote
+  this way (SONNY-6323). `geode backup create --help` says so. Regression:
+  `zig build test-sonny6386-remote-backup-atomic-output`.
 - **BREAKING (operator): backups are encrypted under `GEODE_TDE_KEY` when it
   is set (SONNY-6355 items 1, 2, 5, 6).** `BackupManager` has encrypted the
   payload with AES-256-GCM under `GEODE_TDE_KEY` (and every restore path
