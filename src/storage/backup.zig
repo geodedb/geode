@@ -241,6 +241,57 @@ pub fn archiveKeyMaterial(archive: []const u8) !KeyMaterial {
     return km;
 }
 
+// CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=BackupNeedsDataDir; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
+/// The data directory a backup archives: the store's data-directory override
+/// (set by the server and the CLI), else GEODE_DATA_DIR. With neither it is
+/// error.BackupDataDirUnknown. SONNY-6325: it used to fall back to /tmp,
+/// so a backup archived every top-level entry of the shared temp directory.
+/// Caller frees.
+pub fn backupSourceDataDir(allocator: std.mem.Allocator) ![]u8 {
+    if (graph_store.getDataDirOverride()) |ov| return allocator.dupe(u8, ov);
+    if (getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |dir| {
+        if (dir.len > 0) return dir;
+        allocator.free(dir);
+    } else |_| {}
+    log.err("backup refused: no data directory is configured (no --data-dir and no GEODE_DATA_DIR)", &.{});
+    return error.BackupDataDirUnknown;
+}
+
+// CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=PrivateTempDir; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6325: create a private temporary directory
+/// `<parent>/.<tag>-<random>`, mode 0700, exclusively (a name that exists is
+/// never reused), and return its path (caller frees and removes it). `parent`
+/// must be a real directory, not a symbolic link. Replaces fixed or
+/// predictable temp paths such as S3 restore's /tmp/geode_s3_restore_<id>.
+pub fn makePrivateTempDir(allocator: std.mem.Allocator, parent: []const u8, tag: []const u8) ![]u8 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const pst = try std.Io.Dir.cwd().statFile(io, parent, .{ .follow_symlinks = false });
+    if (pst.kind != .directory) return error.TempDirParentNotDirectory;
+    var attempt: u32 = 0;
+    while (true) : (attempt += 1) {
+        var rnd: [8]u8 = undefined;
+        if (comptime builtin.os.tag == .linux) {
+            _ = std.os.linux.getrandom(&rnd, rnd.len, 0);
+        } else {
+            std.c.arc4random_buf(&rnd, rnd.len);
+        }
+        const path = try std.fmt.allocPrint(allocator, "{s}/.{s}-{x:0>16}", .{ std.mem.trimEnd(u8, parent, "/"), tag, std.mem.readInt(u64, &rnd, .little) });
+        std.Io.Dir.cwd().createDir(io, path, std.Io.File.Permissions.fromMode(0o700)) catch |err| {
+            allocator.free(path);
+            if (err == error.PathAlreadyExists and attempt < 8) continue;
+            return err;
+        };
+        errdefer allocator.free(path);
+        if (comptime builtin.os.tag == .linux) {
+            // The umask may have narrowed 0700; a new directory of ours is set exactly.
+            var zbuf: [std.fs.max_path_bytes]u8 = undefined;
+            const z = try std.fmt.bufPrintZ(&zbuf, "{s}", .{path});
+            if (std.os.linux.errno(std.os.linux.fchmodat(std.os.linux.AT.FDCWD, z, 0o700)) != .SUCCESS) return error.AccessDenied;
+        }
+        return path;
+    }
+}
+
 /// Backup header with payload length for GraphStore snapshots.
 pub const BackupHeader = extern struct {
     magic: u32,
@@ -315,15 +366,7 @@ pub const BackupManager = struct {
 
         // Read the current per-graph storage layout (`graph_registry.dat` plus
         // the recursive `graphs/<uuid>/...` tree).
-        const data_dir = blk: {
-            if (graph_store.getDataDirOverride()) |ov| {
-                break :blk try self.allocator.dupe(u8, ov);
-            } else if (getEnvVarOwned(self.allocator, "GEODE_DATA_DIR")) |dir| {
-                break :blk dir;
-            } else |_| {
-                break :blk try self.allocator.dupe(u8, "/tmp");
-            }
-        };
+        const data_dir = try backupSourceDataDir(self.allocator);
         defer self.allocator.free(data_dir);
 
         const payload = try readPerGraphStoragePayload(self.allocator, data_dir);

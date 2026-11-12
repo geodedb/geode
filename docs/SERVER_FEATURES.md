@@ -1309,7 +1309,7 @@ Total CANARY markers: 1284 tracking governance compliance
 
 **Storage**:
 
-- `GEODE_DATA_DIR`: Data directory path (default, per-user: `$XDG_STATE_HOME/geode`, else `$HOME/.local/state/geode`, else `/tmp/geode-<uid>`)
+- `GEODE_DATA_DIR`: Data directory path (default, per-user: `$XDG_STATE_HOME/geode`, else `$HOME/.local/state/geode`, else `$TMPDIR/geode-<uid>` (TMPDIR when absolute, else `/tmp`), which must be a 0700 directory of this user; SONNY-6325)
 - `GEODE_PAGE_SIZE`: Page size in bytes (default: 4096)
 - `GEODE_DISK_ENCRYPTION`: Enable TDE (`on`/`off`)
 - `GEODE_DISK_KEY_HEX`: Master encryption key (64 hex chars)

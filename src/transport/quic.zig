@@ -46,9 +46,9 @@ const Endpoint = api.QuicEndpoint;
 const Connection = api.QuicConnection;
 const VendorQuicConfig = api.QuicConfig;
 const builtin = @import("builtin");
-// SONNY-2394: the signal-safe, environment-carrying Io certificate
-// auto-generation spawns openssl with (shared with tools/cert_gen.zig).
-const spawn_io = @import("spawn_io");
+// SONNY-6325: the self-signed certificate fallback (shared with
+// tools/cert_gen.zig); it spawns openssl through spawn_io (SONNY-2394).
+const tls_material = @import("tls_material");
 
 /// Allocation-free, Io-independent readability check for a cert/key file.
 /// Mirrors `cert_gen.certFileReadable`: it attempts a raw `openat` and lets the
@@ -1314,52 +1314,16 @@ pub const QuicTransport = struct {
     }
 
     fn generateSelfSignedCert(self: *QuicTransport) !void {
-        // SONNY-2394: do NOT spawn through `global_single_threaded` -- that Io
-        // ships with `.allocator = .failing`, so `std.process.spawn` OOMs
-        // inside spawnPosix's argv arena before it ever forks, and this
-        // auto-generation path could never succeed (the old "unimplemented in
-        // Zig 0.16" note in distributed/cluster.zig). Nor through a second
-        // `Threaded.init` instance: that swaps process-wide signal handlers.
-        // `spawn_io` has neither problem and carries the process environment.
-        var spawn_threaded = spawn_io.threaded();
-        defer spawn_threaded.deinit();
-        const io = spawn_threaded.io();
-
-        // Ensure the parent directory for the certificate exists.
-        if (std.fs.path.dirname(self.config.cert_path)) |dir_path| {
-            if (dir_path.len > 0) {
-                std.Io.Dir.cwd().createDirPath(io, dir_path) catch |err| switch (err) {
-                    error.PathAlreadyExists => {},
-                    else => return QuicError.CertificateError,
-                };
-            }
-        }
-
-        // Build argv: openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1
-        //   -nodes -keyout <key_path> -out <cert_path> -days 365 -subj "/CN=geode-autogen"
-        const argv = [_][]const u8{
-            "openssl",                      "req",    "-x509",
-            "-newkey",                      "ec",     "-pkeyopt",
-            "ec_paramgen_curve:prime256v1", "-nodes", "-keyout",
-            self.config.key_path,           "-out",   self.config.cert_path,
-            "-days",                        "365",    "-subj",
-            "/CN=geode-autogen",
-        };
-
-        var child = try std.process.spawn(io, .{
-            .argv = &argv,
-            .stdin = .ignore,
-            .stdout = .ignore,
-            .stderr = .ignore,
-        });
-
-        const term = try std.process.Child.wait(&child, io);
-        switch (term) {
-            .exited => |code| {
-                if (code != 0) return QuicError.CertificateError;
-            },
+        // SONNY-6325: through tls_material, the same generator `geode serve`
+        // uses: openssl writes into a private staging directory and the pair
+        // is installed exclusive and no-follow (key 0600, certificate 0644),
+        // so nothing already at either path (a planted file or symbolic link)
+        // is followed or replaced. SONNY-2394: tls_material spawns openssl
+        // through spawn_io (no signal-handler swap, the process environment).
+        tls_material.generateSelfSigned(self.config.cert_path, self.config.key_path, .{ .subject = "/CN=geode-autogen" }) catch |err| switch (err) {
+            error.OutOfMemory => return err,
             else => return QuicError.CertificateError,
-        }
+        };
     }
 };
 

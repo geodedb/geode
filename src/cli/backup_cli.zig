@@ -448,7 +448,7 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                 "Usage: geode backup list [options]\n" ++
                 "\n" ++
                 "Options:\n" ++
-                "  --dir <path>           Backup directory (scans ./backups and /tmp by default)\n" ++
+                "  --dir <path>           Backup directory (default: ./backups, ./server_backups and $GEODE_DATA_DIR/backups)\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
@@ -466,8 +466,24 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         }
     }
 
-    // Directories to scan for backups
-    const dirs_to_scan = if (custom_dir) |cd| &[_][]const u8{cd} else &[_][]const u8{ "./backups", "/tmp" };
+    // Directories to scan for backups.
+    // CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=BackupListNoTmp; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-6325: never the shared /tmp (any local user can put files there).
+    // The default is ./backups, the server's <GEODE_DATA_DIR>/backups and the
+    // pre-SONNY-6299 ./server_backups.
+    const env_backup_dir: ?[]u8 = blk: {
+        const dd = posixGetenv("GEODE_DATA_DIR") orelse break :blk null;
+        if (dd.len == 0) break :blk null;
+        break :blk std.fs.path.join(allocator, &.{ dd, backup_types.server_backup_dir_name }) catch null;
+    };
+    defer if (env_backup_dir) |d| allocator.free(d);
+    var default_dirs_buf: [3][]const u8 = .{ "./backups", "./server_backups", "" };
+    var default_dirs_len: usize = 2;
+    if (env_backup_dir) |d| {
+        default_dirs_buf[2] = d;
+        default_dirs_len = 3;
+    }
+    const dirs_to_scan: []const []const u8 = if (custom_dir) |cd| &[_][]const u8{cd} else default_dirs_buf[0..default_dirs_len];
 
     // Collect backup files
     var backup_files: std.ArrayListUnmanaged(BackupFileInfo) = .empty;

@@ -476,7 +476,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
-    .{ .name = "test-sonny6325-no-fixed-tmp-paths", .reason = "failing: intentionally red SONNY-6325 reproduction (auto TLS key at /tmp/geode-server.key, unchecked /tmp/geode-<uid>, /tmp in backup list, audit diagnostics and createFullBackup); moves to shardDep with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -1101,6 +1100,13 @@ pub fn build(b: *std.Build) void {
     // a file may belong to only one module per compilation.
     const spawn_io_mod = b.createModule(.{ .root_source_file = b.path("src/transport/spawn_io.zig"), .target = target, .optimize = optimize, .link_libc = true });
     transport_quic_mod.addImport("spawn_io", spawn_io_mod);
+    // SONNY-6325: auto-generated TLS material (private staging, exclusive
+    // no-follow install, key 0600, existing-key checks), shared by the QUIC
+    // listener and the `geode serve` startup generator for the same reason
+    // spawn_io is a module of its own.
+    const tls_material_mod = b.createModule(.{ .root_source_file = b.path("src/transport/tls_material.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    tls_material_mod.addImport("spawn_io", spawn_io_mod);
+    transport_quic_mod.addImport("tls_material", tls_material_mod);
 
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
     // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
@@ -1314,6 +1320,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("geode", root_mod);
     // server/main.zig -> tools/cert_gen.zig (SONNY-2394).
     geode_exe.root_module.addImport("spawn_io", spawn_io_mod);
+    geode_exe.root_module.addImport("tls_material", tls_material_mod);
     // FIPS seam: wire crypto_backend into the executable for later routing tasks.
     geode_exe.root_module.addImport("crypto_backend", crypto_backend_mod);
     // GAP-0810: named-module form to keep a single owning module for
@@ -2209,6 +2216,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     cert_provided_mod.addImport("spawn_io", spawn_io_mod);
+    cert_provided_mod.addImport("tls_material", tls_material_mod);
     const cert_provided_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_cert_provided_cert_honored.zig"),
         .target = target,
@@ -6151,6 +6159,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/cert_gen.zig"), .target = target, .optimize = optimize }),
     });
     cert_gen_exe.root_module.addImport("spawn_io", spawn_io_mod);
+    cert_gen_exe.root_module.addImport("tls_material", tls_material_mod);
     b.installArtifact(cert_gen_exe);
     tools_step.dependOn(&cert_gen_exe.step);
 
@@ -9367,7 +9376,7 @@ pub fn build(b: *std.Build) void {
     const sonny6325_tests = b.addTest(.{ .root_module = sonny6325_test_mod });
     const run_sonny6325_tests = b.addRunArtifact(sonny6325_tests);
     spawnsBuiltGeode(sonny6325_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6325_tests.step);
+    shardDep(test_step, &run_sonny6325_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6325_step = b.step("test-sonny6325-no-fixed-tmp-paths", "Run SONNY-6325 regression (spawns servers: the auto TLS key is created in the data directory exclusive/no-follow/0600, an existing group-readable, linked or half-pair auto key is refused, no /tmp fallback; S3 restore staging is a private temp dir; audit diagnostics write private data-directory files; backup list skips /tmp; the per-user tmp data directory is checked 0700/owner and honours TMPDIR; a backup without a data directory is refused)");
     sonny6325_step.dependOn(&run_sonny6325_tests.step);
 

@@ -1399,9 +1399,9 @@ pub fn main() !void {
     // second admin with a different password).
 
     // Resolve certificate paths and ensure they exist
-    const cert_paths = try cli_args.resolveCertPaths(gpa, &config);
-    var cert_path = cert_paths.cert_path;
-    var key_path = cert_paths.key_path;
+    const cert_paths = try cli_args.resolveCertPaths(gpa, &config, resolved_data_dir);
+    const cert_path = cert_paths.cert_path;
+    const key_path = cert_paths.key_path;
     const cert_explicit = cert_paths.cert_explicit or cert_paths.key_explicit;
 
     // Try to ensure certificates if using QUIC or gRPC (TLS needed for both).
@@ -1456,18 +1456,28 @@ pub fn main() !void {
                 Attr.string("key_path", key_path),
             });
         } else {
-            // Auto path: no cert supplied → generate-if-missing into the
-            // resolved (data-dir/cert-dir) location, with a /tmp fallback only
-            // when that location is not writable.
+            // Auto path: no cert supplied → use or generate the pair in the
+            // resolved data directory (or GEODE_CERT_DIR).
+            //
+            // CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=NoTmpCertFallback; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-6325: there is no fallback. A failure here used to switch
+            // to /tmp/geode-server.{crt,key}, a fixed path in a shared
+            // directory: a key already there was served whoever planted it.
+            // An unusable auto key (a link, another user's, group/world
+            // readable, or half a pair) or an unwritable directory refuses
+            // startup with the reason; the key is never changed.
             cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path) catch |err| {
-                log.warn("Could not generate certificates, using fallback paths", &.{
+                std.debug.print(
+                    "SECURITY: the auto-generated TLS key {s} / certificate {s} cannot be used: {s} ({s}). Refusing to start.\n" ++
+                        "Fix or remove the files (the key must be a regular file owned by this user, mode 0600), set GEODE_CERT_DIR to a directory this user can write, or pass --cert and --key.\n",
+                    .{ key_path, cert_path, cert_gen.describeTlsError(err), @errorName(err) },
+                );
+                log.err("auto TLS certificate/key unusable; refusing to start", &.{
+                    Attr.string("cert_path", cert_path),
+                    Attr.string("key_path", key_path),
                     Attr.string("error", @errorName(err)),
-                    Attr.string("fallback_cert", "/tmp/geode-server.crt"),
-                    Attr.string("fallback_key", "/tmp/geode-server.key"),
                 });
-                cert_path = "/tmp/geode-server.crt";
-                key_path = "/tmp/geode-server.key";
-                try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
+                return err;
             };
             std.debug.print("[startup] certificates ready ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
         }

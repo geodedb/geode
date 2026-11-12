@@ -810,7 +810,8 @@ pub fn getDataDirOverride() ?[]const u8 {
 /// Resolution order (deterministic, same chain as `cli_auth_helpers.resolveStateDir`):
 ///   1. `$XDG_STATE_HOME/geode`
 ///   2. `$HOME/.local/state/geode`
-///   3. `/tmp/geode-<uid>` (per-user, so two uids never collide)
+///   3. `$TMPDIR/geode-<uid>` (TMPDIR when absolute, else `/tmp`; per-user,
+///      so two uids never collide), checked by `privateUserTmpDir`.
 pub fn defaultDataDir(allocator: std.mem.Allocator) ![]u8 {
     if (getEnvVarOwned(allocator, "XDG_STATE_HOME")) |xdg_state_home| {
         defer allocator.free(xdg_state_home);
@@ -829,11 +830,88 @@ pub fn defaultDataDir(allocator: std.mem.Allocator) ![]u8 {
     if (comptime @import("builtin").os.tag == .windows) {
         return std.fs.path.join(allocator, &.{ ".", ".geode", "state" });
     }
-    const uid = if (comptime @import("builtin").os.tag == .linux)
-        std.os.linux.getuid()
-    else
-        std.c.getuid();
-    return std.fmt.allocPrint(allocator, "/tmp/geode-{d}", .{uid});
+    return privateUserTmpDir(allocator);
+}
+
+// CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=PrivateUserTmpDir; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6325: the per-user last-resort directory `<tmp>/geode-<uid>`, where
+/// `<tmp>` is `$TMPDIR` when it is an absolute path, else `/tmp` (the server's
+/// data directory and the CLI's state directory when neither XDG_STATE_HOME
+/// nor HOME is set; ENG-3921). The temp directory is shared and
+/// world-writable, so the directory must be ours: it is created mode 0700
+/// when absent, and an existing one is used only when it is a real directory
+/// (not a symbolic link) owned by this user with mode exactly 0700. Anything
+/// else is refused (error.UnsafeDefaultDataDir) and never chmod-ed or
+/// followed: another user could have created it, or a link to their own
+/// directory, ahead of us. Caller frees the path.
+pub fn privateUserTmpDir(allocator: std.mem.Allocator) ![]u8 {
+    const builtin_os = @import("builtin").os.tag;
+    const uid: u32 = if (comptime builtin_os == .linux) std.os.linux.getuid() else std.c.getuid();
+    const tmpdir_env: ?[]u8 = getEnvVarOwned(allocator, "TMPDIR") catch null;
+    defer if (tmpdir_env) |t| allocator.free(t);
+    const base: []const u8 = blk: {
+        if (tmpdir_env) |t| {
+            const trimmed = std.mem.trimEnd(u8, t, "/");
+            if (trimmed.len > 0 and std.fs.path.isAbsolute(trimmed)) break :blk trimmed;
+        }
+        break :blk "/tmp";
+    };
+    const path = try std.fmt.allocPrint(allocator, "{s}/geode-{d}", .{ base, uid });
+    errdefer allocator.free(path);
+    ensurePrivateDir(path) catch |err| switch (err) {
+        error.UnsafePrivateDir => {
+            std.debug.print("Set --data-dir, GEODE_DATA_DIR, XDG_STATE_HOME or HOME, or remove {s}.\n", .{path});
+            return error.UnsafeDefaultDataDir;
+        },
+        else => return err,
+    };
+    return path;
+}
+
+fn refusePrivateDir(path: []const u8, reason: []const u8) error{UnsafePrivateDir} {
+    std.debug.print(
+        "SECURITY: the directory {s} {s}; refusing to use it (it must be a directory owned by this user, mode 0700).\n",
+        .{ path, reason },
+    );
+    return error.UnsafePrivateDir;
+}
+
+/// SONNY-6325: make sure `path` is a private directory of this user: create
+/// it mode 0700 when absent; otherwise it must be a real directory (not a
+/// symbolic link) owned by this user with mode exactly 0700, else
+/// error.UnsafePrivateDir (the reason printed). An existing directory is never
+/// chmod-ed.
+pub fn ensurePrivateDir(path: []const u8) !void {
+    const uid: u32 = if (comptime @import("builtin").os.tag == .linux) std.os.linux.geteuid() else std.c.geteuid();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var created = true;
+    std.Io.Dir.cwd().createDir(io, path, std.Io.File.Permissions.fromMode(0o700)) catch |err| switch (err) {
+        error.PathAlreadyExists => created = false,
+        else => return err,
+    };
+    if (comptime @import("builtin").os.tag != .linux) {
+        const st = try std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false });
+        if (st.kind != .directory) return refusePrivateDir(path, "is not a directory (or is a symbolic link)");
+        if (st.permissions.toMode() & 0o777 != 0o700) {
+            if (!created) return refusePrivateDir(path, "has group or other permissions");
+        }
+        return;
+    }
+    const linux = std.os.linux;
+    var zbuf: [std.fs.max_path_bytes]u8 = undefined;
+    const z = try std.fmt.bufPrintZ(&zbuf, "{s}", .{path});
+    if (created) {
+        // Our new directory: the umask may have narrowed 0700; set it exactly.
+        _ = linux.fchmodat(linux.AT.FDCWD, z, 0o700);
+    }
+    var st: linux.Statx = undefined;
+    const rc = linux.statx(linux.AT.FDCWD, z, linux.AT.SYMLINK_NOFOLLOW, .{ .TYPE = true, .MODE = true, .UID = true }, &st);
+    if (linux.errno(rc) != .SUCCESS) return refusePrivateDir(path, "cannot be inspected");
+    const kind = st.mode & linux.S.IFMT;
+    if (kind == linux.S.IFLNK) return refusePrivateDir(path, "is a symbolic link");
+    if (kind != linux.S.IFDIR) return refusePrivateDir(path, "is not a directory");
+    if (st.uid != uid) return refusePrivateDir(path, "is owned by another user");
+    if (st.mode & 0o777 != 0o700) return refusePrivateDir(path, "has group or other permissions (not mode 0700)");
 }
 
 /// DEPRECATED: Legacy persistence file path. Retained as a stub for callers

@@ -1,80 +1,36 @@
 const std = @import("std");
 const builtin = @import("builtin");
-// SONNY-2394: the signal-safe, environment-carrying Io openssl is spawned with
-// (shared with transport/quic.zig).
-const spawn_io = @import("spawn_io");
 
 // Simple self-signed certificate generator for development/testing
 // In production, use proper CA-signed certificates
 
+// SONNY-6325: the generator and the auto-key checks live in the tls_material
+// module (shared with the QUIC listener): openssl writes into a private
+// staging directory and the pair is installed exclusive, no-follow, key 0600.
+const tls_material = @import("tls_material");
+
 pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8, cert_path: []const u8, key_path: []const u8) !void {
-    _ = allocator;
-    // Extract directory from cert_path
-    const cert_dir = std.fs.path.dirname(cert_path) orelse ".";
-
-    // Zig 0.16 note: the stdlib's `global_single_threaded` Threaded instance
-    // ships with `.allocator = .failing`, so any `std.process.run` through it
-    // OOMs immediately inside `spawnPosix`'s internal arena. SONNY-2394: nor
-    // `std.Io.Threaded.init(gpa, .{})`, which this used to be: it swaps
-    // process-wide SIGIO/SIGPIPE handlers, and its environment is EMPTY, so
-    // openssl was found only on std's fixed default PATH and never saw
-    // OPENSSL_CONF. `spawn_io` has a real allocator, installs no handler, and
-    // carries the process environment. `smp_allocator` also backs the argv
-    // strings and captured output below (the governance gate forbids
-    // `page_allocator` in src/).
-    const spawn_gpa = std.heap.smp_allocator;
-    var local_threaded = spawn_io.threaded();
-    defer local_threaded.deinit();
-    const io = local_threaded.io();
-
-    // Create certificate directory if it doesn't exist
-    std.Io.Dir.cwd().createDirPath(io, cert_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
-
-    // Use OpenSSL to generate self-signed ECDSA P-256 certificate.
-
-    const subj = try std.fmt.allocPrint(spawn_gpa, "/CN={s}", .{hostname});
-    defer spawn_gpa.free(subj);
+    const subj = try std.fmt.allocPrint(allocator, "/CN={s}", .{hostname});
+    defer allocator.free(subj);
     const alt_names = try std.fmt.allocPrint(
-        spawn_gpa,
+        allocator,
         "subjectAltName=DNS:{s},DNS:localhost,IP:127.0.0.1,IP:::1",
         .{hostname},
     );
-    defer spawn_gpa.free(alt_names);
-
-    const result = try std.process.run(spawn_gpa, io, .{
-        .argv = &[_][]const u8{
-            "openssl",                      "req",
-            "-x509",                        "-newkey",
-            "ec",                           "-pkeyopt",
-            "ec_paramgen_curve:prime256v1", "-keyout",
-            key_path,                       "-out",
-            cert_path,                      "-days",
-            "365",                          "-nodes",
-            "-subj",                        subj,
-            "-addext",                      alt_names,
-        },
-    });
-    defer spawn_gpa.free(result.stdout);
-    defer spawn_gpa.free(result.stderr);
-
-    if (result.term != .exited or result.term.exited != 0) {
-        std.debug.print("Failed to generate certificate: {s}\n", .{result.stderr});
-        return error.CertificateGenerationFailed;
-    }
+    defer allocator.free(alt_names);
+    try tls_material.generateSelfSigned(cert_path, key_path, .{ .subject = subj, .addext = alt_names });
 }
 
-pub fn ensureCertificates(allocator: std.mem.Allocator) !void {
-    ensureCertificatesAtPath(allocator, "certs/server.crt", "certs/server.key") catch |err| {
-        // If certs directory fails, try /tmp as fallback
-        if (err == error.AccessDenied or err == error.FileNotFound) {
-            try ensureCertificatesAtPath(allocator, "/tmp/geode-server.crt", "/tmp/geode-server.key");
-        } else {
-            return err;
-        }
-    };
+// CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=CertGenExplicitDir; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6325: generate `<dir>/server.crt` and `<dir>/server.key` (the
+/// cert_gen tool). There is no default directory: the tool used to fall back
+/// to the fixed /tmp/geode-server.{crt,key}.
+pub fn ensureCertificatesInDir(allocator: std.mem.Allocator, dir: []const u8) !void {
+    const cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir});
+    defer allocator.free(cert_path);
+    const key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir});
+    defer allocator.free(key_path);
+    try ensureCertificatesAtPath(allocator, cert_path, key_path);
 }
 
 /// Robust, allocation-free readability check for a certificate/key file.
@@ -114,7 +70,7 @@ pub fn certFileReadable(path: []const u8) bool {
 /// Verify that an operator-PROVIDED cert+key pair exists and is readable.
 ///
 /// Unlike `ensureCertificatesAtPath`, this NEVER generates, NEVER overwrites,
-/// and NEVER falls back to a throwaway `/tmp` cert. An explicitly-provided
+/// and NEVER falls back to a throwaway self-signed cert. An explicitly-provided
 /// `--cert`/`--key` must be loaded exactly as supplied; if it cannot be read,
 /// the caller must fail loud (refuse to start) rather than silently self-sign,
 /// which would be a security downgrade. See
@@ -124,40 +80,62 @@ pub fn requireExistingCertificates(cert_path: []const u8, key_path: []const u8) 
     if (!certFileReadable(key_path)) return error.ProvidedKeyUnreadable;
 }
 
-pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const u8, key_path: []const u8) !void {
-    // Only (re)generate when the cert is genuinely absent. The previous
-    // implementation probed via `std.Io.Dir.access` over the `.failing`
-    // global_single_threaded Io under a bare `catch {}` that swallowed ALL
-    // errors and regenerated — environment-sensitive and a silent footgun.
-    // `certFileReadable` is allocation-free and deterministic.
-    if (!certFileReadable(cert_path)) {
-        // Generate new certificates
-        const io = std.Io.Threaded.global_single_threaded.io();
-        try generateSelfSignedCert(allocator, "geode.local", cert_path, key_path);
-
-        // Harden file permissions:
-        //   server.key  → 0600 (owner-only read/write)
-        //   server.crt  → 0644 (world-readable public cert)
-        if (builtin.os.tag != .windows) {
-            if (std.Io.Dir.cwd().openFile(io, key_path, .{})) |f| {
-                defer f.close(io);
-                f.setPermissions(io, std.Io.File.Permissions.fromMode(0o600)) catch {};
-            } else |_| {}
-            if (std.Io.Dir.cwd().openFile(io, cert_path, .{})) |f| {
-                defer f.close(io);
-                f.setPermissions(io, std.Io.File.Permissions.fromMode(0o644)) catch {};
-            } else |_| {}
-        }
-
-        std.debug.print("Generated self-signed certificates at {s} and {s}\n", .{ cert_path, key_path });
-    }
+// CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=AutoKeyChecks; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
+/// The auto path (no --cert/--key): use the pair at `cert_path`/`key_path`
+/// (the data directory or GEODE_CERT_DIR), or generate one when neither file
+/// exists.
+///
+/// SONNY-6325: an existing key is used only when it is a regular file (not a
+/// symbolic link) owned by this user with no group/other permission bits
+/// (`tls_material.checkAutoKey`); otherwise the server refuses with the
+/// reason, and never chmods or replaces it. A key without its certificate, or
+/// a certificate without its key, is refused (error.IncompleteTlsMaterial):
+/// it used to regenerate both through openssl, which replaced an existing key
+/// and followed a symbolic link planted at either path. A new pair is
+/// installed exclusive and no-follow, key 0600, certificate 0644.
+/// The operator-facing reason for an `ensureCertificatesAtPath` failure.
+pub fn describeTlsError(err: anyerror) []const u8 {
+    return switch (err) {
+        error.TlsKeyIsSymlink,
+        error.TlsKeyNotRegularFile,
+        error.TlsKeyForeignOwner,
+        error.TlsKeyGroupOrWorldAccessible,
+        error.TlsKeyUnreadable,
+        error.IncompleteTlsMaterial,
+        => tls_material.describeKeyError(err),
+        error.TlsFileExists => "a file appeared at the key or certificate path while it was being generated",
+        error.AccessDenied, error.PermissionDenied, error.ReadOnlyFileSystem => "the directory is not writable by this user",
+        error.CertificateGenerationFailed => "openssl could not generate the certificate",
+        else => "it could not be generated",
+    };
 }
 
-pub fn main() !void {
+pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const u8, key_path: []const u8) !void {
+    const key_state = try tls_material.checkAutoKey(key_path);
+    const cert_present = tls_material.pathPresent(cert_path);
+    switch (key_state) {
+        .usable => {
+            if (cert_present) return;
+            return error.IncompleteTlsMaterial;
+        },
+        .absent => if (cert_present) return error.IncompleteTlsMaterial,
+    }
+    try generateSelfSignedCert(allocator, "geode.local", cert_path, key_path);
+    std.debug.print("Generated self-signed certificates at {s} and {s}\n", .{ cert_path, key_path });
+}
+
+pub fn main(proc_init: std.process.Init.Minimal) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-
-    try ensureCertificates(allocator);
+    const argv = proc_init.args.vector;
+    const dir: []const u8 = if (argv.len == 2) std.mem.span(argv[1]) else "";
+    if (dir.len == 0 or std.mem.startsWith(u8, dir, "-")) {
+        std.debug.print("usage: cert_gen <output-dir>\n" ++
+            "Writes <output-dir>/server.crt (0644) and <output-dir>/server.key (0600).\n" ++
+            "There is no default directory (SONNY-6325).\n", .{});
+        std.process.exit(2);
+    }
+    try ensureCertificatesInDir(allocator, dir);
     std.debug.print("TLS certificates ready\n", .{});
 }

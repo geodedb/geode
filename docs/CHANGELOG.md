@@ -80,6 +80,49 @@
   identity. Backups written by older binaries still restore, with a
   warning; their key files are written 0600 and their lock file is not.
   Regression: `zig build test-sonny6299-backup-excludes-secrets`.
+- **BREAKING: no TLS key, temp directory or backup at a fixed `/tmp` path
+  (SONNY-6325).** The auto-generated TLS certificate and private key fell
+  back to `/tmp/geode-server.crt` and `/tmp/geode-server.key` whenever the
+  server ran without `--data-dir` (with `GEODE_DATA_DIR` or the per-user
+  default only) and whenever the data or cert directory could not be
+  written; a key already at that path was served whoever planted it, and
+  openssl followed a symbolic link planted there. Now:
+  - the auto pair lives in `GEODE_CERT_DIR` or the RESOLVED data directory
+    (`--data-dir`, `GEODE_DATA_DIR` or the per-user default; a gRPC-only
+    server no longer writes `./certs` of its working directory). There is
+    no fallback: an unusable location **refuses startup** with the reason.
+  - a new pair is generated in a private staging directory and installed
+    exclusive and no-follow: key 0600, certificate 0644.
+  - an existing auto key is used only when it is a regular file owned by the
+    server's user with no group/other bits. **A symbolic link, another
+    user's key, a group- or world-readable key (e.g. 0640), or a key without
+    its certificate (or a certificate without its key) refuses startup**
+    and is never changed: fix the mode (`chmod 600 server.key`), the owner,
+    or remove both files to regenerate. An operator-provided `--cert`/`--key`
+    is loaded as before (no ownership or mode check).
+  - the `cert_gen` tool needs an output directory (`cert_gen <dir>`;
+    `make cert-gen` uses `CERT_DIR`, default `certs`).
+  - the per-user last-resort data/state directory is `$TMPDIR/geode-<uid>`
+    (TMPDIR when absolute, else `/tmp`), used only when neither
+    `XDG_STATE_HOME` nor `HOME` is set. It is created 0700; **an existing one
+    that is a link, another user's, or not mode 0700 is refused**, never
+    chmod-ed.
+  - S3 restore stages in a private directory beside the target (random
+    name, 0700), not `/tmp/geode_s3_restore_<id>`.
+  - a backup with no data directory configured (no override, no
+    `GEODE_DATA_DIR`) fails with `BackupDataDirUnknown`; it used to archive
+    every top-level entry of `/tmp`.
+  - `geode backup list` scans `./backups`, `./server_backups` and
+    `$GEODE_DATA_DIR/backups`, not `/tmp`.
+  - the audit diagnostic procedures (`audit.test_file_output`,
+    `audit.test_auth_categories`, the test logger) write
+    `<data dir>/audit-diagnostics/` (0700, files 0600, no link followed);
+    `audit.cleanup_test_artifacts` removes files there only. It used to
+    delete fixed `/tmp` files and `/etc/geode/geode_audit.jsonl`.
+  - the schema catalog falls back to the resolved data directory, not
+    `/tmp`; the uncalled `/tmp`-using `txn_session.zig`, undo-log file
+    persistence and `wal.initGlobalWal` were removed.
+  Regression: `zig build test-sonny6325-no-fixed-tmp-paths`.
 
 ### Added
 

@@ -124,7 +124,7 @@ pub const ServerConfig = struct {
 
     // Whether cert_path/key_path were EXPLICITLY supplied by the operator
     // (via --cert/--key or a config file) as opposed to auto-derived from
-    // --data-dir / GEODE_CERT_DIR / the /tmp fallback. An explicitly-provided
+    // --data-dir / GEODE_CERT_DIR / the resolved data dir. An explicitly-provided
     // cert MUST be loaded as-is and never regenerated or replaced by a
     // throwaway self-signed cert. See
     // docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
@@ -312,7 +312,7 @@ pub fn printHelp() void {
     std.debug.print("  1. .geode/config.{{yaml|toml|json}}    (project config)\n", .{});
     std.debug.print("  2. ~/.config/geode/config.*          (user config)\n", .{});
     std.debug.print("\nIf no listen option is specified, defaults to 0.0.0.0:3141 (QUIC/TLS).\n", .{});
-    std.debug.print("Auto-generated certificates are placed in data_dir or /tmp.\n", .{});
+    std.debug.print("Auto-generated certificates are placed in GEODE_CERT_DIR or the data directory.\n", .{});
 }
 
 /// Parse command line arguments into ServerConfig
@@ -596,54 +596,36 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
 }
 
 /// Resolve certificate paths based on configuration.
-/// Precedence: CLI flags > GEODE_CERT_DIR env > data_dir > /tmp fallback.
+/// Precedence: CLI flags > GEODE_CERT_DIR env > the resolved data directory.
 /// Returns the resolved cert_path/key_path plus whether each was EXPLICITLY
 /// supplied by the operator (vs auto-derived). Callers must honor an explicit
 /// cert by loading it as-is and failing loud if it cannot be read — never
 /// regenerate or fall back. See
 /// docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
-pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig) !struct {
+///
+/// SONNY-6325: `data_dir` is the RESOLVED data directory (--data-dir,
+/// GEODE_DATA_DIR or the per-user default), the one the server locks. With no
+/// --data-dir the auto pair used to land at the fixed /tmp/geode-server.{crt,key},
+/// and a gRPC-only server put it in ./certs of its working directory.
+pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig, data_dir: []const u8) !struct {
     cert_path: []const u8,
     key_path: []const u8,
     cert_explicit: bool,
     key_explicit: bool,
 } {
-    // If QUIC is enabled and no custom certs specified, use defaults
-    if (config.listen_quic != null) {
-        if (config.cert_path == null or config.key_path == null) {
-            // Check GEODE_CERT_DIR env var first (set by systemd unit).
-            // This puts certs in /etc/geode/certs/ (0755) so non-root
-            // processes can read the public cert for CA verification.
-            const cert_dir: ?[]const u8 = posixGetenv("GEODE_CERT_DIR");
-
-            if (config.cert_path == null) {
-                if (cert_dir) |dir| {
-                    config.cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir});
-                    config._allocated_cert_path = true;
-                } else if (config.data_dir) |dir| {
-                    config.cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir});
-                    config._allocated_cert_path = true;
-                } else {
-                    config.cert_path = "/tmp/geode-server.crt";
-                }
-            }
-
-            if (config.key_path == null) {
-                if (cert_dir) |dir| {
-                    config.key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir});
-                    config._allocated_key_path = true;
-                } else if (config.data_dir) |dir| {
-                    config.key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir});
-                    config._allocated_key_path = true;
-                } else {
-                    config.key_path = "/tmp/geode-server.key";
-                }
-            }
+    if (config.cert_path == null or config.key_path == null) {
+        // GEODE_CERT_DIR first (set by the systemd unit: /etc/geode/certs,
+        // 0755, so non-root processes can read the public cert for CA
+        // verification); otherwise the data directory.
+        const cert_dir: []const u8 = posixGetenv("GEODE_CERT_DIR") orelse data_dir;
+        if (config.cert_path == null) {
+            config.cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{cert_dir});
+            config._allocated_cert_path = true;
         }
-    } else {
-        // For non-QUIC, use dummy paths if not specified
-        config.cert_path = config.cert_path orelse "certs/server.crt";
-        config.key_path = config.key_path orelse "certs/server.key";
+        if (config.key_path == null) {
+            config.key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{cert_dir});
+            config._allocated_key_path = true;
+        }
     }
 
     return .{

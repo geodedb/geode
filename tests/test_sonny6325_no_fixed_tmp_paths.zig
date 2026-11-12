@@ -781,9 +781,7 @@ test "SONNY-6325 (4) geode backup list does not scan /tmp" {
 // ===========================================================================
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
-extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 const c_setenv = setenv;
-const c_unsetenv = unsetenv;
 
 const EnvSave = struct {
     names: []const [:0]const u8,
@@ -797,16 +795,17 @@ const EnvSave = struct {
         return s;
     }
 
+    /// Values are only ever overwritten in place, never removed: unsetenv
+    /// shifts libc's environ array under Zig's cached copy of it (a null
+    /// entry inside its length), which crashed std.debug.print. An empty
+    /// value is what the code under test treats as unset.
     fn restore(self: *EnvSave) void {
         for (self.names, 0..) |n, i| {
-            if (self.saved[i]) |v| {
-                const z = testing.allocator.dupeZ(u8, v) catch continue;
-                defer testing.allocator.free(z);
-                _ = c_setenv(n, z, 1);
-                testing.allocator.free(v);
-            } else {
-                _ = c_unsetenv(n);
-            }
+            const v = self.saved[i] orelse "";
+            const z = testing.allocator.dupeZ(u8, v) catch continue;
+            defer testing.allocator.free(z);
+            _ = c_setenv(n, z, 1);
+            if (self.saved[i]) |owned| testing.allocator.free(owned);
         }
     }
 };
@@ -826,8 +825,8 @@ test "SONNY-6325 (5) the per-user tmp data directory honours TMPDIR, is created 
     const env_names = [_][:0]const u8{ "XDG_STATE_HOME", "HOME", "TMPDIR" };
     var saved = EnvSave.save(&env_names);
     defer saved.restore();
-    _ = c_unsetenv("XDG_STATE_HOME");
-    _ = c_unsetenv("HOME");
+    try setenvZ("XDG_STATE_HOME", "");
+    try setenvZ("HOME", "");
     const tmp = try fx.path(allocator, "faketmp");
     defer allocator.free(tmp);
     try std.Io.Dir.cwd().createDirPath(fsIo(), tmp);
@@ -910,7 +909,7 @@ fn backupNoDataDirCase() !void {
     const env_names = [_][:0]const u8{"GEODE_DATA_DIR"};
     var saved = EnvSave.save(&env_names);
     defer saved.restore();
-    _ = c_unsetenv("GEODE_DATA_DIR");
+    try setenvZ("GEODE_DATA_DIR", "");
     geode.graph_store.setDataDirOverride(allocator, null);
     try testing.expectError(error.BackupDataDirUnknown, backup.backupSourceDataDir(allocator));
 

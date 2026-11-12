@@ -104,8 +104,9 @@ fn resolveStateDir(allocator: std.mem.Allocator) ![]u8 {
     } else |_| {}
 
     if (builtin.os.tag != .windows) {
-        const uid = if (builtin.os.tag == .linux) std.os.linux.getuid() else std.c.getuid();
-        return std.fmt.allocPrint(allocator, "/tmp/geode-{d}", .{uid});
+        // SONNY-6325: `<TMPDIR or /tmp>/geode-<uid>`, created 0700 and
+        // refused when it is not a directory of ours with mode 0700.
+        return geode.graph_store.privateUserTmpDir(allocator);
     }
     return std.fs.path.join(allocator, &.{ ".", ".geode", "state" });
 }

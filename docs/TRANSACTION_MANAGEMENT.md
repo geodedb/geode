@@ -256,7 +256,9 @@ pub const TransactionSession = struct {
 
 **Files:**
 
-- `src/txn_session.zig`: Load/save transaction session
+- `src/txn_session.zig` (load/save of a CLI transaction session) was removed
+  (SONNY-6325): it had no callers and fell back to the fixed
+  `/tmp/geode_transaction_session.txt`.
 - `src/test_harness.zig:50-130`: Transaction session lifecycle
 - `src/execution.zig:474-551`: Transaction command execution
 

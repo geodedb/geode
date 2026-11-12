@@ -118,6 +118,15 @@ Generated automatically by setup script:
 ./scripts/setup-deployment.sh
 ```
 
+Without `--cert`/`--key`, `geode serve` uses `server.crt` and `server.key`
+in `GEODE_CERT_DIR`, else in its data directory (`--data-dir`,
+`GEODE_DATA_DIR` or the per-user default), and generates a self-signed pair
+there when neither file exists (key 0600, certificate 0644, created
+exclusively; SONNY-6325). There is no `/tmp` fallback. The server refuses to
+start when that key is a symbolic link, belongs to another user, is
+readable or writable by group or others, or has no matching certificate:
+fix it (`chmod 600 server.key`) or remove both files to regenerate.
+
 #### Production Certificates
 
 Replace self-signed certificates with CA-signed certificates:
