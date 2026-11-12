@@ -9739,6 +9739,22 @@ pub fn build(b: *std.Build) void {
     const sonny3348c_step = b.step("test-sonny3348-cluster-batch", "Run SONNY-3348 round 19 regression (on a cluster leader a statement's writes are ONE Raft entry or none: FOR ... CREATE and MATCH ... MERGE with a limit on the last row propose nothing, and succeed as one GBAT batch; MERGE matches the statement's own held create; a read a held write could change is refused; the batch codec is versioned; an in-process 3-node cluster through the real gRPC handler)");
     sonny3348c_step.dependOn(&run_sonny3348c_tests.step);
 
+    // SONNY-2726: a replicated write is applied under the writing session's
+    // tenant (GTN1 envelope).
+    const sonny2726_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2726_replicated_tenant.zig"), .target = target, .optimize = optimize });
+    sonny2726_test_mod.link_libc = true;
+    sonny2726_test_mod.addImport("geode", root_mod);
+    sonny2726_test_mod.addImport("schema", schema_mod);
+    sonny2726_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2726_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2726_test_mod.addImport("logging", logging_mod);
+    sonny2726_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2726_tests = b.addTest(.{ .root_module = sonny2726_test_mod });
+    const run_sonny2726_tests = b.addRunArtifact(sonny2726_tests);
+    shardDep(test_step, &run_sonny2726_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2726_step = b.step("test-sonny2726-replicated-tenant", "Run SONNY-2726 regression (an in-process 3-node cluster through the gRPC handler: a tenant session's replicated node and edge creates carry its tenant and its MATCH returns them, another tenant's does not; a follower applies a tenant-enveloped entry under its tenant, idempotently, and an entry without the envelope as the default tenant)");
+    sonny2726_step.dependOn(&run_sonny2726_tests.step);
+
     // SONNY-3348 (round 19): the undo record's budget (I2) and the round 18
     // review's minors m1-m7. gRPC in process.
     const sonny3348b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3348_round19_undo.zig"), .target = target, .optimize = optimize });
