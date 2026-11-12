@@ -344,6 +344,11 @@ test "SONNY-2751: a read-only Admin request refuses every security DDL statement
         try expectReadOnlyRefusal(ga, w.admin, q);
         try testing.expectEqualDeep(before, w.snapshot());
     }
+    // A user's own password change: the handlers take it from the raw text,
+    // before the parser (GAP-0284), so it never reached the read-only floor.
+    const alice = try w.sessions.createSession("alice", "", .ReadOnly, null, null, false, 0);
+    try expectReadOnlyRefusal(ga, alice, "ALTER USER alice SET PASSWORD 'Correct-Horse-Battery-Staple-2751'");
+    try testing.expectEqualDeep(before, w.snapshot());
     try w.agm.verifyChain(&HMAC_KEY);
     try testing.expect(user_mgmt.getUser("ro_new") == null);
     try testing.expect(w.policy("ro_keep") != null);
@@ -403,4 +408,41 @@ test "SONNY-2751: without read_only the same Admin runs the security DDL (the re
     try fx.expectRuns(ga, w.admin, "GRANT READ ON GRAPH g1 TO alice");
     try testing.expect(w.pol.hasGraphGrant(w.alice_id, "g1", READ));
     try fx.expectRuns(ga, w.admin, "CALL geode.auth.grant_list('alice')");
+}
+
+test "SONNY-2751: QUIC and gRPC take the read-only decision from the same plan: every change counts, no read does" {
+    const D = graph_store.DEFAULT_GRAPH_NAME;
+    const Want = struct { q: []const u8, changes: bool };
+    var cases = std.ArrayList(Want).empty;
+    defer cases.deinit(testing.allocator);
+    for (security_ddl) |q| try cases.append(testing.allocator, .{ .q = q, .changes = true });
+    for (other_changes) |q| try cases.append(testing.allocator, .{ .q = q, .changes = true });
+    for (reads) |q| try cases.append(testing.allocator, .{ .q = q, .changes = false });
+    for (user_list_reads) |q| try cases.append(testing.allocator, .{ .q = q, .changes = false });
+    for (cases.items) |c| {
+        var parsed = try geode.parseGql(c.q, testing.allocator);
+        defer parsed.deinit();
+        const analysis = geode.query_traits.analyzeRequest(&parsed.program);
+        for ([_]geode.query_traits.HandlerTransport{ .quic, .grpc }) |t| {
+            const plan = geode.query_traits.statementPlan(&parsed.program, &analysis, D, D, t);
+            if (plan.changes_state != c.changes) {
+                std.debug.print("{s} `{s}`: changes_state={}, want {}\n", .{ @tagName(t), c.q, plan.changes_state, c.changes });
+                return error.WrongClassification;
+            }
+        }
+        try testing.expectEqual(c.changes, geode.query_traits.changesStoredState(&parsed.program));
+    }
+}
+
+test "SONNY-2751: the security DDL is not a data change: no write lock, no write gate" {
+    const D = graph_store.DEFAULT_GRAPH_NAME;
+    for (security_ddl) |q| {
+        var parsed = try geode.parseGql(q, testing.allocator);
+        defer parsed.deinit();
+        const analysis = geode.query_traits.analyzeRequest(&parsed.program);
+        const plan = geode.query_traits.statementPlan(&parsed.program, &analysis, D, D, .grpc);
+        try testing.expect(!plan.is_mutation);
+        try testing.expect(plan.actions.security);
+        try testing.expect(!geode.query_traits.isMutatingProgram(&parsed.program));
+    }
 }

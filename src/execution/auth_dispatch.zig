@@ -50,6 +50,7 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 const ast = @import("../gql/ast.zig");
+const procedure_access = @import("procedure_access.zig");
 const value_types = @import("../value_types.zig");
 
 const logging = @import("logging");
@@ -504,6 +505,22 @@ const read_only_set = std.StaticStringMap(void).initComptime(.{
     .{ "geode.auth.apikey_list", {} },
     .{ "geode.auth.apikey_check_scope", {} },
 });
+
+// SONNY-2751: the geode.auth.* procedures that skip the Admin check here are
+// exactly the ones `procedure_access` classifies read-only (the read-only
+// floors, the lock and the write gate go by that list). `geode.auth.grant_list`
+// was in this set only, so a read-only request could not call it.
+comptime {
+    @setEvalBranchQuota(100_000);
+    for (read_only_set.keys()) |name| {
+        if (procedure_access.classifyProcedureName(name) != .read_only)
+            @compileError("SONNY-2751: " ++ name ++ " is read-only here but not in procedure_access.read_only_procedure_names");
+    }
+    for (procedure_access.read_only_procedure_names) |name| {
+        if (std.mem.startsWith(u8, name, "geode.auth.") and !read_only_set.has(name))
+            @compileError("SONNY-2751: " ++ name ++ " is read-only in procedure_access but needs Admin in auth_dispatch.read_only_set");
+    }
+}
 
 /// Execute a geode.auth.* procedure. Returns null if not recognized.
 pub fn execute(

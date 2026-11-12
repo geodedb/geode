@@ -307,9 +307,10 @@ it for few actions:
   schema, index and constraint DDL, BACKUP and RESTORE, and CALLs of
   procedures that change data.
   - Not covered: the security DDL (CREATE/ALTER/DROP USER, CREATE/DROP ROLE,
-    GRANT, REVOKE, CREATE/ALTER/DROP POLICY). It is counted as read-only
-    (SONNY-2751) and has its own Admin role check, so a DENY WRITE does not
-    reach it.
+    GRANT, REVOKE, CREATE/ALTER/DROP POLICY). It changes stored security
+    state, not graph data: a read-only request refuses it (SONNY-2751), but
+    it takes no graph write lock and no write gate, and has its own Admin
+    (or self) check, so a DENY WRITE does not reach it.
 - **DENY READ and DENY WRITE** apply to `CALL` procedures. A read-only
   procedure asks for read on the procedure, and one that changes data asks
   for write.

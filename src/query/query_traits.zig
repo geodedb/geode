@@ -425,6 +425,30 @@ pub fn isMutatingProgram(program: *const ast.Program) bool {
     return false;
 }
 
+/// SONNY-2751, SONNY-2781: what the GPS actions a program needs say it
+/// changes, over every statement (`write_walk.Actions`). The one derivation
+/// behind `isMutatingProgram` (its data changes), the read-only floors
+/// (`changesStoredState`) and the handlers' write gate
+/// (`gps.changePermittedOn`).
+pub fn programActions(program: *const ast.Program) write_walk.Actions {
+    var actions: write_walk.Actions = .{};
+    for (program.statements) |*stmt| actions = actions.merge(write_walk.statementActions(stmt, .{}));
+    return actions;
+}
+
+// CANARY: REQ=REQ-SONNY-2751-READ-ONLY-SECURITY-DDL; FEATURE="ReadOnlyExecute"; ASPECT=StateChangeClassifier; STATUS=TESTED; TEST=tests/test_sonny2751_readonly_security_ddl.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2751: does `program` change stored state of any kind: graph data or
+/// schema (`isMutatingProgram`), a procedure that changes something (any
+/// procedure not on the read-only list, `procedure_access`), BACKUP or
+/// RESTORE, or the security DDL (users, roles, grants, policies)? What a
+/// read-only request and the MCP read-only mode refuse. The security DDL
+/// counted as a read, so a read-only request ran CREATE USER and GRANT.
+/// Session statements (USE GRAPH, SESSION SET / RESET / CLOSE) and
+/// transaction control change no stored state and are not counted.
+pub fn changesStoredState(program: *const ast.Program) bool {
+    return programActions(program).changesState();
+}
+
 /// Check if a single statement is a mutation (DML write, DDL, or a Query
 /// containing inline CREATE/SET/REMOVE/DELETE clauses).
 ///
@@ -498,6 +522,12 @@ pub const StatementPlan = struct {
     /// a snapshot of `lock_graph` alone answered `USE GRAPH g2; MATCH ...` from
     /// an empty copy of g2.
     reads_several_graphs: bool = false,
+    /// SONNY-2751, SONNY-2781: every change the program makes, as GPS actions
+    /// (`programActions`). `is_mutation` is `actions.writesData()`.
+    actions: write_walk.Actions = .{},
+    /// SONNY-2751: the program changes stored state of any kind, the security
+    /// DDL included (`changesStoredState`). A read-only request refuses it.
+    changes_state: bool = false,
 };
 
 /// SONNY-2749: what the handlers answer (SQLSTATE 0A000) to a program whose
@@ -545,7 +575,8 @@ pub fn statementPlan(
     transport: HandlerTransport,
 ) StatementPlan {
     const self_locking = isSelfLockingProgram(program);
-    const is_mutation = isMutatingProgram(program);
+    const actions = programActions(program);
+    const is_mutation = actions.writesData();
     const rest_is_noop = restOfProgramIsNoop(analysis, session_graph);
     const store_free = transport == .quic and analysis.kind == .rows and analysis.is_store_free and rest_is_noop;
     const needs_store_lock = !self_locking and analysis.kind != .explain and !store_free;
@@ -560,6 +591,8 @@ pub fn statementPlan(
         .lock_graph_may_be_missing = programOnlyGraphDdl(program, session_graph, home_graph),
         .graph_ddl_has_company = programMixesGraphDdl(program),
         .reads_several_graphs = !is_mutation and needs_store_lock and program_graph == null,
+        .actions = actions,
+        .changes_state = actions.changesState(),
     };
 }
 

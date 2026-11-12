@@ -42,7 +42,7 @@ const expected_rows = [_]ExpectedRow{
     .{ .name = "profile", .value = "true" },
     .{ .name = "explain_policy", .value = "true" },
     .{ .name = "sonny_profile_version", .value = "1" },
-    .{ .name = "read_only_covers_admin_ddl", .value = "false" },
+    .{ .name = "read_only_covers_admin_ddl", .value = "true" }, // SONNY-2751
     .{ .name = "strict_tenancy_production_default", .value = "false" },
     .{ .name = "tenant_scope_fail_closed", .value = "false" },
     .{ .name = "tenant_binding_server_verified", .value = "false" },

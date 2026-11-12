@@ -176,6 +176,29 @@
   re-creating a role frees its old description, and
   `auth_dispatch.deinitCustomRoleStore` frees the rest.
   Regression: `zig build test-sonny6278-custom-role-lifetime`.
+- **A read-only request refuses the security DDL (SONNY-2751).** The
+  statement classifier behind the per-request read-only floor
+  (`ExecuteRequest.read_only`, QUIC and gRPC) and the MCP read-only mode
+  counted `CREATE` / `ALTER` / `DROP USER`, `CREATE` / `DROP ROLE`, `GRANT`,
+  `REVOKE` and `CREATE` / `ALTER` / `DROP POLICY` as reads, so a read-only
+  request ran them (each kept its own Admin check, so an Admin connection
+  marked read-only created users and granted privileges). A user's own
+  `ALTER USER <self> SET PASSWORD`, which both handlers take from the raw
+  text before the parser, skipped the floor too. The one write walk
+  (`execution/write_walk.zig`) now records which changes a statement makes
+  (`Actions`); the floors refuse any of them (`StatementPlan.changes_state`,
+  `query_traits.changesStoredState`), the security DDL included, and the
+  password intercepts check the floor first. Procedures were already
+  classified fail-closed (anything not on the read-only list counts as a
+  change), and every statement kind is classified at compile time.
+  `CALL geode.auth.grant_list`, which only reads, was missing from the
+  read-only procedure list and is now on it; a compile-time check keeps that
+  list and the auth dispatcher's read-only set in step. The security DDL
+  still takes no graph write lock and no write gate. Behaviour changes: a
+  read-only request refuses the security DDL and password changes (42501);
+  `CALL geode.auth.grant_list` runs on a read-only request and for a
+  read-only user; the `read_only_covers_admin_ddl` capability is now `true`.
+  Regression: `zig build test-sonny2751-readonly-security-ddl`.
 
 ### Added
 

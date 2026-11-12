@@ -45,6 +45,22 @@ SHOW CAPABILITIES
 Names may be bare identifiers or quoted strings. `<string>` denotes a
 single-quoted or double-quoted string literal.
 
+### Read-only requests (SONNY-2751)
+
+A request sent with `ExecuteRequest.read_only` set (QUIC and gRPC), and every
+`query` call of an MCP server started read-only, refuses every statement in
+this reference that changes something: `CREATE` / `ALTER` / `DROP USER`
+(an `ALTER USER <self> SET PASSWORD` included), `CREATE` / `DROP ROLE`,
+`GRANT`, `REVOKE`, and the policy DDL (`CREATE` / `ALTER` / `DROP POLICY`),
+for every role, Admin included, with SQLSTATE 42501 (`Read-only request:
+data modification rejected`) and nothing changed. A `CALL` of a mutating
+`geode.auth.*` procedure is refused the same way. The `SHOW` statements and
+the read-only procedures (`geode.auth.user_list`, `user_show`,
+`user_permissions`, `role_list`, `policy_list`, `grant_list`, `apikey_list`,
+`apikey_check_scope`) still run. Before SONNY-2751 the security DDL counted
+as a read and ran on a read-only request, and `CALL geode.auth.grant_list`
+was refused.
+
 ---
 
 ## Statement to Procedure Mapping

@@ -41,9 +41,9 @@ const geode_security = @import("geode").security;
 pub const Principal = geode_security.principal.Principal;
 
 // CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=ClassifierImport; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
-// Task 6 (hybrid-RAG audit spec): the same real parser + mutation
-// classifier the QUIC/gRPC transports use to decide read-vs-write locking
-// (query_traits.isMutatingProgram), reused here as an MCP-layer
+// Task 6 (hybrid-RAG audit spec): the same real parser + state-change
+// classifier the QUIC/gRPC transports' read-only floor uses
+// (query_traits.changesStoredState), reused here as an MCP-layer
 // defense-in-depth gate. Sibling import to the `validate` tool's parser
 // entry point (lsp.zig -> gql_parser/gql_lexer).
 const geode_gql = @import("geode").gql;
@@ -407,9 +407,9 @@ const ReadOnlyVerdict = enum { read_ok, refused };
 /// CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=Classifier; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
 /// Classify a GQL statement for the read-only gate using the same parser
 /// entry the `validate` tool uses (see lsp.zig validateQuery) plus the
-/// real query_traits.isMutatingProgram classifier — the identical
-/// classifier the QUIC/gRPC transports consult to pick the read vs.
-/// write lock path.
+/// real query_traits.changesStoredState classifier — the identical
+/// classifier the QUIC/gRPC transports' read-only floor consults
+/// (`StatementPlan.changes_state`).
 ///
 /// Fail-closed contract: a statement is `.read_ok` only when it (a)
 /// passes the GAP-0819 input chokepoint, (b) parses successfully, AND
@@ -418,13 +418,13 @@ const ReadOnlyVerdict = enum { read_ok, refused };
 /// `.refused`. Unparseable input is unclassifiable and is therefore
 /// refused, not passed through.
 ///
-/// Documented fail-open caveat inherited from the shared classifier:
-/// SHOW/admin-style statements classify as read-only here (they are not
-/// graph-store mutations). That is acceptable at this layer because the
-/// engine's own admin/authorization gates still apply server-side on
-/// every request regardless of what this MCP-layer gate decides — this
-/// gate is defense-in-depth above the Task 5 ExecuteRequest.read_only
-/// hard floor, not a substitute for it.
+/// SONNY-2751: the question is `query_traits.changesStoredState`, the one
+/// the transports' read-only floor asks: a change of graph data or schema,
+/// a procedure not on the read-only list, BACKUP / RESTORE, or the security
+/// DDL (CREATE / ALTER / DROP USER, CREATE / DROP ROLE, GRANT, REVOKE,
+/// CREATE / ALTER / DROP POLICY). The security DDL used to classify as a
+/// read here, so a read-only MCP server forwarded CREATE USER or GRANT to
+/// the engine. SHOW and the read-only auth procedures still pass.
 fn classifyForReadOnly(allocator: std.mem.Allocator, query: []const u8) ReadOnlyVerdict {
     _ = lsp.validateAndSanitizeGqlInput(query) catch return .refused;
 
@@ -448,7 +448,7 @@ fn classifyForReadOnly(allocator: std.mem.Allocator, query: []const u8) ReadOnly
 
     const program = parser.parseProgram() catch return .refused;
 
-    if (geode_query_traits.isMutatingProgram(&program)) return .refused;
+    if (geode_query_traits.changesStoredState(&program)) return .refused;
     return .read_ok;
 }
 

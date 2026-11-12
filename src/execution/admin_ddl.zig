@@ -291,7 +291,11 @@ pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
         // GEO-UP-001 (ENG-4653): Sonny GraphRAG capability profile rows.
         // CANARY: REQ=REQ-SONNY-CAPABILITY-PROFILE-001; FEATURE="SonnyCapabilityProfile"; ASPECT=DiscoveryRows; STATUS=TESTED; TEST=tests/test_sonny_capability_profile.zig; OWNER=execution; UPDATED=2026-09-08
         .{ .name = "sonny_profile_version", .value = .{ .profile_version = {} } },
-        .{ .name = "read_only_covers_admin_ddl", .value = .{ .boolean = false } },
+        // SONNY-2751: a read-only request refuses the security DDL (users,
+        // roles, grants, policies, a password change) and every procedure not
+        // on the read-only list (tenant, FLE, TDE, CDC mutators), as it
+        // refuses data and schema changes.
+        .{ .name = "read_only_covers_admin_ddl", .value = .{ .boolean = true } },
         .{ .name = "strict_tenancy_production_default", .value = .{ .boolean = false } },
         .{ .name = "tenant_scope_fail_closed", .value = .{ .boolean = false } },
         .{ .name = "tenant_binding_server_verified", .value = .{ .boolean = false } },

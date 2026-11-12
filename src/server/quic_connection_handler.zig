@@ -7294,6 +7294,15 @@ fn handleClientMessage(
             {
                 const trimmed = std.mem.trim(u8, exec_req.query, " \t\r\n");
                 if (parseAlterUserSetPassword(trimmed)) |parsed| {
+                    // SONNY-2751: a password change changes stored security
+                    // state; a read-only request refuses it, as the read-only
+                    // floor below refuses the rest of the security DDL. This
+                    // intercept runs before the parser, so the floor never saw
+                    // it.
+                    if (exec_req.read_only) {
+                        try sendExecuteError(gpa, stream, "42501", "Read-only request: data modification rejected", &.{}, &.{});
+                        return;
+                    }
                     try handleAlterUserSetPassword(gpa, state, stream, parsed.username, parsed.new_password);
                     return;
                 }
@@ -7491,7 +7500,10 @@ fn handleClientMessage(
             // orchestrator sets ExecuteRequest.read_only=true to guarantee no
             // mutation reaches the store no matter what role the connection holds.
             // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=QuicGate; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
-            if (exec_req.read_only and program_is_mutating) {
+            // SONNY-2751: any change of stored state (`changes_state`), the
+            // security DDL included; it took data changes only, so a
+            // read-only request ran CREATE USER, GRANT and CREATE POLICY.
+            if (exec_req.read_only and stmt_plan.changes_state) {
                 try sendExecuteError(gpa, stream, "42501", "Read-only request: data modification rejected", &.{}, &.{});
                 return;
             }
