@@ -9538,6 +9538,20 @@ pub fn build(b: *std.Build) void {
     const sonny6300_step = b.step("test-sonny6300-staged-restore-paths", "Run SONNY-6300 regression (BackupManager has no in-place restore: its restore refuses the live data directory, leaving it byte for byte, and restores a new directory staged and verified; a staged restore of 700 files issues a constant number of syncs; geode restore --server and geode backup create take --timeout <seconds> and refuse a non-positive one)");
     sonny6300_step.dependOn(&run_sonny6300_tests.step);
 
+    // SONNY-6323: a local backup is written once, at --output; the dead
+    // retention code and unbuilt backup test files are gone; no /tmp data
+    // directory for a backup.
+    const sonny6323_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6323_local_backup_written_once.zig"), .target = target, .optimize = optimize });
+    sonny6323_test_mod.link_libc = true;
+    sonny6323_test_mod.addImport("geode", root_mod);
+    sonny6323_test_mod.addImport("storage/backup", storage_backup_mod);
+    const sonny6323_tests = b.addTest(.{ .root_module = sonny6323_test_mod });
+    const run_sonny6323_tests = b.addRunArtifact(sonny6323_tests);
+    spawnsBuiltGeode(sonny6323_tests);
+    shardDep(test_step, &run_sonny6323_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6323_step = b.step("test-sonny6323-local-backup-written-once", "Run SONNY-6323 regression (geode backup create --local writes the backup once, at --output, 0600, nothing else beside it, and it restores; BackupManager/SimplifiedBackupManager have no runRetention and the unbuilt backup test files are gone; createFullBackup without a data directory is refused)");
+    sonny6323_step.dependOn(&run_sonny6323_tests.step);
+
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
     // look inside PROFILE and EXPLAIN. The real gRPC handler in process
