@@ -12822,6 +12822,20 @@ pub fn build(b: *std.Build) void {
     const sonny3357_step = b.step("test-sonny3357-merge-relationship-properties", "Run SONNY-3357 regression (a relationship MERGE matches on the relationship's properties too, on the executor's standalone MERGE and MATCH ... MERGE: a pattern whose properties differ creates an edge, ON MATCH / ON CREATE SET run on the right edge; the server's MATCH ... MERGE edge fast path declines a relationship with properties)");
     sonny3357_step.dependOn(&run_sonny3357_tests.step);
 
+    const sonny3241_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3241_fast_path_parity_wire.zig"), .target = target, .optimize = optimize });
+    sonny3241_test_mod.link_libc = true;
+    sonny3241_test_mod.addImport("geode", root_mod);
+    sonny3241_test_mod.addImport("schema", schema_mod);
+    sonny3241_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3241_test_mod.addImport("logging", logging_mod);
+    sonny3241_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3241_tests = b.addTest(.{ .root_module = sonny3241_test_mod });
+    const run_sonny3241_tests = b.addRunArtifact(sonny3241_tests);
+    run_sonny3241_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3241_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3241_step = b.step("test-sonny3241-fast-path-parity-wire", "Run SONNY-3241 wire regression (spawns a server, group commit on and off: node MERGE with ON CREATE / ON MATCH SET beside a bare SET, also /*+BATCH*/ and USE GRAPH; MATCH ... CREATE edges over a key two nodes hold or a non-integer key; MATCH ... MERGE edges with ON CREATE SET and with relationship properties all write what the executor writes)");
+    sonny3241_step.dependOn(&run_sonny3241_tests.step);
+
     const sonny6354_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6354_lean_late_key_indexes.zig"), .target = target, .optimize = optimize });
     sonny6354_test_mod.link_libc = true; // setenv/unsetenv
     sonny6354_test_mod.addImport("geode", root_mod);
