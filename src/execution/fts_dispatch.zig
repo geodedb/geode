@@ -97,6 +97,23 @@ pub fn execute(
 ///   - `error.Unsupported`  — the adapter/graph/index does not exist (a clear
 ///                            failure rather than a silent empty result, matching
 ///                            the prior scalar surface's contract).
+// CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=FulltextSearchRefused; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6335: a fulltext index over an FLE-encrypted field (one made before
+/// CREATE INDEX refused them) holds ciphertext tokens: a search over it is
+/// refused (0A000) instead of silently matching nothing.
+fn refuseEncryptedFulltext(allocator: std.mem.Allocator, context: ExecutionContext, index_name: []const u8) !void {
+    const fle_integration = @import("../fle_integration.zig");
+    if (!fle_integration.hasEncryptedFields()) return;
+    const rows = try context.catalog.listIndexesForGraph(allocator, graph_store.DEFAULT_GRAPH_NAME);
+    defer allocator.free(rows);
+    for (rows) |row| {
+        if (!std.mem.eql(u8, row.name, index_name)) continue;
+        for (row.columns) |col| {
+            if (fle_integration.fieldRequiresEncryption(row.table_name, col)) return error.IndexOnEncryptedField;
+        }
+    }
+}
+
 fn handleFtsSearch(
     allocator: std.mem.Allocator,
     call_stmt: ast.CallProcedure,
@@ -109,6 +126,7 @@ fn handleFtsSearch(
     if (args.len < 2 or args.len > 3) return error.InvalidArgs;
 
     const index_name = try literalString(args[0]);
+    try refuseEncryptedFulltext(allocator, context, index_name); // SONNY-6335
     const query_text = try literalString(args[1]);
 
     var max_results: usize = DEFAULT_MAX_RESULTS;
@@ -204,6 +222,7 @@ fn handleFtsPhrase(
     if (args.len < 2 or args.len > 3) return error.InvalidArgs;
 
     const index_name = try literalString(args[0]);
+    try refuseEncryptedFulltext(allocator, context, index_name); // SONNY-6335
     const phrase_text = try literalString(args[1]);
 
     var max_results: usize = DEFAULT_MAX_RESULTS;
@@ -252,6 +271,7 @@ fn handleFtsProximity(
     if (args.len < 3 or args.len > 4) return error.InvalidArgs;
 
     const index_name = try literalString(args[0]);
+    try refuseEncryptedFulltext(allocator, context, index_name); // SONNY-6335
     const query_text = try literalString(args[1]);
 
     if (args[2].* != .Int) return error.TypeMismatch;

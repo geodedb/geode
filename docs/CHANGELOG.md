@@ -4,6 +4,21 @@
 
 ### Security
 
+- **BEHAVIOUR CHANGE: one FLE encryption identity; no index over an
+  encrypted field (SONNY-6335).** (1) The graph-store write primitives
+  encrypted a plaintext value that reached them (raft apply, internal
+  callers) with the store's tenant/schema and `node_<id>` / `edge_<id>`,
+  which no reader used, so those values read as `FleDecryptionFailed`
+  (58030). Every writer and reader now uses one identity (request tenant,
+  label or edge type, field, `<id>` / `edge_<id>`); readers also try the old
+  store identity, so values already written that way decrypt. (2) `CREATE
+  INDEX` of any type and `CREATE CONSTRAINT ... IS UNIQUE` / `NODE KEY` over
+  an FLE-encrypted field are refused (0A000): the index held ciphertext (a
+  fulltext search, a seek or a UNIQUE check never matched). `CALL
+  geode.fle.configureField` on a field with such an index or constraint is
+  refused (0A000; drop it first), and a fulltext index made before its field
+  was encrypted refuses searches (0A000) instead of matching nothing.
+  Regression: `zig build test-sonny6335-fle-identity-and-indexes`.
 - **BREAKING: the FLE role is bound to the authenticated user
   (SONNY-6341).** The FLE role a session reads encrypted fields with was
   whatever its client named in HELLO (`role`, the CLI's `--role`), checked

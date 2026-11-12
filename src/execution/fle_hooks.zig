@@ -73,23 +73,14 @@ pub fn encryptPropertyIfNeeded(
     // GAP-0281: tenant_id from FLE context instead of hardcoded "default".
     // GAP-0852: prefer the request-scoped ExecutionContext tenant over the
     // per-thread map so async/work-stealing executors stay tenant-correct.
-    const ctx = fle_integration.EncryptionContext{
-        .tenant_id = fle_integration.tenantPreferringActiveContext(),
-        .schema_name = node_type,
-        .allocator = allocator,
-        .current_user_role = fle_integration.rolePreferringActiveContext(),
-    };
-
-    const record_id = try std.fmt.allocPrint(allocator, "{d}", .{node_id});
-    defer allocator.free(record_id);
-
-    // Try to encrypt - if field is not encrypted, returns original value
-    const encrypted_value = fle_integration.encryptFieldIfNeeded(
-        ctx,
+    // SONNY-6335: the one encryption identity (fle_integration.recordIdentity).
+    const encrypted_value = fle_integration.encryptStoredString(
+        allocator,
+        .node,
         node_type,
         field_name,
         plaintext_value,
-        record_id,
+        node_id,
     ) catch |err| {
         // SECURITY FIX: If encryption is REQUIRED for this field but fails,
         // we MUST NOT write plaintext to disk. Return an error instead.
@@ -136,23 +127,14 @@ pub fn encryptEdgePropertyIfNeeded(
     // GAP-0281: tenant_id from FLE context instead of hardcoded "default".
     // GAP-0852: prefer the request-scoped ExecutionContext tenant over the
     // per-thread map (see fle_integration.tenantPreferringActiveContext).
-    const ctx = fle_integration.EncryptionContext{
-        .tenant_id = fle_integration.tenantPreferringActiveContext(),
-        .schema_name = edge_type,
-        .allocator = allocator,
-        .current_user_role = fle_integration.rolePreferringActiveContext(),
-    };
-
-    const record_id = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge_id});
-    defer allocator.free(record_id);
-
-    // Try to encrypt - if field is not encrypted, returns original value
-    const encrypted_value = fle_integration.encryptFieldIfNeeded(
-        ctx,
+    // SONNY-6335: the one encryption identity (fle_integration.recordIdentity).
+    const encrypted_value = fle_integration.encryptStoredString(
+        allocator,
+        .edge,
         edge_type,
         field_name,
         plaintext_value,
-        record_id,
+        edge_id,
     ) catch |err| {
         // SECURITY FIX: If encryption is REQUIRED for this field but fails,
         // we MUST NOT write plaintext to disk. Return an error instead.

@@ -853,6 +853,68 @@ pub const FleReadError = error{ SearchNotPermitted, FleCatalogUnavailable, FleDe
 /// "<id>", `encryptEdgePropertyIfNeeded`: "edge_<id>").
 pub const EntityKind = enum { node, edge };
 
+// CANARY: REQ=REQ-SONNY-6335-FLE-ONE-IDENTITY; FEATURE="FieldLevelEncryption"; ASPECT=OneEncryptionIdentity; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6335: the ONE encryption identity of a stored string property (what
+/// goes into the key ids and the AAD): the request tenant (the active
+/// context's, else the thread's, else "default": GAP-0852), the node's
+/// first label or the edge's type as the schema, and the record id "<id>"
+/// for a node, "edge_<id>" for an edge. Every writer (the executor hook and
+/// the graph-store primitives, which encrypt a value that reaches them in
+/// plaintext: raft apply, internal callers) and every reader uses it. The
+/// graph-store writers used tenant/schema "default"/"default" and
+/// "node_<id>", which no reader used: see `legacyStoreIdentity`.
+pub const Identity = struct {
+    tenant_id: []const u8,
+    schema_name: []const u8,
+    record_id: []const u8,
+};
+
+pub fn recordIdentity(buf: *[32]u8, kind: EntityKind, type_name: []const u8, id: u64) Identity {
+    return .{
+        .tenant_id = tenantPreferringActiveContext(),
+        .schema_name = type_name,
+        .record_id = switch (kind) {
+            .node => std.fmt.bufPrint(buf, "{d}", .{id}),
+            .edge => std.fmt.bufPrint(buf, "edge_{d}", .{id}),
+        } catch unreachable, // error-policy: D — "edge_" + a u64 fits 32 bytes.
+    };
+}
+
+/// SONNY-6335: the identity the graph-store write sites used before
+/// SONNY-6335 (store tenant and schema "default", "node_<id>" /
+/// "edge_<id>"). Readers try it after `recordIdentity`, so values written
+/// that way (raft apply, internal callers) decrypt.
+pub fn legacyStoreIdentity(buf: *[32]u8, kind: EntityKind, id: u64) Identity {
+    return .{
+        .tenant_id = "default",
+        .schema_name = "default",
+        .record_id = switch (kind) {
+            .node => std.fmt.bufPrint(buf, "node_{d}", .{id}),
+            .edge => std.fmt.bufPrint(buf, "edge_{d}", .{id}),
+        } catch unreachable, // error-policy: D — "node_" + a u64 fits 32 bytes.
+    };
+}
+
+/// SONNY-6335: encrypt a stored string property under `recordIdentity` (or
+/// return `plaintext` when the field is not encrypted). Memory from
+/// `allocator` when it differs from `plaintext`.
+pub fn encryptStoredString(
+    allocator: std.mem.Allocator,
+    kind: EntityKind,
+    type_name: []const u8,
+    field_name: []const u8,
+    plaintext: []const u8,
+    id: u64,
+) ![]const u8 {
+    var buf: [32]u8 = undefined;
+    const ident = recordIdentity(&buf, kind, type_name, id);
+    return encryptFieldIfNeeded(.{
+        .tenant_id = ident.tenant_id,
+        .schema_name = ident.schema_name,
+        .allocator = allocator,
+    }, type_name, field_name, plaintext, ident.record_id);
+}
+
 // CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=OneReadPolicyForNodesAndEdges; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
 /// SONNY-6327: the ONE read policy for a stored string property of a node
 /// (`type_name` its first label) or an edge (`type_name` its type). Every
@@ -880,33 +942,31 @@ pub fn readStoredString(
 
     // GAP-0281 / GAP-0852: the request-scoped tenant and role; the execution
     // import is lazy (function-body) to avoid a top-level cycle.
-    const role_and_tenant = blk: {
-        const exec_mod = @import("execution.zig");
-        if (exec_mod.getActiveContext()) |ctx_ptr| {
-            break :blk .{ getCurrentUserRoleCtx(ctx_ptr), getCurrentTenantIdCtx(ctx_ptr) };
-        }
-        break :blk .{ getCurrentUserRole(), getCurrentTenantId() };
-    };
+    // SONNY-6335: the one identity (`recordIdentity`), then the legacy
+    // graph-store one.
+    var id_buf: [32]u8 = undefined;
+    const ident = recordIdentity(&id_buf, kind, type_name, id);
     const ctx = EncryptionContext{
-        .tenant_id = role_and_tenant[1],
-        .schema_name = type_name,
+        .tenant_id = ident.tenant_id,
+        .schema_name = ident.schema_name,
         .allocator = allocator,
-        .current_user_role = role_and_tenant[0],
+        .current_user_role = rolePreferringActiveContext(),
         .plaintext_gate = currentPlaintextGate(),
     };
 
-    // The record identity must match the one the value was encrypted with.
-    var id_buf: [32]u8 = undefined;
-    const record_id = switch (kind) {
-        .node => std.fmt.bufPrint(&id_buf, "{d}", .{id}),
-        .edge => std.fmt.bufPrint(&id_buf, "edge_{d}", .{id}),
-    } catch unreachable; // error-policy: D — "edge_" + a u64 fits 32 bytes.
-
-    return decryptFieldIfNeeded(ctx, type_name, field_name, stored, record_id, true) catch |err| switch (err) {
+    return decryptFieldIfNeeded(ctx, type_name, field_name, stored, ident.record_id, true) catch |err| switch (err) {
         error.SearchNotPermitted => error.SearchNotPermitted,
         error.FleCatalogUnavailable => error.FleCatalogUnavailable,
         error.OutOfMemory => error.OutOfMemory,
         else => {
+            // The principal may read it (the RBAC check passed before any
+            // decrypt): try the identity the graph-store writers used.
+            var legacy_buf: [32]u8 = undefined;
+            const legacy = legacyStoreIdentity(&legacy_buf, kind, id);
+            var legacy_ctx = ctx;
+            legacy_ctx.tenant_id = legacy.tenant_id;
+            legacy_ctx.schema_name = legacy.schema_name;
+            if (decryptFieldIfNeeded(legacy_ctx, type_name, field_name, stored, legacy.record_id, true)) |v| return v else |_| {}
             std.log.warn("SECURITY: FLE field {s}.{s} could not be decrypted ({s}); the read is refused", .{ type_name, field_name, @errorName(err) });
             return error.FleDecryptionFailed;
         },

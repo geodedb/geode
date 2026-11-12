@@ -1176,6 +1176,32 @@ pub const Catalog = struct {
     // CANARY: REQ=REQ-SHOW-INDEXES-001; FEATURE="SHOW INDEXES"; ASPECT=CatalogList; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=catalog; UPDATED=2026-01-13
     /// List all indexes in the catalog
     /// Returns a dynamically allocated slice of IndexInfo. Caller owns the returned slice.
+    // CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=IndexedFieldLookup; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6335: the name (a copy in `allocator`) of an index, or an
+    /// enforced UNIQUE / NODE KEY constraint, over `label`.`prop` in any
+    /// graph; null when there is none. Such an index would hold the
+    /// field's ciphertext (or, written elsewhere, its plaintext), so FLE
+    /// refuses to encrypt the field while one exists.
+    pub fn indexOrUniqueOnField(self: *Catalog, allocator: std.mem.Allocator, label: []const u8, prop: []const u8) !?[]u8 {
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+        var it = self.indexes.valueIterator();
+        while (it.next()) |row| {
+            if (!std.mem.eql(u8, row.table_name, label)) continue;
+            for (row.columns) |c| {
+                if (std.mem.eql(u8, c, prop)) return try allocator.dupe(u8, row.name);
+            }
+        }
+        var cit = self.constraints.valueIterator();
+        while (cit.next()) |row| {
+            if (!enforcesUnique(row.*) or !std.mem.eql(u8, row.label, label)) continue;
+            for (row.properties) |c| {
+                if (std.mem.eql(u8, c, prop)) return try allocator.dupe(u8, row.name);
+            }
+        }
+        return null;
+    }
+
     pub fn listAllIndexes(self: *Catalog, allocator: std.mem.Allocator) ![]IndexInfo {
         self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());

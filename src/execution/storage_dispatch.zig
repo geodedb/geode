@@ -2946,6 +2946,21 @@ fn handleGeodeFleConfigurefield(allocator: std.mem.Allocator, call_stmt: ast.Cal
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=ConfigureFieldRefused; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6335: a field with an index or a UNIQUE / NODE KEY constraint
+    // over it is not encrypted until that is dropped: the index would keep
+    // (or get) the field's plaintext, or index ciphertext.
+    if (execution.existingCatalogInstance()) |schema_catalog| {
+        if (try schema_catalog.indexOrUniqueOnField(allocator, type_name, field_name)) |name| {
+            log.warn("FLE configureField refused: the field has an index or unique constraint; drop it first", &.{
+                Attr.string("type", type_name),
+                Attr.string("field", field_name),
+                Attr.string("index", name),
+            });
+            return error.EncryptedFieldIndexed;
+        }
+    }
+
     // Get the FLE catalog
     const catalog = try fle_catalog.globalCatalog(allocator);
 

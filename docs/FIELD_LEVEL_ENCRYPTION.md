@@ -343,9 +343,47 @@ background work) are decided by the role list alone.
 
 An inline property map on an encrypted field (`MATCH (n:L {ssn: '...'})`,
 `-[:R {p: '...'}]->`) compares the stored envelope and never matches; use
-`WHERE`. While any FLE field is configured the QUIC write fast paths and the
-aggregate pushdowns decline to the executor, so encrypted values are always
-encrypted by the executor's FLE hook.
+`WHERE` (SONNY-6335 item 3, open). While any FLE field is configured the QUIC
+write fast paths and the aggregate pushdowns decline to the executor.
+
+#### Encryption identity (SONNY-6335)
+
+Every encrypted string property is encrypted, and decrypted, under one
+identity (`fle_integration.recordIdentity`): the request tenant (else
+`default`), the node's first label or the edge's type, the field, and the
+record id `<id>` (node) or `edge_<id>` (edge). The executor's FLE hook and the
+graph-store write primitives (which encrypt a plaintext value that reaches
+them without the hook: raft apply, internal callers) both use it; a value
+that is already an envelope is stored as it is, never encrypted twice. Values
+the graph-store primitives wrote before SONNY-6335 (tenant and schema
+`default`, record id `node_<id>` / `edge_<id>`) are still read: a reader tries
+that identity after the current one. The tenant is the writer's request
+tenant: a reader in another tenant (a parent tenant reading a child's row
+included) does not decrypt it (58030).
+
+#### No index over an encrypted field (SONNY-6335)
+
+An index holds the values it indexes in its own files. Over an encrypted
+field it would hold ciphertext (a fulltext search, an equality or range seek
+and a UNIQUE check would never match: the envelope has a fresh random nonce
+per write) or, maintained from a decrypted value, the plaintext. So:
+
+- `CREATE INDEX` of any type (btree, hash, fulltext, vector, ...) over an
+  encrypted field, and `CREATE CONSTRAINT ... IS UNIQUE` / `NODE KEY` over
+  one, are refused (0A000). `NOT NULL` / `EXISTS` constraints are allowed.
+- `CALL geode.fle.configureField` on a field that has an index or a UNIQUE /
+  NODE KEY constraint over it, in any graph, is refused (0A000): drop it
+  first.
+- A fulltext index made over a field before the field was encrypted (an
+  existing deployment) refuses `geode.fts.search` / `phrase` / `proximity`
+  (0A000) instead of matching nothing. Other index types over such a field
+  are not detected at startup; drop them (`DROP INDEX`).
+
+Searchable (blind-index) fields exist in the FLE catalog and the read
+path (`@searchable`, `lookupEncryptedField`), but no `CALL` procedure can
+declare one (`configureField` always configures `searchable: false`), and the
+blind-index equality search is not wired to `WHERE` or to inline maps
+(SONNY-6335 item 5).
 
 #### `CALL geode.fle.getFieldConfig(type_name, field_name)`
 

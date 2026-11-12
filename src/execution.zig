@@ -408,6 +408,11 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     return instance;
 }
 
+/// SONNY-6335: the process catalog if one exists (never creates it).
+pub fn existingCatalogInstance() ?*catalog_mod.Catalog {
+    return @atomicLoad(?*catalog_mod.Catalog, &global_catalog_instance, .acquire);
+}
+
 /// M2: Get catalog from ExecutionContext
 /// Pure accessor - no fallback, catalog is always required
 pub fn getCatalog(_: std.mem.Allocator, context: ExecutionContext) *catalog_mod.Catalog {
@@ -2169,6 +2174,14 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // EXISTS asks about it, and the row records it.
             const index_graph = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context);
             try session_graph.authorizeCatalogSchemaChange(context, index_graph);
+            // CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=CreateIndexRefused; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+            // SONNY-6335: no index of any type over an FLE-encrypted field:
+            // it would index the ciphertext (a fulltext search, an equality
+            // seek or a range never matches) or, maintained from a decrypted
+            // value, put the plaintext in an unencrypted index file.
+            for (ci.properties) |prop| {
+                if (fle_integration.fieldRequiresEncryption(ci.label, prop)) return error.IndexOnEncryptedField;
+            }
             const cat = context.catalog;
             const index_name = ci.name orelse blk: {
                 var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
@@ -2355,6 +2368,14 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // EXISTS lookup. SONNY-3030: and on the database.
             const constraint_graph = session_graph.current(context);
             try session_graph.authorizeCatalogSchemaChange(context, constraint_graph);
+            // SONNY-6335: UNIQUE / NODE KEY compare stored values; an encrypted
+            // field stores a fresh random nonce per write, so duplicates would
+            // never be detected. Refused (NOT NULL / EXISTS are presence checks).
+            if (cc.constraint_type == .unique or cc.constraint_type == .node_key) {
+                for (cc.properties) |prop| {
+                    if (fle_integration.fieldRequiresEncryption(cc.label, prop)) return error.IndexOnEncryptedField;
+                }
+            }
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
             // CREATE CONSTRAINT implementation - store in catalog and enforce
 

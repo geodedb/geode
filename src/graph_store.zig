@@ -7547,27 +7547,17 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_node) |n| isSecurityGraphName(n.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(node_type, key)) {
-                        const fle_ctx = fle_integration.EncryptionContext{
-                            .tenant_id = self.tenant_id,
-                            .schema_name = self.schema_name,
-                            .allocator = self.allocator,
-                            .current_user_role = fle_integration.rolePreferringActiveContext(),
-                        };
-                        // FLE record-id formatting must NOT go through allocPrint on the
-                        // shared self.allocator — concurrent thread-pool paths (QUIC auth
-                        // lookups, etc.) can trigger `@memcpy arguments alias` inside
-                        // std.Io.Writer.drain when the allocator is contended. Stack buffer
-                        // is large enough for "node_" + u64 (max 25 bytes).
-                        var id_buf: [32]u8 = undefined;
-                        const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch {
-                            break :blk value;
-                        };
-                        const encrypted = fle_integration.encryptFieldIfNeeded(
-                            fle_ctx,
+                        // SONNY-6335: the one encryption identity (label/type, request
+                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. It used the store's
+                        // tenant/schema and "node_<id>", which no reader used.
+                        const encrypted = fle_integration.encryptStoredString(
+                            self.allocator,
+                            .node,
                             node_type,
                             key,
                             s,
-                            record_id,
+                            node_id,
                         ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             owned_encrypted = encrypted;
@@ -7888,23 +7878,17 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_node) |n| isSecurityGraphName(n.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(node_type, key)) {
-                        const fle_ctx = fle_integration.EncryptionContext{
-                            .tenant_id = self.tenant_id,
-                            .schema_name = self.schema_name,
-                            .allocator = self.allocator,
-                            .current_user_role = fle_integration.rolePreferringActiveContext(),
-                        };
-                        // Stack-formatted record ID — see setNodeProperty comment.
-                        var id_buf: [32]u8 = undefined;
-                        const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch {
-                            return .{ .value = value };
-                        };
-                        const encrypted = fle_integration.encryptFieldIfNeeded(
-                            fle_ctx,
+                        // SONNY-6335: the one encryption identity (label/type, request
+                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. It used the store's
+                        // tenant/schema and "node_<id>", which no reader used.
+                        const encrypted = fle_integration.encryptStoredString(
+                            self.allocator,
+                            .node,
                             node_type,
                             key,
                             s,
-                            record_id,
+                            node_id,
                         ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             return .{ .value = PropertyValue{ .String = encrypted }, .owned = encrypted };
@@ -10461,23 +10445,17 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(edge_type, key)) {
-                        const fle_ctx = fle_integration.EncryptionContext{
-                            .tenant_id = self.tenant_id,
-                            .schema_name = self.schema_name,
-                            .allocator = self.allocator,
-                            .current_user_role = fle_integration.rolePreferringActiveContext(),
-                        };
-                        // Stack-formatted record ID — see setNodeProperty comment.
-                        var id_buf: [32]u8 = undefined;
-                        const record_id = std.fmt.bufPrint(&id_buf, "edge_{d}", .{edge_id}) catch {
-                            break :blk value;
-                        };
-                        const encrypted = fle_integration.encryptFieldIfNeeded(
-                            fle_ctx,
+                        // SONNY-6335: the one encryption identity (label/type, request
+                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. It used the store's
+                        // tenant/schema and "edge_<id>", which no reader used.
+                        const encrypted = fle_integration.encryptStoredString(
+                            self.allocator,
+                            .edge,
                             edge_type,
                             key,
                             s,
-                            record_id,
+                            edge_id,
                         ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             owned_encrypted = encrypted;
@@ -10660,23 +10638,17 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(edge_type, key)) {
-                        const fle_ctx = fle_integration.EncryptionContext{
-                            .tenant_id = self.tenant_id,
-                            .schema_name = self.schema_name,
-                            .allocator = self.allocator,
-                            .current_user_role = fle_integration.rolePreferringActiveContext(),
-                        };
-                        // Stack-formatted record ID — see setNodeProperty comment.
-                        var id_buf: [32]u8 = undefined;
-                        const record_id = std.fmt.bufPrint(&id_buf, "edge_{d}", .{edge_id}) catch {
-                            return .{ .value = value };
-                        };
-                        const encrypted = fle_integration.encryptFieldIfNeeded(
-                            fle_ctx,
+                        // SONNY-6335: the one encryption identity (label/type, request
+                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. It used the store's
+                        // tenant/schema and "edge_<id>", which no reader used.
+                        const encrypted = fle_integration.encryptStoredString(
+                            self.allocator,
+                            .edge,
                             edge_type,
                             key,
                             s,
-                            record_id,
+                            edge_id,
                         ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             return .{ .value = PropertyValue{ .String = encrypted }, .owned = encrypted };
