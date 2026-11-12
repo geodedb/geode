@@ -2164,6 +2164,13 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // an ungated CREATE INDEX exists on ONE node and silently diverges.
             // CANARY: REQ=REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED; FEATURE="DistributedCluster"; ASPECT=GateIndexDDL; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-06-10
             try cluster_mod.gateUnreplicatedWrite();
+            // CANARY: REQ=REQ-SONNY-6281-EXISTENCE-CONSTRAINTS; FEATURE="ConstraintEnforcement"; ASPECT=UniqueIndexRefused; STATUS=TESTED; TEST=tests/test_sonny6281_existence_constraints.zig; OWNER=engine; UPDATED=2026-11-12
+            // SONNY-6281: `CREATE UNIQUE INDEX` (a Geode/openCypher extension;
+            // ISO/IEC 39075:2024 has no index DDL) built a plain index and
+            // ignored UNIQUE. Uniqueness is declared with CREATE CONSTRAINT
+            // ... IS UNIQUE, which is enforced; the keyword is refused
+            // (0A000) rather than accepted and not honoured.
+            if (ci.unique) return error.UniqueIndexNotSupported;
             // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=IndexDDL; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
             // SONNY-2803: schema on the graph the index DDL runs on (the
             // session's; a fulltext index lives in the default graph,
@@ -2377,7 +2384,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 }
             }
             // CANARY: REQ=REQ-CONSTRAINT-EXEC-001; FEATURE="ConstraintExecution"; ASPECT=CREATE; STATUS=EXEMPT; OWNER=engine; UPDATED=2026-01-09
-            // CREATE CONSTRAINT implementation - store in catalog and enforce
+            // CREATE CONSTRAINT: validate existing data, record the row; every
+            // kind is enforced at statement end (`unique_constraints`).
 
             // Convert AST constraint type to catalog constraint type
             const constraint_type: catalog_mod.ConstraintInfo.ConstraintType = switch (cc.constraint_type) {
@@ -2427,20 +2435,33 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // write either finished before (and is seen) or is refused
             // after. The name is checked first so a duplicate name stays
             // 42710.
-            const enforces_unique = constraint_type == .unique or constraint_type == .node_key;
+            // CANARY: REQ=REQ-SONNY-6281-EXISTENCE-CONSTRAINTS; FEATURE="ConstraintEnforcement"; ASPECT=CreateConstraintValidates; STATUS=TESTED; TEST=tests/test_sonny6281_existence_constraints.zig; OWNER=engine; UPDATED=2026-11-12
+            // SONNY-6281: NOT NULL, EXISTS and NODE KEY require each node of
+            // the label to hold every property (not NULL); such a row over
+            // nodes that lack one is refused (23502, with how many). Every
+            // kind is checked at statement end and fences the fast paths,
+            // so the fence goes up before either validation.
+            const probe_row = catalog_mod.ConstraintInfo{ .name = cc.name, .constraint_type = constraint_type, .label = cc.label, .properties = cc.properties, .is_enforced = true };
             var fenced = false;
             defer if (fenced) graph_store.removeUniqueFence(constraint_graph);
-            if (enforces_unique) {
-                if (cat.constraintNameTaken(constraint_graph, cc.name)) {
-                    if (cc.if_not_exists) return ExecutionResult{
-                        .columns = try allocator.alloc([]const u8, 0),
-                        .rows = try allocator.alloc([]Value, 0),
-                        .flags = std.ArrayList([]const u8).empty,
-                    };
-                    return error.ConstraintAlreadyExists;
+            if (cat.constraintNameTaken(constraint_graph, cc.name)) {
+                if (cc.if_not_exists) return ExecutionResult{
+                    .columns = try allocator.alloc([]const u8, 0),
+                    .rows = try allocator.alloc([]Value, 0),
+                    .flags = std.ArrayList([]const u8).empty,
+                };
+                return error.ConstraintAlreadyExists;
+            }
+            try graph_store.addUniqueFence(constraint_graph);
+            fenced = true;
+            if (catalog_mod.enforcesExistence(probe_row)) {
+                const missing = try unique_constraints.countNodesMissing(graph_store.getGlobalStore(allocator), constraint_graph, cc.label, cc.properties);
+                if (missing > 0) {
+                    unique_constraints.setMissingMessage(cc.name, cc.label, cc.properties, missing);
+                    return error.NotNullConstraintViolation;
                 }
-                try graph_store.addUniqueFence(constraint_graph);
-                fenced = true;
+            }
+            if (catalog_mod.enforcesUnique(probe_row)) {
                 const groups = try unique_constraints.countDuplicateGroups(graph_store.getGlobalStore(allocator), constraint_graph, cc.label, cc.properties);
                 if (groups > 0) {
                     unique_constraints.setDuplicatesMessage(cc.name, cc.label, cc.properties, groups);
@@ -2720,7 +2741,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 for (removed) |kv| {
                     // CANARY: REQ=REQ-SONNY-6270-DROP-CONSTRAINT; FEATURE="SchemaCatalog"; ASPECT=DropLowersFence; STATUS=TESTED; TEST=tests/test_sonny6270_drop_constraint.zig; OWNER=catalog; UPDATED=2026-11-11
                     // SONNY-2846's fence is a count per graph: one per enforced
-                    // UNIQUE / NODE KEY row (raised by CREATE CONSTRAINT and
+                    // row of any kind (SONNY-6281; raised by CREATE CONSTRAINT and
                     // the catalog load) and one per CREATE CONSTRAINT still
                     // validating. The row is gone from the catalog (saved)
                     // before its count is given back, so the fence is never
@@ -2728,7 +2749,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     // row or a concurrent CREATE holds a count on the graph
                     // (an engine-wide row's count is under "", which fences
                     // every graph), and comes down with the last.
-                    if (catalog_mod.enforcesUnique(kv.value)) graph_store.removeUniqueFence(kv.value.graph);
+                    if (catalog_mod.fencesFastPaths(kv.value)) graph_store.removeUniqueFence(kv.value.graph);
                     // No reader holds the row: they copy under the lock.
                     cat.allocator.free(kv.key);
                     cat.freeConstraintInfo(kv.value);

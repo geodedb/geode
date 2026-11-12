@@ -7850,6 +7850,7 @@ fn handleClientMessage(
             // SONNY-2846: the node-writing fast paths (simple CREATE, bulk
             // MERGE, `/*+BATCH*/`, `USE GRAPH g; MERGE`) skip the executor's
             // UNIQUE check, so they decline a graph a UNIQUE constraint
+            // (SONNY-6281: or any NOT NULL / EXISTS / NODE KEY one)
             // applies in and the write takes the executor. The edge fast
             // paths write no node and are not affected.
             const node_fast_paths_ok = fle_fast_paths_ok and !geode.bulk_ingest.uniqueConstraintsDeclineFastPath(query_graph_name);

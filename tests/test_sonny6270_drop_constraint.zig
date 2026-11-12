@@ -251,21 +251,23 @@ fn exerciseCore(h: *Harness) !void {
     try testing.expect(try h.listed("p_id"));
     try h.run("DROP CONSTRAINT p_id");
 
-    // Every kind the catalog stores drops (only UNIQUE / NODE KEY are
-    // enforced today, SONNY-6281).
+    // Every kind the catalog stores drops, and (SONNY-6281) every kind is
+    // enforced and holds a count of the graph's fast-path fence.
     try h.run("CREATE CONSTRAINT k_nk FOR (n:K) REQUIRE (n.a, n.b) IS NODE KEY");
     try h.run("CREATE CONSTRAINT k_nn FOR (n:K) REQUIRE n.c IS NOT NULL");
     try h.run("CREATE CONSTRAINT k_ex ON :K ASSERT EXISTS (d)");
     try testing.expectEqual(@as(usize, 3), try h.showCount());
     try testing.expect(graph_store.uniqueFenced("default"));
-    try h.run("CREATE (:K {a: 1, b: 1})");
-    try h.expectViolation("CREATE (:K {a: 1, b: 1})");
+    try h.run("CREATE (:K {a: 1, b: 1, c: 1, d: 1})");
+    try h.expectViolation("CREATE (:K {a: 1, b: 1, c: 1, d: 1})");
     try h.run("DROP CONSTRAINT k_nk");
-    try h.run("CREATE (:K {a: 1, b: 1})");
-    // NOT NULL and EXISTS rows are not UNIQUE: no fence stays for them.
-    try testing.expect(!graph_store.uniqueFenced("default"));
+    try h.run("CREATE (:K {a: 1, b: 1, c: 1, d: 1})");
+    // The NOT NULL and EXISTS rows keep the fence up until the last goes.
+    try testing.expect(graph_store.uniqueFenced("default"));
     try h.run("DROP CONSTRAINT k_nn");
+    try testing.expect(graph_store.uniqueFenced("default"));
     try h.run("DROP CONSTRAINT k_ex");
+    try testing.expect(!graph_store.uniqueFenced("default"));
     try testing.expectEqual(@as(usize, 0), try h.showCount());
 
     // SONNY-6294: a constraint name is one constraint of the graph: a
@@ -410,11 +412,15 @@ test "SONNY-6270: the fast-path fence stays up while another UNIQUE row applies,
     try h.expectViolation("CREATE (:B {id: 1})");
     try testing.expectEqual(@as(i64, 1), try h.count("MATCH (n:B {id: 1}) RETURN count(n) AS c"));
 
-    // A non-UNIQUE row keeps no fence up.
+    // SONNY-6281: a NOT NULL row holds a count too, so with it in place
+    // the last UNIQUE row's drop leaves the fence up.
+    try h.run("MATCH (n:B) SET n.name = 'b'");
     try h.run("CREATE CONSTRAINT b_nn FOR (n:B) REQUIRE n.name IS NOT NULL");
-
-    // The last UNIQUE row dropped: the fast paths serve the graph again.
     try h.run("DROP CONSTRAINT b_u");
+    try testing.expect(graph_store.uniqueFenced("default"));
+    try h.run("DROP CONSTRAINT b_nn");
+
+    // The last row dropped: the fast paths serve the graph again.
     try testing.expect(!graph_store.uniqueFenced("default"));
     try testing.expect(!geode.bulk_ingest.uniqueConstraintsDeclineFastPath("default"));
     _ = try bulkInsert("default", "B", 1);

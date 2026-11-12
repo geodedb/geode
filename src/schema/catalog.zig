@@ -144,12 +144,24 @@ fn isZeroUuid(uuid: [16]u8) bool {
     return true;
 }
 
-/// SONNY-2846: is `row` an enforced UNIQUE or NODE KEY constraint? Each such
-/// row holds one count of its graph's bulk fast-path fence
-/// (`graph_store.addUniqueFence`) for as long as it is in the catalog;
-/// SONNY-6270: DROP CONSTRAINT gives that count back.
+/// SONNY-2846: is `row` an enforced UNIQUE or NODE KEY constraint?
 pub fn enforcesUnique(row: ConstraintInfo) bool {
     return row.is_enforced and (row.constraint_type == .unique or row.constraint_type == .node_key);
+}
+
+// CANARY: REQ=REQ-SONNY-6281-EXISTENCE-CONSTRAINTS; FEATURE="ConstraintEnforcement"; ASPECT=CatalogKinds; STATUS=TESTED; TEST=tests/test_sonny6281_existence_constraints.zig; OWNER=catalog; UPDATED=2026-11-12
+/// SONNY-6281: does `row` require its properties to be present and not
+/// NULL (NOT NULL, the legacy EXISTS, and the existence half of NODE KEY)?
+pub fn enforcesExistence(row: ConstraintInfo) bool {
+    return row.is_enforced and (row.constraint_type == .not_null or row.constraint_type == .exists or row.constraint_type == .node_key);
+}
+
+/// SONNY-2846 / SONNY-6281: is `row` checked at statement end (any kind,
+/// enforced)? Each such row holds one count of its graph's bulk fast-path
+/// fence (`graph_store.addUniqueFence`) for as long as it is in the
+/// catalog; SONNY-6270: DROP CONSTRAINT gives that count back.
+pub fn fencesFastPaths(row: ConstraintInfo) bool {
+    return enforcesUnique(row) or enforcesExistence(row);
 }
 
 /// SONNY-1319: may rows of `a` and `b` name the same object? An engine-wide
@@ -831,20 +843,21 @@ pub const Catalog = struct {
     }
 
     // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=CatalogCopy; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=catalog; UPDATED=2026-11-11
-    /// SONNY-2846: a deep copy, in `allocator`, of every enforced UNIQUE and
-    /// NODE KEY row (all graphs; `rowInGraph` tells where each applies).
+    /// SONNY-2846: a deep copy, in `allocator`, of every enforced row
+    /// (SONNY-6281: of every kind, `fencesFastPaths`; all graphs;
+    /// `rowInGraph` tells where each applies).
     /// Copied under the lock held shared, which is released before the
     /// caller reads the store: the catalog lock (tier 2) is never held while
     /// a graph lock (tier 1) or the node cache is taken (the SONNY-2795
     /// pattern). Pass an arena: the copies are not freed one by one.
-    pub fn copyEnforcedUniqueConstraints(self: *Catalog, allocator: std.mem.Allocator) ![]ConstraintInfo {
+    pub fn copyEnforcedConstraints(self: *Catalog, allocator: std.mem.Allocator) ![]ConstraintInfo {
         self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         var result = std.ArrayList(ConstraintInfo).empty;
         var iter = self.constraints.valueIterator();
         while (iter.next()) |row| {
-            if (!enforcesUnique(row.*)) continue;
+            if (!fencesFastPaths(row.*)) continue;
             const props = try allocator.alloc([]const u8, row.properties.len);
             for (row.properties, props) |p, *out| out.* = try allocator.dupe(u8, p);
             try result.append(allocator, .{

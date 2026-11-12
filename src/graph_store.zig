@@ -287,6 +287,8 @@ pub fn setLeanIndexingForTest(enabled: bool) void {
 // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=FastPathFence; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=storage; UPDATED=2026-11-11
 // SONNY-2846: the graphs that have a UNIQUE (or NODE KEY) constraint, as a
 // count of such rows per graph ("" = an engine-wide row, in every graph).
+// SONNY-6281: NOT NULL and EXISTS rows hold a count too (the executor checks
+// them at statement end as well; `catalog.fencesFastPaths`).
 // The executor checks a constraint when a statement ends
 // (`execution/unique_constraints.zig`); the server's bulk write fast paths
 // skip the executor, so they must not serve such a graph. The handler's gate

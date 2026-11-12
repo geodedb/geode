@@ -370,9 +370,9 @@ test "SONNY-6281: the bulk fast paths decline a graph with an existence constrai
     try testing.expect(!geode.bulk_ingest.uniqueConstraintsDeclineFastPath("default"));
 
     // Another graph is not fenced.
-    try h.run("CREATE CONSTRAINT f_name2 FOR (n:F) REQUIRE n.name IS NOT NULL");
+    try h.run("CREATE CONSTRAINT h_name FOR (n:H) REQUIRE n.name IS NOT NULL");
     try h.run("CREATE GRAPH g6281");
     try testing.expect(!geode.bulk_ingest.uniqueConstraintsDeclineFastPath("g6281"));
     try h.run("USE GRAPH g6281");
-    try h.run("CREATE (:F {id: 3})");
+    try h.run("CREATE (:H {id: 3})");
 }

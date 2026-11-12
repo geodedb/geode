@@ -275,10 +275,19 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // duplicate groups there are), never a value.
         error.UniqueConstraintViolation => .{ .code = "23505", .message = unique_constraints.violationMessage() },
         error.UniqueConstraintCheckFailed => .{ .code = "58030", .message = "the UNIQUE constraint check could not read the store; the statement was not applied" },
+        // CANARY: REQ=REQ-SONNY-6281-EXISTENCE-CONSTRAINTS; FEATURE="ConstraintEnforcement"; ASPECT=NotNullViolationCode; STATUS=TESTED; TEST=tests/test_sonny6281_existence_constraints.zig; OWNER=engine; UPDATED=2026-11-12
+        // SONNY-6281: a statement that would leave a node without a property
+        // a NOT NULL / EXISTS / NODE KEY constraint requires, or a CREATE
+        // CONSTRAINT over nodes that lack it. 23502 is SQL's
+        // not_null_violation. The message names the constraint, never a value.
+        error.NotNullConstraintViolation => .{ .code = "23502", .message = unique_constraints.notNullMessage() },
+        // SONNY-6281: CREATE UNIQUE INDEX built a plain index and ignored
+        // UNIQUE; it is refused, and uniqueness is a constraint.
+        error.UniqueIndexNotSupported => .{ .code = "0A000", .message = "CREATE UNIQUE INDEX is not supported: declare uniqueness with CREATE CONSTRAINT <name> FOR (n:Label) REQUIRE n.prop IS UNIQUE (enforced), or create a plain index with CREATE INDEX" },
         // SONNY-2846: a bulk fast-path write that reached a graph a UNIQUE
         // constraint was just created in; a retry runs through the executor,
         // which checks it.
-        error.UniqueConstraintFastPathConflict => .{ .code = "40001", .message = "UniqueConstraintFastPathConflict: a UNIQUE constraint now applies in this graph; the write was not applied, retry it" },
+        error.UniqueConstraintFastPathConflict => .{ .code = "40001", .message = "UniqueConstraintFastPathConflict: a constraint (UNIQUE, NODE KEY, NOT NULL or EXISTS) now applies in this graph; the write was not applied, retry it" },
         // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
         error.PolicyAlreadyExists => .{ .code = "42710", .message = "Duplicate policy name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },

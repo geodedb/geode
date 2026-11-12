@@ -202,6 +202,33 @@
 
 ### Fixed
 
+- **BEHAVIOUR CHANGE: NOT NULL, EXISTS and NODE KEY existence are enforced;
+  `CREATE UNIQUE INDEX` is refused (SONNY-6281).** `REQUIRE n.p IS NOT
+  NULL`, `ASSERT EXISTS (p)` and the existence half of `IS NODE KEY` were
+  recorded and never checked. They are now checked at the end of every
+  statement, through SONNY-2846's check: a statement that would leave a node
+  of the label without the property (absent or `NULL`: CREATE, MERGE that
+  creates, `SET n.p = NULL`, `SET n = {...}`, `REMOVE n.p`, `SET n:Label`)
+  fails with 23502 (`not_null_violation`) and keeps none of its changes;
+  `REMOVE n:Label` frees a node. **`CREATE CONSTRAINT` of these kinds over
+  nodes that already lack the property is now refused** (23502, with the
+  count); it used to be accepted. Every enforced constraint, of any kind,
+  now sends the server's node-writing fast paths (simple CREATE, bulk
+  MERGE, `/*+BATCH*/`, `USE GRAPH g; MERGE`) to the executor, and a cluster
+  leader refuses a replicated non-delete write on such a graph, as for
+  UNIQUE. **`CREATE UNIQUE INDEX` is now refused with 0A000**
+  (`UniqueIndexNotSupported`): it built a plain index and ignored `UNIQUE`;
+  use `CREATE CONSTRAINT ... IS UNIQUE`. ISO/IEC 39075:2024 has no
+  constraint or index DDL; these are Geode extensions. **Upgrade note:** a
+  NOT NULL / EXISTS / NODE KEY constraint created on an older version over
+  data that lacks the property stays in the catalog and is enforced from
+  now on for each node a statement writes (a statement that changes any
+  property or label of such a node must also supply the missing one);
+  nodes not written are not rechecked. Find them with `MATCH (n:Label)
+  WHERE n.prop IS NULL`. The dead `catalog_mod` import in `crud_operations.zig` and its
+  misleading `REQ-CONSTRAINT-ENFORCE-001` CANARY are removed. Regression:
+  `zig build test-sonny6281-existence-constraints`.
+
 - **`zig build test-graph-store` is green again (SONNY-6336, tests
   only):** seven inline tests set the process-global data-directory
   override through `initGlobalStore` and left it naming their removed
@@ -269,7 +296,7 @@
   (or `NODE KEY`) over data that already has duplicates is now refused**
   (23505, with the number of duplicate groups); it used to be accepted. The
   uniqueness half of NODE KEY is enforced; NOT NULL, EXISTS and NODE KEY's
-  existence half are still recorded only. The holder is found through the
+  existence half followed in SONNY-6281 (above). The holder is found through the
   exact node-property index, or, where it cannot answer (lean mode, the
   index rebuilding after a restart, an in-memory session, a non-scalar
   value), by a scan of the label, including nodes that are not resident.
@@ -279,8 +306,8 @@
   that check when the constraint is created is refused with 40001. A
   cluster leader refuses (40001) a replicated non-delete write on such a
   graph. The dead `validateConstraints` (crud_operations.zig) and
-  `Catalog.getConstraintsForLabel` are removed. `CREATE UNIQUE INDEX` still
-  creates no constraint (documented). Regressions:
+  `Catalog.getConstraintsForLabel` are removed. (`CREATE UNIQUE INDEX` is
+  refused since SONNY-6281, above.) Regressions:
   `zig build test-sonny2846-unique-constraint-enforcement` and
   `zig build test-sonny2846-unique-fast-paths-wire`.
 - **DROP CONSTRAINT drops the constraint (SONNY-6270):** it answered

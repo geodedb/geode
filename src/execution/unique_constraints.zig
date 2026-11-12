@@ -1,6 +1,8 @@
 // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=StatementEndCheck; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=engine; UPDATED=2026-11-11
+// CANARY: REQ=REQ-SONNY-6281-EXISTENCE-CONSTRAINTS; FEATURE="ConstraintEnforcement"; ASPECT=StatementEndCheck; STATUS=TESTED; TEST=tests/test_sonny6281_existence_constraints.zig; OWNER=engine; UPDATED=2026-11-12
 //! SONNY-2846 / SONNY-3358: UNIQUE (and the uniqueness half of NODE KEY)
-//! constraint enforcement.
+//! constraint enforcement. SONNY-6281: NOT NULL, EXISTS and the existence
+//! half of NODE KEY, through the same check (see "Existence" below).
 //!
 //! `CREATE CONSTRAINT c FOR (n:L) REQUIRE n.p IS UNIQUE` (or `ON :L ASSERT
 //! (a, b) IS UNIQUE`, or `... IS NODE KEY`) records a catalog row; until
@@ -52,6 +54,18 @@
 //! existed, under the graph lock that CREATE CONSTRAINT holds EXCLUSIVE
 //! while it adds the fence and validates the data.
 //!
+//! Existence (SONNY-6281): `REQUIRE n.p IS NOT NULL`, the legacy `ASSERT
+//! EXISTS (p)` and `IS NODE KEY` require every node of the label in the
+//! row's graph to hold each named property with a value that is not NULL
+//! (GQL treats a property whose value is null as absent, so absent and NULL
+//! are one case). The statement-end check reads the same nodes (a node the
+//! statement removed a property from is checked too); a node lacking one
+//! fails the statement with `error.NotNullConstraintViolation` (23502,
+//! SQL's not_null_violation). Removing the label frees a node. CREATE
+//! CONSTRAINT refuses such a row over nodes that already lack it
+//! (`countNodesMissing`). Every enforced row, of any kind, raises its
+//! graph's fast-path fence (`graph_store.addUniqueFence`).
+//!
 //! What is NOT checked here, by design: Raft apply, snapshot install, WAL
 //! recovery and restore replay writes that were validated when made; they
 //! run outside any statement scope. In cluster mode a leader's writes are
@@ -80,6 +94,9 @@ const PropKV = graph_storage_adapter.StorageAdapter.PropKV;
 pub const Error = error{
     /// 23505: the statement would leave two nodes holding one key.
     UniqueConstraintViolation,
+    /// 23502 (SONNY-6281): the statement would leave a node of a label
+    /// without a property a NOT NULL / EXISTS / NODE KEY row requires.
+    NotNullConstraintViolation,
     /// The store could not be read to check; the statement is not kept.
     UniqueConstraintCheckFailed,
     /// Cluster leader: a held write could break a constraint.
@@ -126,6 +143,30 @@ fn setViolation(rule: ConstraintInfo) void {
     setMessage("unique_violation: UNIQUE constraint {s} on :{s}({s}): the statement would give two nodes of one graph and tenant the same value; nothing was written", .{ rule.name, rule.label, joinedProps(&pbuf, rule.properties) });
 }
 
+const generic_not_null_message = "not_null_violation: the statement would leave a node without a property a NOT NULL, EXISTS or NODE KEY constraint requires; nothing was written";
+
+threadlocal var t_not_null_buf: [512]u8 = undefined;
+threadlocal var t_not_null_len: usize = 0;
+
+/// The message of this thread's latest existence (NOT NULL) violation.
+pub fn notNullMessage() []const u8 {
+    if (t_not_null_len == 0) return generic_not_null_message;
+    return t_not_null_buf[0..t_not_null_len];
+}
+
+fn setNotNullMessage(comptime fmt: []const u8, args: anytype) void {
+    const text = std.fmt.bufPrint(&t_not_null_buf, fmt, args) catch {
+        t_not_null_len = 0;
+        return;
+    };
+    t_not_null_len = text.len;
+}
+
+fn setNotNullViolation(rule: ConstraintInfo) void {
+    var pbuf: [256]u8 = undefined;
+    setNotNullMessage("not_null_violation: constraint {s} on :{s}({s}) requires every such node to hold each property, not NULL; the statement would leave one without it; nothing was written", .{ rule.name, rule.label, joinedProps(&pbuf, rule.properties) });
+}
+
 // ---------------------------------------------------------------------------
 // The fast-path gate.
 // ---------------------------------------------------------------------------
@@ -135,13 +176,13 @@ pub fn graphFenced(graph: []const u8) bool {
     return graph_store.uniqueFenced(graph);
 }
 
-/// Register the fences of every UNIQUE row `cat` holds (the process catalog
-/// was loaded). A failure to record one leaves a graph unfenced, which
-/// would let a fast path skip its check, so it is returned.
+/// Register the fences of every enforced row `cat` holds, of any kind
+/// (the process catalog was loaded). A failure to record one leaves a graph
+/// unfenced, which would let a fast path skip its check, so it is returned.
 pub fn registerCatalogFences(cat: *catalog_mod.Catalog) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
     defer arena.deinit();
-    const rules = try cat.copyEnforcedUniqueConstraints(arena.allocator());
+    const rules = try cat.copyEnforcedConstraints(arena.allocator());
     for (rules) |rule| try graph_store.addUniqueFence(rule.graph);
 }
 
@@ -331,8 +372,18 @@ fn ruleKeys(arena: std.mem.Allocator, rules: []const ConstraintInfo) ![]const []
 // The statement-end check.
 // ---------------------------------------------------------------------------
 
+/// Whether `snap` holds every property `rule` names, none NULL.
+fn holdsAll(rule: ConstraintInfo, snap: Snapshot, keys: []const []const u8) bool {
+    for (rule.properties) |p| {
+        const v = snap.value(keys, p) orelse return false;
+        if (isNullish(v)) return false;
+    }
+    return true;
+}
+
 /// SONNY-2846: check the writes of the statement whose scope this thread
-/// owns, before they are kept. See the module comment.
+/// owns, before they are kept. See the module comment. SONNY-6281: the
+/// existence rows too.
 pub fn checkStatementWrites(cat: *catalog_mod.Catalog) Error!void {
     const changes = statement_undo.entries();
     const held = statement_proposals.heldCount();
@@ -342,7 +393,7 @@ pub fn checkStatementWrites(cat: *catalog_mod.Catalog) Error!void {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const rules = try cat.copyEnforcedUniqueConstraints(arena);
+    const rules = try cat.copyEnforcedConstraints(arena);
     if (rules.len == 0) return;
 
     if (held > 0 and cluster_mod.getGlobalClusterCoordinator() != null) {
@@ -366,6 +417,8 @@ pub fn checkStatementWrites(cat: *catalog_mod.Catalog) Error!void {
             .CreateNode => |e| e.node_id,
             .SetNodeProperty => |e| e.node_id,
             .AddNodeLabel => |e| e.node_id,
+            // SONNY-6281: a removed property can break an existence row.
+            .RemoveNodeProperty => |e| e.node_id,
             else => continue,
         };
         if ((try checked.getOrPut(id)).found_existing) continue;
@@ -373,6 +426,11 @@ pub fn checkStatementWrites(cat: *catalog_mod.Catalog) Error!void {
         for (rules) |rule| {
             if (!catalog_mod.rowInGraph(rule.graph, snap.graph)) continue;
             if (!snap.hasLabel(rule.label)) continue;
+            if (catalog_mod.enforcesExistence(rule) and !holdsAll(rule, snap, keys)) {
+                setNotNullViolation(rule);
+                return error.NotNullConstraintViolation;
+            }
+            if (!catalog_mod.enforcesUnique(rule)) continue;
             const values = (try ruleValues(arena, rule, snap, keys)) orelse continue;
             const holds = Holds{ .graph = snap.graph, .tenant = snap.tenant, .label = rule.label, .keys = rule.properties, .values = values };
             if ((try findOtherHolder(arena, store, &holds, id)) != null) {
@@ -478,4 +536,42 @@ pub fn countDuplicateGroups(store: *graph_store.GraphStore, graph: []const u8, l
 pub fn setDuplicatesMessage(name: []const u8, label: []const u8, props: []const []const u8, groups: usize) void {
     var pbuf: [256]u8 = undefined;
     setMessage("unique_violation: CREATE CONSTRAINT {s} refused: {d} groups of :{s} nodes already share a value of ({s}); remove the duplicates first", .{ name, groups, label, joinedProps(&pbuf, props) });
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-6281: CREATE CONSTRAINT (NOT NULL / EXISTS / NODE KEY) over existing
+// data.
+// ---------------------------------------------------------------------------
+
+/// How many nodes of `label` in `graph` lack one of `props` (absent or
+/// NULL). CREATE CONSTRAINT refuses an existence row when any does.
+pub fn countNodesMissing(store: *graph_store.GraphStore, graph: []const u8, label: []const u8, props: []const []const u8) Error!usize {
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const ids = (store.snapshotNodesByLabel(arena, graph, label) catch |err| return readFailed(err)) orelse return 0;
+    var n: usize = 0;
+    for (ids) |id| {
+        const snap = (try snapshotNode(arena, store, id, props)) orelse continue;
+        if (!std.mem.eql(u8, snap.graph, graph) or !snap.hasLabel(label)) continue;
+        for (snap.values) |v| {
+            const pv = v orelse {
+                n += 1;
+                break;
+            };
+            if (isNullish(pv)) {
+                n += 1;
+                break;
+            }
+        }
+    }
+    return n;
+}
+
+/// The message of a CREATE CONSTRAINT refused over `missing` nodes that
+/// lack a required property.
+pub fn setMissingMessage(name: []const u8, label: []const u8, props: []const []const u8, missing: usize) void {
+    var pbuf: [256]u8 = undefined;
+    setNotNullMessage("not_null_violation: CREATE CONSTRAINT {s} refused: {d} :{s} nodes lack a value for ({s}); set it or remove those nodes first", .{ name, missing, label, joinedProps(&pbuf, props) });
 }

@@ -94,9 +94,13 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
   MERGE, SET and the server's write fast paths, per graph and tenant, with
   SQLSTATE 23505 (SONNY-2846; see docs/API_REFERENCE.md, Constraint
   Operations). CREATE CONSTRAINT over existing duplicates is refused.
-- **NOT NULL Constraints**: Recorded only; not enforced
-- **NODE KEY Constraints**: The uniqueness half is enforced; the existence
-  half is not
+- **NOT NULL / EXISTS Constraints**: Enforced at the end of every
+  statement on CREATE, MERGE, SET and REMOVE, with SQLSTATE 23502
+  (SONNY-6281). CREATE CONSTRAINT over nodes lacking the property is refused.
+- **NODE KEY Constraints**: Both halves enforced (existence 23502,
+  uniqueness 23505)
+- **CREATE UNIQUE INDEX**: Refused (0A000); use CREATE CONSTRAINT ... IS
+  UNIQUE
 - **Catalog Persistence**: Constraints stored across restarts; `DROP
   CONSTRAINT [IF EXISTS]` removes one from the session graph's catalog,
   durably (SONNY-6270)

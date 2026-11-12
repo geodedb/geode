@@ -9,16 +9,17 @@ Creates an index on node properties for improved query performance.
 #### Syntax
 
 ```gql
-CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name
+CREATE INDEX [IF NOT EXISTS] index_name
 ON label(property[, ...])
 [USING {btree | hash | fulltext | spatial | vector}]
 ```
 
 #### Parameters
 
-- `UNIQUE`: Optional. Accepted for compatibility; it does **not** create a
-  uniqueness constraint and nothing is enforced. Use `CREATE CONSTRAINT ...
-  IS UNIQUE` (see Constraint Operations below)
+- `CREATE UNIQUE INDEX` is refused with `0A000` (`UniqueIndexNotSupported`,
+  SONNY-6281): it used to build a plain index and ignore `UNIQUE`. Declare
+  uniqueness with `CREATE CONSTRAINT ... IS UNIQUE` (enforced; see
+  Constraint Operations below)
 - `IF NOT EXISTS`: Optional. Prevents error if index already exists
 - `index_name`: Name of the index to create. A name is one index of a
   graph (SONNY-6294): a second `CREATE INDEX` with a name the graph already
@@ -171,8 +172,36 @@ on every write (SONNY-2846):
   refuses (`40001`, `ClusterWriteNotReplicable`) a replicated write, other
   than a delete, on a graph a UNIQUE constraint applies in.
 
-Not enforced: `NOT NULL`, `EXISTS`, and the existence half of `NODE KEY`
-(the rows are recorded only). `CREATE UNIQUE INDEX` creates no constraint.
+#### NOT NULL, EXISTS and NODE KEY enforcement
+
+`REQUIRE n.prop IS NOT NULL`, the legacy `ASSERT EXISTS (prop)` and the
+existence half of `NODE KEY` are enforced on every write (SONNY-6281):
+
+- **Rule:** every node of the label in the constraint's graph holds each
+  named property with a value that is not `NULL`. GQL treats a property
+  whose value is null as absent, so a missing and a `NULL` property are the
+  same violation.
+- **When:** at the end of each statement, like UNIQUE. A statement that
+  would leave such a node without the property fails with SQLSTATE `23502`
+  (`not_null_violation`, `NotNullConstraintViolation`; the message names
+  the constraint, never a value) and none of its changes are kept.
+  `CREATE`, `MERGE` when it creates (unless `ON CREATE SET` supplies the
+  property), `SET n.prop = NULL`, `SET n = {...}` without it, `REMOVE
+  n.prop` and `SET n:Label` on a node without it are refused. A statement
+  may create a node and set the property later in the same statement.
+  `REMOVE n:Label` frees the node from the constraint.
+- **Existing data:** `CREATE CONSTRAINT` of these kinds over nodes that
+  lack the property is refused with `23502`, naming how many nodes lack
+  it; set the property or remove those nodes first.
+- **Fast paths and cluster mode:** as for UNIQUE: every enforced
+  constraint, of any kind, sends the server's node-writing fast paths to
+  the executor (`40001` for a write already past that check), and a leader
+  refuses a replicated non-delete write on a graph a constraint applies in.
+- **NODE KEY:** both halves: a missing key property is `23502`, a duplicate
+  key `23505`.
+- **Standard:** ISO/IEC 39075:2024 defines no `CREATE CONSTRAINT` (these
+  statements are Geode extensions in the openCypher form); the rule follows
+  its `NOT NULL` property value types.
 
 #### Example
 
@@ -739,7 +768,7 @@ Geode follows ISO/IEC SQL error code standards:
 ### Index Usage
 
 1. Create indexes on frequently queried properties
-2. Use unique indexes for properties with high cardinality
+2. Use a UNIQUE constraint (not an index) for a property that must not repeat
 3. Use hash indexes for exact match queries only
 4. Use btree indexes for range queries and sorting
 5. Use vector indexes for similarity search
