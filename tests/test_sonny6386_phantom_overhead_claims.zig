@@ -4,7 +4,7 @@
 // of at most 5% per transaction ("range tracking overhead <= 5%",
 // "phantom prevention transaction overhead <= 5%"). With the SONNY-2439
 // methodology (batched, interleaved, medians, production allocator) the
-// transaction manager measures 33-36% (phantom-anomaly) and 84-88%
+// transaction manager measures 27-36% (phantom-anomaly) and 84-96%
 // (phantom-range) in ReleaseFast, 54-63% in Debug: the claims could never
 // hold, and the enforced perf-gate job failed on them with no product change.
 // The cost is the bookkeeping itself (a hash-map entry and a list allocation
@@ -13,7 +13,7 @@
 // 120-350 ns that do no storage work; it is not an accidental scan or lock.
 //
 // The contract: no source or doc claims a 5% bound; each benchmark claims
-// the bound recalibrated from the measurement (per build mode, about 1.4-1.5x
+// the bound recalibrated from the measurement (per build mode, about 1.3-1.4x
 // the highest median measured), and docs/ENHANCED_TRANSACTION_ISOLATION.md
 // states the measured figures and the same bounds.
 const std = @import("std");
@@ -37,7 +37,7 @@ const Bound = struct { file: []const u8, decl: []const u8, percent: []const u8 }
 const bounds = [_]Bound{
     .{ .file = "tests/canary_txn_phantom_range.zig", .decl = "const max_range_overhead_release = 1.25;", .percent = "125%" },
     .{ .file = "tests/canary_txn_phantom_range.zig", .decl = "const max_range_overhead_debug = 0.80;", .percent = "80%" },
-    .{ .file = "tests/canary_txn_phantom_anomaly.zig", .decl = "const max_phantom_overhead_release = 0.55;", .percent = "55%" },
+    .{ .file = "tests/canary_txn_phantom_anomaly.zig", .decl = "const max_phantom_overhead_release = 0.50;", .percent = "50%" },
     .{ .file = "tests/canary_txn_phantom_anomaly.zig", .decl = "const max_phantom_overhead_debug = 0.90;", .percent = "90%" },
 };
 

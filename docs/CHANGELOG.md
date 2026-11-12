@@ -46,6 +46,22 @@
   synced; a failure removes only the temporary file. `--local` already wrote
   this way (SONNY-6323). `geode backup create --help` says so. Regression:
   `zig build test-sonny6386-remote-backup-atomic-output`.
+- **The phantom-prevention overhead claims state the measured cost, not 5%
+  (SONNY-6386 item 9).** `test-canary-txn-phantom-anomaly` and
+  `test-canary-txn-phantom-range` claimed at most 5% per transaction; with
+  the SONNY-2439 methodology the transaction manager measures 27-36% and
+  84-96% in ReleaseFast (61-63% and 54-61% in Debug; ten and three runs), so the enforced perf-gate job
+  failed on them with no product change. Profiling the arms shows the cost is
+  the tracking itself (a hash-map entry and a list allocation per tracking
+  structure, a heap copy of every prefix and range bound, the commit-time
+  scan of the transaction's writes; about 100-125 ns) against synthetic
+  transactions of 120-350 ns that do no storage work, not an accidental scan
+  or lock, and no server path runs it. The bounds are recalibrated per build
+  mode to about 1.3-1.4x the highest median measured (anomaly 50% ReleaseFast
+  / 90% Debug, range 125% / 80%), and
+  `docs/ENHANCED_TRANSACTION_ISOLATION.md` gains a "Phantom prevention
+  overhead" section with the measurements. Regression:
+  `zig build test-sonny6386-phantom-overhead-claims`.
 - **The JSON and scheduler latency bounds are batched perf_gate medians
   (SONNY-6386 item 6, the part SONNY-2439 left open).** The four claims in
   `src/performance/test_json_optimization.zig` (parse, serialize, 1000-row

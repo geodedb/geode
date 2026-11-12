@@ -46,3 +46,29 @@ together with the two uncompiled tests that exercised them
 - The `geode.transaction.isolation_level` metric label
   (`otel_metrics.IsolationLevel`, six values) is recorded only by
   `src/transactions/manager.zig`, so the server never emits it.
+
+## Phantom prevention overhead
+
+`src/transactions/manager.zig` phantom prevention (prefix predicates and the
+`range_tracker.zig` ranges, checked at commit) is not cheap relative to the
+synthetic transactions its benchmarks run, and no server path pays it (see
+above). The benchmarks used to claim an overhead of at most 5% per
+transaction; corrected for methodology (SONNY-2439: batched samples,
+interleaved arms, medians, the production allocator) they measure, on a
+shared dev host (SONNY-6386):
+
+| Benchmark | ReleaseFast | Debug | Bound (ReleaseFast / Debug) |
+| --- | --- | --- | --- |
+| `zig build test-canary-txn-phantom-anomaly` (5 predicate reads, 10 writes, commit; prevention on vs off) | 27-36% (349-361 ns vs 457-474 ns) | 61-63% | 50% / 90% |
+| `zig build test-canary-txn-phantom-range` (predicate plus two range reads vs two predicate reads, prevention on in both) | 84-96% (116-123 ns vs 224-231 ns) | 54-61% | 125% / 80% |
+
+The cost is the tracking itself: for each transaction a hash-map entry and a
+list allocation per tracking structure and a heap copy of every prefix and
+range bound, released at commit, plus the commit-time scan of the
+transaction's writes (about 100-125 ns in ReleaseFast). The baseline
+transactions do no storage work, so the ratio is large; it is not an
+accidental scan or lock. The bounds are about 1.3-1.4x the highest median
+measured (ten ReleaseFast and three Debug runs), per build mode, because the thresholds are not yet calibrated on the
+quiet CI runner (SONNY-2439); a change that doubled the tracking cost would
+still exceed them. The scheduled `test-perf-gates-enforced` job enforces them
+in ReleaseFast. Regression: `zig build test-sonny6386-phantom-overhead-claims`.
