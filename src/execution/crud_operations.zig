@@ -4013,8 +4013,10 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     try applyMergeActions(allocator, store, m, &scope, clause_created);
 
     // Return the merged node(s) if there's a RETURN clause
+    // SONNY-3025: a relationship-only pattern (`MERGE (a)-[r:R]->(b)`) binds
+    // no merged node chain, and its RETURN was skipped: no row.
     if (m.return_clause) |ret| {
-        if (merged_nodes.items.len > 0) {
+        {
             const columns = try generateUniqueColumnNames(allocator, ret.items);
 
             var rows = try allocator.alloc([]Value, 1);
@@ -4032,7 +4034,8 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             defer env_values.deinit(allocator);
 
             try env_names.append(allocator, "created");
-            try env_values.append(allocator, Value{ .Bool = merged_nodes.items[merged_nodes.items.len - 1].created });
+            const created = if (merged_nodes.items.len > 0) merged_nodes.items[merged_nodes.items.len - 1].created else clause_created;
+            try env_values.append(allocator, Value{ .Bool = created });
             try env_names.appendSlice(allocator, scope.names.items);
             try env_values.appendSlice(allocator, scope.values.items);
 

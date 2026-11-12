@@ -2098,7 +2098,8 @@ pub fn executeLegacyQueryWithResolvedParams(
             // n.g}) RETURN count(*)` merged one (:M {g: null}) and returned 1. A
             // RETURN that aggregates or is DISTINCT is computed by the shared
             // projection over the matched rows, each extended with the nodes its
-            // MERGE bound; any other RETURN is the last MERGE's, as before.
+            // MERGE bound. SONNY-3025: so is a plain RETURN (ISO/IEC 39075:2024
+            // 14.11: once per record); it was the last MERGE's RETURN, one row.
             if (q.match.chains.len > 0) {
                 // SONNY-2683: refuse a grouped or filtered RETURN before anything
                 // is written.
@@ -2108,7 +2109,7 @@ pub fn executeLegacyQueryWithResolvedParams(
                 // matched rows as they were read, before the MERGE, and one on a
                 // variable the MERGE binds was dropped (`write_shape.table`).
                 try match_operations.refuseUnappliedWrites(q, .{ .merge = true });
-                const project_rows = match_operations.returnProjectsMatchedRows(q);
+                const project_rows = q.ret.items.len != 0;
 
                 var bindings = try match_operations.readPatternBindings(allocator, q, param_names.items, param_values.items, q.inline_let_bindings, merge_graph);
                 defer bindings.deinit(allocator);
@@ -2131,6 +2132,13 @@ pub fn executeLegacyQueryWithResolvedParams(
                     };
                     for (merge_stmt.pattern.chains) |chain| {
                         if (chain.head) |head| if (head.name) |n| try add.name(allocator, &merged_names, match_result.columns, n);
+                        // SONNY-3025: a relationship MERGE's variables too
+                        // (`MERGE (a)-[r:R]->(b) RETURN r`).
+                        for (chain.hops) |hop| {
+                            for ([_]?[]const u8{ hop.left.name, hop.rel.name, hop.right.name }) |maybe| {
+                                if (maybe) |n| try add.name(allocator, &merged_names, match_result.columns, n);
+                            }
+                        }
                     }
                     try add.name(allocator, &merged_names, match_result.columns, "created");
                 }

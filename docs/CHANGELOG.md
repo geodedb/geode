@@ -374,6 +374,16 @@
   `avg()` divides the exact sum and stays a DOUBLE. **Behaviour change:**
   an integer `sum()` past i64 is an error, not an approximate DOUBLE.
   Regression: `zig build test-sonny2774-exact-sum`.
+- **A plain RETURN after MATCH ... CREATE / MERGE is one row per matched
+  row (SONNY-3025):** a RETURN that neither aggregated nor was DISTINCT was
+  evaluated once, over the last row's created or merged elements, so `MATCH
+  (n:G) CREATE (n)-[:T]->(m:Z) RETURN n, m` over 25 `:G` nodes returned one
+  row. Every RETURN is now projected over the matched rows, each extended
+  with what its CREATE created or its MERGE bound (ISO/IEC 39075:2024 14.11).
+  A relationship MERGE's RETURN (`MATCH (a), (b) MERGE (a)-[r:R]->(b) RETURN
+  r`) returned no row at all; it returns one per matched row with `r` and
+  its endpoints. **Behaviour change:** such statements return one row per
+  matched row. Regression: `zig build test-sonny3025-match-write-return-rows`.
 - **A GROUP BY after a RETURN that follows a WITH (SONNY-2698):** the parser
   kept one GROUP BY / HAVING per query part whichever clause it followed,
   and every executor gave it to the WITH, so `MATCH (z) WITH z WHERE z.k >= 2
@@ -2712,7 +2722,7 @@ run inside an explicit transaction again.
   that neither aggregates nor is DISTINCT is evaluated once, over the last
   row's created and matched elements; the CREATE itself runs once per
   matched row. Aggregate the RETURN, or make it DISTINCT, to see every row.
-  v0.8.24.
+  v0.8.24. (Fixed in the Unreleased section.)
 
 ---
 

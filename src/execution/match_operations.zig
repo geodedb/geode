@@ -3963,11 +3963,12 @@ fn nodeMatchesProps(
 /// variable the CREATE introduces, and a MERGE beside the CREATE, are refused
 /// with 0A000.
 ///
-/// A RETURN that aggregates or is DISTINCT (`returnProjectsMatchedRows`), and
-/// any RETURN of a statement that deletes, is computed by the shared
-/// projection over the matched rows, each extended with the variables its
-/// CREATE created. Any other RETURN is evaluated once over the created
-/// entities, as before (SONNY-3025); without a RETURN the statement returns
+/// The RETURN is computed by the shared projection over the matched rows, each
+/// extended with the variables its CREATE created (ISO/IEC 39075:2024 14.11:
+/// once per record of the working table). SONNY-3025: a RETURN that neither
+/// aggregated nor was DISTINCT was evaluated once, over the last row's created
+/// and matched elements, so `MATCH (n:G) CREATE (n)-[:T]->(m:Z) RETURN n, m`
+/// over 25 :G nodes returned one row. Without a RETURN the statement returns
 /// its creation counts.
 pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param_names_arg: []const []const u8, param_values_arg: []const Value, current_graph: ?[]const u8) !ExecutionResult {
     // SONNY-2683: refuse a grouped or filtered RETURN before anything is written.
@@ -3976,7 +3977,8 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     try refuseUnappliedWrites(q, .{ .set = true, .remove = true, .create = true, .delete = true });
     const create_pattern = q.create_pattern.?;
     const deletes = q.delete_items.len != 0;
-    const project_rows = returnProjectsMatchedRows(q) or (deletes and q.ret.items.len != 0);
+    // SONNY-3025: every RETURN, plain ones too.
+    const project_rows = q.ret.items.len != 0;
     const writes_rows = q.set_clauses.len != 0 or q.remove_clauses.len != 0;
 
     var bindings = try readPatternRows(allocator, q, param_names_arg, param_values_arg, q.inline_let_bindings, current_graph);
@@ -4098,15 +4100,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         try checkReturnBeforeDelete(allocator, q, &dry_result, param_names_arg, param_values_arg, deleted);
     }
 
-    // Track all created entities across all matched rows
-    var all_created_nodes = std.StringHashMap(u64).init(allocator);
-    defer all_created_nodes.deinit();
-    var all_created_relationships = std.StringHashMap(Value).init(allocator);
-    defer all_created_relationships.deinit();
-    // SONNY-3322: by id; resolved for the RETURN after every row's CREATE.
-    var all_created_edge_ids = std.StringHashMap(u64).init(allocator);
-    defer all_created_edge_ids.deinit();
-
     // Per-kind counters: the summary row reports nodes and relationships
     // SEPARATELY (a pure edge create used to surface as `nodes_created: 1`).
     var total_created_nodes: i64 = 0;
@@ -4125,7 +4118,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         for (match_result.columns, 0..) |col_name, i| {
             if (i < row.len and row[i] == .Node) {
                 try row_bindings.put(col_name, row[i].Node.id);
-                try all_created_nodes.put(col_name, row[i].Node.id);
             }
         }
 
@@ -4144,15 +4136,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         }
         total_created_nodes += result.created_nodes_count;
         total_created_relationships += result.created_relationships_count;
-
-        var node_iter = result.created_nodes.iterator();
-        while (node_iter.next()) |entry| {
-            try all_created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
-        }
-        var rel_iter = result.created_relationships.iterator();
-        while (rel_iter.next()) |entry| {
-            if (entry.value_ptr.* == .Edge) try all_created_edge_ids.put(entry.key_ptr.*, entry.value_ptr.*.Edge.id);
-        }
 
         if (project_rows or writes_rows) {
             const out_row = try allocator.alloc(Value, columns.len);
@@ -4201,13 +4184,6 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     if (deletes) _ = try crud_operations.deleteElements(allocator, deleted.node_ids, deleted.edge_ids, q.detach_delete, current_graph);
 
     if (projected) |p| return p;
-
-    // A RETURN that neither aggregates nor is DISTINCT: evaluated with all
-    // created entities.
-    if (q.ret.items.len > 0) {
-        try crud_operations.resolveCreatedEdges(store, &all_created_edge_ids, &all_created_relationships);
-        return executeReturnClauseWithNodes(allocator, q.ret, all_created_nodes, all_created_relationships);
-    }
 
     // Default: return summary row showing how many entities were created.
     // Nodes and relationships are reported in SEPARATE columns -- collapsing
@@ -10205,11 +10181,6 @@ fn boxEdge(allocator: std.mem.Allocator, rows: *ExecutionResult, edge: *const gr
 /// over the matched rows: it aggregates, or it is DISTINCT. Such a RETURN is
 /// one row per group, not one per match, so it cannot also be the rows the
 /// write binds.
-pub fn returnProjectsMatchedRows(q: ast.Query) bool {
-    if (q.ret.items.len == 0) return false;
-    return q.ret.distinct or returnItemsHaveAggregation(q.ret.items);
-}
-
 /// SONNY-2674, SONNY-2694: `q`'s RETURN over `rows` (one row per match), by the
 /// shared projection: the GROUP BY and HAVING of the RETURN, the aggregates,
 /// DISTINCT and ORDER BY. The result owns its values, as the planned read's
