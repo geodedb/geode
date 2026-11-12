@@ -9333,6 +9333,22 @@ pub fn build(b: *std.Build) void {
     const sonny6288_step = b.step("test-sonny6288-server-restore-target", "Run SONNY-6288 regression (spawns servers: a QUIC or gRPC restore on a server started with --data-dir, GEODE_DATA_DIR or both restores beside its real data directory, staged and verified, never into ./data or over the live store, reports that directory and leaves the running server's data intact; corrupt, unsafe-entry and non-admin restores write nothing)");
     sonny6288_step.dependOn(&run_sonny6288_tests.step);
 
+    // SONNY-6301: free test ports (tests/test_ports.zig) and shared test
+    // clients that wait for a live server past their reply deadline and fail
+    // at once when it exited. Spawns the geode this build emitted.
+    const sonny6301_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6301_test_ports_and_timeouts.zig"), .target = target, .optimize = optimize });
+    sonny6301_test_mod.link_libc = true;
+    sonny6301_test_mod.addImport("geode", root_mod);
+    sonny6301_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6301_test_mod.addImport("schema", schema_mod);
+    sonny6301_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6301_tests = b.addTest(.{ .root_module = sonny6301_test_mod });
+    const run_sonny6301_tests = b.addRunArtifact(sonny6301_tests);
+    spawnsBuiltGeode(sonny6301_tests);
+    shardDep(test_step, &run_sonny6301_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6301_step = b.step("test-sonny6301-test-ports-and-timeouts", "Run SONNY-6301 regression (test ports come from the kernel, not a constant: distinct, usable UDP/TCP ports and two servers at once each answering on its own; shared QUIC and gRPC test clients wait for a live server past the old reply deadline and fail at once when it exited)");
+    sonny6301_step.dependOn(&run_sonny6301_tests.step);
+
     // SONNY-6299: a backup never holds the TLS private key, the auth-chain
     // HMAC key, the generated admin password or the data-directory lock;
     // server backups live under the data directory (or an absolute
