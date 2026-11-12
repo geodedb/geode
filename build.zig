@@ -13685,6 +13685,23 @@ pub fn build(b: *std.Build) void {
     const sonny3135_drop_step = b.step("test-sonny3135-lockless-drop-waits", "Run the SONNY-3135 N7c regression (a graph drop with no lock of the graph's, from the executor, a CREATE GRAPH / HELLO / SchemaManager rollback or GraphStore.dropGraph directly, waits for the graph's read and write lock holders; a caller that holds the write lock does not wait for itself)");
     sonny3135_drop_step.dependOn(&run_sonny3135_drop_tests.step);
 
+    // SONNY-3122: a write to a graph that no longer exists is GraphNotFound;
+    // the write lock does not create a dropped graph again.
+    const sonny3122_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3122_dropped_graph_not_recreated.zig"), .target = target, .optimize = optimize });
+    sonny3122_test_mod.link_libc = true;
+    sonny3122_test_mod.addImport("geode", root_mod);
+    sonny3122_test_mod.addImport("schema", schema_mod);
+    sonny3122_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3122_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3122_test_mod.addImport("logging", logging_mod);
+    sonny3122_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3122_tests = b.addTest(.{ .root_module = sonny3122_test_mod });
+    const run_sonny3122_tests = b.addRunArtifact(sonny3122_tests);
+    run_sonny3122_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3122_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3122_step = b.step("test-sonny3122-dropped-graph-not-recreated", "Run the SONNY-3122 regression (a session on a graph another session dropped cannot write to it over gRPC or QUIC, its fast paths included; a write waiting for the lock while the graph is dropped is told it is gone; the write lock of a graph that exists nowhere creates nothing, while the default graph is still materialized; spawns a server)");
+    sonny3122_step.dependOn(&run_sonny3122_tests.step);
+
     // SONNY-2410: every SecurityManager method that reads or changes shared
     // state takes the manager's lock; mutating methods race readers.
     const sonny2410_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2410_security_manager_locking.zig"), .target = target, .optimize = optimize });
