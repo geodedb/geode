@@ -3304,6 +3304,12 @@ const OrderedShardState = struct {
     pos: usize = 0,
 };
 
+/// SONNY-6375 test seam (test builds only): runs on the scanning thread
+/// between two batches of one `orderedScan`, when it holds no graph or shard
+/// lock — the window a concurrent write or ordered-index rebuild can use.
+pub const OrderedScanBatchHook = struct { ctx: *anyopaque, run: *const fn (*anyopaque) void };
+pub threadlocal var test_ordered_scan_between_batches: ?OrderedScanBatchHook = null;
+
 /// Advance shard `i`'s ordered cursor by a BOUNDED batch, copying (key,node_id)
 /// out into owned buffers, then release the shard lock.
 ///
@@ -6917,6 +6923,9 @@ pub const StorageAdapter = struct {
 
             states[bi].pos += 1;
             if (states[bi].pos >= states[bi].buf.items.len and !states[bi].exhausted) {
+                if (comptime @import("builtin").is_test) {
+                    if (test_ordered_scan_between_batches) |h| h.run(h.ctx);
+                }
                 try orderedScanRefill(mg, bi, label_id, key, eng_dir, &states[bi], allocator, io);
             }
         }

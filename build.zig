@@ -482,6 +482,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-startup-lazy-hydrate-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-scan-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-index-autobuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-sonny6375-ordered-scan-locking-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-parallel-index-rebuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     // Members of the end-to-end lane (test-e2e).
     .{ .name = "test-gap0203", .reason = "e2e lane (test-e2e): QUIC pipeline suite with a 5 s read deadline, flaky under load (KNOWN_TEST_ISSUES)" },
@@ -12151,6 +12152,41 @@ pub fn build(b: *std.Build) void {
         "H3-P2 Task 3 TSan: orderedScan adversarial concurrency under -fsanitize-thread (race detection)",
     );
     ordered_scan_tsan_step.dependOn(&run_ordered_scan_tsan_tests.step);
+
+    // SONNY-6375: orderedScan honours the ordered-index cursor contract — no
+    // cursor carried across a lock release (an ordered-index rebuild between
+    // two batches freed the tree under it), `mg.rwlock` SHARED around each
+    // batch, and no self-deadlock for a caller already holding the graph
+    // lock. See tests/test_sonny6375_ordered_scan_locking.zig.
+    const sonny6375_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6375_ordered_scan_locking.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6375_mod.addImport("geode", root_mod);
+    sonny6375_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6375_tests = b.addTest(.{ .root_module = sonny6375_mod });
+    const run_sonny6375_tests = b.addRunArtifact(sonny6375_tests);
+    shardDep(test_step, &run_sonny6375_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6375_step = b.step("test-sonny6375-ordered-scan-locking", "SONNY-6375: orderedScan never resumes a cursor across a lock release and holds the graph lock while it reads");
+    sonny6375_step.dependOn(&run_sonny6375_tests.step);
+
+    // SONNY-6375: TSan companion (tsanTest, LLVM backend; opt-in, not in the
+    // aggregate — the same file runs uninstrumented there).
+    const sonny6375_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6375_ordered_scan_locking.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    sonny6375_tsan_mod.addImport("geode", root_mod);
+    sonny6375_tsan_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6375_tsan_tests = tsanTest(b, sonny6375_tsan_mod);
+    const run_sonny6375_tsan_tests = b.addRunArtifact(sonny6375_tsan_tests);
+    const sonny6375_tsan_step = b.step("test-sonny6375-ordered-scan-locking-tsan", "SONNY-6375 TSan: orderedScan locking under -fsanitize-thread");
+    sonny6375_tsan_step.dependOn(&run_sonny6375_tsan_tests.step);
 
     // H3-P3: planner orderedScanFastPath — `ORDER BY <eligible-indexed> LIMIT`
     // served from the value-ordered index (slots ~0), with a strict heap
