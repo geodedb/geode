@@ -342,6 +342,13 @@
   key-registry backup export/import is not implemented. The KMS provider
   clients in `src/security/kms.zig`, `kms_remote.zig`,
   `external_kms_client.zig` and `vault_kms_provider.zig` are unchanged.
+- **Unread state in live files (SONNY-6298).** The QUIC handler created a
+  `DistributedQueryPlanner` and `FederationManager` for every stream and
+  stored them in two `ServerState` fields nothing read; they are gone.
+  `rls_filter.applyRLSToFederatedResults` (no caller since the federation
+  code was removed in SONNY-6279) and its tests are removed, as is
+  `EnhancedRLSEngine.policy_optimizer` / `PolicyOptimizer`, which was only
+  initialised and freed.
 
 ---
 

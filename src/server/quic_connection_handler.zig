@@ -3077,14 +3077,6 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     // Initialize evaluator callbacks (idempotent).
     execution.initEvaluator();
 
-    // Federation planner (per-stream; lightweight init).
-    var federation_manager = geode.distributed.query_planner.FederationManager.init(gpa);
-    defer federation_manager.deinit();
-    var dist_planner = geode.distributed.query_planner.DistributedQueryPlanner.init(gpa, &federation_manager);
-    defer dist_planner.deinit();
-    state.federation_manager = &federation_manager;
-    state.distributed_planner = &dist_planner;
-
     // #683: Use cached env config from SharedConnState instead of per-stream syscalls.
     if (cs.env_config) |ec| {
         state.query_optimizer_enabled = ec.query_optimizer_enabled;
@@ -3940,8 +3932,6 @@ const FirstStreamOwnerContext = struct {
     state: ServerState,
     conn_state: SharedConnState,
     reader: BufferedProtoReader,
-    federation_manager: geode.distributed.query_planner.FederationManager,
-    dist_planner: geode.distributed.query_planner.DistributedQueryPlanner,
     acceptor_ctx: ?*StreamAcceptorContext = null,
     acceptor_submitted: bool = false,
     quota_tenant_id: ?[]const u8 = null,
@@ -4375,8 +4365,6 @@ fn releaseFirstStreamResources(ctx: *FirstStreamOwnerContext) void {
     ctx.conn.destroyStream(ctx.stream);
     ctx.conn_state.unregisterActiveStream(stream_id);
     ctx.conn_state.releaseActiveStream();
-    ctx.dist_planner.deinit();
-    ctx.federation_manager.deinit();
     releaseQuotaTenant(gpa, &ctx.quota_tenant_id);
     deinitQuicServerState(gpa, &ctx.state, "first stream close");
 }
@@ -5163,7 +5151,7 @@ fn firstStreamReadyCallback(ctx_ptr: *anyopaque, _: *quic_transport.QuicInnerCon
 // while the poll-thread RX-ready notifier `firstStreamReadyCallback` still reads
 // `ctx.cooperative_*` and dereferences `ctx.cooperative_scheduler`. The full
 // production free path (`destroyFirstStreamOwnerResources`) tears down heavy,
-// externally-owned deps (conn_state / dist_planner / transport / reader) that
+// externally-owned deps (conn_state / transport / reader) that
 // cannot be constructed in-process, so the harness below isolates the RACING
 // SUBSET: the same struct allocation, the REAL `firstStreamReadyCallback`, the
 // REAL `FirstStreamScheduler.enqueueReady`, and the same `gpa.destroy(ctx)`
@@ -5197,8 +5185,6 @@ pub const FirstStreamLifetimeTestHarness = struct {
             .state = undefined,
             .conn_state = undefined,
             .reader = undefined,
-            .federation_manager = undefined,
-            .dist_planner = undefined,
         };
         // Mirror the cooperative-field publish that `submit` performs, minus the
         // registry/notifier installation (which would touch `ctx.stream`).
@@ -5785,19 +5771,6 @@ pub fn handleQuicConnection(
     // CANARY: REQ=REQ-PERF-AST-CACHE-003; FEATURE="SharedASTCache"; ASPECT=ConnectionState; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
     state.query_ast_cache = shared_ast_cache;
 
-    // Initialize distributed query planner for federation-aware optimization
-    var federation_manager = geode.distributed.query_planner.FederationManager.init(gpa);
-    var dist_planner = geode.distributed.query_planner.DistributedQueryPlanner.init(gpa, &federation_manager);
-    var distributed_planner_handed_off = false;
-    defer {
-        if (!distributed_planner_handed_off) {
-            dist_planner.deinit();
-            federation_manager.deinit();
-        }
-    }
-    state.federation_manager = &federation_manager;
-    state.distributed_planner = &dist_planner;
-
     // GAP-0258: mTLS authentication over QUIC — extract peer certificate and authenticate
     // CANARY: REQ=REQ-AUTH-MTLS-QUIC-003; FEATURE="mTLS over QUIC"; ASPECT=ConnectionAuth; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
     if (conn.getPeerCertificateDer()) |cert_der| {
@@ -6035,20 +6008,14 @@ pub fn handleQuicConnection(
         .state = state,
         .conn_state = conn_state,
         .reader = line_reader,
-        .federation_manager = federation_manager,
-        .dist_planner = dist_planner,
         .quota_tenant_id = quota_tenant_id,
         .peer_ip = peer_ip,
         .peer_ip_allocated = peer_ip_allocated,
     };
-    first_ctx.dist_planner.federation_manager = &first_ctx.federation_manager;
-    first_ctx.state.federation_manager = &first_ctx.federation_manager;
-    first_ctx.state.distributed_planner = &first_ctx.dist_planner;
     first_ctx.state.shared_conn = &first_ctx.conn_state;
     first_ctx.conn_state.peer_ip = first_ctx.peer_ip;
 
     state_handed_off = true;
-    distributed_planner_handed_off = true;
     conn_state_handed_off = true;
     line_reader_handed_off = true;
     stream_handed_off = true;

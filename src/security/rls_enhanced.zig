@@ -54,7 +54,6 @@ pub const EnhancedRLSEngine = struct {
     allocator: Allocator,
     base_engine: rls.RLSEngine,
     expression_compiler: ExpressionCompiler,
-    policy_optimizer: PolicyOptimizer,
     statistics_collector: RLSStatisticsCollector,
     cache_manager: EnhancedCacheManager,
 
@@ -65,7 +64,6 @@ pub const EnhancedRLSEngine = struct {
             .allocator = allocator,
             .base_engine = try rls.RLSEngine.init(allocator),
             .expression_compiler = try ExpressionCompiler.init(allocator),
-            .policy_optimizer = try PolicyOptimizer.init(allocator),
             .statistics_collector = try RLSStatisticsCollector.init(allocator),
             .cache_manager = try EnhancedCacheManager.init(allocator),
         };
@@ -74,7 +72,6 @@ pub const EnhancedRLSEngine = struct {
     pub fn deinit(self: *Self) void {
         self.base_engine.deinit();
         self.expression_compiler.deinit();
-        self.policy_optimizer.deinit();
         self.statistics_collector.deinit();
         self.cache_manager.deinit();
     }
@@ -708,85 +705,6 @@ pub const ExpressionCompiler = struct {
             hour >= start_hour or hour <= end_hour; // Wrap around midnight
 
         return rls.Value{ .boolean = in_range };
-    }
-};
-
-// Policy Optimizer for efficient policy evaluation
-pub const PolicyOptimizer = struct {
-    allocator: Allocator,
-    optimization_cache: std.HashMap(u64, OptimizedPolicySet, std.hash_map.DefaultHashContext, 80),
-
-    const OptimizedPolicySet = struct {
-        policies: []rls.RLSEngine.Policy,
-        evaluation_order: []usize,
-        short_circuit_points: []usize,
-    };
-
-    pub fn init(allocator: Allocator) !PolicyOptimizer {
-        return PolicyOptimizer{
-            .allocator = allocator,
-            .optimization_cache = std.HashMap(u64, OptimizedPolicySet, std.hash_map.DefaultHashContext, 80).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *PolicyOptimizer) void {
-        var it = self.optimization_cache.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.value_ptr.evaluation_order);
-            self.allocator.free(entry.value_ptr.short_circuit_points);
-        }
-        self.optimization_cache.deinit();
-    }
-
-    pub fn optimizePolicies(
-        self: *PolicyOptimizer,
-        policies: []const rls.RLSEngine.Policy,
-    ) !std.ArrayList(rls.RLSEngine.Policy) {
-        // Calculate hash for caching
-        const policies_hash = self.calculatePoliciesHash(policies);
-
-        if (self.optimization_cache.get(policies_hash)) |cached| {
-            var result = std.ArrayList(rls.RLSEngine.Policy).init(self.allocator);
-            try result.appendSlice(cached.policies);
-            return result;
-        }
-
-        // Optimize policy evaluation order
-        var optimized = std.ArrayList(rls.RLSEngine.Policy).init(self.allocator);
-        try optimized.appendSlice(policies);
-
-        // Sort by priority and performance characteristics
-        std.sort.insertion(rls.RLSEngine.Policy, optimized.items, {}, policyCompareFn);
-
-        return optimized;
-    }
-
-    fn calculatePoliciesHash(self: *PolicyOptimizer, policies: []const rls.RLSEngine.Policy) u64 {
-        _ = self;
-        var hasher = std.hash.Wyhash.init(0);
-
-        for (policies) |policy| {
-            hasher.update(std.mem.asBytes(&policy.id));
-            hasher.update(std.mem.asBytes(&policy.enabled));
-            hasher.update(std.mem.asBytes(&policy.permissive));
-        }
-
-        return hasher.final();
-    }
-
-    fn policyCompareFn(context: void, a: rls.RLSEngine.Policy, b: rls.RLSEngine.Policy) bool {
-        _ = context;
-
-        // Prioritize enabled policies
-        if (a.enabled != b.enabled) {
-            return a.enabled;
-        }
-
-        // Prioritize simpler expressions (faster evaluation)
-        const a_complexity = if (a.using_expr) |expr| expr.raw.len else 0;
-        const b_complexity = if (b.using_expr) |expr| expr.raw.len else 0;
-
-        return a_complexity < b_complexity;
     }
 };
 
