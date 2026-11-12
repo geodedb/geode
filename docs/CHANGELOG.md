@@ -2598,6 +2598,19 @@
 
 ### Removed
 
+- **Test files no build step compiled, cited by TESTED markers (SONNY-6430
+  item 4).** `tests/test_mfa_policies.zig` now drives the real
+  `SecurityManager` and runs as `zig build test-mfa-policies` (6/6); the
+  attestation signature checks of `tests/test_remote_kms_attestation.zig`
+  run in `test-remote-kms-hardening`
+  (`SignatureVerifyTamperDetect`). Removed, with their markers repointed to
+  tests that run: `tests/canary_mfa_core_additional.zig` (it removed
+  recovery codes itself and called no product code),
+  `tests/test_remote_kms_auth_negative.zig` (covered by `InvalidAuth`),
+  `tests/test_remote_kms_unwrap_attest.zig` and
+  `tests/test_tde_oltp_overhead_threshold.zig` (it asserted `true`). The
+  "<5% TDE overhead" figure in README.md and docs/KMS_PROVIDER_SYSTEM.md is
+  now called a target: no geode test measures it.
 - **The uninstalled mutation-notify callback in `src/graph_store.zig`
   (SONNY-6430 item 3).** `setMutationNotify` / `setMutationNotifyInhibit`
   had no caller since the WAL wrapper was removed (SONNY-6422), so the 15

@@ -115,6 +115,60 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation" {
     }.f);
 }
 
+// SONNY-6430 (4): ported from tests/test_remote_kms_attestation.zig, which
+// no build step compiled (it cited fixed ports and a removed API). The
+// server's Attest answer carries an Ed25519 signature over
+// "GEODE-KMS-ATTEST" || hash: it verifies under the returned public key, and
+// a flipped signature byte, another hash or the unwrap domain do not.
+// CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SignatureVerifyTamperDetect; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect; OWNER=security; UPDATED=2026-11-12
+test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect" {
+    try withServer("tok-attest", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
+            std.mem.doNotOptimizeAway(s);
+            var c = try connectClient(port, "tok-attest");
+            defer c.deinit();
+            const qc = &c.quic_client.?;
+            var stream = try qc.getStream();
+            defer stream.close();
+            try stream.writeAll("{\"op\":\"Attest\",\"auth\":\"tok-attest\"}\n");
+            var waited_ms: u32 = 0;
+            const resp = while (true) {
+                try qc.poll(50);
+                break stream.readLine(8192) catch |err| {
+                    if (err != error.WouldBlock) return err;
+                    if (waited_ms >= 30_000) return error.Timeout;
+                    waited_ms += 60;
+                    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch {};
+                    continue;
+                };
+            };
+            var hash: [32]u8 = undefined;
+            var pub_key: [32]u8 = undefined;
+            var sig: [64]u8 = undefined;
+            try hexField(resp, "\"hash\":\"", &hash);
+            try hexField(resp, "\"pub\":\"", &pub_key);
+            try hexField(resp, "\"sig\":\"", &sig);
+            try std.testing.expect(!std.mem.allEqual(u8, &hash, 0));
+            try std.testing.expect(kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, hash, sig, false));
+            var bad_sig = sig;
+            bad_sig[10] ^= 0xAA;
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, hash, bad_sig, false));
+            var bad_hash = hash;
+            bad_hash[0] ^= 0x01;
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, bad_hash, sig, false));
+            // Domain separation: an Attest signature is not an unwrap attestation.
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, hash, sig, true));
+        }
+    }.f);
+}
+
+fn hexField(resp: []const u8, tag: []const u8, out: []u8) !void {
+    const at = std.mem.indexOf(u8, resp, tag) orelse return error.FieldMissing;
+    const start = at + tag.len;
+    if (resp.len < start + out.len * 2) return error.FieldTruncated;
+    _ = try std.fmt.hexToBytes(out, resp[start .. start + out.len * 2]);
+}
+
 const StressWorker = struct {
     port: u16,
     env: kms.Envelope,

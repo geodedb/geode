@@ -6488,6 +6488,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_auth_test.step, 1, test_shard_loads, test_shard_index);
     const auth_test_step = b.step("test-geode-auth-lib", "Run geode_auth_lib.zig inline unit tests");
     auth_test_step.dependOn(&run_auth_test.step);
+    // SONNY-6430 (4): MFA admin-policy evaluation against the real
+    // SecurityManager (the file was cited by TESTED markers and never built).
+    const mfa_policies_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_mfa_policies.zig"), .target = target, .optimize = optimize });
+    mfa_policies_test_mod.link_libc = true;
+    mfa_policies_test_mod.addImport("geode_auth", auth_mod);
+    const mfa_policies_tests = b.addTest(.{ .root_module = mfa_policies_test_mod });
+    const run_mfa_policies_tests = b.addRunArtifact(mfa_policies_tests);
+    shardDep(test_step, &run_mfa_policies_tests.step, 1, test_shard_loads, test_shard_index);
+    const mfa_policies_step = b.step("test-mfa-policies", "Run MFA admin-policy evaluation tests (role match and cache, all-roles, time window, risk score, re-auth interval) against the real SecurityManager");
+    mfa_policies_step.dependOn(&run_mfa_policies_tests.step);
 
     const rls_test = b.addTest(.{
         .root_module = rls_mod,

@@ -16,9 +16,9 @@ This matrix reflects updated evidence as of 2025-09-27, including Remote KMS neg
 | Backup/Restore Key Handling       | NOT IMPLEMENTED | Key-registry export/import (`backup_key_envelope.zig`) was never compiled and was removed (SONNY-6298) | Implement if needed                                                  | Med  |
 | MFA Core (TOTP + Recovery)        | PARTIAL  | Auth + recovery code consumption tests                                                                        | Policy matrix & re-auth interval enforcement                         | Med  |
 | MFA Audit Logging                 | NOT VERIFIED | No test checks MFA audit events (SONNY-6422)                                                                | Add an audit event test                                              | Low  |
-| MFA Policy Engine                 | PARTIAL  | The TimeWindow/Risk/Reauth tests are in `tests/test_mfa_policies.zig`, which no build step compiles (SONNY-6422) | Register the test                                                    | Med  |
-| Remote KMS Attestation            | COMPLETE | Real Ed25519 hash+pub+sig; cryptographic tests                                                                | Add unwrap signature validation test                                 | Low  |
-| Performance Validation (<5% OLTP) | NOT VERIFIED | The OLTP threshold test `tests/test_tde_oltp_overhead_threshold.zig` is compiled by no build step (SONNY-6422) | Register and calibrate the measurement                               | High |
+| MFA Policy Engine                 | COMPLETE | Role match/cache, all-roles, time window, risk score and re-auth interval against the real SecurityManager (`zig build test-mfa-policies`, SONNY-6430) | N/A                                                                  | Med  |
+| Remote KMS Attestation            | PARTIAL  | Real Ed25519 hash+pub+sig; the server's signature verifies and a tampered signature, hash or domain does not (`zig build test-remote-kms-hardening`). `RemoteKmsClient.attest` itself does not verify the signature (SONNY-6430) | Verify the signature in the client; add an unwrap signature test     | Low  |
+| Performance Validation (<5% OLTP) | NOT VERIFIED | No test or benchmark measures it: `tests/test_tde_oltp_overhead_threshold.zig` (never compiled, asserted `true`) was removed (SONNY-6430); `benchmarks/benchmark_tde_oltp_overhead.zig` is a simulation no build step compiles | Write and calibrate a real measurement                               | High |
 | Secrets Zeroization               | PARTIAL  | Callers use `std.crypto.secureZero` directly; `src/security/test_secure_zero.zig` checks `kms.zig` and `tde_nonce_gen.zig` for bare `@memset`. The `secure_mem.zig` wipe utility was never compiled and was removed (SONNY-6298) | Integrate structured audit on failure                                | Med  |
 | Rotation Scheduling (operator)    | PARTIAL  | `scheduleRotation` predicate + `rotateIfDue` tick (injected clock, `test-gap0890`); NO in-server timer — scheduling is operator/cron-invoked (GAP-0890 residual) | In-server scheduler only if a production consumer of KeyRegistry lands | Low  |
 | Privileged Unwrap Path            | COMPLETE | Privileged unwrap round‑trip test                                                                             | Add negative auth + tamper detection                                 | Med  |
@@ -37,7 +37,7 @@ CANARY: REQ=REQ-GQL-TDE-EXT-KMS-001; FEATURE="ExternalKMSWrapUnwrap"; ASPECT=SEC
 CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/canary_remote_kms.zig|tests/canary_remote_kms_hardening.zig; OWNER=security; UPDATED=2026-11-12
 CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/canary_mfa_recovery_code_contention.zig|tests/canary_mfa_risk_stepup.zig; OWNER=security; UPDATED=2026-11-12
 CANARY: REQ=REQ-GQL-MFA-AUDIT-001; FEATURE="MfaAuditLogging"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
-CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
+CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mfa_policies.zig; OWNER=security; UPDATED=2026-11-12
 CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/canary_remote_kms.zig|tests/canary_remote_kms_hardening.zig; OWNER=security; UPDATED=2026-11-12
 CANARY: REQ=REQ-GQL-TDE-OLTP-PERF-001; FEATURE="TDEOlptOverheadValidation"; ASPECT=PERFORMANCE; STATUS=IMPL; OWNER=perf; UPDATED=2026-11-12
 CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/canary_remote_kms.zig; OWNER=security; UPDATED=2026-11-12
@@ -55,6 +55,17 @@ CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=SECU
 > test files a build step runs; WAL encryption, MFA audit logging, the MFA
 > policy engine and the OLTP overhead validation have no compiled test and
 > are IMPL.
+>
+> SONNY-6430: `tests/test_mfa_policies.zig` now builds and runs
+> (`zig build test-mfa-policies`), so the MFA policy engine is TESTED; the
+> attestation signature checks of `tests/test_remote_kms_attestation.zig`
+> run in `tests/canary_remote_kms_hardening.zig`. The other uncompiled files
+> were removed: `tests/canary_mfa_core_additional.zig` (it removed recovery
+> codes itself and called no product code),
+> `tests/test_remote_kms_auth_negative.zig` (covered by
+> `TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth`),
+> `tests/test_remote_kms_unwrap_attest.zig` and
+> `tests/test_tde_oltp_overhead_threshold.zig`.
 
 ### Notes
 

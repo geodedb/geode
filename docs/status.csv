@@ -215,7 +215,7 @@ REQ-AUTH-CONFIG-001,UserAuthPolicy,ConfigurablePolicy,TESTED,,,security,2026-01-
 REQ-AUTH-DEFAULT-001,AuthDefault,UserCreation,IMPL,,,security,2026-11-12,tests/test_gap_0193_batch2_security.zig,46
 REQ-AUTH-DEFAULT-001,Default User Creation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,1677
 REQ-AUTH-ENFORCE-003,AuthEnforcement,UnitTests,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig,1
-REQ-AUTH-ENFORCE-004,AuthEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig,6500
+REQ-AUTH-ENFORCE-004,AuthEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig,6510
 REQ-AUTH-ENFORCE-025,AuthEnforcement,AuthorizationTests,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig,210
 REQ-AUTH-ENFORCE-026,AuthEnforcement,OperationMapping,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig,436
 REQ-AUTH-ENFORCE-027,AuthEnforcement,SecurityBoundaries,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig,474
@@ -1692,7 +1692,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,910
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,15341
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,15351
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2096
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1474
@@ -1839,7 +1839,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,125
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,15350
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,15360
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1687
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1939
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1036
@@ -1851,7 +1851,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7605
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,15362
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,15372
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -2823,8 +2823,8 @@ REQ-GQL-MATCH-CREATE-COUNTERS,MatchCreateCounters,SummaryColumns,TESTED,,,execut
 REQ-GQL-MEAN-DISTANCE-001,MeanDistance,Statistics,EXEMPT,,,graph,2026-01-03,src/execution/centrality_algorithms.zig,2044
 REQ-GQL-MEAN-DISTANCE-001,Statistics,MeanDistance,IMPL,,,graph,2026-11-12,tests/test_gap_0193_batch2_engine.zig,266
 REQ-GQL-MFA-002,MFA authentication enforcement,SECURITY,TESTED,,,security,2025-09-26,tests/unit_mfa_enforcement.zig,7
-REQ-GQL-MFA-003,MFA admin policy,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,289
-REQ-GQL-MFA-003,MFA admin policy,SECURITY,TESTED,,,security,2025-09-26,tests/test_mfa_policies.zig,7
+REQ-GQL-MFA-003,MFA admin policy,RoleMatchAndCache,TESTED,,,security,2026-11-12,tests/test_mfa_policies.zig,10
+REQ-GQL-MFA-003,MFA admin policy,SECURITY,TESTED,,,security,2026-11-12,src/security/geode_auth_lib.zig,289
 REQ-GQL-MFA-004,MFA challenge issued,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,643
 REQ-GQL-MFA-004,MFA challenge issued,SECURITY,TESTED,,,security,2025-09-26,tests/test_auth_mfa_flows.zig,7
 REQ-GQL-MFA-005,MFA challenge success,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,647
@@ -2841,13 +2841,7 @@ REQ-GQL-MFA-010,ConfigurableElevationTTL,TEST,TESTED,,,security,2025-09-26,tests
 REQ-GQL-MFA-AUDIT-001,MfaAuditLogging,SECURITY,IMPL,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,39
 REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,RobustnessBase32Decode,TESTED,,,security,2025-09-26,tests/canary_mfa_base32_negative.zig,6
 REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,38
-REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,TESTED,,,security,2025-09-26,src/security/mfa.zig,44
-REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,TESTED,,,security,2025-09-26,tests/canary_mfa_core_additional.zig,7
-REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,TESTED,,,security,2025-09-26,tests/canary_mfa_core_additional.zig,8
-REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,TESTED,,,security,2025-09-26,tests/canary_mfa_core_additional.zig,9
-REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,TESTED,,,security,2025-09-26,tests/canary_mfa_core_additional.zig,10
-REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,TESTED,,,security,2025-09-26,tests/canary_mfa_core_additional.zig,11
-REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,TESTED,,,security,2025-09-26,tests/canary_mfa_core_additional.zig,12
+REQ-GQL-MFA-CORE-001,MfaCoreTotpRecovery,SECURITY,TESTED,,,security,2026-11-12,src/security/mfa.zig,44
 REQ-GQL-MFA-CORE-001,MfaRecoveryCodeContention,ConcurrentSingleUseRedemption,TESTED,,,security,2026-09-23,tests/canary_mfa_recovery_code_contention.zig,22
 REQ-GQL-MFA-CORE-001,MfaRecoveryCodeContention,VarianceEnvelope,BENCHED,,,security,2025-09-27,benchmarks/benchmark_mfa_recovery_code_contention.zig,16
 REQ-GQL-MFA-CORE-001,MfaRiskSensitivity,RiskModel,TESTED,,,security,2025-09-27,src/security/mfa_risk.zig,6
@@ -2856,9 +2850,9 @@ REQ-GQL-MFA-CORE-001,MfaRiskStepUpDecision,DecisionLogic,TESTED,,,security,2025-
 REQ-GQL-MFA-CORE-001,MfaRiskStepUpDecision,DecisionLogic,TESTED,,,security,2025-09-27,tests/canary_mfa_risk_stepup.zig,8
 REQ-GQL-MFA-CORE-001,MfaRiskStepUpDecision,LatencyVarianceEnvelope,BENCHED,,,security,2025-09-27,benchmarks/benchmark_mfa_stepup_latency.zig,17
 REQ-GQL-MFA-PERF-001,MfaPolicyEvaluation,VarianceEnvelope,BENCHED,,,security,2025-09-26,benchmarks/benchmark_mfa_policy_evaluation_variance.zig,13
-REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,IMPL,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,40
-REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,,,security,2025-09-26,src/security/geode_auth_lib.zig,1100
-REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,,,security,2025-09-26,tests/test_mfa_policies.zig,46
+REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,DynamicConditions,TESTED,,,security,2026-11-12,tests/test_mfa_policies.zig,11
+REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,40
+REQ-GQL-MFA-POLICY-001,MfaPolicyEngine,SECURITY,TESTED,,,security,2026-11-12,src/security/geode_auth_lib.zig,1100
 REQ-GQL-MFA-STEPUP-001,MfaStepUpVerification,SecurityEnforcement,EXEMPT,,,security,2026-01-10,src/security/mfa_risk.zig,69
 REQ-GQL-MULTI-CHAIN-REL-001,MultiChainRel,Match,IMPL,,,engine,2026-11-12,tests/test_gap_0193_batch2_engine.zig,115
 REQ-GQL-MULTI-CHAIN-REL-001,MultiChainRelationshipMatch,Execution,TESTED,,,engine,2025-12-23,src/execution/match_operations.zig,6000
@@ -3016,9 +3010,8 @@ REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,,,security,2025-10-05,src/
 REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,,,security,2025-10-05,tests/test_kms_provider.zig,5
 REQ-GQL-SEC-TDE-OVERHEAD-001,TDEEncryptBenchmark,PERFORMANCE,BENCHED,,,security,2025-09-26,benchmarks/benchmark_tde_encrypt_pages.zig,9
 REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,43
-REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,SECURITY,TESTED,,,security,2025-09-26,src/security/kms_remote.zig,49
+REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,SECURITY,TESTED,,,security,2026-11-12,src/security/kms_remote.zig,49
 REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,TEST,TESTED,,,security,2025-09-26,tests/canary_remote_kms.zig,14
-REQ-GQL-SEC-UNWRAP-001,PrivilegedUnwrapPath,TEST,TESTED,,,security,2025-09-26,tests/test_remote_kms_unwrap_attest.zig,6
 REQ-GQL-SET-OPERATIONS,SetOperations,Core,TESTED,,,team,2025-10-02,tests/integration/test_union_operations.zig,385
 REQ-GQL-SET-QUANTIFIER-001,AggregateSetQuantifier,DistinctAccumulator,TESTED,,,execution,2026-07-31,src/execution/distinct_set.zig,9
 REQ-GQL-SET-QUANTIFIER-002,AggregateSetQuantifier,ASTNode,TESTED,,,parser,2026-07-31,src/gql/ast.zig,385
@@ -3057,30 +3050,27 @@ REQ-GQL-TDE-001,TDE performance benchmark,PERFORMANCE,BENCHED,,,security,2025-09
 REQ-GQL-TDE-002,Snapshot encryption,TEST,TESTED,,,security,2026-02-04,tests/unit_graphstore_encryption_round_trip.zig,7
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ExpiredAttestation,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,23
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,41
-REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,,,security,2025-09-26,src/security/kms_remote.zig,48
-REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,,,security,2025-09-26,tests/test_remote_kms_attestation.zig,3
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,,,security,2026-11-12,src/security/kms_remote.zig,48
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SignatureVerifyTamperDetect,TESTED,,,security,2026-11-12,tests/canary_remote_kms_hardening.zig,123
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,,,security,2025-09-26,tests/canary_remote_kms.zig,13
-REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,,,security,2025-09-26,tests/test_remote_kms_unwrap_attest.zig,5
 REQ-GQL-TDE-ATTEST-REAL-001,RealEd25519Attestation,SECURITY,TESTED,,,security,2026-01-16,src/security/tde.zig,787
 REQ-GQL-TDE-AWS-001,AwsKmsIntegration,SECURITY,IMPL,,,security,2026-11-12,src/security/external_kms_client.zig,463
 REQ-GQL-TDE-CORE-001,AES256GcmPrimitive,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,32
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSIntegration,SECURITY,TESTED,,,security,2026-01-15,src/security/external_kms_client.zig,63
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSWrapUnwrap,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,36
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSWrapUnwrap,TEST,TESTED,,,security,2026-11-12,tests/test_external_kms_provider.zig,8
-REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSAuthGuard,SECURITY,TESTED,,,security,2025-09-26,tests/test_remote_kms_auth_negative.zig,3
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,BENCHED,,,security,2025-09-26,benchmarks/benchmark_remote_kms_unwrap_concurrency.zig,5
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,BENCHED,,,security,2025-09-26,benchmarks/benchmark_remote_kms_unwrap_concurrency.zig,40
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,24
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,BENCHED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,25
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,NegativeAuthMatrix,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,22
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,37
-REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,,,security,2025-09-26,src/security/kms_remote.zig,47
+REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,,,security,2026-11-12,src/security/kms_remote.zig,47
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,,,security,2025-09-26,tests/canary_remote_kms.zig,12
 REQ-GQL-TDE-KEYID-001,SecureKeyIdDerivation,Security,EXEMPT,,,security,2026-01-10,src/security/tde_key_manager.zig,84
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,BENCHED,,,perf,2025-09-26,benchmarks/benchmark_tde_oltp_overhead.zig,3
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,IMPL,,,perf,2026-11-12,docs/SECURITY_PROGRESS.md,42
-REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PERFORMANCE,TESTED,,,perf,2025-09-26,tests/test_tde_oltp_overhead_threshold.zig,2
-REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,,,perf,2026-09-23,tests/canary_tde_published_overhead_sync.zig,8
+REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,,,perf,2026-09-23,tests/canary_tde_published_overhead_sync.zig,11
 REQ-GQL-TDE-OVERHEAD-001,TDEOverheadSmoke,BENCH,TESTED,,,security,2026-01-16,tests/benchmark_tde_overhead_smoke.zig,8
 REQ-GQL-TDE-PAGE-001,PageEncryption,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,33
 REQ-GQL-TDE-SSS-001,ShamirSecretSharing,KeyEscrow,EXEMPT,,,security,2026-01-10,src/security/tde.zig,256
@@ -4273,7 +4263,7 @@ REQ-QUALITY-GAP-406-007,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-
 REQ-QUALITY-GAP-406-008,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/log/logger.zig,155
 REQ-QUALITY-GAP-406-011,SafeStdioHandles,ErrorHandling,TESTED,,,quality,2026-01-30,src/fuzz/main.zig,13
 REQ-QUALITY-GAP-413-001,OrphanedTestFix,API,TESTED,,,quality,2026-01-30,src/performance/json_optimized_fixed.zig,5
-REQ-QUALITY-GAP-413-002,OrphanedTestRemediation,BuildSystem,TESTED,,,quality,2026-01-30,build.zig,6564
+REQ-QUALITY-GAP-413-002,OrphanedTestRemediation,BuildSystem,TESTED,,,quality,2026-01-30,build.zig,6574
 REQ-QUALITY-GAP-413-003,OrphanedTestRemediation,AuditFilters,TESTED,,,quality,2026-01-30,tests/test_filters.zig,3
 REQ-QUALITY-GAP-413-004,OrphanedTestRemediation,AuditTransports,TESTED,,,quality,2026-01-30,tests/test_transports.zig,3
 REQ-QUALITY-GAP-413-005,OrphanedTestRemediation,AuditCef,TESTED,,,quality,2026-01-30,tests/test_cef.zig,3
@@ -5849,7 +5839,7 @@ REQ-TDE-ENFORCE-011,TDEEnforcement,NonceUniqueness,TESTED,,,security,2026-01-28,
 REQ-TDE-ENFORCE-012,TDEEnforcement,MemorySecurity,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig,366
 REQ-TDE-ENFORCE-013,TDEEnforcement,Verification,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig,391
 REQ-TDE-ENFORCE-014,TDEEnforcement,PerformanceThreshold,TESTED,,,security,2026-01-28,src/security/test_tde_enforcement.zig,422
-REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig,6538
+REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig,6548
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,<Component>,TESTED,,,security,2026-01-28,docs/TDE_FILE_LEVEL_ENCRYPTION.md,182
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FLECatalog,TESTED,,,security,2026-01-28,src/schema/fle_catalog.zig,12
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-04-01,src/index/hnsw_persist.zig,5

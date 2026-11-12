@@ -41,7 +41,7 @@ const mfa_policy = @import("mfa_policy");
 
 // Multi-Factor Authentication (MFA) test support and compliance helpers.
 // Production auth and CLI code import the external auth library directly.
-// CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeSingleUse|TestCANARY_REQ_GQL_MFA_CORE_001_ReauthIntervalPolicyTrigger|TestCANARY_REQ_GQL_MFA_CORE_001_ElevationTtlExpiry|TestCANARY_REQ_GQL_MFA_CORE_001_DynamicPolicyCacheBypass|TestCANARY_REQ_GQL_MFA_CORE_001_EndToEndElevationFlow; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/canary_mfa_recovery_code_contention.zig|tests/canary_mfa_risk_stepup.zig; OWNER=security; UPDATED=2026-11-12
 
 pub fn globallyEnabled() bool {
     return flags_mod.global().mfa.enabled();

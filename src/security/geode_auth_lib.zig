@@ -286,7 +286,7 @@ pub const Operation = enum { select, insert, update, delete, all };
 pub const RowLevelPolicy = struct { id: PolicyId, name: []const u8, table: []const u8, operation: Operation, using_clause: []const u8, check_clause: ?[]const u8, roles: []const RoleId, enabled: bool };
 
 // ---- MFA Admin Policy ----
-// CANARY: REQ=REQ-GQL-MFA-003; FEATURE="MFA admin policy"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAllRoles|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAnyRole; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-MFA-003; FEATURE="MFA admin policy"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mfa_policies.zig; OWNER=security; UPDATED=2026-11-12
 pub const MfaScope = enum { user, role, attribute };
 pub const MfaConditionType = enum {
     match_any_role,
@@ -1097,7 +1097,7 @@ pub const SecurityManager = struct {
     }
 
     // Extended evaluation considering dynamic conditions (time window, risk, reauth interval).
-    // CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mfa_policies.zig; OWNER=security; UPDATED=2026-11-12
     pub fn evaluateMfaPoliciesAdvanced(self: *Self, u: *User, session: ?*Session, now_ms: i64) bool {
         self.auth_mu.lock();
         defer self.auth_mu.unlock();
