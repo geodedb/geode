@@ -46,6 +46,24 @@
   synced; a failure removes only the temporary file. `--local` already wrote
   this way (SONNY-6323). `geode backup create --help` says so. Regression:
   `zig build test-sonny6386-remote-backup-atomic-output`.
+- **BREAKING (library API): `security.key_rotation.KeyRegistry` loses the
+  uncompiled `saveState` / `loadState` and the simulated-KMS
+  `rotateWithKms` / `setKmsSeed` (SONNY-6386 item 5).** The registry has no
+  production caller (it is exported from `lib.zig` and used by tests and
+  `bench-tde-key-rotate`). The persistence functions predated the Zig 0.16
+  std.Io migration and never compiled; `loadState` could unwrap a persisted
+  envelope only with the local simulated KMS (a key derived from a seed),
+  and `rotateWithKms` wrapped with that simulator. Their only tests
+  (`tests/test_key_rotation_persistence.zig`, `_checksum.zig`,
+  `_kms_envelopes.zig`) were in no build step and are removed. The markers
+  that cited them are corrected: REQ-GQL-SEC-KEYROT-STATE-001 is removed;
+  REQ-GQL-KMS-BACKEND-001, -CONFIG-001, REQ-KMS-TLS-SAFETY-001 and
+  REQ-HEX-PARSE-001 are TESTED against new tests of the KMS production
+  guards and envelope hex parsing, REQ-GQL-KMS-LOCALSIM-001 against
+  `test-external-kms-provider`, and REQ-GQL-TDE-VAULT-001 / -AWS-001 (the
+  Vault and AWS network clients, which no test reaches) are IMPL.
+  `docs/DESIGN_TDE_KMS.md` no longer lists rotation persistence as
+  implemented. Regression: `zig build test-sonny6386-key-rotation-truth`.
 - **Dead mock test removed and stale architecture docs corrected
   (SONNY-6386 items 4 and 8).** `tests/test_backup_integration.zig`
   redefined `BackupConfig`, `BackupType`, `BackupMetadata` and a backup

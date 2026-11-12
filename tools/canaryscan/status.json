@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:56:14.907509755Z",
+  "generated_at": "2026-11-12T18:59:19.181481841Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -43685,78 +43685,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-SEC-KEYROT-KMS-001",
-      "features": [
-        {
-          "feature": "KeyRotationKmsEnvelopes",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "tests/test_key_rotation_kms_envelopes.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_KMS_001_Envelopes"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-SEC-KEYROT-STATE-001",
-      "features": [
-        {
-          "feature": "KeyRotationStatePersistence",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "src/security/key_rotation.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "KeyRotationStatePersistence",
-          "aspect": "TEST",
-          "status": "TESTED",
-          "files": [
-            "tests/test_key_rotation_persistence.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave",
-            "TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_NoFile"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-SEC-KEYROT-STATE-CHK-001",
-      "features": [
-        {
-          "feature": "KeyRotationStateChecksum",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "tests/test_key_rotation_checksum.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_STATE_CHK_001"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-SEC-KMS-001",
       "features": [
         {
@@ -46958,42 +46886,8 @@
             "src/security/external_kms_client.zig"
           ],
           "tests": [
-            "tests/test_key_rotation_kms_envelopes.zig"
+            "tests/test_sonny6386_key_rotation_truth.zig"
           ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-HEX-PARSE-KEYROT-001",
-      "features": [
-        {
-          "feature": "Safe Hex Parsing",
-          "aspect": "Security",
-          "status": "IMPL",
-          "files": [
-            "src/security/key_rotation.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-HEX-PARSE-KEYROT-002",
-      "features": [
-        {
-          "feature": "Safe Hex Parsing",
-          "aspect": "Security",
-          "status": "IMPL",
-          "files": [
-            "src/security/key_rotation.zig"
-          ],
-          "tests": [],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
@@ -47633,23 +47527,6 @@
       ]
     },
     {
-      "id": "REQ-KEY-ROTATION-003",
-      "features": [
-        {
-          "feature": "SecureKmsKeyRotation",
-          "aspect": "Security",
-          "status": "EXEMPT",
-          "files": [
-            "src/security/key_rotation.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-10"
-        }
-      ]
-    },
-    {
       "id": "REQ-KMS-REMOTE-CLIENT-001",
       "features": [
         {
@@ -47814,11 +47691,11 @@
             "src/security/external_kms_client.zig"
           ],
           "tests": [
-            "tests/test_key_rotation_kms_envelopes.zig"
+            "tests/test_sonny6386_key_rotation_truth.zig"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -87072,9 +86949,9 @@
     "by_status": {
       "BENCHED": 215,
       "COMPLETE": 2,
-      "EXEMPT": 217,
-      "IMPL": 338,
-      "TESTED": 4477
+      "EXEMPT": 216,
+      "IMPL": 336,
+      "TESTED": 4473
     },
     "by_aspect": {
       "2PC": 3,
@@ -90135,7 +90012,7 @@
       "SCC_WRAPPER": 1,
       "SCHEMA": 2,
       "SEARCH": 2,
-      "SECURITY": 41,
+      "SECURITY": 38,
       "SERVER_INIT": 1,
       "SERVER_STATE": 1,
       "SERVER_STATE_STRUCT": 1,
@@ -90192,7 +90069,7 @@
       "SecondsPrecisionDeclaration": 1,
       "SecureConnection": 1,
       "SecureDefaults": 1,
-      "Security": 52,
+      "Security": 49,
       "SecurityAudit": 3,
       "SecurityBatch2": 1,
       "SecurityBoundaries": 1,
@@ -90542,7 +90419,7 @@
       "SyslogTests": 1,
       "TDE": 2,
       "TDERotationVarianceEnvelope": 1,
-      "TEST": 13,
+      "TEST": 12,
       "TESTING": 13,
       "TLS": 1,
       "TLSConnection": 1,

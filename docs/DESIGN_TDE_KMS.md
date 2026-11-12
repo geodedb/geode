@@ -6,8 +6,9 @@
 > encrypt/decrypt/rotate over `std.http`) and `AwsKmsClient` (AWS KMS
 > Encrypt/Decrypt/GenerateDataKey), with production-safety guards
 > (`KmsBackend.isProductionSafe`, `KmsConfig.validateForProduction`) covered by
-> `tests/test_key_rotation_kms_envelopes.zig`, and a QUIC remote-KMS round-trip
-> suite (`zig build test-remote-kms`). The Status Summary table at the bottom
+> `zig build test-sonny6386-key-rotation-truth`, and a QUIC remote-KMS
+> round-trip suite (`zig build test-remote-kms`). No test reaches the Vault or
+> AWS network clients (their markers are IMPL, SONNY-6386). The Status Summary table at the bottom
 > has been rebaselined; the design narrative is kept as written for history.
 
 ## Scope
@@ -57,7 +58,7 @@ Master (provider source) -> Derivation -> { data_key, wal_key }
 
 ## Backup / Restore Handling (Planned)
 
-1. Persist rotation state (already) alongside encrypted data pages.
+1. Persist rotation state alongside encrypted data pages (not implemented: `KeyRegistry` is in memory only, SONNY-6386).
 2. On restore:
    - Load rotation state file first.
    - For each historical key id needed for page/WAL replay, request unwrap from KMS (future path) or derive (current stub paths).
@@ -92,8 +93,8 @@ Master (provider source) -> Derivation -> { data_key, wal_key }
 | ---------------------------- | ------------------------ |
 | StaticEnv Provider           | Stable                   |
 | MockKms Provider             | Stable (test-only)       |
-| ExternalKms Providers        | Implemented — `VaultTransitClient` + `AwsKmsClient` in `src/security/external_kms_client.zig` (`tests/test_key_rotation_kms_envelopes.zig`) |
-| Rotation Persistence         | Implemented              |
+| ExternalKms Providers        | Implemented, untested — `VaultTransitClient` + `AwsKmsClient` in `src/security/external_kms_client.zig`; no test reaches them (the production guards and envelope parsing: `test-sonny6386-key-rotation-truth`) |
+| Rotation Persistence         | Not implemented — `KeyRegistry` is in memory only; the uncompiled `saveState`/`loadState` (which could unwrap only with the local simulated KMS) were removed (SONNY-6386) |
 | Real-Path Overhead Benchmark | Partial (XOR stream sim) |
 | External KMS Network         | Implemented — real HTTP (Vault Transit, AWS KMS) + QUIC remote-KMS path (`zig build test-remote-kms`) |
 | Backup Key Workflow          | Not Started              |
