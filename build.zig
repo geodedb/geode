@@ -12815,6 +12815,15 @@ pub fn build(b: *std.Build) void {
     const sonny3056_step = b.step("test-sonny3056-lean-merge-evicted-holder", "Run SONNY-3056 regression (lean index mode, a small node cache: the executor's MERGE and the server's bulk MERGE helpers match a holder written before its MERGE key was registered and evicted since, also for a key registered through another label and after a reopen)");
     sonny3056_step.dependOn(&run_sonny3056_tests.step);
 
+    const sonny6354_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6354_lean_late_key_indexes.zig"), .target = target, .optimize = optimize });
+    sonny6354_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6354_test_mod.addImport("geode", root_mod);
+    const sonny6354_tests = b.addTest(.{ .root_module = sonny6354_test_mod });
+    const run_sonny6354_tests = b.addRunArtifact(sonny6354_tests);
+    shardDep(test_step, &run_sonny6354_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6354_step = b.step("test-sonny6354-lean-late-key-indexes", "Run SONNY-6354 regression (a node whose reserved id has bit 63 set takes property SETs and labels and never touches another node's MERGE entry; in lean index mode a key registered after its nodes were written is complete in the exact property index for WHERE / inline seeks and bulk endpoint resolution, also after a reopen; a composite MERGE key registered at runtime resolves a non-resident holder)");
+    sonny6354_step.dependOn(&run_sonny6354_tests.step);
+
     const sonny6268_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6268_graph_store_failure_atomicity.zig"), .target = target, .optimize = optimize });
     sonny6268_test_mod.addImport("geode", root_mod);
     const sonny6268_tests = b.addTest(.{ .root_module = sonny6268_test_mod });
