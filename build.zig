@@ -9807,6 +9807,20 @@ pub fn build(b: *std.Build) void {
     const sonny3381_step = b.step("test-sonny3381-undo-index-entries", "Run SONNY-3381 regression (after a failed statement and after ROLLBACK the full-text and vector indexes answer for the values the store holds: an undone SET, REMOVE, DELETE and CREATE of a fulltext-indexed property, an undone first vector and vector overwrite; live maintenance continues; gRPC in process)");
     sonny3381_step.dependOn(&run_sonny3381_tests.step);
 
+    const sonny6362_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6362_statement_undo_threads.zig"), .target = target, .optimize = optimize });
+    sonny6362_test_mod.link_libc = true;
+    sonny6362_test_mod.addImport("geode", root_mod);
+    sonny6362_test_mod.addImport("schema", schema_mod);
+    sonny6362_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6362_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6362_test_mod.addImport("logging", logging_mod);
+    sonny6362_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6362_tests = b.addTest(.{ .root_module = sonny6362_test_mod });
+    const run_sonny6362_tests = b.addRunArtifact(sonny6362_tests);
+    shardDep(test_step, &run_sonny6362_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6362_step = b.step("test-sonny6362-statement-undo-threads", "Run SONNY-6362 item 1 regression (the statement undo record is the statement's: writes a thread working for the statement makes are undone when it fails and seen by the UNIQUE and NOT NULL checks at its end; threads appending concurrently lose no entry; a parallel UNION's arms join the record; gRPC in process)");
+    sonny6362_step.dependOn(&run_sonny6362_tests.step);
+
     // SONNY-3384: MATCH ... SET ... DETACH DELETE ... RETURN runs every clause,
     // or is refused. gRPC in process.
     const sonny3384_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3384_set_detach_delete.zig"), .target = target, .optimize = optimize });
