@@ -5041,6 +5041,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_phantom_range_tests.step, 1, test_shard_loads, test_shard_index);
     const phantom_range_tests_step = b.step("test-canary-txn-phantom-range", "Run MVCC phantom-prevention range tracker CANARY tests (REQ-GQL-023)");
     phantom_range_tests_step.dependOn(&run_phantom_range_tests.step);
+    // SONNY-6422 item 7: the phantom check looks the range list up once per
+    // commit, not once per concurrent write.
+    const sonny6422_phantom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_phantom_check_once_per_commit.zig"), .target = target, .optimize = optimize }) });
+    sonny6422_phantom_tests.root_module.addImport("txn", txn_mod_for_phantom_range_tests);
+    sonny6422_phantom_tests.root_module.addImport("perf_gate", perf_gate_mod);
+    const run_sonny6422_phantom_tests = b.addRunArtifact(sonny6422_phantom_tests);
+    shardDep(test_step, &run_sonny6422_phantom_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6422-phantom-check-once-per-commit", "Run SONNY-6422 item 7 regression (a transaction with no range reads checks no concurrent writes against ranges at commit, so its phantom check stays flat as the write history grows 64x; a write inside a read range still fails the commit)").dependOn(&run_sonny6422_phantom_tests.step);
     const run_planner_enumerator_tests = b.addRunArtifact(planner_enumerator_tests);
     shardDep(test_step, &run_planner_enumerator_tests.step, 1, test_shard_loads, test_shard_index);
     const planner_enumerator_tests_step = b.step("test-canary-planner-enumerator", "Run cost-based plan enumeration engine CANARY tests (REQ-GQL-024)");
