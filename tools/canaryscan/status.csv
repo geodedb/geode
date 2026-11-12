@@ -5089,6 +5089,7 @@ REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED,FieldLevelEncryption,RotateKeyRefusedAsUns
 REQ-SONNY-6386-KEYROT-TRUTH,KeyRotation,NoUncompiledPersistenceOrSimulatedKmsClaims,TESTED,tests/test_sonny6386_key_rotation_truth.zig,tests/test_sonny6386_key_rotation_truth.zig,,security,2026-11-12
 REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,src/cli/backup_cli.zig,tests/test_sonny6386_remote_backup_atomic_output.zig,,cli,2026-11-12
 REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,tests/test_sonny6386_remote_backup_atomic_output.zig,,,cli,2026-11-12
+REQ-SONNY-6386-RESTORE-HMAC-FILE-TDE,Backup Restore,HmacKeyFileVsTdeKeyExplained,TESTED,tests/test_sonny6386_restore_hmac_key_file_with_tde.zig,tests/test_sonny6386_restore_hmac_key_file_with_tde.zig,,cli,2026-11-12
 REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED,TDE baseline,MalformedKeyRefusesStartup,TESTED,tests/test_sonny6386_tde_key_fail_closed.zig,tests/test_sonny6386_tde_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED,TDE baseline,ServerStartupRefusal,TESTED,src/server/server_init.zig,tests/test_sonny6386_tde_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

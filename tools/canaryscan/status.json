@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:59:19.181481841Z",
+  "generated_at": "2026-11-12T19:01:29.936820636Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79263,6 +79263,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6386-RESTORE-HMAC-FILE-TDE",
+      "features": [
+        {
+          "feature": "Backup Restore",
+          "aspect": "HmacKeyFileVsTdeKeyExplained",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED",
       "features": [
         {
@@ -86951,7 +86970,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4473
+      "TESTED": 4474
     },
     "by_aspect": {
       "2PC": 3,
@@ -88528,6 +88547,7 @@
       "HistogramStats": 1,
       "HistoryPersistence": 1,
       "HitCounter": 1,
+      "HmacKeyFileVsTdeKeyExplained": 1,
       "HomogeneousDetection": 1,
       "HomogeneousNodes": 1,
       "HomogeneousOperations": 1,
