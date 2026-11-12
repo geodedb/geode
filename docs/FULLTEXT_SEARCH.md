@@ -252,6 +252,18 @@ already in flight is refused (`RebuildInProgress`) rather than racing two
 drop→create sequences. Regression: `tests/test_fts_rebuild.zig` (`zig build
 test-fts-rebuild`).
 
+**Undo rebuilds the indexes it touched (SONNY-3381):** a statement that fails
+and a `ROLLBACK` (or rollback to a savepoint) undo their changes through the
+graph store, which the fulltext engine cannot follow: it is append-only, a
+SET's old postings stay, and a tombstoned document is never searchable again.
+After such an undo every fulltext index (and every vector or other advanced
+index) covering a property, label or node it reverted is rebuilt from the
+store as the undo left it (`execution/undo_index_repair.zig`, through
+`rebuildFulltextIndex` above), so a search no longer finds a node by a word
+an undone SET wrote, and finds a node whose DELETE was undone. The rebuild is
+O(nodes of the label) and runs only for such an undo. Regression:
+`zig build test-sonny3381-undo-index-entries`.
+
 **Ingestion invariant:** after any bulk-ingestion run, verify FTS visibility
 with a canary query (`CALL geode.fts.search(index, term)` for a term known to
 be present) before marking ingestion ready — cheap insurance, and the primary

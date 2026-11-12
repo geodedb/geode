@@ -80,7 +80,15 @@ ROLLBACK
 
 **Behavior:**
 
-- Discards all changes made during the transaction
+- Discards all changes made during the transaction: every statement's
+  creates, property SETs and REMOVEs, label changes and deletes are undone
+  through the store's write methods (SONNY-3059, SONNY-3348)
+- Rebuilds, from the store as the undo left it, every full-text and advanced
+  (vector, spatial, ...) index covering a property, label or node the undo
+  reverted, so a search after ROLLBACK answers for what the store holds
+  (SONNY-3381). The same holds for a statement that fails: its changes are
+  undone before its error is returned, and the same indexes are rebuilt. A
+  rebuild costs O(nodes of the index's label)
 - Clears transaction state
 - Returns error if no transaction is active
 
@@ -288,10 +296,11 @@ These features implement ISO/IEC 39075:2024 GQL standard:
 ## Limitations (Current Implementation)
 
 1. **Auto-commit Mode**: Changes are currently visible immediately (no true isolation)
-2. **No Rollback of Previous Changes**: ROLLBACK clears state but doesn't revert changes
-3. **Single User**: No multi-user concurrency control yet
-4. **No Isolation Levels**: Default isolation only
-5. **No Savepoints**: SAVEPOINT/RELEASE not yet implemented
+2. **Single User**: No multi-user concurrency control yet
+3. **No Isolation Levels**: Default isolation only
+4. **Savepoints on the wire only**: the client protocol's savepoint and
+   rollback-to-savepoint requests are implemented; GQL has no SAVEPOINT
+   statement here
 
 ## Future Enhancements
 

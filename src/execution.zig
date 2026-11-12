@@ -15,6 +15,7 @@ const fle_catalog = @import("schema/fle_catalog.zig");
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
 const statement_undo = @import("statement_undo.zig");
+const undo_index_repair = @import("execution/undo_index_repair.zig");
 // SONNY-3348 (round 19): a statement's replicated writes, one entry or none.
 const statement_proposals = @import("distributed/statement_proposals.zig");
 const log = logging.scoped("execution");
@@ -1696,6 +1697,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 /// held replicated writes (`statement_proposals`). `pub` for PROFILE's scope
 /// (`planned_read_runtime.executeProfiledIfSupported`).
 pub fn beginStatementScope(owns: bool) void {
+    undo_index_repair.install(); // SONNY-3381
     statement_undo.begin(owns);
     statement_proposals.begin(owns);
 }

@@ -202,6 +202,25 @@
 
 ### Fixed
 
+- **A failed statement and a ROLLBACK leave the full-text and vector
+  indexes answering for what the store holds (SONNY-3381).** The executor
+  maintains the full-text indexes and the advanced (vector, spatial, ...)
+  indexes beside the graph store's write methods, while the undo of a failed
+  statement and of `ROLLBACK` / rollback to a savepoint replays through those
+  methods only. Afterwards `CALL geode.fts.search` still found a node by a
+  word an undone SET wrote (also inside a transaction, where fulltext
+  maintenance is not deferred), missed a node whose DELETE was undone (the
+  engine's tombstone is permanent), and `knn()` ranked a node by a vector an
+  undone SET had added. The undo now collects the (graph, label, property)
+  of each node change it reverts (`txn_undo_log.IndexRepair`) and, when it
+  is done, rebuilds every full-text and advanced index covering one of them
+  from the store (`execution/undo_index_repair.zig`), on the undoing thread
+  under its graph lock. Cost: an O(nodes of the label) rebuild, only after
+  such an undo. Also fixed on the way: a transaction that wrote one
+  vector-indexed property twice leaked the index name it queued for its
+  COMMIT's rebuild, and a ROLLBACK left that queued rebuild for the next
+  COMMIT of any session to run. Regression:
+  `zig build test-sonny3381-undo-index-entries`.
 - **The server's MATCH ... CREATE and MATCH ... MERGE edge fast paths write
   what the executor writes (SONNY-3241).** (1) `MATCH (a:P {k: 1}), (b:Q
   {k: 9}) CREATE (a)-[:E]->(b)` resolved each endpoint to the lowest node

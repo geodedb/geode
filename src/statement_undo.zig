@@ -16,7 +16,12 @@
 //! memory, read budget or IN type error, or any other error), the record is
 //! replayed newest first through the store's normal, logged write methods,
 //! so the storage engine, the WAL mutation stream and the store's indexes see
-//! the compensating changes, before the error is returned. The round 17
+//! the compensating changes, before the error is returned. SONNY-3381: the
+//! full-text and advanced (vector, ...) indexes the executor maintains beside
+//! the store cannot take back one change; every one covering a change the
+//! replay reverted is rebuilt from the store once it is done
+//! (`txn_undo_log.IndexRepair`, `execution/undo_index_repair.zig`), and so on
+//! ROLLBACK. The round 17
 //! write fence (`graph_store.statementWriteFence`) only stopped the writes
 //! after the limit was recorded: earlier rows, a SET before a RETURN or a WITH
 //! evaluated late, and the point-write fast path kept theirs.
@@ -283,11 +288,15 @@ fn replay() bool {
     suspendCapture();
     defer resumeCapture();
     _ = replayed_statements_total.fetchAdd(1, .monotonic);
+    // SONNY-3381: the full-text and vector indexes the executor keeps beside
+    // the store are rebuilt for what the replay reverted, once it is done.
+    var repair = txn_undo_log.IndexRepair.init(allocator);
+    defer repair.finish(store);
     var complete = true;
     var i: usize = t_entries.items.len;
     while (i > 0) {
         i -= 1;
-        (if (takeTestUndoFailure()) error.InjectedUndoFailure else txn_undo_log.undoEntryLogged(store, t_entries.items[i])) catch |err| {
+        (if (takeTestUndoFailure()) error.InjectedUndoFailure else txn_undo_log.undoEntryLogged(store, t_entries.items[i], &repair)) catch |err| {
             complete = false;
             _ = replay_failures_total.fetchAdd(1, .monotonic);
             log.err("statement undo: an entry could not be undone; the failed statement is partly applied", &.{Attr.string("error", @errorName(err))});
