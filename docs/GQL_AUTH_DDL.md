@@ -90,7 +90,25 @@ permissions. With `FOR <username>`, an Admin role is required unless
 `<username>` is the current user; a refusal answers 42501 and is audited
 like the admin-only procedures (SONNY-6269, the `SHOW GRANTS` rule below).
 `CALL geode.auth.user_permissions([<username>])` has the same rule; without
-a username it lists the caller's permissions.
+a username it lists the caller's permissions. For a user that does not
+exist an Admin gets 42704 (`User does not exist`); it used to be answered
+with the `user` role's permissions (SONNY-6291).
+
+`CALL geode.auth.user_show([<username>])` (username, email, role, status)
+follows the same rule (SONNY-6291): a user may show itself; another user
+needs the Admin role, and a refusal answers 42501 and is audited. A user
+that does not exist is an error: 42704 for an Admin, and for anyone else
+the same 42501 refusal as another user's, so a non-admin cannot probe
+which users exist. It used to show any user to any authenticated user, and
+made up a row (`unknown` / `user` / `active`) for a missing one.
+
+The `geode.auth.apikey_*` procedures (`apikey_create`, `apikey_list`,
+`apikey_revoke`, `apikey_check_scope`, and any other `apikey_` name) answer
+0A000: the server has no API-key store, and its QUIC / gRPC handshake does
+not authenticate by key (SONNY-6291). They were stubs: `apikey_check_scope`
+answered `scope granted` for any key and `apikey_revoke` answered
+`revoked` having revoked nothing. `apikey_create` and `apikey_revoke`
+still need the Admin role (42501 first for anyone else).
 
 `SHOW GRANTS` without a `FOR` clause shows the current user's grants. A user
 may list its own grants (`FOR` its own name, or no `FOR`); another user's

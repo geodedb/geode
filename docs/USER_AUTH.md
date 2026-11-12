@@ -519,21 +519,23 @@ This authentication system provides **enterprise-grade security** with **complet
 | **Username/Password** | ✅ Implemented | Interactive login | High | `src/security/user_management.zig` |
 | **MFA (TOTP)** | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
 | **Session Tokens** | ✅ Implemented | Session continuity with rotation | High | `src/security/authn.zig` |
-| **API Keys** | ✅ Implemented | Service accounts, automation | Medium-High | `src/security/api_keys.zig` |
+| **API Keys** | ❌ Not on the server wire | Service accounts, automation | — | Library `auth_lib.api_keys` and the offline `geode apikey` CLI (local state file) only; see below |
 | **mTLS (Certificate)** | ✅ Implemented | Zero-trust, service mesh | Very High | `src/security/mtls_provider.zig` |
 
-### API Key Authentication
+### API Key Authentication (not implemented on the server)
 
-For programmatic access (CI/CD pipelines, automation, service accounts):
-
-```bash
-# API keys follow format: gk1.<token_id>.<secret>
-# Generate via CLI:
-geode admin create-api-key --user service_account --name "ci-pipeline" --scope "read,write"
-
-# Use in requests:
-curl -H "Authorization: Bearer gk1.XXXX.YYYY" https://geode.example.com:3141/api/query
-```
+**API keys are not implemented end to end (SONNY-6291).** A `geode serve`
+server has no API-key store, and its QUIC and gRPC handshakes authenticate
+by username and password (or mTLS), never by key. The
+`geode.auth.apikey_*` procedures (`apikey_create`, `apikey_list`,
+`apikey_revoke`, `apikey_check_scope`) answer SQLSTATE 0A000 (not
+supported); before SONNY-6291 they were stubs that answered `scope
+granted` for any key and `revoked` without revoking anything. What exists:
+the `auth_lib.api_keys` library (key format `gk1.<token_id>.<secret>`,
+SHA-256 digests, constant-time comparison), used in process by the MCP and
+LSP verifiers, and the offline `geode apikey` CLI, which keeps keys in a
+local state file the server never reads. Use service-account users with
+passwords, or mTLS, for programmatic access.
 
 ### mTLS Certificate Authentication
 

@@ -411,6 +411,12 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
         error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },
         error.DivisionByZero => .{ .code = "22012", .message = "Division by zero" },
+        // SONNY-6291: the geode.auth.apikey_* procedures (no server-side
+        // API-key store).
+        error.ApiKeysNotSupported => .{ .code = "0A000", .message = "API keys are not supported by the server: the geode.auth.apikey_* procedures create, list, check and revoke nothing, and the handshake does not authenticate by key" },
+        // SONNY-6291: user_show / user_permissions (SHOW PERMISSIONS FOR) of
+        // a user that does not exist, for an Admin.
+        error.UserNotFound => .{ .code = "42704", .message = "User does not exist" },
         error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
         // GAP-0856: distributed EXPLAIN/PROFILE is intentionally node-local only.
         error.DistributedExplainUnsupported => .{ .code = "0A000", .message = @import("../distributed/distributed_explain.zig").unsupported_message },

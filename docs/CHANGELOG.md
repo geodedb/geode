@@ -234,6 +234,28 @@
   answers 58030 (`UserNotPersisted`) and the user stays locked out
   (SONNY-3038). A retry succeeds.
   Regression: `zig build test-sonny6293-checked-auth-deletes`.
+- **The `geode.auth.apikey_*` procedures answer "not supported", and
+  `user_show` no longer shows other users or invents rows (SONNY-6291).**
+  The server has no API-key store: nothing creates, stores, hashes or
+  revokes a key, and the QUIC / gRPC handshake does not authenticate by one
+  (the `geode apikey` CLI keeps its own local state file). The procedures
+  were stubs: `apikey_check_scope` answered `scope granted` for any key,
+  `apikey_revoke` answered `revoked` and revoked nothing, `apikey_create`
+  printed a key built from its arguments, and `apikey_list` /
+  `apikey_check_scope` told any caller whether a user exists. **Behaviour
+  change:** every `geode.auth.apikey_*` procedure now answers 0A000
+  (`apikey_create` / `apikey_revoke` / any other mutating name still need
+  Admin first: 42501 for anyone else). docs/USER_AUTH.md no longer lists
+  API keys as implemented. **Behaviour change:** `geode.auth.user_show`
+  follows the SONNY-6269 rule: a user may show itself (with no argument,
+  itself); another user needs Admin (42501, audited `access_denied`). A
+  missing user is an error, not a made-up `unknown` / `user` / `active`
+  row: 42704 (`User does not exist`) for an Admin, and the same 42501 as a
+  forbidden user for anyone else (no existence oracle).
+  `geode.auth.user_permissions` / `SHOW PERMISSIONS FOR` of a missing user
+  is 42704 for an Admin (it listed the `user` role's permissions).
+  `error.UserNotFound` now maps to 42704 on every path.
+  Regression: `zig build test-sonny6291-apikey-user-show`.
 - **A read-only request refuses the security DDL (SONNY-2751).** The
   statement classifier behind the per-request read-only floor
   (`ExecuteRequest.read_only`, QUIC and gRPC) and the MCP read-only mode
