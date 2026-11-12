@@ -13437,6 +13437,21 @@ pub fn build(b: *std.Build) void {
     const sonny6292_step = b.step("test-sonny6292-custom-role-membership", "Run the SONNY-6292 regression (GRANT ROLE / ALTER USER SET ROLE / geode.auth.user_assign_role of a custom role answers 0A000 and changes nothing; a dropped and re-created role has no members; built-in roles are still granted)");
     sonny6292_step.dependOn(&run_sonny6292_tests.step);
 
+    // SONNY-6345: the offline auth CLI opens the server's default data
+    // directory; `geode auth verify` of a store with no security graph
+    // changes nothing and fails; GRANT / REVOKE of a missing user is 42704;
+    // the auth DDL results own their status rows.
+    const sonny6345_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6345_auth_cli_and_grant.zig"), .target = target, .optimize = optimize });
+    sonny6345_test_mod.link_libc = true;
+    sonny6345_test_mod.addImport("geode", root_mod);
+    sonny6345_test_mod.addImport("logging", logging_mod);
+    const sonny6345_tests = b.addTest(.{ .root_module = sonny6345_test_mod });
+    const run_sonny6345_tests = b.addRunArtifact(sonny6345_tests);
+    run_sonny6345_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6345_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6345_step = b.step("test-sonny6345-auth-cli-and-grant", "Run the SONNY-6345 regression (geode auth verify / init use the server's default data dir with no --data-dir or GEODE_DATA_DIR; verify of a store with no security graph creates nothing and exits 1; GRANT / REVOKE of a missing user is 42704; auth DDL results own their status rows)");
+    sonny6345_step.dependOn(&run_sonny6345_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
