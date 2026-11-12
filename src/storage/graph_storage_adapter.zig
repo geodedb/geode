@@ -3372,6 +3372,19 @@ pub const StorageAdapter = struct {
     /// because the actual sharded data lives at `{data_dir}/<graph_uuid>/...`,
     /// leaving the placeholder as a competing empty `graphs/` root.
     pub fn init(allocator: Allocator, data_dir: []const u8, config: gs.GraphConfig) !*StorageAdapter {
+        return initForPurpose(allocator, data_dir, config, .live);
+    }
+
+    /// Open a private restore copy without importing its merge-key sidecars
+    /// into the live process's global registries or backfilling its store.
+    // CANARY: REQ=REQ-SONNY-6300; FEATURE="Offline restore safety"; ASPECT=VerificationIsolation; STATUS=TESTED; TEST=tests/test_sonny6300_restore_safety.zig; OWNER=storage; UPDATED=2026-11-11
+    pub fn initForRestoreVerification(allocator: Allocator, data_dir: []const u8) !*StorageAdapter {
+        return initForPurpose(allocator, data_dir, .{}, .restore_verification);
+    }
+
+    const OpenPurpose = enum { live, restore_verification };
+
+    fn initForPurpose(allocator: Allocator, data_dir: []const u8, config: gs.GraphConfig, purpose: OpenPurpose) !*StorageAdapter {
         const owned_dir = try allocator.dupe(u8, data_dir);
         errdefer allocator.free(owned_dir);
 
@@ -3420,7 +3433,7 @@ pub const StorageAdapter = struct {
         // merge keys after reopen — which would make a completeness-gated seek
         // wrongly return empty for existing nodes. No-op when lean mode is off
         // (everything is always indexed) or when the sidecar is absent.
-        graph_store.loadPersistedMergeIndexKeys(self.allocator, self.data_dir);
+        if (purpose == .live) graph_store.loadPersistedMergeIndexKeys(self.allocator, self.data_dir);
 
         // Caveat "B": re-register persisted COMPOSITE merge keys (e.g.
         // {source, source_id}) BEFORE any graph opens, so the per-node load
@@ -3429,7 +3442,7 @@ pub const StorageAdapter = struct {
         // separate process from the NODE phase, so without this the edges-only
         // run would find no composite entries and fall back to the slow
         // seed+verify path. No-op when the sidecar is absent (fresh data dir).
-        graph_store.loadPersistedCompositeMergeKeys(self.allocator, self.data_dir);
+        if (purpose == .live) graph_store.loadPersistedCompositeMergeKeys(self.allocator, self.data_dir);
 
         return self;
     }

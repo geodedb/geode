@@ -420,7 +420,9 @@ pub const BackupManager = struct {
         if (header.magic != BACKUP_MAGIC or header.version != BACKUP_VERSION) return error.InvalidBackupFile;
         if (header.backup_type != .full) return error.InvalidBackupFile;
 
-        const payload_len: usize = @intCast(header.payload_len);
+        const file_size = (try file.stat(io_rb)).size;
+        if (file_size < header_buf.len or header.payload_len != file_size - header_buf.len) return error.InvalidBackupFile;
+        const payload_len = std.math.cast(usize, header.payload_len) orelse return error.InvalidBackupFile;
         const payload = try self.allocator.alloc(u8, payload_len);
         defer self.allocator.free(payload);
         const pl_n = try file.readPositionalAll(io_rb, payload, header_buf.len);
@@ -669,58 +671,177 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
     return buffer.toOwnedSlice(allocator);
 }
 
-/// Restore a per-graph archive payload into restore_dir, recreating
-/// `graph_registry.dat` and the recursive `graphs/<uuid>/...` tree.
-// CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-16
-fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8) !void {
-    if (payload.len < 16) return error.InvalidBackupFile;
+const ArchiveEntry = struct { name: []const u8, data: []const u8 };
 
-    var offset: usize = 0;
-
-    // Validate magic.
-    if (!std.mem.eql(u8, payload[0..8], "GEODBAK1")) return error.InvalidBackupFile;
-    offset += 8;
-
-    // version (u32) — currently ignored.
-    offset += 4;
-
-    const file_count = std.mem.readInt(u32, payload[offset..][0..4], .little);
-    offset += 4;
-
-    for (0..file_count) |_| {
-        if (offset + 4 > payload.len) return error.InvalidBackupFile;
+fn parseArchive(allocator: std.mem.Allocator, payload: []const u8) ![]ArchiveEntry {
+    if (payload.len < 16 or !std.mem.eql(u8, payload[0..8], "GEODBAK1")) return error.InvalidBackupFile;
+    if (std.mem.readInt(u32, payload[8..12], .little) != 1) return error.InvalidBackupFile;
+    const count = std.mem.readInt(u32, payload[12..16], .little);
+    if (count > (payload.len - 16) / 12) return error.InvalidBackupFile;
+    const entries = try allocator.alloc(ArchiveEntry, count);
+    errdefer allocator.free(entries);
+    var names = std.StringHashMap(void).init(allocator);
+    defer names.deinit();
+    var offset: usize = 16;
+    for (entries) |*entry| {
+        if (payload.len - offset < 4) return error.InvalidBackupFile;
         const name_len = std.mem.readInt(u32, payload[offset..][0..4], .little);
         offset += 4;
-
-        if (offset + name_len > payload.len) return error.InvalidBackupFile;
-        const name = payload[offset .. offset + name_len];
+        if (name_len > payload.len - offset) return error.InvalidBackupFile;
+        const name = payload[offset..][0..name_len];
         offset += name_len;
-
-        if (offset + 8 > payload.len) return error.InvalidBackupFile;
+        if (name.len == 0 or std.fs.path.isAbsolute(name) or
+            std.mem.indexOfAny(u8, name, "\\:\x00") != null) return error.InvalidBackupPath;
+        var components = std.mem.splitScalar(u8, name, '/');
+        while (components.next()) |component| {
+            if (component.len == 0 or std.mem.eql(u8, component, ".") or std.mem.eql(u8, component, "..")) return error.InvalidBackupPath;
+        }
+        const seen = try names.getOrPut(name);
+        if (seen.found_existing) return error.DuplicateBackupPath;
+        if (payload.len - offset < 8) return error.InvalidBackupFile;
         const data_len = std.mem.readInt(u64, payload[offset..][0..8], .little);
         offset += 8;
-
-        const data_size: usize = @intCast(data_len);
-        if (offset + data_size > payload.len) return error.InvalidBackupFile;
-        const data = payload[offset .. offset + data_size];
-        offset += data_size;
-
-        // Build the destination path and ensure parent directories exist.
-        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ restore_dir, name });
-        defer allocator.free(full_path);
-
-        const io_ef = std.Io.Threaded.global_single_threaded.io();
-        if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
-            // error-policy: A — ensure-parent-dirs is best-effort (the dir may
-            // already exist); a real failure surfaces as a proper error on the
-            // createFile immediately below.
-            std.Io.Dir.cwd().createDirPath(io_ef, full_path[0..last_slash]) catch {};
-        }
-
-        const out = try std.Io.Dir.cwd().createFile(io_ef, full_path, .{});
-        defer out.close(io_ef);
-        try out.writeStreamingAll(io_ef, data);
+        const size = std.math.cast(usize, data_len) orelse return error.InvalidBackupFile;
+        if (size > payload.len - offset) return error.InvalidBackupFile;
+        entry.* = .{ .name = name, .data = payload[offset..][0..size] };
+        offset += size;
     }
+    if (offset != payload.len) return error.InvalidBackupFile;
+    return entries;
+}
+
+/// Only a missing or empty destination can be published. Never merge archive
+/// contents with an old store, and never follow a target symlink.
+fn emptyRestoreTarget(target: []const u8) !bool {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    const stat = cwd.statFile(io, target, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    if (stat.kind != .directory) return error.InvalidRestoreTarget;
+    var dir = try cwd.openDir(io, target, .{ .iterate = true });
+    defer dir.close(io);
+    var it = dir.iterate();
+    if (try it.next(io) != null) return error.RestoreTargetNotEmpty;
+    return true;
+}
+
+fn verifyEntry(dir: std.Io.Dir, entry: ArchiveEntry) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = try dir.openFile(io, entry.name, .{});
+    defer file.close(io);
+    if ((try file.stat(io)).size != entry.data.len) return error.RestoreVerificationFailed;
+    var buffer: [64 * 1024]u8 = undefined;
+    var offset: usize = 0;
+    while (offset < entry.data.len) {
+        const chunk = buffer[0..@min(buffer.len, entry.data.len - offset)];
+        const n = try file.readPositionalAll(io, chunk, offset);
+        if (n != chunk.len or !std.mem.eql(u8, chunk, entry.data[offset..][0..chunk.len])) return error.RestoreVerificationFailed;
+        offset += n;
+    }
+}
+
+fn verifyRestoredStore(allocator: std.mem.Allocator, stage: []const u8) !void {
+    const Adapter = geode.graph_storage_adapter.StorageAdapter;
+    const Registry = @FieldType(Adapter, "registry");
+    var registry = Registry.init(allocator);
+    defer registry.deinit();
+    const path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{stage});
+    defer allocator.free(path);
+    // Adapter startup tolerates a bad registry for normal recovery. A restore
+    // verifier must explicitly reject it instead of blessing an empty store.
+    registry.loadFromFile(path) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return error.RestoreVerificationFailed,
+    };
+    const io = std.Io.Threaded.global_single_threaded.io();
+    for (registry.entries.items) |entry| {
+        const uuid_hex = std.fmt.bytesToHex(entry.uuid, .lower);
+        const graph_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ stage, uuid_hex });
+        defer allocator.free(graph_path);
+        // Opening a missing graph would create files, so require its archived
+        // directory before asking the real engine to recover and count it.
+        var graph_dir = try std.Io.Dir.cwd().openDir(io, graph_path, .{});
+        graph_dir.close(io);
+    }
+    const adapter = try Adapter.initForRestoreVerification(allocator, stage);
+    defer adapter.deinit();
+    for (registry.entries.items) |entry| {
+        _ = try adapter.nodeCount(entry.name);
+        _ = try adapter.edgeCount(entry.name);
+    }
+}
+
+fn syncDirectory(dir: std.Io.Dir) !void {
+    const file = std.Io.File{ .handle = dir.handle, .flags = .{ .nonblocking = false } };
+    try file.sync(std.Io.Threaded.global_single_threaded.io());
+}
+
+fn syncRestoreTree(dir: std.Io.Dir) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    if (comptime @import("builtin").os.tag == .linux) {
+        // One checked filesystem flush covers every data file and directory,
+        // including files created during engine verification. Directory fsync
+        // alone would not persist the file contents.
+        try std.posix.syncfs(dir.handle);
+    } else {
+        // Platforms without syncfs retain checked data+metadata durability.
+        // Never substitute directory-only syncing for flushing file contents.
+        var it = dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind == .directory) {
+                var child = try dir.openDir(io, entry.name, .{ .iterate = true });
+                defer child.close(io);
+                try syncRestoreTree(child);
+            } else if (entry.kind == .file) {
+                const file = try dir.openFile(io, entry.name, .{ .mode = .read_write });
+                defer file.close(io);
+                try file.sync(io);
+            } else return error.InvalidBackupPath;
+        }
+        try syncDirectory(dir);
+    }
+}
+
+/// Decode completely, stage beside the target, verify bytes and the real
+/// engine, flush once per filesystem on Linux, then publish atomically.
+// CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_sonny6300_restore_safety.zig; OWNER=storage; UPDATED=2026-11-11
+// CANARY: REQ=REQ-SONNY-6300; FEATURE="Offline restore safety"; ASPECT=VerifiedStaging; STATUS=TESTED; TEST=tests/test_sonny6300_restore_safety.zig; OWNER=storage; UPDATED=2026-11-11
+fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8) !void {
+    const existing_empty = try emptyRestoreTarget(restore_dir);
+    const entries = try parseArchive(allocator, payload);
+    defer allocator.free(entries);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    const parent = std.fs.path.dirname(restore_dir) orelse ".";
+    var random: [8]u8 = undefined;
+    compat_fillRandom(&random);
+    const stage = try std.fmt.allocPrint(allocator, "{s}/.geode-restore-{x}", .{ parent, std.mem.readInt(u64, &random, .little) });
+    defer allocator.free(stage);
+    try cwd.createDir(io, stage, .fromMode(0o700));
+    defer cwd.deleteTree(io, stage) catch {}; // Private staging only; never the target.
+    var dir = try cwd.openDir(io, stage, .{ .iterate = true });
+    defer dir.close(io);
+    for (entries) |entry| {
+        if (std.fs.path.dirname(entry.name)) |subdir| try dir.createDirPath(io, subdir);
+        const out = try dir.createFile(io, entry.name, .{ .exclusive = true });
+        defer out.close(io);
+        try out.writeStreamingAll(io, entry.data);
+    }
+    for (entries) |entry| try verifyEntry(dir, entry);
+    try verifyRestoredStore(allocator, stage);
+    try syncRestoreTree(dir);
+    // rename refuses a nonempty target even if it changed since the preflight.
+    // Missing targets use no-replace publication to preserve concurrent data.
+    if (existing_empty) {
+        try cwd.rename(stage, cwd, restore_dir, io);
+    } else {
+        try cwd.renamePreserve(stage, cwd, restore_dir, io);
+    }
+    var parent_dir = try cwd.openDir(io, parent, .{ .iterate = true });
+    defer parent_dir.close(io);
+    try syncDirectory(parent_dir);
 }
 
 /// Result of compressData: the compressed payload plus the compression type
