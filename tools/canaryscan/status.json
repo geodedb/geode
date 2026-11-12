@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:50:40.575462984Z",
+  "generated_at": "2026-11-12T23:51:31.535297923Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84343,6 +84343,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6433-MERGE-KEYS",
+      "features": [
+        {
+          "feature": "MergeStatement",
+          "aspect": "NullAndListKeys",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_merge_keys.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_merge_keys.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92028,7 +92047,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4783
+      "TESTED": 4784
     },
     "by_aspect": {
       "2PC": 3,
@@ -94361,6 +94380,7 @@
       "NoteInboundAppendEntriesAdvance": 1,
       "NotedFailure": 1,
       "Null": 1,
+      "NullAndListKeys": 1,
       "NullCheck": 3,
       "NullComparison": 2,
       "NullConcat": 1,

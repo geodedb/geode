@@ -10906,6 +10906,20 @@ pub fn build(b: *std.Build) void {
     const sonny3245_step = b.step("test-sonny3245-create-merge-forms", "Run SONNY-3245 regression (invalid CREATE forms refused per ISO/IEC 39075 16.5; null and list property semantics for CREATE, SET and MERGE; RETURN after UNWIND CREATE and chained MERGE; gRPC in process)");
     sonny3245_step.dependOn(&run_sonny3245_tests.step);
 
+    const sonny6433_merge_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6433_merge_keys.zig"), .target = target, .optimize = optimize });
+    sonny6433_merge_test_mod.link_libc = true;
+    sonny6433_merge_test_mod.addImport("geode", root_mod);
+    sonny6433_merge_test_mod.addImport("schema", schema_mod);
+    sonny6433_merge_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6433_merge_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6433_merge_test_mod.addImport("logging", logging_mod);
+    sonny6433_merge_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6433_merge_tests = b.addTest(.{ .root_module = sonny6433_merge_test_mod });
+    const run_sonny6433_merge_tests = b.addRunArtifact(sonny6433_merge_tests);
+    shardDep(test_step, &run_sonny6433_merge_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_merge_step = b.step("test-sonny6433-merge-keys", "Run SONNY-6433 regression (MERGE on a null key refused with 22004 and writing nothing; a list-valued MERGE key matches by value; FOR ... CREATE ... RETURN returns the loop variable; gRPC in process)");
+    sonny6433_merge_step.dependOn(&run_sonny6433_merge_tests.step);
+
     const sonny6433_keys_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6433_keys_after_remove.zig"), .target = target, .optimize = optimize });
     sonny6433_keys_test_mod.link_libc = true;
     sonny6433_keys_test_mod.addImport("geode", root_mod);
