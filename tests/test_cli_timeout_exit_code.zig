@@ -52,7 +52,7 @@ const posix = std.posix;
 const binary_path = "./zig-out/bin/geode";
 const ready_marker = "[startup] server ready";
 const admin_username = "geode";
-const admin_password = "GeodeTestPassword123!";
+const admin_password = "Geode Test Password Passphrase 123";
 
 const ready_deadline_ms: i64 = 120_000;
 const cli_deadline_ms: i64 = 120_000;

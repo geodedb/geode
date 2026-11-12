@@ -487,7 +487,7 @@ test "SONNY-1333: a CREATE USER whose save fails answers an error status and cre
         const ga = w.ga();
 
         w.sec_fail.arm(offset);
-        const rows = try queryRows(ga, w.admin, "CREATE USER carol SET PASSWORD 'carolPass1234'");
+        const rows = try queryRows(ga, w.admin, "CREATE USER carol SET PASSWORD 'Carol Grant Persist Passphrase'");
         const induced = w.sec_fail.failed;
         w.sec_fail.disarm();
         try testing.expectEqual(@as(usize, 1), rows.len);
@@ -500,7 +500,7 @@ test "SONNY-1333: a CREATE USER whose save fails answers an error status and cre
             try testing.expect(user_mgmt.getUser("carol") == null);
             try testing.expect((try w.agm.findUserIdByName("carol")) == null);
             try w.agm.verifyChain(&HMAC_KEY);
-            const again = try queryRows(ga, w.admin, "CREATE USER carol SET PASSWORD 'carolPass1234'");
+            const again = try queryRows(ga, w.admin, "CREATE USER carol SET PASSWORD 'Carol Grant Persist Passphrase'");
             try testing.expectEqualStrings("created carol", again[0][0].?);
         } else {
             try testing.expectEqualStrings("created carol", status);

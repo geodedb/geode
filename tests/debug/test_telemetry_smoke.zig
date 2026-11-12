@@ -16,7 +16,7 @@ test "Telemetry emits PULL_PAGE" {
     defer server_env.deinit();
     try server_env.put("GEODE_TELEMETRY_PAGING", "1");
     try server_env.put("GEODE_ADMIN_USERNAME", "geode");
-    try server_env.put("GEODE_DEFAULT_PASSWORD", "geode-test-password");
+    try server_env.put("GEODE_DEFAULT_PASSWORD", "Geode Test Admin Passphrase");
     // Prepare a fallback capture file for server stderr in case pipe drains empty on some platforms.
     var tmp_path_buf: [128]u8 = undefined;
     const ts = std.time.milliTimestamp();
@@ -61,7 +61,7 @@ test "Telemetry emits PULL_PAGE" {
         "--user",
         "geode",
         "--password",
-        "geode-test-password",
+        "Geode Test Admin Passphrase",
         "--no-saved-session",
     }, allocator);
     client.stdin_behavior = .Ignore;

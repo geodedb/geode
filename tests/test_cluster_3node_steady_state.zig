@@ -81,7 +81,7 @@ fn binaryPresent() bool {
     return true;
 }
 
-const ADMIN_PW = "SteadyStatePw123!";
+const ADMIN_PW = "Steady State Admin Passphrase";
 
 /// CA that signed the nodes' leaf cert; set by makeCerts. `geode query` trusts it
 /// via --ca-cert so the client VERIFIES the node's TLS certificate. The client
@@ -489,7 +489,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
         try env.put("GEODE_CLUSTER_PORT", "4242");
         try env.put("GEODE_CLUSTER_LISTEN_ADDRESS", ip);
         try env.put("GEODE_CLUSTER_CA_CERT", certs.ca);
-        try env.put("GEODE_ADMIN_PASSWORD", "SteadyStatePw123!");
+        try env.put("GEODE_ADMIN_PASSWORD", "Steady State Admin Passphrase");
         if (posixGetenv("PATH")) |p| try env.put("PATH", p);
         if (posixGetenv("HOME")) |p| try env.put("HOME", p);
         if (posixGetenv("LD_LIBRARY_PATH")) |p| try env.put("LD_LIBRARY_PATH", p);

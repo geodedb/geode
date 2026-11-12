@@ -223,21 +223,38 @@ test "SONNY-6331: user_create's generated password meets the policy and logs in"
 // ALTER USER SET PASSWORD / user_reset_password / user_change_password
 // ---------------------------------------------------------------------------
 
-test "SONNY-6331: ALTER USER SET PASSWORD and user_reset_password apply the policy; the old password stays" {
+/// The GQL statement through the executor's statement dispatch, as an Admin
+/// (ALTER USER ... SET PASSWORD of ANOTHER user: the QUIC / gRPC password
+/// intercept answers that one with 42501 before the parser, so this is the
+/// route an embedded or MCP caller takes; admin_ddl.executeAlterUser).
+fn gqlAsAdmin(w: *World, query: []const u8) !void {
+    var parsed = try geode.parseGql(query, testing.allocator);
+    defer parsed.deinit();
+    var ctx = w.h.ctx;
+    ctx.role = .Admin;
+    ctx.user = "root6331";
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    _ = try geode.execution.executeStatementWithContext(arena.allocator(), parsed.program.statements[0], ctx);
+}
+
+test "SONNY-6331: ALTER USER SET PASSWORD (GQL) and user_reset_password apply the policy; the old password stays" {
     var w: World = undefined;
     try w.init();
     defer w.deinit();
     try fx.expectRuns(w.ga(), w.admin, "CREATE USER carol SET PASSWORD '" ++ GOOD ++ "'");
 
-    try w.expectPolicyRefusal("ALTER USER carol SET PASSWORD 'short1'", "short1", "Password too short (minimum 20 characters)");
-    try w.expectPolicyRefusal("ALTER USER carol SET PASSWORD 'onewordbutlongenoughHere'", "onewordbutlongenoughHere", "Password must be a passphrase with at least 3 words");
+    try testing.expectError(error.PasswordTooShort, gqlAsAdmin(&w, "ALTER USER carol SET PASSWORD 'short1'"));
+    try testing.expectError(error.PasswordNotPassphrase, gqlAsAdmin(&w, "ALTER USER carol SET PASSWORD 'onewordbutlongenoughHere'"));
+    try testing.expectError(error.PasswordMissingUppercase, gqlAsAdmin(&w, "ALTER USER carol SET PASSWORD 'no upper case letters here'"));
     try w.expectPolicyRefusal("CALL geode.auth.user_reset_password('carol', '')", "", "Password too short (minimum 20 characters)");
     try w.expectPolicyRefusal("CALL geode.auth.user_reset_password('carol', 'x')", "x", "Password too short (minimum 20 characters)");
+    try w.expectPolicyRefusal("CALL geode.auth.user_reset_password('carol', 'onewordbutlongenoughHere')", "onewordbutlongenoughHere", "Password must be a passphrase with at least 3 words");
     try testing.expect(w.canLogIn("carol", GOOD));
     try testing.expect(!w.canLogIn("carol", "short1"));
     try testing.expect(!w.canLogIn("carol", ""));
 
-    try fx.expectRuns(w.ga(), w.admin, "ALTER USER carol SET PASSWORD '" ++ GOOD2 ++ "'");
+    try gqlAsAdmin(&w, "ALTER USER carol SET PASSWORD '" ++ GOOD2 ++ "'");
     try testing.expect(w.canLogIn("carol", GOOD2));
 }
 
@@ -264,7 +281,7 @@ test "SONNY-6331: a user whose stored password predates the policy still logs in
     try user_mgmt.createUserWithHash(testing.allocator, "legacy", hash, "l@x", .User, false);
     try testing.expect(w.canLogIn("legacy", "Alice123!"));
     // The next change of it is held to the policy.
-    try w.expectPolicyRefusal("ALTER USER legacy SET PASSWORD 'Bobby123!'", "Bobby123!", "Password too short (minimum 20 characters)");
+    try w.expectPolicyRefusal("CALL geode.auth.user_reset_password('legacy', 'Bobby123!')", "Bobby123!", "Password too short (minimum 20 characters)");
     try testing.expect(w.canLogIn("legacy", "Alice123!"));
 }
 
@@ -279,7 +296,7 @@ test "SONNY-6331: PasswordPolicy.validate names the configured limits" {
     try setEnv("GEODE_PASSWORD_MIN_LENGTH", "40");
     try setEnv("GEODE_PASSWORD_MIN_WORDS", "6");
     try testing.expectEqualStrings("Password too short (minimum 40 characters)", geode_auth.PasswordPolicy.geodeSecure().validate(GOOD).?);
-    try testing.expectEqualStrings("Password must be a passphrase with at least 6 words", geode_auth.PasswordPolicy.geodeSecure().validate("Correct Horse Battery Staple Is Long").?);
+    try testing.expectEqualStrings("Password must be a passphrase with at least 6 words", geode_auth.PasswordPolicy.geodeSecure().validate("Correctly Horsing Batteries Staplers Extended").?);
 }
 
 fn bootstrapPersistent(env_password: ?[:0]const u8) !struct { reset: bool, password_ok: bool } {

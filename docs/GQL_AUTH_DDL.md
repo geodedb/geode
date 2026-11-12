@@ -61,6 +61,22 @@ the read-only procedures (`geode.auth.user_list`, `user_show`,
 as a read and ran on a read-only request, and `CALL geode.auth.grant_list`
 was refused.
 
+### Password policy (SONNY-6331)
+
+`CREATE USER ... SET PASSWORD`, `ALTER USER ... SET PASSWORD` and the
+procedures they map to (`geode.auth.user_create`, `user_reset_password`,
+and `user_change_password`) apply the server's password policy
+([USER_AUTH.md](USER_AUTH.md#2-unified-password-policy-all-users)): at least
+20 characters (`GEODE_PASSWORD_MIN_LENGTH`), an upper and a lower case
+letter, at least 3 space-separated words (`GEODE_PASSWORD_MIN_WORDS`). A
+password it refuses fails the statement with SQLSTATE 22000 and a message
+naming the first rule broken, with the configured limit (for example
+`Password too short (minimum 20 characters)`); the message never contains
+the password, and nothing is created or changed. Before SONNY-6331 `CREATE
+USER` applied an older rule (8 characters, a letter and a digit) and a
+password change applied none. Existing passwords keep working; the policy is
+checked when a password is set.
+
 ---
 
 ## Statement to Procedure Mapping

@@ -269,8 +269,8 @@ fn expectReadOnlyRuns(ga: std.mem.Allocator, session_id: []const u8, query: []co
 
 /// Every statement that changes stored security state.
 const security_ddl = [_][]const u8{
-    "CREATE USER ro_new SET PASSWORD 'Ro-Passw0rd-1' ROLE readonly",
-    "ALTER USER alice SET PASSWORD 'Ro-Passw0rd-2'",
+    "CREATE USER ro_new SET PASSWORD 'Read Only Passphrase One' ROLE readonly",
+    "ALTER USER alice SET PASSWORD 'Read Only Passphrase Two'",
     "ALTER USER alice SET ROLE readwrite",
     "ALTER USER alice DISABLE",
     "ALTER USER alice ENABLE",
@@ -303,7 +303,7 @@ const other_changes = [_][]const u8{
     "CREATE GRAPH g_ro",
     "DROP GRAPH g2",
     "CREATE INDEX ro_idx FOR (n:C) ON (n.v)",
-    "CALL geode.auth.user_create('ro_proc', 'Ro-Passw0rd-3')",
+    "CALL geode.auth.user_create('ro_proc', 'Read Only Passphrase Three')",
     "CALL geode.auth.grant('alice', 'g1', 'READ')",
     "CALL geode.auth.policy_delete('ro_keep')",
     "CALL geode.ts.insert(1, 'm', 1, 1)",
@@ -403,7 +403,7 @@ test "SONNY-2751: without read_only the same Admin runs the security DDL (the re
     try w.init();
     defer w.deinit();
     const ga = w.ga();
-    try fx.expectRuns(ga, w.admin, "CREATE USER ro_new SET PASSWORD 'Ro-Passw0rd-1' ROLE readonly");
+    try fx.expectRuns(ga, w.admin, "CREATE USER ro_new SET PASSWORD 'Read Only Passphrase One' ROLE readonly");
     try testing.expect(user_mgmt.getUser("ro_new") != null);
     try fx.expectRuns(ga, w.admin, "GRANT READ ON GRAPH g1 TO alice");
     try testing.expect(w.pol.hasGraphGrant(w.alice_id, "g1", READ));

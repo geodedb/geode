@@ -98,7 +98,7 @@ test "gap0034: fresh-store bootstrap seals chain root synchronously; first verif
     defer ta.free(data_dir);
 
     unsetEnv(DEFAULT_PASSWORD_ENV);
-    try setEnv(ADMIN_PASSWORD_ENV, "bootpass0034a");
+    try setEnv(ADMIN_PASSWORD_ENV, "Boot Pass Seed 0034a");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
 
     var ctx = try bootstrapFreshStore(data_dir);
@@ -129,7 +129,7 @@ test "gap0034: chain-root eviction from bounded node cache must not raise Missin
     defer ta.free(data_dir);
 
     unsetEnv(DEFAULT_PASSWORD_ENV);
-    try setEnv(ADMIN_PASSWORD_ENV, "bootpass0034b");
+    try setEnv(ADMIN_PASSWORD_ENV, "Boot Pass Seed 0034b");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
 
     var ctx = try bootstrapFreshStore(data_dir);
@@ -180,7 +180,7 @@ test "gap0034: genuinely deleted chain root with user records present still rais
     defer ta.free(data_dir);
 
     unsetEnv(DEFAULT_PASSWORD_ENV);
-    try setEnv(ADMIN_PASSWORD_ENV, "bootpass0034c");
+    try setEnv(ADMIN_PASSWORD_ENV, "Boot Pass Seed 0034c");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
 
     var ctx = try bootstrapFreshStore(data_dir);
@@ -214,7 +214,7 @@ test "gap0034: corrupted chain root hash raises ChainHashMismatch, resident or e
     defer ta.free(data_dir);
 
     unsetEnv(DEFAULT_PASSWORD_ENV);
-    try setEnv(ADMIN_PASSWORD_ENV, "bootpass0034d");
+    try setEnv(ADMIN_PASSWORD_ENV, "Boot Pass Seed 0034d");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
 
     var ctx = try bootstrapFreshStore(data_dir);

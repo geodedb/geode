@@ -4,6 +4,40 @@
 
 ### Security
 
+- **BREAKING: one password policy on every path that sets a password
+  (SONNY-6331).** The documented policy (docs/USER_AUTH.md section 2: at
+  least 20 characters, an upper and a lower case letter, at least 3
+  space-separated words, the limits raised by `GEODE_PASSWORD_MIN_LENGTH` /
+  `GEODE_PASSWORD_MIN_WORDS`) was applied by the offline `geode user` CLI and
+  the forced reset only. On the server `CREATE USER` /
+  `geode.auth.user_create` applied an older rule (8 characters, a letter and
+  a digit) and `ALTER USER ... SET PASSWORD` / `geode.auth.user_reset_password`
+  / `user_change_password` none (an empty password was accepted). They now
+  apply the policy (`user_management.createUser` / `updateUserPassword`). A
+  refused password answers SQLSTATE 22000 with the first rule it breaks and
+  the configured limit (for example `Password too short (minimum 25
+  characters)`; the policy's messages always said 20 characters and 3
+  words), never the password, and nothing is created or changed.
+  **Behaviour changes:** (1) clients that create users or set passwords with
+  short or one-word passwords (`Alice123!`) are refused and must use
+  passphrases; (2) a first-boot `GEODE_ADMIN_PASSWORD` /
+  `GEODE_DEFAULT_PASSWORD` seed that does not meet the policy is still
+  accepted, but the admin now has to set a compliant password at first login
+  (a forced reset, as docs/USER_AUTH.md "Reset Triggers" states; it was
+  accepted with a warning only), so deployments and test rigs that seed a
+  one-word admin password (`GeodeTestPassword123!`) must seed a passphrase
+  to avoid the reset; (3) generated passwords (the first-boot admin and its
+  `.geode_admin_password` file, `geode user ... --generate-password`,
+  `user_create`'s generated password) are passphrases of 8-character words
+  that meet the policy instead of 32 hex characters, which it refused (so
+  `geode user change-password --generate-password` failed its own check).
+  Existing users are not locked out: a stored password that predates the
+  policy keeps working, and the policy applies at its next change.
+  `GEODE_PASSWORD_MIN_LENGTH` above 256 (the longest accepted password) is
+  read as 256, and `GEODE_PASSWORD_MIN_WORDS` above 128 as 128 (no password
+  could be set). docs/USER_AUTH.md no longer claims the server re-checks
+  stored passwords at login (it does not).
+  Regression: `zig build test-sonny6331-password-policy-paths`.
 - **BREAKING: fail-closed default role.** A user with no stored built-in
   role (not a superuser, no `HAS_ROLE` edge to `admin`, `user`, `readwrite`
   or `readonly`) used to fall back to `readwrite` and could read and write

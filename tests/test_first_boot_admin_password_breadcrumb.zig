@@ -200,8 +200,8 @@ test "reset-password reports failure honestly when the target user cannot be loa
     defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
 
     const args = [_][]const u8{
-        BINARY_PATH,      "user",           "reset-password", "geode",
-        "--new-password", "resetpass12345", "--data-dir",     data_dir,
+        BINARY_PATH,      "user",                      "reset-password", "geode",
+        "--new-password", "Reset Pass Honest Failure", "--data-dir",     data_dir,
     };
     const env_ptr = try buildCleanChildEnv(aa);
 

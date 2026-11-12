@@ -853,8 +853,28 @@ fn finishRefreshFlight(key: RefreshFlightKey, flight: *RefreshFlight, result: Re
     }
 }
 
-/// Create a new user
+// CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=ServerUserStore; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6331: the password policy every path that sets a password through
+/// the server's user store applies (CREATE USER, ALTER USER SET PASSWORD,
+/// geode.auth.user_create / user_reset_password / user_change_password, the
+/// forced reset). `PasswordPolicy.geodeSecure()`, as the offline CLI and
+/// the forced reset use. CREATE USER applied an older rule (8 characters, a
+/// letter and a digit) and a password change none.
+pub fn enforcePasswordPolicy(password: []const u8) geode_auth.PasswordPolicy.PolicyError!void {
+    return geode_auth.PasswordPolicy.geodeSecure().enforce(password);
+}
+
+/// Create a new user. The password must meet the policy
+/// (`enforcePasswordPolicy`; a `PasswordPolicy.PolicyError` otherwise).
 pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
+    try enforcePasswordPolicy(password);
+    return createUserUnchecked(allocator, username, password, email, role, password_reset_required);
+}
+
+/// `createUser` without the policy check: only for the first-boot admin,
+/// whose operator-supplied seed is taken with a forced reset when it does
+/// not meet the policy (`ensureDefaultUser`).
+fn createUserUnchecked(allocator: std.mem.Allocator, username: []const u8, password: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -1156,6 +1176,8 @@ pub fn hasUsers() bool {
 /// The new password must not match the current password (prevents reuse).
 pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, new_password: []const u8) !void {
     _ = allocator;
+    // SONNY-6331: checked before the user is looked up (no existence oracle).
+    try enforcePasswordPolicy(new_password);
     if (!try ensureUserCached(username)) return error.Unauthenticated;
 
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -1279,18 +1301,11 @@ pub fn invalidateCachedUser(username: []const u8) void {
 }
 
 /// Generate a cryptographically secure random password
-/// GAP-0104/GAP-0108 SECURITY FIX: Use crypto random for initial passwords
+/// GAP-0104/GAP-0108 SECURITY FIX: Use crypto random for initial passwords.
+/// SONNY-6331: one that meets the password policy.
 fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
-    const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
-    var password: [24]u8 = undefined;
-    var random_bytes: [24]u8 = undefined;
-    try cb.Csprng.bytes(&random_bytes);
-
-    for (&password, random_bytes) |*p, r| {
-        p.* = charset[r % charset.len];
-    }
-
-    return try allocator.dupe(u8, &password);
+    var buf: [geode_auth.max_password_length]u8 = undefined;
+    return try allocator.dupe(u8, try geode_auth.PasswordPolicy.geodeSecure().generate(&buf));
 }
 
 /// Create default admin user if no users exist
@@ -1326,8 +1341,17 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
         };
         defer allocator.free(admin_password);
 
-        // Create admin user (force password reset only for auto-generated passwords)
-        try createUser(allocator, admin_user, admin_password, admin_email, .Admin, generated_password);
+        // Create admin user. A reset is forced for a generated password and
+        // (SONNY-6331, docs/USER_AUTH.md "Reset Triggers") for a seed that
+        // does not meet the password policy: it is taken, so an existing
+        // deployment still boots, but it only lets the admin set a new one.
+        const seed_violation = if (generated_password) null else geode_auth.PasswordPolicy.geodeSecure().check(admin_password);
+        if (seed_violation) |v| {
+            log.warn("GEODE_ADMIN_PASSWORD does not meet the password policy; the admin must set a new password at first login", &.{
+                Attr.string("reason", geode_auth.PasswordPolicy.geodeSecure().message(v)),
+            });
+        }
+        try createUserUnchecked(allocator, admin_user, admin_password, admin_email, .Admin, generated_password or seed_violation != null);
 
         // Log that a password was generated (without the password itself — S3 security fix).
         // The actual password is printed to stderr via std.debug.print in server_init.zig
@@ -2047,7 +2071,7 @@ test "assignRole_changes_role_and_bumps_version" {
 
     try initUserStore(testing.allocator);
 
-    try createUser(testing.allocator, "ru", "Passw0rd1!", "ru@x.com", .User, false);
+    try createUser(testing.allocator, "ru", "Persistence Test Passphrase", "ru@x.com", .User, false);
 
     const before = getUser("ru") orelse return error.TestSetupFailed;
     try testing.expectEqual(Role.User, before.role);
@@ -2068,7 +2092,7 @@ test "assignRole_same_role_is_noop" {
 
     try initUserStore(testing.allocator);
 
-    try createUser(testing.allocator, "ru2", "Passw0rd1!", "ru2@x.com", .Admin, false);
+    try createUser(testing.allocator, "ru2", "Persistence Test Passphrase", "ru2@x.com", .Admin, false);
 
     try assignRole(testing.allocator, "ru2", .Admin);
 

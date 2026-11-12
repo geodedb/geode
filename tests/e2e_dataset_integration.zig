@@ -19,7 +19,7 @@ fn runGeodeQuery(allocator: std.mem.Allocator, server: []const u8, query: []cons
         "--user",
         "geode",
         "--password",
-        "geode-test-password",
+        "Geode Test Admin Passphrase",
         "--format",
         "json",
         query,
@@ -80,7 +80,7 @@ test "dataset migration and basic queries" {
     var env_map = try std.process.getEnvMap(allocator);
     defer env_map.deinit();
     try env_map.put("GEODE_ADMIN_USERNAME", "geode");
-    try env_map.put("GEODE_DEFAULT_PASSWORD", "geode-test-password");
+    try env_map.put("GEODE_DEFAULT_PASSWORD", "Geode Test Admin Passphrase");
     try env_map.put("GEODE_QUIC_PASSIVE_TEARDOWN", "1");
 
     var server = std.process.Child.init(

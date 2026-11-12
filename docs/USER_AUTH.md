@@ -30,9 +30,10 @@ For enterprise SSO requirements today, use mTLS certificate-based authentication
 ### Basic Setup
 
 - **Default Username**: `geode` (configurable)
-- **Default Password**: generated (16 random bytes, 32 hex characters) unless
-  `GEODE_ADMIN_PASSWORD` or `GEODE_DEFAULT_PASSWORD` is set. There is no
-  fixed default password.
+- **Default Password**: generated unless `GEODE_ADMIN_PASSWORD` or
+  `GEODE_DEFAULT_PASSWORD` is set: a random passphrase that meets the
+  password policy (section 2), words of eight characters, with a reset forced
+  at first login. There is no fixed default password.
 - **Privileges**: Full superuser access
 - **Auto-Creation**: Created automatically on first system initialization
 
@@ -129,6 +130,33 @@ export GEODE_ADMIN_USERNAME="test_user"
 - ✅ **Character Support**: Spaces, numbers, and symbols allowed
 - ✅ **No Exceptions**: Admin and regular users follow identical standards
 
+### Where It Applies (SONNY-6331)
+
+One policy (`PasswordPolicy.geodeSecure()`), on every path that sets a
+password:
+
+- `CREATE USER ... SET PASSWORD` and `CALL geode.auth.user_create(...)`
+- `ALTER USER ... SET PASSWORD` (the transport's own-password intercept and
+  the GQL route), `CALL geode.auth.user_reset_password(...)` and
+  `CALL geode.auth.user_change_password(...)`
+- the forced reset at first login
+- the offline `geode user create | update | change-password | reset-password`
+- the first-boot admin: a generated password meets the policy; a
+  `GEODE_ADMIN_PASSWORD` / `GEODE_DEFAULT_PASSWORD` seed that does not is
+  accepted with a forced reset (section 3)
+
+A password the policy refuses is an error, SQLSTATE `22000` on the server,
+whose message names the first rule it breaks with the configured limit, for
+example `Password too short (minimum 25 characters)` or `Password must be a
+passphrase with at least 4 words`. The message never contains the password.
+Words are separated by spaces. `GEODE_PASSWORD_MIN_LENGTH` above 256 (the
+longest password accepted) is read as 256.
+
+Passwords stored before the policy applied to a path (for example a user
+created with an 8-character password by an older server) keep working: the
+policy is checked when a password is set, not at login. The user is held to
+it at the next password change.
+
 ### Policy Configuration
 
 ```bash
@@ -161,11 +189,10 @@ export GEODE_PASSWORD_MIN_WORDS=1          # Becomes 2
 
 Password reset is **automatically required** when:
 
-- ✅ Using default password `"geodesic"`
-- ✅ Environment password < configured minimum length
-- ✅ Environment password lacks uppercase AND lowercase letters  
-- ✅ Environment password doesn't meet passphrase word requirements
-- ✅ Administrator manually forces reset via API
+- ✅ The first-boot admin password was generated
+- ✅ The first-boot `GEODE_ADMIN_PASSWORD` / `GEODE_DEFAULT_PASSWORD` seed
+  does not meet the password policy (shorter than the configured minimum, no
+  upper or no lower case letter, or fewer words than required)
 
 ### Reset Flow Process
 
@@ -383,11 +410,11 @@ Successfully authenticated as 'cluster_admin' on server 'cluster-01.geode.intern
 
 ### Mandatory Policy Enforcement
 
-- **Non-Bypassable Validation**: Password policy violations cannot be circumvented
-- **Real-Time Enforcement**: Policy changes immediately affect all existing users
-- **Pre and Post Validation**: Passwords validated before hashing AND after authentication
-- **Dynamic Compliance**: Users with policy-violating passwords must reset immediately
-- **Zero Exceptions**: No user can maintain a password that violates current policy
+- **One Policy on Every Path**: every path that sets a password applies the
+  same policy before hashing (section 2)
+- **Set-Time Enforcement**: the policy is checked when a password is set. A
+  stored password that predates it (or a stricter configured limit) keeps
+  working until it is next changed; it does not force a reset at login
 
 ### Post-Quantum Readiness
 

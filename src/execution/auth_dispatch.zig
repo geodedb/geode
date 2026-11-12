@@ -68,6 +68,7 @@ const schema_change_notifier = @import("schema_change_notifier.zig");
 const Value = value_types.Value;
 
 const user_mgmt = @import("../security/user_management.zig");
+const geode_auth = @import("geode_auth");
 const auth_ddl_lock = @import("../security/auth_ddl_lock.zig");
 const mfa_mod = @import("mfa");
 const cluster_mod = @import("../distributed/cluster.zig");
@@ -420,17 +421,6 @@ fn buildRecoveryStr(allocator: std.mem.Allocator, codes: [][]u8) ![]u8 {
     return buf;
 }
 
-/// GAP-0154: Check if password contains at least one letter and one digit.
-fn passwordHasLetterAndDigit(password: []const u8) bool {
-    var has_digit = false;
-    var has_alpha = false;
-    for (password) |c| {
-        if (std.ascii.isDigit(c)) has_digit = true;
-        if (std.ascii.isAlphabetic(c)) has_alpha = true;
-    }
-    return has_digit and has_alpha;
-}
-
 fn ensureRolesInit() void {
     if (!g_custom_roles_init) {
         g_custom_roles = std.StringHashMap([]const u8).init(g_role_store_alloc);
@@ -623,24 +613,22 @@ fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
         if (args.len >= 4 and args[3].* == .String) role_str = args[3].String;
     }
 
-    // GAP-0154: Handle auto-generated passwords from CLI --generate-password flag
-    var generated_pw: [32]u8 = undefined;
+    // GAP-0154: Handle auto-generated passwords from CLI --generate-password flag.
+    // SONNY-6331: generated to meet the password policy.
+    var generated_pw: [geode_auth.max_password_length]u8 = undefined;
     var actual_password = password;
     if (std.mem.eql(u8, password, "auto_generated_password_placeholder")) {
-        var random_bytes: [16]u8 = undefined;
-        try crypto_backend.Csprng.bytes(&random_bytes);
-        generated_pw = std.fmt.bytesToHex(random_bytes, .lower);
-        actual_password = &generated_pw;
+        actual_password = try geode_auth.PasswordPolicy.geodeSecure().generate(&generated_pw);
     }
 
-    // GAP-0154: Validate password strength (min 8 chars, must contain letter and digit)
-    if (actual_password.len < 8 or !passwordHasLetterAndDigit(actual_password)) {
-        return error.PasswordPolicyViolation;
-    }
-
+    // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=CreateUserPolicy; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6331: the password policy (user_management.createUser applies
+    // it; a refusal is an error status, 22000, naming the rule). This
+    // applied an older rule: 8 characters, a letter and a digit.
     const role = user_mgmt.Role.fromString(role_str) orelse .User;
     user_mgmt.createUser(allocator, username, actual_password, email, role, false) catch |err| {
         log.warn("geode.auth.user_create failed", &.{Attr.string("error", @errorName(err))});
+        if (geode_auth.PasswordPolicy.violationOf(err) != null) return err;
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "username");

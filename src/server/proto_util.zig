@@ -370,7 +370,23 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },
-        error.PasswordPolicyViolation => .{ .code = "22000", .message = "password does not meet policy requirements (min 8 chars, letters and numbers)" },
+        // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6331: a password the policy refuses (CREATE USER, ALTER USER
+        // SET PASSWORD, geode.auth.user_create / user_reset_password /
+        // user_change_password), with the rule it broke and the configured
+        // limit; never the password. It named an older 8-character rule.
+        error.PasswordTooShort,
+        error.PasswordTooLong,
+        error.PasswordMissingUppercase,
+        error.PasswordMissingLowercase,
+        error.PasswordMissingDigit,
+        error.PasswordContainsSpaces,
+        error.PasswordNotPassphrase,
+        => blk: {
+            const PasswordPolicy = @import("geode_auth").PasswordPolicy;
+            break :blk .{ .code = "22000", .message = PasswordPolicy.geodeSecure().message(PasswordPolicy.violationOf(err).?) };
+        },
+        error.PasswordReuse => .{ .code = "22000", .message = "New password must not match the current password" },
         error.UnknownProcedure => .{ .code = "42883", .message = "Unknown procedure" },
         // docs/@BUGS_731.md bug 8b: an unresolved scalar function used to
         // silently evaluate to NULL; surface it with the same

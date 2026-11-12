@@ -479,18 +479,18 @@ test "SONNY-3038: a password change that cannot be saved answers 58030, keeps th
     // bob's own ALTER USER (the transport's password intercept), and the
     // admin's procedure (the route the GQL ALTER USER takes).
     _ = try fx.expectRefused(ga, bob, "ALTER USER bob SET PASSWORD 'Correct Horse Battery 9'", "58030");
-    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.user_reset_password('bob', 'newBobPass99')", "58030");
+    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.user_reset_password('bob', 'New Bob Reset Passphrase')", "58030");
     g_fail_writes = false;
 
     try testing.expect(BobState.eql(before, BobState.of(&w)));
     // Neither the old password (it may have leaked) nor the new one.
     try testing.expect(!bobCanLogIn(BOB_PASSWORD));
-    try testing.expect(!bobCanLogIn("newBobPass99"));
+    try testing.expect(!bobCanLogIn("New Bob Reset Passphrase"));
     try w.expectSealed();
 
-    try fx.expectRuns(ga, w.admin, "CALL geode.auth.user_reset_password('bob', 'newBobPass99')");
+    try fx.expectRuns(ga, w.admin, "CALL geode.auth.user_reset_password('bob', 'New Bob Reset Passphrase')");
     try testing.expect(!BobState.eql(before, BobState.of(&w)));
-    try testing.expect(bobCanLogIn("newBobPass99"));
+    try testing.expect(bobCanLogIn("New Bob Reset Passphrase"));
     try testing.expect(!bobCanLogIn(BOB_PASSWORD));
     try w.expectSealed();
 }
@@ -678,7 +678,7 @@ fn deleted(_: BobState, after: BobState) bool {
 }
 
 test "SONNY-3038: a password change that fails part way stores none of it" {
-    try testing.expect(try sweepUserStatement("CALL geode.auth.user_reset_password('bob', 'sweepPass123')", passwordChanged) > 0);
+    try testing.expect(try sweepUserStatement("CALL geode.auth.user_reset_password('bob', 'Sweep Bob Reset Passphrase')", passwordChanged) > 0);
 }
 
 test "SONNY-3038: a DISABLE that fails part way stores none of it" {

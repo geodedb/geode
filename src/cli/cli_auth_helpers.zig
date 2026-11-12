@@ -150,12 +150,24 @@ pub fn passwordPolicyError(password: []const u8) ?[]const u8 {
 
 // -- Secure Password Generation --
 
-/// Generate a cryptographically secure random password.
-/// Returns a 32-character hex string (16 random bytes converted to hex).
-pub fn generateSecurePassword() ![32]u8 {
-    var random_bytes: [16]u8 = undefined;
-    try cb.Csprng.bytes(&random_bytes);
-    return std.fmt.bytesToHex(random_bytes, .lower);
+/// A generated password: `slice()` is the password.
+pub const GeneratedPassword = struct {
+    buf: [geode_auth.max_password_length]u8 = undefined,
+    len: usize = 0,
+
+    pub fn slice(self: *const GeneratedPassword) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
+/// Generate a cryptographically secure random password. SONNY-6331: one
+/// that meets the password policy (`PasswordPolicy.generate`); it was a
+/// 32-character hex string the policy refuses, so `change-password
+/// --generate-password` failed its own policy check.
+pub fn generateSecurePassword() !GeneratedPassword {
+    var out: GeneratedPassword = .{};
+    out.len = (try geode_auth.PasswordPolicy.geodeSecure().generate(&out.buf)).len;
+    return out;
 }
 
 // -- Offline Data Directory Lock (ENG-3921) --
@@ -376,7 +388,7 @@ test "passwordPolicyError explains the rejection" {
     try std.testing.expect(std.mem.indexOf(u8, reason, "too short") != null);
 }
 
-test "generateSecurePassword returns 32 chars" {
+test "generateSecurePassword meets the password policy" {
     const pw = try generateSecurePassword();
-    try std.testing.expectEqual(@as(usize, 32), pw.len);
+    try std.testing.expect(passwordPolicyError(pw.slice()) == null);
 }

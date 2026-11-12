@@ -419,7 +419,7 @@ test "three geode subprocesses on loopback form a 3-node Raft cluster" {
         try env_ptr.put("GEODE_CLUSTER_TOKEN", "test-subprocess-cluster");
         try env_ptr.put("GEODE_NODE_ID", node_id_str);
         try env_ptr.put("GEODE_CLUSTER_CA_CERT", certs.ca);
-        try env_ptr.put("GEODE_ADMIN_PASSWORD", "GeodeTestPassword123!");
+        try env_ptr.put("GEODE_ADMIN_PASSWORD", "Geode Test Password Passphrase 123");
         if (posixGetenv("PATH")) |p| try env_ptr.put("PATH", p);
         if (posixGetenv("HOME")) |p| try env_ptr.put("HOME", p);
         if (posixGetenv("LD_LIBRARY_PATH")) |p| try env_ptr.put("LD_LIBRARY_PATH", p);

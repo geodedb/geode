@@ -6475,16 +6475,8 @@ fn handleAlterUserSetPassword(
     // didn't meet policy — so the change never persisted and reverted on restart.
     if (state.security_manager) |sm| {
         sm.validatePassword(new_password) catch |err| {
-            const msg = switch (err) {
-                error.PasswordTooShort => "Password too short (minimum 20 characters)",
-                error.PasswordTooLong => "Password too long (maximum 256 characters)",
-                error.PasswordMissingUppercase => "Password must contain at least one uppercase letter",
-                error.PasswordMissingLowercase => "Password must contain at least one lowercase letter",
-                error.PasswordMissingDigit => "Password must contain at least one digit",
-                error.PasswordContainsSpaces => "Password must not contain spaces",
-                error.PasswordNotPassphrase => "Password must be a passphrase with at least 3 words",
-                else => "Password does not meet security policy requirements",
-            };
+            // SONNY-6331: the rule that failed, with the configured limit.
+            const msg = if (geode_auth.PasswordPolicy.violationOf(err)) |v| sm.password_policy.message(v) else "Password does not meet security policy requirements";
             try sendExecuteError(gpa, stream, "28P01", msg, &.{}, &.{});
             return;
         };
@@ -6501,7 +6493,7 @@ fn handleAlterUserSetPassword(
         // SONNY-3038: not saved (58030); the user is locked out.
         const info: proto_util.ErrorInfo = if (err == error.UserNotPersisted) proto_util.mapError(err) else .{ .code = "28P01", .message = switch (err) {
             error.PasswordReuse => "New password must not match the current password",
-            else => "Failed to update password",
+            else => if (geode_auth.PasswordPolicy.violationOf(err)) |v| geode_auth.PasswordPolicy.geodeSecure().message(v) else "Failed to update password",
         } };
         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
         return;

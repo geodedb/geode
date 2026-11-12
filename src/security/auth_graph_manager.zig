@@ -1041,8 +1041,8 @@ pub const AuthGraphManager = struct {
         //    `GEODE_ADMIN_PASSWORD` wins for backward compatibility with
         //    deployments already pinning that name; a deprecation warning is
         //    emitted when both are set with different values so operators
-        //    notice the drift.  Falls back to a random 32-char hex password
-        //    when neither env var is present.
+        //    notice the drift.  Falls back to a random policy-compliant
+        //    passphrase (SONNY-6331) when neither env var is present.
         var password_from_env = false;
         const password = blk: {
             const admin_env = getEnvVarOwned(self.allocator, "GEODE_ADMIN_PASSWORD") catch null;
@@ -1065,33 +1065,30 @@ pub const AuthGraphManager = struct {
                 break :blk env_pw;
             }
 
-            var random_bytes: [16]u8 = undefined;
-            try cb.Csprng.bytes(&random_bytes);
-            const pw = try self.allocator.alloc(u8, 32);
-            const hex_chars = "0123456789abcdef";
-            for (random_bytes, 0..) |byte, i| {
-                pw[i * 2] = hex_chars[byte >> 4];
-                pw[i * 2 + 1] = hex_chars[byte & 0xf];
-            }
-            break :blk pw;
+            // SONNY-6331: a generated password meets the policy (it was 32
+            // hex characters, which the policy refuses).
+            var pw_buf: [geode_auth.max_password_length]u8 = undefined;
+            break :blk try self.allocator.dupe(u8, try geode_auth.PasswordPolicy.geodeSecure().generate(&pw_buf));
         };
 
         // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Unified Password Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_bug731_password_policy.zig; OWNER=security; UPDATED=2026-07-31
+        // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=FirstBootSeedForcedReset; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
         // The env seed path historically enforced NO password policy at all,
         // while `ALTER USER ... SET PASSWORD` over the wire enforced a 20-char
-        // 3-word passphrase — so a one-word 5-character admin password could be
-        // installed at first boot and then never be changeable to anything
-        // weaker-or-equal. Validate it here so the drift is visible.
+        // 3-word passphrase. See docs/@BUGS_731.md bug 4.
         //
-        // Deliberately WARN-ONLY, not fail-closed: refusing to boot would brick
-        // existing deployments whose seed predates this check, on upgrade. The
-        // operator is told exactly what is wrong and how it differs from what
-        // the server will demand at the next password change.
-        // See docs/@BUGS_731.md bug 4.
+        // SONNY-6331: a seed that does not meet the policy is taken (refusing
+        // to boot would brick a deployment whose seed predates the check) with
+        // a forced reset, as docs/USER_AUTH.md "Reset Triggers" states: it
+        // logs the admin in only to set a policy-compliant password. It was
+        // taken with no reset and only a warning.
+        var seed_violation: ?geode_auth.PasswordPolicy.Violation = null;
         if (password_from_env) {
-            if (geode_auth.PasswordPolicy.geodeSecure().validate(password)) |reason| {
-                log.warn("GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD does not meet the server's password policy. The seed is being ACCEPTED for backward compatibility, but the same password would be REJECTED by 'ALTER USER ... SET PASSWORD'. Seed a policy-compliant passphrase (>=20 chars, upper and lower case, >=3 space-separated words) to remove this warning.", &.{
-                    Attr.string("reason", reason),
+            const policy = geode_auth.PasswordPolicy.geodeSecure();
+            seed_violation = policy.check(password);
+            if (seed_violation) |v| {
+                log.warn("GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD does not meet the server's password policy. The seed is accepted with a FORCED RESET: the admin must set a policy-compliant passphrase at first login. Seed a compliant passphrase to avoid the reset.", &.{
+                    Attr.string("reason", policy.message(v)),
                 });
             }
         }
@@ -1111,7 +1108,7 @@ pub const AuthGraphManager = struct {
         var record = self.storage.getUser(user_id) orelse return error.UserNotFound;
         record.is_superuser = true;
         record.is_default_user = true;
-        record.password_reset_required = !password_from_env;
+        record.password_reset_required = !password_from_env or seed_violation != null;
         record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
         record.password_changed_at = compat_milliTimestamp();
         try self.storage.putCachedUser(user_id, record);
@@ -2357,7 +2354,8 @@ test "bootstrapDefaultAdmin creates user + role + chain root with valid HMAC cha
     // Verify user was created
     try testing.expect(mgr.hasAuthRecords());
     try testing.expect(std.mem.eql(u8, result.username, "geode"));
-    try testing.expectEqual(@as(usize, 32), result.password.len);
+    // SONNY-6331: a generated password meets the password policy.
+    try testing.expectEqual(@as(?[]const u8, null), geode_auth.PasswordPolicy.geodeSecure().validate(result.password));
 
     // Verify user is superuser and default
     const user = mgr.storage.getUser(result.user_id);

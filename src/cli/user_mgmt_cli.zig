@@ -163,13 +163,9 @@ fn hasHelpFlag(argv: [][:0]u8, start_idx: usize) bool {
     return false;
 }
 
-fn requirePasswordStrong(password: []const u8) bool {
-    return cli_auth.isPasswordStrong(password);
-}
-
-/// GAP-0154 FIX: Generate a cryptographically secure random password
-/// Returns a 32-character hex string (16 random bytes converted to hex)
-fn generateSecurePassword() ![32]u8 {
+/// GAP-0154 FIX: Generate a cryptographically secure random password that
+/// meets the password policy (SONNY-6331).
+fn generateSecurePassword() !cli_auth.GeneratedPassword {
     return cli_auth.generateSecurePassword();
 }
 
@@ -412,7 +408,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
 
         // GAP-0154 FIX: Production build password handling
-        var generated_pw: [32]u8 = undefined;
+        var generated_pw: cli_auth.GeneratedPassword = .{};
         const final_password: []const u8 = blk: {
             if (password) |pw| {
                 // Explicit password provided
@@ -420,8 +416,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                     std.debug.print("Error: password cannot be empty\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }
-                if (!requirePasswordStrong(pw)) {
-                    std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
+                if (cli_auth.passwordPolicyError(pw)) |reason| {
+                    std.debug.print("Error: password does not meet the password policy: {s}\n", .{reason});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }
                 break :blk pw;
@@ -429,8 +425,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             if (generate_password) {
                 // Generate random password
                 generated_pw = try generateSecurePassword();
-                std.debug.print("Generated password: {s}\n", .{generated_pw});
-                break :blk &generated_pw;
+                std.debug.print("Generated password: {s}\n", .{generated_pw.slice()});
+                break :blk generated_pw.slice();
             }
             // All builds require explicit password
             std.debug.print("Error: --password or --generate-password is required\n", .{});
@@ -656,8 +652,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
 
         if (new_password) |pw| {
-            if (!requirePasswordStrong(pw)) {
-                std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
+            if (cli_auth.passwordPolicyError(pw)) |reason| {
+                std.debug.print("Error: password does not meet the password policy: {s}\n", .{reason});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
         }
@@ -679,8 +675,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             const pw = new_password.?;
-            if (!requirePasswordStrong(pw)) {
-                std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
+            if (cli_auth.passwordPolicyError(pw)) |reason| {
+                std.debug.print("Error: password does not meet the password policy: {s}\n", .{reason});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
             const user_id = mgr.next_user_id;
@@ -1012,22 +1008,22 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
         // GAP-0154 FIX: Require explicit new password
-        var generated_pw: [32]u8 = undefined;
+        var generated_pw: cli_auth.GeneratedPassword = .{};
         const final_new: []const u8 = blk: {
             if (new_pw) |pw| {
                 break :blk pw;
             }
             if (generate_password) {
                 generated_pw = try generateSecurePassword();
-                std.debug.print("Generated password: {s}\n", .{generated_pw});
-                break :blk &generated_pw;
+                std.debug.print("Generated password: {s}\n", .{generated_pw.slice()});
+                break :blk generated_pw.slice();
             }
             std.debug.print("Error: --new-password is required\n", .{});
             std.debug.print("Use --new-password <password> or --generate-password\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
-        if (!requirePasswordStrong(final_new)) {
-            std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
+        if (cli_auth.passwordPolicyError(final_new)) |reason| {
+            std.debug.print("Error: password does not meet the password policy: {s}\n", .{reason});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
         // Verify old password if provided. Bug 731 (adjacent finding): this
@@ -1090,22 +1086,22 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
         // GAP-0154 FIX: Require explicit new password
-        var generated_pw: [32]u8 = undefined;
+        var generated_pw: cli_auth.GeneratedPassword = .{};
         const final_new: []const u8 = blk: {
             if (new_pw) |pw| {
                 break :blk pw;
             }
             if (generate_password) {
                 generated_pw = try generateSecurePassword();
-                std.debug.print("Generated password: {s}\n", .{generated_pw});
-                break :blk &generated_pw;
+                std.debug.print("Generated password: {s}\n", .{generated_pw.slice()});
+                break :blk generated_pw.slice();
             }
             std.debug.print("Error: --new-password is required\n", .{});
             std.debug.print("Use --new-password <password> or --generate-password\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
-        if (!requirePasswordStrong(final_new)) {
-            std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
+        if (cli_auth.passwordPolicyError(final_new)) |reason| {
+            std.debug.print("Error: password does not meet the password policy: {s}\n", .{reason});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
         // Review-0016 Important-2: `reset-password` is the DOCUMENTED escape

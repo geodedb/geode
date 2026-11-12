@@ -362,20 +362,46 @@ pub const PasswordPolicy = struct {
             break :blk if (parsed < 2) 2 else parsed;
         } else 3;
 
+        // SONNY-6331: no limit above what a password can meet (256
+        // characters hold at most 128 words); a larger setting meant no
+        // password was accepted.
         return .{
-            .min_length = min_length,
-            .max_length = 256,
+            .min_length = @min(min_length, max_password_length),
+            .max_length = max_password_length,
             .require_uppercase = true,
             .require_lowercase = true,
             .require_digit = false, // Optional for passphrases
             .require_special = false, // Optional for passphrases
             .allow_spaces = true,
             .require_passphrase = true,
-            .min_words = min_words,
+            .min_words = @min(min_words, max_password_words),
             .max_age_days = 90,
             .history_count = 5,
         };
     }
+
+    /// SONNY-6331: the rule a password broke.
+    pub const Violation = enum {
+        too_short,
+        too_long,
+        missing_uppercase,
+        missing_lowercase,
+        missing_digit,
+        contains_spaces,
+        too_few_words,
+    };
+
+    /// The error a refused password is answered with, one per rule
+    /// (SQLSTATE 22000 on the wire, with `message` as its text).
+    pub const PolicyError = error{
+        PasswordTooShort,
+        PasswordTooLong,
+        PasswordMissingUppercase,
+        PasswordMissingLowercase,
+        PasswordMissingDigit,
+        PasswordContainsSpaces,
+        PasswordNotPassphrase,
+    };
 
     // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Unified Password Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_bug731_password_policy.zig; OWNER=security; UPDATED=2026-07-31
     /// Validate a candidate password against this policy.
@@ -393,66 +419,150 @@ pub const PasswordPolicy = struct {
     /// this. See docs/@BUGS_731.md bug 4.
     ///
     /// The message wording is deliberately stable — it is quoted verbatim in
-    /// docs and in operator-facing error output.
+    /// docs and in operator-facing error output. SONNY-6331: it names the
+    /// configured limit (GEODE_PASSWORD_MIN_LENGTH / _MIN_WORDS), not the
+    /// default, and never contains the password.
     pub fn validate(self: PasswordPolicy, password: []const u8) ?[]const u8 {
-        if (password.len < self.min_length) return "Password too short (minimum 20 characters)";
-        if (password.len > self.max_length) return "Password too long (maximum 256 characters)";
+        const v = self.check(password) orelse return null;
+        return self.message(v);
+    }
 
-        if (self.require_uppercase) {
-            var found = false;
-            for (password) |c| {
-                if (std.ascii.isUpper(c)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return "Password must contain at least one uppercase letter";
-        }
-
-        if (self.require_lowercase) {
-            var found = false;
-            for (password) |c| {
-                if (std.ascii.isLower(c)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return "Password must contain at least one lowercase letter";
-        }
-
-        if (self.require_digit) {
-            var found = false;
-            for (password) |c| {
-                if (std.ascii.isDigit(c)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return "Password must contain at least one digit";
-        }
-
-        if (!self.allow_spaces) {
-            for (password) |c| {
-                if (c == ' ') return "Password must not contain spaces";
-            }
-        }
-
-        if (self.require_passphrase) {
-            var word_count: usize = 0;
-            var in_word = false;
-            for (password) |c| {
-                if (c == ' ') {
-                    in_word = false;
-                } else {
-                    if (!in_word) word_count += 1;
-                    in_word = true;
-                }
-            }
-            if (word_count < self.min_words) return "Password must be a passphrase with at least 3 words";
-        }
-
+    // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=PolicyCheck; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+    /// The first rule `password` breaks, or null when it meets the policy.
+    pub fn check(self: PasswordPolicy, password: []const u8) ?Violation {
+        if (password.len < self.min_length) return .too_short;
+        if (password.len > self.max_length) return .too_long;
+        if (self.require_uppercase and !containsWhere(password, std.ascii.isUpper)) return .missing_uppercase;
+        if (self.require_lowercase and !containsWhere(password, std.ascii.isLower)) return .missing_lowercase;
+        if (self.require_digit and !containsWhere(password, std.ascii.isDigit)) return .missing_digit;
+        if (!self.allow_spaces and std.mem.indexOfScalar(u8, password, ' ') != null) return .contains_spaces;
+        if (self.require_passphrase and countPassphraseWords(password) < self.min_words) return .too_few_words;
         return null;
     }
+
+    /// `check` as an error (`PolicyError`), for the paths that set a password.
+    pub fn enforce(self: PasswordPolicy, password: []const u8) PolicyError!void {
+        const v = self.check(password) orelse return;
+        return errorOf(v);
+    }
+
+    pub fn errorOf(v: Violation) PolicyError {
+        return switch (v) {
+            .too_short => error.PasswordTooShort,
+            .too_long => error.PasswordTooLong,
+            .missing_uppercase => error.PasswordMissingUppercase,
+            .missing_lowercase => error.PasswordMissingLowercase,
+            .missing_digit => error.PasswordMissingDigit,
+            .contains_spaces => error.PasswordContainsSpaces,
+            .too_few_words => error.PasswordNotPassphrase,
+        };
+    }
+
+    /// The rule a `PolicyError` (also `SecurityManager.validatePassword`'s
+    /// errors of the same names) stands for; null for any other error.
+    pub fn violationOf(err: anyerror) ?Violation {
+        return switch (err) {
+            error.PasswordTooShort => .too_short,
+            error.PasswordTooLong => .too_long,
+            error.PasswordMissingUppercase => .missing_uppercase,
+            error.PasswordMissingLowercase => .missing_lowercase,
+            error.PasswordMissingDigit => .missing_digit,
+            error.PasswordContainsSpaces => .contains_spaces,
+            error.PasswordNotPassphrase => .too_few_words,
+            else => null,
+        };
+    }
+
+    /// The operator-facing text of a broken rule, with this policy's limits.
+    /// A static string: never the password.
+    pub fn message(self: PasswordPolicy, v: Violation) []const u8 {
+        return switch (v) {
+            .too_short => too_short_messages[@min(self.min_length, max_password_length)],
+            .too_long => too_long_messages[@min(self.max_length, max_password_length)],
+            .missing_uppercase => "Password must contain at least one uppercase letter",
+            .missing_lowercase => "Password must contain at least one lowercase letter",
+            .missing_digit => "Password must contain at least one digit",
+            .contains_spaces => "Password must not contain spaces",
+            .too_few_words => too_few_words_messages[@min(self.min_words, max_password_words)],
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=GeneratedPasswordsComply; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6331: a random password that meets this policy, written into
+    /// `out` (which must hold `max_password_length` bytes). Words of eight
+    /// characters (an uppercase letter, a lowercase letter, six lowercase
+    /// letters or digits; about 40 bits each), as many as the length and word
+    /// limits need. The generated passwords (first-boot admin, `geode user
+    /// --generate-password`, `user_create`'s placeholder) were hex strings that
+    /// the policy refused.
+    pub fn generate(self: PasswordPolicy, out: []u8) ![]const u8 {
+        const word_len = 8;
+        const tail = "abcdefghijklmnopqrstuvwxyz0123456789";
+        var len: usize = 0;
+        var words: usize = 0;
+        while (len < self.min_length or words < self.min_words) {
+            const need: usize = if (words == 0) word_len else word_len + 1;
+            if (len + need > @min(out.len, self.max_length)) return error.PolicyUnsatisfiable;
+            if (words > 0) {
+                out[len] = ' ';
+                len += 1;
+            }
+            var raw: [word_len]u8 = undefined;
+            try crypto_backend.Csprng.bytes(&raw);
+            out[len] = 'A' + raw[0] % 26;
+            out[len + 1] = 'a' + raw[1] % 26;
+            for (raw[2..], 2..) |r, i| out[len + i] = tail[r % tail.len];
+            len += word_len;
+            words += 1;
+        }
+        const pw = out[0..len];
+        std.debug.assert(self.check(pw) == null);
+        return pw;
+    }
+
+    fn containsWhere(s: []const u8, comptime pred: fn (u8) bool) bool {
+        for (s) |c| if (pred(c)) return true;
+        return false;
+    }
+
+    fn countPassphraseWords(password: []const u8) usize {
+        var word_count: usize = 0;
+        var in_word = false;
+        for (password) |c| {
+            if (c == ' ') {
+                in_word = false;
+            } else {
+                if (!in_word) word_count += 1;
+                in_word = true;
+            }
+        }
+        return word_count;
+    }
+};
+
+/// The longest password any policy accepts, and the most words it holds.
+pub const max_password_length: usize = 256;
+pub const max_password_words: usize = max_password_length / 2;
+
+const too_short_messages = blk: {
+    @setEvalBranchQuota(200_000);
+    var msgs: [max_password_length + 1][]const u8 = undefined;
+    for (&msgs, 0..) |*m, n| m.* = std.fmt.comptimePrint("Password too short (minimum {d} characters)", .{n});
+    break :blk msgs;
+};
+
+const too_long_messages = blk: {
+    @setEvalBranchQuota(200_000);
+    var msgs: [max_password_length + 1][]const u8 = undefined;
+    for (&msgs, 0..) |*m, n| m.* = std.fmt.comptimePrint("Password too long (maximum {d} characters)", .{n});
+    break :blk msgs;
+};
+
+const too_few_words_messages = blk: {
+    @setEvalBranchQuota(200_000);
+    var msgs: [max_password_words + 1][]const u8 = undefined;
+    for (&msgs, 0..) |*m, n| m.* = std.fmt.comptimePrint("Password must be a passphrase with at least {d} words", .{n});
+    break :blk msgs;
 };
 
 // ---- Audit ----

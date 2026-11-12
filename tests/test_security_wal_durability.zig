@@ -255,7 +255,7 @@ test "gap0026: credential rotation survives hard crash under deferred WAL (old c
     clearAdminPasswordEnv();
     try setEnv(WAL_SYNC_ENV, "deferred");
     defer unsetEnv(WAL_SYNC_ENV);
-    try setEnv(ADMIN_PASSWORD_ENV, "initialpass1");
+    try setEnv(ADMIN_PASSWORD_ENV, "Initial Admin Seed Passphrase");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
 
     const hmac_key = [_]u8{0x5a} ** 32;
@@ -317,7 +317,7 @@ test "gap0026: credential rotation survives hard crash under deferred WAL (old c
         const new_ok = try geode_auth.verifyPasswordArgon2id(ta, "rotatedpass99", reloaded_hash);
         try testing.expect(new_ok);
 
-        const old_ok = try geode_auth.verifyPasswordArgon2id(ta, "initialpass1", reloaded_hash);
+        const old_ok = try geode_auth.verifyPasswordArgon2id(ta, "Initial Admin Seed Passphrase", reloaded_hash);
         try testing.expect(!old_ok);
     }
 }

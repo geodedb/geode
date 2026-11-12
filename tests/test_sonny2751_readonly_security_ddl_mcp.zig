@@ -53,7 +53,7 @@ test "SONNY-2751: the read-only MCP server refuses the security DDL before the w
     defer server.deinit();
     try handshake(server, allocator);
     const statements = [_][]const u8{
-        "CREATE USER mallory SET PASSWORD 'Ro-Passw0rd-1' ROLE admin",
+        "CREATE USER mallory SET PASSWORD 'Read Only Passphrase One' ROLE admin",
         "ALTER USER alice SET ROLE admin",
         "DROP USER alice",
         "CREATE ROLE r",
