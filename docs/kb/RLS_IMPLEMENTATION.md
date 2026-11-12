@@ -223,8 +223,24 @@ This document describes the comprehensive Row-Level Security (RLS) implementatio
   graph. Its details give the pattern's labels (or relationship types) and
   its property keys. Property values are never recorded, because they are
   the secret being guessed. A burst of these records from one user is the
-  signature of enumeration. The engine has no per-session rate limit for
-  refusals yet.
+  signature of enumeration.
+
+  **Refusals are rate-limited per session and label (SONNY-2817).** Each
+  session counts its refusals per graph and label (a relationship type for
+  an edge; a pattern node with no label counts under a label of its own).
+  The fifth refusal within 60 seconds on one label starts a 5-minute
+  cooldown: every MERGE that names that label on that graph is refused with
+  `MergeRefusalRateLimited` (SQLSTATE 53400), before what it would match is
+  looked at, so a MERGE that would have matched a hidden row, a visible one
+  or none gets the same answer and the cooldown tells nothing. The cooldown
+  starts with a `MERGE_REFUSAL_RATE_LIMIT_ENGAGED` audit record and each
+  refusal during it writes a `MERGE_REFUSAL_RATE_LIMITED` one (user, graph,
+  labels; no values). Other labels and other sessions are not affected. The
+  limit is per session (a QUIC stream's or gRPC session's state): a client
+  that opens new sessions to reset it pays a HELLO and an authentication for
+  each, and the audit records still show the burst. An embedded executor
+  with no session is not limited. The limits are constants in
+  `src/execution/merge_refusal_limiter.zig`.
 
 ### 5. User Management CLI (`src/tools/user_auth.zig`)
 

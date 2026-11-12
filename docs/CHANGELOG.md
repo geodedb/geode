@@ -111,6 +111,21 @@
   over gRPC and over QUIC's general and fast paths alike; only CREATE GRAPH
   (and a HELLO allowed to create its graph) creates a graph.
   `test-sonny3122-dropped-graph-not-recreated`.
+- **MERGE visibility refusals are rate-limited per session and label
+  (SONNY-2817).** A MERGE refused for a row row-level security hides
+  (`MergeMatchNotVisible`, 42501, SONNY-2686) is an equality oracle over
+  any property its pattern names; SONNY-2728 audited each refusal, and
+  nothing limited how fast a session could guess. **Behaviour change:** a
+  session's fifth refusal within 60 s on one label of one graph starts a
+  5-minute cooldown in which every MERGE naming that label there is refused
+  with `MergeRefusalRateLimited` (SQLSTATE 53400), before what it would
+  match is looked at, so the cooldown answers nothing. The cooldown's start
+  (`MERGE_REFUSAL_RATE_LIMIT_ENGAGED`) and each refusal in it
+  (`MERGE_REFUSAL_RATE_LIMITED`) are audited with the user, graph and
+  labels, never a value. Other labels, other sessions and an embedded
+  executor with no session are not limited
+  (`src/execution/merge_refusal_limiter.zig`, `SessionState`; see
+  `docs/kb/RLS_IMPLEMENTATION.md`). `test-sonny2817-merge-refusal-limit`.
 - **`geode query` exit code, superuser roles, procedure errors, EXPLAIN
   POLICY's executor checks, legacy hashes (SONNY-6369).** (1) **Behaviour
   change:** `geode query` exits 1 when the server answers the query with an

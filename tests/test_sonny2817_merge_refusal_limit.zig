@@ -22,10 +22,10 @@ const geode = @import("geode");
 const h = @import("rls_session_harness.zig");
 
 const execution = geode.execution;
+const lim = geode.execution.merge_refusal_limiter;
 
-/// What a session may collect on one label before the cooldown
-/// (execution/merge_refusal_limiter.zig `refusal_limit`).
-const refusal_limit = 5;
+/// What a session may collect on one label before the cooldown.
+const refusal_limit = lim.refusal_limit;
 
 test "SONNY-2817: after too many refused MERGEs on a label, every MERGE naming that label is refused for the session, with no oracle" {
     var s = try h.Session.init(.label_policy);
@@ -112,4 +112,60 @@ test "SONNY-2817: an executor with no session (embedded) keeps refusing with Mer
         try h.expectError(&s, &f, "MERGE (x:Hidden {s: 'leak'}) RETURN x.s", error.MergeMatchNotVisible);
     }
     try f.finish("SONNY-2817 no session");
+}
+
+// ---------------------------------------------------------------------------
+// The limiter itself, on a clock the test drives.
+// ---------------------------------------------------------------------------
+
+test "SONNY-2817 MergeRefusalLimiter: the limit starts a cooldown for that label only, which ends on its own" {
+    var l = lim.MergeRefusalLimiter.init(testing.allocator);
+    defer l.deinit();
+    const t0: i64 = 1_000_000;
+    var i: u32 = 0;
+    while (i + 1 < lim.refusal_limit) : (i += 1) {
+        try testing.expect(!l.noteRefusal("g", "Hidden", t0 + i));
+        try testing.expect(!l.isLimited("g", "Hidden", t0 + i));
+    }
+    try testing.expect(l.noteRefusal("g", "Hidden", t0 + i));
+    try testing.expect(l.isLimited("g", "Hidden", t0 + i));
+    try testing.expect(!l.isLimited("g", "Doc", t0 + i));
+    try testing.expect(!l.isLimited("g2", "Hidden", t0 + i));
+    try testing.expect(l.isLimited("g", "Hidden", t0 + i + lim.cooldown_ms - 1));
+    try testing.expect(!l.isLimited("g", "Hidden", t0 + i + lim.cooldown_ms));
+    // The count starts again after a cooldown.
+    try testing.expect(!l.noteRefusal("g", "Hidden", t0 + i + lim.cooldown_ms + 1));
+}
+
+test "SONNY-2817 MergeRefusalLimiter: refusals further apart than the window do not add up" {
+    var l = lim.MergeRefusalLimiter.init(testing.allocator);
+    defer l.deinit();
+    var t: i64 = 0;
+    for (0..refusal_limit * 3) |_| {
+        try testing.expect(!l.noteRefusal("g", "Hidden", t));
+        t += @divTrunc(lim.window_ms, lim.refusal_limit - 1) + 1;
+    }
+    try testing.expect(!l.isLimited("g", "Hidden", t));
+}
+
+test "SONNY-2817 MergeRefusalLimiter: at most max_tracked pairs; a running cooldown is not dropped to make room" {
+    var l = lim.MergeRefusalLimiter.init(testing.allocator);
+    defer l.deinit();
+    for (0..refusal_limit) |_| _ = l.noteRefusal("g", "Hidden", 0);
+    try testing.expect(l.isLimited("g", "Hidden", 1));
+    var name: [16]u8 = undefined;
+    for (0..lim.max_tracked * 2) |k| {
+        const label = try std.fmt.bufPrint(&name, "L{d}", .{k});
+        _ = l.noteRefusal("g", label, @intCast(10 + k));
+    }
+    try testing.expect(l.entries.count() <= lim.max_tracked);
+    try testing.expect(l.isLimited("g", "Hidden", 20));
+}
+
+test "SONNY-2817 MergeRefusalLimiter: a pair that cannot be stored is not counted, and nothing leaks" {
+    var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
+    var l = lim.MergeRefusalLimiter.init(failing.allocator());
+    defer l.deinit();
+    try testing.expect(!l.noteRefusal("g", "Hidden", 0));
+    try testing.expectEqual(@as(u32, 0), l.entries.count());
 }

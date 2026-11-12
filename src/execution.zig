@@ -80,6 +80,8 @@ pub const procedure_registry = @import("execution/procedure_registry.zig");
 // hard dependency on src/server/rls_filter.zig (which lives in the `root`
 // module and would otherwise create a diamond-dep with the `geode` module).
 pub const rls_dispatch = @import("execution/rls_dispatch.zig");
+// SONNY-2817: the per-session limit on MERGE visibility refusals.
+pub const merge_refusal_limiter = @import("execution/merge_refusal_limiter.zig");
 // Task 9: fire schema-change notifications after CREATE/DROP GRAPH so LSP
 // SchemaProviders drop their per-session label/edge-type caches.
 const schema_change_notifier = @import("execution/schema_change_notifier.zig");
@@ -498,15 +500,21 @@ pub const SessionState = struct {
     timezone: ?[]const u8 = null,
     parameters: std.StringHashMap([]const u8),
     allocator: std.mem.Allocator,
+    /// SONNY-2817: the session's MERGE visibility refusals, per graph and
+    /// label (execution/merge_refusal_limiter.zig). SESSION RESET and SESSION
+    /// CLOSE do not clear it.
+    merge_refusal_limiter: merge_refusal_limiter.MergeRefusalLimiter,
 
     pub fn init(allocator: std.mem.Allocator) SessionState {
         return .{
             .parameters = std.StringHashMap([]const u8).init(allocator),
             .allocator = allocator,
+            .merge_refusal_limiter = merge_refusal_limiter.MergeRefusalLimiter.init(allocator),
         };
     }
 
     pub fn deinit(self: *SessionState) void {
+        self.merge_refusal_limiter.deinit();
         if (self.schema) |s| self.allocator.free(s);
         if (self.graph) |g| self.allocator.free(g);
         if (self.timezone) |tz| self.allocator.free(tz);

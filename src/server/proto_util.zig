@@ -438,6 +438,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // rather than binding the hidden node or creating a duplicate of it.
         // CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
         error.MergeMatchNotVisible => .{ .code = "42501", .message = "MergeMatchNotVisible: the MERGE pattern matches an existing node that row-level security hides from this session; the statement was refused, and nothing was bound, updated or created" },
+        // SONNY-2817: the per-session, per-label limit on those refusals.
+        error.MergeRefusalRateLimited => .{ .code = "53400", .message = "MergeRefusalRateLimited: this session was refused too many MERGEs for rows row-level security hides on a label of this graph; every MERGE naming that label is refused for 5 minutes, and nothing was bound, updated or created" },
         // SONNY-2691 item 5: the evaluator's row visibility was never
         // installed in this process; the statement is refused rather than
         // answered without the session's RLS policies.
