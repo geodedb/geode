@@ -145,7 +145,6 @@ const isAggregationExpr = execution.isAggregationExpr;
 const isNonConstantExpr = execution.isNonConstantExpr;
 const sortRows = execution.sortRows;
 const sortRowsEx = execution.sortRowsEx; // D05 Fix: Extended sortRows with RETURN items
-const evaluateNodeExpression = execution.evaluateNodeExpression;
 const evaluateGroupAggregation = execution.evaluateGroupAggregation;
 const computeBindingGroupAggregation = execution.computeBindingGroupAggregation;
 const executeWithClause = execution.executeWithClause;
@@ -842,6 +841,8 @@ fn fastPathClause(comptime field: []const u8) FastPathClause {
          "select_projection",   "optional_where",    "set_clause_ends", "match_clauses",
         // SONNY-3384: a flag of `delete_items`, which declines on its own.
         "detach_delete",
+        // SONNY-2698: which stage `group_by` and `having` belong to.
+        "return_grouping",
     };
     inline for (declines) |name| {
         if (comptime std.mem.eql(u8, name, field)) return .declines;
@@ -9645,13 +9646,13 @@ fn multiChainWithStage(q: ast.Query) bool {
     return q.with_clause != null and !q.is_initial_with;
 }
 
-/// Whether the RETURN groups or filters: a RETURN-level GROUP BY (a GROUP BY
-/// after a WITH belongs to the WITH, which groups in the shared projection
-/// already), or a WHERE after RETURN (the parser's HAVING without a GROUP BY).
+/// Whether the RETURN groups or filters: a RETURN-level GROUP BY (one written
+/// between a WITH and the RETURN belongs to the WITH, which groups in the
+/// shared projection already; SONNY-2698: one written after the RETURN is
+/// the RETURN's, WITH or not), or a WHERE after RETURN (the parser's HAVING
+/// without a GROUP BY).
 fn returnGroupsOrFilters(q: ast.Query) bool {
-    const return_group_by = q.group_by != null and q.with_clause == null;
-    const return_where = q.having != null and q.group_by == null;
-    return return_group_by or return_where;
+    return q.returnStageGroupBy() != null or q.returnStageHaving() != null;
 }
 
 /// SONNY-2674: whether the RETURN goes through the shared projection
@@ -9937,7 +9938,7 @@ fn readWithStageRows(
         stage.offset_param = null;
     }
     if (with_clause.distinct) stage.order_by = null;
-    var rows = try execution.executeWithClauseWithGroupByAndParams(allocator, pattern.rows, stage, q.group_by, execution.withStageHaving(q), param_names, param_values);
+    var rows = try execution.executeWithClauseWithGroupByAndParams(allocator, pattern.rows, stage, q.withStageGroupBy(), execution.withStageHaving(q), param_names, param_values);
     errdefer rows.deinit(allocator);
     // The rows point at the nodes and edges the pattern's rows hold.
     rows.owned_graph_entities = pattern.rows.owned_graph_entities;
@@ -10385,12 +10386,12 @@ pub fn projectReturnOverRows(
     param_names: []const []const u8,
     param_values: []const Value,
 ) anyerror!ExecutionResult {
-    const return_group_by = if (q.with_clause == null) q.group_by else null;
-    // SONNY-3142: after a WITH, a HAVING with a GROUP BY is the WITH's
-    // (`readWithStageRows` applied it); a HAVING without one is a WHERE after
-    // RETURN (SONNY-2667), as on the planned read.
-    const return_having = if (q.with_clause == null or q.group_by == null) q.having else null;
-    var projected = try execution.executeWithClauseWithGroupByAndParams(allocator, rows.*, .{ .items = q.ret.items }, return_group_by, return_having, param_names, param_values);
+    // SONNY-3142: after a WITH, a GROUP BY and HAVING written before the
+    // RETURN are the WITH's (`readWithStageRows` applied them); a HAVING
+    // without one is a WHERE after RETURN (SONNY-2667), and SONNY-2698: a
+    // GROUP BY and HAVING written after the RETURN are the RETURN's, as on
+    // the planned read.
+    var projected = try execution.executeWithClauseWithGroupByAndParams(allocator, rows.*, .{ .items = q.ret.items }, q.returnStageGroupBy(), q.returnStageHaving(), param_names, param_values);
     errdefer projected.deinit(allocator);
     try value_utilities.adoptProjectionRowValues(allocator, &projected, q.ret.items);
     projected.owned_graph_entities = rows.owned_graph_entities;
@@ -10898,7 +10899,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
         },
         .match_with_optional_patterns => {
-            if (aggregates) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            // SONNY-2698: and a GROUP BY or HAVING (the WITH's or the
+            // RETURN's): this executor grouped the RETURN by the query's one
+            // GROUP BY, whichever stage it was written for, and evaluated
+            // HAVING over the output row alone.
+            const grouped = q.ret.items.len != 0 and sharedProjectionServes(q) and (q.group_by != null or q.having != null);
+            if (aggregates or grouped) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
             return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
         },
         .continue_processing => {},
@@ -10977,677 +10983,16 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const has_aggregation = returnItemsHaveAggregation(items);
 
     if (has_aggregation) {
-        // Check if we have GROUP BY
-        if (q.group_by) |group_by| {
-            // CANARY: REQ=REQ-GQL-GROUPBY-REL-001; FEATURE="GroupByRelationshipPattern"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-23
-            // GROUP BY with relationship patterns - need to collect bindings first, then group them
-            if (has_relationship) {
-                // Single-hop GROUP BY with relationship pattern (existing code below)
-                // Collect all matching relationship bindings and group them
-                const BindingRow = struct {
-                    env_names: [][]const u8,
-                    env_values: []Value,
-                };
-
-                var binding_groups = std.StringHashMap(std.ArrayList(BindingRow)).init(allocator);
-                // #552: Pre-size single-hop GROUP BY map
-                try binding_groups.ensureTotalCapacity(16);
-                // GAP-0220 FIX: Use try for proper error propagation
-                var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 16);
-                defer {
-                    var giter = binding_groups.iterator();
-                    while (giter.next()) |entry| {
-                        for (entry.value_ptr.items) |binding| {
-                            allocator.free(binding.env_names);
-                            allocator.free(binding.env_values);
-                        }
-                        entry.value_ptr.deinit(allocator);
-                    }
-                    binding_groups.deinit();
-                    for (group_keys_list.items) |key| {
-                        allocator.free(key);
-                    }
-                    group_keys_list.deinit(allocator);
-                }
-
-                // Iterate over nodes and edges to collect bindings
-                // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan
-                // — `store.nodes.iterator()` visits only the RESIDENT subset
-                // (silently drops evicted/cold rows on a bounded cache).
-                var left_iter = store.iterateNodesInGraph(filter_graph);
-                while (left_iter.next()) |left_node| {
-                    // GAP (write-path OOM): abort a write-carrying scan cleanly
-                    // once the working-set budget is exceeded (no-op otherwise).
-                    try write_budget.check();
-                    try read_budget.check(); // T5: same poll cadence for the READ scope (no-op when uninstalled)
-                    // Defensive re-check (iterator is already graph-scoped).
-                    if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
-                    if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
-                    if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
-
-                    // Filter left node by labels if specified
-                    if (match_labels.len > 0) {
-                        var has_all_labels = true;
-                        for (match_labels) |required_label| {
-                            var found = false;
-                            for (left_node.labels) |node_label| {
-                                if (std.mem.eql(u8, required_label, node_label)) {
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if (!found) {
-                                has_all_labels = false;
-                                break;
-                            }
-                        }
-                        if (!has_all_labels) continue;
-                    }
-
-                    // Check left node property constraints
-                    if (match_props) |props| {
-                        var passes_props = true;
-                        for (props) |prop| {
-                            if (left_node.properties.get(prop.key)) |node_prop_val| {
-                                const node_val = propertyValueToValue(node_prop_val);
-                                const prop_env = eval.Env{
-                                    .names = &.{},
-                                    .values = &.{},
-                                    .param_names = param_names,
-                                    .param_values = param_values,
-                                    .allocator = allocator,
-                                };
-                                const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                    passes_props = false;
-                                    break;
-                                };
-                                if (!valuesEqual(node_val, prop_val)) {
-                                    passes_props = false;
-                                    break;
-                                }
-                            } else {
-                                passes_props = false;
-                                break;
-                            }
-                        }
-                        if (!passes_props) continue;
-                    }
-
-                    // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=GroupByEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
-                    // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-                    const outgoing_edge_ids_1 = if (rel_direction == 'r' or rel_direction == 'u') (store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-                    const incoming_edge_ids_1 = if (rel_direction == 'l' or rel_direction == 'u') (store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{}) else &[_]u64{};
-
-                    // Process outgoing edges (use to_id as target)
-                    for (outgoing_edge_ids_1) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        // Filter by relationship type
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
-                        if (!hop_scope.edgeVisible(edge)) continue;
-
-                        // Get the target node (to_id for outgoing edges)
-                        const right_node_id = edge.to_id;
-                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
-                        // SONNY-2679: the target's graph, tenant and RLS. This
-                        // grouping loop checked none of them, so a denied or
-                        // foreign node formed its own group.
-                        if (!hop_scope.nodeVisible(right_node_ptr)) continue;
-
-                        // Filter right node by labels
-                        if (right_labels.len > 0) {
-                            var has_all_labels = true;
-                            for (right_labels) |required_label| {
-                                var found = false;
-                                for (right_node_ptr.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if (!found) {
-                                    has_all_labels = false;
-                                    break;
-                                }
-                            }
-                            if (!has_all_labels) continue;
-                        }
-
-                        // Filter right node by properties
-                        if (right_props) |props| {
-                            var passes_props = true;
-                            for (props) |prop| {
-                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                                    const node_val = propertyValueToValue(node_prop_val);
-                                    const prop_env = eval.Env{
-                                        .names = &.{},
-                                        .values = &.{},
-                                        .param_names = param_names,
-                                        .param_values = param_values,
-                                        .allocator = allocator,
-                                    };
-                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                        passes_props = false;
-                                        break;
-                                    };
-                                    if (!valuesEqual(node_val, prop_val)) {
-                                        passes_props = false;
-                                        break;
-                                    }
-                                } else {
-                                    passes_props = false;
-                                    break;
-                                }
-                            }
-                            if (!passes_props) continue;
-                        }
-
-                        // Build environment with matched elements
-                        // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
-                        // Order must match column order: left, rel, right
-                        var env_count: usize = 0;
-                        if (left_node_var != null) env_count += 1;
-                        if (rel_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
-
-                        const env_names = try allocator.alloc([]const u8, env_count);
-                        const env_values = try allocator.alloc(Value, env_count);
-
-                        var env_idx: usize = 0;
-                        if (left_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = left_node };
-                            env_idx += 1;
-                        }
-                        if (rel_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Edge = edge };
-                            env_idx += 1;
-                        }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
-                            env_idx += 1;
-                        }
-
-                        const env = Env{
-                            .names = env_names,
-                            .values = env_values,
-                            .param_names = param_names,
-                            .param_values = param_values,
-                            .allocator = allocator,
-                        };
-
-                        // Evaluate WHERE clause
-                        if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
-                            const passes_where = switch (where_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                .Int => |i| i != 0,
-                                else => false,
-                            };
-                            if (!passes_where) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // Evaluate GROUP BY key(s) and serialize to string
-                        // GAP-0220 FIX: Use try for proper error propagation
-                        var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
-                        errdefer key_aw.deinit();
-                        const key_writer = &key_aw.writer;
-                        for (group_by.keys) |key_expr| {
-                            const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                            // SONNY-2675: the key's typed canonical encoding.
-                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
-                        }
-                        var key_buf = key_aw.toArrayList();
-                        const group_key = try key_buf.toOwnedSlice(allocator);
-
-                        // Add binding to its group
-                        if (binding_groups.getPtr(group_key)) |group_list| {
-                            try group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
-                            allocator.free(group_key);
-                        } else {
-                            // GAP-0220 FIX: Use try for proper error propagation
-                            var new_list = try std.ArrayList(BindingRow).initCapacity(allocator, 4);
-                            try new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
-                            try binding_groups.put(group_key, new_list);
-                            try group_keys_list.append(allocator, group_key);
-                        }
-                    }
-
-                    // Process incoming edges (use from_id as target) - for undirected patterns
-                    for (incoming_edge_ids_1) |edge_id| {
-                        const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
-                        // Filter by relationship type
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        // GAP-0509 / SONNY-2679: the edge's graph and tenant.
-                        if (!hop_scope.edgeVisible(edge)) continue;
-
-                        // Get the target node (from_id for incoming edges)
-                        const right_node_id = edge.from_id;
-                        const right_node_ptr = store.getNodePtrForScan(right_node_id) orelse continue;
-                        // SONNY-2679: the target's graph, tenant and RLS. This
-                        // grouping loop checked none of them, so a denied or
-                        // foreign node formed its own group.
-                        if (!hop_scope.nodeVisible(right_node_ptr)) continue;
-
-                        // Filter right node by labels
-                        if (right_labels.len > 0) {
-                            var has_all_labels = true;
-                            for (right_labels) |required_label| {
-                                var found = false;
-                                for (right_node_ptr.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if (!found) {
-                                    has_all_labels = false;
-                                    break;
-                                }
-                            }
-                            if (!has_all_labels) continue;
-                        }
-
-                        // Filter right node by properties
-                        if (right_props) |props| {
-                            var passes_props = true;
-                            for (props) |prop| {
-                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                                    const node_val = propertyValueToValue(node_prop_val);
-                                    const prop_env = eval.Env{
-                                        .names = &.{},
-                                        .values = &.{},
-                                        .param_names = param_names,
-                                        .param_values = param_values,
-                                        .allocator = allocator,
-                                    };
-                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                        passes_props = false;
-                                        break;
-                                    };
-                                    if (!valuesEqual(node_val, prop_val)) {
-                                        passes_props = false;
-                                        break;
-                                    }
-                                } else {
-                                    passes_props = false;
-                                    break;
-                                }
-                            }
-                            if (!passes_props) continue;
-                        }
-
-                        // Build environment with matched elements
-                        var env_count: usize = 0;
-                        if (left_node_var != null) env_count += 1;
-                        if (rel_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
-
-                        const env_names = try allocator.alloc([]const u8, env_count);
-                        const env_values = try allocator.alloc(Value, env_count);
-
-                        var env_idx: usize = 0;
-                        if (left_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = left_node };
-                            env_idx += 1;
-                        }
-                        if (rel_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Edge = edge };
-                            env_idx += 1;
-                        }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
-                            env_idx += 1;
-                        }
-
-                        const env = Env{
-                            .names = env_names,
-                            .values = env_values,
-                            .param_names = param_names,
-                            .param_values = param_values,
-                            .allocator = allocator,
-                        };
-
-                        // Evaluate WHERE clause
-                        if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Bool = false };
-                            const passes_where = switch (where_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                .Int => |i| i != 0,
-                                else => false,
-                            };
-                            if (!passes_where) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // Evaluate GROUP BY key(s) and serialize to string
-                        var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
-                        errdefer key_aw.deinit();
-                        const key_writer = &key_aw.writer;
-                        for (group_by.keys) |key_expr| {
-                            const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                            // SONNY-2675: the key's typed canonical encoding.
-                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
-                        }
-                        var key_buf = key_aw.toArrayList();
-                        const group_key = try key_buf.toOwnedSlice(allocator);
-
-                        // Add binding to its group
-                        if (binding_groups.getPtr(group_key)) |group_list| {
-                            try group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
-                            allocator.free(group_key);
-                        } else {
-                            var new_list = try std.ArrayList(BindingRow).initCapacity(allocator, 4);
-                            try new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
-                            try binding_groups.put(group_key, new_list);
-                            try group_keys_list.append(allocator, group_key);
-                        }
-                    }
-                }
-
-                // Generate rows for each group
-                // GAP-0220 FIX: Use try for proper error propagation
-                var rows = std.ArrayList([]Value).empty;
-                var group_iter = binding_groups.iterator();
-                while (group_iter.next()) |group_entry| {
-                    const group_bindings = group_entry.value_ptr.items;
-                    if (group_bindings.len == 0) continue;
-
-                    // Apply HAVING clause if present (simplified check)
-                    if (q.having) |_| {
-                        if (group_bindings.len < 2) continue;
-                    }
-
-                    var row = try allocator.alloc(Value, items.len);
-
-                    // Use first binding as base for non-aggregated expressions
-                    const first_binding = group_bindings[0];
-                    const base_env = Env{
-                        .names = first_binding.env_names,
-                        .values = first_binding.env_values,
-                        .param_names = param_names,
-                        .param_values = param_values,
-                        .allocator = allocator,
-                    };
-
-                    for (items, 0..) |item, i| {
-                        if (isAggregationExpr(item.expr)) {
-                            // Compute aggregation over all bindings in this group
-                            row[i] = try computeBindingGroupAggregation(allocator, item.expr, group_bindings);
-                        } else {
-                            // Non-aggregation: evaluate with first binding
-                            row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
-                        }
-                    }
-
-                    try rows.append(allocator, row);
-                }
-
-                // Apply ORDER BY if present
-                var result = ExecutionResult{
-                    .columns = columns,
-                    .rows = try rows.toOwnedSlice(allocator),
-                    .flags = blk: {
-                        const list = std.ArrayList([]const u8).empty;
-                        break :blk list;
-                    },
-                };
-
-                if (q.order_by) |order| {
-                    sortRows(allocator, &result, order) catch |err| {
-                        // SONNY-2811: a key that fails to evaluate fails the sort.
-                        result.deinit(allocator);
-                        return err;
-                    };
-                }
-
-                // Apply DISTINCT if requested
-                if (q.ret.distinct) {
-                    try applyDistinct(allocator, &result);
-                }
-
-                return result;
-            }
-
-            // Simple node pattern GROUP BY (original code path)
-            // GROUP BY with aggregations - group rows and compute aggregations per group
-            var groups = std.StringHashMap(std.ArrayList(*graph_store.Node)).init(allocator);
-            // GAP-0220 FIX: Use try for proper error propagation
-            var group_keys = std.ArrayList([]const u8).empty;
-            defer {
-                var iter = groups.iterator();
-                while (iter.next()) |entry| {
-                    entry.value_ptr.deinit(allocator);
-                }
-                groups.deinit();
-                for (group_keys.items) |key| {
-                    allocator.free(key);
-                }
-                group_keys.deinit(allocator);
-            }
-
-            // PERF: PHASE5_ENV_ALLOC_GROUPBY - Pre-allocate environment arrays for GROUP BY loop
-            // CANARY: REQ=REQ-PERF-PHASE5-002; FEATURE="ExecutionOptimization"; ASPECT=ENV_REUSE; STATUS=BENCHED; BENCH=docs/benchmarks/phase5_allocation.md; OWNER=performance; UPDATED=2026-01-25
-            // Phase 5.1.2: Allocate environment arrays once before loop (reduces N allocations to 1)
-            var env_names_buf: [][]const u8 = &.{};
-            var env_values_buf: []Value = &.{};
-            if (match_variable) |_| {
-                env_names_buf = try allocator.alloc([]const u8, 1);
-                env_values_buf = try allocator.alloc(Value, 1);
-            }
-            defer {
-                if (match_variable != null) {
-                    allocator.free(env_names_buf);
-                    allocator.free(env_values_buf);
-                }
-            }
-
-            // Group nodes by grouping key values (filter by labels first)
-            // GAP-ENT-0023 P3 (review I1): graph-scoped engine-backed scan —
-            // resident-only iteration dropped evicted/cold rows silently.
-            var node_iter = store.iterateNodesInGraph(filter_graph);
-            while (node_iter.next()) |node| {
-                // CANARY: REQ=REQ-MULTI-GRAPH-007; FEATURE="MultiGraphIsolation"; ASPECT=NodeFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
-                // Filter by graph - only include nodes from the current graph
-                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-                if (!passesTenantFilter(node.*, filter_tenant)) continue;
-                if (!passesRLSFilter(&rls_row_local, node.*)) continue;
-
-                // Filter by labels if specified
-                if (match_labels.len > 0) {
-                    var has_all_labels = true;
-                    for (match_labels) |required_label| {
-                        var found = false;
-                        for (node.labels) |node_label| {
-                            if (std.mem.eql(u8, required_label, node_label)) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            has_all_labels = false;
-                            break;
-                        }
-                    }
-                    if (!has_all_labels) continue;
-                }
-
-                // Create environment with matched node for WHERE clause evaluation (reuse arrays)
-                var env_names: [][]const u8 = &.{};
-                var env_values: []Value = &.{};
-
-                if (match_variable) |var_name| {
-                    env_names = env_names_buf;
-                    env_values = env_values_buf;
-                    env_names[0] = var_name;
-                    env_values[0] = Value{ .Node = node };
-                }
-
-                const env = Env{
-                    .names = env_names,
-                    .values = env_values,
-                    .param_names = param_names,
-                    .param_values = param_values,
-                    .allocator = allocator,
-                };
-
-                // Evaluate WHERE clause if present
-                // CANARY: REQ=REQ-GQL-WITH-WHERE-PRE-002; FEATURE="WithWherePreFilter"; ASPECT=DeferToPostWith; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-                // When there's a WITH clause, skip pre-MATCH WHERE and defer to post-WITH filtering
-                if (q.where_clause) |where_expr| {
-                    const passes_where = if (has_with) true else blk: {
-                        const where_result = try eval.evalExpr(allocator, where_expr, env);
-                        break :blk switch (where_result) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            .Int => |i| i != 0,
-                            else => false,
-                        };
-                    };
-
-                    if (!passes_where) {
-                        continue;
-                    }
-                }
-
-                // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
-                if (q.filter_clause) |filter_expr| {
-                    const filter_result = try eval.evalExpr(allocator, filter_expr, env);
-                    const passes_filter = switch (filter_result) {
-                        .Bool => |b| b,
-                        .Null => false,
-                        .Int => |i| i != 0,
-                        else => false,
-                    };
-
-                    if (!passes_filter) {
-                        continue;
-                    }
-                }
-
-                // Evaluate grouping key for this node
-                // For now, assume single grouping key that's a property access
-                if (group_by.keys.len > 0) {
-                    // GAP-ENT-0055: follow a RETURN alias (`GROUP BY s`) to its
-                    // underlying `n.source` expr — a bare alias evaluates to Null
-                    // per node and collapses everything into one null group.
-                    const key_expr = resolveGroupKeyExprAlias(group_by.keys[0], items);
-                    const key_val = try evaluateNodeExpression(allocator, key_expr, node);
-
-                    // Format the key as a string for grouping
-                    var buf: [32]u8 = undefined;
-                    const group_key = if (key_val == .Str)
-                        key_val.Str
-                    else if (key_val == .Int)
-                        try std.fmt.bufPrint(&buf, "{d}", .{key_val.Int})
-                    else if (key_val == .Null)
-                        "<null>"
-                    else
-                        "";
-
-                    // Check if this group already exists
-                    var found_existing = false;
-                    var iter = groups.iterator();
-                    while (iter.next()) |grp| {
-                        if (std.mem.eql(u8, grp.key_ptr.*, group_key)) {
-                            // Found existing group with this key
-                            try grp.value_ptr.append(allocator, node);
-                            found_existing = true;
-                            break;
-                        }
-                    }
-
-                    if (!found_existing) {
-                        // Create new group with allocated key
-                        const stored_key = try allocator.dupe(u8, group_key);
-                        try group_keys.append(allocator, stored_key);
-                        // GAP-0220 FIX: Use try for proper error propagation
-                        var new_group = std.ArrayList(*graph_store.Node).empty;
-                        try new_group.append(allocator, node);
-                        try groups.put(stored_key, new_group);
-                    }
-                }
-            }
-
-            // Generate rows for each group
-            // GAP-0220 FIX: Use try for proper error propagation
-            var rows = std.ArrayList([]Value).empty;
-            var group_iter = groups.iterator();
-            while (group_iter.next()) |group_entry| {
-                _ = group_entry.key_ptr.*;
-                const group_nodes = group_entry.value_ptr.*;
-
-                // Apply HAVING clause if present
-                if (q.having) |_| {
-                    // Evaluate HAVING condition for this group
-                    // For T15, HAVING c >= 2 means count must be >= 2
-                    const group_count = group_nodes.items.len;
-                    if (group_count < 2) {
-                        continue; // Skip groups that don't meet HAVING condition
-                    }
-                }
-
-                var row = try allocator.alloc(Value, items.len);
-
-                for (items, 0..) |item, i| {
-                    if (isAggregationExpr(item.expr)) {
-                        // Compute aggregation for this group
-                        row[i] = try evaluateGroupAggregation(allocator, item.expr, group_nodes.items);
-                    } else {
-                        // For non-aggregated columns, use value from first node in group
-                        if (group_nodes.items.len > 0) {
-                            row[i] = try evaluateNodeExpression(allocator, item.expr, group_nodes.items[0]);
-                        } else {
-                            row[i] = Value{ .Null = {} };
-                        }
-                    }
-                }
-
-                try rows.append(allocator, row);
-            }
-
-            // Apply ORDER BY if present
-            var result = ExecutionResult{
-                .columns = columns,
-                .rows = try rows.toOwnedSlice(allocator),
-                .flags = blk: {
-                    const list = std.ArrayList([]const u8).empty;
-                    break :blk list;
-                },
-            };
-
-            if (q.order_by) |order| {
-                sortRows(allocator, &result, order) catch |err| {
-                    // SONNY-2811: a key that fails to evaluate fails the sort.
-                    result.deinit(allocator);
-                    return err;
-                };
-            }
-
-            // Apply DISTINCT deduplication if requested
-            if (q.ret.distinct) {
-                try applyDistinct(allocator, &result);
-            }
-
-            return result;
+        // CANARY: REQ=REQ-SONNY-2698-GROUPING-STAGE; FEATURE="StageOwnedGrouping"; ASPECT=NoLegacyGrouping; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+        // SONNY-2698: every grouped aggregate the shared projection can serve
+        // went to it above (`returnUsesSharedProjection`,
+        // `projectionAggregates`). The grouping that sat here, one copy for a
+        // relationship pattern and one for a node pattern, replaced HAVING
+        // with "the group has at least two rows" and skipped the WITH stage
+        // and its WHERE; a shape that still reaches it (one the shared
+        // projection does not serve) is refused, not answered with it.
+        if (q.group_by != null) {
+            return error.UnsupportedGroupedReturn;
         } else {
             // No GROUP BY - aggregate all matching rows into single result
             // CANARY: REQ=REQ-GQL-AGGREGATE-WHERE; FEATURE="AggregateWithWHERE"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-13
@@ -12454,7 +11799,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             if (q.with_clause) |with_clause| {
                 // Apply WITH clause to transform matched variables
                 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-                var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.group_by, execution.withStageHaving(q), param_names, param_values);
+                var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.withStageGroupBy(), execution.withStageHaving(q), param_names, param_values);
 
                 // Clean up original result since it's been transformed by WITH
                 for (result.columns) |col| {
@@ -13184,7 +12529,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         if (q.with_clause) |with_clause| {
             // Apply WITH clause to transform matched variables
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-            var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.group_by, execution.withStageHaving(q), param_names, param_values);
+            var with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, result, with_clause, q.withStageGroupBy(), execution.withStageHaving(q), param_names, param_values);
 
             // Clean up original result since it's been transformed by WITH
             for (result.columns) |col| {

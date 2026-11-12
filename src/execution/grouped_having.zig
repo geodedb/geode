@@ -34,12 +34,20 @@
 //! NULL, so a misspelt alias silently dropped every group. (GAP-0926 had kept
 //! that NULL for HAVING on purpose; outside a HAVING it is unchanged.)
 //!
-//! Pattern and subquery predicates are refused in a grouped HAVING with
-//! `error.UnsupportedGroupedHavingPredicate` (SQLSTATE 0A000): they read their
-//! free variables from the evaluation environment, which for a group holds no
-//! input row, and this pass does not walk a pattern to check what it reads. An
-//! aggregate of a list comprehension's variable is refused the same way: no
-//! input row binds that variable.
+//! A pattern predicate (EXISTS { }, COUNT { }, a pattern comprehension) reads
+//! the variables it does not bind itself from the environment it is evaluated
+//! in, which for a group holds no input row. SONNY-2699: each input binding
+//! the pattern, its inline properties or its WHERE names must be a grouping
+//! key or a projected variable, and is bound under its own name to the
+//! group's value (`Rewriter.bindPattern`), so `GROUP BY q HAVING EXISTS {
+//! (q)-[:S]->() }` tests each group's `q`, under the session's tenant scope
+//! and RLS policies as a WHERE EXISTS does. Any other input binding has no
+//! single value in the group and is refused with
+//! `error.UnsupportedGroupedHavingPredicate` (SQLSTATE 0A000), as is a pattern
+//! variable named like an output column that does not hold that variable.
+//! A shortest path and a subquery predicate stay refused the same way, and so
+//! does an aggregate of a list comprehension's variable: no input row binds
+//! that variable.
 //!
 //! A HAVING that is not over groups (a WHERE after a RETURN that neither groups
 //! nor aggregates, evaluated for each row) may not contain an aggregate
@@ -217,10 +225,15 @@ const Rewriter = struct {
             .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .CharLit, .VarcharLit, .TextLit, .ByteaLit => return e,
             .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .EnumLit, .BitLit, .VarBitLit => return e,
             .Param => return e,
-            // Over groups, refused (see the module doc). Elsewhere a pattern
-            // reads the row it is evaluated with, as before; a subquery's
-            // tested value is in this scope.
-            .PatternComp, .Exists, .ShortestPath, .PatternCount => {
+            // SONNY-2699: over groups, a pattern predicate reads the group's
+            // keys (`bindPattern`); a shortest path is refused (see the module
+            // doc). Elsewhere a pattern reads the row it is evaluated with, as
+            // before; a subquery's tested value is in this scope.
+            .PatternComp, .Exists, .PatternCount => {
+                if (self.mode == .grouped) try self.bindPattern(e);
+                return e;
+            },
+            .ShortestPath => {
                 if (self.mode == .grouped) return error.UnsupportedGroupedHavingPredicate;
                 return e;
             },
@@ -514,8 +527,66 @@ const Rewriter = struct {
         return flags;
     }
 
+    // CANARY: REQ=REQ-SONNY-2699-PATTERN-KEY-BINDER; FEATURE="GroupedHaving"; ASPECT=PatternVariableKeyBinder; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=engine; UPDATED=2026-11-12
+    /// SONNY-2699: a pattern predicate over groups (EXISTS { }, COUNT { }, a
+    /// pattern comprehension). It is evaluated as written, against the
+    /// group's environment: each input binding that its pattern, the
+    /// pattern's inline properties, its WHERE or its map names is bound there
+    /// under its own name to the group's value (`bindPatternVariable`). The
+    /// variables the pattern introduces are its own. It was refused (0A000)
+    /// since SONNY-2675: before that the group's first row supplied every
+    /// variable, so a variable that is no key read one row of the group.
+    fn bindPattern(self: *Rewriter, e: ast.Expr) Error!void {
+        const parts: PatternParts = switch (e) {
+            .Exists => |x| .{ .pattern = x.pattern.*, .exprs = .{ x.where, null } },
+            .PatternCount => |x| .{ .pattern = x.pattern.*, .exprs = .{ x.where, null } },
+            .PatternComp => |x| .{ .pattern = x.pattern.*, .exprs = .{ x.where, x.map } },
+            else => unreachable,
+        };
+        for (self.scope.input_columns) |name| {
+            // A comprehension's variable is the element, which the evaluator
+            // binds around the pattern.
+            if (containsName(self.locals.items, name)) continue;
+            if (parts.mentions(name)) try self.bindPatternVariable(name);
+        }
+        if (self.scope.projection) return;
+        // A variable the pattern introduces, named like an output column, would
+        // be constrained by the column's value: refused.
+        for (self.scope.output_columns) |name| {
+            if (containsName(self.scope.input_columns, name) or containsName(self.locals.items, name)) continue;
+            if (parts.declares(name)) return error.UnsupportedGroupedHavingPredicate;
+        }
+    }
+
+    /// SONNY-2699: bind the input binding `name`, which a pattern predicate
+    /// reads, to the group's value: a grouping key's (every row of the group
+    /// shares it) or a projected variable's column. The slot is named `name`
+    /// itself, which the pattern looks up. Refused when no single value of it
+    /// belongs to the group, or when an output column named `name` (read
+    /// first) holds anything but the variable.
+    fn bindPatternVariable(self: *Rewriter, name: []const u8) Error!void {
+        if (!self.scope.projection) {
+            const n = @min(self.scope.items.len, self.scope.output_columns.len);
+            for (self.scope.items[0..n], self.scope.output_columns[0..n]) |item, column| {
+                if (std.mem.eql(u8, column, name) and !exprEql(item.expr, ident(name))) return error.UnsupportedGroupedHavingPredicate;
+            }
+        }
+        const slot_ref = (try self.matchSlot(ident(name))) orelse return error.UnsupportedGroupedHavingPredicate;
+        if (containsName(self.slot_names.items, name)) return;
+        for (self.slots.items, self.slot_names.items) |slot, slot_name| {
+            if (!std.mem.eql(u8, slot_name, slot_ref.Ident.orig)) continue;
+            try self.slots.append(self.arena, slot);
+            try self.slot_names.append(self.arena, name);
+            return;
+        }
+        unreachable;
+    }
+
     fn slotIdent(self: *Rewriter, slot: Slot) Error!ast.Expr {
         for (self.slots.items, self.slot_names.items) |existing, name| {
+            // Not a pattern variable's binding (`bindPatternVariable`): an
+            // output column may share its name.
+            if (!isGeneratedSlotName(name)) continue;
             if (slotEql(existing, slot)) return ident(name);
         }
         const name = try std.fmt.allocPrint(self.arena, "\x00having.{d}", .{self.slots.items.len});
@@ -524,6 +595,58 @@ const Rewriter = struct {
         return ident(name);
     }
 };
+
+/// Whether `name` is a slot name `slotIdent` made (a NUL byte first), not a
+/// pattern variable's binding.
+fn isGeneratedSlotName(name: []const u8) bool {
+    return name.len != 0 and name[0] == 0;
+}
+
+/// SONNY-2699: what a pattern predicate reads: its pattern, and its WHERE and
+/// map (a pattern comprehension's).
+const PatternParts = struct {
+    pattern: ast.GraphPattern,
+    exprs: [2]?*const ast.Expr,
+
+    /// Whether the pattern names an element (or a path) `name`.
+    fn declares(self: PatternParts, name: []const u8) bool {
+        for (self.pattern.chains) |chain| {
+            if (optNameIs(chain.name, name)) return true;
+            if (chain.head) |head| if (optNameIs(head.name, name)) return true;
+            for (chain.hops) |hop| {
+                if (optNameIs(hop.left.name, name) or optNameIs(hop.rel.name, name) or optNameIs(hop.right.name, name)) return true;
+            }
+        }
+        return false;
+    }
+
+    /// Whether the pattern, its inline properties, its WHERE or its map name
+    /// `name`. A pattern or subquery nested in them counts as naming it
+    /// (`mentionsAnyName`).
+    fn mentions(self: PatternParts, name: []const u8) bool {
+        if (self.declares(name)) return true;
+        const names = [_][]const u8{name};
+        for (self.pattern.chains) |chain| {
+            if (chain.head) |head| if (propsMention(head.props, &names)) return true;
+            for (chain.hops) |hop| {
+                if (propsMention(hop.left.props, &names) or propsMention(hop.rel.props, &names) or propsMention(hop.right.props, &names)) return true;
+            }
+        }
+        for (self.exprs) |maybe| if (maybe) |x| if (mentionsAnyName(x.*, &names)) return true;
+        return false;
+    }
+};
+
+fn optNameIs(maybe: ?[]const u8, name: []const u8) bool {
+    return if (maybe) |n| std.mem.eql(u8, n, name) else false;
+}
+
+fn propsMention(props: ?[]ast.Property, names: []const []const u8) bool {
+    for (props orelse return false) |p| {
+        if (mentionsAnyName(p.value.*, names)) return true;
+    }
+    return false;
+}
 
 fn slotEql(a: Slot, b: Slot) bool {
     return switch (a) {

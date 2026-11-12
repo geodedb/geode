@@ -2290,6 +2290,8 @@ pub const Parser = struct {
         var match_clauses = std.ArrayList(ast.MatchClause).empty;
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;
+        // SONNY-2698: `group_by` / `having_expr` came after the RETURN items.
+        var return_grouping = false;
         var path_variable: ?[]const u8 = null;
         const pat: ast.GraphPattern = if (have_match) blk_pat: {
             // Handle OPTIONAL { } at the start
@@ -2827,14 +2829,31 @@ pub const Parser = struct {
             try self.parseProjectionItems(&items);
             return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
 
+            // CANARY: REQ=REQ-SONNY-2698-GROUPING-STAGE; FEATURE="StageOwnedGrouping"; ASPECT=ParserReturnTail; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=parser; UPDATED=2026-11-12
+            // SONNY-2698: a WHERE, GROUP BY or HAVING after the RETURN items
+            // is the RETURN's (ISO/IEC 39075:2024 14.11: the <group by
+            // clause> is part of the <return statement body>), recorded in
+            // `return_grouping`. A part keeps one GROUP BY and one HAVING, so
+            // one already written (between a WITH and the RETURN) is not
+            // replaced but refused: the RETURN's used to overwrite it, so
+            // `WITH g, count(*) AS c GROUP BY g RETURN c, count(*) GROUP BY c`
+            // grouped once, by c, over the pattern's rows.
+
             // Allow WHERE after RETURN items as post-projection filter
             if (self.cur.kind == .WHERE) {
+                if (having_expr != null or (with_clause != null and group_by != null)) {
+                    return self.unexpected("a WHERE after RETURN beside the GROUP BY or HAVING written before the RETURN: one grouping per query part");
+                }
                 self.advance();
                 having_expr = try self.parseOrExpr();
+                return_grouping = true;
             }
 
             // Allow GROUP BY (and optional HAVING) after RETURN as well
             if (self.cur.kind == .GROUP) {
+                if (group_by != null) {
+                    return self.unexpected("a GROUP BY after RETURN beside the GROUP BY written before the RETURN: one grouping per query part");
+                }
                 self.advance();
                 _ = try self.expect(.BY);
                 var keys_list2 = std.ArrayList(ast.Expr).empty;
@@ -2844,8 +2863,12 @@ pub const Parser = struct {
                     self.advance();
                 }
                 group_by = .{ .keys = try keys_list2.toOwnedSlice(self.arena.allocator()) };
+                return_grouping = true;
                 // Also accept WHERE after GROUP BY as post-aggregation filter
                 if (self.cur.kind == .HAVING or self.cur.kind == .WHERE) {
+                    if (having_expr != null) {
+                        return self.unexpected("a HAVING beside the WHERE after RETURN: one per query part");
+                    }
                     self.advance();
                     having_expr = try self.parseOrExpr();
                 }
@@ -2995,6 +3018,7 @@ pub const Parser = struct {
             .detach_delete = detach_delete,
             .group_by = group_by,
             .having = having_expr,
+            .return_grouping = return_grouping,
             .ret = return_clause,
             .order_by = ord,
             .limit = limit,

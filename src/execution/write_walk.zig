@@ -321,7 +321,7 @@ fn queryField(comptime name: []const u8) QueryField {
         .{ "initial_where", .walk },     .{ "pre_with_where", .walk },                      .{ "with_where", .walk },
         .{ "chained_write", .walk },     .{ "split_create", .walk },                        .{ "select_projection", .walk },
         .{ "optional_where", .walk },    .{ "set_clause_ends", .walk },                     .{ "detach_delete", .walk },
-        .{ "match_clauses", .walk },
+        .{ "match_clauses", .walk },     .{ "return_grouping", .walk },
     };
     for (roles) |r| {
         if (std.mem.eql(u8, r[0], name)) return r[1];

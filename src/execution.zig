@@ -302,7 +302,6 @@ pub const executeExplainPolicy = statement_handlers.executeExplainPolicy;
 pub const getExpressionNameFromAst = aggregation_evaluation.getExpressionNameFromAst;
 pub const evaluateGroupAggregation = aggregation_evaluation.evaluateGroupAggregation;
 pub const computeBindingGroupAggregation = aggregation_evaluation.computeBindingGroupAggregation;
-pub const evaluateNodeExpression = aggregation_evaluation.evaluateNodeExpression;
 // GAP-0739 / SEC-MTI-01 (2026-04-16): removed evaluateAggregation /
 // evaluateAggregationWithLabels re-exports.  The underlying functions
 // were deleted — they iterated store.nodes with no tenant filter.  Live
@@ -3845,12 +3844,12 @@ pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionRe
     return executeWithClauseWithGroupBy(allocator, input_result, with_clause, null, null);
 }
 
-/// The HAVING a WITH stage applies: the query's HAVING when it has a GROUP BY,
-/// else none. The parser produces a HAVING without a GROUP BY only from a WHERE
-/// after RETURN, which belongs to the RETURN, not to a WITH before it
-/// (SONNY-2667).
+/// The HAVING a WITH stage applies: the HAVING of the WITH's own GROUP BY,
+/// else none. A WHERE after RETURN (a HAVING with no GROUP BY, SONNY-2667)
+/// and a GROUP BY / HAVING written after the RETURN (SONNY-2698) belong to
+/// the RETURN, not to a WITH before it (`ast.Query.withStageHaving`).
 pub fn withStageHaving(q: ast.Query) ?ast.Expr {
-    return if (q.group_by != null) q.having else null;
+    return q.withStageHaving();
 }
 
 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22

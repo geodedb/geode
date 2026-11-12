@@ -398,7 +398,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
         }
         if (q.with_clause) |with_clause| {
             try ops.append(allocator, .{
-                .kind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
+                .kind = if (q.withStageGroupBy() != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
             });
             if (with_clause.distinct) {
                 try ops.append(allocator, .{ .kind = .Distinct });
@@ -416,7 +416,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
 
         if (needsFinalProjection(q)) {
             try ops.append(allocator, .{
-                .kind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
+                .kind = if (q.returnStageGroupBy() != null or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
             });
             if (q.ret.distinct) {
                 try ops.append(allocator, .{ .kind = .Distinct });
@@ -603,7 +603,7 @@ fn executeProfiledInScope(
     }
 
     if (q.with_clause) |with_clause| {
-        const with_kind: OpKind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project;
+        const with_kind: OpKind = if (q.withStageGroupBy() != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project;
         const with_op_index = switch (with_kind) {
             .Aggregate => nextOpIndex(trace.ops, .Aggregate, &aggregate_occurrence),
             .Project => nextOpIndex(trace.ops, .Project, &project_occurrence),
@@ -615,7 +615,7 @@ fn executeProfiledInScope(
         const start_ns = nowNs();
         // SONNY-2667: a HAVING without a GROUP BY is a WHERE after RETURN, so it
         // belongs to the RETURN stage below, not to this one.
-        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.group_by, execution.withStageHaving(q.*), param_names, param_values);
+        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.withStageGroupBy(), execution.withStageHaving(q.*), param_names, param_values);
         transferOwnedGraphEntities(&result, &with_result);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 
@@ -663,11 +663,13 @@ fn executeProfiledInScope(
     }
 
     if (needsFinalProjection(q)) {
-        const return_group_by = if (q.with_clause == null) q.group_by else null;
         // SONNY-2667: a WHERE after RETURN (parsed as a HAVING with no GROUP BY)
         // filters the RETURN's rows, with or without a WITH before it.
-        const return_having = if (q.with_clause == null or q.group_by == null) q.having else null;
-        const return_kind: OpKind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project;
+        // SONNY-2698: a GROUP BY and HAVING written after the RETURN are the
+        // RETURN's, with or without a WITH before it.
+        const return_group_by = q.returnStageGroupBy();
+        const return_having = q.returnStageHaving();
+        const return_kind: OpKind = if (return_group_by != null or hasAggregationItems(q.ret.items)) .Aggregate else .Project;
         const return_op_index = switch (return_kind) {
             .Aggregate => nextOpIndex(trace.ops, .Aggregate, &aggregate_occurrence),
             .Project => nextOpIndex(trace.ops, .Project, &project_occurrence),
@@ -3998,7 +4000,7 @@ fn appendLegacyPlanOps(
 
     if (q.with_clause) |with_clause| {
         try ops.append(allocator, .{
-            .kind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
+            .kind = if (q.withStageGroupBy() != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
         });
         if (with_clause.distinct) {
             try ops.append(allocator, .{ .kind = .Distinct });
@@ -4016,7 +4018,7 @@ fn appendLegacyPlanOps(
 
     if (needsFinalProjection(q)) {
         try ops.append(allocator, .{
-            .kind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
+            .kind = if (q.returnStageGroupBy() != null or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
         });
         if (q.ret.distinct) {
             try ops.append(allocator, .{ .kind = .Distinct });

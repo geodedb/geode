@@ -575,60 +575,6 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
     return Value{ .Null = {} };
 }
 
-pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node: *const graph_store.Node) !Value {
-    switch (expr) {
-        .Member => |member| {
-            // Handle property access like n.label
-            // Access property on the current node
-            if (node.properties.get(member.field)) |val| {
-                switch (val) {
-                    .String => |s| return Value{ .Str = s },
-                    .Int => |n| return Value{ .Int = n },
-                    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
-                    .Float => |f| return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 100.0), .scale = 2 } },
-                    .Bool => |b| return Value{ .Bool = b },
-                    .Null => return Value{ .Null = {} },
-                    .ExtValue => |ext| return Value{ .ExtValue = ext },
-                    .Decimal => |d| return Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                }
-            }
-            return Value{ .Null = {} };
-        },
-        .PropertyAccess => |prop_access| {
-            // Legacy property access (if still used)
-            // Access property on the current node
-            if (node.properties.get(prop_access.property)) |val| {
-                switch (val) {
-                    .String => |s| return Value{ .Str = s },
-                    .Int => |n| return Value{ .Int = n },
-                    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
-                    .Float => |f| return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 100.0), .scale = 2 } },
-                    .Bool => |b| return Value{ .Bool = b },
-                    .Null => return Value{ .Null = {} },
-                    .ExtValue => |ext| return Value{ .ExtValue = ext },
-                    .Decimal => |d| return Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                }
-            }
-            return Value{ .Null = {} };
-        },
-        .Ident => |ident| {
-            // Handle node identifier (like 'n' in MATCH (n))
-            _ = ident;
-            // For now, return null
-            return Value{ .Null = {} };
-        },
-        else => {
-            // For other expressions, evaluate normally
-            const env = Env{
-                .names = &.{},
-                .values = &.{},
-                .allocator = allocator,
-            };
-            return try eval.evalExpr(allocator, expr, env);
-        },
-    }
-}
-
 // GAP-0739 / SEC-MTI-01 (2026-04-16): the dead functions
 // evaluateAggregation and evaluateAggregationWithLabels have been
 // removed.  They iterated store.nodes directly without applying a

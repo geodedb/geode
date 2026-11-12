@@ -305,6 +305,8 @@ pub fn fieldRole(comptime field: []const u8) FieldRole {
         // SONNY-3384: DETACH on the part's DELETE; every executor that
         // applies `.delete` (match_delete, match_create) honours it.
          "detach_delete",
+        // SONNY-2698: which stage `group_by` and `having` belong to.
+        "return_grouping",
     };
     const nested = [_][]const u8{ "next_query", "for_statement", "initial_call_subquery", "cte_list" };
     // SONNY-3242: `set_clause_ends`, where each SET clause ends, orders the
@@ -397,6 +399,9 @@ pub fn chainedWriteAsOneQuery(q: ast.Query) ?ast.Query {
     one.ret = next.ret;
     one.group_by = next.group_by;
     one.having = next.having;
+    // SONNY-2698: the second part has no WITH: its GROUP BY and HAVING
+    // are its RETURN's, not the first part's WITH's.
+    one.return_grouping = true;
     one.order_by = next.order_by;
     one.limit = next.limit;
     one.offset = next.offset;
@@ -1218,9 +1223,12 @@ fn partFacts(facts: *Facts, q: ast.Query, ex: Executor) void {
         } else if (comptime is(name, "delete_items")) {
             if (v.len != 0) facts.insert(.delete);
         } else if (comptime is(name, "group_by")) {
-            if (v != null) facts.insert(if (post_with) .with_group else .ret_group);
+            // SONNY-2698: a GROUP BY written after the RETURN is the RETURN's.
+            if (v != null) facts.insert(if (post_with and !q.return_grouping) .with_group else .ret_group);
         } else if (comptime is(name, "having")) {
-            if (v != null) facts.insert(if (post_with and q.group_by != null) .with_having else .ret_group);
+            if (v != null) facts.insert(if (post_with and q.group_by != null and !q.return_grouping) .with_having else .ret_group);
+        } else if (comptime is(name, "return_grouping")) {
+            // SONNY-2698: which stage `group_by` and `having` are (above).
         } else if (comptime is(name, "ret")) {
             returnClauseFacts(facts, v);
         } else if (comptime is(name, "order_by")) {
@@ -2187,7 +2195,7 @@ fn requiredFeatures(q: ast.Query, ex: Executor) Features {
         if (q.with_where != null) needs.insert(.with_where);
     } else if (q.where_clause != null) needs.insert(.with_where);
     if (wc.distinct) needs.insert(.with_distinct);
-    if (q.group_by != null) needs.insert(.with_group);
+    if (q.withStageGroupBy() != null) needs.insert(.with_group);
     if (wc.order_by != null) needs.insert(.with_order);
     if (wc.limit != null or wc.offset != null or wc.limit_param != null or wc.offset_param != null) needs.insert(.with_window);
     return needs;
@@ -2392,9 +2400,7 @@ fn validateDeleteStatement(d: ast.DeleteStatement) Error!void {
 // The shapes a grouped or filtered RETURN is refused on (SONNY-2683), as
 // match_operations.validateGroupedReturnShape decides them.
 fn returnGroupsOrFilters(q: ast.Query) bool {
-    const return_group_by = q.group_by != null and q.with_clause == null;
-    const return_where = q.having != null and q.group_by == null;
-    return return_group_by or return_where;
+    return q.returnStageGroupBy() != null or q.returnStageHaving() != null;
 }
 
 fn sharedProjectionServes(q: ast.Query) bool {

@@ -2275,7 +2275,7 @@ pub fn executeLegacyQueryWithResolvedParams(
             defer if (with_result) |*w| w.deinit(allocator);
             if (q.with_clause) |with_clause| {
                 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-                with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, call_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
+                with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, call_result, with_clause, q.withStageGroupBy(), execution.withStageHaving(q), param_names.items, param_values.items);
                 // The WITH's rows point at the body's nodes and relationships.
                 with_result.?.owned_graph_entities = call_result.owned_graph_entities;
                 call_result.owned_graph_entities = null;
@@ -2331,7 +2331,7 @@ pub fn executeLegacyQueryWithResolvedParams(
 
             // Apply WITH clause to transform the empty row into WITH variables
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-            const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, initial_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
+            const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, initial_result, with_clause, q.withStageGroupBy(), execution.withStageHaving(q), param_names.items, param_values.items);
 
             // Check if there's a FOR statement to execute with WITH bindings
             if (q.for_statement) |for_stmt| {

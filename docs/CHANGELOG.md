@@ -296,6 +296,38 @@
   `YIELD x AS y RETURN y` keeps the column `x`; MATCH ... CALL ... YIELD
   binds no MATCH variable and leaks. Regression:
   `zig build test-sonny2672-read-semantics-batch`.
+- **A GROUP BY after a RETURN that follows a WITH (SONNY-2698):** the parser
+  kept one GROUP BY / HAVING per query part whichever clause it followed,
+  and every executor gave it to the WITH, so `MATCH (z) WITH z WHERE z.k >= 2
+  RETURN z.g, count(*) GROUP BY z.g` grouped the WITH's rows to one per key
+  and counted 1 (in-memory, persisted, tenant-scoped and RLS sessions). A
+  GROUP BY, HAVING or WHERE written after the RETURN items now belongs to
+  the RETURN (ISO/IEC 39075:2024 14.11: the `<group by clause>` is part of
+  the `<return statement body>`), on the planned and legacy executors; one
+  written between the WITH and the RETURN stays the WITH's. The legacy
+  executor's own grouping (a node and a relationship copy that replaced
+  HAVING with "the group has at least two rows" and skipped the WITH stage)
+  is deleted. **Behaviour changes:** a part that groups both before and
+  after its RETURN (`WITH g, count(*) AS c GROUP BY g RETURN c, count(*)
+  GROUP BY c`, or a WITH's GROUP BY / HAVING and a WHERE after the RETURN,
+  or `RETURN ... WHERE w GROUP BY k HAVING h`) is refused at parse time
+  (`UnexpectedToken`): the second grouping used to replace the first
+  silently. A grouped
+  aggregate the shared projection does not serve is refused with 0A000
+  (`UnsupportedGroupedReturn`) instead of being answered by the deleted
+  grouping. Regression: `zig build test-sonny2672-read-semantics-batch`.
+- **Pattern predicates in a grouped HAVING (SONNY-2699):** `GROUP BY q
+  HAVING EXISTS { (q)-[:S]->() }`, `NOT EXISTS`, `COUNT { } = n`, an EXISTS
+  with its own WHERE, and a COUNT { } in an item beside an aggregate
+  (`count(*) + COUNT { (q)-[:S]->() }`) were refused with 0A000 since
+  v0.8.23. Each variable the pattern reads from outside is now bound to the
+  group's value when it is a grouping key or a projected variable, and the
+  predicate runs under the session's tenant scope and RLS policies as a
+  WHERE EXISTS does. A variable with no single value in the group (an input
+  binding that is neither), and a pattern variable named like an output
+  column that does not hold it, stay refused with 0A000; so do a
+  `shortestPath` and an IN subquery in a grouped HAVING. Regression:
+  `zig build test-sonny2672-read-semantics-batch`.
 
 ---
 
