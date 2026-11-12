@@ -363,6 +363,17 @@
   `test-sonny3251-limit-errors` failed on this branch from items 4 and 1.
   Regression: `zig build test-sonny6383-query-residuals`,
   `zig build test-sonny6383-call-return-flags`.
+- **An exact integer sum stays exact; past i64 it is 22003 (SONNY-2774):**
+  `sum()` over integers continued as a DOUBLE once the running total left
+  the i64 range, on the shared projection and on the GROUP BY fast path
+  alike (a silent exact-to-approximate change). Both, and the legacy
+  aggregate loops, now sum integers in an exact 128-bit accumulator: a total
+  that fits i64 is returned exactly whatever the sums in between were
+  (`MAX + 1 - 2` is `MAX - 1`), and one that does not fails with 22003
+  (numeric value out of range, ISO/IEC 39075:2024 20.9 General Rules).
+  `avg()` divides the exact sum and stays a DOUBLE. **Behaviour change:**
+  an integer `sum()` past i64 is an error, not an approximate DOUBLE.
+  Regression: `zig build test-sonny2774-exact-sum`.
 - **A GROUP BY after a RETURN that follows a WITH (SONNY-2698):** the parser
   kept one GROUP BY / HAVING per query part whichever clause it followed,
   and every executor gave it to the WITH, so `MATCH (z) WITH z WHERE z.k >= 2
@@ -1898,7 +1909,7 @@ run inside an explicit transaction again.
     implies an integer SUM past i64 should raise 22003. The shared
     projection continues it as a double (the value's magnitude is kept, its
     last digits are not), matching the GROUP BY fast path, until both paths
-    converge on 22003.
+    converge on 22003. (Converged in the Unreleased section: SONNY-2774.)
 - **Group and DISTINCT keys keep their type (SONNY-2675, SONNY-2735):** a
   GROUP BY, `count(DISTINCT)`, RETURN DISTINCT and WITH DISTINCT key keeps
   its type and value. Doubles, dates, decimals, texts, UUIDs and lists group

@@ -1286,7 +1286,10 @@ const GroupAcc = struct {
 // int and a float path so a pure-integer input yields an Int result (matching
 // the regular aggregator) and a mixed/decimal input promotes to Double.
 const AggAcc = struct {
-    sum_int: i64 = 0,
+    /// SONNY-2774: the integer inputs' exact sum (`execution.ExactIntSum`);
+    /// past i64 it continued as a double. `sum_float` holds the float inputs
+    /// only.
+    sum_int: execution.ExactIntSum = .{},
     sum_float: f64 = 0,
     has_float: bool = false,
     count: u64 = 0,
@@ -1306,24 +1309,23 @@ const AggAcc = struct {
     fn update(self: *AggAcc, maybe_int: ?i64, f: f64) void {
         self.count += 1;
         if (maybe_int) |iv| {
-            if (!self.has_float) {
-                const r = @addWithOverflow(self.sum_int, iv);
-                if (r[1] != 0) {
-                    self.has_float = true;
-                    self.sum_float = @as(f64, @floatFromInt(self.sum_int)) + @as(f64, @floatFromInt(iv));
-                } else {
-                    self.sum_int = r[0];
-                }
-            } else {
-                self.sum_float += @as(f64, @floatFromInt(iv));
-            }
+            self.sum_int.add(iv);
         } else {
-            if (!self.has_float) {
-                self.has_float = true;
-                self.sum_float = @as(f64, @floatFromInt(self.sum_int));
-            }
+            self.has_float = true;
             self.sum_float += f;
         }
+    }
+
+    /// sum(): exact over integers (22003 past i64), else a double.
+    fn sumValue(self: AggAcc) error{IntegerOverflow}!Value {
+        if (self.has_float) return .{ .Double = self.sum_float + self.sum_int.approximate() };
+        return .{ .Int = try self.sum_int.exact() };
+    }
+
+    /// avg(): a double (a mean never integer-divides; gql_conformance T16).
+    fn avgValue(self: AggAcc) Value {
+        if (self.count == 0) return .{ .Null = {} };
+        return .{ .Double = (self.sum_float + self.sum_int.approximate()) / @as(f64, @floatFromInt(self.count)) };
     }
 
     /// Fold one value (from `minMaxValue`) into min and max; the first of
@@ -1936,15 +1938,8 @@ pub fn propertyAggregateFastPath(
 
     // --- Build result value per aggregate kind ---
     const out_val: Value = switch (kind) {
-        .sum => blk: {
-            if (acc.has_float) break :blk Value{ .Double = acc.sum_float };
-            break :blk Value{ .Int = acc.sum_int };
-        },
-        .avg => blk: {
-            if (acc.count == 0) break :blk Value{ .Null = {} };
-            const total: f64 = if (acc.has_float) acc.sum_float else @as(f64, @floatFromInt(acc.sum_int));
-            break :blk Value{ .Double = total / @as(f64, @floatFromInt(acc.count)) };
-        },
+        .sum => try acc.sumValue(),
+        .avg => acc.avgValue(),
         .min => acc.minValue(),
         .max => acc.maxValue(),
     };
@@ -3243,20 +3238,10 @@ pub fn groupByAggregateFastPath(
                     };
                 },
                 .count_star, .count_prop => Value{ .Int = @intCast(group.accs[item_acc_idx[i]].count) },
-                .sum => blk: {
-                    const a = group.accs[item_acc_idx[i]];
-                    break :blk if (a.has_float) Value{ .Double = a.sum_float } else Value{ .Int = a.sum_int };
-                },
-                .avg => blk: {
-                    const a = group.accs[item_acc_idx[i]];
-                    if (a.count == 0) break :blk Value{ .Null = {} };
-                    // avg() is a mean: pure-integer inputs must NOT integer-divide
-                    // (avg(1,2) is 1.5). The former "legacy GROUP BY parity" Int
-                    // branch was the outlier — every other avg path emits Double;
-                    // pinned by gql_conformance T16.
-                    const total: f64 = if (a.has_float) a.sum_float else @as(f64, @floatFromInt(a.sum_int));
-                    break :blk Value{ .Double = total / @as(f64, @floatFromInt(a.count)) };
-                },
+                .sum => try group.accs[item_acc_idx[i]].sumValue(),
+                // avg() is a mean: pure-integer inputs must NOT integer-divide
+                // (avg(1,2) is 1.5); pinned by gql_conformance T16.
+                .avg => group.accs[item_acc_idx[i]].avgValue(),
                 .min => group.accs[item_acc_idx[i]].minValue(),
                 .max => group.accs[item_acc_idx[i]].maxValue(),
             };

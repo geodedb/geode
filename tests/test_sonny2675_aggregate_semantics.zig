@@ -675,9 +675,10 @@ fn checkSumTypes(s: *Session, f: *Failures) !void {
     // A SmallInt and a BigInt are integers to sum (they were skipped).
     try expectRows(s, f, "MATCH (n:O) WHERE n.g = 's' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'s', 13"});
     try expectRows(s, f, "MATCH (n:O) WHERE n.g = 's' RETURN n.g AS g, avg(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'s', 4.333333333333333d"});
-    // An integer sum past i64 continues as a double (`+=` aborted).
-    try expectRows(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'o', 9223372036854776000d"});
-    try expectRows(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g", &.{}, &.{"'o', 9223372036854776000d"});
+    // An integer sum past i64 (`+=` aborted). SONNY-2774: it is 22003
+    // (IntegerOverflow), not a double continuation: ISO/IEC 39075:2024 20.9.
+    try expectFail(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, error.IntegerOverflow);
+    try expectFail(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g", &.{}, error.IntegerOverflow);
 }
 
 test "SONNY-2675: sum and avg refuse every non-numeric input" {

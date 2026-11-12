@@ -3721,19 +3721,32 @@ fn sumAddend(val: Value) error{TypeMismatch}!?SumAddend {
     };
 }
 
-/// Adds an integer to a sum kept as an i64 while it fits; past i64 the sum
-/// continues as a double, as the GROUP BY fast path's does. (`+=` aborted the
-/// server on an i64 overflow: SONNY-2739's class.)
-fn addInt(int_sum: *i64, float_sum: *f64, has_float: *bool, n: i64) void {
-    const r = @addWithOverflow(int_sum.*, n);
-    if (r[1] == 0) {
-        int_sum.* = r[0];
-        return;
+// CANARY: REQ=REQ-SONNY-2774-EXACT-SUM; FEATURE="GroupedAggregates"; ASPECT=ExactIntegerSum; STATUS=TESTED; TEST=tests/test_sonny2774_exact_sum.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-2774: the exact integer part of a sum() or avg(), kept in an i128.
+/// Fewer than 2^63 addends of magnitude at most 2^63 stay far inside it, so
+/// adding never overflows, and a total that fits i64 is exact whatever the
+/// sums in between were. It continued as a double past i64 (the value's last
+/// digits were lost, silently).
+pub const ExactIntSum = struct {
+    total: i128 = 0,
+
+    pub fn add(self: *ExactIntSum, n: i64) void {
+        self.total += n;
     }
-    float_sum.* += @as(f64, @floatFromInt(int_sum.*)) + @as(f64, @floatFromInt(n));
-    int_sum.* = 0;
-    has_float.* = true;
-}
+
+    /// The sum of exact integers as an exact integer. ISO/IEC 39075:2024 20.9
+    /// <aggregate function>, General Rules: a SUM result outside the range of
+    /// its declared type (here BIGINT) raises 22003 (numeric value out of
+    /// range).
+    pub fn exact(self: ExactIntSum) error{IntegerOverflow}!i64 {
+        return std.math.cast(i64, self.total) orelse error.IntegerOverflow;
+    }
+
+    /// As an approximate number, to add to a sum of doubles or to average.
+    pub fn approximate(self: ExactIntSum) f64 {
+        return @floatFromInt(self.total);
+    }
+};
 
 // CANARY: REQ=REQ-SONNY-2734-AGGREGATE-ARGUMENT-ERRORS; FEATURE="GroupedAggregates"; ASPECT=ArgumentErrorsEscape; STATUS=TESTED; TEST=tests/test_sonny2696_aggregate_expressions.zig; OWNER=execution; UPDATED=2026-11-11
 /// An aggregate's argument for one input row, evaluated by the general
@@ -3796,7 +3809,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
     // Handle sum(expr)
     if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
         if (arg_ptr == null) return Value{ .Null = {} };
-        var int_sum: i64 = 0;
+        var int_sum: ExactIntSum = .{};
         var float_sum: f64 = 0.0;
         var has_float = false;
         var has_value = false;
@@ -3808,7 +3821,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             // GAP-0916: non-numeric input to sum() is a type error, not a
             // silent skip (`sumAddend`).
             switch (try sumAddend(val) orelse continue) {
-                .int => |n| addInt(&int_sum, &float_sum, &has_float, n),
+                .int => |n| int_sum.add(n),
                 .float => |f| {
                     float_sum += f;
                     has_float = true;
@@ -3817,14 +3830,14 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             has_value = true;
         }
         if (!has_value) return Value{ .Null = {} };
-        if (has_float) return Value{ .Double = float_sum + @as(f64, @floatFromInt(int_sum)) };
-        return Value{ .Int = int_sum };
+        if (has_float) return Value{ .Double = float_sum + int_sum.approximate() };
+        return Value{ .Int = try int_sum.exact() };
     }
 
     // Handle avg(expr)
     if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
         if (arg_ptr == null) return Value{ .Null = {} };
-        var int_sum: i64 = 0;
+        var int_sum: ExactIntSum = .{};
         var float_sum: f64 = 0.0;
         var has_float = false;
         var count: i64 = 0;
@@ -3836,7 +3849,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             // GAP-0916: non-numeric input to avg() is a type error, not a
             // silent NULL (`sumAddend`).
             switch (try sumAddend(val) orelse continue) {
-                .int => |n| addInt(&int_sum, &float_sum, &has_float, n),
+                .int => |n| int_sum.add(n),
                 .float => |f| {
                     float_sum += f;
                     has_float = true;
@@ -3849,7 +3862,7 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
         // is 1.5, not 1). Matches the Double convention of every other avg path
         // (aggregation_evaluation.zig, match_operations streaming path); pinned
         // by gql_conformance T16.
-        return Value{ .Double = (float_sum + @as(f64, @floatFromInt(int_sum))) / @as(f64, @floatFromInt(count)) };
+        return Value{ .Double = (float_sum + int_sum.approximate()) / @as(f64, @floatFromInt(count)) };
     }
 
     // Handle min(expr) and max(expr). SONNY-2675: in the value order ORDER BY
