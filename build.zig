@@ -9779,6 +9779,20 @@ pub fn build(b: *std.Build) void {
     const sonny3380_step = b.step("test-sonny3380-merge-alias-duplicate-set", "Run SONNY-3380 regression (MERGE (a) MERGE (b) SET a.x = 1, b.x = 2 with a and b one node is refused 22G03 and the MERGE's create is undone, for a created and an existing node, per row of MATCH ... MERGE and in an explicit transaction; two distinct nodes still run; gRPC in process)");
     sonny3380_step.dependOn(&run_sonny3380_tests.step);
 
+    const sonny3243_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3243_union_write_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny3243_test_mod.link_libc = true;
+    sonny3243_test_mod.addImport("geode", root_mod);
+    sonny3243_test_mod.addImport("schema", schema_mod);
+    sonny3243_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3243_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3243_test_mod.addImport("logging", logging_mod);
+    sonny3243_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3243_tests = b.addTest(.{ .root_module = sonny3243_test_mod });
+    const run_sonny3243_tests = b.addRunArtifact(sonny3243_tests);
+    shardDep(test_step, &run_sonny3243_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3243_step = b.step("test-sonny3243-union-write-atomicity", "Run SONNY-3243 regression (a UNION [ALL] whose later part fails -- NodeHasEdges, divide by zero -- leaves nothing an earlier part SET, REMOVEd or labelled, for two and three parts and in an explicit transaction; a UNION whose parts all succeed applies every part; gRPC in process)");
+    sonny3243_step.dependOn(&run_sonny3243_tests.step);
+
     // SONNY-3384: MATCH ... SET ... DETACH DELETE ... RETURN runs every clause,
     // or is refused. gRPC in process.
     const sonny3384_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3384_set_detach_delete.zig"), .target = target, .optimize = optimize });
