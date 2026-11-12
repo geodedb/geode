@@ -29,6 +29,10 @@ pub const SchemaCatalog = struct {
     /// revoke stays applied when its save fails: it fails closed). Until a
     /// save succeeds, every change, a no-op one included, saves the catalog.
     unsaved: bool = false,
+    /// SONNY-6327: the process-global instance (`globalCatalog`). When it
+    /// gains a field it raises `global_has_fields`, the lock-free "is any
+    /// field encrypted at all" answer the read and write paths check first.
+    is_global: bool = false,
 
     /// Initialize a new schema catalog
     pub fn init(allocator: std.mem.Allocator) SchemaCatalog {
@@ -95,20 +99,167 @@ pub const SchemaCatalog = struct {
             };
         }
         try self.schemas.put(type_meta_ptr.type_name, type_meta_ptr);
+        self.noteFieldsLocked();
     }
 
-    /// Get type metadata by name
-    /// Returns pointer to type metadata, null if type not found
-    /// Thread-safe read operation
-    /// Note: Caller must not modify the returned pointer
-    pub fn getType(self: *SchemaCatalog, type_name: []const u8) ?*const annotations.TypeMetadata {
+    /// SONNY-6327: the global catalog now holds a field (caller holds the
+    /// mutex). Never lowered except by `resetGlobalCatalog`.
+    fn noteFieldsLocked(self: *SchemaCatalog) void {
+        if (self.is_global and self.schemas.count() > 0) global_has_fields.store(true, .release);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6327-FLE-CATALOG-READS-UNDER-LOCK; FEATURE="FieldLevelEncryption"; ASPECT=NoBorrowedReads; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-6327: every read answers its question while it holds the mutex
+    // and returns values, or a copy the caller owns. `getType` (a pointer
+    // into the catalog) and `getFieldMetadata` (a struct of borrowed field
+    // name and role slices) handed out catalog memory after unlocking; a
+    // reconfigure frees the old field copy and a grant or revoke frees the
+    // old role list, so a reader then read freed memory, in the plaintext
+    // authorization decision too. Nothing here allocates under the mutex
+    // except the explicit copies, and nothing blocks.
+
+    fn fieldLocked(self: *SchemaCatalog, type_name: []const u8, field_name: []const u8) ?*const annotations.FieldMetadata {
+        const type_meta_ptr = self.schemas.get(type_name) orelse return null;
+        return type_meta_ptr.fields.getPtr(field_name);
+    }
+
+    /// What the catalog says about one field, by value.
+    pub const FieldPolicy = struct {
+        encrypted: bool,
+        searchable: bool,
+        algorithm: annotations.EncryptionConfig.Algorithm,
+    };
+
+    /// The field's policy, or null when the type or the field is not in the
+    /// catalog. Thread-safe; returns no catalog memory.
+    pub fn fieldPolicy(
+        self: *SchemaCatalog,
+        type_name: []const u8,
+        field_name: []const u8,
+    ) ?FieldPolicy {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        if (self.schemas.get(type_name)) |type_meta_ptr| {
-            return type_meta_ptr;
+        const field = self.fieldLocked(type_name, field_name) orelse return null;
+        return .{
+            .encrypted = field.isEncrypted(),
+            .searchable = field.isSearchable(),
+            .algorithm = field.encryption.algorithm,
+        };
+    }
+
+    /// May `role` read the field in plaintext? Decided under the mutex.
+    /// A field the catalog does not list is not FLE-protected (true); an
+    /// encrypted field with no visibility roles is readable by nobody; no
+    /// role reads nothing that lists roles (fail closed).
+    pub fn canReadPlaintext(
+        self: *SchemaCatalog,
+        type_name: []const u8,
+        field_name: []const u8,
+        role: ?[]const u8,
+    ) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const field = self.fieldLocked(type_name, field_name) orelse return true;
+        return canReadLocked(field, role);
+    }
+
+    fn canReadLocked(field: *const annotations.FieldMetadata, role: ?[]const u8) bool {
+        if (field.visibility.to_roles.len == 0) return !field.isEncrypted();
+        const r = role orelse return false;
+        for (field.visibility.to_roles) |allowed| {
+            if (std.mem.eql(u8, r, allowed)) return true;
         }
-        return null;
+        return false;
+    }
+
+    /// Everything a read of the field needs, in one lock acquisition.
+    pub const ReadDecision = struct {
+        encrypted: bool = false,
+        searchable: bool = false,
+        plaintext_allowed: bool = true,
+    };
+
+    pub fn readDecision(
+        self: *SchemaCatalog,
+        type_name: []const u8,
+        field_name: []const u8,
+        role: ?[]const u8,
+    ) ReadDecision {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const field = self.fieldLocked(type_name, field_name) orelse return .{};
+        return .{
+            .encrypted = field.isEncrypted(),
+            .searchable = field.isSearchable(),
+            .plaintext_allowed = canReadLocked(field, role),
+        };
+    }
+
+    /// Is `role` listed in the field's visibility roles?
+    pub fn hasVisibilityRole(
+        self: *SchemaCatalog,
+        type_name: []const u8,
+        field_name: []const u8,
+        role: []const u8,
+    ) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const field = self.fieldLocked(type_name, field_name) orelse return false;
+        for (field.visibility.to_roles) |allowed| {
+            if (std.mem.eql(u8, role, allowed)) return true;
+        }
+        return false;
+    }
+
+    /// Is the type in the catalog?
+    pub fn hasType(self: *SchemaCatalog, type_name: []const u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.schemas.contains(type_name);
+    }
+
+    /// A copy of one field's metadata (its name, roles and tags) that the
+    /// caller owns: free it with `freeFieldCopy` and the same allocator.
+    pub fn copyFieldMetadata(
+        self: *SchemaCatalog,
+        allocator: std.mem.Allocator,
+        type_name: []const u8,
+        field_name: []const u8,
+    ) !?annotations.FieldMetadata {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const field = self.fieldLocked(type_name, field_name) orelse return null;
+        return try dupeFieldMeta(allocator, field.*);
+    }
+
+    /// Copies of every field of a type, or null when the type is not in the
+    /// catalog. The caller owns them: free with `freeFieldCopies`.
+    pub fn copyTypeFields(
+        self: *SchemaCatalog,
+        allocator: std.mem.Allocator,
+        type_name: []const u8,
+    ) !?[]annotations.FieldMetadata {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const type_meta_ptr = self.schemas.get(type_name) orelse return null;
+        const out = try allocator.alloc(annotations.FieldMetadata, type_meta_ptr.fields.count());
+        var filled: usize = 0;
+        errdefer {
+            for (out[0..filled]) |f| freeFieldMeta(allocator, f);
+            allocator.free(out);
+        }
+        var it = type_meta_ptr.fields.valueIterator();
+        while (it.next()) |field| {
+            out[filled] = try dupeFieldMeta(allocator, field.*);
+            filled += 1;
+        }
+        return out;
     }
 
     /// Check if a field in a type is encrypted
@@ -141,22 +292,6 @@ pub const SchemaCatalog = struct {
             return type_meta_ptr.isFieldSearchable(field_name);
         }
         return false;
-    }
-
-    /// Get field metadata for a specific field
-    /// Thread-safe operation
-    pub fn getFieldMetadata(
-        self: *SchemaCatalog,
-        type_name: []const u8,
-        field_name: []const u8,
-    ) ?annotations.FieldMetadata {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        if (self.schemas.get(type_name)) |type_meta_ptr| {
-            return type_meta_ptr.getField(field_name);
-        }
-        return null;
     }
 
     /// Remove a type from the catalog
@@ -233,6 +368,7 @@ pub const SchemaCatalog = struct {
                 };
                 // The old key is the old copy's field name.
                 freeFieldMeta(self.allocator, old);
+                self.noteFieldsLocked();
                 return;
             }
             type_meta_ptr.fields.put(owned.field_name, owned) catch |err| {
@@ -244,6 +380,7 @@ pub const SchemaCatalog = struct {
                 freeFieldMeta(self.allocator, owned);
                 return error.FleCatalogNotPersisted;
             };
+            self.noteFieldsLocked();
             return;
         }
 
@@ -265,6 +402,7 @@ pub const SchemaCatalog = struct {
             self.allocator.free(name);
             return error.FleCatalogNotPersisted;
         };
+        self.noteFieldsLocked();
     }
 
     /// Put `owned` into the new type and the type into the catalog. On
@@ -416,6 +554,17 @@ fn freeFieldMeta(allocator: std.mem.Allocator, meta: annotations.FieldMetadata) 
     freeStringList(allocator, meta.classification.tags);
 }
 
+/// SONNY-6327: free a `copyFieldMetadata` result.
+pub fn freeFieldCopy(allocator: std.mem.Allocator, meta: annotations.FieldMetadata) void {
+    freeFieldMeta(allocator, meta);
+}
+
+/// SONNY-6327: free a `copyTypeFields` result.
+pub fn freeFieldCopies(allocator: std.mem.Allocator, fields: []annotations.FieldMetadata) void {
+    for (fields) |f| freeFieldMeta(allocator, f);
+    allocator.free(fields);
+}
+
 /// A copy of `list` and its strings; the empty list is not allocated.
 fn dupeStringList(allocator: std.mem.Allocator, list: []const []const u8) ![][]const u8 {
     if (list.len == 0) return &.{};
@@ -468,6 +617,15 @@ var global_load_failure: ?anyerror = null;
 /// The global instance holds the file's contents (`resetGlobalCatalog`
 /// empties it and clears this, so the next use loads the file again).
 var global_loaded: bool = false;
+/// SONNY-6327: the global catalog holds at least one field. Read without a
+/// lock (`globalHasFields`), so a deployment with no FLE field configured
+/// pays no lock on its string reads and writes.
+var global_has_fields: std.atomic.Value(bool) = .init(false);
+
+/// SONNY-6327: does the global catalog hold any field? Lock-free.
+pub fn globalHasFields() bool {
+    return global_has_fields.load(.acquire);
+}
 
 // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=LoadFailureIsAnError; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
 /// Get or create the global schema catalog
@@ -496,6 +654,7 @@ pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
     const catalog = global_catalog orelse blk: {
         const created = try global_allocator.create(SchemaCatalog);
         created.* = SchemaCatalog.init(global_allocator);
+        created.is_global = true;
         global_catalog = created;
         break :blk created;
     };
@@ -507,6 +666,7 @@ pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
         return error.FleCatalogUnavailable;
     };
     global_loaded = true;
+    if (catalog.count() > 0) global_has_fields.store(true, .release);
     return catalog;
 }
 
@@ -588,6 +748,7 @@ pub fn resetGlobalCatalog(allocator: std.mem.Allocator) void {
     if (global_catalog) |catalog| {
         catalog.reset();
     }
+    global_has_fields.store(false, .release);
 }
 
 pub const catalog_file_name = "geode_fle_catalog.dat";

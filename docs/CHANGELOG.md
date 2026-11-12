@@ -63,6 +63,36 @@
   restarting. `geode fle grant-plaintext` refuses to run without
   `GEODE_DATA_DIR`, where it used to write the grant to `/tmp`.
   Regression: `zig build test-sonny6274-fle-catalog-no-tmp`.
+- **BEHAVIOUR CHANGE: FLE read gaps closed (SONNY-6327).** (1) An
+  encrypted EDGE property was returned as stored (the ciphertext envelope)
+  to every principal by `RETURN r.p` and `WHERE r.p = ...`, and every
+  whole-value read (`properties(n|r)`, map projection, `RETURN n`,
+  `RETURN r` and paths over QUIC/gRPC, and JSON) sent the stored bytes for
+  nodes too. All of them now use the one node policy
+  (`fle_integration.readStoredString`): the plaintext role reads the
+  plaintext, any other principal reads `[REDACTED]` (an `n.p`/`r.p` read
+  of a searchable field is 42501, as before), and while the FLE catalog
+  cannot be loaded the read is refused (58030). (2) A value the principal
+  may read that does not decrypt (damaged, or written under another
+  `GEODE_MASTER_KEY`) was returned as the stored bytes; it is now refused,
+  `FleDecryptionFailed` (58030), also inside builtin calls, predicates and
+  aggregates. `GraphStore.getNodeProperty` now returns the stored value
+  and never tries to decrypt; `getNodePropertyChecked` /
+  `getEdgePropertyChecked` read through the policy. (3) The FLE catalog's
+  readers (`getType`, `getFieldMetadata`, the plaintext-role check, the
+  `geode.fle.getFieldConfig` / `listEncryptedFields` procedures) used
+  catalog memory after releasing its lock, which a reconfigure, grant or
+  revoke frees (a use-after-free in the authorization decision); they now
+  answer under the lock or copy, and a deployment with no FLE field skips
+  FLE without a lock. (4) New online `CALL geode.fle.revokePlaintext(type,
+  field, role)`, mirroring `grantPlaintext` (mutating; refused in cluster
+  mode; a failed save leaves the revoke in effect and reports 58030). (5)
+  The QUIC write fast paths (simple CREATE, bulk MERGE, `/*+BATCH*/`,
+  `USE GRAPH g; MERGE`, MATCH ... CREATE/MERGE edge) wrote an encrypted
+  field's PLAINTEXT to disk; with any FLE field configured they now
+  decline to the executor, which encrypts (bulk-ingest throughput on FLE
+  deployments drops to executor speed), and the aggregate/point-write
+  pushdowns decline too. Regression: `zig build test-sonny6327-fle-read-gaps`.
 - **BEHAVIOUR CHANGE: the FLE catalog fails closed (SONNY-6324).**
   (1) `CALL geode.fle.configureField`, `CALL geode.fle.grantPlaintext`,
   `geode fle grant-plaintext` and `geode fle revoke-plaintext` logged a

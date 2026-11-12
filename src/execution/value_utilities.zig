@@ -619,46 +619,17 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                     try writer.writeAll("\":");
                     switch (entry.value_ptr.*) {
                         .String => |s| {
-                            // GAP-0203: Skip FLE entirely when no encrypted fields configured
                             // CANARY: REQ=REQ-PERF-FLE-SKIP-003; FEATURE="FLESkipOptimization"; ASPECT=NodePropertyWrite; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
-                            if (fle_integration.hasEncryptedFields()) {
-                                // Field-Level Encryption: decrypt if configured
-                                const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                                const user_role = fle_integration.rolePreferringActiveContext();
-                                const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = fle_integration.tenantPreferringActiveContext(),
-                                    .schema_name = type_name,
-                                    .allocator = allocator,
-                                    .current_user_role = user_role,
-                                };
-                                const record_id_buf = try std.fmt.allocPrint(allocator, "{d}", .{node.id});
-                                defer allocator.free(record_id_buf);
-
-                                const decrypted = fle_integration.decryptFieldIfNeeded(
-                                    fle_ctx,
-                                    type_name,
-                                    entry.key_ptr.*,
-                                    s,
-                                    record_id_buf,
-                                    true,
-                                ) catch |err| blk_decrypt: {
-                                    if (err == error.SearchNotPermitted) {
-                                        break :blk_decrypt "[REDACTED]";
-                                    }
-                                    // SONNY-6324: fail closed, never the stored bytes.
-                                    if (err == error.FleCatalogUnavailable) return error.FleCatalogUnavailable;
-                                    break :blk_decrypt s;
-                                };
-
-                                try writer.writeByte('"');
-                                try writer.writeAll(decrypted);
-                                try writer.writeByte('"');
-                            } else {
-                                // Fast path: no FLE configured, write string directly
-                                try writer.writeByte('"');
-                                try writeJsonEscapedString(writer, s);
-                                try writer.writeByte('"');
-                            }
+                            // SONNY-6327: the shared FLE read policy (lock-free
+                            // with no FLE field configured). A decrypt failure is
+                            // an error, never the stored bytes; the value is
+                            // JSON-escaped (decrypted text was written raw).
+                            const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+                            const shown = try fle_integration.readStoredStringForEntity(allocator, .node, type_name, entry.key_ptr.*, s, node.id);
+                            defer allocator.free(shown);
+                            try writer.writeByte('"');
+                            try writeJsonEscapedString(writer, shown);
+                            try writer.writeByte('"');
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),
@@ -696,44 +667,13 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                     const prop_value = entry.value_ptr.*;
                     switch (prop_value) {
                         .String => |s| {
-                            // GAP-0203: Skip FLE entirely when no encrypted fields configured
                             // CANARY: REQ=REQ-PERF-FLE-SKIP-004; FEATURE="FLESkipOptimization"; ASPECT=EdgePropertyWrite; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
-                            if (fle_integration.hasEncryptedFields()) {
-                                const type_name = edge.label;
-                                const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = fle_integration.tenantPreferringActiveContext(),
-                                    .schema_name = type_name,
-                                    .allocator = allocator,
-                                    .current_user_role = fle_integration.rolePreferringActiveContext(),
-                                };
-                                const record_id_buf = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge.id});
-                                defer allocator.free(record_id_buf);
-
-                                const decrypted = fle_integration.decryptFieldIfNeeded(
-                                    fle_ctx,
-                                    type_name,
-                                    entry.key_ptr.*,
-                                    s,
-                                    record_id_buf,
-                                    true,
-                                ) catch |err| blk_decrypt: {
-                                    if (err == error.SearchNotPermitted) {
-                                        break :blk_decrypt "[REDACTED]";
-                                    }
-                                    // SONNY-6324: fail closed, never the stored bytes.
-                                    if (err == error.FleCatalogUnavailable) return error.FleCatalogUnavailable;
-                                    break :blk_decrypt s;
-                                };
-
-                                try writer.writeByte('"');
-                                try writer.writeAll(decrypted);
-                                try writer.writeByte('"');
-                            } else {
-                                // Fast path: no FLE configured, write string directly
-                                try writer.writeByte('"');
-                                try writeJsonEscapedString(writer, s);
-                                try writer.writeByte('"');
-                            }
+                            // SONNY-6327: the same policy as a node's property.
+                            const shown = try fle_integration.readStoredStringForEntity(allocator, .edge, edge.label, entry.key_ptr.*, s, edge.id);
+                            defer allocator.free(shown);
+                            try writer.writeByte('"');
+                            try writeJsonEscapedString(writer, shown);
+                            try writer.writeByte('"');
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),

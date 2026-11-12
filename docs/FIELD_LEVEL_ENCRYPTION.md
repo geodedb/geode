@@ -195,6 +195,8 @@ procedure resource (fail-closed for unknown principals/procedures):
 | Procedure | Classification | GPS action | Who may call |
 |-----------|----------------|------------|--------------|
 | `geode.fle.configureField` | mutating | `.write` | Admin role, or a role/policy explicitly granted `write` on the procedure. This is the declare/mutate path. |
+| `geode.fle.grantPlaintext` | mutating | `.write` | Same as `configureField`. |
+| `geode.fle.revokePlaintext` | mutating | `.write` | Same as `configureField` (SONNY-6327). |
 | `geode.fle.getFieldConfig` | read-only | `.read` | Any role/policy with `read` on the procedure (read-only classification). |
 | `geode.fle.listEncryptedFields` | read-only | `.read` | Any role/policy with `read` on the procedure (read-only classification). |
 
@@ -245,6 +247,41 @@ CALL geode.fle.configureField('Person', 'ssn',
   { algorithm: 'AES-256-GCM', visibility: ['pii_reader'] })
 RETURN 'configured' AS status;
 ```
+
+#### `CALL geode.fle.revokePlaintext(type_name, field_name, role)`
+
+The online equivalent of `geode fle revoke-plaintext` (SONNY-6327), the
+mirror of `CALL geode.fle.grantPlaintext(type_name, field_name, role)`:
+removes `role` from the field's visibility roles. Every read that starts
+after the call returns sees the revoke (the catalog is the only decision
+source; there is no decision cache). Revoking a role that has no access is a
+no-op; an unknown type or field is an error. Refused in cluster mode. If the
+catalog cannot be saved the revoke stays in effect in the running server
+and the call fails with 58030 (`FleRevokeNotPersisted`): retry it, or the
+role regains access at the next start.
+
+Returns one row: `status` (STRING, `"revoked"`).
+
+#### Read semantics (SONNY-6327)
+
+Nodes and edges are read by the same policy, on every read surface
+(`n.p` / `r.p` in RETURN, WHERE, ORDER BY and aggregates, `properties()`,
+map projection, `RETURN n` / `RETURN r` / paths over QUIC and gRPC, JSON):
+
+- a field that is not encrypted: the stored value;
+- the principal's FLE role is in the field's visibility roles: the
+  decrypted value; a value that does not decrypt is refused (58030,
+  `FleDecryptionFailed`), never shown as stored;
+- any other principal: `[REDACTED]`; an `n.p` / `r.p` read of a searchable
+  (blind-indexed) field is refused (42501, `SearchNotPermitted`). A
+  predicate on the plaintext therefore never matches for that principal;
+- the FLE catalog cannot be loaded: refused (58030).
+
+An inline property map on an encrypted field (`MATCH (n:L {ssn: '...'})`,
+`-[:R {p: '...'}]->`) compares the stored envelope and never matches; use
+`WHERE`. While any FLE field is configured the QUIC write fast paths and the
+aggregate pushdowns decline to the executor, so encrypted values are always
+encrypted by the executor's FLE hook.
 
 #### `CALL geode.fle.getFieldConfig(type_name, field_name)`
 

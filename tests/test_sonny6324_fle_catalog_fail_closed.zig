@@ -171,11 +171,8 @@ fn restarted() !fle_catalog.SchemaCatalog {
 }
 
 fn hasRole(catalog: *fle_catalog.SchemaCatalog, type_name: []const u8, field: []const u8, role: []const u8) bool {
-    const meta = catalog.getFieldMetadata(type_name, field) orelse return false;
-    for (meta.visibility.to_roles) |r| {
-        if (std.mem.eql(u8, r, role)) return true;
-    }
-    return false;
+    // SONNY-6327: answered under the catalog mutex.
+    return catalog.hasVisibilityRole(type_name, field, role);
 }
 
 fn encryptedField(name: []const u8) FieldMetadata {
@@ -244,22 +241,22 @@ test "SONNY-6324 (1): CALL geode.fle.configureField whose save fails is refused 
 
     const new_type = configureViaCall(aa, "Sonny6324New", "card");
     try testing.expectError(error.FleCatalogNotPersisted, new_type);
-    try testing.expect(global.getType("Sonny6324New") == null);
+    try testing.expect(!global.hasType("Sonny6324New"));
     try testing.expect(!global.isFieldEncrypted("Sonny6324New", "card"));
 
     try testing.expectError(error.FleCatalogNotPersisted, global.configureField("Sonny6324T", .{
         .field_name = "kept",
         .encryption = .{ .enabled = true, .algorithm = .chacha20_poly1305 },
     }));
-    try testing.expect(global.getFieldMetadata("Sonny6324T", "kept").?.encryption.algorithm == .aes256_gcm);
+    try testing.expect(global.fieldPolicy("Sonny6324T", "kept").?.algorithm == .aes256_gcm);
     try f.makeWritable();
 
     var after = try restarted();
     defer after.deinit();
     try testing.expect(after.isFieldEncrypted("Sonny6324T", "kept"));
     try testing.expect(!after.isFieldEncrypted("Sonny6324T", "ssn"));
-    try testing.expect(after.getType("Sonny6324New") == null);
-    try testing.expect(after.getFieldMetadata("Sonny6324T", "kept").?.encryption.algorithm == .aes256_gcm);
+    try testing.expect(!after.hasType("Sonny6324New"));
+    try testing.expect(after.fieldPolicy("Sonny6324T", "kept").?.algorithm == .aes256_gcm);
 
     // Writable again, the same statement runs and is saved.
     try configureViaCall(aa, "Sonny6324T", "ssn");
@@ -648,9 +645,9 @@ fn loadOnce(allocator: std.mem.Allocator) !void {
     defer catalog.deinit();
     try fle_catalog.loadCatalog(&catalog);
     if (!catalog.isFieldEncrypted("Sonny6324L", "ssn")) return error.NotLoaded;
-    // The loaded type's name is the catalog's own copy, readable.
-    const tm = catalog.getType("Sonny6324L") orelse return error.NotLoaded;
-    if (!std.mem.eql(u8, tm.type_name, "Sonny6324L")) return error.TypeNameDangling;
+    // The loaded type's name (the map key) is the catalog's own copy,
+    // readable (SONNY-6327: read under the mutex, no borrowed pointer out).
+    if (!catalog.hasType("Sonny6324L")) return error.NotLoaded;
 }
 
 test "SONNY-6324 (3): loadCatalog and a save free everything, under every allocation failure" {

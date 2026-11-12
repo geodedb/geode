@@ -3891,6 +3891,11 @@ pub fn isQueryLevelEvalError(err: anyerror) bool {
         // write statement's budget abort and cancel were swallowed the same
         // way.
         error.SearchNotPermitted,
+        // SONNY-6327: an FLE read refused because the catalog cannot be
+        // loaded or the value does not decrypt is the query's error too: an
+        // aggregate or a projected cell must not skip or default it.
+        error.FleCatalogUnavailable,
+        error.FleDecryptionFailed,
         error.WriteQueryBudgetExceeded,
         error.WriteQueryCancelled,
         // Item 5 of the SONNY-2686 review: the evaluator's row visibility is

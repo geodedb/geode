@@ -12824,7 +12824,7 @@ pub fn build(b: *std.Build) void {
     const sonny6327_tests = b.addTest(.{ .root_module = sonny6327_test_mod });
     const run_sonny6327_tests = b.addRunArtifact(sonny6327_tests);
     run_sonny6327_tests.step.dependOn(&install_geode_exe.step);
-    // SONNY-6327: red TDD reproduction; joins shardDep with the fix.
+    shardDep(test_step, &run_sonny6327_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6327_step = b.step("test-sonny6327-fle-read-gaps", "Run SONNY-6327 regression (an encrypted edge property is read by the node FLE policy on every surface: member access, WHERE, aggregates, properties(), the wire and JSON encodings; a value that does not decrypt is an error, never the stored bytes; the FLE catalog answers under its mutex; CALL geode.fle.revokePlaintext; the QUIC write fast paths never store an encrypted field's plaintext)");
     sonny6327_step.dependOn(&run_sonny6327_tests.step);
 

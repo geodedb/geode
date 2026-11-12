@@ -2865,6 +2865,7 @@ const FleHandler = *const fn (std.mem.Allocator, ast.CallProcedure) anyerror!Exe
 const fle_table = std.StaticStringMap(FleHandler).initComptime(.{
     .{ "geode.fle.configurefield", handleGeodeFleConfigurefield },
     .{ "geode.fle.grantplaintext", handleGeodeFleGrantplaintext },
+    .{ "geode.fle.revokeplaintext", handleGeodeFleRevokeplaintext },
     .{ "geode.fle.getfieldconfig", handleGeodeFleGetfieldconfig },
     .{ "geode.fle.listencryptedfields", handleGeodeFleListencryptedfields },
 });
@@ -2880,7 +2881,8 @@ pub fn executeFle(
         // durable HMAC-chained FLE field catalog; getfieldconfig /
         // listencryptedfields are reads and stay open.
         if (std.mem.eql(u8, proc_name, "geode.fle.configurefield") or
-            std.mem.eql(u8, proc_name, "geode.fle.grantplaintext"))
+            std.mem.eql(u8, proc_name, "geode.fle.grantplaintext") or
+            std.mem.eql(u8, proc_name, "geode.fle.revokeplaintext"))
         {
             try cluster_mod.gateUnreplicatedWrite();
         }
@@ -3014,6 +3016,68 @@ fn handleGeodeFleGrantplaintext(allocator: std.mem.Allocator, call_stmt: ast.Cal
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
+// CANARY: REQ=REQ-SONNY-6327-FLE-ONLINE-REVOKE; FEATURE="FieldLevelEncryption"; ASPECT=RevokePlaintextProcedure; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+fn handleGeodeFleRevokeplaintext(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
+    // geode.fle.revokePlaintext(type_name, field_name, role) -> status
+    // SONNY-6327: the ONLINE equivalent of the offline `geode fle
+    // revoke-plaintext` command, mirroring geode.fle.grantPlaintext: the
+    // same GPS gate (a mutating procedure: `.write`, see
+    // procedure_access.classifyProcedureName; not on any read-only list),
+    // the same cluster refusal (executeFle), the same global catalog the
+    // read path consults, and the same call the offline command makes
+    // (SchemaCatalog.revokePlaintextAccess). The role loses plaintext access
+    // for every read that starts after this returns: the catalog is the
+    // only decision source (no decision cache). SONNY-6324: it fails
+    // closed: a save that fails leaves the revoke applied in memory and
+    // reports FleRevokeNotPersisted (58030); a retry saves it.
+    //
+    // Example: CALL geode.fle.revokePlaintext('User', 'ssn', 'analyst')
+    var type_name: []const u8 = "unknown";
+    var field_name: []const u8 = "unknown";
+    var role: []const u8 = "unknown";
+
+    if (call_stmt.procedure == .Call) {
+        const args = call_stmt.procedure.Call.args;
+        if (args.len >= 3) {
+            if (args[0].* == .String) {
+                type_name = args[0].String;
+            }
+            if (args[1].* == .String) {
+                field_name = args[1].String;
+            }
+            if (args[2].* == .String) {
+                role = args[2].String;
+            }
+        }
+    }
+
+    const catalog = try fle_catalog.globalCatalog(allocator);
+    catalog.revokePlaintextAccess(type_name, field_name, role) catch |err| {
+        if (err == error.FleRevokeNotPersisted) {
+            log.warn("FLE plaintext access revoked (online) but not saved", &.{
+                Attr.string("type", type_name),
+                Attr.string("field", field_name),
+                Attr.string("role", role),
+            });
+        }
+        return err;
+    };
+
+    log.info("FLE plaintext access revoked (online)", &.{
+        Attr.string("type", type_name),
+        Attr.string("field", field_name),
+        Attr.string("role", role),
+    });
+
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "status");
+    const row = try allocator.alloc(Value, 1);
+    row[0] = Value{ .Str = "revoked" };
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
 fn handleGeodeFleGetfieldconfig(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
     // geode.fle.getFieldConfig(type_name, field_name) -> encrypted, algorithm, searchable
     // CANARY: REQ=REQ-FLE-PROC-003; FEATURE="FLEProcedures"; ASPECT=GetFieldConfig; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -3038,12 +3102,14 @@ fn handleGeodeFleGetfieldconfig(allocator: std.mem.Allocator, call_stmt: ast.Cal
     var algorithm_str: []const u8 = "none";
     var searchable = false;
 
-    if (catalog.getFieldMetadata(type_name, field_name)) |field_meta| {
-        encrypted = field_meta.isEncrypted();
-        if (field_meta.algorithm()) |alg| {
-            algorithm_str = @tagName(alg);
+    // SONNY-6327: the policy by value, read under the catalog mutex (it
+    // returned the catalog's field struct, borrowed, after unlocking).
+    if (catalog.fieldPolicy(type_name, field_name)) |policy| {
+        encrypted = policy.encrypted;
+        if (policy.encrypted) {
+            algorithm_str = @tagName(policy.algorithm);
         }
-        searchable = field_meta.isSearchable();
+        searchable = policy.searchable;
     }
 
     const columns = try allocator.alloc([]const u8, 3);
@@ -3082,13 +3148,15 @@ fn handleGeodeFleListencryptedfields(allocator: std.mem.Allocator, call_stmt: as
 
     var rows_list = std.ArrayList([]Value).empty;
 
-    if (catalog.getType(type_name)) |type_meta| {
-        var it = type_meta.fields.iterator();
-        while (it.next()) |entry| {
-            const field_meta = entry.value_ptr.*;
+    // SONNY-6327: copies made under the catalog mutex, in the query's
+    // allocator (it iterated the catalog's own field map after unlocking,
+    // and the rows borrowed field names a reconfigure frees).
+    if (try catalog.copyTypeFields(allocator, type_name)) |fields| {
+        defer fle_catalog.freeFieldCopies(allocator, fields);
+        for (fields) |field_meta| {
             if (field_meta.isEncrypted()) {
                 const row = try allocator.alloc(Value, 3);
-                row[0] = Value{ .Str = field_meta.field_name };
+                row[0] = Value{ .Str = try allocator.dupe(u8, field_meta.field_name) };
                 row[1] = Value{ .Str = if (field_meta.algorithm()) |alg| @tagName(alg) else "none" };
                 row[2] = Value{ .Bool = field_meta.isSearchable() };
                 try rows_list.append(allocator, row);

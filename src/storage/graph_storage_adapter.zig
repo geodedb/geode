@@ -3918,6 +3918,7 @@ pub const StorageAdapter = struct {
         txn_id_opt: ?u64,
     ) !u64 {
         try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
         // Statement-atomicity pre-pass. This path SKIPS the undo log by design
@@ -4088,6 +4089,7 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
         try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -4334,6 +4336,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -4462,6 +4465,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -4651,6 +4655,7 @@ pub const StorageAdapter = struct {
         graph_name: []const u8,
         edges: []BatchMergeEdge,
     ) !void {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         if (edges.len == 0) return;
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -4873,6 +4878,7 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
         try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -5040,6 +5046,7 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
         try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -5168,6 +5175,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // thread-local statement-txn slots are source of truth.
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -5303,6 +5311,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // thread-local statement-txn slots are source of truth.
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -5514,6 +5523,7 @@ pub const StorageAdapter = struct {
         apply_on_match: bool,
     ) !MergeResult {
         try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
         // GAP-0046 / GAP-0900 Layer-3 (Fix 2): in lean-index mode the merge key

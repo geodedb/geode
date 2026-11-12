@@ -25,17 +25,24 @@ var global_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 // GAP-0203: Global flag to fast-path skip FLE when no encryption is configured
 // CANARY: REQ=REQ-PERF-FLE-SKIP-001; FEATURE="FLESkipOptimization"; ASPECT=GlobalDisable; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
-var fle_has_encrypted_fields: bool = false;
-var fle_catalog_state_checked: bool = false;
+// SONNY-6327: atomics (they were plain bools read without the mutex), and
+// the catalog's own lock-free `globalHasFields` is consulted first, so a
+// field configured by any path (not only `CALL geode.fle.configureField`,
+// which sets this flag) is seen.
+var fle_has_encrypted_fields: std.atomic.Value(bool) = .init(false);
+var fle_catalog_state_checked: std.atomic.Value(bool) = .init(false);
 
 /// Check if FLE has any encrypted fields configured. Returns false when no encryption is active,
 /// allowing callers to skip all FLE processing for non-encrypted deployments.
+/// Lock-free once the catalog has been loaded.
 pub fn hasEncryptedFields() bool {
-    if (!fle_has_encrypted_fields and !fle_catalog_state_checked) {
+    if (fle_has_encrypted_fields.load(.acquire)) return true;
+    if (fle_catalog.globalHasFields()) return true;
+    if (!fle_catalog_state_checked.load(.acquire)) {
         global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        if (!fle_has_encrypted_fields and !fle_catalog_state_checked) {
+        if (!fle_has_encrypted_fields.load(.acquire) and !fle_catalog_state_checked.load(.acquire)) {
             // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=UnknownMeansEncrypted; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
             // SONNY-6324: a catalog that cannot be loaded means "which fields
             // are encrypted is unknown", not "none are": answer true (and
@@ -45,19 +52,19 @@ pub fn hasEncryptedFields() bool {
             const catalog = fle_catalog.globalCatalog(std.heap.c_allocator) catch {
                 return true;
             };
-            fle_has_encrypted_fields = catalog.count() > 0;
-            fle_catalog_state_checked = true;
+            fle_has_encrypted_fields.store(catalog.count() > 0, .release);
+            fle_catalog_state_checked.store(true, .release);
         }
     }
-    return fle_has_encrypted_fields;
+    return fle_has_encrypted_fields.load(.acquire) or fle_catalog.globalHasFields();
 }
 
 /// Mark that encrypted fields exist (called when encryption is configured)
 pub fn setHasEncryptedFields(has_fields: bool) void {
     global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    fle_has_encrypted_fields = has_fields;
-    fle_catalog_state_checked = has_fields;
+    fle_has_encrypted_fields.store(has_fields, .release);
+    fle_catalog_state_checked.store(has_fields, .release);
 }
 
 // GAP-0285/S3: Per-thread user role map replaces process-global variable.
@@ -418,17 +425,9 @@ pub fn fieldRequiresEncryption(type_name: []const u8, field_name: []const u8) bo
         return true; // FAIL-SECURE: Assume encryption required on catalog error
     };
 
-    // Check if type exists
-    const type_meta = catalog.getType(type_name) orelse {
-        return false; // Type not in catalog = not configured for encryption
-    };
-
-    // Check if field is marked as encrypted
-    const field_meta = type_meta.getField(field_name) orelse {
-        return false; // Field not in catalog = not configured for encryption
-    };
-
-    return field_meta.isEncrypted();
+    // SONNY-6327: answered under the catalog mutex (a type or field not in
+    // the catalog is not configured for encryption).
+    return catalog.isFieldEncrypted(type_name, field_name);
 }
 
 /// Encrypt a field value if encryption is enabled for this field
@@ -448,16 +447,10 @@ pub fn encryptFieldIfNeeded(
     // 1. Get global catalog
     const catalog = try fle_catalog.globalCatalog(ctx.allocator);
 
-    // 2. Check if field is encrypted
-    if (!catalog.isFieldEncrypted(type_name, field_name)) {
-        return plaintext;
-    }
-
-    // 3. Get field metadata
-    const type_meta = catalog.getType(type_name) orelse return plaintext;
-    const field_meta = type_meta.getField(field_name) orelse return plaintext;
-
-    if (!field_meta.isEncrypted()) {
+    // 2-3. The field's policy, by value (SONNY-6327: it read the catalog's
+    // type pointer after unlocking).
+    const policy = catalog.fieldPolicy(type_name, field_name) orelse return plaintext;
+    if (!policy.encrypted) {
         return plaintext;
     }
 
@@ -489,10 +482,10 @@ pub fn encryptFieldIfNeeded(
     // FIPS fail-close: ChaCha20-Poly1305 is not an approved AEAD under FIPS 140-3.
     // AES-256-GCM is the only permitted path. Reject ChaCha selection at runtime.
     // CANARY: REQ=REQ-FIPS-CHACHA-FAILCLOSE-001; FEATURE="FIPSFailClose"; ASPECT=FLEEncrypt; STATUS=IMPL; OWNER=security; UPDATED=2026-06-24
-    if (build_options.fips and field_meta.encryption.algorithm == .chacha20_poly1305) {
+    if (build_options.fips and policy.algorithm == .chacha20_poly1305) {
         return error.FipsUnsupported;
     }
-    const alg = switch (field_meta.encryption.algorithm) {
+    const alg = switch (policy.algorithm) {
         .aes256_gcm => fle_aead.Alg.aes256_gcm,
         .chacha20_poly1305 => fle_aead.Alg.chacha20_poly1305,
     };
@@ -508,7 +501,7 @@ pub fn encryptFieldIfNeeded(
     defer envelope.deinit(ctx.allocator);
 
     // 7. If searchable, update blind index
-    if (field_meta.isSearchable()) {
+    if (policy.searchable) {
         const blind_index = try getGlobalBlindIndex(ctx.allocator);
         const bik = try key_manager.getBIK(key_ids);
 
@@ -545,16 +538,18 @@ pub fn decryptFieldIfNeeded(
     // 1. Get global catalog
     const catalog = try fle_catalog.globalCatalog(ctx.allocator);
 
-    // 2. Check if field is encrypted
-    if (!catalog.isFieldEncrypted(type_name, field_name)) {
+    // 2. Check if field is encrypted, and (3) whether the role may read it,
+    // in one decision under the catalog mutex (SONNY-6327).
+    const decision = catalog.readDecision(type_name, field_name, ctx.current_user_role orelse getCurrentUserRole());
+    if (!decision.encrypted) {
         return data;
     }
 
     // 3. If RBAC check required, verify access
-    if (check_rbac and !canReadPlaintext(ctx, type_name, field_name)) {
+    if (check_rbac and !decision.plaintext_allowed) {
         // If field is searchable, throw error (search operations require privilege)
         // If field is not searchable, return redacted placeholder (projection only)
-        if (catalog.isFieldSearchable(type_name, field_name)) {
+        if (decision.searchable) {
             // fle v0.1.7 (98dd8af) dropped the never-raised SearchNotPermitted
             // from its aead.Error set; this is geode's own authz semantic
             // (see value_types / execution / eval EvalError.SearchNotPermitted).
@@ -722,56 +717,53 @@ fn canReadPlaintext(
         return false; // FAIL-SECURE: Deny access on catalog error
     };
 
-    // Get field metadata
-    // If type/field not in catalog, it's not FLE-protected, so allow access
-    const type_meta = catalog.getType(type_name) orelse return true;
-    const field_meta = type_meta.getField(field_name) orelse return true;
-
-    // SECURITY FIX: Empty to_roles means NO ONE can read plaintext (fail-secure).
-    // Previously, non-searchable encrypted fields with empty visibility allowed access,
-    // which violated the principle of least privilege and failed the locked-field test.
-    if (field_meta.visibility.to_roles.len == 0) {
-        if (field_meta.isEncrypted()) {
-            // Empty visibility on an encrypted field = locked to nobody
-            return false;
-        }
-        // Non-encrypted fields with no restrictions allow access (not FLE-protected)
-        return true;
-    }
-
-    // Get user role from context or global state
-    const user_role = ctx.current_user_role orelse getCurrentUserRole() orelse return false;
-
-    // Check if user's role is in the allowed roles list
-    for (field_meta.visibility.to_roles) |allowed_role| {
-        if (std.mem.eql(u8, user_role, allowed_role)) {
-            return true; // User has required role
-        }
-    }
-
-    // User's role not in allowed list
-    return false;
+    // SONNY-6327: decided under the catalog mutex (it walked the role list
+    // after unlocking, and a grant, revoke or reconfigure frees that list).
+    // A type/field not in the catalog is not FLE-protected (allowed); an
+    // encrypted field with no visibility roles is locked to nobody; no role
+    // reads nothing that lists roles.
+    return catalog.canReadPlaintext(type_name, field_name, ctx.current_user_role orelse getCurrentUserRole());
 }
 
-/// Check property access permissions during evaluation
-/// This should be called when accessing node properties during WHERE clause evaluation
-/// For searchable encrypted fields, it enforces RBAC by throwing SearchNotPermitted
-/// Returns the value (decrypted if necessary and permitted)
-pub fn checkPropertyAccess(
+/// SONNY-6327: what a read of a stored string property can fail with.
+/// `FleDecryptionFailed` (58030): the field is encrypted, the principal may
+/// read it, and the stored bytes do not decrypt (damaged, written under
+/// another key or record identity). The stored bytes are never presented
+/// as the value.
+pub const FleReadError = error{ SearchNotPermitted, FleCatalogUnavailable, FleDecryptionFailed, OutOfMemory };
+
+/// Whose property a stored string is: the record identity in the AAD the
+/// executor's FLE hooks encrypt with (`fle_hooks.encryptPropertyIfNeeded`:
+/// "<id>", `encryptEdgePropertyIfNeeded`: "edge_<id>").
+pub const EntityKind = enum { node, edge };
+
+// CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=OneReadPolicyForNodesAndEdges; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6327: the ONE read policy for a stored string property of a node
+/// (`type_name` its first label) or an edge (`type_name` its type). Every
+/// read surface (member access, `properties()`, map projection, the JSON
+/// and wire encodings of a whole node, edge or path) calls this:
+///   * no FLE field configured anywhere: the stored bytes, lock-free;
+///   * a field that is not encrypted: the stored bytes;
+///   * encrypted, and the principal's role may read plaintext: the
+///     decrypted value; bytes that do not decrypt are
+///     `error.FleDecryptionFailed`, never the stored bytes;
+///   * encrypted, and it may not: "[REDACTED]" for a field without a blind
+///     index, `error.SearchNotPermitted` (42501) for a searchable one;
+///   * the FLE catalog cannot be loaded: `error.FleCatalogUnavailable`.
+/// The role and tenant are the active request context's, else the
+/// thread's (GAP-0852). Returns `stored` itself or memory from `allocator`.
+pub fn readStoredString(
     allocator: std.mem.Allocator,
+    kind: EntityKind,
     type_name: []const u8,
     field_name: []const u8,
-    value_str: []const u8,
-    node_id: u64,
-) ![]const u8 {
-    // Create encryption context with correct schema.
-    // GAP-0281: tenant_id from FLE context instead of hardcoded "default".
-    // GAP-0852: prefer the active ExecutionContext's request-scoped tenant/role
-    // over the per-thread map so WHERE-clause FLE access checks stay correct
-    // under a future async / work-stealing executor. The execution import is
-    // lazy (function-body) to avoid a fle_integration ↔ execution top-level
-    // cycle; when no context is active (internal/legacy callers) we fall back to
-    // the per-thread readers verbatim.
+    stored: []const u8,
+    id: u64,
+) FleReadError![]const u8 {
+    if (!hasEncryptedFields()) return stored;
+
+    // GAP-0281 / GAP-0852: the request-scoped tenant and role; the execution
+    // import is lazy (function-body) to avoid a top-level cycle.
     const role_and_tenant = blk: {
         const exec_mod = @import("execution.zig");
         if (exec_mod.getActiveContext()) |ctx_ptr| {
@@ -781,30 +773,86 @@ pub fn checkPropertyAccess(
     };
     const ctx = EncryptionContext{
         .tenant_id = role_and_tenant[1],
-        .schema_name = type_name, // Use actual type name, not "default"
+        .schema_name = type_name,
         .allocator = allocator,
         .current_user_role = role_and_tenant[0],
     };
 
-    // Check if field is encrypted
-    const catalog = try fle_catalog.globalCatalog(allocator);
-    if (!catalog.isFieldEncrypted(type_name, field_name)) {
-        return value_str; // Not encrypted, return as-is
-    }
+    // The record identity must match the one the value was encrypted with.
+    var id_buf: [32]u8 = undefined;
+    const record_id = switch (kind) {
+        .node => std.fmt.bufPrint(&id_buf, "{d}", .{id}),
+        .edge => std.fmt.bufPrint(&id_buf, "edge_{d}", .{id}),
+    } catch unreachable; // error-policy: D — "edge_" + a u64 fits 32 bytes.
 
-    // Format record ID - must match encryption format
-    const record_id = try std.fmt.allocPrint(allocator, "{d}", .{node_id});
-    defer allocator.free(record_id);
+    return decryptFieldIfNeeded(ctx, type_name, field_name, stored, record_id, true) catch |err| switch (err) {
+        error.SearchNotPermitted => error.SearchNotPermitted,
+        error.FleCatalogUnavailable => error.FleCatalogUnavailable,
+        error.OutOfMemory => error.OutOfMemory,
+        else => {
+            std.log.warn("SECURITY: FLE field {s}.{s} could not be decrypted ({s}); the read is refused", .{ type_name, field_name, @errorName(err) });
+            return error.FleDecryptionFailed;
+        },
+    };
+}
 
-    // Decrypt and check RBAC
-    return try decryptFieldIfNeeded(
-        ctx,
-        type_name,
-        field_name,
-        value_str,
-        record_id,
-        true, // Check RBAC - will throw SearchNotPermitted for searchable fields
-    );
+/// SONNY-6327: `readStoredString`, always as a copy `allocator` owns.
+pub fn readStoredStringOwned(
+    allocator: std.mem.Allocator,
+    kind: EntityKind,
+    type_name: []const u8,
+    field_name: []const u8,
+    stored: []const u8,
+    id: u64,
+) FleReadError![]u8 {
+    const v = try readStoredString(allocator, kind, type_name, field_name, stored, id);
+    if (v.ptr == stored.ptr and v.len == stored.len) return allocator.dupe(u8, stored);
+    return @constCast(v);
+}
+
+/// SONNY-6327: `readStoredString` for a whole-entity encoding (RETURN n,
+/// RETURN r, a path, `properties()`, map projection, JSON): a field the
+/// principal may not read is "[REDACTED]" there, searchable or not (as the
+/// node JSON encoding always did); every other refusal stands.
+pub fn readStoredStringForEntity(
+    allocator: std.mem.Allocator,
+    kind: EntityKind,
+    type_name: []const u8,
+    field_name: []const u8,
+    stored: []const u8,
+    id: u64,
+) FleReadError![]u8 {
+    return readStoredStringOwned(allocator, kind, type_name, field_name, stored, id) catch |err| switch (err) {
+        error.SearchNotPermitted => allocator.dupe(u8, "[REDACTED]"),
+        else => err,
+    };
+}
+
+/// Check property access permissions during evaluation
+/// This should be called when accessing node properties during WHERE clause evaluation
+/// For searchable encrypted fields, it enforces RBAC by throwing SearchNotPermitted
+/// Returns the value (decrypted if necessary and permitted)
+/// SONNY-6327: a node's property through `readStoredString` (a decrypt
+/// failure is an error, and no FLE field means no lock).
+pub fn checkPropertyAccess(
+    allocator: std.mem.Allocator,
+    type_name: []const u8,
+    field_name: []const u8,
+    value_str: []const u8,
+    node_id: u64,
+) FleReadError![]const u8 {
+    return readStoredString(allocator, .node, type_name, field_name, value_str, node_id);
+}
+
+/// SONNY-6327: an edge's property through the same policy as a node's.
+pub fn checkEdgePropertyAccess(
+    allocator: std.mem.Allocator,
+    edge_type: []const u8,
+    field_name: []const u8,
+    value_str: []const u8,
+    edge_id: u64,
+) FleReadError![]const u8 {
+    return readStoredString(allocator, .edge, edge_type, field_name, value_str, edge_id);
 }
 
 // CANARY: REQ=REQ-FLE-PREDICATE-HELPERS-001; FEATURE="FLE Predicate Rewriting"; ASPECT=Helpers; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2026-01-09
@@ -1013,8 +1061,8 @@ test "GAP-0886: hasEncryptedFields reflects catalog state (flag self-heal + sett
     {
         global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        fle_has_encrypted_fields = false;
-        fle_catalog_state_checked = false;
+        fle_has_encrypted_fields.store(false, .release);
+        fle_catalog_state_checked.store(false, .release);
     }
 
     // INVARIANT under test: the lazy self-heal must observe the configured

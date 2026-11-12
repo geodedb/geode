@@ -164,11 +164,13 @@ pub const SchemaManager = struct {
         try self.fle_catalog.registerType(type_name, type_meta);
     }
 
-    /// Get encryption metadata for a type
+    /// Get encryption metadata for one field, by value.
+    /// SONNY-6327: it returned a pointer into the catalog after unlocking
+    /// (a reconfigure frees what it pointed at).
     ///
-    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-016; FEATURE="FLE Metadata Retrieval"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
-    pub fn getEncryptionMetadata(self: *SchemaManager, type_name: []const u8) ?*const TypeMetadata {
-        return self.fle_catalog.getType(type_name);
+    /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-016; FEATURE="FLE Metadata Retrieval"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-11-11
+    pub fn getEncryptionMetadata(self: *SchemaManager, type_name: []const u8, field_name: []const u8) ?SchemaCatalog.FieldPolicy {
+        return self.fle_catalog.fieldPolicy(type_name, field_name);
     }
 
     // ========================================================================

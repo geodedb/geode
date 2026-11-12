@@ -472,16 +472,18 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
 
     // 1. Get FLE catalog and validate schema/field
     const catalog = try fle_catalog.globalCatalog(allocator);
-    const type_meta = catalog.getType(args.schema_name) orelse {
+    // SONNY-6327: a copy made under the catalog mutex, owned here.
+    if (!catalog.hasType(args.schema_name)) {
         std.debug.print("Error: Schema '{s}' not found in FLE catalog\n", .{args.schema_name});
         return error.SchemaNotFound;
-    };
+    }
 
     // Check if field exists and get its encryption config
-    const field_meta = type_meta.getField(args.field_name) orelse {
+    const field_meta = (try catalog.copyFieldMetadata(allocator, args.schema_name, args.field_name)) orelse {
         std.debug.print("Error: Field '{s}' not found in schema '{s}'\n", .{ args.field_name, args.schema_name });
         return error.FieldNotFound;
     };
+    defer fle_catalog.freeFieldCopy(allocator, field_meta);
 
     // 2. Initialize key manager and get FEK (Field Encryption Key)
     const key_manager = try fle_key_manager.initFromEnv(allocator);
@@ -593,21 +595,18 @@ pub fn showPolicyStatus(allocator: std.mem.Allocator, schema_name: []const u8) !
     std.debug.print("FLE Policy Status for Schema: {s}\n", .{schema_name});
     std.debug.print("========================================\n", .{});
 
-    const type_meta = catalog.getType(schema_name);
-    if (type_meta == null) {
+    // SONNY-6327: copies made under the catalog mutex, owned here.
+    const fields = (try catalog.copyTypeFields(allocator, schema_name)) orelse {
         std.debug.print("Schema '{s}' not found in FLE catalog.\n", .{schema_name});
         std.debug.print("To register a schema, use encrypted field annotations.\n", .{});
         return;
-    }
-
-    const meta = type_meta.?;
+    };
+    defer fle_catalog.freeFieldCopies(allocator, fields);
     std.debug.print("Encrypted fields:\n", .{});
 
     var encrypted_count: usize = 0;
-    var it = meta.fields.iterator();
-    while (it.next()) |entry| {
-        const field_name = entry.key_ptr.*;
-        const field_meta = entry.value_ptr;
+    for (fields) |*field_meta| {
+        const field_name = field_meta.field_name;
 
         if (field_meta.isEncrypted()) {
             encrypted_count += 1;

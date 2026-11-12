@@ -7846,14 +7846,24 @@ fn handleClientMessage(
             // SONNY-2686: the fast paths below that find existing nodes by
             // merge key (every MERGE shape, and MATCH … CREATE edge) serve a
             // session only when no tenant scope or RLS policy restricts it.
-            const key_resolved_writes_ok = is_mutation and keyResolvedWriteFastPathServes(state, &exec_context);
+            // CANARY: REQ=REQ-SONNY-6327-FLE-FAST-PATH-DECLINE; FEATURE="FieldLevelEncryption"; ASPECT=QuicFastPathDecline; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-6327: the write fast paths write property values to the
+            // engine as given, without the executor's FLE hook: a bulk MERGE
+            // or CREATE stored an encrypted field's PLAINTEXT on disk (and an
+            // envelope in memory, encrypted afterwards under another record
+            // identity, so memory and engine disagreed and an FLE error then
+            // stopped the batch part-way after the engine write). With any
+            // FLE field configured, or the FLE catalog unavailable, every
+            // write fast path declines and the executor encrypts the write.
+            const fle_fast_paths_ok = !geode.fle_integration.hasEncryptedFields();
+            const key_resolved_writes_ok = is_mutation and fle_fast_paths_ok and keyResolvedWriteFastPathServes(state, &exec_context);
             // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=QuicFastPathDecline; STATUS=TESTED; TEST=tests/test_sonny2846_unique_fast_paths_wire.zig; OWNER=transport; UPDATED=2026-11-11
             // SONNY-2846: the node-writing fast paths (simple CREATE, bulk
             // MERGE, `/*+BATCH*/`, `USE GRAPH g; MERGE`) skip the executor's
             // UNIQUE check, so they decline a graph a UNIQUE constraint
             // applies in and the write takes the executor. The edge fast
             // paths write no node and are not affected.
-            const node_fast_paths_ok = !geode.bulk_ingest.uniqueConstraintsDeclineFastPath(query_graph_name);
+            const node_fast_paths_ok = fle_fast_paths_ok and !geode.bulk_ingest.uniqueConstraintsDeclineFastPath(query_graph_name);
 
             // GAP-0900 lever (c): opt-in concurrent batch-merge fast path.
             // A client signals "this program is a batch of independent simple

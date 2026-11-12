@@ -360,6 +360,17 @@ pub fn refuseIfUniqueFenced(graph: []const u8) error{UniqueConstraintFastPathCon
     if (uniqueFenced(graph)) return error.UniqueConstraintFastPathConflict;
 }
 
+// CANARY: REQ=REQ-SONNY-6327-FLE-FAST-PATH-DECLINE; FEATURE="FieldLevelEncryption"; ASPECT=AdapterBulkRefusal; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6327: the adapter's bulk (fast-path) writers write property values
+/// to the engine as given, without the executor's FLE hook. The QUIC
+/// handler declines every write fast path while an FLE field is configured
+/// (or the catalog is unavailable); a field configured between that check
+/// and the write is refused here, before any engine write (58030), instead
+/// of storing plaintext.
+pub fn refuseIfFleConfigured() error{EncryptionRequired}!void {
+    if (fle_integration.hasEncryptedFields()) return error.EncryptionRequired;
+}
+
 /// Whether a property `key` should be added to the exact + merge property
 /// indexes. Always true when lean mode is off (default). When on, true only for
 /// registered merge keys. Over-indexing is always safe; this only ever SKIPS
@@ -7882,6 +7893,21 @@ pub const GraphStore = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=GraphStoreCheckedRead; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+    /// The node's STORED property value: for an FLE-encrypted string, the
+    /// stored envelope. A caller that needs the value as the requesting
+    /// principal may see it uses `getNodePropertyChecked`.
+    ///
+    /// SONNY-6327: this used to try to decrypt and return the stored bytes
+    /// when that failed, so its caller took ciphertext for the value. It
+    /// also decrypted with the store's tenant/schema and a "node_<id>"
+    /// record identity, which the executor's FLE hook (label, request
+    /// tenant, "<id>") never writes, so it failed on every value the
+    /// executor encrypted, and a decrypted copy leaked on `self.allocator`.
+    /// Its callers are the security graph (never FLE-encrypted, GAP-0854),
+    /// the fulltext indexer (which must not index plaintext of an encrypted
+    /// field), the in-memory MERGE key check, and the aggregate fast paths,
+    /// which decline whenever an FLE field is configured.
     pub fn getNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) ?PropertyValue {
         // Hydrate-on-miss: an evicted-but-live node is rebuilt from the engine
         // so this read is transparent under the bounded cache. The returned
@@ -7889,60 +7915,37 @@ pub const GraphStore = struct {
         // valid until a grace-point reclaim, which the caller's per-graph rwlock
         // excludes for the read's duration (same borrow lifetime as pre-cache).
         if (self.nodes.getOrHydratePtr(node_id) catch null) |node| {
-            const value = node.properties.get(key) orelse return null;
-
-            // Fast path: skip FLE decryption when no encryption is configured.
-            if (!fle_integration.hasEncryptedFields()) return value;
-
-            // GAP-0854: the internal security graph is never FLE-encrypted (see
-            // setNodeProperty), so it must never be run through FLE decryption
-            // either — its `hmac`/`username`/`email` values are stored as
-            // plaintext and feed the auth HMAC chain verbatim.
-            if (isSecurityGraphName(node.graph_name)) return value;
-
-            // Field-Level Encryption: decrypt string values if encrypted
-            switch (value) {
-                .String => |s| {
-                    // Get node type (primary label) for catalog lookup
-                    const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-
-                    // Create encryption context using GraphStore's tenant/schema
-                    const fle_ctx = fle_integration.EncryptionContext{
-                        .tenant_id = self.tenant_id,
-                        .schema_name = self.schema_name,
-                        .allocator = self.allocator,
-                        .current_user_role = fle_integration.rolePreferringActiveContext(),
-                    };
-
-                    // Format record ID on the stack — NOT via allocPrint on the shared
-                    // self.allocator. Concurrent thread-pool access (QUIC auth lookups,
-                    // parallel query handlers) triggered '@memcpy arguments alias' inside
-                    // std.Io.Writer.drain → ArrayList.ensureTotalCapacityPrecise when the
-                    // allocator was contended. Stack buffer fits "node_" + u64 (<=25 bytes).
-                    var id_buf: [32]u8 = undefined;
-                    const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch s;
-
-                    // Decrypt if field is encrypted
-                    const decrypted_value = fle_integration.decryptFieldIfNeeded(
-                        fle_ctx,
-                        type_name,
-                        key,
-                        s,
-                        record_id,
-                        true, // Check RBAC permissions
-                    ) catch s; // Fall back to original value on error
-
-                    // If decryption returned a different value, return new PropertyValue
-                    if (!std.mem.eql(u8, decrypted_value, s)) {
-                        return PropertyValue{ .String = decrypted_value };
-                    }
-
-                    return value;
-                },
-                else => return value,
-            }
+            return node.properties.get(key);
         }
         return null;
+    }
+
+    /// SONNY-6327: the node's property as the requesting principal may see
+    /// it: a string through the shared FLE read policy
+    /// (`fle_integration.readStoredString`, the one eval uses): decrypted
+    /// for a role that may read it, "[REDACTED]" or `SearchNotPermitted`
+    /// for one that may not, `FleDecryptionFailed` when it does not
+    /// decrypt, `FleCatalogUnavailable` while the catalog cannot be loaded.
+    /// Never the stored envelope presented as the value. A decrypted or
+    /// redacted string is allocated from `allocator`.
+    pub fn getNodePropertyChecked(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64, key: []const u8) fle_integration.FleReadError!?PropertyValue {
+        const node = (self.nodes.getOrHydratePtr(node_id) catch null) orelse return null;
+        const value = node.properties.get(key) orelse return null;
+        if (value != .String) return value;
+        // GAP-0854: the internal security graph is never FLE-encrypted.
+        if (isSecurityGraphName(node.graph_name)) return value;
+        const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+        return PropertyValue{ .String = try fle_integration.readStoredString(allocator, .node, type_name, key, value.String, node_id) };
+    }
+
+    /// SONNY-6327: the edge's property as the requesting principal may see
+    /// it, by the same policy as `getNodePropertyChecked`.
+    pub fn getEdgePropertyChecked(self: *GraphStore, allocator: std.mem.Allocator, edge_id: u64, key: []const u8) fle_integration.FleReadError!?PropertyValue {
+        const edge = self.getEdgeHydrated(edge_id) orelse return null;
+        const value = edge.properties.get(key) orelse return null;
+        if (value != .String) return value;
+        if (isSecurityGraphName(edge.graph_name)) return value;
+        return PropertyValue{ .String = try fle_integration.readStoredString(allocator, .edge, edge.label, key, value.String, edge_id) };
     }
 
     /// Get a node property value (simplified version without FLE decryption).

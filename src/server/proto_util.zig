@@ -10,6 +10,7 @@ const type_helpers = @import("../eval/type_helpers.zig");
 const eval_extended = @import("../eval_extended.zig");
 const property_codec = @import("../property_value_codec.zig");
 const unique_constraints = @import("../execution/unique_constraints.zig");
+const fle_integration = @import("../fle_integration.zig");
 
 pub const ParamBindings = struct {
     names: []const []const u8,
@@ -221,6 +222,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.FleCatalogNotPersisted => .{ .code = "58030", .message = "The FLE catalog could not be saved; the change was not applied. Retry it" },
         error.FleRevokeNotPersisted => .{ .code = "58030", .message = "The plaintext-access revoke is in effect but could not be saved to the FLE catalog; the role regains access at the next start unless the revoke is retried and saved. Retry it" },
         error.FleCatalogUnavailable => .{ .code = "58030", .message = "The FLE catalog could not be loaded, so which fields are encrypted is unknown; string property writes and reads are refused until it is restored (see the server log)" },
+        // SONNY-6327: an encrypted value the principal may read does not
+        // decrypt (damaged, or written under another key or identity).
+        error.FleDecryptionFailed => .{ .code = "58030", .message = "An encrypted property value could not be decrypted (damaged, or written under another FLE key); the read is refused (see the server log)" },
         error.EncryptionRequired => .{ .code = "58030", .message = "The value must be stored encrypted and could not be encrypted (FLE catalog or keys unavailable); nothing was written" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
         // SONNY-3134: or another session's open transaction.
@@ -731,7 +735,9 @@ fn nodeToProto(allocator: std.mem.Allocator, node: graph_store.Node) !schema.Nod
     var it = node.properties.iterator();
     while (it.next()) |entry| {
         const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const val = try propertyValueToProto(allocator, entry.value_ptr.*);
+        // SONNY-6327: a string through the FLE read policy (RETURN n sent
+        // the stored bytes: ciphertext, to every principal).
+        const val = try entityPropertyToProto(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", node.id, entry.key_ptr.*, entry.value_ptr.*);
         try props.append(allocator, .{ .key = key, .value = val });
     }
     return .{
@@ -746,7 +752,7 @@ fn edgeToProto(allocator: std.mem.Allocator, edge: graph_store.Edge) !schema.Edg
     var it = edge.properties.iterator();
     while (it.next()) |entry| {
         const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const val = try propertyValueToProto(allocator, entry.value_ptr.*);
+        const val = try entityPropertyToProto(allocator, .edge, edge.label, edge.id, entry.key_ptr.*, entry.value_ptr.*);
         try props.append(allocator, .{ .key = key, .value = val });
     }
     return .{
@@ -756,6 +762,25 @@ fn edgeToProto(allocator: std.mem.Allocator, edge: graph_store.Edge) !schema.Edg
         .label = try allocator.dupe(u8, edge.label),
         .properties = props,
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=WireEncoding; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6327: a property of a whole node, edge or path on the wire. A
+/// string goes through the shared FLE read policy for a whole entity
+/// (`fle_integration.readStoredStringForEntity`).
+fn entityPropertyToProto(
+    allocator: std.mem.Allocator,
+    kind: fle_integration.EntityKind,
+    type_name: []const u8,
+    id: u64,
+    key: []const u8,
+    value: graph_store.PropertyValue,
+) !schema.Value {
+    if (value == .String) {
+        const shown = try fle_integration.readStoredStringForEntity(allocator, kind, type_name, key, value.String, id);
+        return .{ .kind = .{ .string_val = .{ .value = shown, .kind = .STRING } } };
+    }
+    return propertyValueToProto(allocator, value);
 }
 
 fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.PropertyValue) !schema.Value {

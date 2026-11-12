@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const fle_integration = @import("../fle_integration.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
 // SONNY-1318: the ONE hierarchy-aware tenant visibility predicate, shared with
@@ -1769,6 +1770,10 @@ pub fn propertyAggregateFastPath(
     filter_graph: []const u8,
     filter_tenant: ?[]const u8,
 ) !?ExecutionResult {
+    // SONNY-6327: this path reads and writes stored property bytes without
+    // the FLE read policy or the executor's FLE write hook; with any FLE
+    // field configured (or the catalog unavailable) the executor runs it.
+    if (fle_integration.hasEncryptedFields()) return null;
     // --- Shape gates on the MATCH ---
     if (q.match.chains.len != 1) return null;
     const chain = q.match.chains[0];
@@ -2063,6 +2068,10 @@ pub fn pointWriteFastPath(
     param_names: []const []const u8,
     param_values: []const Value,
 ) !?ExecutionResult {
+    // SONNY-6327: this path reads and writes stored property bytes without
+    // the FLE read policy or the executor's FLE write hook; with any FLE
+    // field configured (or the catalog unavailable) the executor runs it.
+    if (fle_integration.hasEncryptedFields()) return null;
     // --- Shape gates on the MATCH ---
     if (q.match.chains.len != 1) return null;
     const chain = q.match.chains[0];
@@ -2300,6 +2309,10 @@ pub fn countFilteredFastPath(
     filter_graph: []const u8,
     filter_tenant: ?[]const u8,
 ) !?ExecutionResult {
+    // SONNY-6327: this path reads and writes stored property bytes without
+    // the FLE read policy or the executor's FLE write hook; with any FLE
+    // field configured (or the catalog unavailable) the executor runs it.
+    if (fle_integration.hasEncryptedFields()) return null;
     // --- Shape gates on the MATCH ---
     if (q.match.chains.len != 1) return null;
     const chain = q.match.chains[0];
@@ -2555,6 +2568,10 @@ pub fn indexServedGroupByFastPath(
     filter_graph: []const u8,
     filter_tenant: ?[]const u8,
 ) !?ExecutionResult {
+    // SONNY-6327: this path reads and writes stored property bytes without
+    // the FLE read policy or the executor's FLE write hook; with any FLE
+    // field configured (or the catalog unavailable) the executor runs it.
+    if (fle_integration.hasEncryptedFields()) return null;
     // ---- Shape gates on MATCH (identical to groupByAggregateFastPath) ----
     if (q.match.chains.len != 1) return null;
     const chain = q.match.chains[0];
@@ -2818,6 +2835,10 @@ pub fn groupByAggregateFastPath(
     filter_graph: []const u8,
     filter_tenant: ?[]const u8,
 ) !?ExecutionResult {
+    // SONNY-6327: this path reads and writes stored property bytes without
+    // the FLE read policy or the executor's FLE write hook; with any FLE
+    // field configured (or the catalog unavailable) the executor runs it.
+    if (fle_integration.hasEncryptedFields()) return null;
     // ---- Shape gates on MATCH ----
     if (q.match.chains.len != 1) return null;
     const chain = q.match.chains[0];
@@ -3416,6 +3437,10 @@ pub fn topKOrderedFastPath(
     filter_graph: []const u8,
     filter_tenant: ?[]const u8,
 ) !?ExecutionResult {
+    // SONNY-6327: this path reads and writes stored property bytes without
+    // the FLE read policy or the executor's FLE write hook; with any FLE
+    // field configured (or the catalog unavailable) the executor runs it.
+    if (fle_integration.hasEncryptedFields()) return null;
     // --- Shape gates on the MATCH ---
     if (q.match.chains.len != 1) return null;
     const chain = q.match.chains[0];

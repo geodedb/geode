@@ -74,6 +74,10 @@ fn isPropagatableEvalError(err: EvalError) bool {
         // never be swallowed into a NULL that looks like a successful answer.
         EvalError.ReadQueryBudgetExceeded,
         EvalError.ReadQueryCancelled,
+        // SONNY-6327: an FLE read refusal nested in a call is never a NULL.
+        EvalError.SearchNotPermitted,
+        EvalError.FleCatalogUnavailable,
+        EvalError.FleDecryptionFailed,
         EvalError.OutOfMemory,
         => true,
         else => false,
@@ -135,6 +139,17 @@ fn raiseInListTypeError() EvalError {
 /// into NULL, false, 0 or a skipped row (a WHERE, a projection cell, an
 /// aggregate's argument, a subquery) must pass these on instead, or the
 /// query answers as if the rows did not match.
+/// SONNY-6327: an FLE read refusal (the field may not be searched by this
+/// principal, the FLE catalog cannot be loaded, the value does not decrypt).
+/// A predicate that meets one is the query's error, never the row's false:
+/// a row must not be silently dropped (or kept) on an answer FLE refused.
+pub fn isFleReadRefusal(err: anyerror) bool {
+    return switch (err) {
+        error.SearchNotPermitted, error.FleCatalogUnavailable, error.FleDecryptionFailed => true,
+        else => false,
+    };
+}
+
 pub fn isResourceLimitError(err: anyerror) bool {
     return switch (err) {
         error.ExpressionTooDeep,
@@ -1354,11 +1369,14 @@ fn projectValue(allocator: std.mem.Allocator, source: Value, fields: []const []c
             .Node => |node| blk_node: {
                 // Try to get the property from the node
                 const val = node.properties.get(field) orelse break :blk_node Value{ .Null = {} };
+                // SONNY-6327: a string through the FLE read policy.
+                if (val == .String) break :blk_node Value{ .Str = try fleReadEntity(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, val.String, node.id) };
                 break :blk_node property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
             },
             .Edge => |edge| blk_edge: {
                 // Try to get the property from the edge
                 const val = edge.properties.get(field) orelse break :blk_edge Value{ .Null = {} };
+                if (val == .String) break :blk_edge Value{ .Str = try fleReadEntity(allocator, .edge, edge.label, field, val.String, edge.id) };
                 break :blk_edge property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
             },
             // ExtValue types don't support property access
@@ -1701,6 +1719,12 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     error.ReadQueryBudgetExceeded => return EvalError.ReadQueryBudgetExceeded,
                     error.ReadQueryCancelled => return EvalError.ReadQueryCancelled,
                     error.OutOfMemory => return EvalError.OutOfMemory,
+                    // SONNY-6327: an FLE read refusal inside a builtin
+                    // (`properties(r)`, `toUpper(n.ssn)`) is the query's,
+                    // not a NULL.
+                    error.SearchNotPermitted => return EvalError.SearchNotPermitted,
+                    error.FleCatalogUnavailable => return EvalError.FleCatalogUnavailable,
+                    error.FleDecryptionFailed => return EvalError.FleDecryptionFailed,
                     else => {},
                 }
                 // Propagate validation errors instead of converting to null
@@ -1874,24 +1898,9 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 .Node => |node| {
                     if (node.properties.get(pa.property)) |val| {
                         const result = switch (val) {
-                            .String => |s| blk: {
-                                const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                                const checked_value = fle_integration.checkPropertyAccess(
-                                    allocator,
-                                    type_name,
-                                    pa.property,
-                                    s,
-                                    node.id,
-                                ) catch |err| {
-                                    if (err == error.SearchNotPermitted) {
-                                        return EvalError.SearchNotPermitted;
-                                    }
-                                    // SONNY-6324: fail closed, never the stored bytes.
-                                    if (err == error.FleCatalogUnavailable) return EvalError.FleCatalogUnavailable;
-                                    break :blk Value{ .Str = try allocator.dupe(u8, s) };
-                                };
-                                break :blk Value{ .Str = try allocator.dupe(u8, checked_value) };
-                            },
+                            // SONNY-6327: the shared FLE read policy; a
+                            // decrypt failure is an error (never the bytes).
+                            .String => |s| Value{ .Str = try fleReadMember(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", pa.property, s, node.id) },
                             .ExtValue => |ext| property_codec.extValueToProjectedValue(allocator, ext) catch return EvalError.OutOfMemory,
                             else => property_codec.propertyValueToValue(val),
                         };
@@ -1901,7 +1910,10 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 .Edge => |edge| {
                     if (edge.properties.get(pa.property)) |val| {
                         const result: Value = switch (val) {
-                            .String => |s| .{ .Str = try allocator.dupe(u8, s) },
+                            // SONNY-6327: an edge's string goes through the
+                            // same FLE read policy as a node's (it was
+                            // returned as stored: ciphertext, to everyone).
+                            .String => |s| .{ .Str = try fleReadMember(allocator, .edge, edge.label, pa.property, s, edge.id) },
                             .ExtValue => |ext| property_codec.extValueToProjectedValue(allocator, ext) catch return EvalError.OutOfMemory,
                             else => property_codec.propertyValueToValue(val),
                         };
@@ -2135,6 +2147,29 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=EvalReadSites; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6327: a node's or edge's stored string read as one property
+/// (`n.p`, `r.p`, in RETURN, WHERE, ORDER BY, aggregates): the shared FLE
+/// read policy (`fle_integration.readStoredString`), as an evaluator error.
+fn fleReadMember(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64) EvalError![]u8 {
+    return fle_integration.readStoredStringOwned(allocator, kind, type_name, field, stored, id) catch |err| fleEvalError(err);
+}
+
+/// SONNY-6327: the same, for a whole-entity read (`properties()`, map
+/// projection): a field the principal may not read is "[REDACTED]".
+fn fleReadEntity(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64) EvalError![]u8 {
+    return fle_integration.readStoredStringForEntity(allocator, kind, type_name, field, stored, id) catch |err| fleEvalError(err);
+}
+
+fn fleEvalError(err: fle_integration.FleReadError) EvalError {
+    return switch (err) {
+        error.SearchNotPermitted => EvalError.SearchNotPermitted,
+        error.FleCatalogUnavailable => EvalError.FleCatalogUnavailable,
+        error.FleDecryptionFailed => EvalError.FleDecryptionFailed,
+        error.OutOfMemory => EvalError.OutOfMemory,
+    };
+}
+
 // CANARY: REQ=REQ-SONNY-3181-EVAL-CHAINS; FEATURE="ExpressionEvaluator"; ASPECT=MemberOfValue; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=eval; UPDATED=2026-09-27
 /// Member access `.field` on an evaluated `target`: a node's or an edge's
 /// property (FLE-checked), a map entry, a structured (JSON) member, a
@@ -2147,26 +2182,9 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
         const node = target.Node;
         if (node.properties.get(field)) |val| {
             const result = switch (val) {
-                .String => |s| blk: {
-                    // For string properties, check FLE permissions
-                    const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                    const checked_value = fle_integration.checkPropertyAccess(
-                        allocator,
-                        type_name,
-                        field,
-                        s,
-                        node.id,
-                    ) catch |err| {
-                        if (err == error.SearchNotPermitted) {
-                            return EvalError.SearchNotPermitted;
-                        }
-                        // SONNY-6324: fail closed, never the stored bytes.
-                        if (err == error.FleCatalogUnavailable) return EvalError.FleCatalogUnavailable;
-                        // For other errors, fall back to original value
-                        break :blk Value{ .Str = s };
-                    };
-                    break :blk Value{ .Str = checked_value };
-                },
+                // SONNY-6327: the shared FLE read policy (a decrypt failure
+                // is an error; it fell back to the stored bytes).
+                .String => |s| Value{ .Str = try fleReadMember(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, s, node.id) },
                 else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
             };
             return result;
@@ -2178,26 +2196,10 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
         const edge = target.Edge;
         if (edge.properties.get(field)) |val| {
             const result = switch (val) {
-                .String => |s| blk: {
-                    // For string properties, check FLE permissions
-                    const type_name = edge.label;
-                    const checked_value = fle_integration.checkPropertyAccess(
-                        allocator,
-                        type_name,
-                        field,
-                        s,
-                        edge.id,
-                    ) catch |err| {
-                        if (err == error.SearchNotPermitted) {
-                            return EvalError.SearchNotPermitted;
-                        }
-                        // SONNY-6324: fail closed, never the stored bytes.
-                        if (err == error.FleCatalogUnavailable) return EvalError.FleCatalogUnavailable;
-                        // For other errors, fall back to original value
-                        break :blk Value{ .Str = s };
-                    };
-                    break :blk Value{ .Str = checked_value };
-                },
+                // SONNY-6327: the edge's record identity ("edge_<id>", as the
+                // write side encrypts it; it used the node form, so nothing
+                // decrypted and the stored bytes were returned).
+                .String => |s| Value{ .Str = try fleReadMember(allocator, .edge, edge.label, field, s, edge.id) },
                 else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
             };
             return result;
@@ -3614,7 +3616,12 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = node.properties.iterator();
                 while (prop_iter.next()) |entry| {
-                    const prop_val = property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
+                    // SONNY-6327: a string through the FLE read policy (it
+                    // was the stored bytes: ciphertext).
+                    const prop_val = if (entry.value_ptr.* == .String)
+                        Value{ .Str = try fleReadEntity(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", entry.key_ptr.*, entry.value_ptr.String, node.id) }
+                    else
+                        property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
                     const key_copy = allocator.dupe(u8, entry.key_ptr.*) catch continue;
                     prop_map.put(key_copy, prop_val) catch {
                         allocator.free(key_copy);
@@ -3629,7 +3636,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = edge.properties.iterator();
                 while (prop_iter.next()) |entry| {
-                    const prop_val = property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
+                    const prop_val = if (entry.value_ptr.* == .String)
+                        Value{ .Str = try fleReadEntity(allocator, .edge, edge.label, entry.key_ptr.*, entry.value_ptr.String, edge.id) }
+                    else
+                        property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
                     const key_copy = allocator.dupe(u8, entry.key_ptr.*) catch continue;
                     prop_map.put(key_copy, prop_val) catch {
                         allocator.free(key_copy);
