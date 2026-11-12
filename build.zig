@@ -9453,6 +9453,25 @@ pub fn build(b: *std.Build) void {
     const sonny6340_step = b.step("test-sonny6340-no-fabricated-procedures", "Run SONNY-6340 regression (audit.* and tde.* procedures that cannot do what they report are refused as unsupported; audit.get_merkle_digests hashes the server's audit log; tde.test_encryption/test_decryption report success=false with TDE off; the diagnostic audit logger never keeps the query allocator)");
     sonny6340_step.dependOn(&run_sonny6340_tests.step);
 
+    // SONNY-6342: the tde.* key-management stubs are refused (0A000), the
+    // real TDE self tests still answer, and the dead blind-index predicate
+    // rewrite is gone; plus src/security/authn.zig's AuthProvider inline
+    // tests (one leaked its API-key result), rooted from src/lib.zig like
+    // test-tenant-visibility.
+    const sonny6342_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6342_tde_stub_procedures.zig"), .target = target, .optimize = optimize });
+    sonny6342_test_mod.link_libc = true;
+    sonny6342_test_mod.addImport("geode", root_mod);
+    const sonny6342_tests = b.addTest(.{ .root_module = sonny6342_test_mod });
+    const run_sonny6342_tests = b.addRunArtifact(sonny6342_tests);
+    shardDep(test_step, &run_sonny6342_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6342_step = b.step("test-sonny6342-tde-stub-procedures", "Run SONNY-6342 regression (tde.* key-management stubs are refused as unsupported with TDE on or off; the real TDE self tests still answer; the dead blind-index predicate rewrite is removed)");
+    sonny6342_step.dependOn(&run_sonny6342_tests.step);
+    const sonny6342_authn_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"AuthProvider:"} });
+    const run_sonny6342_authn_tests = b.addRunArtifact(sonny6342_authn_tests);
+    shardDep(test_step, &run_sonny6342_authn_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6342_authn_step = b.step("test-sonny6342-authn-inline", "Run src/security/authn.zig AuthProvider inline unit tests (SONNY-6342: the API-key test leaked its result)");
+    sonny6342_authn_step.dependOn(&run_sonny6342_authn_tests.step);
+
     // SONNY-6299: a backup never holds the TLS private key, the auth-chain
     // HMAC key, the generated admin password or the data-directory lock;
     // server backups live under the data directory (or an absolute

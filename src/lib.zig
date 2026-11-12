@@ -946,3 +946,11 @@ test "tenant_visibility: inline test root" {
 test "SONNY-2799 undo log inline test roots" {
     _ = @import("txn_undo_log.zig");
 }
+
+// SONNY-6342: src/security/authn.zig's AuthProvider inline tests entered no
+// test binary (one leaked its API-key result). Named with the
+// "AuthProvider:" filter of `zig build test-sonny6342-authn-inline`, so the
+// filter keeps this block, and with it the file, in discovery.
+test "SONNY-6342 AuthProvider: authn inline test root" {
+    _ = @import("security/authn.zig");
+}
