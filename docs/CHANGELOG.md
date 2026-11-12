@@ -390,6 +390,18 @@
   logs an error and leaves the QUIC server running. Regression:
   `zig build test-sonny6332-no-fixed-ports` (also scans every test source
   the build compiles for a literal listen port).
+- **The in-process gRPC test fixtures no longer crash after a vector index
+  is created, and the I-4 vector case runs over gRPC (SONNY-3379).** The
+  executor creates the process-wide index manager on the first CREATE INDEX
+  from that statement's allocator; the fixtures
+  (`tests/sonny738_r12_grpc_fixture.zig` and the round-4a transport test's)
+  hand the gRPC handlers their request arena, so the manager and its HNSW
+  worker pool lived in that arena, which the fixture freed before the
+  catalog cleanup called into the manager (SIGSEGV). The fixtures now create
+  the manager with the test allocator and tear down the catalog and the
+  manager before the arena. `test-sonny-write-allowlist-r4-transport` runs
+  SONNY-3319's label-SET vector check over gRPC as well as QUIC. Regression:
+  `zig build test-sonny3379-grpc-vector-index-teardown`.
 - **The offline `geode user` CLI names the password-policy rule a password
   breaks; `reset-password` and `password` accept `--generate-password`
   (SONNY-6271).** `user create`, `update`, `password` and `reset-password`

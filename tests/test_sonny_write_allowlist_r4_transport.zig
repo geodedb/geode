@@ -31,7 +31,8 @@
 //   streamed comma join and its read budget (53200), every type of an
 //   alternation, a repeated SET target refused before anything is written
 //   (the QUIC MERGE fast path too), window values (22G03), LET chains and
-//   CALL bodies, and a label SET's vector check (22000, QUIC).
+//   CALL bodies, and a label SET's vector check (22000; over gRPC too since
+//   SONNY-3379).
 //
 // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=TransportProfile; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
 
@@ -48,6 +49,8 @@ const util = @import("proto_test_util.zig");
 const graph_store = geode.graph_store;
 const user_mgmt = geode.user_management;
 const gps = geode.security.gps;
+const execution = geode.execution;
+const index_manager = geode.index_manager;
 
 // ---------------------------------------------------------------------------
 // The cases, one label family per case (`L` is replaced by `L<n>`).
@@ -383,14 +386,10 @@ const cases = [_]Case{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .want = "1" },
     } },
-};
-
-/// Cases run over QUIC only. SONNY-3319's creates a vector index, and the
-/// in-process gRPC fixture's index manager lives in the fixture's request
-/// arena, which the fixture frees before the catalog it registers into (a
-/// harness limit: the catalog cleanup then reads freed memory).
-const quic_only_cases = [_]Case{
-    // SONNY-3319 (I-4): a label SET checks the vectors the node holds.
+    // SONNY-3319 (I-4): a label SET checks the vectors the node holds. Over
+    // gRPC too since SONNY-3379 (the fixture's teardown freed the index
+    // manager this case's CREATE INDEX makes before the catalog cleanup
+    // called into it).
     .{ .name = "3319 label SET vectors", .steps = &.{
         .{ .query = "CREATE INDEX vk4b_idx ON VK4b (emb) USING HNSW WITH (metric = 'l2')" },
         .{ .query = "CREATE (:VK4b {id: 1, emb: vectorf32('[1.0, 0.0, 0.0, 0.0]')})" },
@@ -473,6 +472,10 @@ const Fixture = struct {
         errdefer self.h.deinit();
         _ = graph_store.getGlobalStore(testing.allocator);
         _ = geode.txn_undo_log.getGlobalUndoLog(testing.allocator);
+        // SONNY-3379: the first CREATE INDEX would create the process-wide
+        // index manager with the requests' arena, which `deinit` frees.
+        _ = try index_manager.ensureGlobalIndexManager(testing.allocator);
+        errdefer index_manager.cleanupGlobalIndexManager();
         self.auth_was_enabled = user_mgmt.isAuthEnabled();
         user_mgmt.setAuthEnabled(false);
         self.allow_all_was = gps.isInsecureAllowAll();
@@ -485,6 +488,10 @@ const Fixture = struct {
     fn deinit(self: *Fixture) void {
         grpc.setSessionStore(null);
         self.sessions.deinit();
+        // SONNY-3379: the catalog (whose cleanup calls into the index
+        // manager), then the index manager, then the arena and the store.
+        execution.cleanupCatalogInstance();
+        index_manager.cleanupGlobalIndexManager();
         self.arena.deinit();
         gps.setInsecureAllowAll(self.allow_all_was);
         user_mgmt.setAuthEnabled(self.auth_was_enabled);
@@ -1021,16 +1028,6 @@ test "round 4a over QUIC: PROFILE repros refused, C3, I2, I11 (the MERGE fast pa
             const query = try labeled(aa, st.query, n);
             const got = try quicAnswer(aa, &client, query, st.params);
             try check(aa, &failures, "quic", c.name, st, query, got);
-        }
-    }
-    for (quic_only_cases, cases.len..) |c, n| {
-        for (seed) |st| {
-            const query = try labeled(aa, st.query, n);
-            try check(aa, &failures, "quic", c.name, st, query, try quicAnswer(aa, &client, query, &.{}));
-        }
-        for (c.steps) |st| {
-            const query = try labeled(aa, st.query, n);
-            try check(aa, &failures, "quic", c.name, st, query, try quicAnswer(aa, &client, query, st.params));
         }
     }
     // I8: more than 1024 statements (54000).
