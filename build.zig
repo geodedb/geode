@@ -10313,6 +10313,30 @@ pub fn build(b: *std.Build) void {
     const sonny2672_step = b.step("test-sonny2672-read-semantics-batch", "Run the SONNY-2672 read-semantics batch (FILTER before the read's LIMIT; SKIP / LIMIT parameters; ORDER BY key errors and unprojected keys; CALL YIELD windows; ORDER BY after a write RETURN; RETURN after SET; WITH before GROUP BY / HAVING; implicit grouping; GROUP BY a node HAVING EXISTS; multi-hop aggregates: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny2672_step.dependOn(&run_sonny2672_tests.step);
 
+    // SONNY-6383 items 2-8: CALL { } WITH ... RETURN paging and grouping, the
+    // WITH's GROUP BY not grouping the RETURN, an aggregate name inside a
+    // comprehension, legacy RETURN-loop and WITH ORDER BY leaks, a CALL's
+    // RETURN keeping its flags, VALUES ... MATCH without a scratch arena.
+    const sonny6383_residuals_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6383_query_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6383_residuals_test_mod.addImport("geode", root_mod);
+    sonny6383_residuals_test_mod.addImport("logging", logging_mod);
+    sonny6383_residuals_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6383_residuals_tests = b.addTest(.{ .root_module = sonny6383_residuals_test_mod });
+    const run_sonny6383_residuals_tests = b.addRunArtifact(sonny6383_residuals_tests);
+    shardDep(test_step, &run_sonny6383_residuals_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6383_residuals_step = b.step("test-sonny6383-query-residuals", "Run SONNY-6383 items 2-8 regression (CALL { } WITH ... RETURN grouping and paging, a WITH's GROUP BY does not group the RETURN, aggregate names inside comprehensions, legacy RETURN-loop / WITH ORDER BY / VALUES ... MATCH leaks, a CALL's RETURN keeps its flags)");
+    sonny6383_residuals_step.dependOn(&run_sonny6383_residuals_tests.step);
+
+    // SONNY-6383 item 7: a standalone CALL's RETURN keeps the procedure
+    // result's flags (projectCallReturn driven directly).
+    const sonny6383_flags_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6383_call_return_flags.zig"), .target = target, .optimize = optimize });
+    sonny6383_flags_test_mod.addImport("geode", root_mod);
+    const sonny6383_flags_tests = b.addTest(.{ .root_module = sonny6383_flags_test_mod });
+    const run_sonny6383_flags_tests = b.addRunArtifact(sonny6383_flags_tests);
+    shardDep(test_step, &run_sonny6383_flags_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6383_flags_step = b.step("test-sonny6383-call-return-flags", "Run SONNY-6383 item 7 regression (a standalone CALL's RETURN keeps the procedure result's flags)");
+    sonny6383_flags_step.dependOn(&run_sonny6383_flags_tests.step);
+
     // SONNY-738 Task W fix round: the one write step (a SET, REMOVE, CREATE,
     // MERGE or DELETE applied over the rows the pattern binds, after the WITH
     // and its WHERE) and the structural guard that refuses a write clause an
