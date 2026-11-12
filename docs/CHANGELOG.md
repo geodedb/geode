@@ -59,6 +59,33 @@
 
 ### Fixed
 
+- **BREAKING: a restore request to a running server no longer writes into
+  `./data` or over the live store, and no longer reports a restore it does
+  not serve (SONNY-6288).** The QUIC `restore` message, the gRPC
+  `/geode.GeodeService/Restore` call and `geode restore --server` restored
+  the server's newest backup into `GEODE_DATA_DIR` if set, otherwise into
+  `./data` in the server's working directory, never into the directory the
+  server was started on with `--data-dir`. A server started with
+  `--data-dir X` wrote the restore into `./data` and answered "Restore
+  completed" while it kept serving X. With `GEODE_DATA_DIR` naming the live
+  directory it wrote the files in place over the open store and answered
+  "Restore completed"; the server kept serving the old data, and after a
+  restart the restore was gone. The write was in place, with no staging, so
+  a failure part way left a half-written store. The gRPC handler took no
+  lock at all. Now the server never writes a restore into its data
+  directory (it cannot swap the store under its open engines): it restores
+  into a new directory beside the data directory the storage engine has
+  open, `<data dir>.restored-<backup id>-<ms>`, with the same sequence as
+  `geode restore <file>` (decode and verify, write into a staging
+  directory, compare every file, open the restored store and count each
+  graph, rename), and the response names that directory, the per-graph
+  counts, and that the server still serves its old data until restarted
+  with `--data-dir <restored directory>`. A failed restore leaves no new
+  directory and no staging directory. The request stays Admin-only, is now
+  audited (`SERVER_RESTORE`), is refused in cluster mode (no replication
+  slice), and an unparsable `target_time` is refused instead of meaning
+  "latest"; the CLI converts an ISO-8601 `--target-time` to epoch ms.
+  Regression: `zig build test-sonny6288-server-restore-target`.
 - **BREAKING: `geode restore <file>` restores the backup (SONNY-6280).**
   From 2026-03-28 (`16833164`, which removed the legacy `graph_store.dat`
   restore) the local CLI restore wrote nothing to disk: it checked and
@@ -81,7 +108,7 @@
   `s3://` or `http(s)://` source fails closed (the server ignored the URI
   and restored its own newest backup over its live data); download the file
   first. `geode restore --server <addr>` with no file asks the server to
-  restore its own newest backup, as before. Regression:
+  restore its own newest backup (see SONNY-6288 above). Regression:
   `zig build test-sonny6280-cli-restore-writes-data`.
 - **A restore with the wrong decryption key no longer crashes:**
   `decryptData` freed its buffer twice on an authentication failure (the CLI

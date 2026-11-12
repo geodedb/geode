@@ -67,6 +67,7 @@ echo -e "${YELLOW}Building Geode...${NC}"
 zig build >/dev/null 2>&1 || { echo "build failed"; exit 1; }
 
 mkdir -p "$DATA_DIR" "$BACKUP_DIR"
+HAD_DATA=0; [ -e "./data" ] && HAD_DATA=1
 
 echo -e "${YELLOW}Starting Geode server (insecure TLS for test)...${NC}"
 $BIN serve --listen "$LISTEN" --data_dir "$DATA_DIR" $TLS >"$WORK_DIR/server.log" 2>&1 &
@@ -105,6 +106,24 @@ fi
 # SONNY-6280: it used to write nothing and still report success)
 RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --data-dir "$WORK_DIR/restored" --yes 2>&1)
 assert_match "CLI restore" "$RESTORE_OUT" "RESTORE: Restored and verified [0-9]+ files"
+
+# Test 3b: server restore (SONNY-6288). The server restores its newest
+# server-side backup into a NEW directory beside its --data-dir and reports
+# it; it never writes into its data directory or into ./data in its working
+# directory (it used to, and answered "Restore completed" while serving the
+# old data). The running server keeps serving its current data.
+SERVER_BACKUP_OUT=$($BIN backup create --output "$BACKUP_DIR/server-side.backup" --server "$LISTEN" $TLS "${AUTH[@]}" 2>&1)
+assert_match "CLI backup create (server-side copy for restore)" "$SERVER_BACKUP_OUT" "Backup (created|completed) successfully|Backup completed:"
+SERVER_RESTORE_OUT=$($BIN restore --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1)
+assert_match "Server restore reports a new directory beside --data-dir" "$SERVER_RESTORE_OUT" "Restored into: ${DATA_DIR}\.restored-"
+assert_match "Server restore says the server still serves its data" "$SERVER_RESTORE_OUT" "still serves"
+if [ "$HAD_DATA" = 0 ] && [ -e "./data" ]; then
+    bad "Server restore wrote nothing into ./data" "./data exists in the server's working directory"
+else
+    ok "Server restore wrote nothing into ./data"
+fi
+AFTER_COUNT=$(q "MATCH (n) RETURN count(n) AS cnt" | grep -oE '"cnt":[0-9]+' | grep -oE '[0-9]+' | head -1)
+assert_match "Server keeps serving its data after a server restore (3 nodes)" "${AFTER_COUNT:-0}" "^3$"
 
 # Test 4: CLI restore of a non-existent file fails (negative)
 MISSING_OUT=$($BIN restore "$BACKUP_DIR/does-not-exist.backup" --data-dir "$WORK_DIR/restored-missing" --yes 2>&1 || true)

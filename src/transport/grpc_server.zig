@@ -4702,6 +4702,21 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     return encodeMessage(allocator, resp);
 }
 
+/// The authenticated username of `session_id`, copied into `buf` (for an
+/// audit record); "" when there is none or it does not fit.
+fn sessionUsername(session_id: []const u8, buf: []u8) []const u8 {
+    if (session_id.len == 0) return "";
+    const store = getSessionStore() orelse return "";
+    const entry = store.acquire(session_id) orelse return "";
+    defer store.release(entry);
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const name = entry.state.authenticated_user orelse return "";
+    if (name.len > buf.len) return "";
+    @memcpy(buf[0..name.len], name);
+    return buf[0..name.len];
+}
+
 fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.RestoreRequest, &reader, allocator) catch {
@@ -4746,41 +4761,20 @@ fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
         return encodeMessage(allocator, resp);
     }
 
-    var mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{
-        // Restore reads the codec from each backup file's header; keep the
-        // honest default (.none) — .zstd has no encoder (GAP-0880).
-        .compression = .none,
-        .encryption = false,
-        .retention_days = 30,
-    }) catch |err| {
-        const msg = try std.fmt.allocPrint(allocator, "Restore init failed: {s}", .{@errorName(err)});
-        const resp = schema.RestoreResponse{ .success = false, .message = msg };
-        return encodeMessage(allocator, resp);
-    };
-    defer mgr.deinit();
-
-    const target_time: i64 = if (req.target_time.len > 0)
-        std.fmt.parseInt(i64, req.target_time, 10) catch compat_milliTimestamp()
-    else
-        compat_milliTimestamp();
-
-    const restore_dir = if (getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |dir| blk: {
-        defer allocator.free(dir);
-        break :blk try allocator.dupe(u8, dir);
-    } else |_| try allocator.dupe(u8, "./data");
-
-    mgr.restoreToPointInTime(target_time, restore_dir) catch |err| {
-        const msg = try std.fmt.allocPrint(allocator, "Restore failed: {s}", .{@errorName(err)});
-        const resp = schema.RestoreResponse{ .success = false, .message = msg };
-        allocator.free(restore_dir);
-        return encodeMessage(allocator, resp);
-    };
-
+    // SONNY-6288: same restore as the QUIC handler (backup_manager.
+    // restoreForServer): into a new directory beside the server's data
+    // directory, never into the live store (which used to be GEODE_DATA_DIR
+    // or ./data, written in place while this server kept serving old data).
+    var user_buf: [256]u8 = undefined;
+    const username = sessionUsername(req.session_id, &user_buf);
+    const result = try backup_mgr.restoreForServer(allocator, "./server_backups", req.target_time, username);
+    defer allocator.free(result.message);
+    defer allocator.free(result.restore_dir);
     const resp = schema.RestoreResponse{
-        .success = true,
-        .message = try allocator.dupe(u8, "Restore completed"),
-        .restore_dir = restore_dir,
-        .target_time = try allocator.dupe(u8, if (req.target_time.len > 0) req.target_time else "latest"),
+        .success = result.success,
+        .message = result.message,
+        .restore_dir = result.restore_dir,
+        .target_time = if (req.target_time.len > 0) req.target_time else "latest",
         .restore_timestamp = @intCast(compat_milliTimestamp()),
     };
     return encodeMessage(allocator, resp);

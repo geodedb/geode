@@ -9290,6 +9290,25 @@ pub fn build(b: *std.Build) void {
     const sonny6280_step = b.step("test-sonny6280-cli-restore-writes-data", "Run SONNY-6280 regression (geode restore of a local backup writes every node, edge and typed property into --data-dir, verified cold, and fails closed with nothing left behind on a corrupt, truncated, missing, wrong-key or unsafe archive, a remote URI, or an unwritable, non-empty or missing target)");
     sonny6280_step.dependOn(&run_sonny6280_tests.step);
 
+    // SONNY-6288: a restore request to a running server (QUIC and gRPC)
+    // never writes into ./data, GEODE_DATA_DIR or over the live store: it
+    // restores beside the server's real data directory, staged and verified,
+    // reports that directory, and leaves the running server's data intact;
+    // a failed or non-admin restore writes nothing.
+    const sonny6288_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6288_server_restore_target.zig"), .target = target, .optimize = optimize });
+    sonny6288_test_mod.link_libc = true;
+    sonny6288_test_mod.addImport("geode", root_mod);
+    sonny6288_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6288_test_mod.addImport("schema", schema_mod);
+    sonny6288_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6288_test_mod.addImport("storage/backup", storage_backup_mod);
+    const sonny6288_tests = b.addTest(.{ .root_module = sonny6288_test_mod });
+    const run_sonny6288_tests = b.addRunArtifact(sonny6288_tests);
+    spawnsBuiltGeode(sonny6288_tests);
+    shardDep(test_step, &run_sonny6288_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6288_step = b.step("test-sonny6288-server-restore-target", "Run SONNY-6288 regression (spawns servers: a QUIC or gRPC restore on a server started with --data-dir, GEODE_DATA_DIR or both restores beside its real data directory, staged and verified, never into ./data or over the live store, reports that directory and leaves the running server's data intact; corrupt, unsafe-entry and non-admin restores write nothing)");
+    sonny6288_step.dependOn(&run_sonny6288_tests.step);
+
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
     // look inside PROFILE and EXPLAIN. The real gRPC handler in process
