@@ -4,6 +4,18 @@
 
 ### Security
 
+- **The embedded LSP listener no longer frees its AuthProvider while
+  sessions use it (SONNY-6374 item 1).** `geode serve` freed the listener's
+  `AuthProvider` in a `defer` inside the block that spawned the listener
+  thread, so it was freed as soon as the thread started, and every LSP
+  session's `initialize` verified its token against freed memory. A debug
+  server panicked on the first such session, taking the whole server down.
+  The listener, its sessions and the provider are now owned together: on
+  shutdown the listener stops accepting, closes open sessions and waits up
+  to 5 s for them, and only then is the provider freed (it is leaked, with a
+  `[shutdown]` line, if a session outlives the wait). SIGTERM now prints
+  `[shutdown] LSP listener stopped`. Regression:
+  `zig build test-sonny6374-lsp-auth-provider-lifetime`.
 - **BREAKING: a corrupt tenant registry line refuses startup (SONNY-6348
   item 2).** `TenantRegistry.hydrate` skipped a `registry.jsonl` line it
   could not parse, or that was not an object with a valid string
