@@ -9807,6 +9807,20 @@ pub fn build(b: *std.Build) void {
     const sonny3381_step = b.step("test-sonny3381-undo-index-entries", "Run SONNY-3381 regression (after a failed statement and after ROLLBACK the full-text and vector indexes answer for the values the store holds: an undone SET, REMOVE, DELETE and CREATE of a fulltext-indexed property, an undone first vector and vector overwrite; live maintenance continues; gRPC in process)");
     sonny3381_step.dependOn(&run_sonny3381_tests.step);
 
+    const sonny6368_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6368_index_maintenance.zig"), .target = target, .optimize = optimize });
+    sonny6368_test_mod.link_libc = true;
+    sonny6368_test_mod.addImport("geode", root_mod);
+    sonny6368_test_mod.addImport("schema", schema_mod);
+    sonny6368_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6368_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6368_test_mod.addImport("logging", logging_mod);
+    sonny6368_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6368_tests = b.addTest(.{ .root_module = sonny6368_test_mod });
+    const run_sonny6368_tests = b.addRunArtifact(sonny6368_tests);
+    shardDep(test_step, &run_sonny6368_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6368_step = b.step("test-sonny6368-index-maintenance", "Run SONNY-6368 regression (a repeated SET target answers 22G0M; geode.fts.rebuild from another graph rebuilds the default graph's index; a live SET n:L and a committed REMOVE n.prop maintain the full-text and vector indexes; vector maintenance covers every label; an undo repair colliding with a running fulltext rebuild runs after it; gRPC in process)");
+    sonny6368_step.dependOn(&run_sonny6368_tests.step);
+
     const sonny6362_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6362_statement_undo_threads.zig"), .target = target, .optimize = optimize });
     sonny6362_test_mod.link_libc = true;
     sonny6362_test_mod.addImport("geode", root_mod);

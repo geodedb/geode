@@ -142,6 +142,12 @@ fn dupeSpec(
     props_out.* = owned_props;
 }
 
+/// SONNY-6368 test instrumentation: called by `rebuildFulltextIndex` once its
+/// backfill has read the store, while the index is still rebuilding (before
+/// the drain). A test holds the rebuild there to land a write, or an undo,
+/// in its window.
+pub var rebuild_backfilled_hook: ?*const fn (index_name: []const u8) void = null;
+
 /// Spec geode-vectorization-and-reranking: post-bulk-ingest invariant — rebuild
 /// the fulltext engine for `index_name` from current store contents. Resolves
 /// the (label, properties) spec from the schema catalog when available (works
@@ -250,6 +256,7 @@ pub fn rebuildFulltextIndex(
     defer allocator.free(snapshot);
 
     const backfill_count = try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, snapshot);
+    if (rebuild_backfilled_hook) |hook| hook(index_name);
 
     // Drain: reindex every write queued during the window whose id is NOT
     // already covered by the snapshot backfill above just processed.
