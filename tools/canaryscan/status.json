@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:42:25.586814175Z",
+  "generated_at": "2026-11-12T23:43:23.394071793Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84310,6 +84310,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6433-KEYS-AFTER-REMOVE",
+      "features": [
+        {
+          "feature": "PropertyStorage",
+          "aspect": "RemovedPropertyAbsent",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_keys_after_remove.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_keys_after_remove.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -91995,7 +92014,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4781
+      "TESTED": 4782
     },
     "by_aspect": {
       "2PC": 3,
@@ -95108,6 +95127,7 @@
       "RemoveRole": 1,
       "RemoveUser": 1,
       "RemovedLabelRebuildQueue": 1,
+      "RemovedPropertyAbsent": 1,
       "RemovedTextRebuildQueue": 1,
       "RenameAndToggleTogether": 1,
       "RenameSurvivesRestartNoStale": 1,
