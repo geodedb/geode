@@ -30,7 +30,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 
 - **13.18x I/O Performance** - Memory-mapped operations with optimization
 - **Query Planner** - Rule-based index use; EXPLAIN shows per-operator cost estimates (no cost-based plan choice)
-- **Backup/Restore CLI** - `geode backup create` / `geode restore <file> --data-dir <dir>` (engine-backed, full graph data round-trip; the restore is offline, into a new or empty directory, and verified before it reports success). S3 backup target supported; restoring straight from an S3 URI is not (download the file first). GQL `BACKUP`/`RESTORE` *statements* are not implemented (use the CLI). Payload compression: `none` or `gzip` (`--compress`); see [Known Limitations](CLAUDE.md#known-limitations).
+- **Backup/Restore CLI** - `geode backup create` / `geode restore <file> --data-dir <dir>` (engine-backed, full graph data round-trip; the restore is offline, into a new or empty directory, and verified before it reports success). Backups are local files: geode has no S3/object-storage path for backup or restore (copy files with your own tool; an `s3://` output or source is refused). GQL `BACKUP`/`RESTORE` *statements* are not implemented (use the CLI). Payload compression: `none` or `gzip` (`--compress`); see [Known Limitations](CLAUDE.md#known-limitations).
 - **Multi-Shard Support** - Up to 32 shards with automatic coordination
 
 ## 🚀 Quick Start

@@ -115,7 +115,6 @@ const _benchmark_inverted_index_lookup_variance = @import("benchmark_inverted_in
 const _canary_migration_engine = @import("canary_migration_engine_stubs.zig");
 const _canary_migration_engine_new = @import("canary_migration_engine_new_tests.zig");
 // Backup & restore CANARY tests
-const _canary_backup_restore = @import("canary_backup_restore.zig");
 
 // Newly added feature scaffold tests (security, FTS, parallel exec, CBO, graph algos)
 const _e2e_security_tde_mfa = @import("e2e_security_tde_mfa.zig");

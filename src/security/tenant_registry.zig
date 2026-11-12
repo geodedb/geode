@@ -424,27 +424,38 @@ pub const TenantRegistry = struct {
         };
         defer self.allocator.free(data);
 
+        // CANARY: REQ=REQ-SONNY-6348-TENANT-REGISTRY-CORRUPT; FEATURE="TenantRegistry"; ASPECT=CorruptLineRefused; STATUS=TESTED; TEST=tests/test_sonny6348_readonly_restore_checks_registry.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6348: a line that cannot become a tenant (not JSON, not an
+        // object, no valid string tenant_id, a parent that is not a string,
+        // a repeated id) is an error. It was skipped with a warning, so that
+        // tenant was silently gone. The file is rewritten whole on every
+        // change (temp file + rename), so a bad line is corruption.
         var hydrated: usize = 0;
-        var line_it = std.mem.tokenizeScalar(u8, data, '\n');
+        var line_no: usize = 0;
+        var line_it = std.mem.splitScalar(u8, data, '\n');
         while (line_it.next()) |line| {
+            line_no += 1;
             const trimmed = std.mem.trim(u8, line, " \t\r");
             if (trimmed.len == 0) continue;
             const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, trimmed, .{}) catch |err| {
-                log.warn("tenant_registry.hydrate_parse_failed", &.{Attr.string("error", @errorName(err))});
-                continue;
+                return corruptLine(line_no, @errorName(err));
             };
             defer parsed.deinit();
             const obj = switch (parsed.value) {
                 .object => |o| o,
-                else => continue,
+                else => return corruptLine(line_no, "not a JSON object"),
             };
-            const id_v = obj.get("tenant_id") orelse continue;
+            const id_v = obj.get("tenant_id") orelse return corruptLine(line_no, "no tenant_id");
             const id_str = switch (id_v) {
                 .string => |s| s,
-                else => continue,
+                else => return corruptLine(line_no, "tenant_id is not a string"),
             };
-            if (!validId(id_str)) continue;
-            if (self.tenants.contains(id_str)) continue;
+            if (!validId(id_str)) return corruptLine(line_no, "tenant_id is not a valid tenant id");
+            if (self.tenants.contains(id_str)) return corruptLine(line_no, "tenant_id repeats an earlier line");
+            if (obj.get("parent")) |pv| switch (pv) {
+                .string, .null => {},
+                else => return corruptLine(line_no, "parent is not a string"),
+            };
 
             const owned_id = try self.allocator.dupe(u8, id_str);
             errdefer self.allocator.free(owned_id);
@@ -487,6 +498,14 @@ pub const TenantRegistry = struct {
         if (hydrated > 0) {
             log.info("tenant_registry.hydrated", &.{Attr.int("count", @intCast(hydrated))});
         }
+    }
+
+    fn corruptLine(line_no: usize, why: []const u8) error{TenantRegistryCorrupt} {
+        log.err("tenant_registry.hydrate_corrupt_line", &.{
+            Attr.uint("line", @intCast(line_no)),
+            Attr.string("reason", why),
+        });
+        return error.TenantRegistryCorrupt;
     }
 
     fn jsonU32(obj: std.json.ObjectMap, key: []const u8) u32 {

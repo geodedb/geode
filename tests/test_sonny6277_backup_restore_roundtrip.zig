@@ -152,7 +152,8 @@ fn roundTrip(compression: backup.CompressionType) !void {
         defer mgr.deinit();
         const meta = try mgr.createFullBackup();
         try testing.expectEqual(compression, meta.compression);
-        try mgr.restoreToPointInTime(restore_dir.path(), meta.timestamp + 1);
+        var restored_side = try mgr.restoreInto(restore_dir.path(), meta.timestamp + 1, .{});
+        restored_side.deinit();
     }
 
     // Restored, cold: a fresh store opened on the restored directory.

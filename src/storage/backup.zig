@@ -149,12 +149,6 @@ pub const BackupType = enum(u32) {
     full = 0,
 };
 
-/// Point-in-time recovery information
-pub const RecoveryPoint = struct {
-    timestamp: i64,
-    backup_chain: []const u64, // Backup IDs needed for recovery
-};
-
 pub const BACKUP_MAGIC: u32 = 0x47454F42; // "GEOB"
 pub const BACKUP_VERSION: u16 = 4;
 
@@ -376,9 +370,54 @@ pub const BackupManager = struct {
         self.allocator.free(self.backup_dir);
     }
 
-    /// Create a full backup and return metadata.
+    /// Create a full backup in this manager's backup directory
+    /// (`full_<id>.backup`), register it in metadata.json and return its
+    /// metadata.
     pub fn createFullBackup(self: *BackupManager) !BackupMetadata {
         const backup_id = generateBackupId();
+        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
+        defer self.allocator.free(backup_path);
+        const metadata = try self.writeFullBackup(backup_path, backup_id, .{});
+
+        try self.metadata_log.append(self.allocator, metadata);
+        try self.writeMetadata();
+        return metadata;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6323-LOCAL-BACKUP-ONCE; FEATURE="Local Directory Backup"; ASPECT=WrittenOnceAtOutput; STATUS=TESTED; TEST=tests/test_sonny6323_local_backup_written_once.zig; OWNER=storage; UPDATED=2026-11-12
+    /// Write a full backup of the data directory to `path` and return its
+    /// metadata. Nothing goes into this manager's backup directory or
+    /// metadata.json: `geode backup create --local` writes its --output this
+    /// way, once (SONNY-6323: it wrote full_<id>.backup and metadata.json
+    /// beside --output and then copied the file). The file is written as a
+    /// private temporary file beside `path` (0600, created exclusively),
+    /// synced, and renamed onto `path`, so `path` never holds a partial
+    /// backup.
+    pub fn writeFullBackupFile(self: *BackupManager, path: []const u8) !BackupMetadata {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const dir = std.fs.path.dirname(path) orelse ".";
+        var rnd: [8]u8 = undefined;
+        compat_fillRandom(&rnd);
+        const tmp = try std.fmt.allocPrint(self.allocator, "{s}/.{s}.tmp-{x}", .{ dir, std.fs.path.basename(path), std.mem.readInt(u64, &rnd, .little) });
+        defer self.allocator.free(tmp);
+
+        const metadata = try self.writeFullBackup(tmp, generateBackupId(), .{ .exclusive = true, .sync = true });
+        errdefer std.Io.Dir.cwd().deleteFile(io, tmp) catch {};
+        try std.Io.Dir.cwd().rename(tmp, std.Io.Dir.cwd(), path, io);
+        return metadata;
+    }
+
+    const WriteBackupOptions = struct {
+        /// Never open an existing file.
+        exclusive: bool = false,
+        /// Sync the file before returning.
+        sync: bool = false,
+    };
+
+    /// Archive the data directory and write it (header + payload) to a new
+    /// file at `path`, created only once the archive is built; a failure
+    /// leaves no file there.
+    fn writeFullBackup(self: *BackupManager, path: []const u8, backup_id: u64, opts: WriteBackupOptions) !BackupMetadata {
         const timestamp = compat_milliTimestamp();
 
         // Persist via adapter checkpoint (no-op for file-based — adapter owns storage).
@@ -407,14 +446,12 @@ pub const BackupManager = struct {
 
         const checksum = computeChecksum(final_payload);
 
-        // Write backup file (header + payload)
-        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
-        defer self.allocator.free(backup_path);
-
         const io_bf = std.Io.Threaded.global_single_threaded.io();
-        const file = try std.Io.Dir.cwd().createFile(io_bf, backup_path, .{ .permissions = backup_file_perms });
+        const file = try std.Io.Dir.cwd().createFile(io_bf, path, .{ .exclusive = opts.exclusive, .permissions = backup_file_perms });
+        var written = false;
+        // error-policy: A — best-effort removal of our own partial file.
+        defer if (!written) std.Io.Dir.cwd().deleteFile(io_bf, path) catch {};
         defer file.close(io_bf);
-
         const header = BackupHeader{
             .magic = BACKUP_MAGIC,
             .version = BACKUP_VERSION,
@@ -428,8 +465,10 @@ pub const BackupManager = struct {
         const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
         try file.writePositionalAll(io_bf, header_bytes, 0);
         try file.writePositionalAll(io_bf, final_payload, header_bytes.len);
+        if (opts.sync) try file.sync(io_bf);
+        written = true;
 
-        const metadata = BackupMetadata{
+        return BackupMetadata{
             .backup_id = backup_id,
             .timestamp = timestamp,
             .backup_type = .full,
@@ -438,16 +477,12 @@ pub const BackupManager = struct {
             .encrypted = self.config.encryption,
             .checksum = checksum,
         };
-
-        try self.metadata_log.append(self.allocator, metadata);
-        try self.writeMetadata();
-        return metadata;
     }
 
     /// Ingest an uploaded backup artifact (the complete bytes of a
     /// `full_*.backup` file: BackupHeader + payload) into this manager's
     /// backup_dir and register it durably in the metadata log so it becomes
-    /// restorable via `restoreToPointInTime`.
+    /// restorable (`restoreInto`, the server restore).
     ///
     /// Verification BEFORE anything is written (GAP-0880: no empty-file
     /// fake-success path):
@@ -499,78 +534,21 @@ pub const BackupManager = struct {
         return metadata;
     }
 
-    /// Restore to a point in time using the latest full backup before the timestamp.
-    pub fn restoreToPointInTime(self: *BackupManager, restore_dir: []const u8, target_time: i64) !void {
-        if (self.metadata_log.items.len == 0) {
-            _ = try self.loadMetadata();
-        }
-        const reload_live_store = self.store.data_dir.len > 0 and std.mem.eql(u8, self.store.data_dir, restore_dir);
-        const recovery = try self.findRecoveryPoint(target_time);
-        defer self.allocator.free(recovery.backup_chain);
-
-        const backup_id = recovery.backup_chain[recovery.backup_chain.len - 1];
-        const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
-        defer self.allocator.free(backup_path);
-
-        var decoded = try readBackupFile(self.allocator, backup_path, self.enc_key);
-        defer decoded.deinit(self.allocator);
-
-        // Write snapshot to restore directory and load store.
-        const prev_override = graph_store.getDataDirOverride();
-        var prev_override_owned: ?[]u8 = null;
-        if (prev_override) |ov| {
-            prev_override_owned = try self.allocator.dupe(u8, ov);
-        }
-        defer {
-            if (prev_override_owned) |ov| {
-                graph_store.setDataDirOverride(self.allocator, ov);
-                self.allocator.free(ov);
-            } else {
-                graph_store.setDataDirOverride(self.allocator, null);
-            }
-        }
-
-        graph_store.setDataDirOverride(self.allocator, restore_dir);
-
-        try restorePerGraphPayload(self.allocator, restore_dir, decoded.archive);
-
-        if (reload_live_store) {
-            // Reopen the adapter on the restored directory before rebuilding the
-            // compatibility cache so reads reflect the restored graph-storage files.
-            graph_store.deinitGlobalAdapter();
-            _ = try graph_store.initGlobalAdapter(self.allocator, restore_dir);
-            try self.store.loadFromFile();
-        }
-    }
-
-    /// Apply retention policy and remove old backups.
-    pub fn runRetention(self: *BackupManager) !void {
-        if (self.metadata_log.items.len == 0) {
-            _ = try self.loadMetadata();
-        }
-        if (self.metadata_log.items.len == 0) return;
-
-        const cutoff = compat_milliTimestamp() - @as(i64, @intCast(self.config.retention_days)) * 24 * 60 * 60 * 1000;
-        var kept: std.ArrayList(BackupMetadata) = .{};
-
-        for (self.metadata_log.items) |entry| {
-            if (entry.timestamp >= cutoff) {
-                try kept.append(self.allocator, entry);
-                continue;
-            }
-            const path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, entry.backup_id });
-            defer self.allocator.free(path);
-            std.Io.Dir.cwd().deleteFile(path) catch |err| {
-                log.warn("Failed to delete expired backup", &.{
-                    Attr.string("path", path),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-        }
-
-        self.metadata_log.deinit(self.allocator);
-        self.metadata_log = kept;
-        try self.writeMetadata();
+    // CANARY: REQ=REQ-SONNY-6300-STAGED-RESTORE-ONLY; FEATURE="Backup Restore"; ASPECT=ManagerRestoreIsStaged; STATUS=TESTED; TEST=tests/test_sonny6300_staged_restore_paths.zig; OWNER=storage; UPDATED=2026-11-12
+    /// Restore the newest full backup in this manager's backup directory
+    /// taken at or before `target_time` (epoch ms) into `target_dir`, which
+    /// must not exist or be empty (`restoreBackupInto`: staged, verified,
+    /// renamed into place). SONNY-6300: this replaced restoreToPointInTime,
+    /// which wrote the backup over whatever directory it was given, the live
+    /// data directory included, and then reopened the process-global adapter
+    /// there (whose shutdown checkpoint wrote the old in-memory state back
+    /// over the restore). A running store is never restored over.
+    pub fn restoreInto(self: *BackupManager, target_dir: []const u8, target_time: i64, opts: RestoreOptions) !SideRestore {
+        const path = try selectPointInTimeBackup(self.allocator, self.backup_dir, target_time);
+        defer self.allocator.free(path);
+        var o = opts;
+        if (o.enc_key == null and self.config.encryption) o.enc_key = self.enc_key;
+        return restoreBackupInto(self.allocator, path, target_dir, o);
     }
 
     /// Load metadata log from disk.
@@ -615,27 +593,6 @@ pub const BackupManager = struct {
 
     fn metadataPath(self: *BackupManager) ![]u8 {
         return try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{self.backup_dir});
-    }
-
-    fn findRecoveryPoint(self: *BackupManager, target_time: i64) !RecoveryPoint {
-        var chosen: ?BackupMetadata = null;
-        for (self.metadata_log.items) |entry| {
-            if (entry.backup_type != .full) continue;
-            if (entry.timestamp <= target_time) {
-                if (chosen == null or entry.timestamp > chosen.?.timestamp) {
-                    chosen = entry;
-                }
-            }
-        }
-        if (chosen == null) return error.NoBackupFound;
-
-        var chain: std.ArrayList(u64) = .empty;
-        try chain.append(self.allocator, chosen.?.backup_id);
-        const chain_slice = try chain.toOwnedSlice(self.allocator);
-        return .{
-            .timestamp = chosen.?.timestamp,
-            .backup_chain = chain_slice,
-        };
     }
 };
 
@@ -967,24 +924,32 @@ fn validateArchive(allocator: std.mem.Allocator, payload: []const u8) !ArchiveSt
     return stats;
 }
 
-/// Restore a per-graph archive payload into restore_dir, recreating
+/// Write a per-graph archive payload into `dir`, recreating
 /// `graph_registry.dat` and every per-graph directory. The whole archive is
-/// validated first (names cannot escape restore_dir). Files are created
-/// 0600 — the archive keeps no modes, and one written before SONNY-6299
-/// holds key material (server.key, .geode_hmac_key) — and synced before the
-/// restore reports success. A `.geode.lock` entry (such an archive's) is
-/// never written: it is the source process's lock, not data.
-// CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=storage; UPDATED=2026-11-11
-fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8, payload: []const u8) !void {
+/// validated first (names cannot escape `dir`). Files are created 0600 — the
+/// archive keeps no modes, and one written before SONNY-6299 holds key
+/// material (server.key, .geode_hmac_key). A `.geode.lock` entry (such an
+/// archive's) is never written: it is the source process's lock, not data.
+///
+/// With `durable`, everything written is on disk before this returns.
+/// SONNY-6300: each file used to be fsynced as it was written (about 700
+/// fsyncs for a tiny two-graph store, over 10 s on a loaded disk). On Linux
+/// the filesystem holding `dir` is now synced once (syncfs(2): every dirty
+/// file and directory entry of that filesystem); elsewhere each file is
+/// still synced. Returns the number of sync calls made.
+// CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=storage; UPDATED=2026-11-12
+fn writeArchiveTree(allocator: std.mem.Allocator, dir: []const u8, payload: []const u8, durable: bool) !u32 {
     _ = try validateArchive(allocator, payload);
 
     const io_ef = std.Io.Threaded.global_single_threaded.io();
     const file_perms: std.Io.File.Permissions = if (comptime builtin.os.tag == .windows) .default_file else std.Io.File.Permissions.fromMode(0o600);
+    const sync_once = comptime builtin.os.tag == .linux;
+    var syncs: u32 = 0;
     var it = try ArchiveIterator.init(payload);
     while (try it.next()) |entry| {
         if (std.mem.eql(u8, entry.name, lock_file_name)) continue;
         // Build the destination path and ensure parent directories exist.
-        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ restore_dir, entry.name });
+        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, entry.name });
         defer allocator.free(full_path);
 
         if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
@@ -997,8 +962,19 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
         const out = try std.Io.Dir.cwd().createFile(io_ef, full_path, .{ .permissions = file_perms });
         defer out.close(io_ef);
         try out.writeStreamingAll(io_ef, entry.data);
-        try out.sync(io_ef);
+        if (durable and !sync_once) {
+            try out.sync(io_ef);
+            syncs += 1;
+        }
     }
+    if (durable and sync_once) {
+        // A real descriptor (iterate), not O_PATH: syncfs and fsync refuse O_PATH.
+        var d = try std.Io.Dir.cwd().openDir(io_ef, dir, .{ .iterate = true });
+        defer d.close(io_ef);
+        if (std.os.linux.errno(std.os.linux.syncfs(d.handle)) != .SUCCESS) return error.RestoreSyncFailed;
+        syncs += 1;
+    }
+    return syncs;
 }
 
 /// Re-read every file the archive names under `dir` and compare it byte for
@@ -1038,7 +1014,12 @@ pub const StagedRestore = struct {
     target_dir: []u8,
     stats: ArchiveStats,
     committed: bool = false,
+    /// Sync calls made to put the restore on disk (SONNY-6300: a constant,
+    /// not one per file, on Linux).
+    syncs: u32 = 0,
 
+    /// Rename the staging directory onto the target, then sync the parent
+    /// directory so the rename itself is durable.
     pub fn commit(self: *StagedRestore) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         std.Io.Dir.cwd().rename(self.staging_dir, std.Io.Dir.cwd(), self.target_dir, io) catch |err| switch (err) {
@@ -1046,6 +1027,13 @@ pub const StagedRestore = struct {
             else => return err,
         };
         self.committed = true;
+        if (comptime builtin.os.tag == .linux) {
+            const parent = std.fs.path.dirname(self.target_dir) orelse ".";
+            var d = try std.Io.Dir.cwd().openDir(io, parent, .{ .iterate = true });
+            defer d.close(io);
+            if (std.os.linux.errno(std.os.linux.fsync(d.handle)) != .SUCCESS) return error.RestoreSyncFailed;
+            self.syncs += 1;
+        }
     }
 
     /// Deletes the staging directory unless committed, and frees.
@@ -1094,10 +1082,50 @@ pub fn stageRestore(allocator: std.mem.Allocator, archive: []const u8, target_di
     // error-policy: A — best-effort removal of our own staging dir on failure.
     errdefer std.Io.Dir.cwd().deleteTree(io, staging) catch {};
 
-    try restorePerGraphPayload(allocator, staging, archive);
+    const syncs = try writeArchiveTree(allocator, staging, archive, true);
     const stats = try verifyRestoredArchive(allocator, staging, archive);
 
-    return .{ .allocator = allocator, .staging_dir = staging, .target_dir = target_owned, .stats = stats };
+    return .{ .allocator = allocator, .staging_dir = staging, .target_dir = target_owned, .stats = stats, .syncs = syncs };
+}
+
+// CANARY: REQ=REQ-SONNY-6348-READONLY-RESTORE-CHECKS; FEATURE="Backup Restore"; ASPECT=ChecksOnThrowawayCopy; STATUS=TESTED; TEST=tests/test_sonny6348_readonly_restore_checks_registry.zig; OWNER=storage; UPDATED=2026-11-12
+/// A throwaway copy of an archive for the checks that open a restored store
+/// (graph counts, the auth-chain verifier). SONNY-6348: opening a store
+/// writes to it — WAL replay checkpoints, manifests, store files, and on
+/// __geode_security a new audit key epoch (a new seed and public key file
+/// and a KEY_EPOCH record) — and the storage engine has no read-only open.
+/// Those checks ran on the staged copy, so the directory a restore committed
+/// was no longer the backup and its audit epoch had been started by the
+/// check. They now run here, and the staged copy that is committed is never
+/// opened. Not synced; `deinit` deletes it. It costs the archive's size again
+/// in disk space while the restore runs.
+pub const ProbeCopy = struct {
+    allocator: std.mem.Allocator,
+    dir: []u8,
+
+    pub fn deinit(self: *ProbeCopy) void {
+        // error-policy: A — best-effort removal of our own throwaway copy.
+        std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), self.dir) catch {};
+        self.allocator.free(self.dir);
+        self.* = undefined;
+    }
+};
+
+/// Write `archive` into a new mode-0700 directory `<target_dir>.probe-<random>`
+/// beside the restore target (`ProbeCopy`).
+pub fn writeProbeCopy(allocator: std.mem.Allocator, archive: []const u8, target_dir: []const u8) !ProbeCopy {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const target = std.mem.trimEnd(u8, target_dir, "/");
+    var rnd: [8]u8 = undefined;
+    compat_fillRandom(&rnd);
+    const dir = try std.fmt.allocPrint(allocator, "{s}.probe-{x}", .{ target, std.mem.readInt(u64, &rnd, .little) });
+    errdefer allocator.free(dir);
+    const dir_perms: std.Io.File.Permissions = if (comptime builtin.os.tag == .windows) .default_dir else std.Io.File.Permissions.fromMode(0o700);
+    try std.Io.Dir.cwd().createDir(io, dir, dir_perms);
+    // error-policy: A — best-effort removal of our own throwaway copy on failure.
+    errdefer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+    _ = try writeArchiveTree(allocator, dir, archive, false);
+    return .{ .allocator = allocator, .dir = dir };
 }
 
 /// Node and edge count of one graph in a restored store.
@@ -1194,8 +1222,9 @@ pub fn selectPointInTimeBackupIn(allocator: std.mem.Allocator, backup_dirs: []co
     return std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ chosen_dir, selected.backup_id });
 }
 
-/// A server restore written into a new directory beside the server's data
-/// directory and verified. Owns its strings.
+/// A restore written into a new (or empty) directory and verified
+/// (`restoreBackupInto`; the server restore, `BackupManager.restoreInto`,
+/// S3 restore). Owns its strings.
 pub const SideRestore = struct {
     allocator: std.mem.Allocator,
     /// The new directory holding the restored store.
@@ -1206,7 +1235,7 @@ pub const SideRestore = struct {
     graphs: []RestoredGraph,
     /// Key material the archive held (an archive from before SONNY-6299).
     key_material: KeyMaterial = .{},
-    /// The live data directory's `.geode_hmac_key` was copied in.
+    /// `RestoreOptions.hmac_key_from`'s `.geode_hmac_key` was copied in.
     copied_hmac_key: bool = false,
 
     pub fn deinit(self: *SideRestore) void {
@@ -1242,31 +1271,109 @@ fn copyHmacKeyFile(allocator: std.mem.Allocator, from_dir: []const u8, to_dir: [
     return true;
 }
 
+/// SONNY-6322: verifies the `__geode_security` HMAC chain of a restored
+/// store in the given directory the way a server starting on it would.
+pub const StagedAuthVerifier = *const fn (allocator: std.mem.Allocator, dir: []const u8) anyerror!void;
+
+/// How `restoreBackupInto` treats keys.
+pub const RestoreOptions = struct {
+    /// Decrypts an encrypted backup; null takes GEODE_TDE_KEY.
+    enc_key: ?[32]u8 = null,
+    /// Copy this directory's `.geode_hmac_key` into the restore when the
+    /// archive holds none (a server restoring its own backup).
+    hmac_key_from: ?[]const u8 = null,
+    /// Verifies the restored `__geode_security` chain. A restored store with
+    /// auth records and no verifier is refused (error.AuthChainVerifierRequired):
+    /// never commit auth state nobody checked.
+    verify_auth: ?StagedAuthVerifier = null,
+};
+
+fn hasAuthRecords(graphs: []const RestoredGraph) bool {
+    for (graphs) |g| {
+        if (std.mem.eql(u8, g.name, graph_store.SECURITY_GRAPH_NAME) and g.nodes > 0) return true;
+    }
+    return false;
+}
+
+// CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore"; ASPECT=StagedVerifiedRestore; STATUS=TESTED; TEST=tests/test_sonny6300_staged_restore_paths.zig; OWNER=storage; UPDATED=2026-11-12
+/// Restore the backup file `backup_path` into `target_dir`, which must not
+/// exist or be empty. Same sequence as `geode restore` (SONNY-6280): decode
+/// and verify the backup (`readBackupFile`), write it into a mode-0700
+/// staging directory beside the target, synced, and compare it byte for byte
+/// with the archive (`stageRestore`); open a throwaway copy of it as a store
+/// and count every graph (`writeProbeCopy`, `countRestoredStore`), verify its
+/// auth chain when it has auth records (SONNY-6322), then rename the staging
+/// directory into place. The committed directory holds exactly the archive's
+/// files plus the copied HMAC key file (SONNY-6348). Any failure leaves
+/// neither the target nor the staging or check copies behind.
+pub fn restoreBackupInto(allocator: std.mem.Allocator, backup_path: []const u8, target_dir: []const u8, opts: RestoreOptions) !SideRestore {
+    var decoded = try readBackupFile(allocator, backup_path, opts.enc_key);
+    defer decoded.deinit(allocator);
+    const key_material = try archiveKeyMaterial(decoded.archive);
+
+    var staged = try stageRestore(allocator, decoded.archive, target_dir);
+    defer staged.deinit();
+    var probe = try writeProbeCopy(allocator, decoded.archive, staged.target_dir);
+    defer probe.deinit();
+
+    // SONNY-6299: backups no longer hold `.geode_hmac_key`. A server
+    // restores its own backups, so its key file (when it has one) goes into
+    // the restore, and into the check copy for the verifier.
+    var copied_hmac_key = false;
+    if (!key_material.hmac_key) {
+        if (opts.hmac_key_from) |from| {
+            copied_hmac_key = try copyHmacKeyFile(allocator, from, staged.staging_dir);
+            if (copied_hmac_key) _ = try copyHmacKeyFile(allocator, from, probe.dir);
+        }
+    }
+
+    const graphs = try countRestoredStore(allocator, probe.dir);
+    errdefer freeRestoredGraphs(allocator, graphs);
+
+    // CANARY: REQ=REQ-SONNY-6322-SERVER-RESTORE-CHAIN; FEATURE="Backup Restore"; ASPECT=VerifyStagedAuthChain; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=storage; UPDATED=2026-11-12
+    // SONNY-6322: a restored store with auth records must verify before it
+    // is committed: a backup sealed under another key used to restore
+    // "successfully" and then fail AuthChainTampered at the next startup.
+    if (hasAuthRecords(graphs)) {
+        const verify_auth = opts.verify_auth orelse {
+            log.err("restored store holds __geode_security auth records and no verifier was given; restore refused, nothing kept", &.{});
+            return error.AuthChainVerifierRequired;
+        };
+        verify_auth(allocator, probe.dir) catch |err| {
+            log.err("restored __geode_security chain does not verify; restore refused, nothing kept", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            return error.AuthChainVerificationFailed;
+        };
+    }
+
+    const target_owned = try allocator.dupe(u8, staged.target_dir);
+    errdefer allocator.free(target_owned);
+    const path_owned = try allocator.dupe(u8, backup_path);
+    errdefer allocator.free(path_owned);
+
+    try staged.commit();
+
+    return .{
+        .allocator = allocator,
+        .target_dir = target_owned,
+        .backup_path = path_owned,
+        .stats = staged.stats,
+        .graphs = graphs,
+        .key_material = key_material,
+        .copied_hmac_key = copied_hmac_key,
+    };
+}
+
+// CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore"; ASPECT=ServerRestoreBesideDataDir; STATUS=TESTED; TEST=tests/test_sonny6288_server_restore_target.zig; OWNER=storage; UPDATED=2026-11-12
 /// Restore the newest backup in `backup_dirs` taken at or before
 /// `target_time` into a NEW directory beside `live_data_dir`, named
-/// `<live_data_dir>.restored-<backup id>-<ms>` (SONNY-6288). The live data
-/// directory is never written: a running server cannot swap its store under
-/// open engines, so the caller tells the operator to restart on the result.
-///
-/// Same sequence as `geode restore` (SONNY-6280): decode and verify the
-/// backup (`readBackupFile`), write it into a mode-0700 staging directory
-/// beside the target and compare it byte for byte with the archive
-/// (`stageRestore`), open it as a store and count every graph
-/// (`countRestoredStore`), then rename it into place. Any failure leaves
-/// neither the target nor the staging directory behind.
-///
-/// SONNY-6299: backups no longer hold `.geode_hmac_key`. This server
-/// restores its own backups, so its key file (when it has one) is copied
-/// into the restored directory. SONNY-6322: the staged copy's
-/// `__geode_security` chain is verified with that key (or the environment
-/// key) through `verify_auth` before anything is committed; a backup sealed
-/// under another key fails (error.AuthChainVerificationFailed) and leaves
-/// nothing behind.
-// CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore"; ASPECT=ServerRestoreBesideDataDir; STATUS=TESTED; TEST=tests/test_sonny6288_server_restore_target.zig; OWNER=storage; UPDATED=2026-11-11
-/// SONNY-6322: verifies the `__geode_security` HMAC chain of the staged
-/// restore in the given directory the way a server starting on it would.
-pub const StagedAuthVerifier = *const fn (allocator: std.mem.Allocator, staging_dir: []const u8) anyerror!void;
-
+/// `<live_data_dir>.restored-<backup id>-<ms>` (SONNY-6288), through
+/// `restoreBackupInto` with the live directory's HMAC key file and
+/// `verify_auth`. The live data directory is never written: a running server
+/// cannot swap its store under open engines, so the caller tells the
+/// operator to restart on the result. A backup sealed under another key
+/// fails (error.AuthChainVerificationFailed) and leaves nothing behind.
 pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dirs: []const []const u8, live_data_dir: []const u8, target_time: i64, verify_auth: StagedAuthVerifier) !SideRestore {
     const live = std.mem.trimEnd(u8, live_data_dir, "/");
     const base = std.fs.path.basename(live);
@@ -1275,11 +1382,7 @@ pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dirs: []const [
     }
 
     const backup_path = try selectPointInTimeBackupIn(allocator, backup_dirs, target_time);
-    errdefer allocator.free(backup_path);
-
-    var decoded = try readBackupFile(allocator, backup_path, null);
-    defer decoded.deinit(allocator);
-    const key_material = try archiveKeyMaterial(decoded.archive);
+    defer allocator.free(backup_path);
 
     const backup_name = std.fs.path.basename(backup_path);
     const id_hex = if (std.mem.startsWith(u8, backup_name, "full_") and std.mem.endsWith(u8, backup_name, ".backup"))
@@ -1287,46 +1390,12 @@ pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dirs: []const [
     else
         "backup";
     const target = try std.fmt.allocPrint(allocator, "{s}.restored-{s}-{d}", .{ live, id_hex, compat_milliTimestamp() });
-    errdefer allocator.free(target);
+    defer allocator.free(target);
     if (std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), target, .{})) |_| {
         return error.RestoreTargetNotEmpty;
     } else |_| {}
 
-    var staged = try stageRestore(allocator, decoded.archive, target);
-    defer staged.deinit();
-
-    const copied_hmac_key = if (key_material.hmac_key) false else try copyHmacKeyFile(allocator, live, staged.staging_dir);
-
-    const graphs = try countRestoredStore(allocator, staged.staging_dir);
-    errdefer freeRestoredGraphs(allocator, graphs);
-
-    // CANARY: REQ=REQ-SONNY-6322-SERVER-RESTORE-CHAIN; FEATURE="Backup Restore"; ASPECT=VerifyStagedAuthChain; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=storage; UPDATED=2026-11-11
-    // SONNY-6322: a restored store with auth records must verify before it
-    // is committed: a backup sealed under another key used to restore
-    // "successfully" and then fail AuthChainTampered at the next startup.
-    for (graphs) |g| {
-        if (std.mem.eql(u8, g.name, graph_store.SECURITY_GRAPH_NAME) and g.nodes > 0) {
-            verify_auth(allocator, staged.staging_dir) catch |err| {
-                log.err("restored __geode_security chain does not verify; restore refused, nothing kept", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                return error.AuthChainVerificationFailed;
-            };
-            break;
-        }
-    }
-
-    try staged.commit();
-
-    return .{
-        .allocator = allocator,
-        .target_dir = target,
-        .backup_path = backup_path,
-        .stats = staged.stats,
-        .graphs = graphs,
-        .key_material = key_material,
-        .copied_hmac_key = copied_hmac_key,
-    };
+    return restoreBackupInto(allocator, backup_path, target, .{ .hmac_key_from = live, .verify_auth = verify_auth });
 }
 
 /// Result of compressData: the compressed payload plus the compression type

@@ -194,7 +194,8 @@ test "GAP-0862 restore preserves node/edge counts and properties" {
 
     const restore_dir = try makeTempDir(allocator, "restore");
     defer cleanupTempDir(allocator, restore_dir);
-    try mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
+    var restored_side = try mgr.restoreInto(restore_dir, meta.timestamp + 1, .{});
+    restored_side.deinit();
 
     // Re-open a fresh adapter + store on the restored directory and assert
     // the graph round-tripped intact.
@@ -276,6 +277,5 @@ test "GAP-0862 corrupted backup payload is rejected on restore" {
     const restore_dir = try makeTempDir(allocator, "xrestore");
     defer cleanupTempDir(allocator, restore_dir);
 
-    const result = mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
-    try testing.expectError(error.BackupChecksumMismatch, result);
+    try testing.expectError(error.BackupChecksumMismatch, mgr.restoreInto(restore_dir, meta.timestamp + 1, .{}));
 }

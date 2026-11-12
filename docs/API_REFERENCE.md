@@ -125,8 +125,15 @@ DROP INDEX IF EXISTS person_age_idx;
 > and prints `Restore completed successfully` with each graph's node and
 > edge counts. Any failure exits non-zero with `error: <Name>` and leaves
 > nothing at the target. Restoring from an `s3://` or `http(s)://` URI is
-> not supported; download the file first. (From 2026-03-28 until
-> SONNY-6280 this command wrote nothing and still reported success.)
+> not supported (geode has no object-storage path; a `backup create
+> --output` URI is refused too); download the file first. (From 2026-03-28
+> until SONNY-6280 this command wrote nothing and still reported success.)
+> The checks that open the restored store (graph counts, the auth-chain
+> check) run on a throwaway copy beside the target, so the committed
+> directory holds exactly the backup's files plus the HMAC key file
+> (SONNY-6348); the restore needs the backup's size again in free disk while
+> it runs. `geode backup create` and `geode restore` refuse options they do
+> not know (SONNY-6290).
 >
 > **Server restore (QUIC `restore`, gRPC `/geode.GeodeService/Restore`,
 > `geode restore --server <addr>` with no file; SONNY-6288):** Admin only,
@@ -152,7 +159,12 @@ DROP INDEX IF EXISTS person_age_idx;
 > If the server backup fails (unreachable, timeout, stalled transfer, server
 > error), `backup create` exits 1, leaves no output file and does not fall
 > back to a local backup. A local data-directory backup runs only with
-> `--local`, which needs `--data-dir` or `GEODE_DATA_DIR`.
+> `--local`, which needs `--data-dir` or `GEODE_DATA_DIR`; it is written
+> once, at `--output` (until SONNY-6323 it also left `full_<id>.backup` and
+> `metadata.json` beside it). The CLI waits up to 300 s for the server's
+> answer to a backup or a server restore; `--timeout <seconds>` changes
+> that (SONNY-6300; it was a fixed 30 s). A server restore cannot replace a
+> running server's live store: there is no in-place restore.
 >
 > The CLI is engine-backed by `BackupManager` (`src/storage/backup.zig`):
 > full backup of the per-graph storage tree with CRC32 integrity verification
