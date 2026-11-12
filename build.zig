@@ -13578,6 +13578,21 @@ pub fn build(b: *std.Build) void {
     const sonny6313_step = b.step("test-sonny6313-explain-policy-gates", "Run the SONNY-6313 regression (EXPLAIN POLICY reports the read gate's decide(match_, graph) and the write gate's per-action decisions for the session's graph, so a graph-scoped deny or allow is reported as the gates apply it; geode.tenant.list / show are read-only procedures that still need admin_tenant)");
     sonny6313_step.dependOn(&run_sonny6313_tests.step);
 
+    // SONNY-3034: the geode.rls.* restrictions, and their removal, survive
+    // a server restart (stored in __geode_security). Spawns a server.
+    const sonny3034_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3034_rls_restrictions_durable.zig"), .target = target, .optimize = optimize });
+    sonny3034_test_mod.link_libc = true;
+    sonny3034_test_mod.addImport("geode", root_mod);
+    sonny3034_test_mod.addImport("schema", schema_mod);
+    sonny3034_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3034_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3034_tests = b.addTest(.{ .root_module = sonny3034_test_mod });
+    const run_sonny3034_tests = b.addRunArtifact(sonny3034_tests);
+    run_sonny3034_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny3034_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3034_step = b.step("test-sonny3034-rls-restrictions-durable", "Run the SONNY-3034 regression (geode.rls.add_deny_policy / add_attribute_policy restrictions and their removal survive a server restart; spawns a server)");
+    sonny3034_step.dependOn(&run_sonny3034_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.

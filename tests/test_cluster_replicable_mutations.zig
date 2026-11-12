@@ -932,6 +932,12 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
         .{ .name = "fulltext-rebuild", .query = "CALL geode.fts.rebuild('fcidx')" },
         .{ .name = "tenant-create", .query = "CALL geode.tenant.create('fctenant')" },
         .{ .name = "policy-ddl-create-policy", .query = "CREATE POLICY fcpol ON GRAPH * FOR READ" },
+        // SONNY-3034: the geode.rls.* restrictions are stored in
+        // __geode_security, which has no replication slice.
+        .{ .name = "rls-add-deny-policy", .query = "CALL geode.rls.add_deny_policy('default', 'FcSecret', 'fcuser')" },
+        .{ .name = "rls-remove-deny-policy", .query = "CALL geode.rls.remove_deny_policy('default', 'FcSecret', 'fcuser')" },
+        .{ .name = "rls-add-attribute-policy", .query = "CALL geode.rls.add_attribute_policy('default', 'FcDoc', 'dept', 'department')" },
+        .{ .name = "rls-remove-attribute-policy", .query = "CALL geode.rls.remove_attribute_policy('default', 'FcDoc', 'dept', 'department')" },
     };
 
     var failures: std.ArrayList([]const u8) = .empty;
