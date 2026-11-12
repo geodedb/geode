@@ -232,8 +232,13 @@ auth records yet). **A data directory that has auth records and no key
 refuses to start** with `HMAC key required` naming the three sources, and
 writes nothing (SONNY-6322; it used to write a new random key that could never
 verify the chain, exit `AuthChainTampered`, and leave that key behind). Backups
-do not hold the key (SONNY-6299): restore with the source server's key. A
-server restore (QUIC/gRPC `restore`) verifies the restored copy's chain with
+do not hold the key (SONNY-6299): restore with the source server's key. Because
+the environment comes first, `geode restore --hmac-key-file` is refused when
+`GEODE_TDE_KEY` or `GEODE_AUTH_HMAC_KEY` is set (`HmacKeySourceConflict`): a
+key file planted in the restored directory would never be read. A backup taken
+with `GEODE_TDE_KEY` set is encrypted under it, so it is restored with the
+source server's `GEODE_TDE_KEY` (and `GEODE_AUTH_HMAC_KEY`, if it had one) and
+no key file (SONNY-6386). A server restore (QUIC/gRPC `restore`) verifies the restored copy's chain with
 the server's own key before it reports success; a backup sealed under another
 key fails and leaves nothing behind. To accept records whose key is lost, an
 operator re-seals them under a new key: `geode auth reseal --data-dir <dir>`.
@@ -248,7 +253,8 @@ were kept in memory and lost at restart, with no error. **A server never runs
 without the auth graph any more:** it refuses to start when a key source is
 set but unusable (a malformed or unreadable `.geode_hmac_key`, a non-empty
 `GEODE_AUTH_HMAC_KEY` that is not 64 hex characters, which used to be
-skipped in favour of the file), when the key file cannot be created, or when
+skipped in favour of the file, or a non-empty `GEODE_TDE_KEY` that is not 64
+hex characters, SONNY-6386), when the key file cannot be created, or when
 the store or the auth graph cannot be opened (`[startup] HMAC key unusable`,
 `[startup] ... refusing to start without durable auth state`).
 

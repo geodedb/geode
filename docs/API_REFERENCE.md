@@ -214,7 +214,15 @@ DROP INDEX IF EXISTS person_age_idx;
 > set as the source server had it. The restore verifies the chain with that
 > key before it moves the directory into place; without a key it fails with
 > `error: HmacKeyRequired`, with the wrong one `error:
-> AuthChainVerificationFailed`, and nothing is restored. If the key is lost,
+> AuthChainVerificationFailed`, and nothing is restored.
+> `--hmac-key-file` cannot be combined with `GEODE_TDE_KEY` or
+> `GEODE_AUTH_HMAC_KEY` (`error: HmacKeySourceConflict`, SONNY-6386): a
+> server with `GEODE_TDE_KEY` set derives its HMAC key from it
+> (`GEODE_AUTH_HMAC_KEY` takes precedence) and never reads `.geode_hmac_key`,
+> so a key file would be ignored. An encrypted backup (taken with
+> `GEODE_TDE_KEY` set) needs that key to decrypt, so it is always restored
+> with the source server's `GEODE_TDE_KEY` (and its `GEODE_AUTH_HMAC_KEY`, if
+> it set one), never `--hmac-key-file`. If the key is lost,
 > `--unverified-auth` restores the records unverified: no server starts on
 > them (`AuthChainTampered`) until an operator who has checked them accepts
 > them with `geode auth reseal --data-dir <dir>`, which re-seals them under a

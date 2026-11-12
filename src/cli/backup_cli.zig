@@ -1003,6 +1003,11 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "--hmac-key-file <source data dir>/.geode_hmac_key (written into the restored\n" ++
                 "directory, mode 0600), or set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY as the source\n" ++
                 "server had it. A server restore copies the server's own key file.\n" ++
+                "--hmac-key-file cannot be combined with GEODE_TDE_KEY or GEODE_AUTH_HMAC_KEY: a\n" ++
+                "server with GEODE_TDE_KEY set derives the HMAC key from it (GEODE_AUTH_HMAC_KEY\n" ++
+                "takes precedence) and never reads .geode_hmac_key. An encrypted backup (taken\n" ++
+                "with GEODE_TDE_KEY set) is therefore restored with the source server's\n" ++
+                "GEODE_TDE_KEY (and GEODE_AUTH_HMAC_KEY, if it had one), never --hmac-key-file.\n" ++
                 "\n" ++
                 "Options:\n" ++
                 "  --source <path>        Backup file (alternative to positional)\n" ++
@@ -2533,7 +2538,17 @@ fn settleRestoredAuth(allocator: std.mem.Allocator, probe: []const u8, staging: 
             return error.HmacKeySourceConflict;
         }
         if (envSet("GEODE_AUTH_HMAC_KEY") or envSet("GEODE_TDE_KEY")) {
-            std.debug.print("RESTORE: --hmac-key-file and GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY are both set; a server uses the environment key, so give one\n", .{});
+            // SONNY-6386: say why and what to do. The environment key wins
+            // at server startup, so a planted key file would be ignored, and
+            // an encrypted backup cannot be restored without GEODE_TDE_KEY.
+            std.debug.print(
+                "RESTORE: --hmac-key-file cannot be used with GEODE_TDE_KEY or GEODE_AUTH_HMAC_KEY set. A server with GEODE_TDE_KEY set\n" ++
+                    "derives its auth-chain HMAC key from it (GEODE_AUTH_HMAC_KEY, when set, takes precedence) and never reads .geode_hmac_key,\n" ++
+                    "so a key file written into the restored directory would be ignored. Restore with the source server's GEODE_TDE_KEY\n" ++
+                    "(and its GEODE_AUTH_HMAC_KEY, if it set one) and without --hmac-key-file; an encrypted backup needs GEODE_TDE_KEY\n" ++
+                    "to decrypt in any case. --hmac-key-file is for a source server that ran with neither variable set. Nothing was restored.\n",
+                .{},
+            );
             return error.HmacKeySourceConflict;
         }
         key = try readHmacKeyFile(kf);

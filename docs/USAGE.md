@@ -70,7 +70,10 @@ aws s3 cp ./full.backup s3://my-bucket/backups/full.backup
 
 # Restore: download the file, then restore it offline into a new or empty
 # data directory. Backups do not hold the auth-chain HMAC key: give the source
-# server's key file (or set GEODE_AUTH_HMAC_KEY / GEODE_TDE_KEY as it had it)
+# server's key file (or set GEODE_AUTH_HMAC_KEY / GEODE_TDE_KEY as it had it).
+# --hmac-key-file cannot be combined with GEODE_TDE_KEY: a backup taken with
+# GEODE_TDE_KEY set is restored with that key alone (it decrypts the backup and
+# the HMAC key is derived from it)
 aws s3 cp s3://my-bucket/backups/full.backup ./full.backup
 geode restore ./full.backup --data-dir /data --yes --hmac-key-file /secure/geode_hmac_key
 ```

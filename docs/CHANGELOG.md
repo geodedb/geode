@@ -46,6 +46,19 @@
   synced; a failure removes only the temporary file. `--local` already wrote
   this way (SONNY-6323). `geode backup create --help` says so. Regression:
   `zig build test-sonny6386-remote-backup-atomic-output`.
+- **`geode restore --hmac-key-file` with `GEODE_TDE_KEY` set: the refusal
+  is documented and explained (SONNY-6386 item 7).** A server with
+  `GEODE_TDE_KEY` set derives its auth-chain HMAC key from it
+  (`GEODE_AUTH_HMAC_KEY` takes precedence) and never reads
+  `.geode_hmac_key`, so restore refuses `--hmac-key-file` alongside either
+  variable (`HmacKeySourceConflict`), and an encrypted backup, which needs
+  `GEODE_TDE_KEY` to decrypt, is always restored with the source server's
+  `GEODE_TDE_KEY` and no key file. The refusal used to read "both are set; a
+  server uses the environment key, so give one"; it now says why, what to
+  do, and that nothing was restored. `geode restore --help`,
+  `docs/GQL_AUTH_DDL.md` ("HMAC key"), `docs/API_REFERENCE.md`,
+  `docs/USAGE.md` and `docs/deployment/DEPLOYMENT.md` say so. Regression:
+  `zig build test-sonny6386-restore-hmac-key-file-with-tde`.
 - **BREAKING (library API): `security.key_rotation.KeyRegistry` loses the
   uncompiled `saveState` / `loadState` and the simulated-KMS
   `rotateWithKms` / `setKmsSeed` (SONNY-6386 item 5).** The registry has no
