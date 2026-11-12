@@ -166,7 +166,7 @@ test "GAP-0193: Types - Cryptographic types" {
         const types = geode.types;
         try testing.expect(@hasDecl(types, "Hash") or
             @hasDecl(types, "Signature") or
-            @hasDecl(types, "cryptographic") or true);
+            @hasDecl(types, "cryptographic"));
     }
     var result = try geode.parse(testing.allocator, "RETURN hash('sha256', 'data') AS hash", .{});
     defer result.deinit();
@@ -183,7 +183,7 @@ test "GAP-0193: Types - Geographic types" {
     if (has_types) {
         const types = geode.types;
         try testing.expect(@hasDecl(types, "Point") or
-            @hasDecl(types, "geographic") or true);
+            @hasDecl(types, "geographic"));
     }
     var result = try geode.parse(testing.allocator, "RETURN point({latitude: 37.7749, longitude: -122.4194}) AS location", .{});
     defer result.deinit();
@@ -200,7 +200,7 @@ test "GAP-0193: Types - Network types module" {
     if (has_types) {
         const types = geode.types;
         try testing.expect(@hasDecl(types, "network") or
-            @hasDecl(types, "IpAddr") or true);
+            @hasDecl(types, "IpAddr"));
     }
     var result = try geode.parse(testing.allocator, "RETURN '192.168.1.1' AS ip", .{});
     defer result.deinit();

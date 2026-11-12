@@ -121,7 +121,7 @@ test "GAP-0193: REQ-GQL-051 - GPU module structure" {
     // Verify GPU module exists (may be stub if no GPU available)
     const has_gpu = @hasDecl(geode, "gpu");
     // GPU support is optional - test passes if module exists or is properly stubbed
-    try testing.expect(has_gpu or true);
+    try testing.expect(has_gpu);
 }
 
 // =============================================================================
@@ -365,7 +365,7 @@ test "GAP-0193: REQ-PROP-PATTERN-VAR-001 - Property pattern with variable refere
 test "GAP-0193: REQ-CDC-ENGINE-001 - CDC engine module" {
     // Verify CDC module exists
     const has_cdc = @hasDecl(geode, "cdc");
-    try testing.expect(has_cdc or true); // CDC may be optional
+    try testing.expect(has_cdc); // CDC may be optional
 }
 
 // =============================================================================
@@ -375,7 +375,7 @@ test "GAP-0193: REQ-CDC-ENGINE-001 - CDC engine module" {
 
 test "GAP-0193: REQ-DISTRIBUTED-001 - Distributed module structure" {
     const has_distributed = @hasDecl(geode, "distributed");
-    try testing.expect(has_distributed or true); // Distributed may be optional
+    try testing.expect(has_distributed); // Distributed may be optional
 }
 
 // =============================================================================
@@ -395,7 +395,7 @@ test "GAP-0193: REQ-RLS-EXPR-001 - RLS expression compilation" {
 
 test "GAP-0193: REQ-PROMETHEUS-001 - Metrics infrastructure" {
     const has_metrics = @hasDecl(geode, "metrics") or @hasDecl(geode, "telemetry");
-    try testing.expect(has_metrics or true); // Metrics may be optional
+    try testing.expect(has_metrics); // Metrics may be optional
 }
 
 // =============================================================================
@@ -417,7 +417,7 @@ test "GAP-0193: REQ-PHANTOM-READ-001 - Phantom read prevention" {
 
 test "GAP-0193: REQ-CLI-MOD-001 - CLI module structure" {
     const has_cli = @hasDecl(geode, "cli");
-    try testing.expect(has_cli or true); // CLI may be separate module
+    try testing.expect(has_cli); // CLI may be separate module
 }
 
 // =============================================================================

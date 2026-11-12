@@ -1,17 +1,39 @@
-// Test suite for TDE nonce uniqueness and security
-// CANARY: REQ=REQ-TDE-NONCE-001; FEATURE="TDE_AES_GCM_Nonce_Security"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-17
-//         ASPECT=TESTING; STATUS=TESTED; TEST=src/security/test_tde_nonce.zig; OWNER=security; UPDATED=2026-01-15
+// Test suite for TDE nonce uniqueness and security (src/security/tde.zig).
+// CANARY: REQ=REQ-TDE-NONCE-001; FEATURE="TDE_AES_GCM_Nonce_Security"; ASPECT=Security; STATUS=TESTED; TEST=test-tde-nonce; OWNER=security; UPDATED=2026-11-11
+//
+// SONNY-6298: this file lived in src/security/ and no build step compiled it
+// (std.process.setEnvVar was removed in Zig 0.16). It now drives the engine
+// through the geode module, enabling TDE the way test-gap0843-tenant-tde does.
 
 const std = @import("std");
 const testing = std.testing;
-const tde = @import("tde.zig");
+const geode = @import("geode");
+
+const tde = geode.tde_stub; // src/security/tde.zig
+// Imported under a non-`feature_*` name for the no-feature-flags governance
+// check (see tests/test_gap0843_tenant_tde.zig).
+const runtime_flags = geode.util_feature_flags;
+
+// std.posix.setenv was removed in Zig 0.16; the key manager reads
+// GEODE_TDE_KEY via std.c.getenv, so install it through libc.
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+const TEST_MASTER_KEY_HEX = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+fn enableTde() void {
+    runtime_flags.global().tde.enableForTests();
+    _ = setenv("GEODE_TDE_KEY", TEST_MASTER_KEY_HEX, 1);
+}
+
+fn disableTde() void {
+    _ = unsetenv("GEODE_TDE_KEY");
+    runtime_flags.global().tde.disableForTests();
+}
 
 test "TDE nonce uniqueness - 10000 encryptions" {
-    // Set up TDE key for testing
-    try std.process.setEnvVar("GEODE_TDE_ENABLED", "1");
-    try std.process.setEnvVar("GEODE_TDE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    defer std.process.unsetEnvVar("GEODE_TDE_ENABLED");
-    defer std.process.unsetEnvVar("GEODE_TDE_KEY");
+    enableTde();
+    defer disableTde();
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -45,10 +67,8 @@ test "TDE nonce uniqueness - 10000 encryptions" {
 }
 
 test "TDE same plaintext produces different ciphertexts" {
-    try std.process.setEnvVar("GEODE_TDE_ENABLED", "1");
-    try std.process.setEnvVar("GEODE_TDE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    defer std.process.unsetEnvVar("GEODE_TDE_ENABLED");
-    defer std.process.unsetEnvVar("GEODE_TDE_KEY");
+    enableTde();
+    defer disableTde();
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -80,10 +100,8 @@ test "TDE same plaintext produces different ciphertexts" {
 }
 
 test "TDE nonce cryptographic randomness check" {
-    try std.process.setEnvVar("GEODE_TDE_ENABLED", "1");
-    try std.process.setEnvVar("GEODE_TDE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    defer std.process.unsetEnvVar("GEODE_TDE_ENABLED");
-    defer std.process.unsetEnvVar("GEODE_TDE_KEY");
+    enableTde();
+    defer disableTde();
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -121,10 +139,8 @@ test "TDE nonce cryptographic randomness check" {
 }
 
 test "TDE round-trip with various plaintexts" {
-    try std.process.setEnvVar("GEODE_TDE_ENABLED", "1");
-    try std.process.setEnvVar("GEODE_TDE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    defer std.process.unsetEnvVar("GEODE_TDE_ENABLED");
-    defer std.process.unsetEnvVar("GEODE_TDE_KEY");
+    enableTde();
+    defer disableTde();
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -151,10 +167,8 @@ test "TDE round-trip with various plaintexts" {
 }
 
 test "TDE wrong AAD fails decryption" {
-    try std.process.setEnvVar("GEODE_TDE_ENABLED", "1");
-    try std.process.setEnvVar("GEODE_TDE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    defer std.process.unsetEnvVar("GEODE_TDE_ENABLED");
-    defer std.process.unsetEnvVar("GEODE_TDE_KEY");
+    enableTde();
+    defer disableTde();
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -169,14 +183,12 @@ test "TDE wrong AAD fails decryption" {
 
     // Decryption with wrong AAD should fail
     const decrypt_result = tde.decrypt(ally, ct, wrong_aad);
-    try testing.expectError(error.AuthenticationFailed, decrypt_result);
+    try testing.expectError(error.AuthFailed, decrypt_result);
 }
 
 test "TDE tampered ciphertext fails decryption" {
-    try std.process.setEnvVar("GEODE_TDE_ENABLED", "1");
-    try std.process.setEnvVar("GEODE_TDE_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
-    defer std.process.unsetEnvVar("GEODE_TDE_ENABLED");
-    defer std.process.unsetEnvVar("GEODE_TDE_KEY");
+    enableTde();
+    defer disableTde();
 
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -194,6 +206,6 @@ test "TDE tampered ciphertext fails decryption" {
 
         // Decryption should fail due to authentication
         const decrypt_result = tde.decrypt(ally, ct, aad);
-        try testing.expectError(error.AuthenticationFailed, decrypt_result);
+        try testing.expectError(error.AuthFailed, decrypt_result);
     }
 }

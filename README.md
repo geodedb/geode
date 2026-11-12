@@ -4,7 +4,7 @@
 
 [![ISO Conformance Suite](https://img.shields.io/badge/ISO%20Conformance%20Suite-70%2F70-brightgreen)](docs/GQL_COMPLIANCE.md)
 [![Local Test Baseline](https://img.shields.io/badge/Local%20Test%20Baseline-166%2F175%20steps-green)](docs/KNOWN_TEST_ISSUES.md)
-[![CANARY Tracking](https://img.shields.io/badge/CANARY%20Markers-4900%2B-blue)](docs/TODO.md)
+[![CANARY Tracking](https://img.shields.io/badge/CANARY%20Markers-5900%2B-blue)](docs/TODO.md)
 [![Status](https://img.shields.io/badge/Status-Development%20Ready%20%28Single--Tenant%29-yellow)](docs/FEATURES_OVERVIEW.md)
 
 Geode is a feature-complete single-tenant graph database implementing the **ISO/IEC 39075:2024 Graph Query Language (GQL)** standard. Built in Zig for performance and reliability, Geode provides enterprise-grade features including advanced security, machine learning integration, and distributed query processing.
@@ -17,7 +17,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 
 - **ISO/IEC 39075:2024 GQL Conformance Suite** - 96/96 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
 - **Transactions** - `START TRANSACTION` / `COMMIT` / `ROLLBACK` with undo-log rollback; writes are serialized per graph and each read sees one snapshot. There are no isolation levels and no SSI (see [docs/ENHANCED_TRANSACTION_ISOLATION.md](docs/ENHANCED_TRANSACTION_ISOLATION.md))
-- **Enterprise Security** - Enhanced RLS, TDE, audit logging, MFA support
+- **Enterprise Security** - Row-level security, TDE, audit logging, MFA support
 
 ### **Advanced Capabilities**
 
@@ -193,7 +193,7 @@ COMMIT;
 
 - **Vector Processing** - SIMD-accelerated operations with hardware optimization
 - **Machine Learning** - Integrated graph embedding algorithms for AI applications
-- **Security Layer** - Enhanced RLS, policy evaluation, temporal constraints
+- **Security Layer** - Row-level security: policy evaluation, temporal constraints
 - **Analytics Engine** - Real-time stream processing with pattern detection
 
 ## 📊 Performance Benchmarks
@@ -215,7 +215,7 @@ COMMIT;
 
 ### **Authentication & Authorization**
 
-- **Enhanced Row-Level Security (RLS)** - Policy-based access control with expression evaluation
+- **Row-Level Security (RLS)** - Policy-based access control with expression evaluation
 - **RBAC/ABAC** - Role and attribute-based access control
 - **Multi-Factor Authentication** - Integrated MFA support
 - **Session Management** - Secure session handling with timeout controls
@@ -311,7 +311,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 - **Local Test Baseline** - 167/175 named `zig build test-*` steps pass; see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) for the canonical baseline (6 FAIL / 2 TIMEOUT with file:line evidence) and the geodetestlab integration suite (separate harness run owed)
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
-- **CANARY Governance** - ~4,900 governance markers (≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED; run `make status-generate` for current counts)
+- **CANARY Governance** - 5,937 governance markers (88.1% TESTED, 4.3% IMPL, 4.1% EXEMPT, 3.5% BENCHED, 2026-11-11; run `make status-generate` for current counts)
 - **Cross-Platform** - Linux, macOS, Windows compatibility
 - **GPU Build Foundation** - Vulkan backend scaffold with honest device detection (`zig build test-gpu` self-skips hardware dispatch); algorithms run the CPU path, GPU acceleration planned
 

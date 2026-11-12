@@ -95,46 +95,14 @@ ROLLBACK
 
 ### State Persistence
 
-Transaction state is persisted across CLI invocations to support multi-command transactions:
-
-```bash
-# First command
-./geode query "START TRANSACTION"
-
-# Second command (in same session)
-./geode query "CREATE (n:Test {id: 1})"
-
-# Third command (in same session)
-./geode query "COMMIT"
-```
-
-**Implementation:**
-
-- Transaction state saved to disk in session file
-- Loaded before query execution (if not starting new transaction)
-- Cleared after COMMIT or ROLLBACK
-
-### Key Fix: START TRANSACTION State Handling
-
-**Problem Solved:**
-Previously, `START TRANSACTION` would fail with "TransactionAlreadyActive" error because the previous transaction's Active state persisted from disk.
-
-**Solution:**
-Transaction session is NOT loaded when executing START TRANSACTION, ensuring a clean slate.
-
-**Code Location:**
-`src/test_harness.zig:50-56`
-
-```zig
-// Check if starting new transaction BEFORE loading session
-const is_start_transaction = parse_result.program.statements.len > 0
-    and parse_result.program.statements[0] == .StartTransaction;
-
-// Only load session if NOT starting new transaction
-var transaction_session = if (!is_start_transaction)
-    txn_session.loadSession(allocator.*) catch null
-else null;
-```
+Transaction state is held by the server for the connection, not in a file:
+the QUIC handler keeps a per-connection `in_txn` flag
+(`src/server/quic_connection_handler.zig`) and passes it to the executor as
+`ExecutionContext.transaction_state` (`src/execution.zig`). A transaction
+therefore spans the statements sent on one connection, for example in
+`geode shell` or in one multi-statement `geode query` call. Separate
+`geode query` invocations open separate connections and do not share a
+transaction.
 
 ## Error Handling
 
@@ -245,20 +213,13 @@ pub const TransactionState = enum {
 
 ### Session Persistence
 
-Transaction state is persisted using the `TransactionSession` structure:
-
-```zig
-pub const TransactionSession = struct {
-    state: TransactionState,
-    // Future: transaction ID, isolation level, etc.
-};
-```
+There is no on-disk transaction session. See
+[State Persistence](#state-persistence).
 
 **Files:**
 
-- `src/txn_session.zig`: Load/save transaction session
-- `src/test_harness.zig:50-130`: Transaction session lifecycle
-- `src/execution.zig:474-551`: Transaction command execution
+- `src/server/quic_connection_handler.zig`: per-connection transaction flag
+- `src/execution.zig`: transaction command execution and undo log
 
 ## Testing
 

@@ -20,7 +20,7 @@ test "GAP-0193: 2PC TLS - Distributed transaction security" {
         // Check for TLS-related functionality
         try testing.expect(@hasDecl(distributed, "TwoPhaseCoordinator") or
             @hasDecl(distributed, "twophase") or
-            @hasDecl(distributed, "TLSConfig") or true);
+            @hasDecl(distributed, "TLSConfig"));
     }
     // Parse distributed transaction query
     var result = try geode.parse(testing.allocator, "BEGIN TRANSACTION", .{});
@@ -47,7 +47,7 @@ test "GAP-0193: Auth Config - Configurable password policy" {
         // Check for auth configuration
         try testing.expect(@hasDecl(security, "AuthConfig") or
             @hasDecl(security, "PasswordPolicy") or
-            @hasDecl(security, "auth") or true);
+            @hasDecl(security, "auth"));
     }
     var result = try geode.parse(testing.allocator, "RETURN current_user() AS user", .{});
     defer result.deinit();
@@ -199,7 +199,7 @@ test "GAP-0193: Audit TLS - Syslog tests" {
         const audit = geode.audit;
         try testing.expect(@hasDecl(audit, "syslog") or
             @hasDecl(audit, "SyslogHandler") or
-            @hasDecl(audit, "TLSConfig") or true);
+            @hasDecl(audit, "TLSConfig"));
     }
     var result = try geode.parse(testing.allocator, "RETURN timestamp() AS audit_time", .{});
     defer result.deinit();
@@ -281,7 +281,7 @@ test "GAP-0193: Network Security - TLS connection" {
         const transport = geode.transport;
         try testing.expect(@hasDecl(transport, "TLS") or
             @hasDecl(transport, "QUIC") or
-            @hasDecl(transport, "SecureConnection") or true);
+            @hasDecl(transport, "SecureConnection"));
     }
     var result = try geode.parse(testing.allocator, "RETURN 'tls_secure' AS connection", .{});
     defer result.deinit();

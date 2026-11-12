@@ -131,7 +131,6 @@ src/utils/          - Additional utilities
 
 ```
 src/types/          - Advanced data types (vector, geographic, network, etc.)
-src/containers/     - Container data structures
 src/unicode/        - Unicode support
 ```
 
@@ -157,10 +156,8 @@ src/fuzz/           - Fuzzing infrastructure
 ```
 src/admin/          - Admin operations
 src/tools/          - Development tools
-src/runtime/        - Runtime support
 src/multitenancy/   - Multi-tenancy support
 src/pagination/     - Pagination utilities
-src/parser/         - Generic parsing utilities
 src/performance/    - Performance optimizations
 src/algorithms/     - Algorithm implementations
 src/dist/           - Distribution utilities
@@ -466,7 +463,6 @@ Request → Authentication → Authorization → RLS Policies → Audit → Resp
 
 - `src/security/auth.zig` (1,226 LOC)
 - `src/security/rls.zig` (1,158 LOC)
-- `src/security/rls_enhanced.zig` (972 LOC)
 - `src/security/audit.zig` (1,701 LOC)
 - `src/security/user_manager.zig` (733 LOC)
 
@@ -723,7 +719,6 @@ Based on this architecture analysis, the modularization phases should proceed as
 | cdc | CDC core | - | - |
 | cli | Command-line interface | ~20 | main.zig (5,885) |
 | client | Client library | ~15 | main.zig (1,081) |
-| containers | Container data structures | - | - |
 | crypto | Cryptographic primitives | - | - |
 | dist | Distribution utilities | - | scaffold.zig (563) |
 | distributed | Raft and cluster management | 27 | raft_consensus.zig (4,405), cluster.zig (3,217) |
@@ -732,8 +727,8 @@ Based on this architecture analysis, the modularization phases should proceed as
 | fts | Full-text search | ~5 | advanced.zig (519) |
 | fuzz | Fuzzing infrastructure | - | - |
 | gpu | GPU acceleration | ~5 | vulkan_compute.zig (759), vulkan_ffi.zig (687) |
-| gql | GQL parser/lexer | ~10 | parser.zig (5,883), lexer.zig (631), main.zig (781), match.zig (836), print.zig (725) |
-| graph | Graph data structures | ~10 | builtin_algorithms.zig (1,581), aggregator.zig (723) |
+| gql | GQL parser/lexer | ~10 | parser.zig (5,883), lexer.zig (631), main.zig (781), print.zig (725) |
+| graph | Graph data structures | ~10 | builtin_algorithms.zig (1,581) |
 | index | Index implementations | ~10 | index_manager.zig (924), btree.zig (697), advanced_types_index.zig (702), spatial_index.zig (522) |
 | keys | Key management | - | - |
 | log | Logging infrastructure | - | - |
@@ -743,13 +738,11 @@ Based on this architecture analysis, the modularization phases should proceed as
 | multitenancy | Multi-tenancy support | - | - |
 | optimizer | Query optimization | ~5 | advanced_types_optimizer.zig (599) |
 | pagination | Pagination utilities | - | - |
-| parser | Generic parsing | - | - |
 | performance | Performance helpers | 3 | memory_mapped_io.zig (850; exported by `src/lib.zig`, no product caller), json_optimized_fixed.zig (408; compiled only by its unit test) |
 | planner | Query planning | 15 | pipeline.zig (854), cost_model.zig (594), cbo.zig (579), wcoj.zig (473), rewrite.zig (360) |
 | query | Query management | ~5 | enhanced_materialized_views.zig (884), materialized_views.zig (650) |
-| runtime | Runtime support | - | - |
 | schema | Schema management | ~5 | catalog.zig (568) |
-| security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), rls_enhanced.zig (972), user_manager.zig (733) |
+| security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), user_manager.zig (733) |
 | server | Server implementation | ~40 | quic_connection_handler.zig (10,995), main.zig (3,628), query_plan_cache.zig (1,136), graph/exec.zig (756), txn/mvcc.zig (799; no server caller), txn/phantom_read_prevention.zig (706; no server caller) |
 | storage | Storage engine | ~8 | heap.zig (860), user_storage.zig (763), s3_backup.zig (521), backup.zig (498), tde_file_encryption.zig (262) |
 | streaming | CDC and streaming | ~5 | cdc_enhanced.zig (1,390) |

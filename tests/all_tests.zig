@@ -85,7 +85,6 @@ const _gap_0193_batch6_comprehensive = @import("test_gap_0193_batch6_comprehensi
 const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");
 const _e2e_s3_backup_restore = @import("e2e_s3_backup_restore.zig");
 const _e2e_cdc_webhook_reliability = @import("e2e_cdc_webhook_reliability.zig");
-const _e2e_cbo_small_n = @import("e2e_cbo_small_n.zig");
 const _canary_cdc_backpressure_adaptive = @import("canary_cdc_backpressure_adaptive.zig");
 const _benchmark_txn_conflict_variance = @import("benchmark_txn_conflict_matrix_variance.zig");
 const _benchmark_betweenness_variance = @import("benchmark_betweenness_variance.zig");

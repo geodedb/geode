@@ -11,7 +11,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 - ✅ **Phase 2**: Parser Extensions (Map literals, deep nesting)
 - ✅ **Phase 3**: Set Operations (UNION/INTERSECT/EXCEPT)
 - ❌ **Phase 4**: Transaction Isolation — not implemented in the server (no isolation levels, SSI or phantom-read prevention; the code was never compiled and was removed 2026-11-11, SONNY-6298). See [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md)
-- ✅ **Phase 5**: Distributed Coordination (10,451 lines)
+- ✅ **Phase 5**: Distributed Coordination — Raft consensus, cluster management and two-phase commit (`src/distributed/`: 22,458 lines in 26 files). Federated / scatter-gather query coordination is not implemented (that code was never compiled and was removed 2026-11-11, SONNY-6279)
 - ✅ **Phase 6**: Materialized Views (3 refresh strategies; query rewrite is exact-match only, API level — GAP-0876)
 - ✅ **Phase 7**: Graph Algorithms (20-90% performance gains)
 
@@ -68,7 +68,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 ### **Authentication & Authorization**
 
 - **RBAC/ABAC**: Role and attribute-based access control
-- **Enhanced RLS**: Row-level security with policy evaluation
+- **Row-level security**: policy evaluation and bytecode-compiled expression policies (`src/security/rls_core.zig`)
 - **MFA Support**: Multi-factor authentication integration
 - **Session Management**: Secure session handling
 

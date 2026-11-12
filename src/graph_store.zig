@@ -743,7 +743,7 @@ fn generateTimeBasedId() u64 {
 }
 
 // Field-Level Encryption Storage Hooks
-// CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FieldLevelEncryption"; ASPECT=STORAGE; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-FLE-STORAGE-001; FEATURE="FieldLevelEncryption"; ASPECT=STORAGE; STATUS=IMPL; OWNER=security; UPDATED=2026-11-11
 
 // Simple graph store with file-based persistence for testing
 // Real implementation would use proper storage engine
@@ -16975,8 +16975,7 @@ pub fn releaseStoreWriteLock() void {
 /// MATCH read path.
 ///
 /// `std.heap.smp_allocator` is a sharded per-core allocator with
-/// thread-local fast paths — the same allocator `src/server/allocator_config.zig`
-/// already selects by default for the top-level server allocator. It has no
+/// thread-local fast paths. It has no
 /// init state, so callers can use `global_allocator()` directly without a
 /// prior initialization step.
 pub fn global_allocator() std.mem.Allocator {

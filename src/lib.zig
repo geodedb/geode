@@ -494,9 +494,8 @@ pub const tenant_quota = @import("security/tenant_quota.zig");
 // GAP-0839: Durable tenant lifecycle registry
 pub const tenant_registry = @import("security/tenant_registry.zig");
 
-// Security modules for enhanced RLS and compliance features
+// Security modules for RLS and compliance features
 pub const security = struct {
-    pub const rls_enhanced = @import("security/rls_enhanced.zig");
     // GAP-0890: policy-enforced key-rotation registry (rotateNow refuses
     // under min_interval; rotateIfDue is the operator-invoked scheduler tick).
     pub const key_rotation = @import("security/key_rotation.zig");

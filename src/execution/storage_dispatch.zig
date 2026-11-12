@@ -213,7 +213,7 @@ pub fn executeTde(
 }
 
 fn handleTdeInitializeKeyHierarchy(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-001; FEATURE="TDEProcedures"; ASPECT=KeyHierarchy; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-001; FEATURE="TDEProcedures"; ASPECT=KeyHierarchy; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.initialize_key_hierarchy() -> success, master_key_id, dek_count
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "success");
@@ -235,7 +235,7 @@ fn handleTdeInitializeKeyHierarchy(allocator: std.mem.Allocator, _: ast.CallProc
 }
 
 fn handleTdeRotateKeys(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-002; FEATURE="TDEProcedures"; ASPECT=KeyRotation; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-002; FEATURE="TDEProcedures"; ASPECT=KeyRotation; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.rotate_keys() -> success, keys_rotated, new_master_key_id
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "success");
@@ -257,7 +257,7 @@ fn handleTdeRotateKeys(allocator: std.mem.Allocator, _: ast.CallProcedure) anyer
 }
 
 fn handleTdeGetEncryptionStatus(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-003; FEATURE="TDEProcedures"; ASPECT=EncryptionStatus; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-003; FEATURE="TDEProcedures"; ASPECT=EncryptionStatus; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.get_encryption_status() -> enabled, encrypted_tables, encryption_algorithm
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "enabled");
@@ -279,7 +279,7 @@ fn handleTdeGetEncryptionStatus(allocator: std.mem.Allocator, _: ast.CallProcedu
 }
 
 fn handleTdeConfigureKms(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-004; FEATURE="TDEProcedures"; ASPECT=KMSConfiguration; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-004; FEATURE="TDEProcedures"; ASPECT=KMSConfiguration; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.configure_kms() -> success, kms_provider, kms_configured
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "success");
@@ -301,7 +301,7 @@ fn handleTdeConfigureKms(allocator: std.mem.Allocator, _: ast.CallProcedure) any
 }
 
 fn handleTdeTestEncryption(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-005; FEATURE="TDEProcedures"; ASPECT=EncryptionTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-005; FEATURE="TDEProcedures"; ASPECT=EncryptionTest; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_encryption() -> success, bytes_encrypted, encryption_time_ms
 
     // Test data
@@ -355,7 +355,7 @@ fn handleTdeTestEncryption(allocator: std.mem.Allocator, _: ast.CallProcedure) a
 }
 
 fn handleTdeTestDecryption(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-006; FEATURE="TDEProcedures"; ASPECT=DecryptionTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-006; FEATURE="TDEProcedures"; ASPECT=DecryptionTest; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_decryption() -> success, bytes_decrypted, decryption_time_ms
 
     // Test data
@@ -408,7 +408,7 @@ fn handleTdeTestDecryption(allocator: std.mem.Allocator, _: ast.CallProcedure) a
 }
 
 fn handleTdeVerifyEncryptedState(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-007; FEATURE="TDEProcedures"; ASPECT=EncryptedStateVerification; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-007; FEATURE="TDEProcedures"; ASPECT=EncryptedStateVerification; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.verify_encrypted_state() -> success, all_encrypted, tables_checked
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "success");
@@ -430,7 +430,7 @@ fn handleTdeVerifyEncryptedState(allocator: std.mem.Allocator, _: ast.CallProced
 }
 
 fn handleTdeBenchmarkEncryption(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-008; FEATURE="TDEProcedures"; ASPECT=EncryptionBenchmark; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-008; FEATURE="TDEProcedures"; ASPECT=EncryptionBenchmark; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.benchmark_encryption() -> success, throughput_mbps, avg_latency_us
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "success");
@@ -452,7 +452,7 @@ fn handleTdeBenchmarkEncryption(allocator: std.mem.Allocator, _: ast.CallProcedu
 }
 
 fn handleTdeTestKeyRotation(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-009; FEATURE="TDEProcedures"; ASPECT=KeyRotationTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-009; FEATURE="TDEProcedures"; ASPECT=KeyRotationTest; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_key_rotation() -> success, rotation_successful, data_integrity_verified
 
     var success = false;
@@ -527,7 +527,7 @@ fn handleTdeTestKeyRotation(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 }
 
 fn handleTdeBackupEncrypted(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-010; FEATURE="TDEProcedures"; ASPECT=EncryptedBackup; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-010; FEATURE="TDEProcedures"; ASPECT=EncryptedBackup; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.backup_encrypted() -> success, backup_path, backup_encrypted
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "success");
@@ -549,7 +549,7 @@ fn handleTdeBackupEncrypted(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 }
 
 fn handleTdeConfigureKeyProvider(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-011; FEATURE="TDEKeyProvider"; ASPECT=CloudKMSConfiguration; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-011; FEATURE="TDEKeyProvider"; ASPECT=CloudKMSConfiguration; STATUS=IMPL; OWNER=security; UPDATED=2026-11-11
     // Configure cloud KMS provider (AWS KMS, Azure Key Vault, GCP KMS, HashiCorp Vault)
 
     const args = switch (call_stmt.procedure) {
@@ -663,7 +663,7 @@ fn handleTdeConfigureKeyProvider(allocator: std.mem.Allocator, call_stmt: ast.Ca
 }
 
 fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-012; FEATURE="MockKMSProvider"; ASPECT=Testing; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-012; FEATURE="MockKMSProvider"; ASPECT=Testing; STATUS=IMPL; OWNER=security; UPDATED=2026-11-11
     // Real mock KMS setup for testing with in-memory key management
 
     // Extract arguments from call statement
@@ -1414,7 +1414,7 @@ fn handleTdeTestCorruptedKey(allocator: std.mem.Allocator, _: ast.CallProcedure)
 }
 
 fn handleTdeConfigureProvider(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-037; FEATURE="TDETestProcedures"; ASPECT=ConfigureProvider; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-037; FEATURE="TDETestProcedures"; ASPECT=ConfigureProvider; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.configure_provider(provider_type) -> provider_type, status, key_source
 
     // Extract provider_type parameter from call arguments
@@ -1460,7 +1460,7 @@ fn handleTdeConfigureProvider(allocator: std.mem.Allocator, call_stmt: ast.CallP
 }
 
 fn handleTdeGetRotationState(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-038; FEATURE="TDETestProcedures"; ASPECT=GetRotationState; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-038; FEATURE="TDETestProcedures"; ASPECT=GetRotationState; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.get_rotation_state() -> current_generation, last_rotation_time, rotation_in_progress, scheduled_rotation
 
     // Call real TDE function
@@ -1488,7 +1488,7 @@ fn handleTdeGetRotationState(allocator: std.mem.Allocator, _: ast.CallProcedure)
 }
 
 fn handleTdeConfigureRotation(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-039; FEATURE="TDETestProcedures"; ASPECT=ConfigureRotation; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-039; FEATURE="TDETestProcedures"; ASPECT=ConfigureRotation; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.configure_rotation(strategy, max_age_hours) -> status, next_rotation_time
 
     // Extract max_age_hours parameter
@@ -1530,7 +1530,7 @@ fn handleTdeConfigureRotation(allocator: std.mem.Allocator, call_stmt: ast.CallP
 }
 
 fn handleTdeEncryptPageTest(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-040; FEATURE="TDETestProcedures"; ASPECT=EncryptPageTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-040; FEATURE="TDETestProcedures"; ASPECT=EncryptPageTest; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.encrypt_page_test() -> page_id, encryption_status, page_size_encrypted, integrity_check
 
     // Call real TDE function
@@ -1558,7 +1558,7 @@ fn handleTdeEncryptPageTest(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 }
 
 fn handleTdeEncryptBackupTest(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-041; FEATURE="TDETestProcedures"; ASPECT=EncryptBackupTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-041; FEATURE="TDETestProcedures"; ASPECT=EncryptBackupTest; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.encrypt_backup_test() -> backup_id, encryption_status, backup_size, integrity_verified
 
     // Call real TDE function
@@ -1586,7 +1586,7 @@ fn handleTdeEncryptBackupTest(allocator: std.mem.Allocator, _: ast.CallProcedure
 }
 
 fn handleTdeRoundtripTest(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-042; FEATURE="TDETestProcedures"; ASPECT=RoundtripTest; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-042; FEATURE="TDETestProcedures"; ASPECT=RoundtripTest; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.roundtrip_test(data) -> original_data, decrypted_data, roundtrip_success
 
     // Extract test_data parameter from call arguments
@@ -1630,7 +1630,7 @@ fn handleTdeRoundtripTest(allocator: std.mem.Allocator, call_stmt: ast.CallProce
 }
 
 fn handleTdeCreateEncryptedBackup(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-043; FEATURE="TDETestProcedures"; ASPECT=CreateEncryptedBackup; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-043; FEATURE="TDETestProcedures"; ASPECT=CreateEncryptedBackup; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.create_encrypted_backup(path) -> backup_path, encryption_key_id, backup_size, integrity_hash
 
     // Extract backup path parameter
@@ -1676,7 +1676,7 @@ fn handleTdeCreateEncryptedBackup(allocator: std.mem.Allocator, call_stmt: ast.C
 }
 
 fn handleTdeRestoreWithKeys(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-044; FEATURE="TDETestProcedures"; ASPECT=RestoreWithKeys; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-044; FEATURE="TDETestProcedures"; ASPECT=RestoreWithKeys; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.restore_with_keys(backup_path, manifest_path) -> restore_status, records_restored, keys_verified
 
     // Extract parameters
@@ -1732,7 +1732,7 @@ fn handleTdeRestoreWithKeys(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 }
 
 fn handleTdeMeasureOverhead(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-045; FEATURE="TDETestProcedures"; ASPECT=MeasureOverhead; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-045; FEATURE="TDETestProcedures"; ASPECT=MeasureOverhead; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.measure_overhead() -> baseline_ops_per_sec, encrypted_ops_per_sec, overhead_percentage, passes_threshold
 
     // Call real TDE function
@@ -1760,7 +1760,7 @@ fn handleTdeMeasureOverhead(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 }
 
 fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-046; FEATURE="TDETestProcedures"; ASPECT=SimulateOLTPWorkload; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-046; FEATURE="TDETestProcedures"; ASPECT=SimulateOLTPWorkload; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.simulate_oltp_workload(duration_seconds, concurrent_transactions) -> avg_transaction_time_ms, tps_with_encryption, tps_without_encryption, degradation_percentage
 
     // Extract parameters
@@ -1818,7 +1818,7 @@ fn handleTdeSimulateOltpWorkload(allocator: std.mem.Allocator, call_stmt: ast.Ca
 }
 
 fn handleTdeTestKeyZeroization(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-047; FEATURE="TDETestProcedures"; ASPECT=TestKeyZeroization; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-047; FEATURE="TDETestProcedures"; ASPECT=TestKeyZeroization; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_key_zeroization() -> keys_zeroized, memory_cleared, secure_cleanup_verified
 
     // Call real TDE function
@@ -1844,7 +1844,7 @@ fn handleTdeTestKeyZeroization(allocator: std.mem.Allocator, _: ast.CallProcedur
 }
 
 fn handleTdeAuditPlaintextKeys(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-048; FEATURE="TDETestProcedures"; ASPECT=AuditPlaintextKeys; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-048; FEATURE="TDETestProcedures"; ASPECT=AuditPlaintextKeys; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.audit_plaintext_keys() -> plaintext_keys_found, encrypted_keys_count, security_violation
 
     // Call real TDE function
@@ -1870,7 +1870,7 @@ fn handleTdeAuditPlaintextKeys(allocator: std.mem.Allocator, _: ast.CallProcedur
 }
 
 fn handleTdeTestKeyAccessControl(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-049; FEATURE="TDETestProcedures"; ASPECT=TestKeyAccessControl; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-049; FEATURE="TDETestProcedures"; ASPECT=TestKeyAccessControl; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_key_access_control() -> authorized_access, unauthorized_attempts, access_denied_count
 
     // Call real TDE function
@@ -1896,7 +1896,7 @@ fn handleTdeTestKeyAccessControl(allocator: std.mem.Allocator, _: ast.CallProced
 }
 
 fn handleTdeConfigureExternalKms(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-050; FEATURE="TDETestProcedures"; ASPECT=ConfigureExternalKMS; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-050; FEATURE="TDETestProcedures"; ASPECT=ConfigureExternalKMS; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.configure_external_kms(endpoint, region) -> status, endpoint, connection_verified
 
     // Extract parameters
@@ -1952,7 +1952,7 @@ fn handleTdeConfigureExternalKms(allocator: std.mem.Allocator, call_stmt: ast.Ca
 }
 
 fn handleTdeTestKmsWrapUnwrap(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-051; FEATURE="TDETestProcedures"; ASPECT=TestKMSWrapUnwrap; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-051; FEATURE="TDETestProcedures"; ASPECT=TestKMSWrapUnwrap; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_kms_wrap_unwrap() -> wrap_success, unwrap_success, roundtrip_verified, latency_ms
     // Call real TDE function
     const result = try tde_mod.testKmsWrapUnwrap(allocator);
@@ -1979,7 +1979,7 @@ fn handleTdeTestKmsWrapUnwrap(allocator: std.mem.Allocator, _: ast.CallProcedure
 }
 
 fn handleTdeTestKmsAttestation(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-052; FEATURE="TDETestProcedures"; ASPECT=TestKMSAttestation; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-052; FEATURE="TDETestProcedures"; ASPECT=TestKMSAttestation; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_kms_attestation() -> attestation_valid, signature_verified, ed25519_verification, tamper_detected
     // Call real TDE function
     const result = try tde_mod.testKmsAttestation(allocator);
@@ -2006,7 +2006,7 @@ fn handleTdeTestKmsAttestation(allocator: std.mem.Allocator, _: ast.CallProcedur
 }
 
 fn handleTdeTestPrivilegedUnwrap(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-053; FEATURE="TDETestProcedures"; ASPECT=TestPrivilegedUnwrap; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-053; FEATURE="TDETestProcedures"; ASPECT=TestPrivilegedUnwrap; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_privileged_unwrap() -> privileged_access_granted, unwrap_successful, audit_logged
     // Call real TDE function
     const result = try tde_mod.testPrivilegedUnwrap(allocator);
@@ -2031,7 +2031,7 @@ fn handleTdeTestPrivilegedUnwrap(allocator: std.mem.Allocator, _: ast.CallProced
 }
 
 fn handleTdeTestKeyRecovery(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-054; FEATURE="TDETestProcedures"; ASPECT=TestKeyRecovery; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-054; FEATURE="TDETestProcedures"; ASPECT=TestKeyRecovery; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_key_recovery() -> recovery_initiated, master_key_recovered, data_accessible
     // Call real TDE function
     const result = try tde_mod.testKeyRecovery(allocator);
@@ -2056,7 +2056,7 @@ fn handleTdeTestKeyRecovery(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 }
 
 fn handleTdeEvaluateRotationSchedule(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-055; FEATURE="TDETestProcedures"; ASPECT=EvaluateRotationSchedule; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-055; FEATURE="TDETestProcedures"; ASPECT=EvaluateRotationSchedule; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.evaluate_rotation_schedule() -> should_rotate, next_check_time, rotation_reason, age_hours
     // Call real TDE function
     const result = try tde_mod.evaluateRotationSchedule(allocator);
@@ -2083,7 +2083,7 @@ fn handleTdeEvaluateRotationSchedule(allocator: std.mem.Allocator, _: ast.CallPr
 }
 
 fn handleTdeTestKmsFailure(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-056; FEATURE="TDETestProcedures"; ASPECT=TestKMSFailure; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-056; FEATURE="TDETestProcedures"; ASPECT=TestKMSFailure; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_kms_failure() -> error_handled, fallback_activated, service_degraded
     // Call real TDE function
     const result = try tde_mod.testKmsFailure(allocator);
@@ -2108,7 +2108,7 @@ fn handleTdeTestKmsFailure(allocator: std.mem.Allocator, _: ast.CallProcedure) a
 }
 
 fn handleTdeTestCorruptedKeyHandling(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-057; FEATURE="TDETestProcedures"; ASPECT=TestCorruptedKeyHandling; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-057; FEATURE="TDETestProcedures"; ASPECT=TestCorruptedKeyHandling; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.test_corrupted_key_handling() -> corruption_detected, recovery_attempted, data_recoverable
     // Call real TDE function
     const result = try tde_mod.testCorruptedKeyHandling(allocator);
@@ -2133,7 +2133,7 @@ fn handleTdeTestCorruptedKeyHandling(allocator: std.mem.Allocator, _: ast.CallPr
 }
 
 fn handleTdeCleanupKeyHierarchy(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
-    // CANARY: REQ=REQ-TDE-PROC-058; FEATURE="TDETestProcedures"; ASPECT=CleanupKeyHierarchy; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=tde; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-TDE-PROC-058; FEATURE="TDETestProcedures"; ASPECT=CleanupKeyHierarchy; STATUS=IMPL; OWNER=tde; UPDATED=2026-11-11
     // tde.cleanup_key_hierarchy() -> keys_zeroized, hierarchy_cleared
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "keys_zeroized");

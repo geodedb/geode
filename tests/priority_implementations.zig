@@ -91,5 +91,5 @@ test "selectivity adaptive learning" {
     const updated_sel = estimator.estimateSelectivity("category", .Equality);
 
     // Should show some adaptation (even if small due to learning rate)
-    try std.testing.expect(initial_sel != updated_sel or initial_sel == updated_sel); // Either adapted or stayed same
+    try std.testing.expect(initial_sel != updated_sel);
 }

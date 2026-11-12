@@ -5548,8 +5548,6 @@ pub fn build(b: *std.Build) void {
     // since the server code is already part of the geode module through statement_dispatcher.
 
     // Shared modules needed by various executables
-    //    const sentinel_mod = b.createModule(.{ .root_source_file = b.path("src/sentinel.zig"), .target = target, .optimize = optimize });
-
     //    const storage_mem_mod = b.createModule(.{ .root_source_file = b.path("src/storage/inmemory.zig"), .target = target, .optimize = optimize });
 
     // Legacy CSR adjacency module removed with PageManager storage.
@@ -6554,7 +6552,7 @@ pub fn build(b: *std.Build) void {
     // const test_timing_attacks_tests = b.addTest(.{ .root_module = test_timing_attacks_mod });
     // test_step.dependOn(&test_timing_attacks_tests.step);
 
-    // GAP-413 REMAINING: 5 orphaned test files (34 test blocks) still need module restructuring:
+    // GAP-413 REMAINING: 4 orphaned test files (28 test blocks) still need module restructuring:
     //
     // Files with module import issues:
     //   - src/security/test_timing_attacks.zig (6 tests) - hash.zig imports storage/heap.zig outside module
@@ -6564,8 +6562,8 @@ pub fn build(b: *std.Build) void {
     //   - src/server/test_abac_enforcement.zig (8 tests) - references non-existent server_init
     //   - src/server/test_async_connection.zig (5 tests) - module path mismatch
     //
-    // Files with deprecated APIs:
-    //   - src/security/test_tde_nonce.zig (6 tests) - uses tde.zig which has deprecated APIs
+    // (src/security/test_tde_nonce.zig was ported to tests/test_tde_nonce.zig,
+    // step test-tde-nonce, in SONNY-6298.)
     //
     // TOTAL REMAINING: 28 test blocks across 4 files NOT running in CI
     // REMEDIATION: Requires API updates or test file refactoring
@@ -6821,6 +6819,34 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0843_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0843_step = b.step("test-gap0843-tenant-tde", "GAP-0843 regression (per-tenant TDE key isolation + real page encrypt)");
     gap0843_step.dependOn(&run_gap0843_tests.step);
+
+    // SONNY-6298: TDE AES-GCM nonce uniqueness / randomness, round-trip, wrong
+    // AAD and tampered ciphertext (src/security/tde.zig). Formerly the
+    // never-compiled src/security/test_tde_nonce.zig. Needs libc for the
+    // setenv that installs GEODE_TDE_KEY.
+    const tde_nonce_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_tde_nonce.zig"), .target = target, .optimize = optimize });
+    tde_nonce_test_mod.addImport("geode", root_mod);
+    tde_nonce_test_mod.link_libc = true;
+    const tde_nonce_tests = b.addTest(.{ .root_module = tde_nonce_test_mod });
+    const run_tde_nonce_tests = b.addRunArtifact(tde_nonce_tests);
+    shardDep(test_step, &run_tde_nonce_tests.step, 1, test_shard_loads, test_shard_index);
+    const tde_nonce_step = b.step("test-tde-nonce", "TDE AES-GCM nonce uniqueness, round-trip and tamper detection (SONNY-6298)");
+    tde_nonce_step.dependOn(&run_tde_nonce_tests.step);
+
+    // SONNY-6298: GAP-0193 batch-2 security module-structure checks against the
+    // geode module. Never compiled before (an unreferenced const in
+    // all_tests.zig); its four always-true `or true` assertions are removed.
+    // The engine and misc batch-2 files are not registered: 7 and 5 of their
+    // cases parse syntax the ISO GQL parser rejects (Cypher's UNWIND, CREATE
+    // CONSTRAINT ... ASSERT, BEGIN TRANSACTION, `[*]`, WHERE pattern
+    // predicates; CREATE MATERIALIZED VIEW ... AS).
+    const gap0193_b2_security_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap_0193_batch2_security.zig"), .target = target, .optimize = optimize });
+    gap0193_b2_security_mod.addImport("geode", root_mod);
+    const gap0193_b2_security_tests = b.addTest(.{ .root_module = gap0193_b2_security_mod });
+    const run_gap0193_b2_security_tests = b.addRunArtifact(gap0193_b2_security_tests);
+    shardDep(test_step, &run_gap0193_b2_security_tests.step, 1, test_shard_loads, test_shard_index);
+    const gap0193_b2_security_step = b.step("test-gap0193-batch2-security", "GAP-0193 batch-2 security module-structure checks (SONNY-6298)");
+    gap0193_b2_security_step.dependOn(&run_gap0193_b2_security_tests.step);
 
     // GAP-0881: crypto truth — real HMAC-SHA3 (FIPS 198-1 via stdlib, not the
     // old SHA3(key||data) placeholder) + TDE status() derives loaded/key_id
