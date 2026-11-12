@@ -10370,6 +10370,17 @@ pub fn build(b: *std.Build) void {
     const sonny2812_step = b.step("test-sonny2812-distinct-list-keys", "SONNY-2812: count(DISTINCT) and collect(DISTINCT) key list values as RETURN DISTINCT and GROUP BY do");
     sonny2812_step.dependOn(&run_sonny2812_tests.step);
 
+    // SONNY-3025: a plain RETURN after MATCH ... CREATE / MERGE is one row per matched row
+    const sonny3025_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3025_match_write_return_rows.zig"), .target = target, .optimize = optimize });
+    sonny3025_test_mod.addImport("geode", root_mod);
+    sonny3025_test_mod.addImport("logging", logging_mod);
+    sonny3025_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3025_tests = b.addTest(.{ .root_module = sonny3025_test_mod });
+    const run_sonny3025_tests = b.addRunArtifact(sonny3025_tests);
+    shardDep(test_step, &run_sonny3025_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3025_step = b.step("test-sonny3025-match-write-return-rows", "SONNY-3025: a plain RETURN after MATCH ... CREATE / MERGE is one row per matched row");
+    sonny3025_step.dependOn(&run_sonny3025_tests.step);
+
     // SONNY-738 Task W fix round: the one write step (a SET, REMOVE, CREATE,
     // MERGE or DELETE applied over the rows the pattern binds, after the WITH
     // and its WHERE) and the structural guard that refuses a write clause an
