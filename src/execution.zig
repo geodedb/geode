@@ -2476,36 +2476,21 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             switch (call_stmt) {
                 .Procedure => |proc| {
+                    // SONNY-2779: the window is resolved first (a bad
+                    // parameter is refused, 22G03, before the procedure
+                    // runs) and applied by `applyQueryWindow`, which frees
+                    // the rows it drops; an OFFSET past the end leaves no
+                    // row. The rows were sliced by hand: the dropped ones
+                    // leaked, an OFFSET past the end returned every row, and
+                    // a SKIP or LIMIT parameter was ignored.
+                    const window = QueryWindow{
+                        .start = proc.offset orelse try windowParam(proc.offset_param, context) orelse 0,
+                        .limit = proc.limit orelse try windowParam(proc.limit_param, context),
+                    };
                     result = try executeCallStatement(allocator, call_stmt, context);
-
-                    // Apply ORDER BY if present
-                    if (proc.order_by) |order| {
-                        try sortRows(allocator, &result, order);
-                    }
-
-                    // Apply OFFSET if present
-                    if (proc.offset) |skip_count| {
-                        if (skip_count < result.rows.len) {
-                            const new_rows = try allocator.alloc([]Value, result.rows.len - skip_count);
-                            for (result.rows[skip_count..], 0..) |row, i| {
-                                new_rows[i] = row;
-                            }
-                            allocator.free(result.rows);
-                            result.rows = new_rows;
-                        }
-                    }
-
-                    // Apply LIMIT if present
-                    if (proc.limit) |limit_count| {
-                        if (limit_count < result.rows.len) {
-                            const new_rows = try allocator.alloc([]Value, limit_count);
-                            for (result.rows[0..limit_count], 0..) |row, i| {
-                                new_rows[i] = row;
-                            }
-                            allocator.free(result.rows);
-                            result.rows = new_rows;
-                        }
-                    }
+                    errdefer result.deinit(allocator);
+                    if (proc.order_by) |order| try sortRows(allocator, &result, order);
+                    try applyQueryWindow(allocator, &result, window);
                 },
                 .Subquery => |subq| {
                     // Execute the subquery in an isolated context

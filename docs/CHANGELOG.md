@@ -288,6 +288,14 @@
   q.f, count(*)`) and VALUES ... MATCH. **Behaviour change:** those two now
   refuse it too; write the GROUP BY. Regression:
   `zig build test-sonny2672-read-semantics-batch`.
+- **A procedure CALL's window (SONNY-2779):** `CALL p() YIELD x RETURN x
+  ... OFFSET n` past the last row returned every row (now none), LIMIT and
+  OFFSET leaked the rows they dropped, a SKIP or LIMIT parameter was
+  ignored, and `SKIP n LIMIT m` after the RETURN was a syntax error. Not
+  covered (follow-ups): the standalone CALL ignores its RETURN clause, so
+  `YIELD x AS y RETURN y` keeps the column `x`; MATCH ... CALL ... YIELD
+  binds no MATCH variable and leaks. Regression:
+  `zig build test-sonny2672-read-semantics-batch`.
 
 ---
 

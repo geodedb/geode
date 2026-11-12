@@ -1760,6 +1760,14 @@ pub const Parser = struct {
                         offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
                         offset_param = off.param;
                     }
+                    // SONNY-2779: `SKIP n LIMIT m`, as after any RETURN; a
+                    // LIMIT after the SKIP was a syntax error.
+                    if (self.cur.kind == .LIMIT and limit == null and limit_param == null) {
+                        self.advance();
+                        const lim = try self.parseLimitValue();
+                        limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
+                        limit_param = lim.param;
+                    }
 
                     break :blk_call .{ .Call = .{ .Procedure = .{
                         .procedure = procedure,
