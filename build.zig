@@ -9890,6 +9890,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6422_env_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6422_env_step = b.step("test-sonny6422-env-key-fail-closed", "Run SONNY-6422 items 1-2 regression (spawns servers: a half-configured or mismatched GEODE_AUDIT_PUB/SEC pair, a GEODE_MASTER_KEY under 32 bytes and an unread GEODE_WAL_KEY refuse startup before the data directory exists; the audit logger, the security graph, the FLE master-key loader and geode migrate create refuse instead of falling back to file keys, a hashed short key or no signature)");
     sonny6422_env_step.dependOn(&run_sonny6422_env_tests.step);
+    const sonny6422_dd_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_cli_data_dir_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6422_dd_test_mod.link_libc = true;
+    const sonny6422_dd_tests = b.addTest(.{ .root_module = sonny6422_dd_test_mod });
+    const run_sonny6422_dd_tests = b.addRunArtifact(sonny6422_dd_tests);
+    spawnsBuiltGeode(sonny6422_dd_tests);
+    shardDep(test_step, &run_sonny6422_dd_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6422_dd_step = b.step("test-sonny6422-cli-data-dir-fail-closed", "Run SONNY-6422 item 6 regression (geode storage verify on a data directory whose adapter cannot open exits non-zero naming it, instead of verifying an empty in-memory store; an openable directory still verifies)");
+    sonny6422_dd_step.dependOn(&run_sonny6422_dd_tests.step);
     const sonny6386_fle_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_fle_rotate_key_unsupported.zig"), .target = target, .optimize = optimize });
     sonny6386_fle_test_mod.link_libc = true;
     sonny6386_fle_test_mod.addImport("geode", root_mod);
