@@ -13405,6 +13405,25 @@ pub fn build(b: *std.Build) void {
     const sonny6291_step = b.step("test-sonny6291-apikey-user-show", "Run the SONNY-6291 regression (every geode.auth.apikey_* procedure answers 0A000, never granted/revoked; user_show self-or-Admin with no existence oracle; a missing user is 42704 for an Admin)");
     sonny6291_step.dependOn(&run_sonny6291_tests.step);
 
+    // SONNY-6331: one password policy on every path that sets a password
+    // (CREATE USER, ALTER USER SET PASSWORD, geode.auth.user_create /
+    // user_reset_password / user_change_password, the first-boot admin), the
+    // refusal naming the broken rule with the configured limits.
+    const sonny6331_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6331_password_policy_paths.zig"), .target = target, .optimize = optimize });
+    sonny6331_test_mod.link_libc = true;
+    sonny6331_test_mod.addImport("geode", root_mod);
+    sonny6331_test_mod.addImport("schema", schema_mod);
+    sonny6331_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6331_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6331_test_mod.addImport("logging", logging_mod);
+    sonny6331_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6331_test_mod.addImport("geode_auth", auth_mod);
+    const sonny6331_tests = b.addTest(.{ .root_module = sonny6331_test_mod });
+    const run_sonny6331_tests = b.addRunArtifact(sonny6331_tests);
+    shardDep(test_step, &run_sonny6331_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6331_step = b.step("test-sonny6331-password-policy-paths", "Run the SONNY-6331 regression (CREATE USER, ALTER USER SET PASSWORD and geode.auth.user_create / user_reset_password / user_change_password apply the documented password policy, answer 22000 naming the broken rule with the configured limits and never the password; generated passwords meet it; a first-boot seed that breaks it forces a reset)");
+    sonny6331_step.dependOn(&run_sonny6331_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
