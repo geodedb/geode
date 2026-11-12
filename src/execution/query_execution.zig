@@ -1147,6 +1147,12 @@ fn aggregateArithStep(op: ast.BinOp, left: Value, right: Value) error{IntegerOve
 }
 
 fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: []const Env) !Value {
+    // SONNY-2696: this chained-part executor computes an aggregate call and
+    // arithmetic over aggregates; an aggregate inside anything else (a
+    // function call, a list, a map, a CASE, a unary operator) it answered as
+    // NULL or as one row's value. Refused instead (0A000); the shared
+    // projection computes those shapes everywhere else.
+    if (expr != .Binary and !return_and_sorting.isAggregateCall(expr) and return_and_sorting.isAggregationExpr(expr)) return error.UnsupportedAggregateExpression;
     switch (expr) {
         .Call => |call| {
             if (call.callee.* == .Ident) {

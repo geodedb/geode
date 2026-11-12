@@ -46,6 +46,15 @@
 //! (`error.AggregateInRowFilter`, SQLSTATE 42803), and its names are checked
 //! the same way (`checkRowFilter`).
 //!
+//! SONNY-2696: the same rewrite serves a projection item with an aggregate
+//! inside it (`count(*) + 1`, `toString(count(*))`, `[count(*), sum(n.i)]`),
+//! with `Scope.projection` set: each aggregate becomes a hidden aggregate
+//! slot (or the column of an item that computes it), each grouping key or
+//! projected key a slot, and the item is evaluated once per group over them
+//! (`execution.GroupedItems`). An input column that is neither is refused
+//! (the caller answers 42803), and a name the item cannot resolve is left to
+//! the evaluator, as in any item.
+//!
 //! Every walker here switches over every `ast.Expr` variant with no `else`, so
 //! a new variant does not compile until it is handled; the SONNY-2675 test
 //! enumerates the variants and checks each walker descends into each one.
@@ -108,6 +117,14 @@ pub const Scope = struct {
     keys: []const ast.Expr = &.{},
     /// The query's parameters, which a name can also stand for.
     param_names: []const []const u8 = &.{},
+    /// SONNY-2696: the expression rewritten is a projection item with an
+    /// aggregate inside it, not a HAVING (`planGrouped`). The items' names
+    /// are not in scope (an item cannot read another item's alias, over
+    /// groups or inside an aggregate's argument), and a name that is no
+    /// input column, grouping key, projected key or parameter is left to
+    /// the evaluator, as it is in any other item. `output_columns` is not
+    /// read.
+    projection: bool = false,
 };
 
 /// A grouped HAVING, rewritten to read slots.
@@ -149,7 +166,7 @@ pub fn checkRowFilter(gpa: std.mem.Allocator, having: ast.Expr, scope: Scope) Er
 /// Whether `e` is a call of one of the aggregates the grouped projection
 /// computes (count, sum, avg, min, max, collect).
 pub fn isAggregateCall(e: ast.Expr) bool {
-    return e == .Call and return_and_sorting.isAggregationExpr(e);
+    return return_and_sorting.isAggregateCall(e);
 }
 
 const Rewriter = struct {
@@ -464,16 +481,18 @@ const Rewriter = struct {
         if (containsName(self.locals.items, name)) return .keep;
         switch (self.mode) {
             .grouped => {
-                if (containsName(self.scope.output_columns, name)) return .keep;
+                if (!self.scope.projection and containsName(self.scope.output_columns, name)) return .keep;
                 if (try self.matchSlot(ident(name))) |slot| return .{ .slot = slot.Ident.orig };
                 if (containsName(self.scope.input_columns, name)) return error.UngroupedHavingReference;
             },
             .argument => {
                 if (containsName(self.scope.input_columns, name)) return .keep;
-                for (self.scope.items, self.scope.output_columns) |item, column| {
-                    if (!std.mem.eql(u8, column, name)) continue;
-                    if (containsAggregate(item.expr)) return error.NestedAggregate;
-                    return .{ .item = item.expr };
+                if (!self.scope.projection) {
+                    for (self.scope.items, self.scope.output_columns) |item, column| {
+                        if (!std.mem.eql(u8, column, name)) continue;
+                        if (containsAggregate(item.expr)) return error.NestedAggregate;
+                        return .{ .item = item.expr };
+                    }
                 }
             },
             .row => {
@@ -482,6 +501,7 @@ const Rewriter = struct {
             },
         }
         if (containsName(self.scope.param_names, name)) return .keep;
+        if (self.scope.projection) return .keep;
         return error.UnknownHavingReference;
     }
 
@@ -661,6 +681,95 @@ fn anyContainsAggregate(es: []const *ast.Expr) bool {
 
 fn optContainsAggregate(e: ?*const ast.Expr) bool {
     return if (e) |c| containsAggregate(c.*) else false;
+}
+
+// CANARY: REQ=REQ-SONNY-2696-NESTED-AGGREGATE; FEATURE="Aggregation"; ASPECT=NestedAggregateAnywhere; STATUS=TESTED; TEST=tests/test_sonny2696_aggregate_expressions.zig; OWNER=execution; UPDATED=2026-11-11
+/// Whether `root` has an aggregate call inside another's argument, wherever
+/// the outer call is (GAP-0926: `sum(count(*))` is invalid). SONNY-2696: the
+/// check followed only calls and arithmetic, so `[sum(count(*))]` or a CASE
+/// over one was not refused. Walked as `containsAggregate` walks; patterns
+/// and subqueries aggregate over their own rows.
+pub fn hasNestedAggregate(root: ast.Expr) bool {
+    var at: *const ast.Expr = &root;
+    while (true) {
+        const e = at.*;
+        if (isAggregateCall(e)) return anyContainsAggregate(e.Call.args);
+        switch (e) {
+            .String, .Int, .Decimal, .Bool, .Null, .Date, .DateTime, .Time, .LocalDateTime => return false,
+            .SmallIntLit, .BigIntLit, .RealLit, .DoubleLit, .CharLit, .VarcharLit, .TextLit, .ByteaLit => return false,
+            .JsonLit, .JsonbLit, .XmlLit, .UrlLit, .DomainLit, .UuidLit, .EnumLit, .BitLit, .VarBitLit => return false,
+            .Param, .Ident, .PropertyAccess, .HasLabel => return false,
+            .PatternComp, .Exists, .ShortestPath, .PatternCount => return false,
+            inline .InSubquery, .NotInSubquery => |x| at = x.value,
+            .List, .ArrayLit => |xs| return anyHasNestedAggregate(xs),
+            .Member => |m| at = m.target,
+            .MapProjection => |mp| at = mp.source,
+            .Index => |ix| {
+                if (hasNestedAggregate(ix.index.*)) return true;
+                at = ix.target;
+            },
+            .Slice => |s| {
+                if (optHasNestedAggregate(s.start) or optHasNestedAggregate(s.end)) return true;
+                at = s.target;
+            },
+            // Not an aggregate (above): its arguments.
+            .Call => |c| return anyHasNestedAggregate(c.args),
+            .Unary => |u| at = u.expr,
+            .Binary => |b| {
+                if (hasNestedAggregate(b.right.*)) return true;
+                at = b.left;
+            },
+            inline .In, .NotIn => |x| {
+                if (anyHasNestedAggregate(x.set)) return true;
+                at = x.value;
+            },
+            inline .InListExpr, .NotInListExpr => |x| {
+                if (hasNestedAggregate(x.list_expr.*)) return true;
+                at = x.value;
+            },
+            inline .IsNull, .IsUnknown => |x| at = x.target,
+            .StartsWith => |x| {
+                if (hasNestedAggregate(x.prefix.*)) return true;
+                at = x.value;
+            },
+            .EndsWith => |x| {
+                if (hasNestedAggregate(x.suffix.*)) return true;
+                at = x.value;
+            },
+            .Contains => |x| {
+                if (hasNestedAggregate(x.needle.*)) return true;
+                at = x.value;
+            },
+            .Case => |c| {
+                if (optHasNestedAggregate(c.operand) or optHasNestedAggregate(c.else_expr)) return true;
+                for (c.whens) |w| {
+                    if (hasNestedAggregate(w.when.*) or hasNestedAggregate(w.then_expr.*)) return true;
+                }
+                return false;
+            },
+            .Map => |props| {
+                for (props) |p| {
+                    if (hasNestedAggregate(p.value.*)) return true;
+                }
+                return false;
+            },
+            .ListComprehension => |lc| {
+                if (optHasNestedAggregate(lc.filter) or optHasNestedAggregate(lc.map)) return true;
+                at = lc.source;
+            },
+        }
+    }
+}
+
+fn anyHasNestedAggregate(es: []const *ast.Expr) bool {
+    for (es) |c| {
+        if (hasNestedAggregate(c.*)) return true;
+    }
+    return false;
+}
+
+fn optHasNestedAggregate(e: ?*const ast.Expr) bool {
+    return if (e) |c| hasNestedAggregate(c.*) else false;
 }
 
 /// Whether `e` may read one of `names`. A pattern or subquery may name

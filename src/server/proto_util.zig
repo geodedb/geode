@@ -321,10 +321,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // CANARY: REQ=REQ-SONNY-2675-GROUPED-HAVING; FEATURE="GroupedHaving"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2675_grouped_having.zig; OWNER=engine; UPDATED=2026-09-25
         error.UngroupedHavingReference => .{ .code = "42803", .message = "Grouping error: a HAVING (or a WHERE after an aggregating RETURN) may reference only grouping keys, projected columns and aggregates" },
         error.AggregateInRowFilter => .{ .code = "42803", .message = "Aggregate functions are not allowed in a WHERE after a RETURN that does not aggregate" },
-        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate, or an aggregate of a list comprehension variable, is not supported in a grouped HAVING" },
+        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate, or an aggregate of a list comprehension variable, is not supported in a grouped HAVING or beside an aggregate in a RETURN or WITH item" },
         // SONNY-2675: a HAVING (or WHERE after RETURN) name that is no column,
         // binding or parameter; it used to evaluate to NULL (GAP-0926).
         error.UnknownHavingReference => .{ .code = "42703", .message = "A HAVING (or a WHERE after RETURN) names something that is no column, binding or parameter" },
+        // SONNY-2696: a NEXT-chained part computes only an aggregate call and
+        // arithmetic over aggregates; it answered any other expression over an
+        // aggregate as NULL or as one row's value.
+        error.UnsupportedAggregateExpression => .{ .code = "0A000", .message = "An aggregate inside a function call, list, map, CASE or unary operator is not supported in a NEXT-chained statement part; compute the aggregate in a WITH (WITH count(*) AS c) and use its alias" },
         // SONNY-2683: the executors of these shapes ignored a GROUP BY, HAVING
         // or WHERE after RETURN; refuse it rather than return other rows.
         // CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="LegacyReturnProjection"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25

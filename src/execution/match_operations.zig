@@ -9309,10 +9309,20 @@ fn executeSingleHopEdgeTraversal(
     }
 }
 
-/// SONNY-3318: whether a multi-chain relationship match aggregates, in its
-/// RETURN or in the items of a WITH after its MATCH, where the shared
-/// projection can compute it.
-fn multiChainAggregates(q: ast.Query) bool {
+// CANARY: REQ=REQ-SONNY-2734-LEGACY-AGGREGATES; FEATURE="LegacyReturnProjection"; ASPECT=AggregatesThroughSharedProjection; STATUS=TESTED; TEST=tests/test_sonny2696_aggregate_expressions.zig; OWNER=engine; UPDATED=2026-11-11
+/// SONNY-3318, SONNY-2734: whether a read aggregates, in its RETURN or in the
+/// items of a WITH after its MATCH, where the shared projection can compute
+/// it. Every such read goes through the shared projection over the rows the
+/// pattern binds (`executeReturnOverBindings`), whatever the pattern's shape,
+/// after the aggregate fast paths decline. The legacy executor's own
+/// aggregate loops, one per pattern shape, read only a property or member
+/// argument (`sum(n.i * $f)` was 0, `count(CASE ...)` counted every row,
+/// `max(n.d)` over dates and `avg(n.i + 1)` were NULL), ignored an inline
+/// property map on a relationship pattern's node (SONNY-2688), evaluated a
+/// disconnected pattern's aggregates once per binding, and computed an item
+/// with an aggregate inside it (SONNY-2696) as NULL or per row; the
+/// multi-chain executor did not aggregate at all (SONNY-3318).
+fn projectionAggregates(q: ast.Query) bool {
     if (q.ret.items.len == 0 or !sharedProjectionServes(q)) return false;
     if (q.with_clause) |wc| {
         if (q.is_initial_with) return false;
@@ -10501,18 +10511,28 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const all_simple_nodes = checkAllSimpleNodes(q.match.chains);
 
     // Dispatch to appropriate multi-chain handler using helper function
+    // SONNY-2734: an aggregating read goes through the shared projection
+    // (`projectionAggregates`), here for the multi-pattern shapes and below,
+    // after the single-pattern aggregate fast paths, for the rest.
+    const aggregates = projectionAggregates(q);
     switch (dispatchToMultiChainHandler(q, all_simple_nodes)) {
-        .multi_node_match => return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
+        .multi_node_match => {
+            if (aggregates) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            return executeMultiNodeMatch(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        },
         .multi_chain_relationship_match => {
             // SONNY-3318: this executor evaluates the RETURN (or a WITH's
             // items) once per binding and never aggregates, so `MATCH
             // (g)-[:R]->(x), (q:Q) RETURN count(q)` answered one row per
             // match. An aggregate goes through the shared projection over
             // the rows this executor binds.
-            if (multiChainAggregates(q) or multiChainWithStage(q)) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            if (aggregates or multiChainWithStage(q)) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
             return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph);
         },
-        .match_with_optional_patterns => return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
+        .match_with_optional_patterns => {
+            if (aggregates) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+            return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
+        },
         .continue_processing => {},
     }
 
@@ -10573,6 +10593,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     if (try topKOrderedFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
         return fast_result;
     }
+    // SONNY-2734: every aggregate the fast paths above declined.
+    if (aggregates) return executeReturnOverBindings(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
 
     const items = q.ret.items;
 

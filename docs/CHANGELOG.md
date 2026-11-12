@@ -121,6 +121,42 @@
   version numbers are unchanged; see docs/EXPLAIN_PROFILE.md, "Index names
   in the profile payload". Regression:
   `zig build test-sonny1335-profile-access-path`.
+- **An aggregate inside an expression is computed once per group
+  (SONNY-2696):** a RETURN or WITH item with an aggregate inside it was
+  computed wrongly on every session: `count(*) + 1`, `sum(n.i) / count(*)`
+  and `count(*) > 0` were NULL; `toString(count(*))`, `[count(*), sum(n.i)]`,
+  `{c: count(*)}`, `coalesce(max(n.i), 0)` and `CASE WHEN count(*) > 5 ...`
+  were evaluated against each input row (`'1'` once per row). Every
+  aggregate inside an item is now a hidden aggregate column computed by the
+  same code as a bare aggregate item (an item that computes the same
+  aggregate is reused), and the item is evaluated once per group over those
+  columns and the group's keys, beside a GROUP BY, under ORDER BY and HAVING,
+  and in a WITH. An input column beside an aggregate that is no grouping key
+  (`RETURN n.i + count(*)`) answers 42803, as `RETURN n.i, count(*)` does; an
+  aggregate inside another's argument anywhere in an item
+  (`[sum(count(*))]`) answers 42803; arithmetic on an aggregate that
+  overflows answers 22003 instead of NULL. A NEXT-chained part computes an
+  aggregate call and arithmetic over aggregates only, and now refuses any
+  other expression over an aggregate with 0A000 instead of answering NULL.
+- **Aggregate arguments are computed by the expression evaluator on every
+  session (SONNY-2734):** the legacy executor (in-memory, tenant-scoped and
+  RLS sessions) computed ungrouped aggregates with loops that read only a
+  property or member argument: `sum(n.i * $f)` was 0,
+  `count(CASE WHEN n.i > 15 THEN 1 END)` counted every row, `avg(n.i + 1)`,
+  `max(n.i * -1)` and `max` over dates were NULL, `collect(n.i + 1)` was empty,
+  `count(DISTINCT n.i % 3)` was 0 and `count(n.v * 2)` counted NULLs. Every
+  aggregating RETURN and WITH of such a read now goes through the shared
+  projection over the rows its pattern binds, after the aggregate fast paths,
+  whatever the pattern's shape, so the arguments are evaluated per input row
+  with the query's parameters; tenant scope and row-level security still
+  decide which rows are bound. This also fixes, on those sessions,
+  `MATCH (a:P {k: 1})-[:R]->(b) RETURN count(*)`, which ignored the inline
+  property (SONNY-2688 part 1), and `MATCH (a:P), (b:Q) RETURN sum(a.k)`,
+  which answered one NULL row per binding. **Behaviour change:** an error
+  inside an aggregate's argument (22003 overflow, 22012 division by zero, a
+  type mismatch) now fails the query, as the same expression does outside an
+  aggregate; the row was skipped. Regression (four sessions, leak-checked):
+  `zig build test-sonny2696-aggregate-expressions`.
 
 ---
 

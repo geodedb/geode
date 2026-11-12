@@ -14,6 +14,8 @@ const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
 // GAP-0535: value ownership helpers for projection results
 const value_utilities = @import("value_utilities.zig");
 const value_order = @import("value_order.zig");
+// SONNY-2696: aggregate detection walks every expression kind.
+const grouped_having = @import("grouped_having.zig");
 
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
@@ -444,38 +446,37 @@ fn getTypeOrder(v: Value) u8 {
 
 // CANARY: REQ=REQ-GQL-AGG-DETECT-001; FEATURE="AggregationDetection"; ASPECT=RecursiveCheck; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 // CANARY: REQ=REQ-SONNY-3189-CHAIN-WALKERS; FEATURE="QueryAnalysis"; ASPECT=IterativeWalkers; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=execution; UPDATED=2026-09-27
-/// SONNY-3189: the left operand of a binary expression and the operand of a
-/// unary one are followed with a loop, not one recursion per operator (and
-/// a copy of the expression per level): `RETURN 1 + 1 + ...` is as deep as
-/// it is long. Right operands recurse; nesting bounds them.
+// CANARY: REQ=REQ-SONNY-2696-AGGREGATE-DETECTION; FEATURE="AggregationDetection"; ASPECT=NestedAggregates; STATUS=TESTED; TEST=tests/test_sonny2696_aggregate_expressions.zig; OWNER=execution; UPDATED=2026-11-11
+/// Whether `root` contains an aggregate call (count, countDistinct, sum, avg,
+/// min, max, collect) anywhere outside a pattern or subquery, whose own
+/// projection aggregates over its own rows: an item that does is computed
+/// over groups.
+///
+/// SONNY-2696: only arithmetic operators were followed down to the call, so
+/// an aggregate inside a function call, a list, a map or a CASE
+/// (`toString(count(*))`, `[count(*), sum(n.i)]`) did not make its item
+/// aggregating, and the item was evaluated against each input row. The walk
+/// is `grouped_having.containsAggregate`, which follows every expression's
+/// chains with a loop (SONNY-3189).
 pub fn isAggregationExpr(root: ast.Expr) bool {
-    var expr: *const ast.Expr = &root;
-    while (true) {
-        switch (expr.*) {
-            .Call => |call| {
-                if (call.callee.* == .Ident) {
-                    const func_name = call.callee.Ident.orig;
-                    // Use case-insensitive comparison for aggregation functions
-                    return std.ascii.eqlIgnoreCase(func_name, "count") or
-                        std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
-                        std.ascii.eqlIgnoreCase(func_name, "sum") or
-                        std.ascii.eqlIgnoreCase(func_name, "avg") or
-                        std.ascii.eqlIgnoreCase(func_name, "min") or
-                        std.ascii.eqlIgnoreCase(func_name, "max") or
-                        std.ascii.eqlIgnoreCase(func_name, "collect");
-                }
-                return false;
-            },
-            .Binary => |bin| {
-                // Check for aggregations in binary expressions (e.g., d.budget - sum(e.salary))
-                if (isAggregationExpr(bin.right.*)) return true;
-                expr = bin.left;
-            },
-            // Check for aggregations in unary expressions
-            .Unary => |un| expr = un.expr,
-            else => return false,
-        }
-    }
+    return grouped_having.containsAggregate(root);
+}
+
+/// Whether `e` is itself a call of one of the aggregate functions (and not an
+/// expression with one inside it): the item the aggregate code computes as
+/// it is.
+pub fn isAggregateCall(e: ast.Expr) bool {
+    if (e != .Call) return false;
+    const callee = e.Call.callee.*;
+    if (callee != .Ident) return false;
+    const func_name = callee.Ident.orig;
+    return std.ascii.eqlIgnoreCase(func_name, "count") or
+        std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
+        std.ascii.eqlIgnoreCase(func_name, "sum") or
+        std.ascii.eqlIgnoreCase(func_name, "avg") or
+        std.ascii.eqlIgnoreCase(func_name, "min") or
+        std.ascii.eqlIgnoreCase(func_name, "max") or
+        std.ascii.eqlIgnoreCase(func_name, "collect");
 }
 
 /// SONNY-3189: as `isAggregationExpr`, left operands and unary operands with
