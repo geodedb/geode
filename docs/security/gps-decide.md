@@ -160,11 +160,10 @@ as fast.
    `reason_code = "graph_grant"`. A builtin role still allows the action on
    every graph. A request on no graph in particular (the database, a
    tenant, a procedure, metadata, `*`) is never allowed by a grant.
-2. Allow policies match resources by `allowPolicyCovers`: a policy scoped
+2. Allow policies match resources by `policyCovers`: a policy scoped
    to `*` covers everything; one scoped to graph `g` covers `g` and its
-   nodes and edges, and nothing else. Deny policies keep the broad
-   `policyMatchesResource` match, so a deny on `g` still refuses a request
-   on the whole database.
+   nodes and edges, and nothing else. Since SONNY-2753 deny policies match
+   by the same rule (see "Policy scope").
 3. A deny policy is evaluated before both, so it overrides a grant.
 
 GRANT and REVOKE update the live table at once (`server_init.grantApply`,
@@ -313,7 +312,8 @@ it for few actions:
     (or self) check, so a DENY WRITE does not reach it.
 - **DENY READ and DENY WRITE** apply to `CALL` procedures. A read-only
   procedure asks for read on the procedure, and one that changes data asks
-  for write.
+  for write; a graph-scoped deny applies on its graph only (see "Policy
+  scope" below).
 - **DENY DECRYPT_FIELD** applies to field-level decryption.
 
 A deny on any other action is accepted but **not enforced**, because nothing
@@ -328,13 +328,39 @@ SONNY-2781 tracks wiring the rest (v0.8.24). bind_graph, admin_tenant,
 execute_procedure and show_metadata have no policy analogue, so no policy
 names them.
 
-Resources match more broadly than for allow policies. `*` matches
-everything. A graph-scoped deny matches that graph and every non-graph
-resource (database, tenant, node, edge, procedure, metadata). So a deny
-scoped to one graph refuses writes to that graph, the database-level write
-check (self-locking CALLs), and, for DENY READ, every read-only procedure
-(SONNY-2753). A graph-scoped allow covers only its graph
-(REQ-SEC-PER-GRAPH-GRANTS).
+### Policy scope (SONNY-2753)
+
+Allow and deny policies cover resources by one rule (`policyCovers`):
+
+- A policy scoped to `*` covers everything.
+- A policy scoped to graph `g` covers `g` and the nodes and edges in it,
+  and nothing else: not another graph, not `*`, and not a request on no
+  graph in particular (the database, a tenant, a procedure as such,
+  metadata).
+
+Where a request runs or changes:
+
+- **One graph** (the handlers' write gate on the graph a program changes,
+  schema DDL on a graph, field decryption, which asks on the node in the
+  graph being read): the policies of that graph and `*` decide.
+- **A procedure**: the procedure is no one graph's resource, so only a `*`
+  policy (or a builtin role) allows it; and a deny scoped to the graph the
+  procedure runs on (the session's graph; the default graph for the
+  fulltext procedures) refuses it (`gps.procedurePermitted`).
+- **Every graph at once** (a self-locking procedure CALL,
+  `gps.writePermitted`; index, constraint and schema DDL, catalogued
+  database-wide, `session_graph.maySchemaDatabase` /
+  `gps.schemaPermittedEverywhere`): only a `*` policy (or a builtin role)
+  allows it, and a deny on any graph refuses it, since it changes that graph
+  too (`denyOnAnyGraph`). For the self-locking CALL that is a deny of WRITE,
+  CREATE, UPDATE or DELETE; for the DDL a deny of SCHEMA.
+
+A deny scoped to one graph used to match every non-graph resource, so a DENY
+READ on `g` refused every read-only procedure on every graph, a deny on `g` a
+node or edge of any graph, and a DENY DECRYPT_FIELD on `g` every decryption;
+and a graph-scoped allow of DECRYPT_FIELD never applied. A DENY SCHEMA on
+`g` did not refuse index DDL run from another graph, which binds `g` as well.
+Regression: `zig build test-sonny2753-graph-scoped-deny`.
 
 A deny whose USING expression does not compile (a record loaded fail-closed)
 keeps denying until it is rewritten, and so does a deny when the principal's

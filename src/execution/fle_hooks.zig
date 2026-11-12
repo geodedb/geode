@@ -196,10 +196,15 @@ pub fn decryptPropertyIfNeeded(
         const gps_mod = @import("../security/gps.zig");
         if (exec_mod.getActiveContext()) |ctx_ptr| {
             if (ctx_ptr.principal) |princ| {
+                // SONNY-2753: the resource is the node, in the graph the read
+                // runs on, so a policy scoped to a graph applies there only.
+                // It was `metadata`, which a graph-scoped deny matched on
+                // every graph and a graph-scoped allow on none.
+                const session_graph = @import("session_graph.zig");
                 const gps_req = gps_mod.DecisionRequest{
                     .principal = princ,
                     .action = .decrypt_field,
-                    .resource = .{ .metadata = .{ .kind = "fle_field" } },
+                    .resource = .{ .node = .{ .graph = session_graph.current(ctx_ptr.*), .id = node_id } },
                 };
                 const decision = try gps_mod.decide(allocator, &gps_req);
                 if (decision.kind != .allow) {

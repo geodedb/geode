@@ -199,6 +199,27 @@
   `CALL geode.auth.grant_list` runs on a read-only request and for a
   read-only user; the `read_only_covers_admin_ddl` capability is now `true`.
   Regression: `zig build test-sonny2751-readonly-security-ddl`.
+- **A GPS deny scoped to one graph applies to that graph only
+  (SONNY-2753).** `gps.decide` matched deny policies with a rule under which
+  a policy scoped to graph `g` also matched every non-graph resource: a DENY
+  READ on `g` refused every read-only procedure on every graph, a DENY WRITE
+  on `g` every procedure that changes data, a deny on `g` a node or edge of
+  any graph, and a DENY DECRYPT_FIELD on `g` every decryption. Allow and
+  deny policies now cover resources by one rule: `*` covers everything; a
+  graph-scoped policy covers its graph and the nodes and edges in it. A
+  procedure is refused by a deny on the graph it runs on (or `*`); field
+  decryption asks on the node in the graph being read. A change of every
+  graph at once (a self-locking procedure CALL; index, constraint and schema
+  DDL, which bind every graph) is refused by a deny on any graph, since it
+  changes that graph too. (Plain writes to another graph were already
+  allowed: the write gate asks on the graph a program changes since
+  REQ-SEC-PER-GRAPH-GRANTS.) Behaviour changes: a graph-scoped deny no
+  longer refuses procedures, nodes, edges or decryption on other graphs; a
+  DENY SCHEMA on any graph now refuses `CREATE` / `DROP INDEX`,
+  constraint and `CREATE` / `DROP SCHEMA` DDL from every graph; a
+  graph-scoped allow of DECRYPT_FIELD now allows decryption on its graph
+  (it never applied before).
+  Regression: `zig build test-sonny2753-graph-scoped-deny`.
 
 ### Added
 

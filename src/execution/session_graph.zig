@@ -146,19 +146,15 @@ pub fn maySchema(principal: ?*const principal_mod.Principal, graph: []const u8) 
 // CANARY: REQ=REQ-SONNY-3030-CATALOG-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=MaySchemaDatabase; STATUS=TESTED; TEST=tests/test_sonny3030_catalog_ddl_gate.zig; OWNER=security; UPDATED=2026-09-27
 /// SONNY-3030: may `principal` change the schema of the whole database:
 /// every graph at once? `gps.decide(schema, graph "*")`: Admin's builtin
-/// Schema permission, or a GPS policy `FOR SCHEMA` scoped to `*`. A policy
-/// scoped to one graph does not match. No principal: yes (an in-process
+/// Schema permission, or a GPS policy `FOR SCHEMA` scoped to `*`. An allow
+/// scoped to one graph does not match. SONNY-2753: and a DENY SCHEMA on any
+/// graph refuses it, as the change binds that graph too
+/// (`gps.schemaPermittedEverywhere`). No principal: yes (an in-process
 /// caller).
 pub fn maySchemaDatabase(principal: ?*const principal_mod.Principal) bool {
     const p = principal orelse return true;
-    const req = gps.DecisionRequest{
-        .principal = p,
-        .action = .schema,
-        .resource = .{ .graph = "*" },
-    };
     // smp_allocator: the governance-approved global allocator in src/.
-    const decision = gps.decide(std.heap.smp_allocator, &req) catch return false;
-    return decision.kind == .allow;
+    return gps.schemaPermittedEverywhere(std.heap.smp_allocator, p);
 }
 
 /// SONNY-3030: refuse index and constraint DDL (`Unauthorized`, 42501) unless
