@@ -4584,11 +4584,11 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
                 // + edge slots), so proceeding would leave it DANGLING once
                 // the node goes. Refuse the whole DETACH instead.
                 if (store.getEdgePtr(edge_id) == null) return error.IncidentEdgeUnresolvable;
-                store.deleteEdge(edge_id);
+                try store.deleteEdgeChecked(edge_id);
                 try detached_edge_ids.append(allocator, edge_id);
             }
         }
-        store.deleteNode(node_id);
+        try store.deleteNodeChecked(node_id);
         if (store.getNodePtr(node_id) == null) {
             deleted_count += 1;
         }
@@ -4619,7 +4619,7 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
             // `MATCH … DELETE r` over no rows stays a successful 00000.)
             return error.EdgeBodyUnresolvable;
         }
-        store.deleteEdge(edge_id);
+        try store.deleteEdgeChecked(edge_id);
         if (store.getEdgePtr(edge_id) == null) {
             deleted_count += 1;
         }
@@ -4845,17 +4845,17 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                                 }
                                 for (edges_to_remove.items) |eid| {
                                     if (store.getEdgePtr(eid) == null) return error.IncidentEdgeUnresolvable;
-                                    store.deleteEdge(eid);
+                                    try store.deleteEdgeChecked(eid);
                                 }
                             }
-                            store.deleteNode(nid);
+                            try store.deleteNodeChecked(nid);
                             if (store.getNodePtr(nid) == null) {
                                 deleted_count += 1;
                             }
                         },
                         .edge_id => |eid| {
                             if (store.getEdgePtr(eid) != null) {
-                                store.deleteEdge(eid);
+                                try store.deleteEdgeChecked(eid);
                             }
                             if (store.getEdgePtr(eid) == null) {
                                 deleted_count += 1;

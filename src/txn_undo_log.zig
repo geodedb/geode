@@ -984,10 +984,10 @@ pub fn cloneEntry(allocator: std.mem.Allocator, entry: UndoEntry) !UndoEntry {
 pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry) !void {
     switch (entry) {
         .CreateNode => |e| {
-            if (store.nodeExistsForUndo(e.node_id)) store.deleteNode(e.node_id);
+            if (store.nodeExistsForUndo(e.node_id)) try store.deleteNodeChecked(e.node_id);
         },
         .CreateEdge => |e| {
-            if (store.edgeExistsForUndo(e.edge_id)) store.deleteEdge(e.edge_id);
+            if (store.edgeExistsForUndo(e.edge_id)) try store.deleteEdgeChecked(e.edge_id);
         },
         .SetNodeProperty => |e| {
             if (!store.nodeExistsForUndo(e.node_id)) return;

@@ -26,7 +26,9 @@
 //   * the same primitive then succeeds and its effect is visible;
 //   * teardown neither crashes nor leaks (allocated bytes == freed bytes).
 // Run on an in-memory store and on a store with a storage adapter (data
-// directory), whose write-through adds failure points of its own.
+// directory), whose write-through adds failure points of its own. A last
+// sweep pins the node cache's ownership rule on its own: a bounded-cache put
+// that evicts and fails changed nothing and leaves the value the caller's.
 //
 // Real GraphStore, real storage adapter; no mocks.
 //
@@ -41,7 +43,6 @@ const GraphStore = graph_store.GraphStore;
 const PropertyValue = graph_store.PropertyValue;
 const eval = geode.eval;
 
-const G = "g6268";
 const T = "default";
 const MAX_K: usize = 400;
 
@@ -59,10 +60,14 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 
 const Mode = enum { memory, persisted };
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
 /// The storage adapter of a persisted run (its own allocator: the sweep
 /// fails the store's allocations, and the adapter's own failure handling is
-/// the adapter's suite's concern). A fresh data directory per iteration, so
-/// no iteration hydrates another's nodes.
+/// the adapter's suite's concern). One per test; each sweep iteration writes
+/// a graph of its own and drops it at the end, so no iteration hydrates
+/// another's nodes.
 const Env = struct {
     tmp: ?std.testing.TmpDir = null,
     data_dir: ?[]u8 = null,
@@ -73,6 +78,10 @@ const Env = struct {
         errdefer tmp.cleanup();
         const dir = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
         errdefer testing.allocator.free(dir);
+        // No per-commit fsync: the sweep opens a store per iteration, and
+        // what it checks is the store's memory, not the WAL's durability.
+        _ = setenv("GEODE_WAL_SYNC", "deferred", 1);
+        defer _ = unsetenv("GEODE_WAL_SYNC");
         _ = try graph_store.initGlobalAdapter(testing.allocator, dir);
         return .{ .tmp = tmp, .data_dir = dir };
     }
@@ -86,8 +95,9 @@ const Env = struct {
     }
 };
 
-/// Ids a scenario's seed made.
+/// Ids a scenario's seed made, and the iteration's graph.
 const Ids = struct {
+    graph: []const u8,
     a: u64 = 0,
     b: u64 = 0,
     e: u64 = 0,
@@ -120,13 +130,13 @@ fn writeSortedList(out: *std.ArrayList(u8), name: []const u8, items: [][]const u
     try out.appendSlice(testing.allocator, "]\n");
 }
 
-fn writeNode(out: *std.ArrayList(u8), store: *GraphStore, name: []const u8, id: u64) !void {
+fn writeNode(out: *std.ArrayList(u8), store: *GraphStore, graph: []const u8, name: []const u8, id: u64) !void {
     if (id == 0) return;
     const node = store.nodes.get(id) orelse {
         try out.print(testing.allocator, "node {s}: absent\n", .{name});
         return;
     };
-    try out.print(testing.allocator, "node {s}: graph={s} tenant={s} labels=", .{ name, node.graph_name, node.tenant_id });
+    try out.print(testing.allocator, "node {s}: in_graph={} tenant={s} labels=", .{ name, std.mem.eql(u8, node.graph_name, graph), node.tenant_id });
     for (node.labels) |l| try out.print(testing.allocator, "{s},", .{l});
     try out.appendSlice(testing.allocator, " props=");
     var it = node.properties.iterator();
@@ -142,7 +152,7 @@ fn writeNode(out: *std.ArrayList(u8), store: *GraphStore, name: []const u8, id: 
 
 fn writeMerge(out: *std.ArrayList(u8), store: *GraphStore, ids: Ids, label: []const u8, key: []const u8, v: PropertyValue) !void {
     var found: u64 = 0;
-    const r = store.lookupMergeCandidate(G, label, key, v, &found);
+    const r = store.lookupMergeCandidate(ids.graph, label, key, v, &found);
     const who: []const u8 = if (r != .found) "-" else if (found == ids.a) "a" else if (found == ids.b) "b" else if (found == ids.made) "made" else "?";
     try out.print(testing.allocator, "merge {s}.{s}=", .{ label, key });
     try writeValue(out, v);
@@ -157,26 +167,26 @@ fn render(store: *GraphStore, ids: Ids) ![]u8 {
     errdefer out.deinit(a);
     try out.print(a, "resident={d} in_graph={d} edges={d} label_index={d} graph_index={d} merge={d}\n", .{
         store.nodes.count(),
-        store.nodesInGraphCount(G),
+        store.nodesInGraphCount(ids.graph),
         store.edges.count(),
         store.label_index.count(),
         store.nodes_by_graph.count(),
         store.merge_prop_index.count(),
     });
     for ([_][]const u8{ "A", "B", "C" }) |label| {
-        const n = if (store.getNodesByLabel(G, label)) |s| s.len else 0;
+        const n = if (store.getNodesByLabel(ids.graph, label)) |s| s.len else 0;
         try out.print(a, "label {s}: {d}\n", .{ label, n });
     }
     try writeSortedList(&out, "labels", try store.listNodeLabels(a, null));
     try writeSortedList(&out, "props(A)", try store.listPropertiesForLabel(a, null, "A"));
     try writeSortedList(&out, "props(C)", try store.listPropertiesForLabel(a, null, "C"));
     try writeSortedList(&out, "edge_types", try store.listEdgeTypes(a, null));
-    const by_type = store.getEdgesByType(a, "R", null, G);
+    const by_type = store.getEdgesByType(a, "R", null, ids.graph);
     defer a.free(by_type);
     try out.print(a, "edges R: {d}\n", .{by_type.len});
-    try writeNode(&out, store, "a", ids.a);
-    try writeNode(&out, store, "b", ids.b);
-    try writeNode(&out, store, "made", ids.made);
+    try writeNode(&out, store, ids.graph, "a", ids.a);
+    try writeNode(&out, store, ids.graph, "b", ids.b);
+    try writeNode(&out, store, ids.graph, "made", ids.made);
     if (ids.e != 0) {
         if (store.edges.get(ids.e)) |e| {
             try out.print(a, "edge e: {s} props=", .{e.label});
@@ -201,13 +211,14 @@ fn render(store: *GraphStore, ids: Ids) ![]u8 {
 /// (their failure must be recorded for the statement instead).
 const Scenario = struct {
     name: []const u8,
-    seed: *const fn (store: *GraphStore) anyerror!Ids,
+    seed: *const fn (store: *GraphStore, graph: []const u8) anyerror!Ids,
     run: *const fn (store: *GraphStore, ids: *Ids) anyerror!void,
     void_op: bool = false,
 };
 
-fn seedTwoNodes(store: *GraphStore) !Ids {
-    var ids: Ids = .{};
+fn seedTwoNodes(store: *GraphStore, graph: []const u8) !Ids {
+    var ids: Ids = .{ .graph = graph };
+    const G = graph;
     ids.a = try store.createNodeWithGraphAndTenant(&.{ "A", "B" }, G, T);
     try store.setNodeProperty(ids.a, "k", .{ .Int = 1 });
     try store.setNodeProperty(ids.a, "name", .{ .String = "x" });
@@ -218,13 +229,13 @@ fn seedTwoNodes(store: *GraphStore) !Ids {
     return ids;
 }
 
-fn seedEmpty(store: *GraphStore) !Ids {
+fn seedEmpty(store: *GraphStore, graph: []const u8) !Ids {
     _ = store;
-    return .{};
+    return .{ .graph = graph };
 }
 
 fn runCreateNode(store: *GraphStore, ids: *Ids) !void {
-    ids.made = try store.createNodeWithGraphAndTenant(&.{ "C", "A" }, G, T);
+    ids.made = try store.createNodeWithGraphAndTenant(&.{ "C", "A" }, ids.graph, T);
 }
 
 fn runSetNewKey(store: *GraphStore, ids: *Ids) !void {
@@ -252,7 +263,7 @@ fn runDeleteNode(store: *GraphStore, ids: *Ids) !void {
 }
 
 fn runCreateEdge(store: *GraphStore, ids: *Ids) !void {
-    _ = try store.createEdgeWithGraphAndTenant(ids.b, ids.a, "R", G, T);
+    _ = try store.createEdgeWithGraphAndTenant(ids.b, ids.a, "R", ids.graph, T);
 }
 
 fn runSetEdgeProperty(store: *GraphStore, ids: *Ids) !void {
@@ -265,6 +276,8 @@ fn runDeleteEdge(store: *GraphStore, ids: *Ids) !void {
 
 /// Sweep `sc` on `mode`: fail allocation k for k = 0.. until the primitive
 /// completes without an induced failure.
+var graph_seq: usize = 0;
+
 fn sweep(mode: Mode, sc: Scenario) !void {
     // The state after each failed-then-retried (or swallowed-failure) run,
     // compared at the end with the clean run's.
@@ -273,17 +286,25 @@ fn sweep(mode: Mode, sc: Scenario) !void {
         for (results.items) |r| testing.allocator.free(r);
         results.deinit(testing.allocator);
     }
+    // One graph per sweep. A persisted iteration deletes what it left in
+    // the engine at its end (`emptyEngineGraph`), so the next iteration's
+    // fresh store hydrates an empty graph: an orphan a failed primitive left
+    // in the engine shows up in the next iteration's "before".
+    var name_buf: [32]u8 = undefined;
+    graph_seq += 1;
+    const graph = try std.fmt.bufPrint(&name_buf, "g6268_{d}", .{graph_seq});
+    defer if (mode == .persisted) {
+        graph_store.getGlobalAdapter().?.dropGraph(graph) catch {};
+    };
+
     var k: usize = 0;
     while (k < MAX_K) : (k += 1) {
-        var env = try Env.open(mode);
-        defer env.close();
-
         var fa = std.testing.FailingAllocator.init(testing.allocator, .{});
         var store = try GraphStore.init(fa.allocator());
         var store_live = true;
         defer if (store_live) store.deinit();
 
-        var ids = try sc.seed(&store);
+        var ids = try sc.seed(&store, graph);
         const before = try render(&store, ids);
         defer testing.allocator.free(before);
         _ = eval.takeDeferredLimitError(true);
@@ -308,6 +329,7 @@ fn sweep(mode: Mode, sc: Scenario) !void {
                     return error.StateDiffersFromCleanRun;
                 }
             }
+            if (mode == .persisted) try emptyEngineGraph(&store);
             store.deinit();
             store_live = false;
             try expectNoLeak(&fa, sc, mode, k);
@@ -350,11 +372,20 @@ fn sweep(mode: Mode, sc: Scenario) !void {
         }
         try results.append(testing.allocator, try render(&store, ids));
 
+        if (mode == .persisted) try emptyEngineGraph(&store);
         store.deinit();
         store_live = false;
         try expectNoLeak(&fa, sc, mode, k);
     }
     return error.SweepDidNotConverge;
+}
+
+/// Delete every node (and so every edge) of the store, through the store,
+/// so the engine's graph is empty for the next iteration.
+fn emptyEngineGraph(store: *GraphStore) !void {
+    const all = try store.getAllNodes(testing.allocator);
+    defer testing.allocator.free(all);
+    for (all) |id| try store.deleteNodeChecked(id);
 }
 
 fn expectNoLeak(fa: *std.testing.FailingAllocator, sc: Scenario, mode: Mode, k: usize) !void {
@@ -392,9 +423,110 @@ test "SONNY-6268: edge primitives are failure-atomic (in memory)" {
 }
 
 test "SONNY-6268: node, label and edge primitives are failure-atomic (storage adapter)" {
+    var env = try Env.open(.persisted);
+    defer env.close();
     for (scenarios) |sc| try sweep(.persisted, sc);
 }
 
 test "SONNY-6268: a node created into an empty store is failure-atomic" {
     try sweep(.memory, .{ .name = "createNode(empty)", .seed = seedEmpty, .run = runCreateNode });
+}
+
+fn noHydrate(_: *anyopaque, _: std.mem.Allocator, _: u64) anyerror!?graph_store.Node {
+    return null;
+}
+
+fn makeNode(allocator: std.mem.Allocator, id: u64) !graph_store.Node {
+    const labels = try allocator.alloc([]const u8, 1);
+    errdefer allocator.free(labels);
+    labels[0] = try allocator.dupe(u8, "L");
+    errdefer allocator.free(labels[0]);
+    const graph = try allocator.dupe(u8, "g");
+    errdefer allocator.free(graph);
+    return .{
+        .id = id,
+        .labels = labels,
+        .properties = graph_store.CompactPropertyMap.init(allocator),
+        .graph_name = graph,
+        .tenant_id = try allocator.dupe(u8, "t"),
+    };
+}
+
+// The node cache's ownership rule (`BoundedNodeCache.put`): a failed put
+// changed nothing and the value is still the caller's; evictions only
+// retire. Before, a failed FIFO append freed the value inside `put` (the
+// caller's error path freed it again), and a failed eviction append left
+// the new entry inserted behind an error and the victim neither resident,
+// retired nor freed.
+/// A key that shares key 1's cache shard: a put of it into a cache holding
+/// key 1, with one resident entry per shard, evicts key 1.
+fn keySharingShardWithOne() !u64 {
+    var dummy: u8 = 0;
+    var candidate: u64 = 2;
+    while (candidate < 10_000) : (candidate += 1) {
+        var probe = try graph_store.NodeCache.init(testing.allocator, .{
+            .cap = 16,
+            .free_fn = graph_store.freeNodeValue,
+            .hydrate_fn = noHydrate,
+            .hydrate_ctx = &dummy,
+        });
+        defer probe.deinit();
+        try probe.put(1, try makeNode(testing.allocator, 1));
+        try probe.put(candidate, try makeNode(testing.allocator, candidate));
+        if (probe.evictions_total == 1) return candidate;
+    }
+    return error.NoSharedShardKey;
+}
+
+test "SONNY-6268: a bounded node cache put that triggers evictions is all-or-nothing" {
+    // The put evicts key 1 into an empty retire list, so it must allocate
+    // the list (and its FIFO slot, and maybe the map slot) — the failure
+    // points the sweep hits.
+    const other = try keySharingShardWithOne();
+    var k: usize = 0;
+    while (k < MAX_K) : (k += 1) {
+        var fa = std.testing.FailingAllocator.init(testing.allocator, .{});
+        const a = fa.allocator();
+        var dummy: u8 = 0;
+        var cache = try graph_store.NodeCache.init(a, .{
+            .cap = 16, // one resident entry per shard
+            .free_fn = graph_store.freeNodeValue,
+            .hydrate_fn = noHydrate,
+            .hydrate_ctx = &dummy,
+        });
+        try cache.put(1, try makeNode(a, 1));
+        const resident = cache.residentCount();
+        const retired = cache.retiredCount();
+        const evictions = cache.evictions_total;
+
+        var value = try makeNode(a, other);
+        fa.fail_index = fa.alloc_index + k;
+        const result = cache.put(other, value);
+        const induced = fa.has_induced_failure;
+        fa.fail_index = std.math.maxInt(usize);
+
+        if (result) |_| {
+            // Done in full: the new entry in, key 1 retired (not freed).
+            try testing.expect(cache.contains(other));
+            try testing.expect(!cache.contains(1));
+            try testing.expectEqual(retired + 1, cache.retiredCount());
+            try testing.expectEqual(evictions + 1, cache.evictions_total);
+            if (!induced) {
+                cache.deinit();
+                try expectNoLeak(&fa, .{ .name = "NodeCache.put", .seed = seedEmpty, .run = runCreateNode }, .memory, k);
+                return;
+            }
+        } else |_| {
+            // Nothing changed, and the value is still ours.
+            try testing.expect(!cache.contains(other));
+            try testing.expect(cache.contains(1));
+            try testing.expectEqual(resident, cache.residentCount());
+            try testing.expectEqual(retired, cache.retiredCount());
+            try testing.expectEqual(evictions, cache.evictions_total);
+            graph_store.freeNodeValue(a, &value);
+        }
+        cache.deinit();
+        try expectNoLeak(&fa, .{ .name = "NodeCache.put", .seed = seedEmpty, .run = runCreateNode }, .memory, k);
+    }
+    return error.SweepDidNotConverge;
 }

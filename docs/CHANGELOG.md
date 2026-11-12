@@ -141,6 +141,24 @@
   `Catalog.removeConstraint`, `listAllConstraints` and
   `listConstraintsForGraph` are removed. Regression:
   `zig build test-sonny6270-drop-constraint`.
+- **A graph-store write that runs out of memory part way leaves nothing
+  half done (SONNY-6268):** node and edge creates, property SET and REMOVE,
+  label add and remove, and node and edge deletes either complete or leave
+  the store, its indexes and the storage engine as they were, free what they
+  copied, and report the failure. Before, a SET whose key copy failed left a
+  property slot with an undefined key, so the next lookup on the node, its
+  delete or the store's shutdown crashed; a create that failed after the node
+  cache took the node left a node no caller knew of in the cache and in some
+  indexes, or leaked its copies, or left an orphan node in the engine; a
+  failed merge-index insert was ignored, so a later MERGE created a
+  duplicate; and a delete that failed half way (edges not collected, a label
+  posting not updated) still removed the node and reported nothing. The node
+  cache's `put` is all-or-nothing and documents who owns the value when it
+  fails (the caller). `GraphStore.deleteNodeChecked` and `deleteEdgeChecked`
+  return the error (the executor's DELETE and the statement undo use them);
+  `deleteNode` and `deleteEdge` log it and fail the running statement on out
+  of memory. Regression:
+  `zig build test-sonny6268-graph-store-failure-atomicity`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)
