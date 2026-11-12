@@ -4,6 +4,26 @@
 
 ### Security
 
+- **Offline `geode user create` and `geode user update --password` store an
+  Argon2id hash, not the password, and seal the chain (SONNY-6358).** Both
+  wrote the supplied password into the user record's `password_hash` as it
+  was (`src/cli/user_mgmt_cli.zig`), so the credential sat in the clear in
+  `__geode_security` and no login with it could succeed (the server checks
+  an Argon2id PHC string). They now hash with the server's
+  `geode_auth.hashPasswordArgon2id`; a password set on an existing user goes
+  through `AuthGraphManager.updateUserPassword` (record HMAC, chain seal,
+  forced-reset flag cleared, auth version moved on), as `change-password` /
+  `reset-password` already did. On a store with no auth records the change
+  was not sealed at all and the server refused to start (no chain root); it
+  is now sealed with the key the server would use there
+  (`cli_auth_helpers.changeKey`: `GEODE_AUTH_HMAC_KEY`, `GEODE_TDE_KEY`, else
+  `.geode_hmac_key`, generated as at the server's first start). **Operator
+  action:** a user created or updated offline before this fix has its
+  password stored in the clear and cannot log in; set it again (`geode user
+  reset-password`). FIPS builds refuse to set a password offline
+  (`FipsUnsupported`), as on the server. `docs/USER_AUTH.md` no longer
+  claims BLAKE2b is the current password hash.
+  Regression: `zig build test-sonny6358-offline-password-hash`.
 - **The periodic auth chain verification and `canUserAccessGraph` hold the
   auth DDL lock (SONNY-6352, items 1 and 2).** `AuthGraphManager.runVerifyRound`
   -> `verifyChain` read the role, policy and permission caches and the

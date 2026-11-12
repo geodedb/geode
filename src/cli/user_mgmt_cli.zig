@@ -169,6 +169,35 @@ fn generateSecurePassword() !cli_auth.GeneratedPassword {
     return cli_auth.generateSecurePassword();
 }
 
+// CANARY: REQ=REQ-SONNY-6358-OFFLINE-PASSWORD-HASH; FEATURE="OfflineAuthStoreSafety"; ASPECT=HashBeforeStore; STATUS=TESTED; TEST=tests/test_sonny6358_offline_password_hash.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6358: the `password_hash` an offline command stores for
+/// `password`: the server's Argon2id PHC string
+/// (`geode_auth.hashPasswordArgon2id`). `user create` and `user update
+/// --password` stored the password itself, in the clear, and no login could
+/// match it. Exits when it cannot hash (FIPS builds have no Argon2id).
+/// Caller frees.
+fn hashPasswordOrExit(allocator: std.mem.Allocator, password: []const u8) []const u8 {
+    return geode_auth.hashPasswordArgon2id(allocator, password) catch |err| {
+        std.debug.print("Error: could not hash the password ({s}); nothing was changed\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6358: set an existing user's stored password hash through the seam
+/// the server's password changes use (`AuthGraphManager.updateUserPassword`:
+/// the record, its HMAC and the chain seal, the forced-reset flag cleared and
+/// the auth version moved on), signed with the key the chain verified with.
+fn setStoredPasswordOrExit(allocator: std.mem.Allocator, mgr: *AuthGraphManager, user_id: u64, username: []const u8, password_hash: []const u8) void {
+    const key = cli_auth.changeKey(allocator) catch |err| {
+        std.debug.print("Error: no HMAC key to seal the password change for user '{s}' with ({s}); password NOT changed\n", .{ username, @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    _ = mgr.updateUserPassword(&key, user_id, password_hash) catch |err| {
+        std.debug.print("Error: failed to persist the new password for user '{s}': {s} — password NOT changed\n", .{ username, @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
 /// Extract --data-dir from argv (returns null if not found)
 fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
     var i: usize = 0;
@@ -436,21 +465,20 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
 
+        // SONNY-6358: stored as the server stores it, never the password.
+        const password_hash = hashPasswordOrExit(allocator, final_password);
+        defer allocator.free(password_hash);
+
         // Check if user already exists
-        if (mgr.storage.getUserByUsername(username) != null) {
+        if (mgr.storage.getUserByUsername(username)) |existing| {
             // Update existing user
-            var it = mgr.storage.user_cache.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.value_ptr.getUsername(), username)) {
-                    try mgr.storage.updateUser(entry.key_ptr.*, email, final_password, null, null, null);
-                    break;
-                }
-            }
+            try mgr.storage.updateUser(existing.id, email, null, null, null, null);
+            setStoredPasswordOrExit(allocator, &mgr, existing.id, username, password_hash);
         } else {
             // Create new user via storage
             const user_id = mgr.next_user_id;
             mgr.next_user_id += 1;
-            try mgr.storage.persistUser(user_id, username, email, final_password, "");
+            try mgr.storage.persistUser(user_id, username, email, password_hash, "");
             // Ensure role exists in graph store
             if (mgr.storage.getRoleByName(role) == null) {
                 const role_id = mgr.next_user_id;
@@ -662,7 +690,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
 
         if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, new_email, new_password, null, null, null);
+            if (new_email != null) try mgr.storage.updateUser(existing.id, new_email, null, null, null, null);
+            // SONNY-6358: the hash, through the resealing seam.
+            if (new_password) |pw| {
+                const password_hash = hashPasswordOrExit(allocator, pw);
+                defer allocator.free(password_hash);
+                setStoredPasswordOrExit(allocator, &mgr, existing.id, username, password_hash);
+            }
             // If role change requested, ensure the new role exists
             if (new_role) |nr| {
                 if (mgr.storage.getRoleByName(nr) == null) {
@@ -682,9 +716,12 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.debug.print("Error: password does not meet the password policy: {s}\n", .{reason});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
+            // SONNY-6358: stored as the server stores it, never the password.
+            const password_hash = hashPasswordOrExit(allocator, pw);
+            defer allocator.free(password_hash);
             const user_id = mgr.next_user_id;
             mgr.next_user_id += 1;
-            try mgr.storage.persistUser(user_id, username, new_email orelse "unknown@example.com", pw, "");
+            try mgr.storage.persistUser(user_id, username, new_email orelse "unknown@example.com", password_hash, "");
         }
         printOut("User '{s}' updated\n", .{username});
         return;

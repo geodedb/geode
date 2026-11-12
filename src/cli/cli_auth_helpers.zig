@@ -222,6 +222,12 @@ var g_verified_key: ?[32]u8 = null;
 /// Why the last `verifyChainBeforeChange` refused (for the message).
 var g_verify_failure: ?anyerror = null;
 
+/// SONNY-6358: `verifyChainBeforeChange` found a store with no auth records
+/// and no chain root, so there was nothing to verify and no key was kept.
+/// `deinitAndSaveCliAuth` then seals what the command stored with the key
+/// the server would use (`changeKey`).
+var g_empty_store: bool = false;
+
 pub const ChainCheckError = error{ AuthChainTampered, HmacKeyUnavailable };
 
 // CANARY: REQ=REQ-SONNY-2798-OFFLINE-VERIFY-FIRST; FEATURE="OfflineAuthStoreSafety"; ASPECT=VerifyBeforeChange; STATUS=TESTED; TEST=tests/test_sonny2798_offline_verify.zig; OWNER=security; UPDATED=2026-09-26
@@ -243,7 +249,11 @@ pub const ChainCheckError = error{ AuthChainTampered, HmacKeyUnavailable };
 /// new key, which then failed to verify, although the refusal said nothing
 /// was changed.
 pub fn verifyChainBeforeChange(allocator: std.mem.Allocator, mgr: *AuthGraphManager) ChainCheckError!void {
-    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) return;
+    g_empty_store = false;
+    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) {
+        g_empty_store = true;
+        return;
+    }
     const kr = AuthGraphManager.resolveExistingHmacKey(allocator, g_resolved_data_dir) catch |err| {
         g_verify_failure = err;
         return error.HmacKeyUnavailable;
@@ -253,6 +263,22 @@ pub fn verifyChainBeforeChange(allocator: std.mem.Allocator, mgr: *AuthGraphMana
         return error.AuthChainTampered;
     };
     g_verified_key = kr.key;
+}
+
+// CANARY: REQ=REQ-SONNY-6358-OFFLINE-PASSWORD-HASH; FEATURE="OfflineAuthStoreSafety"; ASPECT=ChangeKey; STATUS=TESTED; TEST=tests/test_sonny6358_offline_password_hash.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6358: the key an offline command signs its change with, once
+/// `verifyChainBeforeChange` has let it change the store: the key the chain
+/// verified with, or, on a store with no auth records and no chain root, the
+/// key the server would use there (`resolveHmacKey`: the environment, else
+/// `.geode_hmac_key`, written as the server's first start would when there is
+/// none). Kept for `deinitAndSaveCliAuth`'s seal. `error.ChainNotVerified`
+/// when the chain was not checked.
+pub fn changeKey(allocator: std.mem.Allocator) ![32]u8 {
+    if (g_verified_key) |key| return key;
+    if (!g_empty_store) return error.ChainNotVerified;
+    const kr = try AuthGraphManager.resolveHmacKey(allocator, g_resolved_data_dir);
+    g_verified_key = kr.key;
+    return kr.key;
 }
 
 /// `verifyChainBeforeChange` for a CLI command (`command` and `subcommand`
@@ -361,6 +387,18 @@ pub fn deinitAndSaveCliAuth(allocator: std.mem.Allocator, mgr: *AuthGraphManager
     // command's own: seal them, so the next command and the next server start
     // verify the change. Most offline writers stored their records unsigned,
     // and the server refused to start until someone ran `geode auth reseal`.
+    // SONNY-6358: on a store that had no auth records there was no chain to
+    // verify and no key; what the command stored was left unsealed, and the
+    // server refused to start (no chain root). Seal it with the server's key.
+    if (g_verified_key == null and g_empty_store and mgr.countAuthRecords() > 0) {
+        _ = changeKey(allocator) catch |err| {
+            std.debug.print(
+                "Warning: the change was saved but could not be sealed into the __geode_security HMAC chain: no HMAC key ({s}); set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY as the server does, then run 'geode auth reseal'.\n",
+                .{@errorName(err)},
+            );
+        };
+    }
+    g_empty_store = false;
     if (g_verified_key) |key| {
         g_verified_key = null;
         mgr.sealChain(&key) catch |err| {

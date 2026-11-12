@@ -91,6 +91,14 @@ cat /var/lib/geode/.geode_admin_password && rm /var/lib/geode/.geode_admin_passw
   `geode user reset-password geode --new-password '...' --data-dir <data-dir>`.
   This verifies the security graph's HMAC chain first (SONNY-2798).
 
+An offline `geode user` or `geode role` change on a store with no auth
+records yet (nothing to verify) is sealed with the key the server would use
+there: `GEODE_AUTH_HMAC_KEY`, else `GEODE_TDE_KEY`, else
+`<data-dir>/.geode_hmac_key`, which is generated, as at the server's first
+start, when there is none. It used to be left unsealed, and the server then
+refused to start (SONNY-6358). Set the same key variables for the offline
+command as for `geode serve`.
+
 The file is not read again after bootstrap; deleting it changes nothing.
 
 ### Users with no stored role (fail-closed default, 2026-10)
@@ -317,9 +325,17 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
 
 ### Password Hashing
 
-- **Current**: BLAKE2b-256 with salt (secure placeholder)
-- **Future**: Argon2id with OWASP parameters (when Zig API stabilizes)
-- **Security Level**: Post-quantum computational resistance
+- **Current**: Argon2id with OWASP parameters (`m=19456,t=2,p=1`), stored
+  as a PHC string (`$argon2id$v=19$...`) by every path that sets a password:
+  CREATE USER, ALTER USER SET PASSWORD, the `geode.auth.*` procedures, the
+  first-boot admin, and the offline `geode user create | update | change-password | reset-password`
+  (`geode_auth.hashPasswordArgon2id`). The offline `geode user create` and
+  `geode user update --password` stored the password itself until
+  SONNY-6358; such a record cannot log in: set its password again.
+- **Legacy**: an imported BLAKE2b hash (`geode user import --algorithm blake2b`)
+  is accepted for migration only.
+- **FIPS builds**: Argon2id is not FIPS-approved, so setting a password fails
+  closed (`FipsUnsupported`).
 - **Validation**: All passwords validated before hashing
 
 ### Session Management
