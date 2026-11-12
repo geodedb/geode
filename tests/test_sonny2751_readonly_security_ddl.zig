@@ -377,11 +377,11 @@ test "SONNY-2751: a read-only request still runs every read: SHOW, the read-only
     try testing.expectEqualDeep(before, w.snapshot());
 }
 
-/// The user listing. `user_management.listUsers` hands `handleUserList` a
-/// snapshot allocated with the user store's allocator that nothing frees (a
-/// separate defect, reported with SONNY-2751; not this ticket's). The store
-/// runs on smp_allocator in this test so that leak does not decide it: what
-/// is checked is that a read-only request may list users.
+/// The user listing. `user_management.listUsers` handed `handleUserList` a
+/// snapshot allocated with the user store's allocator that nothing freed (a
+/// separate defect, reported with SONNY-2751 and fixed by SONNY-6312). The
+/// store runs on smp_allocator in this test: what is checked is that a
+/// read-only request may list users.
 const user_list_reads = [_][]const u8{
     "SHOW USERS",
     "CALL geode.auth.user_list()",

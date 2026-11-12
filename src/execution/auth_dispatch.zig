@@ -750,24 +750,31 @@ fn handleUserImport(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
+// CANARY: REQ=REQ-SONNY-6312-USER-LIST-OWNERSHIP; FEATURE="GQL Auth DDL"; ASPECT=UserListOwnsRows; STATUS=TESTED; TEST=tests/test_sonny6312_user_list_ownership.zig; OWNER=security; UPDATED=2026-11-12
 fn handleUserList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     // geode.auth.user_list() -> username, email, role, active
+    // SONNY-6312: the listing is a copy this request owns (it leaked the
+    // store's snapshot array on every call and its rows borrowed the store's
+    // strings, which a concurrent DROP USER freed). A listing that cannot be
+    // made is an error, not an empty list.
+    const users = try user_mgmt.listUsers(allocator);
+    defer allocator.free(users);
     const columns = try allocator.alloc([]const u8, 4);
     columns[0] = try allocator.dupe(u8, "username");
     columns[1] = try allocator.dupe(u8, "email");
     columns[2] = try allocator.dupe(u8, "role");
     columns[3] = try allocator.dupe(u8, "active");
     var rows_list = std.ArrayList([]Value).empty;
-    const users = user_mgmt.listUsers() catch &[_]user_mgmt.User{};
     for (users) |user| {
         const row = try allocator.alloc(Value, 4);
+        // The row takes the copied strings over.
         row[0] = Value{ .Str = user.username };
         row[1] = Value{ .Str = user.email };
-        row[2] = Value{ .Str = user.role.toString() };
+        row[2] = Value{ .Str = try allocator.dupe(u8, user.role.toString()) };
         row[3] = Value{ .Bool = user.active };
         try rows_list.append(allocator, row);
     }
-    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 fn handleUserDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -801,7 +808,9 @@ fn handleUserShow(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.Ca
         const args = call_stmt.procedure.Call.args;
         if (args.len >= 1 and args[0].* == .String) username = args[0].String;
     }
-    const user = user_mgmt.getUser(username);
+    // SONNY-6312: a copy this request owns (it borrowed the store's strings,
+    // which a concurrent DROP USER freed).
+    const user = try user_mgmt.getUserSummary(allocator, username);
     const columns = try allocator.alloc([]const u8, 4);
     columns[0] = try allocator.dupe(u8, "username");
     columns[1] = try allocator.dupe(u8, "email");
@@ -811,17 +820,17 @@ fn handleUserShow(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.Ca
     if (user) |u| {
         row[0] = Value{ .Str = u.username };
         row[1] = Value{ .Str = u.email };
-        row[2] = Value{ .Str = u.role.toString() };
-        row[3] = Value{ .Str = if (u.active) "active" else "disabled" };
+        row[2] = Value{ .Str = try allocator.dupe(u8, u.role.toString()) };
+        row[3] = Value{ .Str = try allocator.dupe(u8, if (u.active) "active" else "disabled") };
     } else {
-        row[0] = Value{ .Str = username };
-        row[1] = Value{ .Str = "unknown" };
-        row[2] = Value{ .Str = "user" };
-        row[3] = Value{ .Str = "active" };
+        row[0] = Value{ .Str = try allocator.dupe(u8, username) };
+        row[1] = Value{ .Str = try allocator.dupe(u8, "unknown") };
+        row[2] = Value{ .Str = try allocator.dupe(u8, "user") };
+        row[3] = Value{ .Str = try allocator.dupe(u8, "active") };
     }
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -1020,7 +1029,7 @@ fn handleUserPermissions(allocator: std.mem.Allocator, proc_name: []const u8, ca
     var rows_list = std.ArrayList([]Value).empty;
     for (perms) |p| {
         const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = username };
+        row[0] = Value{ .Str = try allocator.dupe(u8, username) };
         // Output permission names in lowercase to match CLI conventions
         const tag = @tagName(p);
         const lower = try allocator.alloc(u8, tag.len);
@@ -1028,7 +1037,8 @@ fn handleUserPermissions(allocator: std.mem.Allocator, proc_name: []const u8, ca
         row[1] = Value{ .Str = lower };
         try rows_list.append(allocator, row);
     }
-    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    // SONNY-6312: the result owns its strings (each permission name leaked).
+    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 fn handleUserChangePassword(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -1280,13 +1290,13 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
 
     if (role_name.len == 0) {
         row[0] = Value{ .Str = try allocator.dupe(u8, "error: role name required") };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
     }
 
     // Built-in role names are idempotent — acknowledge without touching g_custom_roles.
     if (isBuiltinRoleName(role_name)) {
         row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "already exists: {s} (built-in)", .{role_name}) };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
     }
 
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -1337,7 +1347,7 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     }
     if (previous_desc) |old| store_alloc.free(old);
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "created {s}", .{role_name}) };
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 fn handleRoleDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -1382,7 +1392,7 @@ fn handleRoleDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "deleted {s}", .{role_name}) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 fn handleRoleList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -1393,7 +1403,7 @@ fn handleRoleList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProced
     var rows_list = std.ArrayList([]Value).empty;
     for (builtin_roles) |rn| {
         const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = rn };
+        row[0] = Value{ .Str = try allocator.dupe(u8, rn) };
         try rows_list.append(allocator, row);
     }
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -1405,10 +1415,12 @@ fn handleRoleList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProced
         // (guards against state left over before hardening was in place).
         if (isBuiltinRoleName(entry.key_ptr.*)) continue;
         const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = entry.key_ptr.* };
+        // SONNY-6312: copied under the lock; the row borrowed the store's
+        // key, which a DROP ROLE frees.
+        row[0] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
         try rows_list.append(allocator, row);
     }
-    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 // GPS Phase 4 (Task 4-4): geode.auth.policy_* procedures now delegate to the

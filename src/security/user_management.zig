@@ -159,6 +159,39 @@ pub const User = struct {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-6312-USER-LIST-OWNERSHIP; FEATURE="GQL Auth DDL"; ASPECT=CallerOwnedUserCopies; STATUS=TESTED; TEST=tests/test_sonny6312_user_list_ownership.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6312: what SHOW USERS and `geode.auth.user_show` answer about a
+/// user, copied under `user_store_mutex` with the caller's allocator: nothing
+/// in it points into the user store, so a DROP USER cannot free it. Free with
+/// `deinit` (or `freeUserSummaries`).
+pub const UserSummary = struct {
+    username: []const u8,
+    email: []const u8,
+    role: Role,
+    active: bool,
+
+    fn copyOf(allocator: std.mem.Allocator, user: User) !UserSummary {
+        const username = try allocator.dupe(u8, user.username);
+        errdefer allocator.free(username);
+        return .{
+            .username = username,
+            .email = try allocator.dupe(u8, user.email),
+            .role = user.role,
+            .active = user.active,
+        };
+    }
+
+    pub fn deinit(self: UserSummary, allocator: std.mem.Allocator) void {
+        allocator.free(self.username);
+        allocator.free(self.email);
+    }
+};
+
+pub fn freeUserSummaries(allocator: std.mem.Allocator, users: []const UserSummary) void {
+    for (users) |u| u.deinit(allocator);
+    allocator.free(users);
+}
+
 pub const AuthResult = struct {
     role: Role,
     password_reset_required: bool,
@@ -265,16 +298,17 @@ const UserCache = struct {
         return true;
     }
 
-    fn snapshot(self: *UserCache) ![]const User {
-        if (self.entries.count() == 0) return &[_]User{};
-
-        const result = try self.allocator.alloc(User, self.entries.count());
-        var i: usize = 0;
+    /// SONNY-6312: a copy of every cached user's listed fields, made with
+    /// `allocator` (the caller's), owned by the caller. Caller holds
+    /// `user_store_mutex`.
+    fn snapshot(self: *UserCache, allocator: std.mem.Allocator) ![]UserSummary {
+        const result = try allocator.alloc(UserSummary, self.entries.count());
+        var made: usize = 0;
+        errdefer freeUserSummaries(allocator, result[0..made]);
         var node = self.head;
-        while (node) |current| {
-            result[i] = current.user;
-            i += 1;
-            node = current.next;
+        while (node) |current| : (node = current.next) {
+            result[made] = try UserSummary.copyOf(allocator, current.user);
+            made += 1;
         }
         return result;
     }
@@ -1031,20 +1065,42 @@ pub fn hasPermission(role: Role, permission: Permission) bool {
     return false;
 }
 
-/// Get user by username
+/// Get user by username. SONNY-6312: the returned `User`'s strings point
+/// into the user store and are freed by a DROP USER or an eviction on any
+/// connection: use it for existence and the scalar fields only, and
+/// `getUserSummary` for anything that keeps or returns a string.
 pub fn getUser(username: []const u8) ?User {
     return getUserInternal(username) catch null;
 }
 
-/// GAP-0270: List all users in the in-memory store
-pub fn listUsers() ![]const User {
+/// GAP-0270: List all users in the in-memory store. SONNY-6312: a copy,
+/// made under the lock with `allocator` and owned by the caller
+/// (`freeUserSummaries`). It returned an array allocated with the store's
+/// allocator that no caller freed (every SHOW USERS leaked it), and its
+/// rows borrowed the cached users' strings past the lock, which a DROP USER
+/// on another connection freed.
+pub fn listUsers(allocator: std.mem.Allocator) ![]UserSummary {
     try loadAllUsersFromResolver();
 
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-    if (user_store == null) return &[_]User{};
-    return user_store.?.snapshot();
+    if (user_store == null) return allocator.alloc(UserSummary, 0);
+    return user_store.?.snapshot(allocator);
+}
+
+/// SONNY-6312: one user's listed fields, copied under the lock with
+/// `allocator` (caller frees with `UserSummary.deinit`); null if no such
+/// user. Unlike `getUser`, nothing returned points into the store, and a
+/// failed lookup is an error, not "no such user".
+pub fn getUserSummary(allocator: std.mem.Allocator, username: []const u8) !?UserSummary {
+    if (!try refreshCachedUserIfStale(username)) return null;
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    if (user_store == null) return null;
+    const cached = user_store.?.entries.get(username) orelse return null;
+    return try UserSummary.copyOf(allocator, cached.user);
 }
 
 /// GAP-0270: Delete a user from the in-memory store

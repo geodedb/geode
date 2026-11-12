@@ -176,6 +176,21 @@
   re-creating a role frees its old description, and
   `auth_dispatch.deinitCustomRoleStore` frees the rest.
   Regression: `zig build test-sonny6278-custom-role-lifetime`.
+- **`SHOW USERS` no longer leaks on every call, and user and role listings
+  no longer read freed memory (SONNY-6312).** `geode.auth.user_list` (and
+  `SHOW USERS`) took a snapshot allocated with the user store's allocator
+  that nothing freed, so every call leaked for the life of the server; and
+  its rows pointed at the cached users' names and email addresses after the
+  store lock was released, so a `DROP USER` on another connection could
+  free them while the response was built (a use after free).
+  `geode.auth.user_show` and `SHOW ROLES` borrowed the store's strings the
+  same way. Each now answers a copy made under the store's lock with the
+  request's allocator, which the request frees
+  (`user_management.listUsers(allocator)` / `getUserSummary`); a listing
+  that cannot be made is now an error instead of an empty list. The
+  status rows of `CREATE ROLE` / `DROP ROLE` and the permission rows of
+  `SHOW PERMISSIONS` are freed with their result (they leaked).
+  Regression: `zig build test-sonny6312-user-list-ownership`.
 - **A read-only request refuses the security DDL (SONNY-2751).** The
   statement classifier behind the per-request read-only floor
   (`ExecuteRequest.read_only`, QUIC and gRPC) and the MCP read-only mode
