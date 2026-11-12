@@ -4,6 +4,19 @@
 
 ### Security
 
+- **One label-deny engine for the executor and the transport post-filter
+  (SONNY-2729 part 2).** The post-filter (`server/rls_filter.zig`) had an
+  engine type and global of its own, beside the executor's
+  (`rls_types.RLSFilterEngine`), and `server/main.zig` kept the two in step
+  (`addDenyToEngines` wrote each deny to both; remove, list and count used
+  one of them), so a change that reached one engine and not the other, or a
+  process that installed one, left the post-filter and the executor
+  disagreeing about which labels a user may see. `rls_filter.RLSFilterEngine`
+  and `LabelPolicy` are now rls_types' types, its global is rls_types'
+  global, and the server creates one engine; `removeOneDenyPolicy` and
+  `hasPoliciesForGraph` moved to rls_types' engine and `addDenyToEngines` is
+  gone. Part 1 (the post-filters fail closed when they cannot run, 53200) was
+  in v0.8.23.
 - **Every `SecurityManager` method that touches shared state is locked
   (SONNY-2410).** One `SecurityManager` is shared by every connection
   thread. SONNY-2394 locked `authenticate`, `authenticateWithMFA` and

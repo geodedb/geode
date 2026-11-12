@@ -6662,12 +6662,11 @@ fn bindScanStreamCancel(stream: *quic_transport.QuicStream, scan: *node_scan_str
 /// engines at startup, so the previous `getGlobalRLSFilterEngine() != null`
 /// test was true for every authenticated session even with no policy — which
 /// disabled engine-side streaming for all authenticated reads and forced them
-/// onto the O(graph) snapshot clone. We check BOTH the server-side label
-/// engine (`rls_filter`, the one the handler actually applies) AND the shared
-/// `rls_types`/expression engines (`execution.activeRlsPoliciesConfigured`), so
-/// a best-effort sync failure between the two engines can never let a streamed
-/// read bypass an installed policy. When any real policy exists, streaming is
-/// disabled and the snapshot path runs `passesRLSFilter` per candidate node.
+/// onto the O(graph) snapshot clone. We check the label-deny engine (one
+/// since SONNY-2729: `rls_filter` re-exports rls_types') AND the expression
+/// engine (`execution.activeRlsPoliciesConfigured`, which also reads the
+/// label engine). When any real policy exists, streaming is disabled and the
+/// snapshot path runs `passesRLSFilter` per candidate node.
 fn authenticatedReadNeedsRlsSnapshot(state: *const ServerState) bool {
     if (state.authenticated_user == null) return false;
     if (rls_filter.getGlobalRLSFilterEngine()) |engine| {

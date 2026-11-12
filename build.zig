@@ -8570,6 +8570,8 @@ pub fn build(b: *std.Build) void {
     sonny1560_shim_mod.addImport("geode_auth", auth_mod);
     sonny1560_shim_mod.addImport("logging", logging_mod);
     sonny1560_shim_mod.addImport("build_options", build_options_mod);
+    // SONNY-2729: server/rls_filter.zig re-exports rls_types' label-deny engine.
+    sonny1560_shim_mod.addImport("rls_types", rls_types_mod);
     sonny1560_shim_mod.addOptions("openssl_config", openssl_options);
 
     const sonny1560_test_mod = b.createModule(.{

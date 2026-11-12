@@ -846,63 +846,56 @@ test "SONNY-3038: DROP POLICY removes every stored policy of the name, so none c
 }
 
 // ---------------------------------------------------------------------------
-// Label deny: both engines or neither
+// Label deny: all or nothing
 // ---------------------------------------------------------------------------
+//
+// SONNY-3038 required geode.rls.add_deny's write to add the deny to the
+// post-filter's engine and the executor's, or to neither. SONNY-2729 made
+// them one engine (rls_types'; rls_filter re-exports it), so the write is
+// one add, which keeps nothing when an allocation fails.
 
-test "SONNY-3038: geode.rls.add_deny's write adds the deny to the post-filter and the executor engine, or to neither" {
-    // Fail an allocation of the executor engine, then of the post-filter.
-    for ([_]bool{ true, false }) |fail_types| {
-        var offset: usize = 0;
-        var failures: usize = 0;
-        while (true) : (offset += 1) {
-            var label_fail: OneFailure = .{ .inner = testing.allocator };
-            var types_fail: OneFailure = .{ .inner = testing.allocator };
-            var label_engine = rls_filter.RLSFilterEngine.init(label_fail.allocator());
-            defer label_engine.deinit();
-            var types_engine = rls_types.RLSFilterEngine.init(types_fail.allocator());
-            defer types_engine.deinit();
-            const target = if (fail_types) &types_fail else &label_fail;
-
-            target.arm(offset);
-            const result = rls_filter.addDenyToEngines(&label_engine, &types_engine, "g1", "Secret", "alice");
-            const induced = target.failed;
-            target.disarm();
-
-            const in_label = label_engine.isLabelDenied("g1", "Secret", "alice");
-            const in_types = types_engine.isLabelDenied("g1", "Secret", "alice");
-            if (result) |_| {
-                if (!in_label or !in_types) {
-                    std.debug.print("add_deny succeeded (offset {d}, fail_types={}): post-filter={}, executor={}\n", .{ offset, fail_types, in_label, in_types });
-                    return error.DenyInOneEngineOnly;
-                }
-            } else |_| {
-                try testing.expect(induced);
-                failures += 1;
-                if (in_label or in_types) {
-                    std.debug.print("add_deny failed (offset {d}, fail_types={}): post-filter={}, executor={}\n", .{ offset, fail_types, in_label, in_types });
-                    return error.FailedDenyKept;
-                }
+test "SONNY-3038: geode.rls.add_deny's write is the one label-deny engine's add, which keeps nothing when it fails" {
+    try testing.expect(rls_filter.RLSFilterEngine == rls_types.RLSFilterEngine);
+    var offset: usize = 0;
+    var failures: usize = 0;
+    while (true) : (offset += 1) {
+        var fail: OneFailure = .{ .inner = testing.allocator };
+        var engine = rls_types.RLSFilterEngine.init(fail.allocator());
+        defer engine.deinit();
+        fail.arm(offset);
+        const result = engine.addDenyPolicy("g1", "Secret", "alice");
+        const induced = fail.failed;
+        fail.disarm();
+        const denied = engine.isLabelDenied("g1", "Secret", "alice");
+        if (result) |_| {
+            try testing.expect(denied);
+        } else |_| {
+            try testing.expect(induced);
+            failures += 1;
+            if (denied) {
+                std.debug.print("add_deny failed (offset {d}) and kept the deny\n", .{offset});
+                return error.FailedDenyKept;
             }
-            if (!induced) break;
+            try testing.expectEqual(@as(usize, 0), engine.policyCount());
         }
-        try testing.expect(failures > 0);
+        if (!induced) break;
     }
+    try testing.expect(failures > 0);
 }
 
 test "SONNY-3038: undoing one deny leaves an identical deny added before" {
-    var label_engine = rls_filter.RLSFilterEngine.init(testing.allocator);
-    defer label_engine.deinit();
-    var types_fail: OneFailure = .{ .inner = testing.allocator };
-    var types_engine = rls_types.RLSFilterEngine.init(types_fail.allocator());
-    defer types_engine.deinit();
+    var fail: OneFailure = .{ .inner = testing.allocator };
+    var engine = rls_types.RLSFilterEngine.init(fail.allocator());
+    defer engine.deinit();
 
-    try rls_filter.addDenyToEngines(&label_engine, &types_engine, "g1", "Secret", "alice");
-    types_fail.arm(0);
-    try testing.expectError(error.OutOfMemory, rls_filter.addDenyToEngines(&label_engine, &types_engine, "g1", "Secret", "alice"));
-    types_fail.disarm();
-    try testing.expect(label_engine.isLabelDenied("g1", "Secret", "alice"));
-    try testing.expect(types_engine.isLabelDenied("g1", "Secret", "alice"));
-    try testing.expectEqual(@as(usize, 1), label_engine.policyCount());
+    try engine.addDenyPolicy("g1", "Secret", "alice");
+    fail.arm(0);
+    try testing.expectError(error.OutOfMemory, engine.addDenyPolicy("g1", "Secret", "alice"));
+    fail.disarm();
+    try engine.addDenyPolicy("g1", "Secret", "alice");
+    engine.removeOneDenyPolicy("g1", "Secret", "alice");
+    try testing.expect(engine.isLabelDenied("g1", "Secret", "alice"));
+    try testing.expectEqual(@as(usize, 1), engine.policyCount());
 }
 
 // ---------------------------------------------------------------------------

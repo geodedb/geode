@@ -2042,35 +2042,27 @@ pub fn main() !void {
     // then only read them.
     geode.execution.initEvaluator();
 
-    // S1: Initialize the global RLS filter engine for label-based row filtering.
+    // S1: Initialize the global RLS label-deny engine.
     // CANARY: REQ=REQ-SEC-RLS-WIRE-004; FEATURE="RLS Query Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/rls_filter.zig; OWNER=security; UPDATED=2026-06-11
-    const rls_filter_mod = @import("rls_filter.zig");
-    var rls_engine = rls_filter_mod.RLSFilterEngine.init(gpa);
-    defer rls_engine.deinit();
-    rls_filter_mod.setGlobalRLSFilterEngine(&rls_engine);
-    defer rls_filter_mod.setGlobalRLSFilterEngine(null);
-
-    // GAP-0510 Task 3: Also initialize the rls_types shared label-filter engine.
+    // GAP-0510 Task 3 / SONNY-2729: one engine (rls_types'), read by the
+    // executor and by the transport post-filter (rls_filter re-exports its
+    // type and global). There were two, kept in step here.
     // CANARY: REQ=REQ-SEC-RLS-WIRE-012; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitLabelEngine; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
     const rls_types_mod = @import("rls_types");
-    var rls_types_engine = rls_types_mod.RLSFilterEngine.init(gpa);
-    defer rls_types_engine.deinit();
-    rls_types_mod.setGlobalRLSFilterEngine(&rls_types_engine);
+    var rls_engine = rls_types_mod.RLSFilterEngine.init(gpa);
+    defer rls_engine.deinit();
+    rls_types_mod.setGlobalRLSFilterEngine(&rls_engine);
     defer rls_types_mod.setGlobalRLSFilterEngine(null);
 
     // REQ-RLS-DDL-001: Wire the geode.rls.* deny-policy procedures to the live
-    // engines the connection handlers consult.
+    // engine the connection handlers consult.
     // CANARY: REQ=REQ-RLS-DDL-001; FEATURE="RLS deny-policy procedure"; ASPECT=ServerCallbackWiring; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/rls_cross_tenant_query_shapes.yml; OWNER=security; UPDATED=2026-05-22
     const rls_dispatch_mod = geode.execution.rls_dispatch;
     const RlsAgm = @import("auth_graph_manager").AuthGraphManager;
     const RlsCbCtx = struct {
-        label_engine: *rls_filter_mod.RLSFilterEngine,
-        types_engine: *rls_types_mod.RLSFilterEngine,
+        engine: *rls_types_mod.RLSFilterEngine,
     };
-    var rls_cb_ctx: RlsCbCtx = .{
-        .label_engine = &rls_engine,
-        .types_engine = &rls_types_engine,
-    };
+    var rls_cb_ctx: RlsCbCtx = .{ .engine = &rls_engine };
     const RlsCbFns = struct {
         fn addDeny(
             ctx_anyopaque: ?*anyopaque,
@@ -2079,8 +2071,8 @@ pub fn main() !void {
             username: []const u8,
         ) anyerror!void {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
-            // SONNY-3038: both engines or neither.
-            try rls_filter_mod.addDenyToEngines(ctx.label_engine, ctx.types_engine, graph, label, username);
+            // SONNY-3038: all or nothing (one engine since SONNY-2729).
+            try ctx.engine.addDenyPolicy(graph, label, username);
         }
         fn removeDeny(
             ctx_anyopaque: ?*anyopaque,
@@ -2089,10 +2081,9 @@ pub fn main() !void {
             username: []const u8,
         ) usize {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
-            const before = ctx.label_engine.policyCount();
-            ctx.label_engine.removeDenyPolicy(graph, label, username);
-            ctx.types_engine.removeDenyPolicy(graph, label, username);
-            const after = ctx.label_engine.policyCount();
+            const before = ctx.engine.policyCount();
+            ctx.engine.removeDenyPolicy(graph, label, username);
+            const after = ctx.engine.policyCount();
             return if (before >= after) before - after else 0;
         }
         fn listDeny(
@@ -2100,8 +2091,8 @@ pub fn main() !void {
             allocator: std.mem.Allocator,
         ) anyerror![]rls_dispatch_mod.ListedPolicy {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
-            ctx.label_engine.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer ctx.label_engine.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+            ctx.engine.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer ctx.engine.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
             var list = std.ArrayList(rls_dispatch_mod.ListedPolicy).empty;
             errdefer {
@@ -2112,7 +2103,7 @@ pub fn main() !void {
                 }
                 list.deinit(allocator);
             }
-            for (ctx.label_engine.policies.items) |p| {
+            for (ctx.engine.policies.items) |p| {
                 if (!p.deny) continue;
                 try list.append(allocator, .{
                     .graph = try allocator.dupe(u8, p.graph),
@@ -2124,7 +2115,7 @@ pub fn main() !void {
         }
         fn count(ctx_anyopaque: ?*anyopaque) usize {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
-            return ctx.label_engine.policyCount();
+            return ctx.engine.policyCount();
         }
         // SONNY-3034: the restrictions are stored in __geode_security. No
         // auth graph manager (a degraded start): refused, not kept in memory
@@ -2358,7 +2349,7 @@ pub fn main() !void {
         // gates were HOISTED to before the gRPC serve path (search
         // "GAP-0901"). They formerly lived here, INSIDE the `if (listen_quic)`
         // block, so the gRPC-only serve path never initialized them.
-        // `ip_rate_limiter`, `rls_engine`, `rls_types_engine`, and `rls_cb_ctx`
+        // `ip_rate_limiter`, `rls_engine` (the one label-deny engine), and `rls_cb_ctx`
         // are now in scope here from the hoisted block.
 
         // GAP-0848 follow-up (2026-06-09): the expression RLS engine, per-tenant

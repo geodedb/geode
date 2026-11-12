@@ -93,7 +93,8 @@ pub fn isEnabled() bool {
 ///     request in the general executor, so the fast path must not serve it);
 ///   * no RLS policy that could apply: none installed, or no user for one to
 ///     apply to (the identity `passesRLSFilter` evaluates under).
-/// The QUIC handler also checks its own server-side label engine.
+/// The QUIC handler also checks the label-deny engine (the same one since
+/// SONNY-2729).
 pub fn sessionAllowsKeyResolvedWrites(ctx: *const execution.ExecutionContext) bool {
     if (tenancy.isStrictTenancy()) return false;
     const tenant = tenancy.resolveTenantFilter(ctx.tenant_id) catch return false;
