@@ -240,6 +240,9 @@ zig build test-lsp-embedded-e2e     # 1 test
 # Run the embedded LSP listener alongside QUIC.
 ./zig-out/bin/geode serve --listen 0.0.0.0:3141 --lsp-port=3142
 # (--lsp-port=0 disables; --lsp-bind-all opens 0.0.0.0 instead of loopback.)
+# Without --lsp-port the port comes from GEODE_LSP_PORT, else 3142; the flag
+# wins over the variable. GEODE_LSP_PORT=0 disables the listener (the test
+# build sets it for every test that spawns geode, SONNY-6332).
 ```
 
 geode-ui side (browser/Monaco client):

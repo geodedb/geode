@@ -14,6 +14,7 @@
 
 const std = @import("std");
 const geode_test_bin = @import("geode_test_bin");
+const test_ports = @import("test_ports");
 const testing = std.testing;
 
 // std.c.mkdtemp is not exposed in Zig 0.15.2 — declare the libc extern directly.
@@ -89,9 +90,9 @@ test "server RSS stays bounded across 60 connections" {
     defer std.Io.Dir.cwd().deleteTree(testIo(), tmp_dir) catch {};
 
     // Launch the real server binary so the test covers the shipping allocator.
-    // Hard-coded high port — acceptable because this test is gated to test-e2e
-    // which runs serially.  Parallel runs would collide here.
-    const port: u16 = 34717;
+    // A port the kernel reports free (SONNY-6332: this was the fixed 34717,
+    // shared with any other run of the suite on the host).
+    const port: u16 = try test_ports.freeUdpPort();
     var port_buf: [24]u8 = undefined;
     const listen = try std.fmt.bufPrint(&port_buf, "127.0.0.1:{d}", .{port});
 

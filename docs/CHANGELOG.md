@@ -368,6 +368,28 @@
   5 s. The gRPC test client's socket timeout is 120 s instead of 5 s (TCP
   reports an exited server at once). Regression:
   `zig build test-sonny6301-test-ports-and-timeouts`.
+- **No test binds a fixed port, `geode serve` reports the port it bound,
+  and `GEODE_LSP_PORT` sets the embedded LSP port (SONNY-6332).**
+  `canary_remote_kms` (8876-8880), `canary_remote_kms_hardening`
+  (13051-13054), `test_server_memory_pressure` (34717),
+  `test_datadir_lock_subprocess` (23911-23920) and `test_perf_optimizations`
+  (3182-3186) used fixed ports; the QUIC socket binds with `SO_REUSEADDR`,
+  so two concurrent runs of `test-remote-kms-hardening` bound the same UDP
+  port and failed with `RemoteError` / `AuthenticationFailed` from the other
+  run's KMS key. The KMS suites now start on port 0 and dial the bound
+  `RemoteKmsServer.port`; the others take ports from `tests/test_ports.zig`.
+  `geode serve --listen host:0` logged port 0 in its JSON transport banner
+  and `QUIC server started`; both now carry the bound port
+  (`QuicTransport.boundPort`). Every `geode serve` opened the embedded LSP
+  listener on TCP 3142, so concurrent test servers fought over it (the loser
+  logs `LSP listener: bind failed` and runs without LSP): `GEODE_LSP_PORT`
+  now sets the port when `--lsp-port` is absent (the flag wins, 0 disables,
+  a non-number logs a warning and keeps 3142), and the build sets
+  `GEODE_LSP_PORT=0` on every test Run step that spawns geode. With neither
+  set the production default is unchanged (3142), and a failed LSP bind still
+  logs an error and leaves the QUIC server running. Regression:
+  `zig build test-sonny6332-no-fixed-ports` (also scans every test source
+  the build compiles for a literal listen port).
 - **The offline `geode user` CLI names the password-policy rule a password
   breaks; `reset-password` and `password` accept `--generate-password`
   (SONNY-6271).** `user create`, `update`, `password` and `reset-password`

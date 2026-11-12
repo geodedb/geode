@@ -346,6 +346,32 @@ fn collectRunSteps(
     }
 }
 
+/// SONNY-6332: every `geode serve` opens its embedded LSP listener on TCP
+/// 3142 unless told otherwise, so test servers started concurrently on one
+/// host (parallel lanes, pre-push shards, CI jobs on a shared runner) fought
+/// over that port, and a test server could take it from a real one. Every
+/// Run step of an artifact that spawns the built geode (`spawnsBuiltGeode`)
+/// gets GEODE_LSP_PORT=0, which the server reads when `--lsp-port` is not
+/// given; children inherit it. A test that exercises the listener passes
+/// `--lsp-port=<free port>`. An explicit GEODE_LSP_PORT in the environment is
+/// kept. Runs once, when build() returns.
+fn disableEmbeddedLspForTestServers(b: *std.Build) void {
+    var seen: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    defer seen.deinit(b.allocator);
+    var runs: std.ArrayList(*std.Build.Step) = .empty;
+    defer runs.deinit(b.allocator);
+    for (b.top_level_steps.values()) |tls| collectRunSteps(b, &tls.step, &seen, &runs);
+    var it = g_aggregate_runs.keyIterator();
+    while (it.next()) |run| collectRunSteps(b, run.*, &seen, &runs);
+    for (runs.items) |step| {
+        const run = step.cast(std.Build.Step.Run) orelse continue;
+        const artifact = run.producer orelse continue;
+        if (!artifact.root_module.import_table.contains("geode_test_bin")) continue;
+        if (run.getEnvMap().get("GEODE_LSP_PORT") != null) continue;
+        run.setEnvironmentVariable("GEODE_LSP_PORT", "0");
+    }
+}
+
 /// SONNY-2772: every named `test-*` step either runs in the aggregate `test`
 /// step or is listed in `not_in_aggregate_steps` with the reason it stays
 /// out. 97 named steps used to run in no aggregate, pre-push shard or CI job
@@ -4131,6 +4157,8 @@ pub fn build(b: *std.Build) void {
     defer addExecutablesToTestCompile(b, target);
     // SONNY-2772: deferred so it sees every named step and shardDep call.
     defer checkNamedTestStepsInAggregate(b);
+    // SONNY-6332: deferred so it sees every Run step of a geode-spawning test.
+    defer disableEmbeddedLspForTestServers(b);
     // SONNY-2772: named regression steps declared above that had joined no
     // aggregate shard, so nothing ran them unless someone did by name.
     for ([_]*std.Build.Step.Run{
@@ -4799,6 +4827,8 @@ pub fn build(b: *std.Build) void {
     server_mem_pressure_tests.root_module.link_libc = true;
     const run_server_mem_pressure_tests = b.addRunArtifact(server_mem_pressure_tests);
     spawnsBuiltGeode(server_mem_pressure_tests);
+    // SONNY-6332: tests/test_ports.zig lies outside this module's directory.
+    server_mem_pressure_tests.root_module.addImport("test_ports", b.createModule(.{ .root_source_file = b.path("tests/test_ports.zig"), .target = target, .optimize = optimize }));
     test_e2e_step.dependOn(&run_server_mem_pressure_tests.step);
 
     // Protobuf wire protocol compatibility tests (Phase 6 validation)

@@ -62,6 +62,7 @@
 const std = @import("std");
 const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
+const test_ports = @import("test_ports.zig");
 const testing = std.testing;
 
 const linux = std.os.linux;
@@ -262,6 +263,13 @@ fn spawnGeode(
     return p;
 }
 
+/// A loopback QUIC listen address on a port the kernel reports free.
+/// SONNY-6332: the suite used fixed ports 23911-23920; a second run on the
+/// host bound the same UDP ports (the QUIC socket sets SO_REUSEADDR).
+fn freeListen(aa: std.mem.Allocator) ![]const u8 {
+    return std.fmt.allocPrint(aa, "127.0.0.1:{d}", .{try test_ports.freeUdpPort()});
+}
+
 fn serveArgs(aa: std.mem.Allocator, listen: []const u8, data_dir: []const u8) ![]const []const u8 {
     const args = try aa.alloc([]const u8, 7);
     args[0] = binary_path;
@@ -340,7 +348,7 @@ test "second geode serve on a live data dir is refused (ENG-3921 regression)" {
     // Server A: the incumbent.  Distinct listen port from server B so the
     // ONLY thing the two contend over is the data directory (a shared port
     // would make the test pass for the wrong reason).
-    var a = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), "127.0.0.1:23911", fx.data_dir), &.{
+    var a = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), try freeListen(fx.aa()), fx.data_dir), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
     });
     defer a.deinit();
@@ -351,7 +359,7 @@ test "second geode serve on a live data dir is refused (ENG-3921 regression)" {
     }
 
     // Server B: same data dir, different port, retry budget 0.
-    var b = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), "127.0.0.1:23912", fx.data_dir), &.{
+    var b = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), try freeListen(fx.aa()), fx.data_dir), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
         .{ .key = "GEODE_DATA_DIR_LOCK_TIMEOUT_MS", .value = "0" },
     });
@@ -388,7 +396,7 @@ test "SIGKILLed server leaves no stale data dir lock (ENG-3921)" {
     var fx = (try setUp(gpa, "stale-lock")) orelse return error.SkipZigTest;
     defer fx.deinit();
 
-    var a = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), "127.0.0.1:23913", fx.data_dir), &.{
+    var a = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), try freeListen(fx.aa()), fx.data_dir), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
     });
     defer a.deinit();
@@ -401,7 +409,7 @@ test "SIGKILLed server leaves no stale data dir lock (ENG-3921)" {
     // No graceful shutdown: the holder dies without running any cleanup.
     a.killWith(.KILL);
 
-    var b = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), "127.0.0.1:23914", fx.data_dir), &.{
+    var b = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), try freeListen(fx.aa()), fx.data_dir), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
         .{ .key = "GEODE_DATA_DIR_LOCK_TIMEOUT_MS", .value = "0" },
     });
@@ -422,7 +430,7 @@ test "geode auth reseal against a live data dir is refused (ENG-3921)" {
     var fx = (try setUp(gpa, "cli-reseal")) orelse return error.SkipZigTest;
     defer fx.deinit();
 
-    var a = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), "127.0.0.1:23915", fx.data_dir), &.{
+    var a = try spawnGeode(gpa, fx.aa(), fx.io(), try serveArgs(fx.aa(), try freeListen(fx.aa()), fx.data_dir), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
     });
     defer a.deinit();
@@ -498,7 +506,7 @@ test "unopenable lockfile is refused with an operator-facing message (ENG-3921 R
     // mode 000: open(2) returns EACCES for a non-root uid.
     if (chmod(lock_path_z.ptr, 0o000) != 0) return error.ChmodFailed;
 
-    var srv = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, "127.0.0.1:23916", fx.data_dir), &.{
+    var srv = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, try freeListen(aa), fx.data_dir), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
         .{ .key = "GEODE_DATA_DIR_LOCK_TIMEOUT_MS", .value = "0" },
     });
@@ -564,7 +572,7 @@ test "geode serve on a subdirectory of a live data dir is refused (ENG-3921 R3)"
     const aa = fx.aa();
     const io_fs = std.Io.Threaded.global_single_threaded.io();
 
-    var a = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, "127.0.0.1:23917", fx.data_dir), &.{
+    var a = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, try freeListen(aa), fx.data_dir), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
     });
     defer a.deinit();
@@ -581,7 +589,7 @@ test "geode serve on a subdirectory of a live data dir is refused (ENG-3921 R3)"
     };
 
     // Distinct port again, so the ONLY contended resource is the tree.
-    var b = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, "127.0.0.1:23918", nested), &.{
+    var b = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, try freeListen(aa), nested), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
         .{ .key = "GEODE_DATA_DIR_LOCK_TIMEOUT_MS", .value = "0" },
     });
@@ -643,7 +651,7 @@ test "a conflicting geode serve reports progress within 5s (ENG-3921 R4)" {
 
     const aa = fx.aa();
 
-    var a = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, "127.0.0.1:23919", fx.data_dir), &.{
+    var a = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, try freeListen(aa), fx.data_dir), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
     });
     defer a.deinit();
@@ -655,7 +663,7 @@ test "a conflicting geode serve reports progress within 5s (ENG-3921 R4)" {
 
     // NOTE: GEODE_DATA_DIR_LOCK_TIMEOUT_MS is deliberately NOT set -- this
     // case is about the DEFAULT budget's user experience.
-    var b = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, "127.0.0.1:23920", fx.data_dir), &.{
+    var b = try spawnGeode(gpa, aa, fx.io(), try serveArgs(aa, try freeListen(aa), fx.data_dir), &.{
         .{ .key = "GEODE_ADMIN_PASSWORD", .value = admin_password },
     });
     defer b.deinit();

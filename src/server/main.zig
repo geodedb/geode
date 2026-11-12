@@ -669,8 +669,22 @@ const LspBootstrapConfig = struct {
 /// the `std.process.Args` delivered to `main`. This works on every supported
 /// platform (the prior `/proc/self/cmdline` read was Linux-only). Any failure
 /// degrades silently to the defaults (port=3142, loopback-only).
+///
+/// SONNY-6332: `GEODE_LSP_PORT` sets the port when `--lsp-port` is absent
+/// (the flag wins; 0 disables the listener). Every `geode serve` used to open
+/// TCP 3142, so concurrent test servers on one host fought over it; the test
+/// build sets GEODE_LSP_PORT=0 for every test that spawns geode.
 fn parseLspBootstrapConfig(allocator: std.mem.Allocator) LspBootstrapConfig {
     var cfg: LspBootstrapConfig = .{};
+    if (posixGetenv("GEODE_LSP_PORT")) |v| {
+        cfg.port = std.fmt.parseUnsigned(u16, v, 10) catch blk: {
+            log.warn("GEODE_LSP_PORT is not a port number; using the default", &.{
+                Attr.string("value", v),
+                Attr.int("port", @as(i64, cfg.port)),
+            });
+            break :blk cfg.port;
+        };
+    }
     const args = process_args.getArgs(allocator) catch return cfg;
     defer allocator.free(args);
 
@@ -2394,9 +2408,11 @@ pub fn main() !void {
         try transport.listen();
         std.debug.print("[startup] QUIC transport listening ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
+        // SONNY-6332: the bound port (the kernel's choice for `--listen
+        // host:0`), so a caller can start on port 0 and read it back.
         log.info("QUIC server started", &.{
             Attr.string("address", address_str),
-            Attr.int("port", port),
+            Attr.int("port", transport.boundPort()),
             Attr.string("tls", "1.3"),
         });
 
@@ -2452,7 +2468,7 @@ pub fn main() !void {
             };
             lsp_thr.detach();
         } else {
-            log.info("LSP listener disabled (--lsp-port=0)", &.{});
+            log.info("LSP listener disabled (--lsp-port=0 or GEODE_LSP_PORT=0)", &.{});
         }
 
         // GAP-0260: Start background persistence thread for write coalescing

@@ -4,10 +4,12 @@
 //! 127.0.0.1:3181) talks to whatever else holds that port: a second run of
 //! the same test on the host (parallel lanes, the pre-push shards, CI jobs
 //! sharing a runner) answered its HELLO, or refused its seed with "42P07
-//! Duplicate graph name". `geode serve --listen 127.0.0.1:0` binds an
-//! ephemeral port but reports only the configured one, so the port cannot be
-//! read back from the server. These helpers ask the kernel for a free port
-//! instead: bind port 0, read the port it chose, release it, and pass it on.
+//! Duplicate graph name". These helpers ask the kernel for a free port: bind
+//! port 0, read the port it chose, release it, and pass it on. (Since
+//! SONNY-6332 `geode serve --listen 127.0.0.1:0` reports the port it bound in
+//! its JSON transport banner, and an in-process `RemoteKmsServer` started on
+//! port 0 exposes it as `.port`; a test that can read the port back that way
+//! has no window at all.)
 //! Another process can take the port in between, but only by drawing the
 //! same one from the ephemeral range in that window, where two runs with a
 //! constant collide every time.

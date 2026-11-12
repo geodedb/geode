@@ -292,6 +292,17 @@ fn bannerPort(text: []const u8) ?u16 {
     return std.fmt.parseUnsigned(u16, text[start..i], 10) catch null;
 }
 
+/// The whole of a procfs file. procfs reports size 0, so `readFileAlloc`
+/// and a positional `File.reader` (both size the read from stat) return an
+/// empty buffer; a streaming reader reads to EOF.
+fn readProcFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    const file = try std.Io.Dir.cwd().openFile(io(), path, .{});
+    defer file.close(io());
+    var buf: [4096]u8 = undefined;
+    var reader = file.readerStreaming(io(), &buf);
+    return reader.interface.allocRemaining(allocator, .limited(64 << 20));
+}
+
 /// The TCP ports process `pid` listens on: its socket inodes (from
 /// /proc/<pid>/fd) matched against the LISTEN rows of /proc/net/tcp{,6}.
 /// Read from the kernel rather than the server's log, and without
@@ -317,7 +328,11 @@ fn listeningTcpPorts(allocator: std.mem.Allocator, pid: std.posix.pid_t) !std.Ar
     var ports: std.ArrayList(u16) = .empty;
     errdefer ports.deinit(allocator);
     for ([_][]const u8{ "/proc/net/tcp", "/proc/net/tcp6" }) |table| {
-        const text = std.Io.Dir.cwd().readFileAlloc(io(), table, allocator, .limited(64 << 20)) catch continue;
+        // A host without IPv6 has no tcp6 table; tcp must be readable.
+        const text = readProcFile(allocator, table) catch |err| switch (err) {
+            error.FileNotFound => if (std.mem.endsWith(u8, table, "6")) continue else return err,
+            else => return err,
+        };
         defer allocator.free(text);
         var lines = std.mem.splitScalar(u8, text, '\n');
         _ = lines.next(); // header
@@ -357,6 +372,17 @@ fn printPorts(what: []const u8, ports: []const u16) void {
     std.debug.print("SONNY-6332: {s} listens on TCP:", .{what});
     for (ports) |p| std.debug.print(" {d}", .{p});
     std.debug.print("\n", .{});
+}
+
+test "SONNY-6332 the listener probe sees a TCP listener of this process" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const allocator = testing.allocator;
+    const addr = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try addr.listen(io(), .{});
+    defer server.deinit(io());
+    var ports = try listeningTcpPorts(allocator, std.os.linux.getpid());
+    defer ports.deinit(allocator);
+    try testing.expect(std.mem.indexOfScalar(u16, ports.items, server.socket.address.getPort()) != null);
 }
 
 test "SONNY-6332 (3) the build gives geode-spawning tests GEODE_LSP_PORT=0" {
