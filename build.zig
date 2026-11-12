@@ -9456,6 +9456,19 @@ pub fn build(b: *std.Build) void {
     const sonny6374_step = b.step("test-sonny6374-lsp-auth-provider-lifetime", "Run SONNY-6374 regression (the embedded LSP AuthProvider outlives every session: two sessions get a -32002 answer to initialize, and SIGTERM with a session open closes it, stops the listener and frees the provider)");
     sonny6374_step.dependOn(&run_sonny6374_tests.step);
 
+    // SONNY-2439 (partial): gated benchmarks time with a monotonic clock, the
+    // test-local-only benchmarks are gone, and the enforced job's steps exist.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2439_perf_methodology.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny2439_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny2439-perf-methodology", "Run SONNY-2439 partial regression (every gated perf claim times with a monotonic clock; the gated benchmarks of test-local code are gone; every step the enforced perf-gate job runs exists)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2441: KMSProvider has no dead remote path, every provider type
     // round-trips the caller's key or refuses, and the KMS tests are built.
     const sonny2441_tde_kms_mod = b.createModule(.{ .root_source_file = b.path("src/security/tde_kms_integration.zig"), .target = target, .optimize = optimize });
