@@ -12788,6 +12788,14 @@ pub fn build(b: *std.Build) void {
     const sonny6270_step = b.step("test-sonny6270-drop-constraint", "Run SONNY-6270 regression (DROP CONSTRAINT removes the session graph's or an engine-wide row, saves the catalog under its lock and refuses when the save fails; a dropped constraint stops being enforced and stays dropped after a restart; the UNIQUE fast-path fence comes down with the last applicable row; db.constraints() copies rows under the catalog lock; schema permission required)");
     sonny6270_step.dependOn(&run_sonny6270_tests.step);
 
+    const sonny6268_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6268_graph_store_failure_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny6268_test_mod.addImport("geode", root_mod);
+    const sonny6268_tests = b.addTest(.{ .root_module = sonny6268_test_mod });
+    const run_sonny6268_tests = b.addRunArtifact(sonny6268_tests);
+    shardDep(test_step, &run_sonny6268_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6268_step = b.step("test-sonny6268-graph-store-failure-atomicity", "Run SONNY-6268 regression (allocation-failure sweep over the graph store's node, label and edge primitives, in memory and with a storage adapter: a failed create, property SET/REMOVE, label add/remove or delete leaves the store unchanged, reports the failure, leaks nothing, and the retry succeeds)");
+    sonny6268_step.dependOn(&run_sonny6268_tests.step);
+
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once
     // per candidate row (RC-6, O(N^2) query), and the backfill reports no indexed
