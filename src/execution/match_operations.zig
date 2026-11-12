@@ -5003,7 +5003,6 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                     const passes = switch (where_result) {
                         .Bool => |b| b,
                         .Null => false,
-                        .Int => |i| i != 0,
                         else => false,
                     };
                     if (!passes) return;
@@ -5134,7 +5133,6 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                             const passes = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
-                                .Int => |i| i != 0,
                                 else => false,
                             };
                             if (!passes) {
@@ -5628,11 +5626,15 @@ fn keepPaths(allocator: std.mem.Allocator, value: *Value) !void {
     }
 }
 
+// CANARY: REQ=REQ-SONNY-6425-WHERE-TRUTHINESS; FEATURE="SearchConditionTruth"; ASPECT=SingleNodeTrueOnly; STATUS=TESTED; TEST=tests/test_sonny6425_where_truthiness.zig; OWNER=execution; UPDATED=2026-11-12
 /// A FILTER's verdict on a row, as the single-chain executors read it.
+/// SONNY-6425: here and at every WHERE / FILTER / HAVING site of this file a
+/// row passes only when the condition is the Boolean True (ISO/IEC 39075
+/// 19.1 General Rule 2, 16.13 General Rule 2b; SONNY-3184's rule, which the
+/// cluster leader applies too). A non-zero integer counted as true.
 fn filterPasses(v: Value) bool {
     return switch (v) {
         .Bool => |b| b,
-        .Int => |i| i != 0,
         else => false,
     };
 }
@@ -7006,7 +7008,6 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 const passes_where = switch (where_result) {
                     .Bool => |b| b,
                     .Null => false,
-                    .Int => |i| i != 0,
                     else => false,
                 };
                 if (!passes_where) continue;
@@ -7352,7 +7353,6 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 const passes_where = switch (where_result) {
                     .Bool => |b| b,
                     .Null => false,
-                    .Int => |i| i != 0,
                     else => false,
                 };
                 if (passes_where) {
@@ -7995,7 +7995,6 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 const passes = switch (where_result) {
                     .Bool => |b| b,
                     .Null => false,
-                    .Int => |i| i != 0,
                     else => false,
                 };
                 if (passes) {
@@ -8260,7 +8259,6 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 const having_result = eval.evalExpr(allocator, having_expr, having_env) catch Value{ .Bool = false };
                 const passes_having = switch (having_result) {
                     .Bool => |b| b,
-                    .Int => |hv| hv != 0,
                     else => false,
                 };
                 if (!passes_having) {
@@ -8718,7 +8716,6 @@ fn executeVariableLengthPathTraversal(
             const passes_where = switch (where_result) {
                 .Bool => |b| b,
                 .Null => false,
-                .Int => |i| i != 0,
                 else => false,
             };
 
@@ -8745,7 +8742,6 @@ fn executeVariableLengthPathTraversal(
             const passes_filter = switch (filter_result) {
                 .Bool => |b| b,
                 .Null => false,
-                .Int => |i| i != 0,
                 else => false,
             };
 
@@ -9185,7 +9181,6 @@ fn executeSingleHopEdgeTraversal(
                 const passes_where = switch (where_result) {
                     .Bool => |b| b,
                     .Null => false,
-                    .Int => |i| i != 0,
                     else => false,
                 };
 
@@ -9204,7 +9199,6 @@ fn executeSingleHopEdgeTraversal(
                 const passes_filter = switch (filter_result) {
                     .Bool => |b| b,
                     .Null => false,
-                    .Int => |i| i != 0,
                     else => false,
                 };
 
@@ -9658,7 +9652,6 @@ fn readWithStageRows(
             const env = Env{ .names = rows.columns, .values = row, .param_names = param_names, .param_values = param_values, .allocator = allocator };
             k.* = switch (try eval.evalExpr(allocator, where_expr, env)) {
                 .Bool => |b| b,
-                .Int => |i| i != 0,
                 else => false,
             };
             if (k.*) kept += 1;
@@ -10819,7 +10812,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
-                                .Int => |i| i != 0,
                                 else => false,
                             };
                             if (!passes_where) {
@@ -10961,7 +10953,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
-                                .Int => |i| i != 0,
                                 else => false,
                             };
                             if (!passes_where) {
@@ -11147,7 +11138,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         break :blk switch (where_result) {
                             .Bool => |b| b,
                             .Null => false,
-                            .Int => |i| i != 0,
                             else => false,
                         };
                     };
@@ -11163,7 +11153,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     const passes_filter = switch (filter_result) {
                         .Bool => |b| b,
                         .Null => false,
-                        .Int => |i| i != 0,
                         else => false,
                     };
 
@@ -11422,7 +11411,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
-                                .Int => |i| i != 0,
                                 else => false,
                             };
                             if (!passes_where) {
@@ -11514,7 +11502,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
-                                .Int => |i| i != 0,
                                 else => false,
                             };
                             if (!passes_where) {
@@ -11772,7 +11759,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 const wres = try eval.evalExpr(allocator, wexpr, f_env);
                                 const passes = switch (wres) {
                                     .Bool => |b| b,
-                                    .Int => |iv| iv != 0,
                                     else => false,
                                 };
                                 if (!passes) continue;
@@ -11781,7 +11767,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 const fres = try eval.evalExpr(allocator, fexpr, f_env);
                                 const passes = switch (fres) {
                                     .Bool => |b| b,
-                                    .Int => |iv| iv != 0,
                                     else => false,
                                 };
                                 if (!passes) continue;
@@ -11921,7 +11906,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         break :blk switch (where_result) {
                             .Bool => |b| b,
                             .Null => false,
-                            .Int => |i| i != 0,
                             else => false,
                         };
                     };
@@ -11937,7 +11921,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     const passes_filter = switch (filter_result) {
                         .Bool => |b| b,
                         .Null => false,
-                        .Int => |i| i != 0,
                         else => false,
                     };
 
@@ -12109,7 +12092,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         const passes = switch (where_val) {
                             .Bool => |b| b,
                             .Null => false,
-                            .Int => |i| i != 0,
                             else => false,
                         };
                         if (passes) {
@@ -12552,7 +12534,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         break :blk switch (where_result) {
                             .Bool => |b| b,
                             .Null => false,
-                            .Int => |i| i != 0,
                             else => false,
                         };
                     };
@@ -12572,7 +12553,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     const passes_filter = switch (filter_result) {
                         .Bool => |b| b,
                         .Null => false,
-                        .Int => |i| i != 0,
                         else => false,
                     };
 
@@ -12835,7 +12815,6 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     const passes = switch (where_val) {
                         .Bool => |b| b,
                         .Null => false,
-                        .Int => |i| i != 0,
                         else => false,
                     };
                     if (passes) {

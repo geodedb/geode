@@ -344,7 +344,9 @@ fn startCluster(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Clus
 
     const peers = "127.0.0.11:4242,127.0.0.12:4242,127.0.0.13:4242";
     const token = "replicable-mutations-cluster-token";
-    const hmac = "replmut-hmac-0123456789abcdef0123456789abcdef";
+    // SONNY-6429: 64 hex characters. Since SONNY-6339 a GEODE_AUTH_HMAC_KEY
+    // that is not refuses startup (HmacKeyUnusable), and no node came up.
+    const hmac = "5e7a" ** 16;
 
     var cluster = Cluster{
         .children = undefined,

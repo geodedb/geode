@@ -5121,6 +5121,15 @@ pub const GraphStore = struct {
         var drop_lock: ?*graph_storage_adapter.ManagedGraph = null;
         if (drop_lock_adapter) |adapter| {
             if (!adapter.threadHoldsGraphWriteLock(graph_name)) {
+                // SONNY-6425 item 5: a caller holding the graph's READ lock
+                // would wait for itself here forever (the writer-preferring
+                // acquire never completes while its own shared hold is open,
+                // and every writer of the graph queues behind it). Refused
+                // before anything is dropped.
+                if (adapter.threadHoldsGraphReadLock(graph_name)) {
+                    log.err("dropGraph refused: the calling thread holds the graph's read lock", &.{Attr.string("graph", graph_name)});
+                    return error.ObjectInUse;
+                }
                 drop_lock = adapter.acquireGraphWriteLockCancelable(graph_name, std.math.maxInt(u64)) catch |err| switch (err) {
                     error.GraphNotFound => null,
                     error.Deadline => unreachable, // no deadline
@@ -7113,6 +7122,9 @@ pub const GraphStore = struct {
     /// so such a key answers here once more.)
     pub fn lookupOnlyMergeHolder(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
+        // SONNY-6429: under lean indexing a key no MERGE registered is not in
+        // the index at all, so its absence there says nothing.
+        if (!shouldIndexProperty(prop_key)) return .not_indexable;
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable; // SONNY-3056
         var buf: [1024]u8 = undefined;
@@ -7136,6 +7148,7 @@ pub const GraphStore = struct {
     pub fn lookupOnlyMergeHolderForTenant(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, tenant: ?[]const u8, out_node_id: *u64) MergeLookupResult {
         const tid = tenant orelse return self.lookupOnlyMergeHolder(graph_name, label, prop_key, prop_value, out_node_id);
         if (self.merge_index_untrusted.load(.acquire)) return .not_indexable; // SONNY-6362
+        if (!shouldIndexProperty(prop_key)) return .not_indexable; // SONNY-6429, as above
         self.ensureGraphHydrated(graph_name); // PHASE 1b chokepoint
         self.ensureLeanMergeBackfill(graph_name, label, prop_key) catch return .not_indexable; // SONNY-3056
         var buf: [1024]u8 = undefined;
@@ -18251,6 +18264,21 @@ pub const QueryReadSession = struct {
             source_store.schema_name,
         );
         errdefer session.snapshot.deinit();
+
+        // CANARY: REQ=REQ-SONNY-6425-LISTINGS-AFTER-REOPEN; FEATURE="PerTenantIsolation"; ASPECT=SnapshotHydratesSource; STATUS=TESTED; TEST=tests/test_sonny6425_tenant_listings_reopen.zig; OWNER=storage; UPDATED=2026-11-12
+        // SONNY-6425 item 3: the graphs the snapshot copies are hydrated
+        // first. After an open, a graph's resident products (nodes, label
+        // index, the per-tenant label / type / property-key counts) are
+        // built on first touch (`ensureGraphHydrated`), and the clone below
+        // copies only what is resident: a CALL db.labels() / SHOW TABLES
+        // served from a snapshot taken before anything touched the graph
+        // listed nothing, for every tenant, while MATCH (which reads the
+        // store, hydrating it) saw the rows. Hydration takes no graph lock.
+        if (scope) |names| {
+            for (names) |name| source_store.ensureGraphHydrated(name);
+        } else {
+            source_store.ensureAllGraphsHydrated();
+        }
 
         // Clone nodes/edges from the global store instead of loading from the
         // shared adapter buffer pool (which races with concurrent writers).

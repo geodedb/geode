@@ -14270,6 +14270,98 @@ pub fn build(b: *std.Build) void {
     const sonny3241_step = b.step("test-sonny3241-fast-path-parity-wire", "Run SONNY-3241 wire regression (spawns a server, group commit on and off: node MERGE with ON CREATE / ON MATCH SET beside a bare SET, also /*+BATCH*/ and USE GRAPH; MATCH ... CREATE edges over a key two nodes hold or a non-integer key; MATCH ... MERGE edges with ON CREATE SET and with relationship properties all write what the executor writes)");
     sonny3241_step.dependOn(&run_sonny3241_tests.step);
 
+    // SONNY-6429: the tenant-scoped sole-holder endpoint lookup of the
+    // MATCH ... CREATE edge fast path, in process against the executor's
+    // MATCH, and over QUIC (group commit on and off) the edge statements of
+    // a tenant-scoped or unscoped session answer and write what the executor
+    // does in an explicit transaction.
+    const sonny6429_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6429_sole_holder_tenant_wire.zig"), .target = target, .optimize = optimize });
+    sonny6429_test_mod.link_libc = true;
+    sonny6429_test_mod.addImport("geode", root_mod);
+    sonny6429_test_mod.addImport("schema", schema_mod);
+    sonny6429_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6429_test_mod.addImport("logging", logging_mod);
+    sonny6429_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6429_tests = b.addTest(.{ .root_module = sonny6429_test_mod });
+    const run_sonny6429_tests = b.addRunArtifact(sonny6429_tests);
+    spawnsBuiltGeode(sonny6429_tests);
+    shardDep(test_step, &run_sonny6429_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6429_step = b.step("test-sonny6429-sole-holder-tenant-wire", "Run SONNY-6429 regression (the tenant-scoped sole-holder endpoint lookup answers what the executor's MATCH sees: two holders of the session's tenant, one of it and one of another tenant, only another tenant's, unscoped, persisted / unbounded cache / lean / reopened; over QUIC with group commit on and off, MATCH ... CREATE and MATCH ... MERGE edges of a tenant-scoped or unscoped session answer and write what the executor does)");
+    sonny6429_step.dependOn(&run_sonny6429_tests.step);
+
+    // SONNY-6425 items 1-2: a WHERE / FILTER / HAVING keeps a row only when
+    // it is True (ISO/IEC 39075 19.1, 16.13), on a single node and on a
+    // cluster leader; a failing WHERE / SET expression answers the same
+    // error on both.
+    const sonny6425_where_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6425_where_truthiness.zig"), .target = target, .optimize = optimize });
+    sonny6425_where_test_mod.link_libc = true;
+    sonny6425_where_test_mod.addImport("geode", root_mod);
+    sonny6425_where_test_mod.addImport("schema", schema_mod);
+    sonny6425_where_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6425_where_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6425_where_test_mod.addImport("logging", logging_mod);
+    sonny6425_where_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6425_where_test_mod.addImport("rls", rls_mod);
+    sonny6425_where_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6425_where_tests = b.addTest(.{ .root_module = sonny6425_where_test_mod });
+    const run_sonny6425_where_tests = b.addRunArtifact(sonny6425_where_tests);
+    shardDep(test_step, &run_sonny6425_where_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6425_where_step = b.step("test-sonny6425-where-truthiness", "Run SONNY-6425 items 1-2 regression (a WHERE, FILTER or HAVING whose value is not the Boolean True keeps no row, on the single-node MATCH, hop, multi-chain, WITH and GROUP BY paths and a cluster leader's MATCH ... SET alike; a WHERE or SET expression that fails answers the same error on a leader as on a single node)");
+    sonny6425_where_step.dependOn(&run_sonny6425_where_tests.step);
+
+    // SONNY-6425 item 3: tenant-scoped schema listings after a reopen.
+    const sonny6425_listings_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6425_tenant_listings_reopen.zig"), .target = target, .optimize = optimize });
+    sonny6425_listings_mod.addImport("geode", root_mod);
+    sonny6425_listings_mod.addImport("rls", rls_mod);
+    sonny6425_listings_mod.addImport("rls_types", rls_types_mod);
+    const sonny6425_listings_tests = b.addTest(.{ .root_module = sonny6425_listings_mod });
+    const run_sonny6425_listings_tests = b.addRunArtifact(sonny6425_listings_tests);
+    shardDep(test_step, &run_sonny6425_listings_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6425_listings_step = b.step("test-sonny6425-tenant-listings-reopen", "Run SONNY-6425 item 3 regression (after the store is closed and reopened in the same process, a tenant-scoped session's db.labels(), db.relationshipTypes(), db.propertyKeys() and SHOW TABLES still list what its MATCH sees)");
+    sonny6425_listings_step.dependOn(&run_sonny6425_listings_tests.step);
+
+    // SONNY-6425 item 4: a one-node CREATE commits one engine transaction.
+    const sonny6425_shard_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6425_create_one_shard_commit.zig"), .target = target, .optimize = optimize });
+    sonny6425_shard_test_mod.link_libc = true;
+    sonny6425_shard_test_mod.addImport("geode", root_mod);
+    sonny6425_shard_test_mod.addImport("logging", logging_mod);
+    sonny6425_shard_test_mod.addImport("rls", rls_mod);
+    sonny6425_shard_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6425_shard_tests = b.addTest(.{ .root_module = sonny6425_shard_test_mod });
+    const run_sonny6425_shard_tests = b.addRunArtifact(sonny6425_shard_tests);
+    shardDep(test_step, &run_sonny6425_shard_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6425_shard_step = b.step("test-sonny6425-create-one-shard-commit", "Run SONNY-6425 item 4 regression (a one-node CREATE through the executor commits exactly one storage-engine transaction: the node is allocated on the statement transaction's shard)");
+    sonny6425_shard_step.dependOn(&run_sonny6425_shard_tests.step);
+
+    // SONNY-6425 item 5: dropGraph under the caller's own read lock refuses.
+    const sonny6425_drop_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6425_drop_under_own_read_lock.zig"), .target = target, .optimize = optimize });
+    sonny6425_drop_test_mod.link_libc = true;
+    sonny6425_drop_test_mod.addImport("geode", root_mod);
+    sonny6425_drop_test_mod.addImport("schema", schema_mod);
+    sonny6425_drop_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6425_drop_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6425_drop_test_mod.addImport("logging", logging_mod);
+    const sonny6425_drop_tests = b.addTest(.{ .root_module = sonny6425_drop_test_mod });
+    const run_sonny6425_drop_tests = b.addRunArtifact(sonny6425_drop_tests);
+    shardDep(test_step, &run_sonny6425_drop_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6425_drop_step = b.step("test-sonny6425-drop-under-own-read-lock", "Run SONNY-6425 item 5 regression (GraphStore.dropGraph called by a thread holding the graph's read lock refuses with ObjectInUse instead of waiting for itself; a read lock of another graph does not refuse)");
+    sonny6425_drop_step.dependOn(&run_sonny6425_drop_tests.step);
+
+    // SONNY-6425 item 6: a gRPC per-statement chunk retry that fails after
+    // sending stops the run and prints the summary.
+    const sonny6425_retry_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6425_grpc_retry_summary.zig"), .target = target, .optimize = optimize });
+    sonny6425_retry_test_mod.link_libc = true;
+    sonny6425_retry_test_mod.addImport("geode", root_mod);
+    sonny6425_retry_test_mod.addImport("schema", schema_mod);
+    sonny6425_retry_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6425_retry_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6425_retry_tests = b.addTest(.{ .root_module = sonny6425_retry_test_mod });
+    const run_sonny6425_retry_tests = b.addRunArtifact(sonny6425_retry_tests);
+    run_sonny6425_retry_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6425_retry_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6425_retry_step = b.step("test-sonny6425-grpc-retry-summary", "Run SONNY-6425 item 6 regression (geode query --grpc --file: a statement of a rejected chunk, retried on its own, whose connection fails after it was sent is not sent again, the run stops and the chunked summary is printed; spawns the CLI, a server and a TCP relay)");
+    sonny6425_retry_step.dependOn(&run_sonny6425_retry_tests.step);
+
     const sonny6354_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6354_lean_late_key_indexes.zig"), .target = target, .optimize = optimize });
     sonny6354_test_mod.link_libc = true; // setenv/unsetenv
     sonny6354_test_mod.addImport("geode", root_mod);

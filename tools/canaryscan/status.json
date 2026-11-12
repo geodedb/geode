@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T22:51:40.727798147Z",
+  "generated_at": "2026-11-12T23:20:10.992956618Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84291,6 +84291,228 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6425-CREATE-ONE-SHARD",
+      "features": [
+        {
+          "feature": "StatementTxnBatching",
+          "aspect": "AllocOnStatementShard",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_create_one_shard_commit.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "StatementTxnBatching",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_create_one_shard_commit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_create_one_shard_commit.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6425-DROP-OWN-READ-LOCK",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "ReadHolderTracking",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_drop_under_own_read_lock.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_drop_under_own_read_lock.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_drop_under_own_read_lock.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6425-GRPC-RETRY-SUMMARY",
+      "features": [
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_grpc_retry_summary.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_grpc_retry_summary.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "RetryStopsWithSummary",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_grpc_retry_summary.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6425-LEADER-ERROR-PARITY",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "LeaderSetEvalError",
+          "status": "TESTED",
+          "files": [
+            "src/execution/crud_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_where_truthiness.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6425-LISTINGS-AFTER-REOPEN",
+      "features": [
+        {
+          "feature": "PerTenantIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_tenant_listings_reopen.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_tenant_listings_reopen.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "PerTenantIsolation",
+          "aspect": "SnapshotHydratesSource",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_tenant_listings_reopen.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6425-WHERE-TRUTHINESS",
+      "features": [
+        {
+          "feature": "SearchConditionTruth",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6425_where_truthiness.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_where_truthiness.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "SearchConditionTruth",
+          "aspect": "SingleNodeTrueOnly",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6425_where_truthiness.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6429-MATCH-CREATE-EDGE-SUMMARY",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "MatchCreateEdgeSummaryRow",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6429-SOLE-HOLDER-TENANT",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "SoleHolderTenantRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6430-DEPLOY-DOCS-TRUTH",
       "features": [
         {
@@ -92104,7 +92326,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4789
+      "TESTED": 4802
     },
     "by_aspect": {
       "2PC": 3,
@@ -92215,6 +92437,7 @@
       "AllOrNothingSet": 1,
       "AllShortestPathsFilter": 1,
       "AllShortestPathsIsolation": 1,
+      "AllocOnStatementShard": 1,
       "AllocatorUsage": 1,
       "AllocatorUse": 1,
       "AllowPolicyScope": 1,
@@ -94014,6 +94237,7 @@
       "LeaderProposeMatchCreate": 1,
       "LeaderProposeMerge": 1,
       "LeaderProposeUpdate": 1,
+      "LeaderSetEvalError": 1,
       "LeaderSetRowVisibility": 1,
       "LeakRegression": 1,
       "LeakSafeCreate": 1,
@@ -94160,6 +94384,7 @@
       "MatchCallFiltering": 2,
       "MatchClassifiedAsMatch": 1,
       "MatchCreate": 2,
+      "MatchCreateEdgeSummaryRow": 1,
       "MatchCreateFollowerFailClosed": 1,
       "MatchCreateRows": 1,
       "MatchExecution": 4,
@@ -95126,6 +95351,7 @@
       "ReadFallsBackDuringBuild": 1,
       "ReadGateDecide": 1,
       "ReadGraphList": 2,
+      "ReadHolderTracking": 1,
       "ReadMapPartialFailure": 1,
       "ReadMutationExecuteSplit": 1,
       "ReadOnlyAllowsMatch": 1,
@@ -95186,7 +95412,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 274,
+      "Regression": 279,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -95282,6 +95508,7 @@
       "RetentionCleanup": 1,
       "RetireMigratedGrantPolicies": 1,
       "RetryLogic": 1,
+      "RetryStopsWithSummary": 1,
       "RetryTailRegressionCounters": 1,
       "ReturnAfterSet": 1,
       "ReturnAggregation": 1,
@@ -95591,6 +95818,7 @@
       "SingleDurableWriter": 1,
       "SingleFlightLeak": 1,
       "SingleHopEdgeTraversal": 1,
+      "SingleNodeTrueOnly": 1,
       "SinglePacketFramedWrites": 1,
       "SingleRequestExecution": 1,
       "SingleRowResult": 1,
@@ -95621,6 +95849,7 @@
       "SnapshotEveryGraphRead": 1,
       "SnapshotFlushBatchVarianceEnvelope": 1,
       "SnapshotFlushQueueDepthVarianceEnvelope": 1,
+      "SnapshotHydratesSource": 1,
       "SnapshotIOThrottleVarianceEnvelope": 1,
       "SnapshotInstallation": 1,
       "SnapshotOwnsLabels": 1,
@@ -95633,6 +95862,7 @@
       "SnapshotValidation": 1,
       "SoleHolderEndpoint": 1,
       "SoleHolderEndpointTenantScope": 1,
+      "SoleHolderTenantRegression": 1,
       "SortExecution": 1,
       "Sorting": 1,
       "SourceAudit": 2,

@@ -2781,6 +2781,22 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
             };
             executed += outcome.succeeded;
             error_count += outcome.failed;
+            // CANARY: REQ=REQ-SONNY-6425-GRPC-RETRY-SUMMARY; FEATURE="ChunkedExecution"; ASPECT=RetryStopsWithSummary; STATUS=TESTED; TEST=tests/test_sonny6425_grpc_retry_summary.zig; OWNER=cli; UPDATED=2026-11-12
+            // SONNY-6425 item 6: a retried statement that was sent and got no
+            // answer stops the run, as a chunk does (SONNY-6377 above).
+            if (outcome.unknown) |u| {
+                var not_run: usize = 0;
+                for (u.stmt_idx + 1..statements.len) |idx| {
+                    if (!txn_strip.items[idx]) not_run += 1;
+                }
+                std.debug.print(
+                    "Error: statement {d} got no answer after it was sent ({t}); it may still be executing on the server or may have been applied, so it was not sent again.\n" ++
+                        "Stopping: the {d} statement(s) after it were not executed.\n",
+                    .{ u.stmt_idx + 1, u.err, not_run },
+                );
+                printChunkedSummary(executed, error_count);
+                return if (u.err == error.Timeout) error.ChunkTimedOut else error.ChunkOutcomeUnknown;
+            }
         }
         chunk_start = chunk_end;
     }
@@ -2800,6 +2816,10 @@ fn printChunkedSummary(executed: usize, error_count: usize) void {
 const ChunkRetryOutcome = struct {
     succeeded: usize = 0,
     failed: usize = 0,
+    /// SONNY-6425 item 6: a retried statement that got no answer after it
+    /// was sent (a client timeout, a dropped connection): its error, and its
+    /// index. The retry stopped there; the caller stops the run.
+    unknown: ?struct { err: anyerror, stmt_idx: usize } = null,
 };
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-009; FEATURE="ChunkedExecution"; ASPECT=StatementFallback; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
@@ -2866,6 +2886,10 @@ fn retryChunkStatementByStatement(
             if (isUseGraphStmt(trimmed)) current_use_graph = stmt;
 
             var stmt_failed = false;
+            // SONNY-6425 item 6: as the chunk itself (SONNY-6384), a timeout
+            // or a failure after the statement was sent is returned, not an
+            // exit of the process, so the run stops with its summary.
+            var stmt_sent = false;
             const empty_params = std.ArrayList(schema.Param).empty;
             executeGrpcQuery(allocator, .{
                 .server_addr = opts.server_addr,
@@ -2880,9 +2904,16 @@ fn retryChunkStatementByStatement(
                 .page_size = default_stream_page_size,
                 .params = empty_params,
                 .failed_out = &stmt_failed,
+                .sent_out = &stmt_sent,
+                .return_unknown_outcome = true,
             }) catch |err| {
                 std.debug.print("Error executing statement {d}: {}\n", .{ idx + 1, err });
                 stmt_failed = true;
+                if (stmt_sent) {
+                    outcome.failed += 1;
+                    outcome.unknown = .{ .err = err, .stmt_idx = idx };
+                    return outcome;
+                }
             };
             if (stmt_failed) outcome.failed += 1 else outcome.succeeded += 1;
         }

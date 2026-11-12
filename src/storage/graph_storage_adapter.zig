@@ -4104,7 +4104,18 @@ pub const StorageAdapter = struct {
         // putProperty) each call `txn_manager.begin()` + `commit()`, and
         // `commit()` always ends with `wal.sync()` (fsync) — see
         // `graph_storage/src/txn.zig:67-85`.
-        const node_id = try mg.engine.allocNode();
+        // CANARY: REQ=REQ-SONNY-6425-CREATE-ONE-SHARD; FEATURE="StatementTxnBatching"; ASPECT=AllocOnStatementShard; STATUS=TESTED; TEST=tests/test_sonny6425_create_one_shard_commit.zig; OWNER=storage; UPDATED=2026-11-12
+        // SONNY-6425: with a statement txn open on this graph, the node is
+        // allocated on that txn's shard, so its record, labels and
+        // properties join the statement's one commit. `allocNode` and
+        // `beginTxn` pick their shard round-robin from the SAME counter, so
+        // the node always landed on another shard and committed in its own
+        // transactions (3-6 commits, each a WAL fsync, for a one-node CREATE).
+        const stmt_txn = currentStatementTxnForGraph(graph_name);
+        const node_id = if (stmt_txn) |s|
+            try mg.engine.shards[shardedTxnShard(s.txn_id)].allocNode()
+        else
+            try mg.engine.allocNode();
         const node_shard = mg.shardEngineForNode(node_id);
 
         // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard
@@ -4114,7 +4125,6 @@ pub const StorageAdapter = struct {
         // local txn (one fsync for the whole statement).  Otherwise open a
         // fresh local txn on node_shard (correct isolation, one fsync per
         // createNode call instead of per sub-op).
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
         const local_txn: gs.TxnId = if (stmt_txn) |s|
             shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
         else
@@ -5576,7 +5586,8 @@ pub const StorageAdapter = struct {
     /// key's only holder; `missing_err` when no node holds it (the executor's
     /// MATCH has no row, and creates nothing); `error.MergeKeyNotUnique` when
     /// more nodes may hold it, or MERGE's index cannot hold the value (a
-    /// non-integer number, an over-long key). The executor creates an edge
+    /// non-integer number, an over-long key, or, SONNY-6429, a key lean
+    /// indexing leaves out of it). The executor creates an edge
     /// per matched pair, and finds a value the index cannot hold by a scan,
     /// so the caller declines to it. (The lowest holder was taken as the
     /// only one, and an unindexable value as none.)
@@ -5589,6 +5600,11 @@ pub const StorageAdapter = struct {
         missing_err: anyerror,
     ) !u64 {
         _ = self;
+        // SONNY-6429: a key lean indexing leaves out of MERGE's index (no
+        // MERGE registered it) has no entry whoever holds it; the probe
+        // below would answer that as no holder, and the edge was skipped
+        // where the executor makes it.
+        if (!graph_store.shouldIndexProperty(prop_key)) return error.MergeKeyNotUnique;
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         var id: u64 = undefined;
         // Settles an entry left unresolved by a removed holder first.
@@ -5648,6 +5664,7 @@ pub const StorageAdapter = struct {
     ) !u64 {
         const scope = mergeTenantScope(request_tenant) orelse
             return self.lookupSoleNodeByMergeKey(graph_name, label, prop_key, prop_value, missing_err);
+        if (!graph_store.shouldIndexProperty(prop_key)) return error.MergeKeyNotUnique; // SONNY-6429, as above
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         var id: u64 = undefined;
         // Settles an entry left unresolved by a removed holder first.
@@ -7725,7 +7742,13 @@ pub const StorageAdapter = struct {
         // endpoint key {source, source_id} has a UNIQUE source_id, so the O(1)
         // merge-seek above handles the hot path; this O(label) scan is the rare
         // correctness fallback, not the steady state.
+        //
+        // SONNY-6429: the scan reads every candidate, and a second node
+        // matching every filter is `error.MergeKeyNotUnique`: the executor's
+        // MATCH binds each, and MERGEs an edge per matched pair, where the
+        // first match alone was taken (the caller declines to the executor).
         const label_nodes = store.getNodesByLabel(graph_name, label) orelse return missing_err;
+        var matched: ?u64 = null;
         for (label_nodes) |node_id| {
             var all_match = true;
             for (filters) |f| {
@@ -7736,9 +7759,11 @@ pub const StorageAdapter = struct {
                     break;
                 }
             }
-            if (all_match) return node_id;
+            if (!all_match) continue;
+            if (matched != null) return error.MergeKeyNotUnique;
+            matched = node_id;
         }
-        return missing_err;
+        return matched orelse missing_err;
     }
 
     /// Verify a single `(f.key == f.value)` filter against the PUBLIC node id's
@@ -11229,12 +11254,14 @@ pub const StorageAdapter = struct {
         }
         const hold_start_ns = monoNanosNow();
         noteGraphLockTaken(mg); // SONNY-6375
+        noteReadLockTaken(mg);
         return .{ .mg = mg, .hold_start_ns = hold_start_ns };
     }
 
     pub fn releaseGraphReadLock(self: *StorageAdapter, mg: *ManagedGraph, hold_start_ns: u64, site_tag: graph_store.LockSiteTag) void {
         // SONNY-3028: the pin `acquireGraphReadLock` took goes with the lock.
         defer self.unpinGraph(mg);
+        noteReadLockReleased(mg);
         const _hold_ns = monoNanosNow() -| hold_start_ns;
         _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
         const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
@@ -11366,9 +11393,63 @@ pub const StorageAdapter = struct {
         return mg;
     }
 
+    /// SONNY-6425 item 5: the graphs whose read lock this thread holds
+    /// through `acquireGraphReadLock` (a graph held twice has depth 2); see
+    /// `threadHoldsGraphReadLock`. A thread holds a handful at most; one
+    /// taken while all slots are in use is counted in
+    /// `t_read_locks_untracked`.
+    const HeldReadLock = struct { mg: ?*ManagedGraph = null, depth: u32 = 0 };
+    threadlocal var t_read_locks: [8]HeldReadLock = [_]HeldReadLock{.{}} ** 8;
+    threadlocal var t_read_locks_untracked: u32 = 0;
+
+    fn noteReadLockTaken(mg: *ManagedGraph) void {
+        for (&t_read_locks) |*held| {
+            if (held.mg == mg) {
+                held.depth += 1;
+                return;
+            }
+        }
+        for (&t_read_locks) |*held| {
+            if (held.depth == 0) {
+                held.* = .{ .mg = mg, .depth = 1 };
+                return;
+            }
+        }
+        t_read_locks_untracked += 1;
+    }
+
+    fn noteReadLockReleased(mg: *ManagedGraph) void {
+        for (&t_read_locks) |*held| {
+            if (held.mg == mg and held.depth > 0) {
+                held.depth -= 1;
+                if (held.depth == 0) held.mg = null;
+                return;
+            }
+        }
+        if (t_read_locks_untracked > 0) t_read_locks_untracked -= 1;
+    }
+
     /// SONNY-3135 (N7c): this thread's tag for `ManagedGraph.write_holder`.
     fn currentThreadTag() u64 {
         return @as(u64, std.Thread.getCurrentId()) + 1;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6425-DROP-OWN-READ-LOCK; FEATURE="MultiGraphIsolation"; ASPECT=ReadHolderTracking; STATUS=TESTED; TEST=tests/test_sonny6425_drop_under_own_read_lock.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6425 item 5: does the calling thread hold `graph_name`'s read
+    /// lock through the graph lock API (`acquireGraphReadLock`)? `dropGraph`
+    /// refuses then: its write-lock acquire would wait for this thread's own
+    /// shared hold forever. True also when the thread holds more read locks
+    /// than the per-thread table records (it cannot tell, so it refuses). A
+    /// brief lookup under `mutex` (tier 0); no graph lock is taken.
+    pub fn threadHoldsGraphReadLock(self: *StorageAdapter, graph_name: []const u8) bool {
+        if (t_read_locks_untracked > 0) return true;
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(graph_name) orelse return false;
+        for (t_read_locks) |held| {
+            if (held.mg == mg and held.depth > 0) return true;
+        }
+        return false;
     }
 
     /// SONNY-3135 (N7c): does the calling thread hold `graph_name`'s write

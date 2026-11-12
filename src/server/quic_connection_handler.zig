@@ -697,16 +697,34 @@ fn executeBulkSimpleCreate(
     updateTxnStateFromProgram(state, program, query_graph_name);
 }
 
-/// Shared helper: send the "0 rows affected, success" wire response that
-/// both successful bulk edge inserts and silently-skipped orphan edges
-/// use.  Matches the shape of a no-RETURN MATCH+CREATE coming out of the
-/// regular executor: one schema (0 cols) + one page (0 rows, final=true)
-/// + status 00000.
+/// Shared helper: send the "0 rows affected, success" wire response of an
+/// edge fast path that wrote nothing (an orphan skip) or a MATCH ... MERGE
+/// edge. Matches the regular executor's answer to a no-RETURN MATCH ...
+/// CREATE whose MATCH found no row, and to a MATCH ... MERGE: one schema
+/// (0 cols) + one page (0 rows, final=true) + status 00000.
 fn sendBulkEdgeSuccessResponse(
     gpa: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
 ) !void {
     try sendEmptySuccessResult(gpa, stream);
+}
+
+// CANARY: REQ=REQ-SONNY-6429-MATCH-CREATE-EDGE-SUMMARY; FEATURE="WriteFastPathParity"; ASPECT=MatchCreateEdgeSummaryRow; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=transport; UPDATED=2026-11-12
+/// SONNY-6429: the answer of the MATCH ... CREATE edge fast path when it
+/// wrote its edge: the executor's summary row for a no-RETURN MATCH ...
+/// CREATE (`nodes_created`, `relationships_created`; match_operations.zig
+/// REQ-GQL-MATCH-CREATE-COUNTERS), here 0 and 1. The fast path answered no
+/// columns and no row, so a client counting what the statement created saw
+/// nothing whenever the fast path served it.
+fn sendMatchCreateEdgeSummary(
+    gpa: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+) !void {
+    var columns = [_][]const u8{ "nodes_created", "relationships_created" };
+    var row = [_]geode.value_types.Value{ .{ .Int = 0 }, .{ .Int = 1 } };
+    var rows = [_][]geode.value_types.Value{&row};
+    var result: execution.ExecutionResult = .{ .columns = &columns, .rows = &rows, .flags = .empty };
+    try sendSinglePageExecutionResultBatched(gpa, stream, &result);
 }
 
 /// Task 12 (enterprise-ingest-throughput) fast-path dispatcher for the
@@ -837,7 +855,11 @@ fn executeBulkMatchCreateEdge(
         mut_sample.markExecuteDone();
         mut_sample.markLockReleased();
 
-        try sendBulkEdgeSuccessResponse(gpa, stream);
+        if (result_id == 0) {
+            try sendBulkEdgeSuccessResponse(gpa, stream);
+        } else {
+            try sendMatchCreateEdgeSummary(gpa, stream);
+        }
         if (result_id == 0) {
             mut_sample.record("bulk_match_create_edge_skipped");
             auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped", true);
@@ -963,10 +985,9 @@ fn executeBulkMatchCreateEdge(
         mut_sample.markLockReleased();
     }
 
-    // Wire response: identical shape to `executeBulkSimpleCreate` — schema
-    // with 0 columns + one page with 0 rows final=true + status 00000 —
-    // matches regular-executor output for a no-RETURN MATCH+CREATE.
-    try sendBulkEdgeSuccessResponse(gpa, stream);
+    // Wire response: the executor's summary row for the edge it wrote
+    // (SONNY-6429).
+    try sendMatchCreateEdgeSummary(gpa, stream);
 
     mut_sample.record("bulk_match_create_edge");
 
@@ -992,6 +1013,11 @@ fn executeBulkMatchCreateEdge(
 /// relationship via the SHARD-LOCKED deduped MERGE (graph SHARED + endpoint
 /// shards EXCLUSIVE) so it COEXISTS with readers. Orphan endpoints (a MATCH that
 /// yields no node) silently succeed with 0 rows, matching the slow path.
+///
+/// SONNY-6429: returns false when it declines (an endpoint the filters match
+/// on more than one node, `error.MergeKeyNotUnique`): nothing was written or
+/// sent, and the caller runs the executor, which MERGEs an edge per matched
+/// pair. True when it answered the statement.
 fn executeBulkMatchMergeEdge(
     gpa: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -1000,7 +1026,7 @@ fn executeBulkMatchMergeEdge(
     spec: geode.bulk_ingest.MatchMergeEdgeSpec,
     query_graph_name: []const u8,
     ctx: execution.ExecutionContext,
-) !void {
+) !bool {
     const geode_eval = geode.eval;
     const property_codec = geode.property_value_codec;
     const PropKV = geode.graph_storage_adapter.StorageAdapter.PropKV;
@@ -1051,7 +1077,7 @@ fn executeBulkMatchMergeEdge(
 
     const adapter = graph_store.getGlobalAdapter() orelse {
         try sendExecuteError(gpa, stream, "XX000", "bulk merge-edge fast-path: no adapter registered", &.{}, &.{});
-        return;
+        return true;
     };
 
     // Phase 1: resolve BOTH endpoints by composite key under a brief SHARED
@@ -1070,10 +1096,12 @@ fn executeBulkMatchMergeEdge(
         // authoritative-miss fast-negative (no O(N) scan on a dangling endpoint).
         const s = adapter.lookupPublicNodeIdByLabelAndAllProps(query_graph_name, spec.source.label, src_filters, error.SourceNodeNotFound) catch |err| switch (err) {
             error.SourceNodeNotFound => break :blk null,
+            error.MergeKeyNotUnique => return false, // SONNY-6429
             else => return err,
         };
         const t = adapter.lookupPublicNodeIdByLabelAndAllProps(query_graph_name, spec.target.label, dst_filters, error.TargetNodeNotFound) catch |err| switch (err) {
             error.TargetNodeNotFound => break :blk null,
+            error.MergeKeyNotUnique => return false, // SONNY-6429
             else => return err,
         };
         break :blk @as(?struct { src: u64, dst: u64 }, .{ .src = s, .dst = t });
@@ -1085,7 +1113,7 @@ fn executeBulkMatchMergeEdge(
         auditQueryExecution(query_graph_name, "bulk_match_merge_edge_skipped", true);
         syncGraphFromSession(state);
         updateTxnStateFromProgram(state, program, query_graph_name);
-        return;
+        return true;
     }
     const source_id = resolved.?.src;
     const target_id = resolved.?.dst;
@@ -1095,7 +1123,7 @@ fn executeBulkMatchMergeEdge(
         const coord = group_commit.getOrStartCoordinator(graph_store.global_allocator(), adapter, query_graph_name) catch |err| {
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-            return;
+            return true;
         };
         mut_sample.markLockAcquired();
         var op = group_commit.ApplyOp{ .bulk_merge_edge = .{
@@ -1108,7 +1136,7 @@ fn executeBulkMatchMergeEdge(
         _ = coord.submit(&op) catch |err| {
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-            return;
+            return true;
         };
         mut_sample.markExecuteDone();
         mut_sample.markLockReleased();
@@ -1124,12 +1152,12 @@ fn executeBulkMatchMergeEdge(
                 auditQueryExecution(query_graph_name, "bulk_match_merge_edge_skipped_race", true);
                 syncGraphFromSession(state);
                 updateTxnStateFromProgram(state, program, query_graph_name);
-                return;
+                return true;
             },
             else => {
                 const info = proto_util.mapError(err);
                 try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-                return;
+                return true;
             },
         };
         mut_sample.markExecuteDone();
@@ -1142,6 +1170,7 @@ fn executeBulkMatchMergeEdge(
     execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
     syncGraphFromSession(state);
     updateTxnStateFromProgram(state, program, query_graph_name);
+    return true;
 }
 
 // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=BulkMergeDimensionGuard; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
@@ -8141,8 +8170,8 @@ fn handleClientMessage(
                     // shard-locked deduped edge MERGE so it coexists with
                     // readers instead of the whole-graph EXCLUSIVE (40001).
                     if (geode.bulk_ingest.matchMergeEdgeSpec(&parse_result.program)) |merge_edge_spec| {
-                        try executeBulkMatchMergeEdge(gpa, stream, state, &parse_result.program, merge_edge_spec, query_graph_name, exec_context);
-                        return;
+                        // SONNY-6429: false = declined, nothing written.
+                        if (try executeBulkMatchMergeEdge(gpa, stream, state, &parse_result.program, merge_edge_spec, query_graph_name, exec_context)) return;
                     }
                 }
                 if (bulk_shape == .simple_node_merge and node_merge_writes_ok and node_fast_paths_ok) {
@@ -8195,8 +8224,8 @@ fn handleClientMessage(
                     // FIX #3: shard-locked deduped edge MERGE (see the
                     // GEODE_BULK_INGEST block above).
                     if (geode.bulk_ingest.matchMergeEdgeSpec(&parse_result.program)) |merge_edge_spec| {
-                        try executeBulkMatchMergeEdge(gpa, stream, state, &parse_result.program, merge_edge_spec, query_graph_name, exec_context);
-                        return;
+                        // SONNY-6429: false = declined, nothing written.
+                        if (try executeBulkMatchMergeEdge(gpa, stream, state, &parse_result.program, merge_edge_spec, query_graph_name, exec_context)) return;
                     }
                 }
                 if (bulk_shape == .simple_node_merge and node_merge_writes_ok and node_fast_paths_ok) {

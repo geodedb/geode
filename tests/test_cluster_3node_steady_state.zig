@@ -455,7 +455,9 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
 
     const peers = "127.0.0.11:4242,127.0.0.12:4242,127.0.0.13:4242";
     const token = "steady-state-cluster-token";
-    const hmac = "steady-hmac-0123456789abcdef0123456789abcdef";
+    // SONNY-6429: 64 hex characters. Since SONNY-6339 a GEODE_AUTH_HMAC_KEY
+    // that is not refuses startup (HmacKeyUnusable), and no node came up.
+    const hmac = "57ea" ** 16;
 
     var children: [3]std.process.Child = undefined;
     var spawned: usize = 0;

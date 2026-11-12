@@ -2148,13 +2148,13 @@ fn slotMatchesPredicate(
 }
 
 /// The snapshot executor's label-scan WHERE coercion, exactly
-/// (match_operations.zig generateCombinations): Bool is itself, Null is false,
-/// Int is nonzero, and anything else is false.
+/// (match_operations.zig generateCombinations): a row passes only when the
+/// condition is the Boolean True (SONNY-6425: ISO/IEC 39075 19.1 GR2; a
+/// non-zero Int counted as true).
 fn predicateHolds(where_result: Value) bool {
     return switch (where_result) {
         .Bool => |b| b,
         .Null => false,
-        .Int => |i| i != 0,
         else => false,
     };
 }

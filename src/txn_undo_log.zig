@@ -1205,9 +1205,17 @@ pub fn setIndexRepairHook(hook: ?IndexRepairHook) void {
 // Global undo log instance for CLI mode
 var global_undo_log: ?UndoLog = null;
 
+/// SONNY-6429: the process-global undo log outlives every request, so in the
+/// server it allocates from the process allocator, never from the caller's
+/// (often a per-request or per-statement arena, freed while the log still
+/// holds entries and allocates through it: the next transaction statement's
+/// `adoptStatementEntries` then called through a freed arena and the server
+/// died with a segfault). Test binaries keep the first caller's allocator,
+/// which their harnesses pick deliberately (the testing allocator for leak
+/// checks, or `page_allocator` for a log that outlives a test).
 pub fn getGlobalUndoLog(allocator: std.mem.Allocator) *UndoLog {
     if (global_undo_log == null) {
-        global_undo_log = UndoLog.init(allocator);
+        global_undo_log = UndoLog.init(if (@import("builtin").is_test) allocator else std.heap.smp_allocator);
     }
     return &global_undo_log.?;
 }

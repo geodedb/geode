@@ -2311,7 +2311,6 @@ pub fn executeLegacyQueryWithResolvedParams(
                         const passes_where = switch (matches) {
                             .Bool => |b| b,
                             .Null => false,
-                            .Int => |i| i != 0,
                             else => false,
                         };
                         if (passes_where) {
@@ -2404,7 +2403,6 @@ pub fn executeLegacyQueryWithResolvedParams(
                         const passes_where = switch (matches) {
                             .Bool => |b| b,
                             .Null => false,
-                            .Int => |i| i != 0,
                             else => false,
                         };
                         if (passes_where) {
@@ -2608,16 +2606,15 @@ pub fn executeLegacyQueryWithResolvedParams(
                 // term of a `WITH RECURSIVE` CTE) emitted every element and never
                 // terminated by predicate — it could only stop at the recursion
                 // iteration cap. The predicate is evaluated in the same environment
-                // the RETURN items see (the unwound variable bound). The truthiness
-                // coercion here (a non-zero Int counts as true) matches the CALL-path
-                // WHERE coercion sites, NOT the bare-RETURN WHERE site above — that
-                // one treats any Int as false (`else => false`).
+                // the RETURN items see (the unwound variable bound). SONNY-6425:
+                // a row passes only when the WHERE is the Boolean True, as at every
+                // other WHERE site (ISO/IEC 39075 19.1 GR2; a non-zero Int counted
+                // as true here and at the CALL-path sites).
                 if (q.where_clause) |where_expr| {
                     const where_result = try eval.evalExpr(allocator, where_expr, unwind_env);
                     const passes_filter = switch (where_result) {
                         .Bool => |b| b,
                         .Null => false,
-                        .Int => |iv| iv != 0,
                         else => false,
                     };
                     if (!passes_filter) continue;

@@ -3517,10 +3517,11 @@ fn passesPredicates(allocator: std.mem.Allocator, q: *const ast.Query, env: Env)
     return true;
 }
 
+/// SONNY-6425: only the Boolean True keeps a row (ISO/IEC 39075 19.1 GR2);
+/// a non-zero integer did.
 fn truthyPredicate(value: Value) bool {
     return switch (value) {
         .Bool => |boolean| boolean,
-        .Int => |integer| integer != 0,
         else => false,
     };
 }

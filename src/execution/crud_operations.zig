@@ -4283,9 +4283,12 @@ fn clusterReplicateMatchSet(
             .param_values = context.query_param_values,
         };
 
+        // CANARY: REQ=REQ-SONNY-6425-LEADER-ERROR-PARITY; FEATURE="DistributedCluster"; ASPECT=LeaderSetEvalError; STATUS=TESTED; TEST=tests/test_sonny6425_where_truthiness.zig; OWNER=distributed; UPDATED=2026-11-12
+        // SONNY-6425: a WHERE or SET expression that fails answers its own
+        // error, as on a single node; it answered ClusterWriteNotReplicable
+        // (40001, "retry"), which no retry can cure. Nothing is proposed.
         if (q.where_clause) |where_expr| {
-            const where_result = eval.evalExpr(allocator, where_expr, env) catch
-                return error.ClusterWriteNotReplicable;
+            const where_result = try eval.evalExpr(allocator, where_expr, env);
             const keep = switch (where_result) {
                 .Bool => |b| b,
                 else => false,
@@ -4324,8 +4327,7 @@ fn clusterReplicateMatchSet(
             group_values.clearRetainingCapacity();
             for (group) |sc| {
                 try group_values.append(allocator, switch (sc) {
-                    .Property => |prop| eval.evalExpr(allocator, prop.value, set_env) catch
-                        return error.ClusterWriteNotReplicable,
+                    .Property => |prop| try eval.evalExpr(allocator, prop.value, set_env),
                     else => .Null,
                 });
             }

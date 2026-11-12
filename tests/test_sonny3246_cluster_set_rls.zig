@@ -6,11 +6,9 @@
 //
 // Of the other two divergences the ticket names, one is pinned here: a SET
 // clause is evaluated against the row as it stood before the clause on both
-// (SONNY-3242). The other is NOT fixed: the leader keeps a row only when its
-// WHERE is true (SONNY-3184's rule), while the single-node MATCH paths still
-// take a non-zero integer as true (match_operations, planned_read_runtime,
-// query_execution), so `MATCH (n) WHERE n.a SET ...` with an integer a
-// writes on a single node and not on a leader.
+// (SONNY-3242). The other, WHERE truthiness, was fixed by SONNY-6425: every
+// single-node WHERE / FILTER / HAVING site now keeps a row only when it is
+// the Boolean True, as the leader does (tests/test_sonny6425_where_truthiness.zig).
 //
 // An in-process 3-node cluster (the SONNY-3348 fixture) whose nodes apply to
 // the session's persisted store, with the expression policy of
