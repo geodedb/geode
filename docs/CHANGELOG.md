@@ -396,6 +396,15 @@
   `docs/GAP_ANALYSIS_RESOLVED.md` (GAP-0001) say so. The database-operation
   case of the uncompiled `tests/test_audit_integration.zig` goes with the
   adapter.
+- **Uncompiled fuzz and GPU stubs (SONNY-6298).**
+  `src/fuzz/decimal_order_fuzz.zig` and `src/fuzz/graphstore_durability_fuzz.zig`
+  were in no build step, so the documented workflow (`zig build test
+  --fuzz`, `fuzz/README.md`) never ran them; the wired targets under
+  `fuzz/targets/` are unchanged.
+  `src/gpu/opencl_loader.zig` (OpenCL bindings nothing imported) and the
+  empty `src/gpu/driver_link.zig` were named by no build option either;
+  the Vulkan GPU path is unchanged, and OpenCL has no detection path
+  (`tests/test_gap0878_gpu_truth.zig`).
 
 ---
 
