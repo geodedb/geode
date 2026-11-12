@@ -532,6 +532,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9957,6 +9958,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6422_bp_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6422_bp_step = b.step("test-sonny6422-remote-backup-progress", "Run SONNY-6422 item 8 regression (spawns a server, seeds several MiB, then geode backup create --server prints each 10% progress step at most once, in order, ending at 100%)");
     sonny6422_bp_step.dependOn(&run_sonny6422_bp_tests.step);
+    const sonny6430_bl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_remote_backup_large.zig"), .target = target, .optimize = optimize });
+    sonny6430_bl_test_mod.link_libc = true;
+    sonny6430_bl_test_mod.addImport("geode", root_mod);
+    sonny6430_bl_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6430_bl_test_mod.addImport("schema", schema_mod);
+    sonny6430_bl_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6430_bl_tests = b.addTest(.{ .root_module = sonny6430_bl_test_mod });
+    const run_sonny6430_bl_tests = b.addRunArtifact(sonny6430_bl_tests);
+    spawnsBuiltGeode(sonny6430_bl_tests);
+    // SONNY-6430 item 1: intentionally red (docs/KNOWN_TEST_ISSUES.md): the
+    // stall is in the vendored QUIC library. Not in shardDep until the
+    // library fix lands; compiled by test-compile.
+    if (g_test_compile_step) |c| c.dependOn(&sonny6430_bl_tests.step);
+    const sonny6430_bl_step = b.step("test-sonny6430-remote-backup-large", "Run SONNY-6430 item 1 reproduction, intentionally red until the QUIC library fix (spawns a server, seeds 10 MiB of incompressible data, a backup of about 24 MB, then geode backup create --server must complete and write every announced byte; GEODE_TEST_SONNY6430_MB raises the size)");
+    sonny6430_bl_step.dependOn(&run_sonny6430_bl_tests.step);
     const sonny6386_rh_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"), .target = target, .optimize = optimize });
     sonny6386_rh_test_mod.link_libc = true;
     sonny6386_rh_test_mod.addImport("geode", root_mod);
