@@ -9385,6 +9385,24 @@ pub fn build(b: *std.Build) void {
     const sonny6325_step = b.step("test-sonny6325-no-fixed-tmp-paths", "Run SONNY-6325 regression (spawns servers: the auto TLS key is created in the data directory exclusive/no-follow/0600, an existing group-readable, linked or half-pair auto key is refused, no /tmp fallback; S3 restore staging is a private temp dir; audit diagnostics write private data-directory files; backup list skips /tmp; the per-user tmp data directory is checked 0700/owner and honours TMPDIR; a backup without a data directory is refused)");
     sonny6325_step.dependOn(&run_sonny6325_tests.step);
 
+    // SONNY-6332: no test binds a literal port (source check over every test
+    // source the build compiles); `geode serve --listen host:0` reports the
+    // bound port; the embedded LSP listener is off for test servers
+    // (GEODE_LSP_PORT=0 from the build), movable by GEODE_LSP_PORT, and
+    // `--lsp-port` wins over the variable.
+    const sonny6332_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6332_no_fixed_ports.zig"), .target = target, .optimize = optimize });
+    sonny6332_test_mod.link_libc = true;
+    sonny6332_test_mod.addImport("geode", root_mod);
+    sonny6332_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6332_test_mod.addImport("schema", schema_mod);
+    sonny6332_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6332_tests = b.addTest(.{ .root_module = sonny6332_test_mod });
+    const run_sonny6332_tests = b.addRunArtifact(sonny6332_tests);
+    spawnsBuiltGeode(sonny6332_tests);
+    shardDep(test_step, &run_sonny6332_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6332_step = b.step("test-sonny6332-no-fixed-ports", "Run SONNY-6332 regression (no test the build compiles binds a literal port; geode serve on port 0 reports the bound port; the embedded LSP listener is off for test servers via GEODE_LSP_PORT=0, moved by GEODE_LSP_PORT, and --lsp-port wins)");
+    sonny6332_step.dependOn(&run_sonny6332_tests.step);
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per
