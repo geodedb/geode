@@ -116,7 +116,7 @@ python3 extended_test_runner.py
 
 ### Fix 1: P1 CRITICAL - Double-Free Memory Bug (1 test fixed)
 
-**File**: `src/cli/user_storage_secure.zig:167-204`
+**File**: `src/cli/user_storage_secure.zig:167-204` (never compiled; removed in SONNY-6298)
 
 - ✅ **Root Cause**: deleteUser() used shallow copy causing double-free
 - ✅ **Fix**: Implemented proper deep copy with independent allocations
@@ -181,6 +181,14 @@ python3 extended_test_runner.py
 - **Verification**: Both tests now passing ✅
 
 ### Critical Security Fix: Encrypted User Storage - 4 tests fixed (earlier in day)
+
+> **Status note (2026-11-11, SONNY-6298):** `src/cli/user_storage_secure.zig`
+> (and `user_storage_simple.zig`, `user_management.zig`) were reachable from
+> no executable or test in `build.zig`, so the encrypted `users.dat` storage
+> below never ran; the files have been removed. User records are stored in
+> the HMAC-chained `__geode_security` graph (read by
+> `src/server/persistent_auth_resolver.zig`; see
+> [GQL_AUTH_DDL.md](GQL_AUTH_DDL.md)).
 
 - ✅ **Replaced insecure JSON file storage** with encrypted database storage
 - ✅ **Fixed critical panic** in user_storage_secure.zig:62 (stat on closed file descriptor)

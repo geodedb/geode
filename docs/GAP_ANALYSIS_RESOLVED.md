@@ -25,6 +25,10 @@ This document contains gaps that have been verified as resolved from previous ga
 > so no allocation was ever guarded by it).
 > `src/graph/path_algorithms.zig` (GAP-0084) was not compiled either; the
 > `RELATIONSHIPS(path)` function the server runs is in `src/eval.zig`.
+> `src/cli/user_storage_secure.zig` (GAP-0001) was never compiled either: the
+> AES-256-GCM `users.dat` file it describes was never written by Geode. User
+> records are stored in the HMAC-chained `__geode_security` graph (read by
+> `src/server/persistent_auth_resolver.zig`; see `docs/GQL_AUTH_DDL.md`).
 
 **Current Status**: 7 open/partial actionable gaps (2 Critical — both Blocked; 3 High — GAP-0885 open/partial, GAP-0893 Blocked-vendor, GAP-0900 write-throughput serialization root-caused 2026-06-17; 2 Medium — GAP-0873 deferred, GAP-0897 observability; 0 Low). GAP-0899 (checkpoint-vs-writer crash) closed 2026-06-17. See docs/GAP_ANALYSIS.md.
 

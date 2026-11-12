@@ -385,6 +385,17 @@
   `docs/TRANSACTION_MANAGEMENT.md` no longer says that a transaction is
   saved to a session file and survives across `geode query` invocations:
   the server keeps transaction state per connection.
+- **Uncompiled CLI user-storage files and DB audit adapter (SONNY-6298).**
+  `src/cli/user_storage_secure.zig` (an AES-256-GCM `users.dat` file store),
+  `src/cli/user_storage_simple.zig`, `src/cli/user_management.zig` and
+  `src/audit/db_adapter.zig` were reachable from no executable or test, so
+  none of them ever ran. User records are stored in the HMAC-chained
+  `__geode_security` graph (`src/server/persistent_auth_resolver.zig`,
+  `src/security/user_management.zig`); there is no separate encrypted user
+  file. The status notes in `docs/TODO.md` and
+  `docs/GAP_ANALYSIS_RESOLVED.md` (GAP-0001) say so. The database-operation
+  case of the uncompiled `tests/test_audit_integration.zig` goes with the
+  adapter.
 
 ---
 

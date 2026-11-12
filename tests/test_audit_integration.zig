@@ -4,7 +4,6 @@ const audit_lib = @import("audit_lib");
 const events = audit_lib.events;
 const config = audit_lib.config;
 const logger = audit_lib.logger;
-const db_adapter = @import("../src/audit/db_adapter.zig");
 const syslog = audit_lib.syslog;
 const time = audit_lib.time;
 const test_support = @import("../src/audit/test_support.zig");
@@ -125,84 +124,6 @@ test "Case 2: Sensitive data redaction" {
         try testing.expect(std.mem.indexOf(u8, message, "[REDACTED]") != null or
             std.mem.indexOf(u8, message, "[REDACTED_PAN]") != null or
             std.mem.indexOf(u8, message, "[REDACTED_JWT]") != null);
-    }
-}
-
-// Test Case 3: DB update audit with allowlist fields
-test "Case 3: Database operation audit" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
-
-    var test_config = try test_support.loadTestConfig(allocator);
-    defer test_config.deinit();
-
-    const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
-    defer audit_logger.deinit();
-
-    // Emit DB event
-    try db_adapter.emitDbEvent(
-        audit_logger,
-        .UPDATE,
-        "users",
-        1,
-        42, // duration_ms
-        "admin",
-        "usr-123",
-        "req-db-001",
-        null,
-        null,
-        null,
-    );
-
-    // Mock capture to verify CEF output
-    var mock_sender = syslog.MockSyslogSender.init(allocator);
-    defer mock_sender.deinit();
-
-    // Create equivalent event for verification
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
-    try metadata_obj.put("db.operation", std.json.Value{ .string = "UPDATE" });
-    try metadata_obj.put("db.table", std.json.Value{ .string = "users" });
-    try metadata_obj.put("db.rowCount", std.json.Value{ .integer = 1 });
-    try metadata_obj.put("duration_ms", std.json.Value{ .integer = 42 });
-
-    const metadata = std.json.Value{ .object = metadata_obj };
-
-    const db_event = events.AuditEvent{
-        .category = "db",
-        .action = "UPDATE",
-        .outcome = .success,
-        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
-        .severity = .INFO,
-        .actor_id = "admin",
-        .subject_id = "usr-123",
-        .request_id = "req-db-001",
-        .session_id = null,
-        .source_ip = null,
-        .trace_id = time.TEST_TRACE_ID,
-        .span_id = time.TEST_SPAN_ID,
-        .metadata = metadata,
-    };
-
-    try mock_sender.send(&db_event, &test_config.identity.cef, &test_config.service, &test_config.sinks.syslog, fixed_clock.clock());
-
-    const messages = mock_sender.getMessages();
-    if (messages.len > 0) {
-        const message = messages[0];
-
-        // Verify CEF extension contains expected DB fields
-        try testing.expect(std.mem.indexOf(u8, message, "cs3Label=dbOperation cs3=UPDATE") != null);
-        try testing.expect(std.mem.indexOf(u8, message, "cs4Label=dbTable cs4=users") != null);
-        try testing.expect(std.mem.indexOf(u8, message, "cn1Label=rowCount cn1=1") != null);
-
-        // Verify no SQL text appears (never logged by design)
-        try testing.expect(std.mem.indexOf(u8, message, "SELECT") == null);
-        try testing.expect(std.mem.indexOf(u8, message, "WHERE") == null);
-        try testing.expect(std.mem.indexOf(u8, message, "INSERT") == null);
     }
 }
 

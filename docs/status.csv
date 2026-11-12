@@ -251,8 +251,6 @@ REQ-AUTH-002,AuthenticationLogout,RealImplementation,TESTED,,,cli,2025-09-30,src
 REQ-AUTH-APIKEYS-CLI-001,ApiKeyCLI,CLI,IMPL,,,cli,2026-02-04,src/cli/apikey_cli.zig,40
 REQ-AUTH-CLI-001,CLI QUIC Authentication,AuthenticatedHello,TESTED,,,security,2026-01-15,src/client/repl/repl_dispatch.zig,1146
 REQ-AUTH-CLI-001,CLI QUIC Authentication,ServerConnection,TESTED,,,security,2026-01-15,src/cli/main.zig,4117
-REQ-AUTH-CLI-001,CLIUserManagement,FileStorage,TESTED,,,cli,2025-10-26,src/cli/user_storage_simple.zig,53
-REQ-AUTH-CLI-001,CLIUserManagement,SecureStorage,TESTED,,,cli,2026-01-09,src/cli/user_storage_secure.zig,52
 REQ-AUTH-CLI-HELLO-DECODE-001,CLI QUIC Authentication,HelloResponseOwnership,TESTED,,,cli,2026-07-31,src/client/hello_decode.zig,17
 REQ-AUTH-CONFIG-001,AuthConfig,PasswordPolicy,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,42
 REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig,349
@@ -3417,9 +3415,6 @@ REQ-LIB-MIGRATION-JSON-052,JSON Library Migration,CDCStreaming,TESTED,,,streamin
 REQ-LIB-MIGRATION-JSON-053,JSON Library Migration,CDCEventSerialize,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,1262
 REQ-LIB-MIGRATION-JSON-054,JSON Library Migration,CDCSnapshots,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,817
 REQ-LIB-MIGRATION-JSON-055,JSON Library Migration,CDCDiagnostics,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,885
-REQ-LIB-MIGRATION-JSON-059,JSON Library Migration,UserManagement,EXEMPT,,,cli,2026-01-25,src/cli/user_management.zig,46
-REQ-LIB-MIGRATION-JSON-060,JSON Library Migration,UserStorageSimple,EXEMPT,,,cli,2026-01-25,src/cli/user_storage_simple.zig,50
-REQ-LIB-MIGRATION-JSON-061,JSON Library Migration,UserStorageSecure,EXEMPT,,,cli,2026-01-25,src/cli/user_storage_secure.zig,49
 REQ-LIB-MIGRATION-JSON-068,JSON Library Migration,TestJsonOptimization,EXEMPT,,,performance,2026-01-25,src/performance/test_json_optimization.zig,20
 REQ-LIB-MIGRATION-MCP-001,External Library Migration,MCPIntegration,TESTED,,,core,2026-01-24,src/mcp/server.zig,4
 REQ-LIB-MIGRATION-MCP-002,External Library Migration,MCPTools,TESTED,,,core,2026-01-24,src/mcp/tools.zig,3
