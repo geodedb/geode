@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:33:40.392378188Z",
+  "generated_at": "2026-11-12T18:37:48.335801749Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79334,6 +79334,7 @@
           "aspect": "RotateKeyRefusedAsUnsupported",
           "status": "TESTED",
           "files": [
+            "src/admin/fle_commands.zig",
             "tests/test_sonny6386_fle_rotate_key_unsupported.zig"
           ],
           "tests": [

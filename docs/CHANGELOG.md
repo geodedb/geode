@@ -20,6 +20,20 @@
   of sealing with `.geode_hmac_key`. An unset or empty `GEODE_TDE_KEY`
   behaves as before. `docs/TDE_FILE_LEVEL_ENCRYPTION.md` documents it.
   Regression: `zig build test-sonny6386-tde-key-fail-closed`.
+- **BREAKING (operator): `geode fle rotate-key` refuses as unsupported
+  instead of reporting a rotation it did not perform (SONNY-6386 item 2).**
+  The CLI built a throwaway in-memory key manager from `GEODE_MASTER_KEY`,
+  bumped a version in it, printed `Rotated FEK ... to version 2` (or
+  `Rewrapped SK/TRK`) and exited 0; nothing was persisted and no field value
+  was re-encrypted. `fle_commands.rotateKey` printed `TRK/SK/FEK rotation
+  complete. New key version active.` without touching a key. Both now exit
+  non-zero (`error.Unsupported`) with `FLE key rotation is not supported in
+  this release (SONNY-6387)`, after the usual argument checks; `geode fle
+  --help` says so, and `geode fle show-rotation` no longer reports the TRK
+  as "Active" or a "Last rotation check: Now" that nothing measured. Real
+  rotation is story SONNY-6387. `docs/GAP_ANALYSIS_RESOLVED.md` (GAP-0083,
+  GAP-0004) is corrected. Regression:
+  `zig build test-sonny6386-fle-rotate-key-unsupported`.
 - **BREAKING (operator): backups are encrypted under `GEODE_TDE_KEY` when it
   is set (SONNY-6355 items 1, 2, 5, 6).** `BackupManager` has encrypted the
   payload with AES-256-GCM under `GEODE_TDE_KEY` (and every restore path
