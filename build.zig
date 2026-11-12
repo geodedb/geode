@@ -13342,6 +13342,19 @@ pub fn build(b: *std.Build) void {
     const sonny6278_step = b.step("test-sonny6278-custom-role-lifetime", "Run the SONNY-6278 regression (custom roles created, assigned or hydrated in a request stay intact after the request's memory is gone; DROP ROLE frees them)");
     sonny6278_step.dependOn(&run_sonny6278_tests.step);
 
+    // SONNY-6312: SHOW USERS / geode.auth.user_list, user_show and SHOW
+    // ROLES answer rows the request owns: nothing leaks into the user store,
+    // and a DROP USER / DROP ROLE on another connection cannot free a row.
+    const sonny6312_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6312_user_list_ownership.zig"), .target = target, .optimize = optimize });
+    sonny6312_test_mod.link_libc = true;
+    sonny6312_test_mod.addImport("geode", root_mod);
+    sonny6312_test_mod.addImport("logging", logging_mod);
+    const sonny6312_tests = b.addTest(.{ .root_module = sonny6312_test_mod });
+    const run_sonny6312_tests = b.addRunArtifact(sonny6312_tests);
+    shardDep(test_step, &run_sonny6312_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6312_step = b.step("test-sonny6312-user-list-ownership", "Run the SONNY-6312 regression (SHOW USERS / geode.auth.user_list leak nothing into the user store; SHOW USERS, user_show and SHOW ROLES rows stay valid after DROP USER / DROP ROLE; concurrent listing vs CREATE/DROP USER stress)");
+    sonny6312_step.dependOn(&run_sonny6312_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
