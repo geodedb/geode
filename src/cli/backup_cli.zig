@@ -143,31 +143,51 @@ fn resolveBackupPassword(password_arg: ?[]const u8) ?[]const u8 {
 
 // SEC-MIG-01: Load HMAC key for migration file signature verification.
 // Checks GEODE_MIGRATION_HMAC_KEY env var first, then {migrations_dir}/.hmac_key file.
+// Null when neither is configured.
+// CANARY: REQ=REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED; FEATURE="Key configuration"; ASPECT=MigrationHmacKey; STATUS=TESTED; TEST=tests/test_sonny6422_env_key_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
+// SONNY-6422: a key source that is configured but unusable ends the command
+// (exit 1) with the reason, never the value. A GEODE_MIGRATION_HMAC_KEY that
+// was not 64 hex characters used to be skipped: `migrate create` then wrote
+// an unsigned migration, or signed with the .hmac_key file's key instead.
 fn loadMigrationHmacKey(out: *[32]u8, migrations_dir: []const u8, allocator: std.mem.Allocator) ?*const [32]u8 {
-    // 1. Try GEODE_MIGRATION_HMAC_KEY env var
+    return loadMigrationHmacKeyChecked(out, migrations_dir, allocator) catch |err| {
+        switch (err) {
+            error.MigrationHmacKeyInvalid => std.debug.print("Error: GEODE_MIGRATION_HMAC_KEY is set but unusable: it must be exactly 64 hex characters (a 32-byte key). " ++
+                "Nothing was created, signed or applied. Fix it, or unset it to use {s}/.hmac_key.\n", .{migrations_dir}),
+            error.MigrationHmacKeyFileInvalid => std.debug.print("Error: {s}/.hmac_key is unusable: it must hold exactly 64 hex characters (a 32-byte key). " ++
+                "Nothing was created, signed or applied.\n", .{migrations_dir}),
+            else => std.debug.print("Error: cannot read {s}/.hmac_key ({s}). Nothing was created, signed or applied.\n", .{ migrations_dir, @errorName(err) }),
+        }
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+fn loadMigrationHmacKeyChecked(out: *[32]u8, migrations_dir: []const u8, allocator: std.mem.Allocator) !?*const [32]u8 {
+    // 1. GEODE_MIGRATION_HMAC_KEY (empty counts as unset)
     if (posixGetenv("GEODE_MIGRATION_HMAC_KEY")) |env_val| {
-        if (env_val.len == 64) {
-            _ = std.fmt.hexToBytes(out, env_val[0..64]) catch return null;
+        if (env_val.len != 0) {
+            if (env_val.len != 64) return error.MigrationHmacKeyInvalid;
+            _ = std.fmt.hexToBytes(out, env_val[0..64]) catch return error.MigrationHmacKeyInvalid;
             return out;
         }
     }
 
-    // 2. Try {migrations_dir}/.hmac_key file
-    const key_path = std.fs.path.join(allocator, &.{ migrations_dir, ".hmac_key" }) catch return null;
+    // 2. {migrations_dir}/.hmac_key file
+    const key_path = try std.fs.path.join(allocator, &.{ migrations_dir, ".hmac_key" });
     defer allocator.free(key_path);
 
     const io = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.cwd().openFile(io, key_path, .{}) catch return null;
+    const file = std.Io.Dir.cwd().openFile(io, key_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
     defer file.close(io);
 
     var hex_buf: [64]u8 = undefined;
-    const bytes_read = file.readPositionalAll(io, &hex_buf, 0) catch return null;
-    if (bytes_read == 64) {
-        _ = std.fmt.hexToBytes(out, &hex_buf) catch return null;
-        return out;
-    }
-
-    return null;
+    const bytes_read = try file.readPositionalAll(io, &hex_buf, 0);
+    if (bytes_read != 64) return error.MigrationHmacKeyFileInvalid;
+    _ = std.fmt.hexToBytes(out, &hex_buf) catch return error.MigrationHmacKeyFileInvalid;
+    return out;
 }
 
 /// Backup command handler - routes to specific backup subcommands

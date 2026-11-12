@@ -4,6 +4,30 @@
 
 ### Security
 
+- **BREAKING (operator): half-configured audit keys, a short
+  `GEODE_MASTER_KEY`, a `GEODE_WAL_KEY` and a malformed
+  `GEODE_MIGRATION_HMAC_KEY` are refused instead of falling back to a weaker
+  mode (SONNY-6422 items 1-2).** With only one of `GEODE_AUDIT_PUB` /
+  `GEODE_AUDIT_SEC` set the audit logger generated file-based keys, and the
+  `__geode_security` graph opened with no audit logger at all; a
+  `GEODE_AUDIT_PUB` that was not the seed's public key was never checked.
+  `GEODE_MASTER_KEY` accepted any length and hashed a short value into the
+  FLE master key. `GEODE_WAL_KEY` is read by nothing in the server (the
+  storage-engine WAL is encrypted with `GEODE_TDE_KEY`), so a server given
+  only `GEODE_WAL_KEY` wrote its WAL in plaintext. A
+  `GEODE_MIGRATION_HMAC_KEY` that was not 64 hex characters made
+  `geode migrate create` write an unsigned migration, or sign with
+  `.hmac_key` instead. Now `geode serve` refuses to start before it creates
+  the data directory, naming the variable and the required form and never
+  printing the value: set both audit variables or neither (the public key
+  must be the seed's: `AuditKeyPairIncomplete` / `AuditKeyInvalid` /
+  `AuditKeyMismatch`), give `GEODE_MASTER_KEY` at least 32 bytes
+  (`MasterKeyTooShort`; an empty value is unset), and unset `GEODE_WAL_KEY`.
+  The `__geode_security` graph does not open on a bad audit pair, and the
+  `geode migrate` commands exit 1 on an unusable key env var or `.hmac_key`
+  file. `docs/AUDIT_LOGGING.md`, `docs/FIELD_LEVEL_ENCRYPTION.md`,
+  `docs/TDE_FILE_LEVEL_ENCRYPTION.md` and `docs/DOCKER_OVERVIEW.md` document
+  it. Regression: `zig build test-sonny6422-env-key-fail-closed`.
 - **BREAKING (operator): a set but malformed `GEODE_TDE_KEY` refuses
   startup instead of writing plaintext pages (SONNY-6386 item 1).**
   `initGlobalAdapter` loaded the page key with `catch null`, so a value that

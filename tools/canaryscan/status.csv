@@ -5216,6 +5216,11 @@ REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,
 REQ-SONNY-6386-RESTORE-HMAC-FILE-TDE,Backup Restore,HmacKeyFileVsTdeKeyExplained,TESTED,tests/test_sonny6386_restore_hmac_key_file_with_tde.zig,tests/test_sonny6386_restore_hmac_key_file_with_tde.zig,,cli,2026-11-12
 REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED,TDE baseline,MalformedKeyRefusesStartup,TESTED,tests/test_sonny6386_tde_key_fail_closed.zig,tests/test_sonny6386_tde_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED,TDE baseline,ServerStartupRefusal,TESTED,src/server/server_init.zig,tests/test_sonny6386_tde_key_fail_closed.zig,,security,2026-11-12
+REQ-SONNY-6422-DEAD-WAL-FALSE-MARKERS,Governance,NoDeadWalWrapperOrFalseTestedMarkers,TESTED,tests/test_sonny6422_dead_wal_and_false_markers.zig,tests/test_sonny6422_dead_wal_and_false_markers.zig,,storage,2026-11-12
+REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED,Key configuration,AuditKeyPairComplete,TESTED,src/security/audit.zig,tests/test_sonny6422_env_key_fail_closed.zig,,security,2026-11-12
+REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED,Key configuration,MasterKeyMinimumLength,TESTED,src/keys/manager.zig,tests/test_sonny6422_env_key_fail_closed.zig,,security,2026-11-12
+REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED,Key configuration,MigrationHmacKey,TESTED,src/cli/backup_cli.zig,tests/test_sonny6422_env_key_fail_closed.zig,,security,2026-11-12
+REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED,Key configuration,ServerStartupRefusal,TESTED,src/server/server_init.zig,tests/test_sonny6422_env_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED,Key configuration,SetButUnusableKeyRefuses,TESTED,tests/test_sonny6422_env_key_fail_closed.zig,tests/test_sonny6422_env_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

@@ -39,11 +39,18 @@ error, never "no key" (SONNY-6386). `geode serve` refuses to start before it
 creates or opens the data directory, prints `[startup] GEODE_TDE_KEY is set
 but unusable (InvalidKey) ... Refusing to start`, and never prints the value.
 Before this, a malformed key silently opened the store with no page key and
-every page was written in plaintext. A non-empty `GEODE_WAL_KEY` that is not
-64 hex characters is likewise `InvalidKey` (it no longer falls back to
-`GEODE_TDE_KEY`), and the auth-chain HMAC key derivation refuses a
-`GEODE_TDE_KEY` of the wrong length instead of using `.geode_hmac_key`. An
-unset or empty `GEODE_TDE_KEY` still runs without page encryption.
+every page was written in plaintext. The auth-chain HMAC key derivation
+refuses a `GEODE_TDE_KEY` of the wrong length instead of using
+`.geode_hmac_key`. An unset or empty `GEODE_TDE_KEY` still runs without page
+encryption.
+
+The storage-engine WAL is encrypted with `GEODE_TDE_KEY`, together with the
+pages. There is no separate WAL key: `GEODE_WAL_KEY` was read only by the
+`WriteAheadLog` wrapper in `src/wal.zig`, which nothing in the server
+instantiates, so a server given `GEODE_WAL_KEY` and no `GEODE_TDE_KEY` wrote
+its WAL in plaintext. A non-empty `GEODE_WAL_KEY` now refuses startup
+(`[startup] GEODE_WAL_KEY is set, but the server does not use it ...`,
+SONNY-6422); unset it and set `GEODE_TDE_KEY`.
 
 ## Encrypted File Types
 

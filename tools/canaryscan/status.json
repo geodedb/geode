@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T20:15:55.621457979Z",
+  "generated_at": "2026-11-12T20:24:12.315658465Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81309,8 +81309,83 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6422-DEAD-WAL-FALSE-MARKERS",
+      "features": [
+        {
+          "feature": "Governance",
+          "aspect": "NoDeadWalWrapperOrFalseTestedMarkers",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_dead_wal_and_false_markers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_dead_wal_and_false_markers.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED",
       "features": [
+        {
+          "feature": "Key configuration",
+          "aspect": "AuditKeyPairComplete",
+          "status": "TESTED",
+          "files": [
+            "src/security/audit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "MasterKeyMinimumLength",
+          "status": "TESTED",
+          "files": [
+            "src/keys/manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "MigrationHmacKey",
+          "status": "TESTED",
+          "files": [
+            "src/cli/backup_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "ServerStartupRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
         {
           "feature": "Key configuration",
           "aspect": "SetButUnusableKeyRefuses",
@@ -88983,7 +89058,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4600
+      "TESTED": 4605
     },
     "by_aspect": {
       "2PC": 3,
@@ -89156,6 +89231,7 @@
       "AuditFormatting": 1,
       "AuditIndep": 1,
       "AuditIntegration": 1,
+      "AuditKeyPairComplete": 1,
       "AuditLog": 2,
       "AuditLogging": 6,
       "AuditSeedEpochsAndHmacStartup": 1,
@@ -90973,6 +91049,7 @@
       "MapMerge": 1,
       "MapProjection": 1,
       "MapType": 1,
+      "MasterKeyMinimumLength": 1,
       "MasterKeyRequired": 2,
       "Match": 1,
       "MatchAfterWhere": 1,
@@ -91064,6 +91141,7 @@
       "MicroBenchmarks": 1,
       "MidRunWriteFailure": 1,
       "Migration": 6,
+      "MigrationHmacKey": 1,
       "MigrationModule": 2,
       "MigrationScript": 1,
       "MigrationTesting": 1,
@@ -91168,6 +91246,7 @@
       "NoCatalog": 1,
       "NoDeadBackupTestsOrStaleCanaryRows": 1,
       "NoDeadRemotePath": 1,
+      "NoDeadWalWrapperOrFalseTestedMarkers": 1,
       "NoEnvOverride": 1,
       "NoFabricatedKeyManagement": 1,
       "NoFabricatedKmsSelfTestTruth": 1,
@@ -92241,7 +92320,7 @@
       "ServerStartup": 5,
       "ServerStartupCache": 1,
       "ServerStartupCatalog": 1,
-      "ServerStartupRefusal": 1,
+      "ServerStartupRefusal": 2,
       "ServerStderrPassThrough": 1,
       "ServerUnpack": 1,
       "ServerValidation": 2,

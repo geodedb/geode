@@ -1385,6 +1385,9 @@ pub fn main() !void {
     // before the data directory is created: it used to open the store with
     // no page key and write every page in plaintext.
     try server_init.refuseUnusableTdeKey(gpa);
+    // SONNY-6422: likewise a half-configured audit key pair, a short
+    // GEODE_MASTER_KEY, or a GEODE_WAL_KEY nothing reads.
+    try server_init.refuseUnusableKeyConfig(gpa);
     const data_dir: []const u8 = try resolveServerDataDir(gpa, &config);
     graph_store.setDataDirOverride(gpa, data_dir);
 
