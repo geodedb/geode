@@ -52,6 +52,27 @@ fn printHmacKeyUnusable(data_dir: []const u8, err: anyerror) void {
     });
 }
 
+// CANARY: REQ=REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED; FEATURE="TDE baseline"; ASPECT=ServerStartupRefusal; STATUS=TESTED; TEST=tests/test_sonny6386_tde_key_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6386: refuse to start when GEODE_TDE_KEY is set (non-empty) but is
+/// not 64 hex characters. The store used to open with no page-encryption
+/// key, writing every page in plaintext. Runs before the data directory is
+/// created, so a refused start writes nothing. The value is never printed.
+/// An unset or empty GEODE_TDE_KEY passes (no page encryption, as before).
+pub fn refuseUnusableTdeKey(allocator: std.mem.Allocator) !void {
+    _ = geode.tde_file_encryption.loadKey(allocator) catch |err| {
+        std.debug.print(
+            "[startup] GEODE_TDE_KEY is set but unusable ({s}): it must be exactly 64 hex characters (a 32-byte AES-256 key). " ++
+                "Refusing to start: the store would otherwise be written without page encryption. Nothing was written. " ++
+                "Fix the key, or unset GEODE_TDE_KEY to run without TDE (docs/TDE_FILE_LEVEL_ENCRYPTION.md).\n",
+            .{@errorName(err)},
+        );
+        log.err("GEODE_TDE_KEY unusable: refusing to start (pages would be written unencrypted)", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return error.TdeKeyInvalid;
+    };
+}
+
 /// SONNY-6339: the startup refusal for any other failure to establish the
 /// durable auth state. No secrets.
 fn printAuthStateUnavailable(data_dir: []const u8, what: []const u8, err: anyerror) void {

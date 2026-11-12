@@ -4,6 +4,22 @@
 
 ### Security
 
+- **BREAKING (operator): a set but malformed `GEODE_TDE_KEY` refuses
+  startup instead of writing plaintext pages (SONNY-6386 item 1).**
+  `initGlobalAdapter` loaded the page key with `catch null`, so a value that
+  is not 64 hex characters opened the store with no encryption key and every
+  page (users, roles, data) was written in plaintext while TDE looked
+  configured. `geode serve` now checks the key before it creates or opens
+  the data directory and exits with `[startup] GEODE_TDE_KEY is set but
+  unusable (InvalidKey) ... Refusing to start ... Nothing was written`,
+  never printing the value; the adapter itself returns `InvalidKey`. The
+  same swallow is fixed in two other loaders: a non-empty `GEODE_WAL_KEY`
+  that is not 64 hex characters is `InvalidKey` (it fell back to
+  `GEODE_TDE_KEY` or plaintext), and the auth-chain HMAC key resolver
+  refuses a `GEODE_TDE_KEY` of the wrong length (`HmacKeyInvalid`) instead
+  of sealing with `.geode_hmac_key`. An unset or empty `GEODE_TDE_KEY`
+  behaves as before. `docs/TDE_FILE_LEVEL_ENCRYPTION.md` documents it.
+  Regression: `zig build test-sonny6386-tde-key-fail-closed`.
 - **BREAKING (operator): backups are encrypted under `GEODE_TDE_KEY` when it
   is set (SONNY-6355 items 1, 2, 5, 6).** `BackupManager` has encrypted the
   payload with AES-256-GCM under `GEODE_TDE_KEY` (and every restore path

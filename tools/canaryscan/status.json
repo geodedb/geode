@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:20:27.65972258Z",
+  "generated_at": "2026-11-12T18:32:07.930343408Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79342,6 +79342,20 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
+        },
+        {
+          "feature": "TDE baseline",
+          "aspect": "ServerStartupRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_tde_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -87001,7 +87015,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4473
+      "TESTED": 4474
     },
     "by_aspect": {
       "2PC": 3,
@@ -90175,6 +90189,7 @@
       "ServerStartup": 5,
       "ServerStartupCache": 1,
       "ServerStartupCatalog": 1,
+      "ServerStartupRefusal": 1,
       "ServerStderrPassThrough": 1,
       "ServerUnpack": 1,
       "ServerValidation": 2,

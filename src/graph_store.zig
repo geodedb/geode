@@ -16259,7 +16259,9 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
     // GAP-0265: Wire TDE encryption key into per-graph storage engine.
     // Without this, page-level encryption is disabled even when GEODE_TDE_KEY
     // is set — all store files are written in plaintext.
-    const tde_key = tde.loadKey(allocator) catch null;
+    // SONNY-6386: a set but malformed key is an error (InvalidKey), never
+    // "no key": `catch null` opened the store unencrypted.
+    const tde_key = try tde.loadKey(allocator);
 
     // GAP-0900: opt-in relaxed WAL durability for replayable bulk ingest.
     // The DEFAULT (.sync_each_commit) fsyncs the WAL on every commit — durable

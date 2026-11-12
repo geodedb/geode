@@ -1380,6 +1380,11 @@ pub fn main() !void {
     // so every later consumer (the storage engine, the HMAC key and auth
     // graph, the audit log, the tenant registry, timeseries, raft, TLS,
     // backups, the catalog) sees the same directory however it was given.
+    //
+    // SONNY-6386: a set but malformed GEODE_TDE_KEY refuses startup here,
+    // before the data directory is created: it used to open the store with
+    // no page key and write every page in plaintext.
+    try server_init.refuseUnusableTdeKey(gpa);
     const data_dir: []const u8 = try resolveServerDataDir(gpa, &config);
     graph_store.setDataDirOverride(gpa, data_dir);
 

@@ -398,7 +398,8 @@ pub const AuthGraphManager = struct {
     /// SONNY-6339: a source that is present but unusable is
     /// error.HmacKeyInvalid, never "no key": a non-empty GEODE_AUTH_HMAC_KEY
     /// that is not 64 hex characters (it was skipped, and the file key used
-    /// instead), a GEODE_TDE_KEY of 64 characters that is not hex, and a
+    /// instead), a non-empty GEODE_TDE_KEY that is not 64 hex characters
+    /// (SONNY-6386: a wrong length was skipped too), and a
     /// `.geode_hmac_key` that cannot be opened or read or is not 64 hex
     /// characters / 32 bytes. The server refuses to start on it; it used to
     /// run with the auth graph disabled.
@@ -446,6 +447,13 @@ pub const AuthGraphManager = struct {
                 };
                 const derived = auth_hmac.deriveHmacKey(&tde_key, geode_hkdf_config);
                 return HmacKeyResult{ .key = derived, .key_id = "tde-derived" };
+            } else if (tde_val.len > 0) {
+                // SONNY-6386: a set GEODE_TDE_KEY of the wrong length was
+                // skipped and the chain sealed with the file key instead.
+                log.warn("GEODE_TDE_KEY must be exactly 64 hex characters", &.{
+                    Attr.uint("actual_len", @intCast(tde_val.len)),
+                });
+                return error.HmacKeyInvalid;
             }
         } else |_| {}
 

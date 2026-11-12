@@ -9805,6 +9805,7 @@ pub fn build(b: *std.Build) void {
     sonny6386_tde_test_mod.link_libc = true;
     sonny6386_tde_test_mod.addImport("geode", root_mod);
     sonny6386_tde_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6386_tde_test_mod.addImport("logging", logging_mod);
     const sonny6386_tde_tests = b.addTest(.{ .root_module = sonny6386_tde_test_mod });
     const run_sonny6386_tde_tests = b.addRunArtifact(sonny6386_tde_tests);
     spawnsBuiltGeode(sonny6386_tde_tests);

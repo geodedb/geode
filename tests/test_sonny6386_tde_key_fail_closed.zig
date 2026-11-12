@@ -21,6 +21,7 @@ const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const auth_graph_manager = @import("auth_graph_manager");
+const logging = @import("logging");
 const geode_test_bin = @import("geode_test_bin");
 const test_scratch = @import("test_scratch.zig");
 const test_ports = @import("test_ports.zig");
@@ -70,6 +71,10 @@ const EnvGuard = struct {
 };
 
 fn clearKeyEnv() void {
+    // The refused loads log at error level by design; keep the build
+    // runner's stderr to test results.
+    logging.init(.{ .level = .fatal });
+    logging.setLevel(.fatal);
     _ = unsetenv("GEODE_TDE_KEY");
     _ = unsetenv("GEODE_WAL_KEY");
     _ = unsetenv("GEODE_AUTH_HMAC_KEY");
