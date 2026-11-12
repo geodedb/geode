@@ -39,7 +39,10 @@
   `CREATE GRAPH` rewrote the registry without them; it now fails, and the
   server exits with `Error: cannot open the data directory ...`. A missing
   registry is still a fresh data directory. Regression:
-  `zig build test-sonny6430-storage-open-fail-closed`.
+  `zig build test-sonny6430-storage-open-fail-closed`. SONNY-6435 item 4:
+  `initAuditForGraph` is now typed `!*AuditLogger` (it never returned
+  null), so no caller can read a null as "no audit logger"; regression
+  `zig build test-sonny6435-audit-init-type`.
 - **`GEODE_MASTER_KEY_FORMAT` reads a full 256-bit FLE master key, and an
   existing key never changes (SONNY-6430 item 2).** `GEODE_MASTER_KEY` was
   always used as raw bytes and only its first 32 counted, so the usual
