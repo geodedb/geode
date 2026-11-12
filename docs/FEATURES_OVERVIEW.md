@@ -75,7 +75,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 ### **Data Protection**
 
 - **TDE**: Transparent data encryption with <1% overhead
-- **KMS Integration**: HashiCorp Vault key management
+- **KMS Integration**: KMS provider clients, including HashiCorp Vault; the TDE master key is not KMS-backed (see [KMS_PROVIDER_SYSTEM.md](KMS_PROVIDER_SYSTEM.md))
 - **Audit Logging**: Comprehensive compliance tracking
 - **Data Classification**: 5-level security classification
 

@@ -43,48 +43,33 @@ var provider = kms.vaultKMSProvider(allocator, "https://vault.example.com", "vau
 // Enterprise Vault integration with CLI-based operations
 ```
 
-## TDE-KMS Integration
+## TDE-KMS Integration — Not Implemented
 
-**Implementation**: `src/security/tde_kms_integration.zig`
+**Status (2026-11-11, SONNY-6298):** the TDE master key is not obtained from,
+or wrapped by, any KMS provider. This section used to describe a
+`TDEKeyManager` in `src/security/tde_kms_integration.zig`
+(`initializeWithKMS`, KMS-derived data/WAL keys, `rotateKeys`, and the
+`createLocalDevTDE` / `createRemoteKMSTDE` / `createVaultTDE` factories). That
+file was reachable from no executable or test in `build.zig`; it was never
+compiled and was removed, with its uncompiled test
+`tests/test_tde_kms_integration.zig`.
 
-### TDEKeyManager: Comprehensive key lifecycle management
+What the server does:
 
-```zig
-// Initialize TDE with KMS provider
-var manager = tde_kms.TDEKeyManager.init(allocator);
-try manager.initializeWithKMS(kms.KMSConfig{
-    .provider_type = .vault_transit,
-    .vault_addr = "https://vault.company.com",
-    .auth_token = vault_token,
-    .vault_key_path = "geode/encryption"
-});
-
-// Get derived keys for different encryption domains
-const data_key = try manager.getDataKey();    // For database pages
-const wal_key = try manager.getWALKey();      // For WAL records
-
-// Perform key rotation
-try manager.rotateKeys();
-```
-
-### Factory Functions for Different Configurations
-
-```zig
-// Local development TDE
-var dev_tde = try tde_kms.createLocalDevTDE(allocator);
-
-// External KMS TDE (deterministic for testing)
-var test_tde = try tde_kms.createExternalKMSTDE(allocator, 0xSEED);
-
-// Remote KMS TDE (production QUIC)
-var prod_tde = try tde_kms.createRemoteKMSTDE(allocator, "kms.prod.com", 3141, token);
-
-// HashiCorp Vault TDE (enterprise)
-var vault_tde = try tde_kms.createVaultTDE(allocator, vault_addr, vault_token, key_path);
-
-// Environment variable TDE (legacy)
-var env_tde = try tde_kms.createEnvTDE(allocator);
-```
+- The TDE master key is read from `GEODE_TDE_KEY` (64 hex characters) by
+  `src/security/tde_key_manager.zig`.
+- When `GEODE_KMS_URL` is set, server startup calls
+  `tde_key_manager.configureKMS`, which only checks that the endpoint accepts a
+  TCP connection and refuses to start if it does not. No key is fetched from
+  or wrapped by that endpoint. For the symbolic provider names (`aws`, `azure`,
+  `gcp`, `hashicorp`, `local`) it runs a local AES-256-GCM round trip with an
+  ephemeral key.
+- The providers in `src/security/kms.zig` are reached from the
+  `tde.configure_kms`, `tde.configure_mock_kms` and `tde.test_kms_wrap_unwrap`
+  procedures
+  (`src/execution/storage_dispatch.zig`), which build a provider and run a
+  wrap/unwrap round trip; they do not install a key into page or WAL
+  encryption.
 
 ## Vault Integration Features
 
@@ -99,6 +84,12 @@ var env_tde = try tde_kms.createEnvTDE(allocator);
 - **Cross-Platform**: Works with any Vault-compatible KMS
 
 ### Production Usage
+
+> **Not wired (2026-11-11, SONNY-6298):** no code reads `GEODE_KMS_PROVIDER`
+> or `GEODE_VAULT_KEY_PATH`, and `geode serve` has no `--kms-provider` flag.
+> The TDE master key comes from `GEODE_TDE_KEY`; see
+> [TDE-KMS Integration](#tde-kms-integration--not-implemented). The commands
+> below do not produce Vault-backed TDE.
 
 ```bash
 # Set Vault environment
@@ -146,9 +137,13 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 
 ### Test Suites
 
-- **`tests/test_kms_provider.zig`**: 11 comprehensive KMS provider test scenarios
-- **`tests/test_tde_kms_integration.zig`**: 9 TDE-KMS integration test scenarios  
-- **`tests/test_vault_kms_provider.zig`**: 6 Vault-specific integration tests
+- `zig build test-remote-kms`, `test-remote-kms-hardening` and
+  `test-sonny2394-kms-client-deadline`: the remote KMS server and client over
+  real QUIC (`src/security/kms_remote.zig`).
+- `zig build test-gap0890`: key rotation policy and lazy re-wrap.
+- `tests/test_kms_provider.zig` is in no build step (not compiled or run).
+  `tests/test_vault_kms_provider.zig` and `tests/test_tde_kms_integration.zig`
+  do not exist.
 
 ### Key Test Scenarios
 
@@ -160,6 +155,9 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 - **Vault Integration**: Real Vault server testing with live authentication
 
 ## Production Deployment
+
+> **Not wired:** the Vault and `GEODE_KMS_PROVIDER` settings in this section are
+> not read by the server (see [Production Usage](#production-usage)).
 
 ### Vault Configuration
 

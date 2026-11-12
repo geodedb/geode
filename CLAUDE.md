@@ -50,7 +50,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Enterprise & Security
 
 - **[Advanced Security Features](docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md)** - Enhanced RLS implementation
-- **[KMS Provider System](docs/KMS_PROVIDER_SYSTEM.md)** - Enterprise key management
+- **[KMS Provider System](docs/KMS_PROVIDER_SYSTEM.md)** - KMS provider clients (`src/security/kms.zig`, remote KMS over QUIC: `zig build test-remote-kms`). The TDE master key comes from `GEODE_TDE_KEY`, not from a KMS: TDE-KMS integration is NOT implemented (its only code, `tde_kms_integration.zig`, was never compiled and was removed 2026-11-11, SONNY-6298); `GEODE_KMS_URL` only gates startup on the endpoint being reachable
 - **[User Authentication](docs/USER_AUTH.md)** - RBAC/ABAC with TOTP MFA (SMS/email/U2F are planned, NOT implemented; step-up uses scoped `OperationClass` classification, fail-closed — GAP-0884, `zig build test-gap0884`)
 - **[GQL Auth DDL](docs/GQL_AUTH_DDL.md)** - CREATE/ALTER/DROP USER, CREATE/DROP ROLE, GRANT/REVOKE, SHOW statements (Geode extension)
 

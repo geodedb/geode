@@ -71,7 +71,7 @@ Security implementations tracked via CANARY markers:
 | Component | Source Location |
 |-----------|----------------|
 | KMS Providers | `src/security/kms.zig` |
-| TDE-KMS Integration | `src/security/tde_kms_integration.zig` |
+| TDE master key / KMS endpoint probe (no KMS key wrap; see [KMS_PROVIDER_SYSTEM.md](../KMS_PROVIDER_SYSTEM.md#tde-kms-integration--not-implemented)) | `src/security/tde_key_manager.zig` |
 | Vault Provider | `src/security/vault_kms_provider.zig` |
 | Auth/Users | `src/security/auth.zig` |
 | RLS | `src/security/rls.zig` |

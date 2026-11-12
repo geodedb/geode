@@ -325,6 +325,23 @@
   server uses are `src/types/network.zig` (over the `advanced_types`
   library), unchanged. The "<1μs parsing" figure is dropped from `CLAUDE.md`
   and `README.md`: no benchmark in the repository measures it.
+- **Uncompiled security files; TDE-KMS integration documented as not
+  implemented (SONNY-6298).** `src/security/tde_kms_integration.zig` (a
+  `TDEKeyManager` that took the TDE master key from a KMS provider),
+  `key_provider.zig`, `secure_mem.zig` and `backup_key_envelope.zig` were
+  reachable from no executable or test, so none of them ever ran. They are
+  removed with the uncompiled tests and benchmarks that used them, and the
+  `key_provider.zig` case of `src/security/test_secure_zero.zig` (an
+  `@embedFile` source check of the removed file) goes too.
+  `docs/KMS_PROVIDER_SYSTEM.md`, `CLAUDE.md`, `README.md`,
+  `docs/FEATURES_OVERVIEW.md`, `docs/security/README.md` and
+  `docs/SECURITY_PROGRESS.md` now say that the TDE master key comes from
+  `GEODE_TDE_KEY` and is not fetched from or wrapped by any KMS;
+  `GEODE_KMS_URL` only makes startup fail when the endpoint is unreachable;
+  `GEODE_KMS_PROVIDER` / `GEODE_VAULT_KEY_PATH` are read by nothing; and
+  key-registry backup export/import is not implemented. The KMS provider
+  clients in `src/security/kms.zig`, `kms_remote.zig`,
+  `external_kms_client.zig` and `vault_kms_provider.zig` are unchanged.
 
 ---
 
