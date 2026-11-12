@@ -4,6 +4,25 @@
 
 ### Security
 
+- **A cluster applies a write under the writing session's tenant
+  (SONNY-2726).** In cluster mode a write reaches the store only through
+  the raft apply, whose thread has no request context, and the replicated
+  payloads carried no tenant, so every node and edge written through raft
+  was tagged `default` on every node; since SONNY-2693 a tenant's
+  replicated edges, and its nodes, were hidden from it. The leader now
+  wraps the entry of a session whose tenant is not `default` in a GTN1
+  envelope naming the tenant (`cluster_replication.wrapWithTenant`, in
+  `statement_proposals.proposeNow`, for every graph mutation: create,
+  batch, delete, merge, update), and the apply sets that tenant for the
+  entry (`raft_apply.applyGraphMutation`). A default-tenant write and
+  every entry already in a log are unchanged. **Operator-visible:**
+  upgrade every node of a cluster before tenant-scoped sessions write; a
+  node running an older build skips a tenant-enveloped create (its
+  unknown-payload arm) and cannot decode an enveloped delete, merge or
+  update. **Not fixed:** data replicated before this change is still
+  tagged `default`; a leader-driven re-tag replicated through raft does
+  not exist yet (`geode.tenant.backfill_edge_tags` is refused in a
+  cluster). `test-sonny2726-replicated-tenant`.
 - **Tenant schema listings show what the session's MATCH sees; COUNT { hop }
   counts paths (SONNY-6344 items 1-2).** (2) `CALL db.labels()`,
   `db.relationshipTypes()`, `db.propertyKeys()`, SHOW TABLES and the LSP's

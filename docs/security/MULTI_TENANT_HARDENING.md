@@ -367,9 +367,13 @@ multi-hop patterns, pattern comprehensions, `COUNT {}`, `EXISTS {}`,
 `shortestPath()` and the `CALL algo.*` procedures. An unscoped (admin) session
 sees every edge.
 
-There is **no exception for a `default` tag**. Unscoped and admin writes, and
-follower replication, write `default`, and a `default` node is already hidden
-from every tenant; a `default` edge is hidden the same way. Before SONNY-2693
+There is **no exception for a `default` tag**. Unscoped and admin writes
+write `default`, and a `default` node is already hidden from every tenant; a
+`default` edge is hidden the same way. In a cluster, a write's raft entry
+carries the writing session's tenant (SONNY-2726), so every node applies it
+under that tenant; data replicated before that change was applied as
+`default` on every node and is still tagged so (no replicated re-tag exists
+yet). Before SONNY-2693
 some read paths admitted an edge whose endpoints were visible whatever its tag
 (the GAP-0891 "endpoint bridge"). That showed a tenant another tenant's edge
 between its own nodes, with its properties. It also kept legacy edges visible
