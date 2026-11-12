@@ -13344,6 +13344,18 @@ pub fn build(b: *std.Build) void {
     const sonny2753_step = b.step("test-sonny2753-graph-scoped-deny", "Run the SONNY-2753 regression (a deny scoped to graph g refuses what happens on g only, procedures, nodes, edges and decryption included; a change of every graph at once is refused by a deny on any graph; graph-scoped allow covers its graph only; deny beats allow; cached verdicts are per graph)");
     sonny2753_step.dependOn(&run_sonny2753_tests.step);
 
+    // SONNY-2756 (P23): the GPS policy catalog is read on every request while
+    // policy DDL on other connections changes it.
+    const sonny2756_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2756_policy_catalog_concurrency.zig"), .target = target, .optimize = optimize });
+    sonny2756_test_mod.link_libc = true;
+    sonny2756_test_mod.addImport("geode", root_mod);
+    sonny2756_test_mod.addImport("logging", logging_mod);
+    const sonny2756_tests = b.addTest(.{ .root_module = sonny2756_test_mod });
+    const run_sonny2756_tests = b.addRunArtifact(sonny2756_tests);
+    shardDep(test_step, &run_sonny2756_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2756_step = b.step("test-sonny2756-policy-catalog-concurrency", "Run the SONNY-2756 regression (a policy change waits for a decision walking the GPS policy catalog and a decision for a change in progress; one decision sees one catalog; no cached decision outlives a change; decisions, helpers and SHOW POLICIES stay well-formed during rounds of policy DDL)");
+    sonny2756_step.dependOn(&run_sonny2756_tests.step);
+
     // SONNY-2781: every action a GPS policy can name is enforced: the write
     // gate asks CREATE / UPDATE / DELETE / WRITE+SCHEMA per statement, the
     // read gate asks MATCH on every graph read, for every principal; a deny
