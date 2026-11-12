@@ -334,6 +334,24 @@
   MATCH ... SET and MATCH ... CREATE target resolution uses the same
   predicate and so also sees a parent's descendants' rows, as MATCH does.
   Regression: `zig build test-sonny6338-tenant-visibility-consistency`.
+- **knn() ranks the rows the session's MATCH sees, with a tenant hierarchy
+  too (SONNY-2820).** knn() compared tenant tags exactly, so a parent
+  tenant missed every row of its descendants that MATCH returns. Both the
+  scan and the vector-index path now use the MATCH path's tenant predicate,
+  and still filter before cutting to k (the index path asks the index for
+  twice as many rows until it has k visible ones or the index runs out), so
+  a hidden row never takes a slot. Whether the index may answer alone is now
+  decided over every tenant's carriers when the hierarchy lets the session
+  see more than its own tag (it falls back to the scan more often for such
+  a session). **Behaviour change:** for a session whose scope can hide rows
+  (a concrete tenant scope, or a user an RLS policy may deny a row), a knn()
+  property no visible row carries now answers an empty list, as MATCH
+  answers an empty result, instead of `UnknownProperty` (42703). That
+  includes a misspelled property: telling the two apart would reveal that a
+  hidden row carries the property. Unscoped sessions with no policy keep the
+  `UnknownProperty` diagnostic.
+  Regressions: `zig build test-sonny6338-tenant-visibility-consistency`,
+  `zig build test-sonny2692-knn-rls`.
 
 ### Added
 
