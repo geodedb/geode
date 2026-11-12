@@ -13328,6 +13328,22 @@ pub fn build(b: *std.Build) void {
     sonny2751_step.dependOn(&run_sonny2751_tests.step);
     sonny2751_step.dependOn(&run_sonny2751_mcp_tests.step);
 
+    // SONNY-2753: a GPS policy scoped to a graph covers that graph (and its
+    // nodes and edges) only, deny and allow alike; a change of every graph at
+    // once is refused by a deny on any of them.
+    const sonny2753_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2753_graph_scoped_deny.zig"), .target = target, .optimize = optimize });
+    sonny2753_test_mod.link_libc = true;
+    sonny2753_test_mod.addImport("geode", root_mod);
+    sonny2753_test_mod.addImport("schema", schema_mod);
+    sonny2753_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2753_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2753_test_mod.addImport("logging", logging_mod);
+    const sonny2753_tests = b.addTest(.{ .root_module = sonny2753_test_mod });
+    const run_sonny2753_tests = b.addRunArtifact(sonny2753_tests);
+    shardDep(test_step, &run_sonny2753_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2753_step = b.step("test-sonny2753-graph-scoped-deny", "Run the SONNY-2753 regression (a deny scoped to graph g refuses what happens on g only, procedures, nodes, edges and decryption included; a change of every graph at once is refused by a deny on any graph; graph-scoped allow covers its graph only; deny beats allow; cached verdicts are per graph)");
+    sonny2753_step.dependOn(&run_sonny2753_tests.step);
+
     // GPS Phase 7 Task 7-1: bounded LRU decision cache tests.
     const gps_decision_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decision_cache.zig"), .target = target, .optimize = optimize });
     gps_decision_cache_test_mod.addImport("geode", root_mod);
