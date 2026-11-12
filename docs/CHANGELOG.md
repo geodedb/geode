@@ -195,6 +195,27 @@
   `Catalog.removeConstraint`, `listAllConstraints` and
   `listConstraintsForGraph` are removed. Regression:
   `zig build test-sonny6270-drop-constraint`.
+- **BEHAVIOUR CHANGE: index and constraint names are unique per graph;
+  DROP INDEX is deterministic and locks the session's graph (SONNY-6294).**
+  CREATE INDEX accepted one name on two labels of a graph, and DROP INDEX
+  then dropped whichever row the catalog's hash order met first. A name is
+  now one index of a graph: a second `CREATE INDEX` with the name, on any
+  label, is refused (42P07; a no-op under `IF NOT EXISTS`), and the same
+  for `CREATE CONSTRAINT` (42710). Another graph may still use the name
+  (SONNY-1319). A catalog written before this may hold one name on several
+  labels: DROP INDEX drops all of them in the scope it resolves (the
+  graph's own rows, else the engine-wide rows) and adds a note to the
+  result, as DROP CONSTRAINT does. The server took the default graph's
+  write lock for every DROP INDEX (it might be a fulltext index), so a
+  DROP INDEX in graph g ran beside g's writers and blocked default's; it
+  now takes the session graph's lock, as constraint DDL does. A fulltext
+  index lives in the default graph, so **a bare `DROP INDEX` of a fulltext
+  index from a session on another graph is now refused (0A000)**: run
+  `USE GRAPH default; DROP INDEX <name>`. `IndexNotFound` and
+  `ConstraintNotFound` reached clients as 58000 (system error); they are
+  42704 (undefined_object), and `IndexAlreadyExists` is 42P07. Clients or
+  harness specs that matched 58000 for these must match 42704. Regression:
+  `zig build test-sonny6294-drop-index-rules`.
 - **A graph-store write that runs out of memory part way leaves nothing
   half done (SONNY-6268):** node and edge creates, property SET and REMOVE,
   label add and remove, and node and edge deletes either complete or leave

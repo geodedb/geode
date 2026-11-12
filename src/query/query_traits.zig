@@ -650,12 +650,18 @@ fn moveTo(current: []const u8, target: GraphTarget, home_graph: []const u8) []co
 /// none.
 ///
 /// SONNY-2790: fulltext search is default-graph-only by design
-/// (docs/FULLTEXT_SEARCH.md, "Graph scope"). CREATE INDEX ... USING fulltext,
-/// DROP INDEX (the index may be a fulltext one, whose engine lives in the
-/// default graph) and CALL geode.fts.* run on `default` whatever the current
-/// graph, and so count as statements on `default`: the handlers lock
-/// `default` for them. They used to lock the session's graph while reading
-/// and writing the default graph's nodes and fulltext engine.
+/// (docs/FULLTEXT_SEARCH.md, "Graph scope"). CREATE INDEX ... USING fulltext
+/// and CALL geode.fts.* run on `default` whatever the current graph, and so
+/// count as statements on `default`: the handlers lock `default` for them.
+/// They used to lock the session's graph while reading and writing the
+/// default graph's nodes and fulltext engine.
+///
+/// SONNY-6294: DROP INDEX counts as a statement on the current graph, as
+/// constraint DDL and CREATE INDEX of other types do: the index it drops is
+/// that graph's (or an engine-wide one). It counted as one on `default`
+/// (the index might be fulltext), so in graph g it ran beside g's writers
+/// and blocked default's. The executor refuses to drop a fulltext index
+/// from a session on another graph (`USE GRAPH default; DROP INDEX i`).
 ///
 /// The handlers used to lock the session graph whatever the program selected,
 /// so `USE GRAPH g2; MERGE (:K {id: 1})` wrote g2 holding another graph's
@@ -801,7 +807,8 @@ const DataGraphWalk = struct {
                 const on = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else self.current;
                 return self.note(on);
             },
-            .DropIndex => return self.note(graph_store.DEFAULT_GRAPH_NAME),
+            // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=DropIndexSessionGraphLock; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+            .DropIndex => return self.note(self.current),
             .Call => |call| {
                 const on = switch (call) {
                     .Procedure => |proc| if (procedure_access.isDefaultGraphProcedure(proc)) graph_store.DEFAULT_GRAPH_NAME else self.current,

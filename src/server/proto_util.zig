@@ -241,13 +241,20 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GraphBound => .{ .code = "42000", .message = "USE GRAPH not allowed: session is bound to a graph via DSN connection string" },
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
-        error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
+        error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name: an index of this name exists in the graph (index names are unique per graph, across labels)" },
+        error.IndexAlreadyExists => .{ .code = "42P07", .message = "Duplicate index name" },
+        // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+        // SONNY-6294: a missing index or constraint is undefined_object
+        // (42704); both reached clients as 58000 (system error).
+        error.IndexNotFound => .{ .code = "42704", .message = "Index does not exist" },
+        error.ConstraintNotFound => .{ .code = "42704", .message = "Constraint does not exist in the session's graph" },
+        error.FulltextIndexInDefaultGraph => .{ .code = "0A000", .message = "A fulltext index lives in the default graph: drop it from the default graph (USE GRAPH default; DROP INDEX <name>)" },
         // SONNY-1319: the name is held in another graph by an index whose
         // runtime structure is keyed by name alone (vector and other advanced
         // indexes), so it cannot be created in this graph too.
         error.IndexNameInUseByOtherGraph => .{ .code = "42P07", .message = "Index name is in use in another graph by an index type whose runtime structure is shared by name (vector and other advanced indexes); choose another name" },
         // SONNY-2809: a second CREATE CONSTRAINT with the same name.
-        error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name" },
+        error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name: a constraint of this name exists in the graph (constraint names are unique per graph, across labels)" },
         // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=UniqueViolationCode; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=engine; UPDATED=2026-11-11
         // SONNY-2846: a statement that would give two nodes one UNIQUE key,
         // or a CREATE CONSTRAINT over existing duplicates. 23505 is SQL's

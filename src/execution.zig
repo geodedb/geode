@@ -2363,8 +2363,8 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
 
             // Check IF NOT EXISTS
             if (cc.if_not_exists) {
-                const existing = cat.getConstraintInGraph(constraint_graph, cc.label, cc.name) catch null;
-                if (existing != null) {
+                // SONNY-6294: the name, on any label of the graph.
+                if (cat.constraintNameTaken(constraint_graph, cc.name)) {
                     // Constraint already exists, return success (no-op)
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
@@ -2391,7 +2391,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             var fenced = false;
             defer if (fenced) graph_store.removeUniqueFence(constraint_graph);
             if (enforces_unique) {
-                if ((cat.getConstraintInGraph(constraint_graph, cc.label, cc.name) catch null) != null) {
+                if (cat.constraintNameTaken(constraint_graph, cc.name)) {
                     if (cc.if_not_exists) return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
                         .rows = try allocator.alloc([]Value, 0),
@@ -2462,13 +2462,25 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // (DROP of a vector index waits there for in-flight readers),
             // also a lower tier.
             const io_dl = std.Io.Threaded.global_single_threaded.io();
+            // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=DropAllRowsOfTheName; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-6294: an index name is one index of a graph (addIndex
+            // refuses a second label under it). A catalog written before
+            // that may hold the name on several labels: all of them in the
+            // resolved scope go, as DROP CONSTRAINT drops (SONNY-6270). It
+            // dropped whichever row hash iteration met first.
             const Resolve = struct {
-                key: ?[]const u8 = null,
+                keys: std.ArrayList([]const u8) = .empty,
                 rank: u2 = 0,
+                fulltext: bool = false,
 
-                /// The row DROP INDEX drops. Caller holds the catalog lock.
-                fn find(c: *catalog_mod.Catalog, name: []const u8, graph: []const u8) @This() {
-                    var found: @This() = .{};
+                /// The rows DROP INDEX drops: those of the best scope (the
+                /// graph's own rows, else engine-wide rows, else a fulltext
+                /// row of the default graph). Caller holds the catalog lock;
+                /// the keys borrow the catalog's memory.
+                fn find(self: *@This(), a: std.mem.Allocator, c: *catalog_mod.Catalog, name: []const u8, graph: []const u8) !void {
+                    self.keys.clearRetainingCapacity();
+                    self.rank = 0;
+                    self.fulltext = false;
                     var iter = c.indexes.iterator();
                     while (iter.next()) |entry| {
                         const info = entry.value_ptr.*;
@@ -2481,40 +2493,62 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                             1
                         else
                             0;
-                        if (rank > found.rank) found = .{ .key = entry.key_ptr.*, .rank = rank };
+                        if (rank == 0 or rank < self.rank) continue;
+                        if (rank > self.rank) {
+                            self.keys.clearRetainingCapacity();
+                            self.rank = rank;
+                            self.fulltext = false;
+                        }
+                        try self.keys.append(a, entry.key_ptr.*);
+                        if (std.mem.eql(u8, info.index_type, "fulltext")) self.fulltext = true;
                     }
-                    return found;
                 }
 
                 fn needsDefaultGraph(self: @This(), graph: []const u8) bool {
-                    return self.key != null and self.rank < 3 and !std.mem.eql(u8, graph, graph_store.DEFAULT_GRAPH_NAME);
+                    return self.keys.items.len > 0 and self.rank < 3 and !std.mem.eql(u8, graph, graph_store.DEFAULT_GRAPH_NAME);
                 }
             };
 
+            var found: Resolve = .{};
+            defer found.keys.deinit(allocator);
             cat.rwlock.lockUncancelable(io_dl);
             var cat_locked = true;
             defer if (cat_locked) cat.rwlock.unlock(io_dl);
-            var found = Resolve.find(cat, index_name, drop_graph);
+            try found.find(allocator, cat, index_name, drop_graph);
 
             // An engine-wide or fulltext row is the default graph's as much as
             // this one's: schema on the default graph as well, as DROP INDEX
             // always asked before SONNY-1319. Asked with the lock released,
-            // then the row is resolved again (the catalog may have changed).
+            // then the rows are resolved again (the catalog may have changed).
             if (found.needsDefaultGraph(drop_graph)) {
                 cat.rwlock.unlock(io_dl);
                 cat_locked = false;
                 try session_graph.authorizeCatalogSchemaChange(context, graph_store.DEFAULT_GRAPH_NAME);
                 cat.rwlock.lockUncancelable(io_dl);
                 cat_locked = true;
-                found = Resolve.find(cat, index_name, drop_graph);
+                try found.find(allocator, cat, index_name, drop_graph);
             }
-            const found_key = found.key;
 
-            if (found_key) |key| {
-                const taken = try cat.takeIndexLocked(key);
+            // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=FulltextDropInDefault; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+            // SONNY-6294: DROP INDEX runs under the session graph's write
+            // lock (query_traits). A fulltext index's engine, facade cache and
+            // label registry live in the default graph and its writers
+            // maintain them under default's lock, so dropping one from
+            // another graph's session would change default under the wrong
+            // lock: refused (0A000); `USE GRAPH default; DROP INDEX <name>`.
+            if (found.fulltext and !std.mem.eql(u8, drop_graph, graph_store.DEFAULT_GRAPH_NAME)) {
+                return error.FulltextIndexInDefaultGraph;
+            }
+
+            var dropped: usize = 0;
+            if (found.keys.items.len > 0) {
+                const removed_rows = try allocator.alloc(std.StringHashMap(catalog_mod.IndexInfo).KV, found.keys.items.len);
+                defer allocator.free(removed_rows);
+                try cat.takeIndexesLocked(found.keys.items, removed_rows);
                 cat.rwlock.unlock(io_dl);
                 cat_locked = false;
-                if (taken) |removed| {
+                dropped = removed_rows.len;
+                for (removed_rows) |removed| {
                     // A4a: fulltext index → drop the NAMED fts-storage engine and
                     // free its cached facade. Done BEFORE the catalog strings are
                     // freed (so the index name is still valid). Tolerates a
@@ -2555,11 +2589,19 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 return error.IndexNotFound;
             }
 
-            return ExecutionResult{
+            var result = ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
                 .flags = std.ArrayList([]const u8).empty,
             };
+            if (dropped > 1) {
+                log.warn("DROP INDEX removed several indexes of one name (one per label) that an older catalog held", &.{
+                    Attr.string("index", index_name),
+                    Attr.uint("rows", dropped),
+                });
+                try appendFlagIfMissing(allocator, &result, "DROP INDEX removed several indexes of this name, one per label, that a catalog written before index names were unique per graph held");
+            }
+            return result;
         },
         .DropConstraint => |dc| {
             // Cluster fail-closed: see .CreateConstraint (GateConstraintDDL).

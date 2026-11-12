@@ -152,7 +152,10 @@ is not guaranteed for all letters. This applies equally to `search`, `phrase`,
 DROP INDEX <name>;
 ```
 
-Drops the fulltext index. The server stays alive during the drop: the
+Drops the fulltext index, from a session on the default graph (from
+another graph: `USE GRAPH default; DROP INDEX <name>`; a bare `DROP INDEX`
+there is refused with 0A000, SONNY-6294). The server stays alive during the
+drop: the
 `fts-storage` 0.1.1 single-writer thread-check fix
 (`EngineConfig.single_writer_thread_check`) makes a cross-worker-thread `DROP`
 safe.
@@ -202,10 +205,13 @@ After an index exists, ordinary write paths keep it current automatically:
 > fulltext index, which `geode.fts.search`/`phrase`/`proximity`/`rebuild`
 > cannot currently query.
 >
-> By design, `CREATE INDEX ... USING fulltext`, `DROP INDEX` and every
-> `CALL geode.fts.*` run on the default graph, whatever the session's graph
-> (SONNY-2790). The server takes the default graph's lock for them. A request
-> that also changes another graph is refused (0A000); send it on its own.
+> By design, `CREATE INDEX ... USING fulltext` and every `CALL geode.fts.*`
+> run on the default graph, whatever the session's graph (SONNY-2790). The
+> server takes the default graph's lock for them. A request that also
+> changes another graph is refused (0A000); send it on its own. `DROP INDEX`
+> runs on the session's graph and takes its lock (SONNY-6294), so a
+> fulltext index is dropped from the default graph:
+> `USE GRAPH default; DROP INDEX <name>`.
 
 ### Recovery: `CALL geode.fts.rebuild`
 

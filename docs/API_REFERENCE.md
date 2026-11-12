@@ -20,7 +20,11 @@ ON label(property[, ...])
   uniqueness constraint and nothing is enforced. Use `CREATE CONSTRAINT ...
   IS UNIQUE` (see Constraint Operations below)
 - `IF NOT EXISTS`: Optional. Prevents error if index already exists
-- `index_name`: Name of the index to create
+- `index_name`: Name of the index to create. A name is one index of a
+  graph (SONNY-6294): a second `CREATE INDEX` with a name the graph already
+  uses, on any label, is refused with 42P07 (`DuplicateIndex`), and with
+  `IF NOT EXISTS` does nothing. Another graph may use the name, except for
+  vector and the other advanced index types (`IndexNameInUseByOtherGraph`).
 - `label`: Node label to index
 - `property`: Property or properties to index
 - `USING`: Optional. Specifies index type (default: btree)
@@ -82,6 +86,21 @@ DROP INDEX [IF EXISTS] index_name
 - `IF EXISTS`: Optional. Prevents error if index doesn't exist
 - `index_name`: Name of the index to drop
 
+#### Behaviour
+
+- **Resolution:** the session graph's index of that name, else an
+  engine-wide one (written by an older, engine-global catalog), else a
+  fulltext index of the default graph. Another graph's index is not found.
+- **Missing name:** refused with 42704 (`IndexNotFound`); with `IF EXISTS`
+  the statement does nothing and succeeds.
+- **One name on several labels** (only in a catalog written before index
+  names were unique per graph): every row of the name in the resolved scope
+  is dropped, and the result carries a note saying so (SONNY-6294).
+- **Locking:** the server takes the session graph's write lock (SONNY-6294;
+  it took the default graph's). A fulltext index lives in the default
+  graph: from a session on another graph its DROP is refused (0A000); run
+  `USE GRAPH default; DROP INDEX <name>`.
+
 #### Example
 
 ```gql
@@ -92,7 +111,10 @@ DROP INDEX IF EXISTS person_age_idx;
 
 ### CREATE CONSTRAINT
 
-Records a constraint in the session graph's catalog.
+Records a constraint in the session graph's catalog. A name is one
+constraint of a graph (SONNY-6294): a second `CREATE CONSTRAINT` with a
+name the graph already uses, on any label, is refused with 42710
+(`ConstraintAlreadyExists`), and with `IF NOT EXISTS` does nothing.
 
 #### Syntax
 
@@ -175,9 +197,10 @@ DROP CONSTRAINT [IF EXISTS] name
 - **Resolution:** the session graph's constraint of that name, else an
   engine-wide one (written by an older, engine-global catalog). A
   constraint of another graph is not found. Constraints of one name on
-  several labels of the graph are all dropped.
-- **Missing name:** refused with `ConstraintNotFound`, as DROP INDEX
-  refuses a missing index with `IndexNotFound`; with `IF EXISTS` the
+  several labels of the graph (only in a catalog written before constraint
+  names were unique per graph, SONNY-6294) are all dropped.
+- **Missing name:** refused with 42704 (`ConstraintNotFound`), as DROP
+  INDEX refuses a missing index (`IndexNotFound`); with `IF EXISTS` the
   statement does nothing and succeeds.
 - **Engine-wide row:** dropped from any graph, it is gone for every graph.
 - **Enforcement:** a UNIQUE or NODE KEY constraint stops being enforced as

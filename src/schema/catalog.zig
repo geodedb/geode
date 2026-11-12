@@ -719,8 +719,10 @@ pub const Catalog = struct {
     // CANARY: REQ=REQ-CONSTRAINT-002; FEATURE="ConstraintManagement"; ASPECT=CatalogMethods; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=schema; UPDATED=2026-01-09
     // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=ConstraintGraphScope; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
     /// Add a constraint to the catalog, in `info.graph`. SONNY-1319: a
-    /// same-named constraint on the label in ANOTHER graph is no duplicate; one
-    /// in the same graph, or an engine-wide one (which is in every graph), is.
+    /// same-named constraint in ANOTHER graph is no duplicate; one in the same
+    /// graph, or an engine-wide one (which is in every graph), is.
+    /// SONNY-6294: on any label. DROP CONSTRAINT names a constraint by name
+    /// alone, so a name is one constraint of a graph (as an index name is).
     pub fn addConstraint(self: *Catalog, info: ConstraintInfo) !void {
         self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -731,11 +733,7 @@ pub const Catalog = struct {
         const scoped_key = try graphScopedKey(self.allocator, info.graph, info.label, info.name);
         errdefer self.allocator.free(scoped_key);
 
-        var it = self.constraints.valueIterator();
-        while (it.next()) |row| {
-            if (!std.mem.eql(u8, row.name, info.name) or !std.mem.eql(u8, row.label, info.label)) continue;
-            if (graphsOverlap(row.graph, info.graph)) return error.ConstraintAlreadyExists;
-        }
+        if (self.constraintNameTakenLocked(info.graph, info.name)) return error.ConstraintAlreadyExists;
 
         // Duplicate strings for catalog ownership
         const owned_name = try self.allocator.dupe(u8, info.name);
@@ -780,7 +778,7 @@ pub const Catalog = struct {
 
     // CANARY: REQ=REQ-SONNY-6270-DROP-CONSTRAINT; FEATURE="SchemaCatalog"; ASPECT=DropConstraintPersisted; STATUS=TESTED; TEST=tests/test_sonny6270_drop_constraint.zig; OWNER=catalog; UPDATED=2026-11-11
     /// SONNY-6270: remove the constraint rows at `keys` and persist, as
-    /// `addConstraint` persists an added one (`takeIndexLocked`'s twin). If
+    /// `addConstraint` persists an added one (`takeIndexesLocked`'s twin). If
     /// the save fails every row is put back, so memory matches disk, and the
     /// error is returned. Every key must name a row (the caller found them
     /// under the same lock hold).
@@ -796,6 +794,23 @@ pub const Catalog = struct {
             for (out) |kv| self.constraints.putAssumeCapacityNoClobber(kv.key, kv.value);
             return err;
         };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=NameIsOneObjectPerGraph; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+    /// SONNY-6294: does `graph`'s catalog hold a constraint named `name`, on
+    /// any label (its own row, or an engine-wide one)?
+    pub fn constraintNameTaken(self: *Catalog, graph: []const u8, name: []const u8) bool {
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+        return self.constraintNameTakenLocked(graph, name);
+    }
+
+    fn constraintNameTakenLocked(self: *Catalog, graph: []const u8, name: []const u8) bool {
+        var it = self.constraints.valueIterator();
+        while (it.next()) |row| {
+            if (std.mem.eql(u8, row.name, name) and graphsOverlap(row.graph, graph)) return true;
+        }
+        return false;
     }
 
     /// Get a constraint of the default graph's catalog by label and name.
@@ -1050,8 +1065,11 @@ pub const Catalog = struct {
     // CANARY: REQ=REQ-SONNY-1319-GRAPH-SCOPED-CATALOG; FEATURE="SchemaCatalog"; ASPECT=IndexGraphScope; STATUS=TESTED; TEST=tests/test_sonny1319_graph_scoped_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
     /// Add an index to the catalog, in `info.graph`, and persist.
     ///
-    /// SONNY-1319: `DuplicateIndex` for a same-named index on the label in the
-    /// same graph, or an engine-wide one (which is in every graph). A
+    /// SONNY-1319: `DuplicateIndex` for a same-named index in the same graph,
+    /// or an engine-wide one (which is in every graph). SONNY-6294: on any
+    /// label: DROP INDEX names an index by name alone (and the fulltext and
+    /// vector runtimes are keyed by name), so a name is one index of a graph;
+    /// a second label under the name made DROP INDEX pick one at random. A
     /// same-named index in ANOTHER graph is no duplicate, unless either one's
     /// runtime structure is keyed by name alone (`indexHasNameKeyedRuntime`):
     /// then the two would be one structure, and the CREATE is refused with
@@ -1072,7 +1090,7 @@ pub const Catalog = struct {
         while (it.next()) |row| {
             if (!std.mem.eql(u8, row.name, info.name)) continue;
             if (graphsOverlap(row.graph, info.graph)) {
-                if (std.mem.eql(u8, row.table_name, info.table_name)) return error.DuplicateIndex;
+                return error.DuplicateIndex;
             } else if (indexHasNameKeyedRuntime(row.index_type) or indexHasNameKeyedRuntime(info.index_type)) {
                 in_other_graph = true;
             }
@@ -1123,21 +1141,22 @@ pub const Catalog = struct {
     }
 
     // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DropIndexPersisted; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
-    /// SONNY-2795: remove the index row at `key` and persist, as `addIndex`
-    /// persists an added one. If the save fails the row is put back, so
-    /// memory matches disk, and the error is returned. Null if there is no
-    /// such row.
-    ///
-    /// Caller holds the rwlock EXCLUSIVE, and owns the returned key and row:
-    /// `allocator.free(kv.key)` and `freeIndexInfo(kv.value)`.
-    pub fn takeIndexLocked(self: *Catalog, key: []const u8) !?std.StringHashMap(IndexInfo).KV {
-        const removed = self.indexes.fetchRemove(key) orelse return null;
+    /// SONNY-2795: remove the index rows at `keys` and persist, as `addIndex`
+    /// persists an added one.
+    /// SONNY-6294: several rows at once (the rows of one name a catalog
+    /// written before names were one index per graph holds on several
+    /// labels), saved once. If the save fails every row is
+    /// put back and the error returned. Every key must name a row (the
+    /// caller found them under the same lock hold). Caller holds the rwlock
+    /// EXCLUSIVE and owns the rows written to `out` (`out.len == keys.len`).
+    pub fn takeIndexesLocked(self: *Catalog, keys: []const []const u8, out: []std.StringHashMap(IndexInfo).KV) !void {
+        std.debug.assert(out.len == keys.len);
+        for (keys, out) |key, *slot| slot.* = self.indexes.fetchRemove(key).?;
         self.save() catch |err| {
-            // The removal freed the slot this takes back: no allocation.
-            self.indexes.putAssumeCapacityNoClobber(removed.key, removed.value);
+            // The removals freed the slots these take back: no allocation.
+            for (out) |kv| self.indexes.putAssumeCapacityNoClobber(kv.key, kv.value);
             return err;
         };
-        return removed;
     }
 
     /// Get index metadata of the default graph's catalog by label and name.

@@ -268,15 +268,44 @@ fn exerciseCore(h: *Harness) !void {
     try h.run("DROP CONSTRAINT k_ex");
     try testing.expectEqual(@as(usize, 0), try h.showCount());
 
-    // One name on two labels of the graph is one name to DROP: both go,
-    // with both fence counts.
+    // SONNY-6294: a constraint name is one constraint of the graph: a
+    // second label under the name is refused (42710). (A catalog written
+    // before that rule may hold one name on two labels: DROP removes both,
+    // tests/test_sonny6294_drop_index_rules.zig and below.)
     try h.run("CREATE CONSTRAINT twin_u FOR (n:T1) REQUIRE n.id IS UNIQUE");
-    try h.run("CREATE CONSTRAINT twin_u FOR (n:T2) REQUIRE n.id IS UNIQUE");
+    try h.expectRefusal("CREATE CONSTRAINT twin_u FOR (n:T2) REQUIRE n.id IS UNIQUE", "ConstraintAlreadyExists");
+    try testing.expectEqual(@as(usize, 1), try h.rowsNamed("SHOW CONSTRAINTS", "twin_u"));
+    // One name on two labels (a legacy catalog's rows) is one name to DROP:
+    // both go, with both fence counts.
+    try plantLegacyUniqueRow(h, "T2", "twin_u");
     try testing.expectEqual(@as(usize, 2), try h.rowsNamed("SHOW CONSTRAINTS", "twin_u"));
     try h.run("DROP CONSTRAINT twin_u");
     try testing.expectEqual(@as(usize, 0), try h.showCount());
     try testing.expect(!graph_store.uniqueFenced("default"));
     try testing.expectEqual(@as(u32, 0), h.ctx.catalog.constraints.count());
+}
+
+/// A UNIQUE row of the default graph as a catalog written before
+/// SONNY-6294 may hold it (the name already on another label), with the
+/// fence count a loaded UNIQUE row raises.
+fn plantLegacyUniqueRow(h: *Harness, label: []const u8, name: []const u8) !void {
+    const c = h.ctx.catalog;
+    const a = c.allocator;
+    const props = try a.alloc([]const u8, 1);
+    props[0] = try a.dupe(u8, "id");
+    const info = geode.catalog.ConstraintInfo{
+        .name = try a.dupe(u8, name),
+        .constraint_type = .unique,
+        .label = try a.dupe(u8, label),
+        .properties = props,
+        .is_enforced = true,
+        .graph = try a.dupe(u8, "default"),
+    };
+    const key = try std.fmt.allocPrint(a, "default\x1f{s}:{s}", .{ label, name });
+    c.rwlock.lockUncancelable(io());
+    defer c.rwlock.unlock(io());
+    try c.constraints.put(key, info);
+    try graph_store.addUniqueFence("default");
 }
 
 test "SONNY-6270: DROP CONSTRAINT drops the constraint in an in-memory session" {
