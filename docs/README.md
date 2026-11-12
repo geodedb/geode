@@ -71,7 +71,7 @@ docs/
 
 ### Completed Features
 
-1. **S3 Cloud Backup** - Digital Ocean Spaces integration
+1. **Backup/Restore CLI** - local backup files (no S3 / Digital Ocean Spaces path in the binary; copy files with your own tool)
 2. **REPL QUIC Integration** - Interactive shell
 3. **Vector Operations** - HNSW indexing with SIMD
 4. **ML Graph Embeddings** - Node2Vec, GraphSAGE, DeepWalk

@@ -14,6 +14,22 @@
   `TenantRegistryCorrupt`, naming the line number, and the server refuses to
   start (as for an unreadable registry since SONNY-6346). Regression:
   `zig build test-sonny6348-readonly-restore-checks-registry`.
+- **A restore commits exactly the backup (SONNY-6348 item 3).** The server
+  restore's graph count and its child `geode auth verify`, and `geode
+  restore`'s count and chain check, opened the staged copy that was then
+  committed. Opening a store writes to it (WAL replay checkpoints,
+  manifests, store files) and opening `__geode_security` started a new
+  audit key epoch (a new `audit.jsonl.key`, `audit.jsonl.pub.1` and a
+  KEY_EPOCH record), so the restored directory was no longer the backup and
+  its epoch was started by the check. The checks now run on a throwaway copy
+  (`<target>.probe-<random>`, deleted afterwards); the committed directory
+  holds the backup's files byte for byte plus the HMAC key file the restore
+  adds, and the epoch starts when a server first serves it. A restore needs
+  the backup's size again in free disk while it runs. Residual: `geode auth
+  verify` itself still opens the store read-write (the storage engine has
+  no read-only open). Regression:
+  `zig build test-sonny6348-readonly-restore-checks-registry`.
+
 - **BREAKING: no silent degrade in the tenant registry and the audit log
   writer (SONNY-6346).** A server whose `<data dir>/tenants` could not be
   created (or whose `registry.jsonl` could not be read) ran with an
@@ -292,6 +308,47 @@
 
 ### Fixed
 
+- **No in-place restore; a restore syncs once; the CLI's server wait is
+  configurable (SONNY-6300).** `BackupManager.restoreToPointInTime` wrote a
+  backup over whatever directory it was given, the live data directory
+  included, and then reopened the process-global adapter there, whose
+  shutdown checkpoint wrote the old in-memory state back over the restore;
+  `S3BackupManager.restore` called it. It is removed: `BackupManager.restoreInto`
+  and `S3BackupManager.restore` use the staged, verified restore
+  (`restoreBackupInto`: a new or empty target only, refused over a store,
+  auth chain verified or the restore refused). The staged copy was fsynced
+  file by file (about 700 fsyncs for a tiny two-graph store, over 10 s on a
+  loaded disk); on Linux the filesystem is now synced once (`syncfs`) and the
+  parent directory after the rename (which was not synced at all).
+  `geode backup create` and `geode restore --server` wait up to 300 s (was a
+  fixed 30 s) for the server's answer, set with `--timeout <seconds>`. A live
+  in-place restore into a running server is not implemented: restart on the
+  restored directory. Regression: `zig build test-sonny6300-staged-restore-paths`.
+- **A local backup is written once (SONNY-6323).** `geode backup create
+  --local --output <file>` wrote `full_<id>.backup` and `metadata.json` beside
+  `<file>` and then copied it there; it now writes `<file>` once (through a
+  synced temporary file, 0600). The dead `BackupManager.runRetention` (it
+  could not compile) and `SimplifiedBackupManager.runRetention` (no caller)
+  are removed, with five backup test files no build step compiled
+  (`test_server_backup_api_integration.zig`, `test_server_backup_api_unit.zig`,
+  `test_backup_e2e.zig`, `test_backup_comprehensive_integration.zig`,
+  `canary_backup_restore.zig`). The `/tmp` data-directory fallback was
+  already removed by SONNY-6325 and the test client's fixed 10 s backup wait
+  by SONNY-6301. Regression: `zig build test-sonny6323-local-backup-written-once`.
+- **BREAKING: backup commands the docs showed but the binary never had
+  (SONNY-6290).** `docs/USAGE.md` and `docs/deployment/DEPLOYMENT.md`
+  documented `geode backup --dest s3://... --mode full|incremental --parent
+  <id>` and `--list`, and README, CLAUDE.md and the feature docs claimed an
+  S3 / Digital Ocean Spaces backup target: the binary has no object-storage
+  path (`src/storage/s3_backup.zig` is reached by no command). The docs now
+  show the real commands and copying backup files with your own tool.
+  `geode backup create` ignored options it did not know and took an
+  `s3://` / `http(s)://` `--output` as a local path (with `--local` it
+  created a directory named `s3:` and reported success); both are now usage
+  errors (exit 2), as is an unknown option or extra argument to `geode
+  restore`. Regression: `zig build test-sonny6290-backup-doc-commands`
+  (every documented backup/restore command is checked against the built
+  binary's `--help`).
 - **Tests start servers on free ports, and the shared test clients wait for
   a live server instead of failing at a fixed deadline (SONNY-6301).**
   `tests/gql_conformance.zig` started every server on 127.0.0.1:3181, so two

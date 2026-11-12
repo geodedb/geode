@@ -6,7 +6,7 @@ This guide covers deploying Geode using Docker Compose with a complete productio
 
 - **Geode Database** - Graph database with QUIC+TLS transport
 - **HashiCorp Vault** - Secrets management and encryption key storage
-- **MinIO** - S3-compatible object storage for backups
+- **MinIO** - S3-compatible object storage, for backup files you copy there (geode itself writes backups to local files only)
 - **Redis** - Caching layer
 - **Prometheus** - Metrics collection
 - **Grafana** - Metrics visualization
@@ -94,7 +94,8 @@ GEODE_LISTEN_ADDR=0.0.0.0:8443 # Listen address
 VAULT_ADDR=http://vault:8200
 VAULT_TOKEN=<generated-token>
 
-# MinIO/S3 Configuration
+# MinIO/S3 Configuration (read by the MinIO service and your own copy
+# jobs; geode does not read these: it has no object-storage path)
 S3_ENDPOINT=http://minio:9000
 S3_ACCESS_KEY=geode-minio-admin
 S3_SECRET_KEY=<generated-password>
@@ -293,17 +294,24 @@ groups:
 
 ## Backup and Recovery
 
-### Automated Backups
+### Backups
 
-Geode automatically backs up to MinIO/S3 when configured:
+Geode does not back up to MinIO/S3 by itself: `geode backup create` writes a
+local file (an `s3://` `--output` is refused; SONNY-6290 corrected this guide,
+which showed a `geode backup --dest s3://...` form the binary never had).
+Write the backup into a volume and copy it to MinIO with your own tool:
 
 ```bash
-# Trigger manual backup
-docker-compose exec geode geode backup --dest s3://geode-backups/manual-$(date +%Y%m%d)
+# Full backup from the running server into the data volume
+docker-compose exec geode geode backup create --output /data/backups/manual.backup --compress
 
-# List backups
-docker-compose exec minio mc ls local/geode-backups
+# Copy it out of the container, then into MinIO with the MinIO client
+docker-compose cp geode:/data/backups/manual.backup ./manual.backup
+mc cp ./manual.backup myminio/geode-backups/manual-$(date +%Y%m%d).backup
 ```
+
+Add `--timeout <seconds>` (default 300) when a large store takes longer to
+back up than the CLI waits for the server's answer.
 
 ### Restore from Backup
 
@@ -503,7 +511,7 @@ docker-compose exec geode geode admin check
 6. **Regularly update images** for security patches
 7. **Use secrets rotation** for credentials
 8. **Enable network encryption** between services
-9. **Implement backup encryption** for S3 backups
+9. **Encrypt backup files** before copying them to object storage: `geode backup create` and the server write them unencrypted (owner-only, mode 0600)
 10. **Use RBAC** for Grafana and Prometheus
 
 ## Production Checklist

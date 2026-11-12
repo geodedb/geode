@@ -161,13 +161,20 @@ pub const S3BackupManager = struct {
         return metadata;
     }
 
-    /// Restore from S3 backup (GraphStore snapshots only).
+    // CANARY: REQ=REQ-SONNY-6300-STAGED-RESTORE-ONLY; FEATURE="Backup Restore"; ASPECT=S3RestoreIsStaged; STATUS=IMPL; OWNER=storage; UPDATED=2026-11-12
+    /// Restore backup `backup_id` from S3 into `target_dir`, which must not
+    /// exist or be empty: download it into a private directory beside the
+    /// target, check its header against the uploaded metadata, then the
+    /// staged, verified restore (`backup.restoreBackupInto`). A backup with
+    /// auth records needs `verify_auth`. SONNY-6300: this called the
+    /// in-place BackupManager.restoreToPointInTime. No geode command calls
+    /// it: the binary has no object-storage path (SONNY-6290).
     pub fn restore(
         self: *Self,
         backup_id: u64,
         target_dir: []const u8,
-        store: *graph_store.GraphStore,
-    ) !void {
+        verify_auth: ?backup.StagedAuthVerifier,
+    ) !backup.SideRestore {
         const start_time = compat_milliTimestamp();
 
         const metadata = try self.downloadMetadata(backup_id);
@@ -204,23 +211,14 @@ pub const S3BackupManager = struct {
 
         try self.downloadFile(s3_key, local_path);
 
-        // Write metadata log expected by BackupManager
-        const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{tmp_dir});
-        defer self.allocator.free(metadata_path);
-        {
-            const file = try std.Io.Dir.cwd().createFile(io, metadata_path, .{});
-            defer file.close(io);
-            const json_str = try std.json.Stringify.valueAlloc(self.allocator, &[_]backup.BackupMetadata{metadata}, .{});
-            defer self.allocator.free(json_str);
-            try file.writePositionalAll(io, json_str, 0);
-        }
+        const hdr = try backup.readBackupHeader(local_path);
+        if (hdr.header.checksum != metadata.checksum) return error.BackupChecksumMismatch;
 
-        var mgr = try backup.BackupManager.init(self.allocator, tmp_dir, self.backup_config, store);
-        defer mgr.deinit();
-        try mgr.restoreToPointInTime(target_dir, metadata.timestamp);
+        const result = try backup.restoreBackupInto(self.allocator, local_path, target_dir, .{ .verify_auth = verify_auth });
 
         const duration = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         self.metrics.recordRestore(1, duration);
+        return result;
     }
 
     /// Multipart upload for large files

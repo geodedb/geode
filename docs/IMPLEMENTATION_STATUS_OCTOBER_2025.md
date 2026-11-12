@@ -40,7 +40,7 @@ This document provides the implementation status for Geode as of October 2025, w
 | Feature | Status | Evidence |
 |---------|--------|----------|
 | Vector Search | Implemented | HNSW indexing, 6 distance metrics |
-| Cloud Backup | Implemented (CLI path; protocol upload ingestion residuals tracked in GAP-0880) | S3/Digital Ocean Spaces; gzip compression encoder real, zstd/lz4 not wired |
+| Cloud Backup | NOT implemented in the binary (2026-11, SONNY-6290): backups are local files; `src/storage/s3_backup.zig` is reached by no command | gzip compression encoder real, zstd/lz4 not wired; copy backup files to object storage with your own tool |
 | Materialized Views | Lifecycle/refresh implemented; rewrite exact-match only (API level) | 3 refresh strategies; `zig build test-gap0876`; executor integration future (GAP-0876) |
 | Distributed Queries | Implemented single-node/loopback; multi-pod cluster validation blocked (GAP-0838) | Federation-aware optimization; activates only with `GEODE_CLUSTER_TOKEN` |
 | Real-time Analytics | Implemented | Streaming with ML integration (embeddings reframed experimental per GAP-0879) |

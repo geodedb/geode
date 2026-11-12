@@ -51,31 +51,35 @@ Federated query execution across shards is always enabled:
 ./geode query "EXPLAIN MATCH (n) RETURN n ORDER BY n.id"
 ```
 
-### S3 Cloud Backups
+### Backups and object storage
 
-Perform backups to S3-compatible storage:
+Backups are local files. geode has no object-storage (S3, Spaces, MinIO)
+path: `geode backup create` writes a local file (an `s3://` or `http(s)://`
+`--output` is refused) and `geode restore` reads one (an `s3://` or
+`http(s)://` source is refused). Only full backups exist (no incremental
+chains). To keep backups in object storage, copy the files there with your
+own tool, and download one before restoring it (SONNY-6290: these docs used
+to show a `geode backup --dest s3://... --mode ...` form the binary never had):
 
 ```bash
-# Configure S3 credentials
-export AWS_ACCESS_KEY_ID=your-key
-export AWS_SECRET_ACCESS_KEY=your-secret
-export AWS_REGION=us-east-1
+# Full backup from a running server into a local file
+geode backup create --output ./full.backup --compress
 
-# Full backup
-geode backup --dest s3://my-bucket/backups --mode full
+# Copy it to object storage with your own tool, e.g.
+aws s3 cp ./full.backup s3://my-bucket/backups/full.backup
 
-# Incremental backup
-geode backup --dest s3://my-bucket/backups --mode incremental --parent 12345
-
-# List backups
-geode backup --dest s3://my-bucket/backups --list
-
-# Restore from backup: download the backup file, then restore it offline
-# into a new or empty data directory (restoring straight from s3:// is not
-# supported). Backups do not hold the auth-chain HMAC key: give the source
+# Restore: download the file, then restore it offline into a new or empty
+# data directory. Backups do not hold the auth-chain HMAC key: give the source
 # server's key file (or set GEODE_AUTH_HMAC_KEY / GEODE_TDE_KEY as it had it)
+aws s3 cp s3://my-bucket/backups/full.backup ./full.backup
 geode restore ./full.backup --data-dir /data --yes --hmac-key-file /secure/geode_hmac_key
 ```
+
+A server restore (`geode restore --server <addr>`) writes into a new
+directory beside the server's data directory and the server is restarted on
+it; geode cannot restore into a running server's live store. The CLI waits
+up to 300 s for the server's answer to a backup or a server restore; set
+`--timeout <seconds>` for larger stores.
 
 ### CDC Webhook Configuration
 
@@ -218,12 +222,6 @@ optimizer:
   # Enable/disable removed; only tuning parameters remain
   small_n_threshold: 100
   trace: false
-
-backup:
-  s3:
-    bucket: 'geode-backups'
-    prefix: 'prod'
-    retention_days: 30
 ```
 
 ### Environment Variables (Updated Set)
@@ -239,11 +237,6 @@ GEODE_TRACE_OPTIMIZER=1   # Optional
 
 # Transparent Data Encryption
 GEODE_DISK_KEY_HEX=<64 hex chars>   # Provide to ensure encrypted pages/WAL on new data
-
-# S3 Backup
-AWS_ACCESS_KEY_ID=xxx
-AWS_SECRET_ACCESS_KEY=yyy
-AWS_REGION=us-east-1
 
 # CDC
 CDC_KAFKA_BROKERS=kafka1:9092,kafka2:9092
@@ -307,19 +300,6 @@ geode query "CALL system.federation.status()"
 grep "federation" /var/log/geode/geode.log
 ```
 
-#### S3 Backup Failures
-
-```bash
-# Test S3 connectivity
-aws s3 ls s3://my-bucket/backups/
-
-# Check credentials
-aws sts get-caller-identity
-
-# Verify permissions (need s3:PutObject, s3:GetObject)
-aws s3api put-object --bucket my-bucket --key test.txt --body test.txt
-```
-
 #### CDC Webhook Issues
 
 ```bash
@@ -371,12 +351,12 @@ geode query "CALL system.resources()"
 ### Backups
 
 1. **Schedule regular full backups** - Weekly recommended
-2. **Keep incremental chains short** - Max 7 incrementals
-3. **Test restore procedures** - Verify backup integrity
-4. **Keep the HMAC key apart from the backups** - Backups never hold
+2. **Test restore procedures** - Verify backup integrity
+3. **Keep the HMAC key apart from the backups** - Backups never hold
    `.geode_hmac_key`, `server.key` or `.geode_admin_password`; restoring
    auth records needs the HMAC key, so store it with your other key material
-5. **Monitor S3 costs** - Use lifecycle policies
+4. **Copy backups off the host** - geode writes local files only; copy them
+   to object storage or another machine with your own tool
 
 ### CDC
 
@@ -391,7 +371,7 @@ geode query "CALL system.resources()"
 
 ```bash
 # 1. Backup existing data
-geode backup --dest /backup/previous --mode full
+geode backup create --output /backup/previous/full.backup
 
 # 2. Stop old server
 systemctl stop geode serve

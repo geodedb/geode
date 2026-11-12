@@ -172,6 +172,32 @@ fn loadMigrationHmacKey(out: *[32]u8, migrations_dir: []const u8, allocator: std
 
 /// Backup command handler - routes to specific backup subcommands
 /// Handles: backup create, backup list, backup info, backup cleanup
+/// How long `geode backup create` and `geode restore --server` wait for the
+/// server's answer by default. SONNY-6300: it was a fixed 30 s, shorter than
+/// a server restore of a real store; --timeout <seconds> sets it.
+const default_server_answer_timeout_s: u32 = 300;
+const max_server_answer_timeout_s: u32 = 7 * 24 * 60 * 60;
+
+/// --timeout's value: whole seconds, 1 to a week. Anything else is a usage
+/// error (exits 2).
+fn parseTimeoutSecondsOrExit(value: []const u8) u32 {
+    const secs = std.fmt.parseInt(u32, value, 10) catch 0;
+    if (secs == 0 or secs > max_server_answer_timeout_s) {
+        std.debug.print("Error: --timeout takes whole seconds between 1 and {d}, not '{s}'\n", .{ max_server_answer_timeout_s, value });
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    return secs;
+}
+
+/// SONNY-6290: a backup file goes to a local path. geode has no object
+/// storage path: an s3:// or http(s):// --output used to be taken as a
+/// relative path (with --local it created a directory named `s3:`).
+fn isRemoteUri(path: []const u8) bool {
+    return std.mem.startsWith(u8, path, "s3://") or
+        std.mem.startsWith(u8, path, "https://") or
+        std.mem.startsWith(u8, path, "http://");
+}
+
 pub fn cmdBackup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Check if there's a subcommand
     if (start_idx >= argv.len) {
@@ -233,6 +259,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     // It never stands in for a failed remote backup.
     var local: bool = false;
     var data_dir: ?[]const u8 = null;
+    var timeout_s: u32 = default_server_answer_timeout_s;
 
     // Parse arguments
     var i: usize = start_idx;
@@ -252,6 +279,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "  --local                Back up a local data directory instead of a server\n" ++
                 "                         (no server is contacted)\n" ++
                 "  --data-dir <path>      Data directory for --local (default: $GEODE_DATA_DIR)\n" ++
+                "  --timeout <seconds>    How long to wait for the server's answer (default: 300)\n" ++
                 "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
                 "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
                 "  --ca-cert <path>       CA certificate path for server verification\n" ++
@@ -272,6 +300,9 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "\n" ++
                 "If the server backup fails, the command exits non-zero; it does not\n" ++
                 "fall back to a local backup.\n" ++
+                "\n" ++
+                "--output is a local file. geode does not write to object storage (s3://,\n" ++
+                "http(s)://): copy the backup file there with your own tool.\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--output")) {
@@ -353,12 +384,28 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             }
             i += 1;
             tls_config.client_key_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--timeout")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --timeout requires a number of seconds\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            i += 1;
+            timeout_s = parseTimeoutSecondsOrExit(argv[i]);
+        } else {
+            // SONNY-6290: an option it did not know was ignored, so a
+            // documented form that does not exist (--dest, --mode) "worked".
+            std.debug.print("Error: unknown option '{s}' for geode backup create (see geode backup create --help)\n", .{argv[i]});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
     if (output == null) {
         std.debug.print("Error: --output is required\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+    if (isRemoteUri(output.?)) {
+        std.debug.print("Error: --output {s}: writing a backup to object storage is not supported; write a local file and copy it with your own tool\n", .{output.?});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
     // S-7: Use consolidated password resolution
@@ -391,7 +438,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             std.debug.print("Error: --data-dir is only valid with --local\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
-        executeBackup(allocator, output.?, backup_type_str, server, compress, tls_config, username, password) catch |err| {
+        executeBackup(allocator, output.?, backup_type_str, server, compress, tls_config, username, password, timeout_s) catch |err| {
             std.debug.print("Error: Backup from server {s} failed: {}. No backup was created.\n", .{ server, err });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -892,6 +939,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     var password: ?[]const u8 = null;
     // SONNY-6299: the HMAC key a backup's auth state was sealed with.
     var auth_key: AuthKeyOptions = .{};
+    var timeout_s: u32 = default_server_answer_timeout_s;
+    var timeout_given = false;
     // GAP-0137: TLS configuration options
     var tls_config = TlsConfig{};
 
@@ -916,8 +965,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "beside its data directory, verified, and prints that directory. The running\n" ++
                 "server keeps serving its current data: stop it and start it with\n" ++
                 "--data-dir <restored directory> to serve the restore.\n" ++
-                "Restoring directly from s3:// or http(s):// URIs is not supported: download\n" ++
-                "the backup file first.\n" ++
+                "geode has no object-storage path: restoring from s3:// or http(s):// URIs is\n" ++
+                "not supported; download the backup file with your own tool first.\n" ++
                 "\n" ++
                 "Backups do not hold the HMAC key that seals the __geode_security auth graph\n" ++
                 "(.geode_hmac_key), the TLS key or certificate, the generated admin password\n" ++
@@ -934,6 +983,7 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
                 "                         (epoch ms or YYYY-MM-DDTHH:MM:SS[Z] UTC; a file\n" ++
                 "                         restore picks it from metadata.json beside the file)\n" ++
                 "  --server <addr:port>   Ask this server to restore its own backup\n" ++
+                "  --timeout <seconds>    How long to wait for the server's answer (default: 300)\n" ++
                 "  --user <username>      Username for authentication\n" ++
                 "  --password <password>  Password for authentication\n" ++
                 "  --hmac-key-file <path> The source server's .geode_hmac_key (a file, never the\n" ++
@@ -1043,9 +1093,21 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             }
             i += 1;
             tls_config.client_key_path = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--timeout")) {
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --timeout requires a number of seconds\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            i += 1;
+            timeout_s = parseTimeoutSecondsOrExit(argv[i]);
+            timeout_given = true;
         } else if (source == null and !std.mem.startsWith(u8, argv[i], "--")) {
             // Positional argument for backup file
             source = argv[i];
+        } else {
+            // SONNY-6290: unknown options and extra arguments were ignored.
+            std.debug.print("Error: unexpected argument '{s}' for geode restore (see geode restore --help)\n", .{argv[i]});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
@@ -1064,6 +1126,10 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             std.debug.print("Error: restoring from a remote URI ({s}) is not supported: download the backup file and run geode restore <file> --data-dir <path>\n", .{src});
             std.debug.print("error: RemoteRestoreSourceNotSupported\nRestore failed; nothing was restored.\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+        if (timeout_given) {
+            std.debug.print("Error: --timeout applies to a --server restore; a backup file is restored offline\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         if (server_given) {
             std.debug.print("Error: --server cannot restore a local backup file; geode restore <file> writes it offline into --data-dir (stop the server, restore into an empty directory, start the server on it)\n", .{});
@@ -1150,7 +1216,7 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             break :blk std.fmt.bufPrint(&target_ms_buf, "{d}", .{ms}) catch unreachable;
         } else null;
         // GAP-0137: pass TLS config
-        executeRemoteRestore(allocator, "", target_ms, server, tls_config, username, password) catch |err| {
+        executeRemoteRestore(allocator, "", target_ms, server, tls_config, username, password, timeout_s) catch |err| {
             std.debug.print("error: {s}\nServer restore failed.\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1973,6 +2039,7 @@ fn executeRemoteBackup(
     tls_config: TlsConfig,
     username: ?[]const u8,
     password: ?[]const u8,
+    timeout_s: u32,
 ) !void {
     const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch return error.InvalidAddress;
 
@@ -2046,7 +2113,7 @@ fn executeRemoteBackup(
         return err;
     };
 
-    const backup_resp_msg = readProtoMessage(arena.allocator(), &client, 30000) catch |err| {
+    const backup_resp_msg = readProtoMessage(arena.allocator(), &client, @as(u64, timeout_s) * 1000) catch |err| {
         std.debug.print("Error: Failed to receive backup response: {}\n", .{err});
         return err;
     };
@@ -2110,6 +2177,7 @@ fn executeBackup(
     tls_config: TlsConfig,
     username: ?[]const u8,
     password: ?[]const u8,
+    timeout_s: u32,
 ) !void {
     std.debug.print("Creating {s} backup to: {s}\n", .{ mode, dest });
 
@@ -2117,7 +2185,7 @@ fn executeBackup(
     // A failed remote backup is an error. It used to fall back to a local
     // data-directory backup and report success, which handed the caller a
     // different backup (and, with GEODE_DATA_DIR unset, read all of /tmp).
-    return executeRemoteBackup(allocator, dest, mode, server, compress, tls_config, username, password);
+    return executeRemoteBackup(allocator, dest, mode, server, compress, tls_config, username, password, timeout_s);
 }
 
 // CANARY: REQ=REQ-BACKUP-LOCAL-001; FEATURE="Local Directory Backup"; ASPECT=DataExport; STATUS=TESTED; TEST=tests/test_backup_create_remote_failure.zig; OWNER=cli; UPDATED=2026-10-24
@@ -2144,16 +2212,9 @@ fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, m
     var mgr = try backup_types.BackupManager.init(allocator, backup_dir, config, graph_store.getGlobalStore(allocator));
     defer mgr.deinit();
 
-    const meta = try mgr.createFullBackup();
-    const created_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ backup_dir, meta.backup_id });
-    defer allocator.free(created_path);
-
-    if (!std.mem.eql(u8, created_path, dest)) {
-        std.Io.Dir.cwd().copyFile(created_path, std.Io.Dir.cwd(), dest, std.Io.Threaded.global_single_threaded.io(), .{}) catch |err| {
-            std.debug.print("Error: Failed to copy backup to requested output ({s}): {}\n", .{ dest, err });
-            return err;
-        };
-    }
+    // SONNY-6323: written once, at dest. createFullBackup wrote
+    // full_<id>.backup and metadata.json beside dest, then this copied it.
+    _ = try mgr.writeFullBackupFile(dest);
 
     std.debug.print("Local backup completed: {s}\n", .{dest});
 }
@@ -2169,6 +2230,7 @@ fn executeRemoteRestore(
     tls_config: TlsConfig,
     username: ?[]const u8,
     password: ?[]const u8,
+    timeout_s: u32,
 ) !void {
     std.debug.print("RESTORE: Connecting to server {s} for remote restore...\n", .{server});
 
@@ -2250,7 +2312,10 @@ fn executeRemoteRestore(
         return error.WriteFailed;
     };
 
-    const resp_msg = readProtoMessage(arena.allocator(), &client, 30000) catch |err| {
+    const resp_msg = readProtoMessage(arena.allocator(), &client, @as(u64, timeout_s) * 1000) catch |err| {
+        if (err == error.Timeout) {
+            std.debug.print("RESTORE: no answer from the server within {d} s; it may still be restoring (raise --timeout)\n", .{timeout_s});
+        }
         std.debug.print("RESTORE: Failed to read server response: {}\n", .{err});
         return error.ReadFailed;
     };
@@ -2322,6 +2387,8 @@ fn readHmacKeyFile(path: []const u8) ![32]u8 {
 /// with `key` (the check a server runs at startup), opening it in this
 /// process. Fails with error.AuthChainVerificationFailed.
 fn verifyRestoredAuthChain(allocator: std.mem.Allocator, dir: []const u8, key: *const [32]u8) !void {
+    // SONNY-6348: `dir` is the restore's throwaway check copy: opening a
+    // store writes to it.
     const store = try graph_store.initGlobalStore(allocator, dir);
     defer {
         graph_store.deinitGlobalStore();
@@ -2368,8 +2435,10 @@ fn printHmacKeyRequired() void {
 /// Otherwise the key is the archive's own `.geode_hmac_key` (an older
 /// archive), --hmac-key-file (then written into the restored directory), or
 /// GEODE_AUTH_HMAC_KEY / GEODE_TDE_KEY (as the server will read it), and the
-/// chain must verify with it; or --unverified-auth, explicitly.
-fn settleRestoredAuth(allocator: std.mem.Allocator, staging: []const u8, graphs: []const backup_types.RestoredGraph, km: backup_types.KeyMaterial, opts: AuthKeyOptions) !void {
+/// chain must verify with it; or --unverified-auth, explicitly. The chain is
+/// verified on `probe` (the throwaway check copy, SONNY-6348); a key file is
+/// planted in `staging`, the copy that is committed.
+fn settleRestoredAuth(allocator: std.mem.Allocator, probe: []const u8, staging: []const u8, graphs: []const backup_types.RestoredGraph, km: backup_types.KeyMaterial, opts: AuthKeyOptions) !void {
     var has_auth = false;
     for (graphs) |g| {
         if (std.mem.eql(u8, g.name, graph_store.SECURITY_GRAPH_NAME) and g.nodes > 0) has_auth = true;
@@ -2415,7 +2484,7 @@ fn settleRestoredAuth(allocator: std.mem.Allocator, staging: []const u8, graphs:
         key = kr.key;
     }
 
-    try verifyRestoredAuthChain(allocator, staging, &key);
+    try verifyRestoredAuthChain(allocator, probe, &key);
     if (plant) try plantHmacKey(allocator, staging, &key);
 }
 
@@ -2494,10 +2563,15 @@ fn executeLocalRestore(
     };
     defer staged.deinit();
 
-    const graphs = try backup_types.countRestoredStore(allocator, staged.staging_dir);
+    // SONNY-6348: the checks that open the store (counts, the auth chain)
+    // write to it, so they run on a throwaway copy; the staged copy that is
+    // committed holds exactly the archive (plus a planted key file).
+    var probe = try backup_types.writeProbeCopy(allocator, decoded.archive, staged.target_dir);
+    defer probe.deinit();
+    const graphs = try backup_types.countRestoredStore(allocator, probe.dir);
     defer backup_types.freeRestoredGraphs(allocator, graphs);
 
-    try settleRestoredAuth(allocator, staged.staging_dir, graphs, km, auth_key);
+    try settleRestoredAuth(allocator, probe.dir, staged.staging_dir, graphs, km, auth_key);
 
     staged.commit() catch |err| {
         if (err == error.RestoreTargetNotEmpty) {

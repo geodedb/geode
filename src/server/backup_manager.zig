@@ -131,11 +131,6 @@ pub const SimplifiedBackupManager = struct {
         return self.inner.ingestUploadedBackup(file_bytes, expected_checksum);
     }
 
-    /// Apply retention policy.
-    pub fn runRetention(self: *SimplifiedBackupManager) !void {
-        return self.inner.runRetention();
-    }
-
     /// Load metadata log from disk.
     pub fn loadMetadata(self: *SimplifiedBackupManager) !void {
         _ = try self.inner.loadMetadata();
@@ -251,33 +246,35 @@ fn restoreForServerInner(allocator: std.mem.Allocator, backup_dirs: []const []co
 }
 
 // CANARY: REQ=REQ-SONNY-6322-SERVER-RESTORE-CHAIN; FEATURE="Backup Restore"; ASPECT=ChildVerifier; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=storage; UPDATED=2026-11-11
-/// SONNY-6322: verify the staged restore's `__geode_security` chain the way
+/// SONNY-6322: verify a restored store's `__geode_security` chain the way
 /// a server starting on it would: the key from GEODE_AUTH_HMAC_KEY or
-/// GEODE_TDE_KEY, else the staged `.geode_hmac_key` (this server's, copied
-/// in by `restoreBesideDataDir`, or an older archive's). The running server
-/// cannot open a second store in this process (the store is a process
+/// GEODE_TDE_KEY, else the directory's `.geode_hmac_key` (this server's,
+/// copied in by `restoreBesideDataDir`, or an older archive's). The running
+/// server cannot open a second store in this process (the store is a process
 /// global), so this runs its own binary's offline verifier, `geode auth
-/// verify --data-dir <staging>`, as a child with the server's environment;
-/// it opens only the staging copy and prints no key bytes. A non-zero exit
-/// is error.AuthChainVerificationFailed. Fails closed where the binary
-/// cannot be located (non-Linux).
-fn verifyStagedAuthChain(allocator: std.mem.Allocator, staging_dir: []const u8) anyerror!void {
+/// verify --data-dir <dir>`, as a child with the server's environment; it
+/// prints no key bytes. A non-zero exit is error.AuthChainVerificationFailed.
+/// Fails closed where the binary cannot be located (non-Linux). SONNY-6348:
+/// opening the store writes to it (and starts an audit key epoch), so `restored_dir`
+/// is the restore's throwaway check copy (`backup.ProbeCopy`), never the
+/// staged copy that is committed.
+fn verifyStagedAuthChain(allocator: std.mem.Allocator, restored_dir: []const u8) anyerror!void {
     if (comptime builtin.os.tag != .linux) return error.AuthChainVerificationUnavailable;
     var threaded = spawn_io.threaded();
     defer threaded.deinit();
     const io = threaded.io();
 
-    // The verifier takes the directory's lock; a staging copy has no lock
+    // The verifier takes the directory's lock; a restored copy has no lock
     // file of its own (an archive's is never written), so remove the one
     // the child leaves.
-    const lock_path = try std.fs.path.join(allocator, &.{ staging_dir, backup.lock_file_name });
+    const lock_path = try std.fs.path.join(allocator, &.{ restored_dir, backup.lock_file_name });
     defer allocator.free(lock_path);
     const fs_io = std.Io.Threaded.global_single_threaded.io();
     const lock_existed = if (std.Io.Dir.cwd().access(fs_io, lock_path, .{})) |_| true else |_| false;
     defer if (!lock_existed) std.Io.Dir.cwd().deleteFile(fs_io, lock_path) catch {};
 
     const result = try std.process.run(allocator, io, .{
-        .argv = &.{ "/proc/self/exe", "auth", "verify", "--data-dir", staging_dir },
+        .argv = &.{ "/proc/self/exe", "auth", "verify", "--data-dir", restored_dir },
         .stdout_limit = .limited(1 << 20),
         .stderr_limit = .limited(1 << 20),
     });
@@ -287,7 +284,7 @@ fn verifyStagedAuthChain(allocator: std.mem.Allocator, staging_dir: []const u8) 
     if (!ok) {
         const tail = if (result.stderr.len > 512) result.stderr[result.stderr.len - 512 ..] else result.stderr;
         log.err("restored __geode_security chain does not verify", &.{
-            Attr.string("staging_dir", staging_dir),
+            Attr.string("restored_dir", restored_dir),
             Attr.string("verifier_output", tail),
         });
         return error.AuthChainVerificationFailed;

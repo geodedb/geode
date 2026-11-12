@@ -103,9 +103,10 @@ fn freeSnapshot(allocator: std.mem.Allocator, map: *std.StringHashMap([]u8)) voi
 
 test "SONNY-6300 (1) BackupManager has no in-place restore: its restore writes only a new or empty directory and refuses the live data directory" {
     const allocator = testing.allocator;
-    defer resetGlobalStorage(allocator);
     var root = try test_scratch.ScratchDir.create("sonny6300-inplace");
     defer root.remove();
+    // Close the stores before their directories go.
+    defer resetGlobalStorage(allocator);
 
     if (comptime @hasDecl(backup.BackupManager, "restoreToPointInTime")) {
         std.debug.print("SONNY-6300: BackupManager.restoreToPointInTime still writes a backup over the directory it is given and reopens the global adapter over it (src/storage/backup.zig); S3BackupManager.restore calls it\n", .{});
@@ -168,9 +169,10 @@ test "SONNY-6300 (1) BackupManager has no in-place restore: its restore writes o
 test "SONNY-6300 (3) a staged restore of 700 files makes them durable with a constant number of syncs, not one per file" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
-    defer resetGlobalStorage(allocator);
     var root = try test_scratch.ScratchDir.create("sonny6300-sync");
     defer root.remove();
+    // Close the stores before their directories go.
+    defer resetGlobalStorage(allocator);
 
     const data_dir = try join(allocator, root.path(), "data");
     defer allocator.free(data_dir);

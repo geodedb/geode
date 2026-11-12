@@ -150,7 +150,8 @@ test "GAP-0880 gzip backup compresses for real and round-trips" {
     // Round-trip: restore and verify the data is identical.
     const restore_dir = try makeTempDir(allocator, "gzrestore");
     defer cleanupTempDir(allocator, restore_dir);
-    try mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
+    var restored_side = try mgr.restoreInto(restore_dir, meta.timestamp + 1, .{});
+    restored_side.deinit();
 
     try initAdapterForDir(allocator, restore_dir);
     var restored = try graph_store.GraphStore.init(allocator);
@@ -261,7 +262,8 @@ test "GAP-0880 upload ingestion stores payload bytes and registers durably" {
 
     const restore_dir = try makeTempDir(allocator, "uprestore");
     defer cleanupTempDir(allocator, restore_dir);
-    try fresh_mgr.restoreToPointInTime(restore_dir, ingested.timestamp + 1);
+    var restored_side = try fresh_mgr.restoreInto(restore_dir, ingested.timestamp + 1, .{});
+    restored_side.deinit();
 
     try initAdapterForDir(allocator, restore_dir);
     var restored = try graph_store.GraphStore.init(allocator);

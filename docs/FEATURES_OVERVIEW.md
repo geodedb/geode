@@ -147,7 +147,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 - **MVCC**: Multi-version concurrency control
 - **Memory-Mapped I/O**: 13.18x I/O performance improvement
-- **Cloud Backup**: S3-compatible backup/restore CLI (payload compression currently `.none`; see Known Limitations)
+- **Backup files**: `geode backup create` / `geode restore` write and read local files (`none` or `gzip` payloads); there is no S3-compatible object-storage path: copy backup files with your own tool (SONNY-6290)
 - **WAL Optimization**: Write-ahead logging
 
 ### **Distributed Architecture**
@@ -166,7 +166,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Cloud Integration**
 
-- **S3 Backup**: Digital Ocean Spaces integration (CLI; GQL `BACKUP`/`RESTORE` statements not implemented)
+- **Object storage**: no S3 / Digital Ocean Spaces integration in the binary (backups are local files; GQL `BACKUP`/`RESTORE` statements not implemented)
 - **Compression**: backup payload currently stored uncompressed (`.none`; no encoder wired — see Known Limitations)
 - **Point-in-Time Recovery**: Granular backup restoration
 

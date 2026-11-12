@@ -376,7 +376,8 @@ test "GAP-0865d backup -> wipe -> restore round-trips time-series points" {
 
     const restore_dir = try makeTempDir(allocator, "bk_restore");
     defer cleanupTempDir(allocator, restore_dir);
-    try mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
+    var restored_side = try mgr.restoreInto(restore_dir, meta.timestamp + 1, .{});
+    restored_side.deinit();
 
     // Open a fresh TS store over the restored tree: all points must be back.
     var restored = try ts.Store.initWithConfig(allocator, .{ .data_dir = restore_dir });
