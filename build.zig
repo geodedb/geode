@@ -9538,6 +9538,20 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6328-tsan-detects-race", "Run SONNY-6328 regression (a deliberate data race built like the TSan companion steps must be reported by ThreadSanitizer: exit 66 and a data-race warning)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6355 item 4: the mock S3 backup tests are gone, tests/all_tests.zig
+    // imports only files that exist, and every tools/canaryscan/status.csv
+    // row names a source file that exists.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6355_dead_backup_tests.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6355_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6355-dead-backup-tests", "Run SONNY-6355 item 4 regression (no mock S3 backup tests, tests/all_tests.zig imports only existing files, every canaryscan status row names an existing source file)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6322: a backup never holds the audit signing seed; a store
     // without it starts a new audit key epoch (old public key kept, a
     // KEY_EPOCH record in the log) that `geode audit verify` checks per
