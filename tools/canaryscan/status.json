@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T21:14:49.898646109Z",
+  "generated_at": "2026-11-12T21:48:18.882987394Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -75997,6 +75997,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3125-SHARED-NODE-SET",
+      "features": [
+        {
+          "feature": "SetClauseSemantics",
+          "aspect": "PerRowReread",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3125_shared_node_set.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3125_shared_node_set.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3130-GRAPH-DDL-ALONE",
       "features": [
         {
@@ -89067,7 +89086,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4602
+      "TESTED": 4603
     },
     "by_aspect": {
       "2PC": 3,
@@ -91575,6 +91594,7 @@
       "PerMapHolders": 1,
       "PerNodeRows": 1,
       "PerRequestInstall": 1,
+      "PerRowReread": 1,
       "PerSession": 1,
       "PerThreadRole": 1,
       "PerThreadTenant": 2,

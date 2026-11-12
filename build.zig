@@ -10666,6 +10666,20 @@ pub fn build(b: *std.Build) void {
     const sonny6368_step = b.step("test-sonny6368-index-maintenance", "Run SONNY-6368 regression (a repeated SET target answers 22G0M; geode.fts.rebuild from another graph rebuilds the default graph's index; a live SET n:L and a committed REMOVE n.prop maintain the full-text and vector indexes; vector maintenance covers every label; an undo repair colliding with a running fulltext rebuild runs after it; gRPC in process)");
     sonny6368_step.dependOn(&run_sonny6368_tests.step);
 
+    const sonny3125_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3125_shared_node_set.zig"), .target = target, .optimize = optimize });
+    sonny3125_test_mod.link_libc = true;
+    sonny3125_test_mod.addImport("geode", root_mod);
+    sonny3125_test_mod.addImport("schema", schema_mod);
+    sonny3125_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3125_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3125_test_mod.addImport("logging", logging_mod);
+    sonny3125_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny3125_tests = b.addTest(.{ .root_module = sonny3125_test_mod });
+    const run_sonny3125_tests = b.addRunArtifact(sonny3125_tests);
+    shardDep(test_step, &run_sonny3125_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3125_step = b.step("test-sonny3125-shared-node-set", "Run SONNY-3125 regression (a SET reading a node that N matched rows share is applied N times: hop, two-hop, multi-chain; gRPC in process)");
+    sonny3125_step.dependOn(&run_sonny3125_tests.step);
+
     const sonny6421_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6421_index_maintenance.zig"), .target = target, .optimize = optimize });
     sonny6421_test_mod.link_libc = true;
     sonny6421_test_mod.addImport("geode", root_mod);
