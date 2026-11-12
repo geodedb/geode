@@ -2251,198 +2251,59 @@ pub fn executeLegacyQueryWithResolvedParams(
             // Execute the CALL subquery to get initial results
             const body_window = try execution.queryWindow(call_subq.*, body_context);
             var call_result = try executeQueryWithContext(allocator, call_subq.*, body_context);
+            defer call_result.deinit(allocator);
             try execution.applyQueryWindow(allocator, &call_result, body_window);
 
-            // If there's a WITH clause, apply it to the CALL results
+            // CANARY: REQ=REQ-SONNY-3389-CALL-RETURN; FEATURE="CallSubquery"; ASPECT=SharedProjection; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=engine; UPDATED=2026-11-11
+            // SONNY-3389, SONNY-3167: the rest of the statement over the
+            // body's rows: the WITH (its GROUP BY and HAVING), its WHERE, then
+            // the RETURN by the shared projection (aggregates, GROUP BY,
+            // DISTINCT, ORDER BY) and the statement's SKIP and LIMIT. The
+            // RETURN was evaluated once per row (`RETURN count(*)` answered
+            // one 1 per row), and the WITH's rows were never freed.
+            var input: *ExecutionResult = &call_result;
+            var with_result: ?ExecutionResult = null;
+            defer if (with_result) |*w| w.deinit(allocator);
             if (q.with_clause) |with_clause| {
                 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-003; FEATURE="WithGroupByAggregation"; ASPECT=CallSite; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-                const with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, call_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
-
-                // Apply WHERE filter if present
-                const filtered_result = if (q.where_clause) |where_expr| blk: {
-                    // GAP-0220 FIX: Use try for proper error propagation
-                    var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, with_result.rows.len);
-
-                    for (with_result.rows) |row| {
-                        const env = Env{
-                            .names = with_result.columns,
-                            .values = row,
-                            .param_names = param_names.items,
-                            .param_values = param_values.items,
-                            .allocator = allocator,
-                            .exec_context = exec_ctx,
-                        };
-
-                        const matches = try eval.evalExpr(allocator, where_expr, env);
-                        const passes_where = switch (matches) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            .Int => |i| i != 0,
-                            else => false,
-                        };
-                        if (passes_where) {
-                            try filtered_rows.append(allocator, row);
-                        }
-                    }
-
-                    break :blk ExecutionResult{
-                        .columns = with_result.columns,
-                        .rows = try filtered_rows.toOwnedSlice(allocator),
-                        .flags = with_result.flags,
-                    };
-                } else with_result;
-
-                // Apply RETURN clause to transform results
-                // GAP-0220 FIX: Use try for proper error propagation
-                var final_rows = try std.ArrayList([]Value).initCapacity(allocator, filtered_result.rows.len);
-
-                for (filtered_result.rows) |row| {
-                    var return_row = try allocator.alloc(Value, q.ret.items.len);
-
-                    const env = Env{
-                        .names = filtered_result.columns,
-                        .values = row,
-                        .param_names = param_names.items,
-                        .param_values = param_values.items,
-                        .allocator = allocator,
-                        .exec_context = exec_ctx,
-                    };
-
-                    for (q.ret.items, 0..) |item, i| {
-                        return_row[i] = try eval.evalExpr(allocator, item.expr, env);
-                    }
-
-                    try final_rows.append(allocator, return_row);
-                }
-
-                // Phase 5.1.1 optimization: batch allocate column strings
-                var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
-                defer col_name_strings.deinit(allocator);
-
-                for (q.ret.items) |item| {
-                    const col_name = item.alias orelse switch (item.expr) {
-                        .Ident => |ident| ident.orig,
-                        else => "column",
-                    };
-                    try col_name_strings.append(allocator, col_name);
-                }
-
-                const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
-
-                var result = ExecutionResult{
-                    .columns = col_result.columns,
-                    .rows = try final_rows.toOwnedSlice(allocator),
-                    .flags = filtered_result.flags,
-                    .column_buffer = col_result.buffer,
-                };
-
-                // Apply ORDER BY if present
-                if (q.order_by) |order| {
-                    try sortRows(allocator, &result, order);
-                }
-
-                // Apply LIMIT if present (supports both literal and $param)
-                if (resolveLimitParam(q.limit, q.limit_param, param_names.items, param_values.items)) |lim| {
-                    const end = @min(result.rows.len, lim);
-                    if (end != result.rows.len) {
-                        try execution.applyRowWindow(allocator, &result, 0, end);
-                    }
-                }
-
-                return result;
-            } else {
-                // No WITH clause, just apply WHERE/RETURN to CALL results
-                // GAP-0220 FIX: Use try for proper error propagation
-                var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, call_result.rows.len);
-
-                if (q.where_clause) |where_expr| {
-                    for (call_result.rows) |row| {
-                        const env = Env{
-                            .names = call_result.columns,
-                            .values = row,
-                            .param_names = param_names.items,
-                            .param_values = param_values.items,
-                            .allocator = allocator,
-                            .exec_context = exec_ctx,
-                        };
-
-                        const matches = try eval.evalExpr(allocator, where_expr, env);
-                        const passes_where = switch (matches) {
-                            .Bool => |b| b,
-                            .Null => false,
-                            .Int => |i| i != 0,
-                            else => false,
-                        };
-                        if (passes_where) {
-                            try filtered_rows.append(allocator, row);
-                        }
-                    }
-                } else {
-                    // No WHERE clause, use all rows
-                    for (call_result.rows) |row| {
-                        try filtered_rows.append(allocator, row);
-                    }
-                }
-
-                // Apply RETURN clause
-                // GAP-0220 FIX: Use try for proper error propagation
-                var final_rows = try std.ArrayList([]Value).initCapacity(allocator, filtered_rows.items.len);
-
-                for (filtered_rows.items) |row| {
-                    var return_row = try allocator.alloc(Value, q.ret.items.len);
-
-                    const env = Env{
-                        .names = call_result.columns,
-                        .values = row,
-                        .param_names = param_names.items,
-                        .param_values = param_values.items,
-                        .allocator = allocator,
-                        .exec_context = exec_ctx,
-                    };
-
-                    for (q.ret.items, 0..) |item, i| {
-                        return_row[i] = try eval.evalExpr(allocator, item.expr, env);
-                    }
-
-                    try final_rows.append(allocator, return_row);
-                }
-
-                // Phase 5.1.1 optimization: batch allocate column strings
-                var col_name_strings = try std.ArrayList([]const u8).initCapacity(allocator, q.ret.items.len);
-                defer col_name_strings.deinit(allocator);
-
-                for (q.ret.items) |item| {
-                    const col_name = item.alias orelse switch (item.expr) {
-                        .Ident => |ident| ident.orig,
-                        else => "column",
-                    };
-                    try col_name_strings.append(allocator, col_name);
-                }
-
-                const col_result = try allocateColumnStrings(allocator, col_name_strings.items);
-
-                var result = ExecutionResult{
-                    .columns = col_result.columns,
-                    .rows = try final_rows.toOwnedSlice(allocator),
-                    .flags = call_result.flags,
-                    .column_buffer = col_result.buffer,
-                };
-
-                // Apply ORDER BY if present
-                if (q.order_by) |order| {
-                    try sortRows(allocator, &result, order);
-                }
-
-                // Apply LIMIT if present (supports both literal and $param)
-                if (resolveLimitParam(q.limit, q.limit_param, param_names.items, param_values.items)) |lim| {
-                    const end = @min(result.rows.len, lim);
-                    if (end != result.rows.len) {
-                        try execution.applyRowWindow(allocator, &result, 0, end);
-                    }
-                }
-
-                return result;
+                with_result = try execution.executeWithClauseWithGroupByAndParams(allocator, call_result, with_clause, q.group_by, execution.withStageHaving(q), param_names.items, param_values.items);
+                // The WITH's rows point at the body's nodes and relationships.
+                with_result.?.owned_graph_entities = call_result.owned_graph_entities;
+                call_result.owned_graph_entities = null;
+                input = &with_result.?;
             }
+            if (q.where_clause) |where_expr| {
+                var kept: usize = 0;
+                for (input.rows) |row| {
+                    const env = Env{
+                        .names = input.columns,
+                        .values = row,
+                        .param_names = param_names.items,
+                        .param_values = param_values.items,
+                        .allocator = allocator,
+                        .exec_context = exec_ctx,
+                    };
+                    const keep = switch (try eval.evalExpr(allocator, where_expr, env)) {
+                        .Bool => |b| b,
+                        else => false,
+                    };
+                    if (keep) {
+                        input.rows[kept] = row;
+                        kept += 1;
+                    } else {
+                        if (input.owns_value_memory) for (row) |val| value_utilities.freeValue(allocator, val);
+                        allocator.free(row);
+                    }
+                }
+                if (kept != input.rows.len) {
+                    const shrunk = try allocator.realloc(input.rows, kept);
+                    input.rows = shrunk;
+                }
+            }
+            var projected = try match_operations.projectReturnOverRows(allocator, q, input, param_names.items, param_values.items);
+            errdefer projected.deinit(allocator);
+            try execution.applyQueryWindow(allocator, &projected, try execution.queryWindow(q, context));
+            return projected;
         },
 
         // Handle standalone WITH clause (e.g., WITH 5 AS x RETURN x)

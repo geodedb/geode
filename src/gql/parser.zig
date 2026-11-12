@@ -1653,6 +1653,22 @@ pub const Parser = struct {
                         break :blk_call .{ .Query = wrapper_query };
                     }
 
+                    // CANARY: REQ=REQ-SONNY-3389-CALL-RETURN; FEATURE="CallSubquery"; ASPECT=ParserReturnTail; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=parser; UPDATED=2026-11-11
+                    // SONNY-3389: a RETURN after the CALL { } is the rest of
+                    // the statement, computed over the body's rows: a query
+                    // whose `initial_call_subquery` is the body, with the
+                    // RETURN's DISTINCT, GROUP BY, ORDER BY, SKIP and LIMIT.
+                    // It was kept as `return_clause`, which nothing applied
+                    // (the body's rows were the answer), and an ORDER BY or
+                    // LIMIT after it was a syntax error.
+                    if (self.cur.kind == .RETURN) {
+                        const query_ptr = try self.arena.allocator().create(ast.Query);
+                        query_ptr.* = query;
+                        var tail = try self.parseQuery();
+                        tail.initial_call_subquery = query_ptr;
+                        break :blk_call .{ .Query = tail };
+                    }
+
                     // Optional RETURN clause after subquery
                     var return_clause: ?ast.ReturnClause = null;
                     if (self.cur.kind == .RETURN) {

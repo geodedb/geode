@@ -105,6 +105,12 @@ test "ISO Sec 7.9: OPTIONAL MATCH after WITH and with its own WHERE" {
     try expectParseOk("MATCH (n:Person) WHERE n.a > 1 OPTIONAL MATCH (n)-[:HAS]->(p) WHERE p.k > 1 OPTIONAL MATCH (p)-[:OF]->(q) WHERE q.k = 2 RETURN n, p, q");
 }
 
+// SONNY-3389: the statements after an inline CALL { } (RETURN with ORDER BY
+// and LIMIT).
+test "ISO Sec 15: CALL { } followed by RETURN ... ORDER BY ... LIMIT" {
+    try expectParseOk("CALL { MATCH (x:X) RETURN x.k AS k } RETURN k ORDER BY k DESC LIMIT 2");
+}
+
 test "ISO Sec 7.10: Pattern with alias" {
     try expectParseOk("MATCH p = (a)-[:KNOWS]->(b) RETURN p");
 }

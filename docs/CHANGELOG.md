@@ -248,6 +248,18 @@
   SKIP, LIMIT), whatever the pattern. Regression (in-memory, persisted,
   tenant-scoped and RLS sessions, leak-checked):
   `zig build test-sonny3184-optional-match-distinct-call`.
+- **The statement after a CALL { } is applied (SONNY-3389, SONNY-3167):**
+  `CALL { MATCH (x:X) RETURN x.k AS k } RETURN count(*)` returned the body's
+  rows; a RETURN that computed (`RETURN k + 1`), was DISTINCT or aggregated
+  was ignored the same way; `... RETURN k ORDER BY k LIMIT 2` was a syntax
+  error; and `CALL { } WITH k WHERE k > 1 RETURN count(*)` returned one 1
+  per row and leaked the WITH's rows. The WITH, its WHERE and the RETURN
+  (aggregates, GROUP BY, DISTINCT, ORDER BY, SKIP, LIMIT) are now computed
+  over the body's rows by the shared projection. Not covered by this fix
+  (follow-ups): a CALL { } after a MATCH (`MATCH (q) CALL { ... }`), the
+  variable scope clause `CALL (q) { ... }`, OPTIONAL CALL, and two CALL { }
+  in sequence. Regression (in-memory, persisted, tenant-scoped and RLS
+  sessions, leak-checked): `zig build test-sonny3184-optional-match-distinct-call`.
 
 ---
 
@@ -2545,12 +2557,11 @@ run inside an explicit transaction again.
   `USE [GRAPH] g <statement>` stays one focused statement (ISO/IEC 39075
   §10.3) and needs none.
 - **Reads that are wrong on the legacy path (SONNY-3167, SONNY-3184):** a
-  read through a hop pattern ignores WITH DISTINCT on the in-memory and RLS
-  paths (X2); `CALL { }` returns the subquery's rows instead of the outer
-  RETURN; a WHERE after `WITH ...` before a FOR is not applied. Writes in
-  these shapes are refused. v0.8.24. (Unreleased: EXISTS { } with an inner
-  WHERE is answered correctly since SONNY-2707, and the OPTIONAL MATCH reads
-  since SONNY-3184.)
+  WHERE after `WITH ...` before a FOR is not applied. Writes in these shapes
+  are refused. v0.8.24. (Unreleased: EXISTS { } with an inner WHERE is
+  answered correctly since SONNY-2707; the OPTIONAL MATCH reads since
+  SONNY-3184; WITH DISTINCT on the legacy path and the RETURN after
+  `CALL { }` since SONNY-3167 / SONNY-3389.)
 - **A plain RETURN after MATCH ... CREATE is one row (SONNY-3025):** a RETURN
   that neither aggregates nor is DISTINCT is evaluated once, over the last
   row's created and matched elements; the CREATE itself runs once per
