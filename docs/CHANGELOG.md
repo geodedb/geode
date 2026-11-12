@@ -4,6 +4,30 @@
 
 ### Security
 
+- **BREAKING: a server without `--data-dir` keeps its auth state and data
+  (SONNY-6339).** A server resolves and locks its data directory from
+  `--data-dir`, else `GEODE_DATA_DIR`, else the per-user default
+  (`$XDG_STATE_HOME/geode`, `$HOME/.local/state/geode`,
+  `$TMPDIR/geode-<uid>`), but then handed the raw flag (empty without it) to
+  the HMAC key lookup, the auth graph, the default audit log path, the tenant
+  registry, timeseries and raft storage. With `GEODE_DATA_DIR` only, the
+  `.geode_hmac_key` was neither read nor created and the HMAC-chained auth
+  graph was disabled without an error: `CREATE USER`, `CREATE ROLE`,
+  `GRANT` and `CREATE POLICY` reported success, a per-graph grant did not
+  take effect, and all of it was gone after a restart. With neither, the
+  storage engine was not opened at all (every graph lived in memory), and
+  the audit log went to the working directory. Now one resolver
+  (`resolveServerDataDir`) reads the flag once and every consumer gets the
+  resolved directory, which is also the store's data-directory override.
+  The server refuses to start, instead of running with in-memory
+  authentication, when the store does not open, when an HMAC key source is
+  set but unusable (a malformed or unreadable `.geode_hmac_key`, a
+  `GEODE_AUTH_HMAC_KEY` that is not 64 hex characters: it used to be skipped
+  in favour of the file key), or when the auth graph manager or the first-boot
+  admin cannot be set up. Operators who ran without `--data-dir` find their
+  auth state, timeseries, tenants and audit log in the resolved directory
+  from now on (none of it had been kept). Regression:
+  `zig build test-sonny6339-resolved-data-dir`.
 - **BREAKING: fail-closed default role.** A user with no stored built-in
   role (not a superuser, no `HAS_ROLE` edge to `admin`, `user`, `readwrite`
   or `readonly`) used to fall back to `readwrite` and could read and write

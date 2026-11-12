@@ -394,6 +394,14 @@ pub const AuthGraphManager = struct {
     /// 3. `.geode_hmac_key` file in data directory (64 hex chars or 32 raw bytes)
     /// 4. Auto-generate random 256-bit key -> write to `.geode_hmac_key` (0o600)
     /// 5. error.NoHmacKeyAvailable (only if no data_dir provided)
+    ///
+    /// SONNY-6339: a source that is present but unusable is
+    /// error.HmacKeyInvalid, never "no key": a non-empty GEODE_AUTH_HMAC_KEY
+    /// that is not 64 hex characters (it was skipped, and the file key used
+    /// instead), a GEODE_TDE_KEY of 64 characters that is not hex, and a
+    /// `.geode_hmac_key` that cannot be opened or read or is not 64 hex
+    /// characters / 32 bytes. The server refuses to start on it; it used to
+    /// run with the auth graph disabled.
     pub fn resolveHmacKey(allocator: Allocator, data_dir: ?[]const u8) !HmacKeyResult {
         return resolveHmacKeyEx(allocator, data_dir, true);
     }
@@ -416,13 +424,14 @@ pub const AuthGraphManager = struct {
                 var key: [32]u8 = undefined;
                 _ = std.fmt.hexToBytes(&key, env_val) catch {
                     log.warn("GEODE_AUTH_HMAC_KEY contains invalid hex", &.{});
-                    return error.NoHmacKeyAvailable;
+                    return error.HmacKeyInvalid;
                 };
                 return HmacKeyResult{ .key = key, .key_id = "env" };
-            } else {
+            } else if (env_val.len > 0) {
                 log.warn("GEODE_AUTH_HMAC_KEY must be exactly 64 hex characters", &.{
                     Attr.uint("actual_len", @intCast(env_val.len)),
                 });
+                return error.HmacKeyInvalid;
             }
         } else |_| {}
 
@@ -433,7 +442,7 @@ pub const AuthGraphManager = struct {
                 var tde_key: [32]u8 = undefined;
                 _ = std.fmt.hexToBytes(&tde_key, tde_val) catch {
                     log.warn("GEODE_TDE_KEY contains invalid hex", &.{});
-                    return error.NoHmacKeyAvailable;
+                    return error.HmacKeyInvalid;
                 };
                 const derived = auth_hmac.deriveHmacKey(&tde_key, geode_hkdf_config);
                 return HmacKeyResult{ .key = derived, .key_id = "tde-derived" };
@@ -456,8 +465,9 @@ pub const AuthGraphManager = struct {
                     else => {
                         log.warn("Failed to open HMAC key file", &.{
                             Attr.string("path", path),
+                            Attr.string("error", @errorName(err)),
                         });
-                        return error.NoHmacKeyAvailable;
+                        return error.HmacKeyInvalid;
                     },
                 }
             };
@@ -468,7 +478,7 @@ pub const AuthGraphManager = struct {
             var hex_buf: [64]u8 = undefined;
             const bytes_read = file.readPositionalAll(io_hr, &hex_buf, 0) catch {
                 log.warn("Failed to read HMAC key file", &.{});
-                return error.NoHmacKeyAvailable;
+                return error.HmacKeyInvalid;
             };
             if (bytes_read == 64) {
                 // Hex-encoded key file (64 hex chars -> 32 bytes)
@@ -477,7 +487,7 @@ pub const AuthGraphManager = struct {
                     log.warn("HMAC key file contains invalid hex", &.{
                         Attr.string("path", path),
                     });
-                    return error.NoHmacKeyAvailable;
+                    return error.HmacKeyInvalid;
                 };
                 return HmacKeyResult{ .key = key, .key_id = "file" };
             } else if (bytes_read == 32) {
@@ -489,7 +499,7 @@ pub const AuthGraphManager = struct {
                 log.warn("HMAC key file must be exactly 64 hex chars or 32 raw bytes", &.{
                     Attr.uint("actual", @intCast(bytes_read)),
                 });
-                return error.NoHmacKeyAvailable;
+                return error.HmacKeyInvalid;
             }
         }
 

@@ -238,6 +238,20 @@ the server's own key before it reports success; a backup sealed under another
 key fails and leaves nothing behind. To accept records whose key is lost, an
 operator re-seals them under a new key: `geode auth reseal --data-dir <dir>`.
 
+`<data dir>` is the directory the server resolved and locked, however it was
+given: `--data-dir`, else `GEODE_DATA_DIR`, else the per-user default
+(`$XDG_STATE_HOME/geode`, `$HOME/.local/state/geode`, `$TMPDIR/geode-<uid>`).
+Until SONNY-6339 the key lookup saw only the `--data-dir` flag: a server
+started with `GEODE_DATA_DIR` or the default neither read nor created the key
+and ran with the auth graph disabled, so users, roles, grants and policies
+were kept in memory and lost at restart, with no error. **A server never runs
+without the auth graph any more:** it refuses to start when a key source is
+set but unusable (a malformed or unreadable `.geode_hmac_key`, a non-empty
+`GEODE_AUTH_HMAC_KEY` that is not 64 hex characters, which used to be
+skipped in favour of the file), when the key file cannot be created, or when
+the store or the auth graph cannot be opened (`[startup] HMAC key unusable`,
+`[startup] ... refusing to start without durable auth state`).
+
 ---
 
 ## Known Limitations

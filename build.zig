@@ -476,7 +476,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
-    .{ .name = "test-sonny6339-resolved-data-dir", .reason = "failing: intentionally red SONNY-6339 reproduction (without --data-dir the HMAC key lookup, auth graph, audit log, tenant registry and timeseries get no directory; an unusable HMAC key source runs with the auth graph disabled); moves to shardDep with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9418,7 +9417,7 @@ pub fn build(b: *std.Build) void {
     const sonny6339_tests = b.addTest(.{ .root_module = sonny6339_test_mod });
     const run_sonny6339_tests = b.addRunArtifact(sonny6339_tests);
     spawnsBuiltGeode(sonny6339_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6339_tests.step);
+    shardDep(test_step, &run_sonny6339_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6339_step = b.step("test-sonny6339-resolved-data-dir", "Run SONNY-6339 regression (spawns servers with --data-dir, GEODE_DATA_DIR only, and the per-user default under a private HOME/TMPDIR: users, roles, per-graph grants and policies survive a restart, the HMAC key, TLS pair, audit log, tenant registry and timeseries land in the resolved directory, never the working directory, and geode auth verify passes; a malformed .geode_hmac_key or GEODE_AUTH_HMAC_KEY refuses startup; startup reads the raw flag once)");
     sonny6339_step.dependOn(&run_sonny6339_tests.step);
 
