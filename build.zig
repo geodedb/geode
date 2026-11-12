@@ -13546,6 +13546,22 @@ pub fn build(b: *std.Build) void {
     const sonny6367_step = b.step("test-sonny6367-offline-user-cli", "Run the SONNY-6367 regression (offline geode user create / update --role and assign-role give the user the built-in role and refuse any other; user list / show print the stored role; show / enable / disable of a missing user fail; user_enable / user_disable / user_set_attribute / role_create / user_import / mfa_* failures are GQLSTATUS errors; a BLAKE2b-imported user logs in over QUIC; the dead offline user stores are gone; CLAUDE.md's gql_conformance count; spawns the CLI and a server)");
     sonny6367_step.dependOn(&run_sonny6367_tests.step);
 
+    // SONNY-6313: EXPLAIN POLICY reports the read and write gates' own
+    // decisions for the session's graph; geode.tenant.list / show are
+    // read-only procedures.
+    const sonny6313_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6313_explain_policy_gates.zig"), .target = target, .optimize = optimize });
+    sonny6313_test_mod.link_libc = true;
+    sonny6313_test_mod.addImport("geode", root_mod);
+    sonny6313_test_mod.addImport("schema", schema_mod);
+    sonny6313_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6313_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6313_test_mod.addImport("logging", logging_mod);
+    const sonny6313_tests = b.addTest(.{ .root_module = sonny6313_test_mod });
+    const run_sonny6313_tests = b.addRunArtifact(sonny6313_tests);
+    shardDep(test_step, &run_sonny6313_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6313_step = b.step("test-sonny6313-explain-policy-gates", "Run the SONNY-6313 regression (EXPLAIN POLICY reports the read gate's decide(match_, graph) and the write gate's per-action decisions for the session's graph, so a graph-scoped deny or allow is reported as the gates apply it; geode.tenant.list / show are read-only procedures that still need admin_tenant)");
+    sonny6313_step.dependOn(&run_sonny6313_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
