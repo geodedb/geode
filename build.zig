@@ -13634,6 +13634,28 @@ pub fn build(b: *std.Build) void {
     const sonny6377_resend_step = b.step("test-sonny6377-query-no-resend", "Run the SONNY-6377 item 1 regression (geode query --file does not replay a chunk whose request was sent and timed out; over gRPC a query whose connection failed after it was sent is not resent; spawns the CLI and a server)");
     sonny6377_resend_step.dependOn(&run_sonny6377_resend_tests.step);
 
+    // SONNY-6377 (items 3-6): a row-level RLS decision is not cached for the
+    // table; procedure results own their rows; setAttribute under allocation
+    // failure; security-graph writes outside a statement survive a SIGKILL.
+    const sonny6377_sec_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6377_security_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6377_sec_test_mod.link_libc = true;
+    sonny6377_sec_test_mod.addImport("geode", root_mod);
+    sonny6377_sec_test_mod.addImport("schema", schema_mod);
+    sonny6377_sec_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6377_sec_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6377_sec_test_mod.addImport("logging", logging_mod);
+    sonny6377_sec_test_mod.addImport("rls", rls_mod);
+    sonny6377_sec_test_mod.addImport("rls_types", rls_types_mod);
+    sonny6377_sec_test_mod.addImport("geode_auth", auth_mod);
+    sonny6377_sec_test_mod.addImport("user_attr_store", user_attr_store_mod);
+    sonny6377_sec_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    const sonny6377_sec_tests = b.addTest(.{ .root_module = sonny6377_sec_test_mod });
+    const run_sonny6377_sec_tests = b.addRunArtifact(sonny6377_sec_tests);
+    run_sonny6377_sec_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_sonny6377_sec_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6377_sec_step = b.step("test-sonny6377-security-residuals", "Run the SONNY-6377 items 3-6 regression (one denied row does not deny the table's other rows; user_import / list_deny_policies / policy_count results own their rows and policy_count with no engine is 55000; setAttribute under allocation failure; the login hash upgrade and the ALTER USER intercepts survive a SIGKILL; spawns a server)");
+    sonny6377_sec_step.dependOn(&run_sonny6377_sec_tests.step);
+
     // SONNY-3135 (N6, N7d): the RLS policy cache owns its keys; a per-graph
     // grant on graph '*' is refused.
     const sonny3135_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3135_policy_cache_keys_grant_wildcard.zig"), .target = target, .optimize = optimize });

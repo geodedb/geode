@@ -22,7 +22,7 @@ const std = @import("std");
 // Process-stable allocator. `std.heap.c_allocator` is backed by libc malloc and
 // is valid for the entire process lifetime — exactly the contract a global
 // side-table needs.
-const store_alloc: std.mem.Allocator = std.heap.c_allocator;
+var store_alloc: std.mem.Allocator = std.heap.c_allocator;
 
 var g_attrs: std.StringHashMap(std.StringHashMap([]const u8)) = undefined;
 var g_attrs_init: bool = false;
@@ -110,4 +110,34 @@ pub fn snapshotEntries(
         };
     }
     return out;
+}
+
+/// Tests only (SONNY-6377): route the store's allocations through `a`, e.g.
+/// a `std.testing.FailingAllocator`. Production never calls this.
+pub fn setAllocatorForTesting(a: std.mem.Allocator) void {
+    g_attrs_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_attrs_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    store_alloc = a;
+}
+
+/// Tests only (SONNY-6377): free every entry with `a` (the allocator the
+/// entries came from, or the one under it) and empty the store; `a` stays
+/// the store's allocator.
+pub fn resetForTesting(a: std.mem.Allocator) void {
+    g_attrs_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_attrs_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    store_alloc = a;
+    if (!g_attrs_init) return;
+    var it = g_attrs.iterator();
+    while (it.next()) |entry| {
+        var attr_it = entry.value_ptr.iterator();
+        while (attr_it.next()) |kv| {
+            a.free(kv.key_ptr.*);
+            a.free(kv.value_ptr.*);
+        }
+        entry.value_ptr.deinit();
+        a.free(entry.key_ptr.*);
+    }
+    g_attrs.deinit();
+    g_attrs_init = false;
 }
