@@ -13304,6 +13304,30 @@ pub fn build(b: *std.Build) void {
     const sonny6278_step = b.step("test-sonny6278-custom-role-lifetime", "Run the SONNY-6278 regression (custom roles created, assigned or hydrated in a request stay intact after the request's memory is gone; DROP ROLE frees them)");
     sonny6278_step.dependOn(&run_sonny6278_tests.step);
 
+    // SONNY-2751: a read-only request refuses every statement that changes
+    // stored state, the security DDL included; reads still run. Two modules:
+    // the gRPC Execute handler, and the MCP read-only mode's classifier.
+    const sonny2751_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2751_readonly_security_ddl.zig"), .target = target, .optimize = optimize });
+    sonny2751_test_mod.link_libc = true;
+    sonny2751_test_mod.addImport("geode", root_mod);
+    sonny2751_test_mod.addImport("schema", schema_mod);
+    sonny2751_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2751_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2751_test_mod.addImport("logging", logging_mod);
+    sonny2751_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    const sonny2751_tests = b.addTest(.{ .root_module = sonny2751_test_mod });
+    const run_sonny2751_tests = b.addRunArtifact(sonny2751_tests);
+    shardDep(test_step, &run_sonny2751_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2751_mcp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2751_readonly_security_ddl_mcp.zig"), .target = target, .optimize = optimize });
+    sonny2751_mcp_test_mod.addImport("mcp_server", mcp_read_only_server_mod);
+    sonny2751_mcp_test_mod.link_libc = true;
+    const sonny2751_mcp_tests = b.addTest(.{ .root_module = sonny2751_mcp_test_mod });
+    const run_sonny2751_mcp_tests = b.addRunArtifact(sonny2751_mcp_tests);
+    shardDep(test_step, &run_sonny2751_mcp_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2751_step = b.step("test-sonny2751-readonly-security-ddl", "Run the SONNY-2751 regression (a read-only request refuses the security DDL, every other change and an unknown procedure, gRPC and the MCP read-only mode; SHOW, the read-only auth procedures and session statements still run)");
+    sonny2751_step.dependOn(&run_sonny2751_tests.step);
+    sonny2751_step.dependOn(&run_sonny2751_mcp_tests.step);
+
     // GPS Phase 7 Task 7-1: bounded LRU decision cache tests.
     const gps_decision_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decision_cache.zig"), .target = target, .optimize = optimize });
     gps_decision_cache_test_mod.addImport("geode", root_mod);
