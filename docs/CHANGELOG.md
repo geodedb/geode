@@ -26,6 +26,21 @@
   unwraps. Regression: `zig build test-sonny6435-kms-attestation` (real
   server over QUIC: no pin, unconnected, wrong-key server, tampered and
   replayed replies, nonce-less request).
+- **BREAKING (operator): a `GEODE_MASTER_KEY` other than the one a data
+  directory's encrypted fields were written with refuses startup
+  (SONNY-6435 item 3).** Nothing recorded the key, so a server restarted
+  with another key (or the same characters in another
+  `GEODE_MASTER_KEY_FORMAT`) started, could not read the old fields and
+  wrote new ones under the new key. The first start with a key now records
+  its check value (HMAC-SHA256 of a fixed label under an HKDF-derived key,
+  never the key) in `fle_master_key.kcv` beside the FLE catalog; a later
+  start with another key refuses to start, naming the file and not the key,
+  and an unreadable or malformed check file refuses too. A directory with no
+  recorded value records one (upgrade path). Without `GEODE_MASTER_KEY`
+  nothing is read or written. `docs/FIELD_LEVEL_ENCRYPTION.md` ("Master key
+  check value"). Regression: `zig build test-sonny6435-master-key-check`
+  (the built server across restarts: same key, another key, another format,
+  upgrade, no key).
 - **The security graph never opens unaudited, and an unreadable graph
   registry refuses startup (SONNY-6430 items 5 and 7).**
   `StorageAdapter.initAuditForGraph` returned null for any failure other

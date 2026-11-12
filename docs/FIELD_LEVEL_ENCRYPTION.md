@@ -80,6 +80,35 @@ master key ...`). To keep the same key and drop the warning, set
 (`hex` or `base64` of a new value) needs the fields re-encrypted; there is
 no master-key rotation command in this release.
 
+#### Master key check value
+
+A data directory records which master key its encrypted fields use
+(SONNY-6435). On the first `geode serve` start with a `GEODE_MASTER_KEY`, the
+server writes `fle_master_key.kcv` beside the FLE catalog in the data
+directory: one line holding the key's check value, an HMAC-SHA256 of a fixed
+label under a key HKDF-derived from the master key. It identifies the key
+and does not reveal it. Like the catalog, it is written mode 0600, never
+through a symbolic link, and encrypted under `GEODE_TDE_KEY` when that is
+set.
+
+Every later start with a key compares it with the recorded value:
+
+- the same key (in the same `GEODE_MASTER_KEY_FORMAT`) starts;
+- another key, or the same characters read in another format, refuses to
+  start (`[startup] GEODE_MASTER_KEY is not the key this data directory's
+  encrypted fields were written with ...`), naming the file and never the
+  key. Without the check that server started, could not read the old
+  fields, and wrote new ones under the new key;
+- a check file that cannot be read or is not a check file refuses to start;
+- a data directory with no recorded value (created without a key, or by a
+  server from before this check) records one and is checked from then on.
+
+Without `GEODE_MASTER_KEY` nothing is read or written: a deployment that
+does not use FLE is never blocked. If no field was ever encrypted and you
+mean to change the key, remove `fle_master_key.kcv` and start with the new
+key; otherwise re-encrypt the fields first. Back the file up with the data
+directory.
+
 **Derivation:** HKDF-SHA256 with context strings:
 
 - TRK: `"geode/trk/{tenant_id}"`

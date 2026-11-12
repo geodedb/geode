@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:33:46.17104862Z",
+  "generated_at": "2026-11-12T23:39:59.922772179Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84437,10 +84437,38 @@
       "features": [
         {
           "feature": "Key configuration",
+          "aspect": "KeyCheckValue",
+          "status": "TESTED",
+          "files": [
+            "src/keys/manager.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_master_key_check.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
           "aspect": "MasterKeyCheckValue",
           "status": "TESTED",
           "files": [
             "tests/test_sonny6435_master_key_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_master_key_check.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Key configuration",
+          "aspect": "StartupVerifyOrRecord",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
           ],
           "tests": [
             "tests/test_sonny6435_master_key_check.zig"
@@ -92137,7 +92165,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4791
+      "TESTED": 4793
     },
     "by_aspect": {
       "2PC": 3,
@@ -93978,6 +94006,7 @@
       "Katz": 1,
       "KeepISIG": 1,
       "KernelSources": 1,
+      "KeyCheckValue": 1,
       "KeyDerivation": 2,
       "KeyEpochs": 1,
       "KeyEscrow": 1,
@@ -95698,6 +95727,7 @@
       "StartupMetadataRepair": 1,
       "StartupOrdering": 1,
       "StartupProcessEnvironment": 1,
+      "StartupVerifyOrRecord": 1,
       "StartupWiring": 4,
       "State": 2,
       "StateChangeClassifier": 1,
