@@ -355,6 +355,7 @@ const dispatch_table = std.StaticStringMap(AuthHandler).initComptime(.{
 const read_only_set = std.StaticStringMap(void).initComptime(.{
     .{ "geode.auth.user_show", {} },
     .{ "geode.auth.user_list", {} },
+    .{ "geode.auth.user_permissions", {} },
     .{ "geode.auth.role_list", {} },
     .{ "geode.auth.policy_list", {} },
 });
@@ -411,9 +412,13 @@ pub fn execute(
             // key manager. Refuse it before inspecting any target user or key.
             // Authentication above still applies to every unsupported call.
             if (is_apikey) return error.ApiKeysUnsupported;
-            const is_read_only = read_only_set.has(proc_name) and
+            // Read classification controls replication, separately from the
+            // Admin requirement for sensitive introspection.
+            const is_sensitive_read = std.mem.eql(u8, proc_name, "geode.auth.user_list") or
+                std.mem.eql(u8, proc_name, "geode.auth.user_permissions");
+            const allows_non_admin = read_only_set.has(proc_name) and !is_sensitive_read and
                 (!std.mem.eql(u8, proc_name, "geode.auth.user_show") or targetsCurrentUser(call_stmt, context));
-            if (!is_read_only and context.role.? != .Admin) {
+            if (!allows_non_admin and context.role.? != .Admin) {
                 const d = duration.seconds();
                 om.recordAuthzCheck(.deny, .rbac, d);
                 // GAP-0919: audit the denial (see above).
@@ -611,7 +616,8 @@ fn handleUserList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProced
     columns[2] = try allocator.dupe(u8, "role");
     columns[3] = try allocator.dupe(u8, "active");
     var rows_list = std.ArrayList([]Value).empty;
-    const users = user_mgmt.listUsers() catch &[_]user_mgmt.User{};
+    const users = try user_mgmt.listUsersAlloc(allocator);
+    defer allocator.free(users);
     for (users) |user| {
         const row = try allocator.alloc(Value, 4);
         row[0] = Value{ .Str = user.username };

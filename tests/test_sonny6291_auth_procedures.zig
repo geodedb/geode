@@ -62,6 +62,13 @@ test "SONNY-6291: user_show allows self and Admin, denies other profiles before 
     try testing.expectError(error.Unauthorized, h.run("CALL geode.auth.user_show('missing')", .User, "alice"));
     try testing.expectError(error.Unauthorized, h.run("CALL geode.auth.user_show('bob')", .ReadOnly, null));
     try testing.expectError(error.Unauthenticated, h.run("CALL geode.auth.user_show('alice')", null, null));
+    // Listing users exposes the same profile fields; it cannot bypass the
+    // per-user restriction, through either the procedure or its GQL bridge.
+    try testing.expectError(error.Unauthorized, h.run("CALL geode.auth.user_list()", .User, "alice"));
+    try testing.expectError(error.Unauthorized, h.run("SHOW USERS", .User, "alice"));
+    var listed = try h.run("SHOW USERS", .Admin, "operator");
+    defer listed.deinit(h.arena.allocator());
+    try testing.expect(listed.rows.len >= 2);
     const sink = try std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), h.audit_path, testing.allocator, .limited(1 << 20));
     defer testing.allocator.free(sink);
     try testing.expect(std.mem.indexOf(u8, sink, "access_denied") != null);
@@ -98,4 +105,32 @@ test "SONNY-6291: profile and permission calls reject missing or malformed targe
     }) |query| {
         try testing.expectError(error.InvalidArgs, h.run(query, .Admin, "operator"));
     }
+}
+
+test "SONNY-6291: admin profile reads stay read-only on a cluster follower" {
+    var h = try Harness.init();
+    defer h.deinit();
+    const cluster = geode.distributed.cluster;
+    var coordinator = try cluster.ClusterCoordinator.init(testing.allocator, 1, .{
+        .peers = &.{},
+        .data_dir = h.data_dir,
+        .cluster_token = "test-profile-reads",
+    });
+    defer coordinator.deinit();
+    cluster.setGlobalClusterCoordinator(&coordinator);
+    defer cluster.clearGlobalClusterCoordinator();
+    // A real coordinator is installed; unreplicated mutations must be refused.
+    try testing.expectError(error.ClusterNotLeader, h.run("CALL geode.auth.user_delete('bob')", .Admin, "operator"));
+    for ([_][]const u8{
+        "CALL geode.auth.user_list()",
+        "SHOW USERS",
+        "CALL geode.auth.user_permissions('bob')",
+        "SHOW PERMISSIONS FOR bob",
+        "CALL geode.auth.user_show('bob')",
+    }) |query| {
+        var result = try h.run(query, .Admin, "operator");
+        defer result.deinit(h.arena.allocator());
+        try testing.expect(result.rows.len > 0);
+    }
+    try testing.expectError(error.Unauthorized, h.run("SHOW USERS", .User, "alice"));
 }

@@ -262,10 +262,10 @@ const UserCache = struct {
         return true;
     }
 
-    fn snapshot(self: *UserCache) ![]const User {
+    fn snapshot(self: *UserCache, allocator: std.mem.Allocator) ![]const User {
         if (self.entries.count() == 0) return &[_]User{};
 
-        const result = try self.allocator.alloc(User, self.entries.count());
+        const result = try allocator.alloc(User, self.entries.count());
         var i: usize = 0;
         var node = self.head;
         while (node) |current| {
@@ -927,13 +927,23 @@ pub fn getUser(username: []const u8) ?User {
 
 /// GAP-0270: List all users in the in-memory store
 pub fn listUsers() ![]const User {
+    return listUsersUsingAllocator(null);
+}
+
+/// A snapshot array owned by the caller's allocator. User strings remain
+/// borrowed from the cache, as with listUsers; free the array only.
+pub fn listUsersAlloc(allocator: std.mem.Allocator) ![]const User {
+    return listUsersUsingAllocator(allocator);
+}
+
+fn listUsersUsingAllocator(allocator: ?std.mem.Allocator) ![]const User {
     try loadAllUsersFromResolver();
 
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) return &[_]User{};
-    return user_store.?.snapshot();
+    return user_store.?.snapshot(allocator orelse user_store.?.allocator);
 }
 
 /// GAP-0270: Delete a user from the in-memory store

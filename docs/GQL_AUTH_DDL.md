@@ -76,6 +76,9 @@ default permission set.
 `CALL geode.auth.user_show(username)` returns a profile only to that user or
 an Admin. Other callers receive `42501` before the target is looked up, and the
 denial is audited. An authorized lookup of an unknown user returns `42704`.
+`SHOW USERS` and `geode.auth.user_list()` require Admin when authentication is
+enabled because they expose every profile. They cannot bypass the per-user
+restriction; other users can view their own profile through `user_show`.
 
 ### Unsupported GQL API-key procedures
 

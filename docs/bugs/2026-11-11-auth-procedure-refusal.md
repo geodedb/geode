@@ -19,7 +19,7 @@ procedures reject missing/malformed targets. `SHOW PERMISSIONS` therefore
 requires Admin in both forms; without `FOR`, it selects the current user. The
 reference documents these behavior changes.
 
-## Executed local checks
+## Initial executed local checks
 
 On this patch, using Zig 0.16.0 on Linux/amd64:
 
@@ -56,3 +56,26 @@ SONNY-1333/6269/6273 work was still unpublished when this patch was prepared.
 Integration must preserve those fixes; this patch does not claim their broader
 auth mutation, storage-deletion or policy-sealing work complete. SONNY-6291
 remains In Progress until the required review/CI gates and merge complete.
+
+## Profile-list bypass review
+
+The final review found `user_list` exposed the same fields protected by
+`user_show` on current main, before the unpublished SONNY-6269 change. An added
+real-executor regression reproduced that bypass. `user_list` and `SHOW USERS`
+now require Admin too. Sensitive reads retain their read-only classification
+for replication, separately from authorization: a real follower-coordinator
+test proves Admin listing/profile/permission reads succeed while mutations
+remain refused. That regression failed before separating these decisions.
+
+The positive Admin list test also exposed a leaked cache-allocated snapshot.
+The handler now requests a caller-allocated snapshot array and frees it; its
+borrowed user strings retain the existing cache ownership. The old public
+`listUsers()` signature is preserved, and lookup failures propagate rather than
+becoming an empty success result.
+
+The final adjacent run passed all 66 build steps: 476 tests passed, with two
+existing graph-store tests skipped. All fifteen new auth regressions ran and
+passed, including the additional cluster case and user-management coverage.
+The exact command is the combined command in the checked-delete receipt with
+`test-user-management` added. Full required CI, including the standalone
+compile sweep, still gates merge and Done.

@@ -67,3 +67,9 @@ Linux pool for source/build changes and tags, with one compiler step at a time
 and a retained result log. Its large disposable outputs are not uploaded as a
 cache. Passing this job is an additional merge prerequisite; the local host
 does not have space for the full sweep.
+
+After the profile-list bypass and cluster-read review, the combined command
+above was rerun with `test-user-management` added: 66/66 build steps succeeded,
+476 tests passed and two existing graph-store tests skipped. All fifteen new
+auth regression cases passed; the checked-delete primitive is unchanged from
+the six-test and earlier adjacent qualifications recorded above.
