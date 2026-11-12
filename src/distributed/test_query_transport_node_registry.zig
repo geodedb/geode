@@ -3,7 +3,7 @@
 //! Unit tests for NodeRegistry — the hashmap-based node tracking component of
 //! the distributed query transport. GAP-0889: the drift-prone inline copy was
 //! replaced by importing the REAL type from node_registry.zig (extracted from
-//! query_transport.zig, which re-exports it). stdlib-only: no QUIC/protobuf.
+//! query_transport.zig, since removed in SONNY-6279). stdlib-only: no QUIC/protobuf.
 
 const std = @import("std");
 

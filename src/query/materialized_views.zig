@@ -38,7 +38,6 @@ fn compat_microTimestamp() i64 {
 // The actual MVCCManager is in server/txn/mvcc.zig
 const TxnId = u64;
 const MVCCManager = opaque {}; // Forward declaration to avoid import conflict
-// const query_coordinator = @import("../distributed/query_coordinator.zig");
 // const enhanced_query_transport = @import("../distributed/enhanced_query_transport.zig");
 const ast = @import("../gql/ast.zig");
 const graph_storage = @import("../types/graph_common.zig");
@@ -252,7 +251,6 @@ pub const MaterializedViewManager = struct {
     view_data: AutoHashMap([]const u8, MaterializedViewData),
     refresh_scheduler: RefreshScheduler,
     dependency_tracker: DependencyTracker,
-    // query_coordinator: ?*query_coordinator.QueryCoordinator,
     // enhanced_transport: ?*enhanced_query_transport.EnhancedQueryTransport,
     mvcc_manager: ?*MVCCManager,
     config: ViewManagerConfig,

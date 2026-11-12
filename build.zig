@@ -3735,16 +3735,6 @@ pub fn build(b: *std.Build) void {
     });
     const run_blake2b_migration_tests = b.addRunArtifact(blake2b_migration_tests);
 
-    // GAP-0490: Security test — federation client must send GEODE_CLUSTER_TOKEN in HELLO
-    const federation_auth_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/distributed/test_federation_auth.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    const run_federation_auth_tests = b.addRunArtifact(federation_auth_tests);
-
     // GAP-0490: Security test — server must validate federation HELLO via validateFederationAuth
     const federation_server_auth_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -4259,7 +4249,6 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_jsonb_depth_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_migration_unit_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_blake2b_migration_tests.step, 1, test_shard_loads, test_shard_index);
-    shardDep(test_step, &run_federation_auth_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_federation_server_auth_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_e2e_ts_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_ts_store_tests.step, 1, test_shard_loads, test_shard_index);
@@ -4438,17 +4427,6 @@ pub fn build(b: *std.Build) void {
     const sharding_step = b.step("test-sharding", "Run sharding.zig inline unit tests (ShardManager, migration, split, range/graph/geo routing)");
     sharding_step.dependOn(&run_sharding_tests.step);
 
-    // GAP-0513: federation_merge pure-helper unit tests (standalone, no distributed module import)
-    const federation_merge_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/test_federation_merge.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    const run_federation_merge_tests = b.addRunArtifact(federation_merge_tests);
-    shardDep(test_step, &run_federation_merge_tests.step, 1, test_shard_loads, test_shard_index);
-
     // Raft consensus PersistentStorage file-backed round-trip tests
     const raft_ps_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_raft_persistent_storage.zig"),
@@ -4508,9 +4486,9 @@ pub fn build(b: *std.Build) void {
     const run_gap0870_tests = b.addRunArtifact(gap0870_tests);
     shardDep(test_step, &run_gap0870_tests.step, 1, test_shard_loads, test_shard_index);
     // GAP-0870 (transport half): enhanced_query_transport compiles as its own
-    // standalone test root — it cannot live inside the geode lib graph
-    // (query_coordinator/federation pull server-module files like
-    // rls_filter.zig into the lib, conflicting with the exe's module map).
+    // standalone test root; nothing in the geode lib graph imports it (its
+    // former importers, the federation query coordinators, were removed as
+    // never-compiled code in SONNY-6279).
     const gap0870_eqt_test_mod = b.createModule(.{
         .root_source_file = b.path("src/distributed/enhanced_query_transport.zig"),
         .target = target,
@@ -5590,7 +5568,6 @@ pub fn build(b: *std.Build) void {
     // const key_provider_mod = b.createModule(.{ .root_source_file = b.path("src/security/key_provider.zig"), .target = target, .optimize = optimize });
 
     // Legacy WAL dependencies removed; GraphStore is the sole storage layer.
-    //    const distributed_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/mod.zig"), .target = target, .optimize = optimize });
     //    const federation_flag_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
 
     // transport_quic_mod is defined early (line ~141) and shared across all modules
@@ -13032,8 +13009,8 @@ pub fn build(b: *std.Build) void {
     // materializeEdge:2978-2986 route interior bytes through `scratchOr(allocator)`,
     // and `OwnedGraphEntities.deinit` (execution.zig:662-671) destroys only the
     // struct — so cleanup is CONDITIONAL on a thread arena being installed.
-    // query/materialized_views.zig:711 and distributed/query_coordinator.zig:375
-    // both call executeProgramWithContext with `self.allocator` and no
+    // query/materialized_views.zig:711 (and distributed/query_coordinator.zig,
+    // removed in SONNY-6279) called executeProgramWithContext with `self.allocator` and no
     // pushScratchAllocator, so every row they read leaks its interior.
     const materialize_no_arena_leak_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_materialize_node_no_arena_leak.zig"), .target = target, .optimize = optimize });
     materialize_no_arena_leak_test_mod.addImport("geode", root_mod);

@@ -6,7 +6,8 @@
 // distributed coordinator subsystems now route through. Task 1.3 added
 // `ast_cache: ?*geode.SharedAstCache` fields + `setAstCache()` methods to
 // `MaterializedViewManager` (classic) and `QueryCoordinator` so both
-// subsystems share the server's `ServerState.shared_ast_cache`. Task 18
+// subsystems share the server's `ServerState.shared_ast_cache` (the
+// `QueryCoordinator` side was never compiled and was removed in SONNY-6279). Task 18
 // (follow-up) extended the same pattern to the *enhanced* view manager at
 // `src/query/enhanced_materialized_views.zig` -- see
 // `docs/performance/2026-04-20-query-bench/enhanced-manager-cache-note.md`
