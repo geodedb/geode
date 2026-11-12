@@ -393,23 +393,31 @@ const dispatch_table = std.StaticStringMap(AuthHandler).initComptime(.{
     .{ "geode.auth.policy_delete", handlePolicyDelete },
     .{ "geode.auth.grant", handleGrantRevoke },
     .{ "geode.auth.revoke", handleGrantRevoke },
-    .{ "geode.auth.apikey_create", handleApikeyCreate },
-    .{ "geode.auth.apikey_list", handleApikeyList },
-    .{ "geode.auth.apikey_revoke", handleApikeyRevoke },
-    .{ "geode.auth.apikey_check_scope", handleApikeyCheckScope },
     .{ "geode.auth.mfa_enable", handleMfaEnableDisable },
     .{ "geode.auth.mfa_disable", handleMfaEnableDisable },
 });
 
 const read_only_set = std.StaticStringMap(void).initComptime(.{
     .{ "geode.auth.user_show", {} },
-    .{ "geode.auth.user_permissions", {} },
     .{ "geode.auth.user_list", {} },
     .{ "geode.auth.role_list", {} },
     .{ "geode.auth.policy_list", {} },
-    .{ "geode.auth.apikey_list", {} },
-    .{ "geode.auth.apikey_check_scope", {} },
 });
+
+// CANARY: REQ=REQ-SONNY-6291-AUTH-PROCEDURES; FEATURE="Auth procedure safety"; ASPECT=AuthorizationAndRefusal; STATUS=TESTED; TEST=tests/test_sonny6291_auth_procedures.zig; OWNER=security; UPDATED=2026-11-11
+fn userTarget(call_stmt: ast.CallProcedure) ![]const u8 {
+    if (call_stmt.procedure != .Call) return error.InvalidArgs;
+    const args = call_stmt.procedure.Call.args;
+    if (args.len != 1 or args[0].* != .String or args[0].String.len == 0) return error.InvalidArgs;
+    return args[0].String;
+}
+
+fn targetsCurrentUser(call_stmt: ast.CallProcedure, context: ExecutionContext) bool {
+    const current = context.user orelse return false;
+    if (current.len == 0) return false;
+    const target = userTarget(call_stmt) catch return false;
+    return std.mem.eql(u8, current, target);
+}
 
 /// Execute a geode.auth.* procedure. Returns null if not recognized.
 pub fn execute(
@@ -419,6 +427,7 @@ pub fn execute(
     context: ExecutionContext,
 ) !?ExecutionResult {
     if (std.mem.startsWith(u8, proc_name, "geode.auth.")) {
+        const is_apikey = std.mem.startsWith(u8, proc_name, "geode.auth.apikey_");
         if (user_mgmt.isAuthEnabled()) {
             // Phase C2: this is the REAL RBAC decision point for geode.auth.*
             // admin procedures — the role check below grants or denies access.
@@ -443,7 +452,12 @@ pub fn execute(
                 });
                 return error.Unauthenticated;
             }
-            const is_read_only = read_only_set.has(proc_name);
+            // SONNY-6291: this procedure family has no connection to the real
+            // key manager. Refuse it before inspecting any target user or key.
+            // Authentication above still applies to every unsupported call.
+            if (is_apikey) return error.ApiKeysUnsupported;
+            const is_read_only = read_only_set.has(proc_name) and
+                (!std.mem.eql(u8, proc_name, "geode.auth.user_show") or targetsCurrentUser(call_stmt, context));
             if (!is_read_only and context.role.? != .Admin) {
                 const d = duration.seconds();
                 om.recordAuthzCheck(.deny, .rbac, d);
@@ -462,6 +476,8 @@ pub fn execute(
             om.recordAuthzCheck(.allow, .rbac, d);
         }
 
+        if (is_apikey) return error.ApiKeysUnsupported;
+
         // Cluster fail-closed: auth state persists to the per-node
         // __geode_security graph with no Raft slice — an ungated mutation
         // creates users/roles/grants on exactly ONE node (a security-relevant
@@ -474,11 +490,6 @@ pub fn execute(
 
         if (dispatch_table.get(proc_name)) |handler| {
             return try handler(allocator, proc_name, call_stmt, context);
-        }
-
-        // Catch-all for remaining geode.auth.apikey_* procedures
-        if (std.mem.startsWith(u8, proc_name, "geode.auth.apikey_")) {
-            return try handleApikeyCatchAll(allocator, proc_name, call_stmt, context);
         }
 
         return ExecutionError.UnknownProcedure;
@@ -680,29 +691,18 @@ fn handleUserDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
 
 fn handleUserShow(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     // geode.auth.user_show(username) -> username, email, role, status
-    var username: []const u8 = "";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
-    }
-    const user = user_mgmt.getUser(username);
+    const username = try userTarget(call_stmt);
+    const user = user_mgmt.getUser(username) orelse return error.UserNotFound;
     const columns = try allocator.alloc([]const u8, 4);
     columns[0] = try allocator.dupe(u8, "username");
     columns[1] = try allocator.dupe(u8, "email");
     columns[2] = try allocator.dupe(u8, "role");
     columns[3] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 4);
-    if (user) |u| {
-        row[0] = Value{ .Str = u.username };
-        row[1] = Value{ .Str = u.email };
-        row[2] = Value{ .Str = u.role.toString() };
-        row[3] = Value{ .Str = if (u.active) "active" else "disabled" };
-    } else {
-        row[0] = Value{ .Str = username };
-        row[1] = Value{ .Str = "unknown" };
-        row[2] = Value{ .Str = "user" };
-        row[3] = Value{ .Str = "active" };
-    }
+    row[0] = Value{ .Str = user.username };
+    row[1] = Value{ .Str = user.email };
+    row[2] = Value{ .Str = user.role.toString() };
+    row[3] = Value{ .Str = if (user.active) "active" else "disabled" };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
@@ -873,13 +873,9 @@ fn handleUserRemoveAttribute(allocator: std.mem.Allocator, _: []const u8, call_s
 
 fn handleUserPermissions(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     // geode.auth.user_permissions(username) -> permission list
-    var username: []const u8 = "";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
-    }
-    const user = user_mgmt.getUser(username);
-    const perms = if (user) |u| user_mgmt.Permission.fromRole(u.role) else user_mgmt.Permission.fromRole(.User);
+    const username = try userTarget(call_stmt);
+    const user = user_mgmt.getUser(username) orelse return error.UserNotFound;
+    const perms = user_mgmt.Permission.fromRole(user.role);
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "username");
     columns[1] = try allocator.dupe(u8, "permission");
@@ -1471,149 +1467,6 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     // because the in-memory RBAC state will have moved.
     schema_change_notifier.notify();
 
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleApikeyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    // geode.auth.apikey_create(username, name, scope, expires_in) -> api_key, username, name, scope, expires
-    var username: []const u8 = "";
-    var key_name: []const u8 = "";
-    var scope: []const u8 = "";
-    var expires_in: []const u8 = "";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
-        if (args.len >= 2 and args[1].* == .String) key_name = args[1].String;
-        if (args.len >= 3 and args[2].* == .String) scope = args[2].String;
-        if (args.len >= 4 and args[3].* == .String) expires_in = args[3].String;
-    }
-    // Validate scope is not empty
-    if (scope.len == 0) {
-        const err_columns = try allocator.alloc([]const u8, 1);
-        err_columns[0] = try allocator.dupe(u8, "error");
-        const err_row = try allocator.alloc(Value, 1);
-        err_row[0] = Value{ .Str = "scope required" };
-        const err_rows = try allocator.alloc([]Value, 1);
-        err_rows[0] = err_row;
-        return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-    }
-    // Generate gk1. format API key with deterministic parts
-    const has_expiry = expires_in.len > 0;
-    const num_cols: usize = if (has_expiry) 5 else 4;
-    const columns = try allocator.alloc([]const u8, num_cols);
-    columns[0] = try allocator.dupe(u8, "api_key");
-    columns[1] = try allocator.dupe(u8, "username");
-    columns[2] = try allocator.dupe(u8, "name");
-    columns[3] = try allocator.dupe(u8, "scope");
-    if (has_expiry) columns[4] = try allocator.dupe(u8, "expires");
-    const row = try allocator.alloc(Value, num_cols);
-    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "gk1.{s}.{s}", .{ username, key_name }) };
-    row[1] = Value{ .Str = username };
-    row[2] = Value{ .Str = key_name };
-    row[3] = Value{ .Str = scope };
-    if (has_expiry) row[4] = Value{ .Str = try std.fmt.allocPrint(allocator, "expires in {s}s", .{expires_in}) };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleApikeyList(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    // geode.auth.apikey_list(username) -> name list
-    var username: []const u8 = "";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
-    }
-    if (username.len == 0) {
-        // No user specified — return empty
-        const columns = try allocator.alloc([]const u8, 1);
-        columns[0] = try allocator.dupe(u8, "status");
-        const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = "ok" };
-        const rows = try allocator.alloc([]Value, 1);
-        rows[0] = row;
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
-    // Check user exists
-    if (user_mgmt.getUser(username) == null) {
-        const err_columns = try allocator.alloc([]const u8, 1);
-        err_columns[0] = try allocator.dupe(u8, "error");
-        const err_row = try allocator.alloc(Value, 1);
-        err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "user '{s}' does not exist", .{username}) };
-        const err_rows = try allocator.alloc([]Value, 1);
-        err_rows[0] = err_row;
-        return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-    }
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = "ok" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleApikeyRevoke(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    // geode.auth.apikey_revoke(username, name) -> status with revoked info
-    var username: []const u8 = "";
-    var key_name: []const u8 = "";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
-        if (args.len >= 2 and args[1].* == .String) key_name = args[1].String;
-    }
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "revoked {s}", .{key_name}) };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleApikeyCheckScope(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    // geode.auth.apikey_check_scope(username, name, scope) -> status
-    var username: []const u8 = "";
-    var key_name: []const u8 = "";
-    var scope: []const u8 = "";
-    if (call_stmt.procedure == .Call) {
-        const args = call_stmt.procedure.Call.args;
-        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
-        if (args.len >= 2 and args[1].* == .String) key_name = args[1].String;
-        if (args.len >= 3 and args[2].* == .String) scope = args[2].String;
-    }
-    // Check user exists
-    if (user_mgmt.getUser(username) == null) {
-        const err_columns = try allocator.alloc([]const u8, 1);
-        err_columns[0] = try allocator.dupe(u8, "error");
-        const err_row = try allocator.alloc(Value, 1);
-        err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "user '{s}' does not exist", .{username}) };
-        const err_rows = try allocator.alloc([]Value, 1);
-        err_rows[0] = err_row;
-        return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
-    }
-    // Check scope against key — for now grant all scopes for the key
-    const columns = try allocator.alloc([]const u8, 3);
-    columns[0] = try allocator.dupe(u8, "status");
-    columns[1] = try allocator.dupe(u8, "scope");
-    columns[2] = try allocator.dupe(u8, "key_name");
-    const row = try allocator.alloc(Value, 3);
-    row[0] = Value{ .Str = "scope granted" };
-    row[1] = Value{ .Str = scope };
-    row[2] = Value{ .Str = key_name };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-}
-
-fn handleApikeyCatchAll(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    // apikey_revoke_all, etc.
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = "ok" };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 

@@ -149,10 +149,8 @@ pub fn executeShowRoles(allocator: std.mem.Allocator, ctx: ExecutionContext) !Ex
 }
 
 pub fn executeShowPermissions(allocator: std.mem.Allocator, target: ?[]const u8, ctx: ExecutionContext) !ExecutionResult {
-    // When target is null and ctx.user is null, we pass "" which causes user_permissions
-    // to fall through to Permission.fromRole(.User) — the default-User fallback in
-    // handleUserPermissions. This is acceptable: a query with no auth context sees the
-    // minimum permission set, not an error.
+    // The auth procedure requires Admin when authentication is enabled, and
+    // rejects an absent or unknown target rather than inventing permissions.
     const username = target orelse (ctx.user orelse "");
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_permissions", &.{username});
 }

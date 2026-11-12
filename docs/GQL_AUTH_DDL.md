@@ -5,7 +5,7 @@ management. These statements are parsed via *soft keywords* (so `USER`, `ROLE`,
 `GRANT`, `REVOKE`, `SHOW`, etc. remain valid as identifiers in ordinary queries)
 and act as thin syntactic sugar over the existing `geode.auth.*` procedure
 handlers — inheriting the same authorization rules (Admin role required for
-mutations; any authenticated user may use read-only `SHOW` variants), audit
+mutations; introspection follows the access rules below), audit
 logging, password policy enforcement, and HMAC-chained `__geode_security`
 persistence. **Authentication itself** (session establishment, credential
 verification) still occurs via the QUIC HELLO handshake; these statements
@@ -67,8 +67,28 @@ single-quoted or double-quoted string literal.
 | `SHOW VERSION` | *(local — no auth handler)* |
 | `SHOW CAPABILITIES` | *(local — no auth handler)* |
 
-`SHOW PERMISSIONS` without a `FOR` clause uses the current authenticated user's
-permissions. With `FOR <username>`, an Admin role is required.
+`SHOW PERMISSIONS` requires Admin with or without `FOR`. Without `FOR`, it
+selects the current authenticated user. The underlying
+`geode.auth.user_permissions(username)` procedure also requires Admin when
+authentication is enabled. An unknown user is an error (`42704`), never a
+default permission set.
+
+`CALL geode.auth.user_show(username)` returns a profile only to that user or
+an Admin. Other callers receive `42501` before the target is looked up, and the
+denial is audited. An authorized lookup of an unknown user returns `42704`.
+
+### Unsupported GQL API-key procedures
+
+Every `geode.auth.apikey_*` procedure returns SQLSTATE `0A000` (feature not
+supported), including create, list, revoke, check_scope and catch-all names.
+These GQL handlers are not connected to the API-key manager: they cannot create
+keys, verify scopes or revoke credentials. They return no fabricated key,
+success row or user-existence information. Authentication is still required
+when enabled (`28000` for an unauthenticated call).
+
+This limitation applies to the GQL procedure family. The separate offline
+`geode apikey` CLI and authentication library have their own implementations;
+a GQL call does not manage their stored keys.
 
 Implementation: `src/gql/parser.zig` (parse) → `src/gql/ast.zig` (AST nodes) →
 `src/execution/admin_ddl.zig` (execution) → `src/execution/auth_dispatch.zig`

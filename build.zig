@@ -12521,6 +12521,15 @@ pub fn build(b: *std.Build) void {
     const gap0919_step = b.step("test-gap0919", "Run GAP-0919 denied-DDL audit regression");
     gap0919_step.dependOn(&run_gap0919_tests.step);
 
+    const sonny6291_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6291_auth_procedures.zig"), .target = target, .optimize = optimize });
+    sonny6291_test_mod.addImport("geode", root_mod);
+    sonny6291_test_mod.link_libc = true;
+    const sonny6291_tests = b.addTest(.{ .root_module = sonny6291_test_mod });
+    const run_sonny6291_tests = b.addRunArtifact(sonny6291_tests);
+    shardDep(test_step, &run_sonny6291_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny6291_step = b.step("test-sonny6291-auth-procedures", "Run SONNY-6291 authenticated procedure refusal, profile authorization and missing-user regressions");
+    sonny6291_step.dependOn(&run_sonny6291_tests.step);
+
     // GAP-0918: vector index validation — dimension-mismatch write rejection,
     // DDL metric validation, malformed vector literal type error.
     const gap0918_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0918_vector_validation.zig"), .target = target, .optimize = optimize });
