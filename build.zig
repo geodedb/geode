@@ -9866,6 +9866,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6386_tde_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6386_tde_step = b.step("test-sonny6386-tde-key-fail-closed", "Run SONNY-6386 item 1 regression (spawns servers: a set but malformed GEODE_TDE_KEY refuses startup, names the variable, never echoes it and creates nothing; the adapter, WAL and HMAC key loaders refuse a malformed key instead of falling back to no encryption or another key)");
     sonny6386_tde_step.dependOn(&run_sonny6386_tde_tests.step);
+    const sonny6422_env_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6422_env_key_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6422_env_test_mod.link_libc = true;
+    sonny6422_env_test_mod.addImport("geode", root_mod);
+    sonny6422_env_test_mod.addImport("logging", logging_mod);
+    const sonny6422_env_tests = b.addTest(.{ .root_module = sonny6422_env_test_mod });
+    const run_sonny6422_env_tests = b.addRunArtifact(sonny6422_env_tests);
+    spawnsBuiltGeode(sonny6422_env_tests);
+    shardDep(test_step, &run_sonny6422_env_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6422_env_step = b.step("test-sonny6422-env-key-fail-closed", "Run SONNY-6422 items 1-2 regression (spawns servers: a half-configured or mismatched GEODE_AUDIT_PUB/SEC pair, a GEODE_MASTER_KEY under 32 bytes and an unread GEODE_WAL_KEY refuse startup before the data directory exists; the audit logger, the security graph, the FLE master-key loader and geode migrate create refuse instead of falling back to file keys, a hashed short key or no signature)");
+    sonny6422_env_step.dependOn(&run_sonny6422_env_tests.step);
     const sonny6386_fle_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_fle_rotate_key_unsupported.zig"), .target = target, .optimize = optimize });
     sonny6386_fle_test_mod.link_libc = true;
     sonny6386_fle_test_mod.addImport("geode", root_mod);

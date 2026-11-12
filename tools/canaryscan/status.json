@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T19:35:42.814506017Z",
+  "generated_at": "2026-11-12T20:15:55.621457979Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81309,6 +81309,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "Key configuration",
+          "aspect": "SetButUnusableKeyRefuses",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_env_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -88964,7 +88983,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4599
+      "TESTED": 4600
     },
     "by_aspect": {
       "2PC": 3,
@@ -92246,6 +92265,7 @@
       "SessionTimeout": 2,
       "SessionToken": 1,
       "Set": 2,
+      "SetButUnusableKeyRefuses": 1,
       "SetClauses": 1,
       "SetExecution": 2,
       "SetFiltering": 1,
