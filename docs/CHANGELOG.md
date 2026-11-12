@@ -274,6 +274,21 @@
 - **`EnhancedRLSEngine.rewriteQueryEnhanced` (SONNY-6279).** It had no
   caller and spliced policy text into the query string; it is removed with
   its three private helpers.
+- **Uncompiled probes, scaffolds and utilities (SONNY-6298).** These files
+  were reachable from no executable or test in `build.zig`, and nothing
+  outside `build.zig` ran them: `src/probe_{arraylist,fmt,io}.zig`,
+  `src/dist/{rpc,scaffold}.zig` (a Raft/2PC RPC scaffold; the cluster's Raft
+  traffic goes through `src/distributed/cluster.zig` and
+  `raft_consensus.zig`), `src/util.zig`,
+  `src/util/{yaml,yaml_test,memory_governor,conformance_generator}.zig`,
+  `src/storage/{mod,snapshot_pipeline,queue_depth}.zig`,
+  `src/federation/router.zig` (a stub that always returned `unsupported`) and
+  `src/performance/{async_io,async_io_simple,simple_async_io,collection_optimized}.zig`.
+  They are removed with the uncompiled tests and benchmarks that only
+  exercised them; the cases in uncompiled mixed tests
+  (`tests/priority_implementations.zig`, `tests/test_canary_core.zig`,
+  `tests/test_performance_integration.zig`) that called them are removed and
+  the rest is kept.
 
 ---
 

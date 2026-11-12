@@ -737,7 +737,7 @@ Based on this architecture analysis, the modularization phases should proceed as
 | optimizer | Query optimization | ~5 | advanced_types_optimizer.zig (599) |
 | pagination | Pagination utilities | - | - |
 | parser | Generic parsing | - | - |
-| performance | Performance optimizations | ~5 | async_io.zig (739), memory_mapped_io.zig (606), io_optimized.zig (545) |
+| performance | Performance helpers | 3 | memory_mapped_io.zig (850; exported by `src/lib.zig`, no product caller), json_optimized_fixed.zig (408; compiled only by its unit test) |
 | planner | Query planning | ~10 | cbo.zig (760), pipeline.zig (750), adaptive.zig (668), recursive.zig (695), cost_model.zig (594), optimizer.zig (609) |
 | query | Query management | ~5 | enhanced_materialized_views.zig (884), materialized_views.zig (650) |
 | runtime | Runtime support | - | - |

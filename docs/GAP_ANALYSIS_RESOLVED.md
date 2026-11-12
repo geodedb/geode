@@ -1027,6 +1027,14 @@ The benchmark now:
 
 **Summary**: Implemented real network transport for Raft/2PC RPCs using QUIC protocol.
 
+> **Status note (2026-11-11, SONNY-6298):** `src/dist/rpc.zig` and
+> `src/dist/scaffold.zig`, cited below as the evidence for this closure, were
+> reachable from no executable or test in `build.zig`; they were never
+> compiled and were removed. The cluster's Raft traffic is carried by
+> `src/distributed/cluster.zig` (QUIC, `transport/quic`) driving
+> `src/distributed/raft_consensus.zig`. The evidence below is kept as the
+> historical record.
+
 ### Implementation Evidence
 
 **New RPC Transport Module** (`src/dist/rpc.zig`):
