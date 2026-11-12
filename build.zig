@@ -9926,6 +9926,19 @@ pub fn build(b: *std.Build) void {
     const sonny2686_step = b.step("test-sonny2686-merge-rls", "Run SONNY-2686 regression (a MERGE whose only match an RLS policy hides is refused with MergeMatchNotVisible and never reads, rewrites or attaches to it, under label and expression policies; unscoped sessions and tenant/graph scoping unchanged; the key-resolved write fast paths decline a row-scoped session)");
     sonny2686_step.dependOn(&run_sonny2686_tests.step);
 
+    // SONNY-2817: repeated MERGE visibility refusals are rate-limited per
+    // session and per label, audited.
+    const sonny2817_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2817_merge_refusal_limit.zig"), .target = target, .optimize = optimize });
+    sonny2817_test_mod.addImport("geode", root_mod);
+    sonny2817_test_mod.addImport("logging", logging_mod);
+    sonny2817_test_mod.addImport("rls", rls_mod);
+    sonny2817_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2817_tests = b.addTest(.{ .root_module = sonny2817_test_mod });
+    const run_sonny2817_tests = b.addRunArtifact(sonny2817_tests);
+    shardDep(test_step, &run_sonny2817_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2817_step = b.step("test-sonny2817-merge-refusal-limit", "Run the SONNY-2817 regression (after too many MERGE visibility refusals on a label, a session is refused every MERGE naming that label for a cooldown, 53400, whatever it would match, audited; other labels and sessions are not affected; an executor with no session is not limited)");
+    sonny2817_step.dependOn(&run_sonny2817_tests.step);
+
     // SONNY-2819: every string the audit log's canonical JSON writer prints is
     // escaped, so a MERGE refusal's property key cannot forge a record; the
     // timestamp prints without signs.
