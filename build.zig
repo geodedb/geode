@@ -476,6 +476,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
+    .{ .name = "test-sonny6322-audit-seed-and-hmac-startup", .reason = "failing: intentionally red SONNY-6322 reproduction (backups archive audit.jsonl.key, a missing seed overwrites audit.jsonl.pub, startup writes a junk .geode_hmac_key, server restore does not verify the auth chain); moves to shardDep with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9379,6 +9380,26 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6325_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6325_step = b.step("test-sonny6325-no-fixed-tmp-paths", "Run SONNY-6325 regression (spawns servers: the auto TLS key is created in the data directory exclusive/no-follow/0600, an existing group-readable, linked or half-pair auto key is refused, no /tmp fallback; S3 restore staging is a private temp dir; audit diagnostics write private data-directory files; backup list skips /tmp; the per-user tmp data directory is checked 0700/owner and honours TMPDIR; a backup without a data directory is refused)");
     sonny6325_step.dependOn(&run_sonny6325_tests.step);
+
+    // SONNY-6322: a backup never holds the audit signing seed; a store
+    // without it starts a new audit key epoch (old public key kept, a
+    // KEY_EPOCH record in the log) that `geode audit verify` checks per
+    // epoch; startup never invents an HMAC key over auth records; a server
+    // restore verifies the staged copy's auth chain.
+    const sonny6322_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6322_audit_seed_and_hmac_startup.zig"), .target = target, .optimize = optimize });
+    sonny6322_test_mod.link_libc = true;
+    sonny6322_test_mod.addImport("geode", root_mod);
+    sonny6322_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6322_test_mod.addImport("schema", schema_mod);
+    sonny6322_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6322_test_mod.addImport("storage/backup", storage_backup_mod);
+    sonny6322_test_mod.addImport("audit_verify", audit_mod);
+    const sonny6322_tests = b.addTest(.{ .root_module = sonny6322_test_mod });
+    const run_sonny6322_tests = b.addRunArtifact(sonny6322_tests);
+    spawnsBuiltGeode(sonny6322_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6322_tests.step);
+    const sonny6322_step = b.step("test-sonny6322-audit-seed-and-hmac-startup", "Run SONNY-6322 regression (spawns servers: a backup holds no audit.jsonl.key; a restored store starts a new audit key epoch, old public key intact, both epochs verify with geode audit verify and a made-up key fails; startup with auth records and no HMAC key refuses and writes nothing; a server restore of a backup sealed under another key fails, leaving nothing; an older archive with the seed restores with a warning, 0600)");
+    sonny6322_step.dependOn(&run_sonny6322_tests.step);
 
     // SONNY-6299: a backup never holds the TLS private key, the auth-chain
     // HMAC key, the generated admin password or the data-directory lock;
