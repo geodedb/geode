@@ -100,7 +100,22 @@ DROP INDEX IF EXISTS person_age_idx;
 > geode backup create --output ./full.backup --local --data-dir /var/lib/geode  # from a local data directory
 > geode restore ./full.backup --data-dir /var/lib/geode-restored --yes  # restore a backup file, offline
 > geode backup list [--dir ./backups]                        # list local backups
+> geode backup info ./full.backup                            # decode a backup's header
+> geode backup cleanup --dir ./backups --older-than 30d [--yes]  # delete old backups (dry run without --yes)
 > ```
+>
+> `geode backup info` decodes the header through the same range-checked
+> function as restore and exits 1 with `error: <Name>` for a file that is
+> not a geode backup or whose header is damaged or truncated (it does not
+> verify the payload; restore does). `geode backup cleanup` (SONNY-6289)
+> needs `--dir` and `--older-than <n>s|m|h|d|w`; without `--yes` it only
+> lists what it would delete. It considers only regular files directly in
+> `--dir` whose header decodes as a geode backup (never symlinks or
+> subdirectories), ages them by the header's timestamp, never deletes the
+> newest one, removes deleted backups from the directory's `metadata.json`,
+> reports every file, and exits 1 if a deletion fails. (Until SONNY-6289
+> cleanup printed "Backup cleanup completed" and deleted nothing, and
+> `backup info` crashed on every header.)
 >
 > `geode restore <file>` writes the backup into `--data-dir` (or
 > `GEODE_DATA_DIR`), which must not exist or be empty; no server is

@@ -477,7 +477,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-first-boot-admin-breadcrumb", .reason = "failing: reset-password checks the password policy before loading the user (KNOWN_TEST_ISSUES)" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
-    .{ .name = "test-sonny6289-backup-cleanup-info", .reason = "failing: intentionally red SONNY-6289 reproduction (backup cleanup deletes nothing and reports success; backup info crashes on a damaged header); moves to shardDep with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9366,7 +9365,7 @@ pub fn build(b: *std.Build) void {
     sonny6289_tests.root_module.addImport("storage/backup", storage_backup_mod);
     spawnsBuiltGeode(sonny6289_tests);
     const run_sonny6289_tests = b.addRunArtifact(sonny6289_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6289_tests.step);
+    shardDep(test_step, &run_sonny6289_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6289_step = b.step("test-sonny6289-backup-cleanup-info", "Run SONNY-6289 regression (geode backup cleanup needs --dir and --older-than, lists without --yes, deletes only old geode backups directly in --dir and never the newest, updates metadata.json and fails non-zero on a failed deletion; backup info/list decode the header range-checked and fail cleanly on a damaged one; no header byte flip or truncation crashes the decode)");
     sonny6289_step.dependOn(&run_sonny6289_tests.step);
 

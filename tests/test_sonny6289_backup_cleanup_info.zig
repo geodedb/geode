@@ -308,6 +308,34 @@ test "SONNY-6289 no header byte flip or truncation crashes the shared backup dec
     var good = try backup.readBackupFile(allocator, p, null);
     good.deinit(allocator);
     try testing.expect(refused > 0);
+
+    // The header-only decode `backup info`, `list` and `cleanup` use: every
+    // single-bit and byte flip of every header byte, every byte value of the
+    // enum/bool fields, and every truncation.
+    var hbuf: [hdr]u8 = undefined;
+    var header_refused: usize = 0;
+    for (0..hdr) |i| {
+        for (0..256) |v| {
+            @memcpy(&hbuf, bytes[0..hdr]);
+            hbuf[i] = @intCast(v);
+            if (backup.decodeBackupHeader(&hbuf)) |h| {
+                _ = @tagName(h.compression);
+                _ = @tagName(h.backup_type);
+                try testing.expect(@intFromBool(h.encrypted) <= 1);
+            } else |_| header_refused += 1;
+        }
+    }
+    try testing.expect(header_refused > 0);
+    for (0..bytes.len) |n| {
+        try writeFile(p, bytes[0..n]);
+        if (backup.readBackupHeader(p)) |h| {
+            _ = @tagName(h.header.compression);
+            try testing.expect(n >= hdr);
+        } else |_| {}
+    }
+    try writeFile(p, bytes);
+    const h = try backup.readBackupHeader(p);
+    try testing.expectEqual(@as(u64, bytes.len), h.file_size);
 }
 
 // -- backup cleanup -----------------------------------------------------
@@ -495,11 +523,12 @@ test "SONNY-6289 backup cleanup --yes deletes old geode backups in --dir only, k
             defer allocator.free(p);
             try writeBackup(allocator, p, f[1]);
         }
-        var d = try std.Io.Dir.cwd().openDir(fsIo(), ro, .{});
+        // A real descriptor (`.iterate`), not O_PATH, so fchmod works.
+        var d = try std.Io.Dir.cwd().openDir(fsIo(), ro, .{ .iterate = true });
         try d.setPermissions(fsIo(), std.Io.File.Permissions.fromMode(0o500));
         d.close(fsIo());
         defer {
-            if (std.Io.Dir.cwd().openDir(fsIo(), ro, .{})) |dd_const| {
+            if (std.Io.Dir.cwd().openDir(fsIo(), ro, .{ .iterate = true })) |dd_const| {
                 var dd = dd_const;
                 dd.setPermissions(fsIo(), std.Io.File.Permissions.fromMode(0o700)) catch {};
                 dd.close(fsIo());

@@ -397,11 +397,7 @@ pub const BackupManager = struct {
     pub fn ingestUploadedBackup(self: *BackupManager, file_bytes: []const u8, expected_checksum: ?u64) !BackupMetadata {
         if (file_bytes.len < @sizeOf(BackupHeader)) return error.InvalidBackupFile;
 
-        var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
-        @memcpy(&header_buf, file_bytes[0..@sizeOf(BackupHeader)]);
-        const header: BackupHeader = @bitCast(header_buf);
-        if (header.magic != BACKUP_MAGIC or header.version != BACKUP_VERSION) return error.InvalidBackupFile;
-        if (header.backup_type != .full) return error.InvalidBackupFile;
+        const header = try decodeBackupHeader(file_bytes[0..@sizeOf(BackupHeader)]);
 
         const payload = file_bytes[@sizeOf(BackupHeader)..];
         if (header.payload_len != payload.len) return error.InvalidBackupFile;
@@ -726,6 +722,58 @@ pub const ArchiveStats = struct {
     bytes: u64 = 0,
 };
 
+// CANARY: REQ=REQ-BACKUP-HEADER-001; FEATURE="Backup Restore"; ASPECT=RangeCheckedHeaderDecode; STATUS=TESTED; TEST=tests/test_sonny6289_backup_cleanup_info.zig; OWNER=storage; UPDATED=2026-11-11
+/// Decode a backup header from its raw bytes, checking every field before
+/// it is typed: magic and version, and the enum and bool fields in range (a
+/// damaged header must never put an out-of-range value into an enum or a
+/// bool, which is illegal behaviour and crashed `backup info` and `backup
+/// list`, SONNY-6289). The one header decode for restore, upload, info,
+/// list and cleanup.
+pub fn decodeBackupHeader(header_buf: *const [@sizeOf(BackupHeader)]u8) !BackupHeader {
+    const endian = builtin.cpu.arch.endian();
+    if (std.mem.readInt(u32, header_buf[@offsetOf(BackupHeader, "magic")..][0..4], endian) != BACKUP_MAGIC) return error.InvalidBackupFile;
+    if (std.mem.readInt(u16, header_buf[@offsetOf(BackupHeader, "version")..][0..2], endian) != BACKUP_VERSION) return error.InvalidBackupFile;
+    if (header_buf[@offsetOf(BackupHeader, "encrypted")] > 1) return error.InvalidBackupFile;
+    const raw_compression = std.mem.readInt(u32, header_buf[@offsetOf(BackupHeader, "compression")..][0..4], endian);
+    if (std.enums.fromInt(CompressionType, raw_compression) == null) return error.InvalidBackupFile;
+    const raw_type = std.mem.readInt(u32, header_buf[@offsetOf(BackupHeader, "backup_type")..][0..4], endian);
+    if (std.enums.fromInt(BackupType, raw_type) == null) return error.InvalidBackupFile;
+    return @bitCast(header_buf.*);
+}
+
+/// A backup file's decoded header and its size on disk.
+pub const BackupFileHeader = struct {
+    header: BackupHeader,
+    file_size: u64,
+};
+
+/// Read and decode only the header of the backup file `sub_path` in `dir`
+/// (`decodeBackupHeader`), and check the payload it declares fits in the
+/// file. Reads 48 bytes; no checksum, decryption or archive check (that is
+/// `readBackupFile`). With `follow_symlinks = false` a symbolic link is
+/// refused, never followed.
+pub fn readBackupHeaderAt(dir: std.Io.Dir, sub_path: []const u8, follow_symlinks: bool) !BackupFileHeader {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = dir.openFile(io, sub_path, .{ .mode = .read_only, .follow_symlinks = follow_symlinks }) catch |err| switch (err) {
+        error.FileNotFound => return error.BackupFileNotFound,
+        else => return err,
+    };
+    defer file.close(io);
+    const st = try file.stat(io);
+    if (st.kind != .file) return error.InvalidBackupFile;
+    var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
+    const n = try file.readPositionalAll(io, &header_buf, 0);
+    if (n != header_buf.len) return error.InvalidBackupFile;
+    const header = try decodeBackupHeader(&header_buf);
+    if (header.payload_len > st.size -| header_buf.len) return error.InvalidBackupFile;
+    return .{ .header = header, .file_size = st.size };
+}
+
+/// `readBackupHeaderAt` for a path relative to the working directory.
+pub fn readBackupHeader(path: []const u8) !BackupFileHeader {
+    return readBackupHeaderAt(std.Io.Dir.cwd(), path, true);
+}
+
 /// Read and verify the backup file at `path`: header magic, version and
 /// type, payload length, CRC32, decryption, decompression, and the archive
 /// structure and entry names. Nothing is written. `enc_key` decrypts an
@@ -743,14 +791,7 @@ pub fn readBackupFile(allocator: std.mem.Allocator, path: []const u8, enc_key: ?
     var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
     const hdr_n = try file.readPositionalAll(io, &header_buf, 0);
     if (hdr_n != header_buf.len) return error.InvalidBackupFile;
-    // A damaged header must not reach an enum or bool field with a value
-    // outside its range (safety-checked illegal behaviour).
-    if (header_buf[@offsetOf(BackupHeader, "encrypted")] > 1) return error.InvalidBackupFile;
-    const raw_compression = std.mem.readInt(u32, header_buf[@offsetOf(BackupHeader, "compression")..][0..4], builtin.cpu.arch.endian());
-    if (std.enums.fromInt(CompressionType, raw_compression) == null) return error.InvalidBackupFile;
-    const header: BackupHeader = @bitCast(header_buf);
-    if (header.magic != BACKUP_MAGIC or header.version != BACKUP_VERSION) return error.InvalidBackupFile;
-    if (@intFromEnum(header.backup_type) != @intFromEnum(BackupType.full)) return error.InvalidBackupFile;
+    const header = try decodeBackupHeader(&header_buf);
 
     const file_len = (try file.stat(io)).size;
     if (header.payload_len > file_len -| header_buf.len) return error.InvalidBackupFile;

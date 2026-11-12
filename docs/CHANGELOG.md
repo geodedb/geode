@@ -89,6 +89,24 @@
 
 ### Fixed
 
+- **`geode backup cleanup` deletes old backups instead of reporting a
+  cleanup it never did; `geode backup info` no longer crashes (SONNY-6289).**
+  `backup cleanup` printed "Cleaned 0 backup files" / "Backup cleanup
+  completed" and exited 0 without looking at any file. It now needs `--dir`
+  and `--older-than <n>s|m|h|d|w` (usage error, exit 2, otherwise), lists
+  what it would delete unless `--yes` (or `--confirm`) is given, deletes
+  only regular files directly in `--dir` whose header decodes as a geode
+  backup and whose header timestamp is older than the age, never the newest
+  backup, never a symlink or a subdirectory, drops deleted backups from the
+  directory's `metadata.json`, reports each file, and exits 1 if a deletion
+  failed. `backup info` cast the header straight from an unaligned buffer
+  (a panic on every file) and printed enum and bool fields unchecked; for a
+  `.gz`/`.zst` name it printed "gzip compressed, type full" without reading
+  the file. `backup info`, `backup list` and the server's upload ingestion
+  now decode headers through one range-checked function
+  (`decodeBackupHeader`), and info exits 1 with `error: <Name>` for a
+  damaged, truncated or non-geode file. Regression:
+  `zig build test-sonny6289-backup-cleanup-info`.
 - **BREAKING: a restore request to a running server no longer writes into
   `./data` or over the live store, and no longer reports a restore it does
   not serve (SONNY-6288).** The QUIC `restore` message, the gRPC
