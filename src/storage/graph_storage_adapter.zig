@@ -7175,6 +7175,31 @@ pub const StorageAdapter = struct {
         mg.exact_index_built.store(true, .release);
     }
 
+    /// SONNY-6362 test instrumentation: add the posting `(label, key = value)
+    /// -> node_slot` to `graph_name`'s exact property index, as a value-hash
+    /// collision or a posting left stale reads to a lookup (the posting
+    /// names a node whose value is another).
+    pub fn addExactIndexPostingForTesting(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+        value: graph_store.PropertyValue,
+        node_slot: u64,
+    ) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        try ensureExactNodePropertyIndexBuilt(self, mg);
+        const label_id = mg.label_dict.getId(label) orelse return error.LabelNotFound;
+        const storage_value = try toStorageProperty(self.allocator, value);
+        defer freeTemporaryStorageProperty(self.allocator, storage_value);
+        const value_hash = try hashStorageProperty(self.allocator, storage_value);
+        try mg.exact_node_property_index.addEx(label_id, key, value_hash, node_slot, false);
+    }
+
     /// Test-only: read the coverage counter from the most recent
     /// `rebuildExactNodePropertyIndex` pass on `graph_name` (equals the
     /// live-node count after a successful rebuild).
