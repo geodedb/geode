@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T20:52:24.698627435Z",
+  "generated_at": "2026-11-12T20:53:07.792567988Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -1118,7 +1118,8 @@
           "aspect": "FutexWakeOnReleaseBuild",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -1149,7 +1150,8 @@
           "aspect": "AdmissionFutexWakeBuild",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -2682,7 +2684,8 @@
           "aspect": "BuildTarget",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -3313,7 +3316,8 @@
           "aspect": "BuildIntegration",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -9196,7 +9200,8 @@
           "aspect": "LifetimeRegressionBuild",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-deadline-watchdog"
@@ -10157,7 +10162,8 @@
           "aspect": "UnifiedEntry",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-quic-high-concurrency-e2e"
@@ -10176,7 +10182,8 @@
           "aspect": "ServerModules",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-quic-high-concurrency-e2e"
@@ -10195,7 +10202,8 @@
           "aspect": "AuthModule",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "geodetestlab/specs/geode_auth_ddl.yml"
@@ -15412,7 +15420,8 @@
           "aspect": "RawIoUnitWiring",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-grpc-raw-io"
@@ -15454,7 +15463,8 @@
           "aspect": "TransportParitySmokeWiring",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-transport-parity"
@@ -17174,7 +17184,8 @@
           "aspect": "BuildStep",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "tests/test_read_only_execute.zig"
@@ -18445,7 +18456,8 @@
           "aspect": "BUILD",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "geodetestlab/specs/fle_comprehensive_security.yml"
@@ -20479,6 +20491,23 @@
           "benches": [],
           "owner": "fts",
           "updated": "2026-01-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-FUZZ-DICT-002",
+      "features": [
+        {
+          "feature": "FuzzDictionaries",
+          "aspect": "BuildTarget",
+          "status": "EXEMPT",
+          "files": [
+            "tests/build.zig.full"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "tooling",
+          "updated": "2026-01-03"
         }
       ]
     },
@@ -25498,7 +25527,8 @@
           "aspect": "BuildStep",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "tests/test_gps_explain_policy.zig"
@@ -27281,7 +27311,8 @@
           "aspect": "BuildStep",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "tests/test_gps_mcp_wire.zig"
@@ -27450,7 +27481,8 @@
           "aspect": "BuildStep",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "tests/test_gps_distributed_wire.zig"
@@ -44920,7 +44952,8 @@
           "aspect": "BuildStep",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -44951,7 +44984,8 @@
           "aspect": "Verification",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -44982,7 +45016,8 @@
           "aspect": "TableCheck",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -48478,7 +48513,8 @@
           "aspect": "BuildConfig",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -53101,7 +53137,8 @@
           "aspect": "BuildTarget",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "geodetestlab/specs/gql_catalog_operations_comprehensive.yml"
@@ -57590,7 +57627,8 @@
           "aspect": "BuildIntegration",
           "status": "BENCHED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [
@@ -57952,7 +57990,8 @@
           "aspect": "BuildIntegration",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-perf-optimizations"
@@ -58350,7 +58389,8 @@
           "aspect": "BuildIntegration",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-transport-fuzz"
@@ -59070,7 +59110,8 @@
           "aspect": "PerformanceValidation",
           "status": "BENCHED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -59360,7 +59401,8 @@
           "aspect": "BUILD",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -59389,7 +59431,8 @@
           "aspect": "BUILD",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -59435,7 +59478,8 @@
           "aspect": "BUILD",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -60547,7 +60591,8 @@
           "aspect": "LaneParallelismBuild",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-thread-pool-lane-parallelism"
@@ -60745,7 +60790,8 @@
           "aspect": "BuildIntegration",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-thread-pool-parallel"
@@ -60810,7 +60856,8 @@
           "aspect": "BuildIntegration",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-thread-pool-parallel"
@@ -60829,7 +60876,8 @@
           "aspect": "BuildIntegration",
           "status": "BENCHED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [
@@ -60947,7 +60995,8 @@
           "aspect": "BuildIntegration",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-perf-optimizations"
@@ -60985,7 +61034,8 @@
           "aspect": "BuildIntegration",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-thread-pool-parallel"
@@ -61466,7 +61516,8 @@
           "aspect": "LifetimeRegressionBuild",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-metrics-server"
@@ -62128,7 +62179,8 @@
           "aspect": "BuildSystem",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -62561,7 +62613,8 @@
           "aspect": "PollSyncBuild",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -62606,7 +62659,8 @@
           "aspect": "ParallelReadWriteE2EBuild",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -62623,7 +62677,8 @@
           "aspect": "VendorParallelPoolGating",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-quic-high-concurrency-e2e"
@@ -65162,7 +65217,8 @@
           "aspect": "FirstStreamSchedulerLostWakeBuild",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -65335,7 +65391,8 @@
           "aspect": "ParallelRegression",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-quic-streams"
@@ -65354,7 +65411,8 @@
           "aspect": "PerformanceValidation",
           "status": "BENCHED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [
@@ -65387,7 +65445,8 @@
           "aspect": "ConnectionOutlivesFirstStreamBuild",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -68094,7 +68153,8 @@
           "aspect": "UnitTests",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [
             "test-rls-filter"
@@ -68180,7 +68240,8 @@
           "aspect": "ValueBridge",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -73439,6 +73500,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2774-EXACT-SUM",
+      "features": [
+        {
+          "feature": "GroupedAggregates",
+          "aspect": "ExactIntegerSum",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2774_exact_sum.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2774_exact_sum.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2775-SESSION-GRAPH-GATE",
       "features": [
         {
@@ -74494,6 +74574,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2812-DISTINCT-LIST-KEYS",
+      "features": [
+        {
+          "feature": "AggregateSetQuantifier",
+          "aspect": "ListKeys",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2812_distinct_list_keys.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2812_distinct_list_keys.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2816-BULK-INGEST-TXN",
       "features": [
         {
@@ -74980,6 +75079,25 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3025-WRITE-RETURN-ROWS",
+      "features": [
+        {
+          "feature": "WriteBehindAggregate",
+          "aspect": "PlainReturnPerRow",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3025_match_write_return_rows.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3025_match_write_return_rows.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -80834,6 +80952,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6351-LABELS-PARSE-DEFAULT",
+      "features": [
+        {
+          "feature": "ReadSemanticsBatch",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6351_labels_parse_default.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6351_labels_parse_default.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES",
       "features": [
         {
@@ -81001,6 +81138,25 @@
           ],
           "tests": [
             "tests/test_sonny6362_merge_index_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6362-READ-NO-BUILD-WAIT",
+      "features": [
+        {
+          "feature": "ExactPropertyIndex",
+          "aspect": "ReadFallsBackDuringBuild",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6362_exact_index_read_fallback.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6362_exact_index_read_fallback.zig"
           ],
           "benches": [],
           "owner": "storage",
@@ -81278,6 +81434,44 @@
           ],
           "benches": [],
           "owner": "server",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6383-CALL-RETURN-FLAGS",
+      "features": [
+        {
+          "feature": "ProcedureYield",
+          "aspect": "FlagsKept",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6383_call_return_flags.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6383_call_return_flags.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6383-QUERY-RESIDUALS",
+      "features": [
+        {
+          "feature": "ReadSemanticsBatch",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6383_query_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6383_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-12"
         }
       ]
@@ -83425,7 +83619,8 @@
           "aspect": "BuildTarget",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -83459,7 +83654,8 @@
           "aspect": "BuildTarget",
           "status": "EXEMPT",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -83726,7 +83922,8 @@
           "aspect": "BuildIntegration",
           "status": "TESTED",
           "files": [
-            "build.zig"
+            "build.zig",
+            "tests/build.zig.full"
           ],
           "tests": [],
           "benches": [],
@@ -89026,9 +89223,9 @@
     "by_status": {
       "BENCHED": 215,
       "COMPLETE": 2,
-      "EXEMPT": 217,
+      "EXEMPT": 218,
       "IMPL": 338,
-      "TESTED": 4600
+      "TESTED": 4607
     },
     "by_aspect": {
       "2PC": 3,
@@ -89342,7 +89539,7 @@
       "BuildStep": 6,
       "BuildSystem": 2,
       "BuildSystemIntegration": 1,
-      "BuildTarget": 4,
+      "BuildTarget": 5,
       "BuildVerification": 1,
       "Builder": 1,
       "BuiltinFunctions": 6,
@@ -90184,6 +90381,7 @@
       "ExactIndexCandidates": 2,
       "ExactIndexConfigStamp": 1,
       "ExactIndexLateKeyCatchUp": 1,
+      "ExactIntegerSum": 1,
       "ExactMatchRewrite": 1,
       "ExactNumberHash": 1,
       "ExactNumberKey": 1,
@@ -90363,6 +90561,7 @@
       "FirstStreamSchedulerLostWakeBuild": 1,
       "FlagParsing": 3,
       "FlaggerCompleteness": 1,
+      "FlagsKept": 1,
       "FlakePin": 1,
       "FleLeakRegression": 1,
       "FleRoleBoundToPrincipal": 1,
@@ -90929,6 +91128,7 @@
       "ListGraphGrants": 1,
       "ListHead": 1,
       "ListIn": 1,
+      "ListKeys": 1,
       "ListLiteralCoercion": 2,
       "ListPropertySize": 1,
       "ListRoles": 1,
@@ -91588,6 +91788,7 @@
       "Pipeline": 2,
       "PlainModeRun": 1,
       "PlainPrompt": 1,
+      "PlainReturnPerRow": 1,
       "PlaintextSizeLimit": 1,
       "PlanCacheEviction": 1,
       "PlanCost": 1,
@@ -91950,6 +92151,7 @@
       "ReExport": 3,
       "ReadBudgetOverGrpc": 1,
       "ReadBudgetPoll": 2,
+      "ReadFallsBackDuringBuild": 1,
       "ReadGraphList": 1,
       "ReadMapPartialFailure": 1,
       "ReadMutationExecuteSplit": 1,
@@ -92007,7 +92209,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 234,
+      "Regression": 236,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

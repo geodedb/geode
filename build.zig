@@ -12311,6 +12311,23 @@ pub fn build(b: *std.Build) void {
     const exact_index_deferred_step = b.step("test-exact-index-deferred-build", "H4: defer exact node-property index rebuild to lazy first-access (cold-open phase 1)");
     exact_index_deferred_step.dependOn(&run_exact_index_deferred_tests.step);
 
+    // SONNY-6362 item 6: index-served reads answer ExactIndexBusy (and their
+    // callers scan) instead of waiting for an in-flight exact-index build;
+    // the MERGE resolver still waits.
+    const sonny6362_read_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6362_exact_index_read_fallback.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6362_read_mod.addImport("geode", root_mod);
+    sonny6362_read_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6362_read_tests = b.addTest(.{ .root_module = sonny6362_read_mod });
+    const run_sonny6362_read_tests = b.addRunArtifact(sonny6362_read_tests);
+    shardDep(test_step, &run_sonny6362_read_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6362_read_step = b.step("test-sonny6362-exact-index-read-fallback", "SONNY-6362 item 6: index-served reads do not wait for an in-flight exact-index build (they answer ExactIndexBusy and their callers scan); the MERGE resolver waits");
+    sonny6362_read_step.dependOn(&run_sonny6362_read_tests.step);
+
     // SONNY-1574: the exact-index persist must never report a persist it
     // SKIPPED, and the persist-on-build spawn must happen OUTSIDE the build
     // mutex. Deterministic interleaving (the test thread holds the build mutex)
