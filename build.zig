@@ -10337,6 +10337,17 @@ pub fn build(b: *std.Build) void {
     const sonny6383_flags_step = b.step("test-sonny6383-call-return-flags", "Run SONNY-6383 item 7 regression (a standalone CALL's RETURN keeps the procedure result's flags)");
     sonny6383_flags_step.dependOn(&run_sonny6383_flags_tests.step);
 
+    // SONNY-6351 items 2 and 3: db.labels() omits a label the session RLS policy denies; the embedded parseGql accepts an expression ORDER BY key by default
+    const sonny6351_labels_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6351_labels_parse_default.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    sonny6351_labels_test_mod.addImport("geode", root_mod);
+    sonny6351_labels_test_mod.addImport("logging", logging_mod);
+    sonny6351_labels_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6351_labels_tests = b.addTest(.{ .root_module = sonny6351_labels_test_mod });
+    const run_sonny6351_labels_tests = b.addRunArtifact(sonny6351_labels_tests);
+    shardDep(test_step, &run_sonny6351_labels_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6351_labels_step = b.step("test-sonny6351-labels-parse-default", "SONNY-6351 items 2 and 3: db.labels() omits a label the session RLS policy denies; the embedded parseGql accepts an expression ORDER BY key by default");
+    sonny6351_labels_step.dependOn(&run_sonny6351_labels_tests.step);
+
     // SONNY-738 Task W fix round: the one write step (a SET, REMOVE, CREATE,
     // MERGE or DELETE applied over the rows the pattern binds, after the WITH
     // and its WHERE) and the structural guard that refuses a write clause an
