@@ -5088,6 +5088,7 @@ REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED,FieldLevelEncryption,RotateKeyRefusedAsUns
 REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED,FieldLevelEncryption,RotateKeyRefusedAsUnsupported,TESTED,tests/test_sonny6386_fle_rotate_key_unsupported.zig,,,security,2026-11-12
 REQ-SONNY-6386-KEYROT-TRUTH,KeyRotation,NoUncompiledPersistenceOrSimulatedKmsClaims,TESTED,tests/test_sonny6386_key_rotation_truth.zig,tests/test_sonny6386_key_rotation_truth.zig,,security,2026-11-12
 REQ-SONNY-6386-LATENCY-BOUND-METHODOLOGY,Perf Gates,JsonAndSchedulerLatencyBoundsBatched,TESTED,tests/test_sonny6386_latency_bound_methodology.zig,tests/test_sonny6386_latency_bound_methodology.zig,,performance,2026-11-12
+REQ-SONNY-6386-PHANTOM-OVERHEAD-CLAIMS,MVCC Phantom Prevention,OverheadClaimsMatchMeasurement,TESTED,tests/test_sonny6386_phantom_overhead_claims.zig,tests/test_sonny6386_phantom_overhead_claims.zig,,txn,2026-11-12
 REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,src/cli/backup_cli.zig,tests/test_sonny6386_remote_backup_atomic_output.zig,,cli,2026-11-12
 REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,tests/test_sonny6386_remote_backup_atomic_output.zig,,,cli,2026-11-12
 REQ-SONNY-6386-RESTORE-HMAC-FILE-TDE,Backup Restore,HmacKeyFileVsTdeKeyExplained,TESTED,tests/test_sonny6386_restore_hmac_key_file_with_tde.zig,tests/test_sonny6386_restore_hmac_key_file_with_tde.zig,,cli,2026-11-12

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T19:23:20.396599482Z",
+  "generated_at": "2026-11-12T19:28:00.165906213Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79262,6 +79262,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6386-PHANTOM-OVERHEAD-CLAIMS",
+      "features": [
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "OverheadClaimsMatchMeasurement",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_phantom_overhead_claims.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_phantom_overhead_claims.zig"
+          ],
+          "benches": [],
+          "owner": "txn",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC",
       "features": [
         {
@@ -86989,7 +87008,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4475
+      "TESTED": 4476
     },
     "by_aspect": {
       "2PC": 3,
@@ -89275,6 +89294,7 @@
       "OverCapErrorIdentity": 1,
       "OverCapErrorMapping": 1,
       "OverflowPrevention": 1,
+      "OverheadClaimsMatchMeasurement": 1,
       "OverlapAndContains": 1,
       "OverlongStoredPolicy": 1,
       "OversizedValueErrorMapping": 1,

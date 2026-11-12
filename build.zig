@@ -9510,6 +9510,19 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6386-latency-bound-methodology", "Run SONNY-6386 item 6 regression (the JSON optimization and scheduler-overhead latency bounds sample batches through perf_gate from perf_gate.bench_allocator, take no reading from their own clock, and claim on the median with a robust envelope)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6386 item 9: the phantom-prevention benchmarks claim the measured
+    // overhead (recalibrated per build mode), not 5%, and the doc states it.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_phantom_overhead_claims.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6386_ph_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6386-phantom-overhead-claims", "Run SONNY-6386 item 9 regression (the phantom-range and phantom-anomaly benchmarks claim the overhead bound recalibrated from the measurement, not 5%, and docs/ENHANCED_TRANSACTION_ISOLATION.md states the measured figures and the same bounds)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2441: KMSProvider has no dead remote path, every provider type
     // round-trips the caller's key or refuses, and the KMS tests are built.
     const sonny2441_kms_mod = b.createModule(.{ .root_source_file = b.path("src/security/kms.zig"), .target = target, .optimize = optimize });
