@@ -10665,6 +10665,20 @@ pub fn build(b: *std.Build) void {
     const sonny6368_step = b.step("test-sonny6368-index-maintenance", "Run SONNY-6368 regression (a repeated SET target answers 22G0M; geode.fts.rebuild from another graph rebuilds the default graph's index; a live SET n:L and a committed REMOVE n.prop maintain the full-text and vector indexes; vector maintenance covers every label; an undo repair colliding with a running fulltext rebuild runs after it; gRPC in process)");
     sonny6368_step.dependOn(&run_sonny6368_tests.step);
 
+    const sonny6421_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6421_index_maintenance.zig"), .target = target, .optimize = optimize });
+    sonny6421_test_mod.link_libc = true;
+    sonny6421_test_mod.addImport("geode", root_mod);
+    sonny6421_test_mod.addImport("schema", schema_mod);
+    sonny6421_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6421_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6421_test_mod.addImport("logging", logging_mod);
+    sonny6421_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6421_tests = b.addTest(.{ .root_module = sonny6421_test_mod });
+    const run_sonny6421_tests = b.addRunArtifact(sonny6421_tests);
+    shardDep(test_step, &run_sonny6421_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6421_step = b.step("test-sonny6421-index-maintenance", "Run SONNY-6421 regression (REMOVE n:L leaves L's full-text and vector indexes; a full-text search answers only nodes carrying the index's label; a SET that replaces or drops indexed text leaves the old words unfindable; a vector undo repair survives a background rebuild's swap; the IndexOnEncryptedField message; an engine-less setNodeProperty on a missing node; gRPC in process)");
+    sonny6421_step.dependOn(&run_sonny6421_tests.step);
+
     const sonny6362_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6362_statement_undo_threads.zig"), .target = target, .optimize = optimize });
     sonny6362_test_mod.link_libc = true;
     sonny6362_test_mod.addImport("geode", root_mod);

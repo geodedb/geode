@@ -2429,6 +2429,10 @@ pub const IndexManager = struct {
         }
         const indexed = ids.items.len;
 
+        if (comptime @import("builtin").is_test) {
+            if (test_vector_rebuild_before_swap) |hook| hook(index_name);
+        }
+
         // --- 4. Swap under `rebuild_mutex`.
         {
             self.rebuild_mutex.lockUncancelable(io);
@@ -2734,6 +2738,12 @@ pub const IndexManager = struct {
         }
     }
 };
+
+/// SONNY-6421 test seam (test builds only): runs in
+/// `rebuildAdvancedVectorIndexNonBlocking` after the shadow is built from its
+/// snapshot and before it is swapped in, with no graph lock and no
+/// `rebuild_mutex` held.
+pub var test_vector_rebuild_before_swap: ?*const fn (index_name: []const u8) void = null;
 
 pub fn ensureGlobalIndexManager(allocator: std.mem.Allocator) !*IndexManager {
     global_index_manager_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());

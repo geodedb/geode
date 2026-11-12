@@ -1031,7 +1031,7 @@ REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimGraphDrop,TESTED,,,index,2
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimLazySeed,TESTED,,,index,2026-08-29,src/index/index_manager.zig,1640
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimLifecycleRelease,TESTED,,,index,2026-08-30,tests/test_eng3922_dim_guard.zig,464
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimRegistry,TESTED,,,index,2026-08-29,src/index/index_manager.zig,85
-REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimRegistry,TESTED,,,index,2026-08-29,src/index/index_manager.zig,2754
+REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimRegistry,TESTED,,,index,2026-08-29,src/index/index_manager.zig,2764
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimStatementPrePass,TESTED,,,index,2026-08-29,src/execution/write_precheck.zig,172
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimWriteCheck,TESTED,,,index,2026-08-29,src/execution/property_mutation.zig,393
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimWriteCheck,TESTED,,,index,2026-08-29,src/index/index_manager.zig,1568
@@ -1514,7 +1514,7 @@ REQ-GEODE-877-KNN-INDEX-SHADOW,VectorKnn,UnrelatedIndexMustNotShadowScan,TESTED,
 REQ-GEODE-877-KNN-INDEX-SHADOW,VectorKnn,UnrelatedIndexMustNotShadowScan,TESTED,,,engine,2026-08-29,src/graph_store.zig,4756
 REQ-GEODE-877-KNN-INDEX-SHADOW,VectorKnn,UnrelatedIndexMustNotShadowScan,TESTED,,,eval,2026-08-29,tests/test_vector_knn_silent_failures.zig,91
 REQ-GEODE-877-KNN-LIST-PROPERTY,VectorKnn,NumericListCoercion,TESTED,,,eval,2026-08-29,src/eval.zig,2681
-REQ-GEODE-877-KNN-LIST-PROPERTY,VectorKnn,NumericListCoercion,TESTED,,,index,2026-08-29,src/index/index_manager.zig,2797
+REQ-GEODE-877-KNN-LIST-PROPERTY,VectorKnn,NumericListCoercion,TESTED,,,index,2026-08-29,src/index/index_manager.zig,2807
 REQ-GEODE-877-KNN-LIST-PROPERTY,VectorKnn,NumericListCoercion,TESTED,,,eval,2026-08-29,tests/test_vector_knn_silent_failures.zig,92
 REQ-GEODE-877-KNN-UNKNOWN-PROPERTY,VectorKnn,UnknownPropertyDiagnostic,TESTED,,,eval,2026-08-29,src/eval.zig,3356
 REQ-GEODE-877-KNN-UNKNOWN-PROPERTY,VectorKnn,UnknownPropertyDiagnostic,TESTED,,,eval,2026-08-29,src/server/proto_util.zig,423
@@ -1695,7 +1695,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,909
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,14451
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,14465
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,196
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2170
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1505
@@ -1844,7 +1844,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,113
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,14460
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,14474
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1680
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1922
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,1034
@@ -1856,7 +1856,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7558
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,14472
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,14486
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -5535,6 +5535,7 @@ REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME,Embedded LSP,AuthProviderOutlivesSessi
 REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME,Embedded LSP,ListenerOwnsProviderLifetime,TESTED,,,lsp,2026-11-12,src/server/main.zig,505
 REQ-SONNY-6374-SERVER-RESIDUALS,Server Hygiene,HelpAbacArgonCanaryDeadCode,TESTED,,,server,2026-11-12,tests/test_sonny6374_server_residuals.zig,22
 REQ-SONNY-6378-SERVER-EXIT-HYGIENE,Server Hygiene,ExitLeaksArgonBoundsLoggerDocker,TESTED,,,server,2026-11-12,tests/test_sonny6378_server_exit_and_hygiene.zig,25
+REQ-SONNY-6421-INDEX-MAINTENANCE,Execution,IndexMaintenanceRegression,TESTED,,,execution,2026-11-12,tests/test_sonny6421_index_maintenance.zig,27
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,,,execution,2026-09-08,src/execution/admin_ddl.zig,217
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,,,execution,2026-09-08,tests/test_sonny_capability_profile.zig,1
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,IMPL,,,server,2026-09-08,src/server/cli_args.zig,69
@@ -5970,9 +5971,9 @@ REQ-VECTOR-INDEX-READER-QUIESCENCE-001,VectorIndex,ReaderHandleApi,TESTED,,,inde
 REQ-VECTOR-INDEX-READER-QUIESCENCE-001,VectorIndex,ReaderHandleApi,TESTED,,,index,2026-09-01,tests/test_vector_index_reader_quiescence.zig,73
 REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,src/index/index_manager.zig,138
 REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,src/index/index_manager.zig,1252
-REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2519
+REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2523
 REQ-VECTOR-INDEX-READER-QUIESCENCE-002,VectorIndex,DropWaitsForReaders,TESTED,,,index,2026-09-01,tests/test_vector_index_reader_quiescence.zig,74
-REQ-VECTOR-INDEX-READER-QUIESCENCE-003,VectorIndex,SwapPinnedReader,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2440
+REQ-VECTOR-INDEX-READER-QUIESCENCE-003,VectorIndex,SwapPinnedReader,TESTED,,,index,2026-09-01,src/index/index_manager.zig,2444
 REQ-VECTOR-INDEX-READER-QUIESCENCE-003,VectorIndex,SwapPinnedReader,TESTED,,,index,2026-09-01,tests/test_vector_index_reader_quiescence.zig,75
 REQ-VECTOR-INDEX-READER-QUIESCENCE-004,VectorIndex,EntryStatisticsNoDrift,TESTED,,,index,2026-09-01,src/index/index_manager.zig,1290
 REQ-VECTOR-INDEX-READER-QUIESCENCE-004,VectorIndex,EntryStatisticsNoDrift,TESTED,,,index,2026-09-01,tests/test_vector_index_reader_quiescence.zig,76
