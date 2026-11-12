@@ -7,6 +7,14 @@
 
 # Geode — Field-Level Encryption (FLE) & Quantum-Resistant TDE
 
+> **Note (2026-11-12, SONNY-6422):** this is a research report. The code it
+> cites as current TDE/KMS integration, `src/security/tde_kms_integration.zig`
+> (`TDEKeyManager`, `initializeWithKMS`) and its test
+> `tests/test_tde_kms_integration.zig`, was never compiled and was removed
+> (SONNY-6298); the line references to it below are historical. TDE uses
+> `GEODE_TDE_KEY`, with no KMS (docs/KMS_PROVIDER_SYSTEM.md); the AES-256-GCM
+> page path is `src/storage/tde_file_encryption.zig`.
+
 *(Implementation report for `main` branch — code-level guidance with file/line references)*
 
 > This Geode is a **graph database** and is **unrelated to Apache Geode**.
@@ -102,7 +110,7 @@ Implement **annotation parsing** for:
 
 ## 3) Crypto & envelopes (Zig 0.15.1, `std.crypto`)
 
-* **AEAD:** use `std.crypto.aead.aes_gcm.Aes256Gcm` (see current TDE usage at `tde_kms_integration.zig` **encryptWithKey** lines **60–67** & decrypt lines **74–79**). Add ChaCha20-Poly1305 as fallback per platform policy.
+* **AEAD:** use `std.crypto.aead.aes_gcm.Aes256Gcm` (the TDE code this report cited, the removed `tde_kms_integration.zig`, is historical; see the note at the top). Add ChaCha20-Poly1305 as fallback per platform policy.
 * **AAD binding:** `"tenant␟schema␟field␟record_id␟key_version"` (␟ = 0x1F) as specified in the design.
 * **EnvelopeV1:** `{alg_id:u8, key_version:u16, nonce[12], tag[16], ciphertext}` (binary).
 * **Limits:** track per-key usage; 96-bit nonces; RNG by default; deterministic test-nonce injection for tests.
@@ -142,7 +150,7 @@ Introduce **`src/keys/manager.zig`**:
 4. **Rotation:** insert under FEK v1 → rotate → reads OK; opportunistic re-encrypt.
 5. **Perf micro-benches:** AES-GCM vs ChaCha20-Poly1305.
 
-*(TDE already has canary tests; see `tests/test_tde_kms_integration.zig` for pattern and enablement via feature flags, e.g., TDE enable at lines **16–21** and provider flows **22–33**, **55–67**)*.
+*(The TDE canary test this report cited, `tests/test_tde_kms_integration.zig`, was never compiled and was removed (SONNY-6298); TDE AES-GCM is tested by `zig build test-tde-nonce` and `test-e2e-security-tde-mfa`.)*
 
 ---
 

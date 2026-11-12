@@ -192,10 +192,10 @@ the container for future use (GAP-0878).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `S3_ENDPOINT` | - | S3-compatible backup endpoint |
-| `S3_ACCESS_KEY` | - | S3 access key |
-| `S3_SECRET_KEY` | - | S3 secret key |
-| `S3_BUCKET` | - | S3 bucket for backups |
+| `S3_ENDPOINT` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
+| `S3_ACCESS_KEY` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
+| `S3_SECRET_KEY` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
+| `S3_BUCKET` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
 | `REDIS_URL` | - | Redis cache connection string |
 
 ### GPU Configuration (GPU image only)

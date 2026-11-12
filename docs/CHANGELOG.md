@@ -725,6 +725,21 @@
 
 ### Fixed
 
+- **Docs no longer present S3 / DigitalOcean Spaces as a backup target or
+  the removed TDE-KMS integration as current code (SONNY-6422 item 9).**
+  No command reaches object storage (SONNY-6290; real support is story
+  SONNY-6356), yet `docs/TODO.md` listed "S3 Cloud Backup: Production-ready
+  with Digital Ocean Spaces integration", `docs/GQL_COMPLIANCE.md` said
+  `geode backup create` had S3 / Spaces upload targets,
+  `docs/SERVER_FEATURES.md` §1.4 described `s3_backup.zig` multipart uploads,
+  incremental and point-in-time backups and their throughput,
+  `docs/DOCKER_OVERVIEW.md` listed `S3_*` variables as geode's backup
+  endpoint (geode reads none of them), and `docs/NIX_DEPLOYMENT.md` showed a
+  `backup.s3Bucket` option no module defines. They now describe local backup
+  files. `specs/security/field-level-enc-research-report-pqc-PR.md` cited
+  `tde_kms_integration.zig` and its test as current; it carries a note that
+  both were never compiled and were removed (SONNY-6298). Regression:
+  `zig build test-sonny6422-backup-docs-truth`.
 - **`geode backup create --server` prints each 10% progress step once
   (SONNY-6422 item 8).** `executeRemoteBackup` printed `Progress: N%` after
   every received chunk that left the running percentage on a multiple of 10,
