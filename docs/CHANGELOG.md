@@ -4,6 +4,29 @@
 
 ### Security
 
+- **User changes no longer hold the user store's mutex across the
+  security-graph write; offline removals report a failed delete (SONNY-6352,
+  items 3 to 5).** (3) `user_management`'s createUser, createUserWithHash,
+  deleteUser, updateUserPassword, assignRole and setUserActive held
+  `user_store_mutex` (lock tier 5) while the persistent writer wrote the
+  `__geode_security` graph (tier 1), a lock-order reversal. Each now holds
+  `auth_ddl_lock` (tier 1.7, re-entrant) for the whole change, so user
+  changes stay serialized (the QUIC and gRPC `ALTER USER ... SET PASSWORD`
+  intercepts, which did not take it, included), and takes `user_store_mutex`
+  only to read the cache before the write-through and to apply the saved
+  change after it; a created user is cached only once it is saved. The
+  Argon2id work of CREATE USER and a password change (the reuse check and the
+  new hash) now runs with the mutex released too. (4) **Behaviour change:**
+  `geode user delete`, `geode role delete` and `geode policy delete`
+  dropped the removal's error and reported the record deleted while it
+  stayed stored; they now print the error, say nothing was deleted and exit
+  1. `geode policy delete` of a name with no RLS policy said `deleted`; it
+  now says `not found (noop)`, as `geode role delete` does. (5) DROP USER
+  whose node delete fails (58030, the user stays stored and is locked out,
+  its sessions stale, the chain verifies, the retry drops it) now has an
+  end-to-end test. The lock-order table in `CLAUDE.md` lists
+  `auth_ddl_lock`.
+  Regression: `zig build test-sonny6352-auth-writer-and-removals`.
 - **Offline `geode user create` and `geode user update --password` store an
   Argon2id hash, not the password, and seal the chain (SONNY-6358).** Both
   wrote the supplied password into the user record's `password_hash` as it

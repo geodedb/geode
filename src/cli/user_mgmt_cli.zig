@@ -627,21 +627,18 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("geode user delete - Delete a user\n\nUsage: geode user delete <username>\n\nDeletes the specified user from the local user store.\n", .{});
             return;
         }
-        // Find user by username and remove
-        var found = false;
-        var it = mgr.storage.user_cache.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.getUsername(), username)) {
-                mgr.storage.removeUser(entry.key_ptr.*) catch {};
-                found = true;
-                break;
-            }
-        }
-        if (found) {
-            printOut("User '{s}' deleted\n", .{username});
-        } else {
-            std.debug.print("Error: user '{s}' not found\n", .{username});
+        // SONNY-6352: a removal that fails is reported (it was dropped, and
+        // the user reported deleted while it stayed stored).
+        const outcome = cli_auth.removeUserByName(&mgr, username) catch |err| {
+            std.debug.print("Error: failed to delete user '{s}': {s} — the user was NOT deleted\n", .{ username, @errorName(err) });
             std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        switch (outcome) {
+            .removed => printOut("User '{s}' deleted\n", .{username}),
+            .not_found => {
+                std.debug.print("Error: user '{s}' not found\n", .{username});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            },
         }
         return;
     }
@@ -1301,12 +1298,12 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const rolename = argv[start_idx + 2];
-        var deleted = false;
-        if (mgr.storage.getRoleByName(rolename)) |role| {
-            mgr.storage.removeRole(role.id) catch {};
-            deleted = true;
-        }
-        printOut("Role '{s}' {s}\n", .{ rolename, if (deleted) "deleted" else "not found (noop)" });
+        // SONNY-6352: a removal that fails is reported (it was dropped).
+        const outcome = cli_auth.removeRoleByName(&mgr, rolename) catch |err| {
+            std.debug.print("Error: failed to delete role '{s}': {s} — the role was NOT deleted\n", .{ rolename, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        printOut("Role '{s}' {s}\n", .{ rolename, if (outcome == .removed) "deleted" else "not found (noop)" });
         return;
     } else if (std.mem.eql(u8, subcommand, "show")) {
         if (hasHelpFlag(argv, start_idx + 2)) {

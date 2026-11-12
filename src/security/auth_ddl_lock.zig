@@ -19,6 +19,11 @@
 // their procedures), and `policy_ddl.create` / `drop` / `alter` (CREATE / ALTER
 // / DROP POLICY and `geode.auth.policy_create` / `policy_delete`). It is held
 // to the end of the operation, the write-through and any undo included.
+// SONNY-6352: `user_management`'s user changes (create, import, delete,
+// password, role, active flag) take it too, so the QUIC / gRPC `ALTER USER
+// ... SET PASSWORD` intercepts are serialized with the rest, and they hold
+// the user store's mutex only around their cache reads and writes, never
+// across the write-through.
 //
 // Lock order (CLAUDE.md, tier 1.7): the security DDL runs with at most its
 // session graph's lock held (tier 1), and that graph is never

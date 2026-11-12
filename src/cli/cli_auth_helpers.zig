@@ -63,6 +63,45 @@ pub fn createRlsPolicyRecord(mgr: *AuthGraphManager, name: []const u8, table: []
     return policy_id;
 }
 
+// -- Offline record removal (SONNY-6352) --
+
+pub const RemoveOutcome = enum { removed, not_found };
+
+// CANARY: REQ=REQ-SONNY-6352-CLI-REMOVAL-ERRORS; FEATURE="OfflineAuthStoreSafety"; ASPECT=RemovalErrorsReported; STATUS=TESTED; TEST=tests/test_sonny6352_auth_writer_and_removals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6352: `geode user delete <username>`'s removal. `geode user
+/// delete`, `geode role delete` and `geode policy delete` dropped the
+/// removal's error (`catch {}`) and reported the record deleted while it
+/// stayed stored (a node delete that fails leaves the record, SONNY-6293).
+/// An error here means nothing was removed.
+pub fn removeUserByName(mgr: *AuthGraphManager, username: []const u8) !RemoveOutcome {
+    const id = mgr.storage.findUserIdByUsername(username) orelse return .not_found;
+    try mgr.storage.removeUser(id);
+    return .removed;
+}
+
+/// SONNY-6352: `geode role delete <rolename>`'s removal (see
+/// `removeUserByName`).
+pub fn removeRoleByName(mgr: *AuthGraphManager, name: []const u8) !RemoveOutcome {
+    const role = mgr.storage.getRoleByName(name) orelse return .not_found;
+    try mgr.storage.removeRole(role.id);
+    return .removed;
+}
+
+/// SONNY-6352: `geode policy delete <name>`'s removal: the RLS policy of
+/// that name, never a GPS policy (SONNY-2750; see `removeUserByName`).
+pub fn removeRlsPolicyByName(mgr: *AuthGraphManager, name: []const u8) !RemoveOutcome {
+    const id = blk: {
+        var it = mgr.storage.policy_cache.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.effectiveKind() != .rls) continue;
+            if (std.mem.eql(u8, entry.value_ptr.getName(), name)) break :blk entry.key_ptr.*;
+        }
+        return .not_found;
+    };
+    try mgr.storage.removePolicy(id);
+    return .removed;
+}
+
 // -- State Path Resolution (for non-auth flat files) --
 
 const STATE_DIR_ENV = "GEODE_STATE_DIR";

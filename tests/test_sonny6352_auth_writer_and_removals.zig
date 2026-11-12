@@ -356,6 +356,16 @@ test "SONNY-6352: DROP USER whose node delete fails answers 58030; the user stay
 // 4. The offline removals report a failed node delete
 // ---------------------------------------------------------------------------
 
+/// Whether an RLS policy record `name` is cached (`findPolicyIdByName` finds
+/// GPS policies only).
+fn rlsPolicyStored(mgr: *AuthGraphManager, name: []const u8) bool {
+    var it = mgr.storage.policyIterator();
+    while (it.next()) |record| {
+        if (record.effectiveKind() == .rls and std.mem.eql(u8, record.getName(), name)) return true;
+    }
+    return false;
+}
+
 test "SONNY-6352: the offline user / role / policy removals report a failed node delete; the record stays stored and the chain verifies" {
     const io = std.Io.Threaded.global_single_threaded.io();
     var process = std.heap.ArenaAllocator.init(testing.allocator);
@@ -388,7 +398,7 @@ test "SONNY-6352: the offline user / role / policy removals report a failed node
     Faults.set(0);
     try testing.expect(mgr.storage.getUserByUsername("zed6352") != null);
     try testing.expect(mgr.storage.getRoleByName("auditor6352") != null);
-    try testing.expect(mgr.findPolicyIdByName("orders6352") != null);
+    try testing.expect(rlsPolicyStored(&mgr, "orders6352"));
     try mgr.verifyChain(&kr.key);
 
     // A name with no record is reported as such.
@@ -402,7 +412,7 @@ test "SONNY-6352: the offline user / role / policy removals report a failed node
     try testing.expectEqual(cli_auth.RemoveOutcome.removed, try cli_auth.removeRlsPolicyByName(&mgr, "orders6352"));
     try testing.expect(mgr.storage.getUserByUsername("zed6352") == null);
     try testing.expect(mgr.storage.getRoleByName("auditor6352") == null);
-    try testing.expect(mgr.findPolicyIdByName("orders6352") == null);
+    try testing.expect(!rlsPolicyStored(&mgr, "orders6352"));
     try mgr.sealChain(&kr.key);
     try mgr.verifyChain(&kr.key);
 }
