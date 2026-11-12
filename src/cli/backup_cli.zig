@@ -2039,7 +2039,7 @@ fn computeChecksum(data: []const u8) u64 {
 // CANARY: REQ=REQ-BACKUP-RESTORE-001; FEATURE="Backup Restore"; ASPECT=RemoteRestore; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=cli; UPDATED=2026-01-09
 // GAP-0137: Updated to support TLS certificate verification
 // Remote server restore execution function - sends restore request via QUIC
-// CANARY: REQ=REQ-SONNY-6300; FEATURE="Restore jobs"; ASPECT=ClientPolling; STATUS=IMPL; OWNER=cli; UPDATED=2026-11-11
+// CANARY: REQ=REQ-SONNY-6300; FEATURE="Restore jobs"; ASPECT=ClientPolling; STATUS=TESTED; TEST=tests/test_sonny6300_restore_transport.zig; OWNER=cli; UPDATED=2026-11-11
 const RestoreClientOptions = struct {
     timeout_ms: u64 = 30 * 60 * 1000,
     job_id: ?[]const u8 = null,
@@ -2138,7 +2138,7 @@ fn executeRemoteRestore(
         const elapsed_signed = started.durationTo(std.Io.Clock.awake.now(io)).toMilliseconds();
         const elapsed: u64 = @intCast(@max(elapsed_signed, 0));
         if (elapsed >= options.timeout_ms) {
-            if (job_id) |id| std.debug.print("RESTORE: Wait timed out; job {s} continues. Resume with 'geode restore --job {s} --server {s}' and your authentication/TLS options.\n", .{ id, id, server });
+            if (job_id) |id| std.debug.print("RESTORE: Wait timed out; job {s} was not cancelled. Check status with 'geode restore --job {s} --server {s}' and your authentication/TLS options.\n", .{ id, id, server });
             return error.RestoreWaitTimeout;
         }
         const request = schema.RestoreRequest{

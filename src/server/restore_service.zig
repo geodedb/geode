@@ -44,7 +44,7 @@ fn response(allocator: std.mem.Allocator, status: jobs.Snapshot) !schema.Restore
     return .{ .success = status.state == .completed, .message = message, .restore_dir = status.restore_dir, .job_id = status.job_id, .job_state = state, .phase = phase, .completed_files = status.progress.completed_files, .total_files = status.progress.total_files, .restore_timestamp = status.finished_at_ms };
 }
 
-// CANARY: REQ=REQ-SONNY-6300; FEATURE="Restore jobs"; ASPECT=SharedTransport; STATUS=IMPL; TEST=tests/test_sonny6300_restore_jobs.zig; OWNER=storage; UPDATED=2026-11-11
+// CANARY: REQ=REQ-SONNY-6300; FEATURE="Restore jobs"; ASPECT=SharedTransport; STATUS=TESTED; TEST=tests/test_sonny6300_restore_transport.zig; OWNER=storage; UPDATED=2026-11-11
 pub fn handle(allocator: std.mem.Allocator, request: schema.RestoreRequest, username: []const u8) !schema.RestoreResponse {
     const current = try manager();
     if (request.job_id.len > 0) return response(allocator, try current.get(allocator, request.job_id));
@@ -55,7 +55,8 @@ pub fn handle(allocator: std.mem.Allocator, request: schema.RestoreRequest, user
     else
         std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toMilliseconds();
     const adapter = graph_store.getGlobalAdapter() orelse return error.StorageNotInitialized;
-    const store = graph_store.getGlobalStore(allocator);
+    // Jobs outlive requests; never borrow a thread's query-read snapshot.
+    const store = graph_store.getLiveGlobalStore(allocator);
     const status = if (request.async_restore)
         try current.start(allocator, store, "./server_backups", adapter.data_dir, target_time)
     else

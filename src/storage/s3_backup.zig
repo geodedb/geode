@@ -78,6 +78,9 @@ pub const S3Config = struct {
     access_key_id: []const u8,
     secret_access_key: []const u8,
     endpoint: ?[]const u8 = null, // Optional for S3-compatible services
+    /// Path addressing supports custom endpoints without wildcard DNS (MinIO,
+    /// for example). Preserve virtual-host addressing for existing callers.
+    addressing_style: enum { virtual_host, path } = .virtual_host,
     use_ssl: bool = true,
     multipart_threshold: u64 = 5 * 1024 * 1024, // 5MB
     multipart_part_size: u64 = 5 * 1024 * 1024, // 5MB
@@ -176,14 +179,13 @@ pub const S3BackupManager = struct {
         const metadata = try self.downloadMetadata(backup_id);
 
         const io = std.Io.Threaded.global_single_threaded.io();
-        const tmp_dir = try std.fmt.allocPrint(self.allocator, "/tmp/geode_s3_restore_{x}", .{backup_id});
+        var nonce: [16]u8 = undefined;
+        compat_fillRandom(&nonce);
+        const tmp_dir = try std.fmt.allocPrint(self.allocator, "{s}/.geode-s3-download-{x}", .{ std.fs.path.dirname(target_dir) orelse ".", nonce });
         defer self.allocator.free(tmp_dir);
-        std.Io.Dir.cwd().createDirPath(io, tmp_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
+        try std.Io.Dir.cwd().createDir(io, tmp_dir, .fromMode(0o700));
         // error-policy: A — best-effort cleanup of the restore staging dir
-        // under /tmp; a leftover tree affects nothing but disk hygiene.
+        // beside the offline target; a leftover tree affects disk hygiene.
         defer std.Io.Dir.cwd().deleteTree(io, tmp_dir) catch {};
 
         const s3_key = try std.fmt.allocPrint(
@@ -384,13 +386,23 @@ pub const S3BackupManager = struct {
 
         const encoded_key = try sigv4.uriEncodePath(allocator, s3_key);
         defer allocator.free(encoded_key);
-        const canonical_uri = try std.fmt.allocPrint(allocator, "/{s}", .{encoded_key});
+        const encoded_bucket = try sigv4.uriEncodePath(allocator, self.config.bucket);
+        defer allocator.free(encoded_bucket);
+        const canonical_uri = if (self.config.addressing_style == .path)
+            try std.fmt.allocPrint(allocator, "/{s}/{s}", .{ encoded_bucket, encoded_key })
+        else
+            try std.fmt.allocPrint(allocator, "/{s}", .{encoded_key});
         defer allocator.free(canonical_uri);
         const canonical_query = try sigv4.buildCanonicalQuery(allocator, query_params);
         defer allocator.free(canonical_query);
 
         const host = if (self.config.endpoint) |endpoint|
-            try std.fmt.allocPrint(allocator, "{s}.{s}", .{ self.config.bucket, endpoint })
+            if (self.config.addressing_style == .path)
+                try allocator.dupe(u8, endpoint)
+            else
+                try std.fmt.allocPrint(allocator, "{s}.{s}", .{ self.config.bucket, endpoint })
+        else if (self.config.addressing_style == .path)
+            try std.fmt.allocPrint(allocator, "s3.{s}.amazonaws.com", .{self.config.region})
         else
             try std.fmt.allocPrint(allocator, "{s}.s3.{s}.amazonaws.com", .{ self.config.bucket, self.config.region });
         errdefer allocator.free(host);

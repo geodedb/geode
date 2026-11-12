@@ -10,7 +10,7 @@ restore work; it does not claim the full restore follow-up is complete.
    facade with an empty `data_dir`. Restore into a separate, verified staging
    directory and publish atomically. **Live target refusal and the common
    verified staging path are implemented. S3 uses that common path; a successful
-   actual S3 transport round-trip still needs qualification.**
+   actual MinIO SigV4 upload/download/restore passed locally; required CI is pending.**
 2. Decide the live engine contract. Retain the staged-output plus operator restart
    contract documented by SONNY-6288 (Jira comment 155274). No hot replacement is
    introduced: teardown checkpoints old memory and frees graph handles still
@@ -19,8 +19,8 @@ restore work; it does not claim the full restore follow-up is complete.
    reconstruction, respecting `CLAUDE.md`'s Mutex Lock Ordering table. Holding
    only the outer graph lock cannot establish all those lifetime guarantees.
 3. Batch durable syncing, expose configurable client waits, and return progress
-   or run restore as a job. **Linux filesystem batching is implemented; client
-   wait/progress handling remains outstanding.** Linux uses one checked syncfs
+   or run restore as a job. **Linux filesystem batching, owned jobs, progress and configurable client
+   waits are implemented and locally qualified.** Linux uses one checked syncfs
    for staged contents and directory metadata before publication, then a parent
    directory fsync after rename. Other platforms retain file and directory
    syncing; directory fsync alone cannot make file contents durable.
@@ -32,8 +32,9 @@ restore work; it does not claim the full restore follow-up is complete.
 Pulled Geode main `122230c4` before editing. Work is isolated on
 `fix/sonny-6300-restore-safety`. SONNY-6288's server staging change `ea8cddcc` is
 reported as committed elsewhere but unpublished; it is absent from fetched main,
-remote refs and this checkout's object store. Its server integration must be
-reconciled before claiming the complete follow-up delivered.
+remote refs and this checkout's object store. The necessary server-target/staging behavior is implemented independently here.
+Any later integration must preserve these jobs and shutdown guarantees; the
+unavailable branch is not treated as reviewed or as a blocker to this fix.
 
 ## Live-target guard
 
@@ -115,8 +116,8 @@ Additional evidence:
   pass is claimed here. A final outer-length race guard then passed all eleven
   named restore tests again (`geode-6300-staging-length-guard`, 35/35 steps).
 
-Client timeouts and progress/job behavior, real S3 transport qualification,
-unpublished SONNY-6288 integration, and final required CI/merge remain open.
+The later job and transport sections record client waits/progress and actual S3
+qualification. Final required CI and merge remain open.
 
 ## Restore jobs and client waits
 
@@ -176,8 +177,55 @@ Executed evidence for this phase:
   job/source options. This build preceded the final timestamp/audit/CLI cleanup
   additions; a fresh native build on the final source remains required.
 
-Shared transport and CLI polling markers remain IMPL until their real runtime
-qualification. Actual QUIC/gRPC progress/resume/auth/cluster behavior, an actual
-S3 transport round-trip, final source CI and merge remain outstanding. This
-receipt does not substitute job-manager tests or a successful build for those
-runtime checks.
+## Actual transport qualification
+
+`geode-6300-server-build-final` passed 58/58 native steps on signed source
+`a934d5f0`. The permanent `test-sonny6300-restore-transport` RUN step is registered
+in the sharded aggregate and installs the real geode binary first. Its Python
+helper uses only the standard library and openssl, verifies a private CA, sends
+real protobuf gRPC over TLS HTTP/2, and uses the actual QUIC CLI. It never mocks
+database responses. `geode-6300-wire-formal2` passed all fourteen initial runtime
+checks; `geode-6300-transport-registered` then passed 38/38 steps and its actual
+runtime regression on the updated native binary. Evidence covers:
+
+- Admin, readonly and unauthenticated start/poll gates; required confirmation
+  and invalid target-time refusal.
+- Pending acceptance (success false), progress over 579 archived files,
+  completion, and stable completion timestamps across real gRPC polls.
+- Synchronous clients receiving completion; CLI start/timeout/resume with a
+  paused owned daemon, and completed-job polling with restart instructions.
+- Target selection beside the actual server data directory, live node count 2,
+  and shutdown/restart on the staged copy retaining the backed-up node count 1.
+
+The expanded `geode-6300-transport-cluster` run passed 47/47 steps and 34/34
+tests (12 storage, 5 jobs, 16 signing and 1 actual runtime test), including a real
+cluster-coordinator refusal. `geode-6300-transport-final` then passed 38/38
+steps and its full actual runtime test with an elected leader explicitly
+refusing `ClusterWriteNotReplicable` too. Owned daemons are resumed and joined
+in cleanup; retained private logs are mode 0600. Jobs borrow the live primary
+store, never a thread's temporary query snapshot.
+
+## Actual S3 qualification
+
+`geode-6300-s3-real2` passed 35/35 build steps and the strict-allocator real S3
+regression. The fixture starts its own loopback MinIO release
+`RELEASE.2025-09-07T16-13-09Z`, verifies executable SHA-256
+`7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f`, creates a private
+bucket with SigV4, and runs the actual Geode S3 manager. This covers signed backup
+and metadata uploads, signed metadata/archive downloads, common verified staging,
+live-target refusal, restored count 1 versus live count 2 after reopening, refusal
+to overwrite the published nonempty target, and cleanup of private staging.
+The initial run failed compilation on the new directory-permission call; the
+corrected run above executed the actual round trip. Both raw logs are retained.
+
+`S3Config.addressing_style` defaults to the existing virtual-host mode. Explicit
+path mode supports custom endpoints without wildcard DNS and signs the actual
+bucket-prefixed URI. Downloads now use an exclusive mode-0700 random sibling
+directory rather than the shared predictable `/tmp` path.
+
+The aggregate explicitly skips the external-S3 test when no owned fixture is
+configured. A new required `test-restore-s3` CI job supplies the pinned real
+fixture and runs it. A separate required `test-zig-compile` job compiles every
+aggregate artifact and executable alone. These jobs, all existing mandatory
+checks, and merge remain outstanding; focused local passes are not a full
+aggregate or cross-platform qualification.

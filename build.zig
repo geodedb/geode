@@ -7567,6 +7567,19 @@ pub fn build(b: *std.Build) void {
     const sonny6300_restore_step = b.step("test-sonny6300-restore-safety", "Run SONNY-6300 real-store restore safety regressions");
     sonny6300_restore_step.dependOn(&run_sonny6300_restore_tests.step);
 
+    const sonny6300_s3_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6300_restore_s3.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6300_s3_tests.root_module.addImport("geode", root_mod);
+    sonny6300_s3_tests.root_module.addImport("s3_backup", s3_backup_sig_mod);
+    sonny6300_s3_tests.root_module.link_libc = true;
+    const run_sonny6300_s3_tests = b.addRunArtifact(sonny6300_s3_tests);
+    shardDep(test_step, &run_sonny6300_s3_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6300_s3_step = b.step("test-sonny6300-restore-s3", "Run SONNY-6300 real MinIO SigV4 backup/restore (fixture: tests/qualify_restore_s3.py)");
+    sonny6300_s3_step.dependOn(&run_sonny6300_s3_tests.step);
+
     const insecure_tls_gate_mod = b.createModule(.{ .root_source_file = b.path("src/cli/insecure_tls_gate.zig"), .target = target, .optimize = optimize });
     insecure_tls_gate_mod.link_libc = true;
     const s3_sigv4_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_s3_sigv4.zig"), .target = target, .optimize = optimize });
@@ -9122,6 +9135,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_backup_remote_failure_tests.step, 1, test_shard_loads, test_shard_index);
     const backup_remote_failure_step = b.step("test-backup-create-remote-failure", "Run backup-create regression (a failed remote backup exits non-zero with no output file instead of falling back to a local backup; --local needs an explicit data directory)");
     backup_remote_failure_step.dependOn(&run_backup_remote_failure_tests.step);
+
+    const restore_transport_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6300_restore_transport.zig"), .target = target, .optimize = optimize });
+    restore_transport_mod.link_libc = true;
+    const restore_transport_tests = b.addTest(.{ .root_module = restore_transport_mod });
+    const run_restore_transport_tests = b.addRunArtifact(restore_transport_tests);
+    run_restore_transport_tests.step.dependOn(&install_geode_exe.step);
+    shardDep(test_step, &run_restore_transport_tests.step, 1, test_shard_loads, test_shard_index);
+    const restore_transport_step = b.step("test-sonny6300-restore-transport", "Run SONNY-6300 actual TLS QUIC/gRPC restore authorization, progress, timeout/resume and restored-data restart regression");
+    restore_transport_step.dependOn(&run_restore_transport_tests.step);
 
     // SONNY-3026: an EXPLAIN or PROFILE of transaction control, a session
     // statement or graph selection is refused (0A000), and the program traits
