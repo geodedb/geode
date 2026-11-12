@@ -4,6 +4,19 @@
 
 ### Security
 
+- **Every `SecurityManager` method that touches shared state is locked
+  (SONNY-2410).** One `SecurityManager` is shared by every connection
+  thread. SONNY-2394 locked `authenticate`, `authenticateWithMFA` and
+  `updatePassword`; the other methods read and changed the users, roles,
+  permissions, role memberships, sessions, policies, MFA cache and audit log
+  with no lock (`getUserIdByUsername`, which the QUIC and gRPC password
+  change call, walked the users map while it could change; concurrent
+  `createSession` / `hydrateUser` / `createRole` corrupted the maps and
+  handed out one role id twice). Every public method but `init`,
+  `initEmpty` and `deinit` now holds the manager's lock, which is
+  re-entrant on one thread (`ReentrantMutex`). The pointers `createRole` and
+  `createPermission` answer still point into the manager's maps and are
+  moved by the next create.
 - **The RLS policy cache owns its keys; no grant on graph `*` (SONNY-3135
   N6, N7d).** (N6) `RLSEngine.checkRowAccess` cached each decision under
   the graph and table strings its caller passed (`PolicyCache.put` kept the

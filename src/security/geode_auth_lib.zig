@@ -744,6 +744,37 @@ pub fn externalPasswordPersistenceOwned() bool {
 }
 
 // ---- SecurityManager ----
+// CANARY: REQ=REQ-SONNY-2410-SECURITY-MANAGER-LOCKING; FEATURE="SecurityManagerThreadSafety"; ASPECT=ReentrantLock; STATUS=TESTED; TEST=tests/test_sonny2410_security_manager_locking.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-2410: a mutex the owning thread may take again (each `lock` paired
+/// with an `unlock`). Per instance: two managers on one thread lock
+/// independently.
+pub const ReentrantMutex = struct {
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// The holding thread's id; 0 when free (no thread has id 0).
+    owner: std.atomic.Value(std.Thread.Id) = std.atomic.Value(std.Thread.Id).init(0),
+    /// Written only by the holder.
+    depth: u32 = 0,
+
+    pub fn lock(self: *ReentrantMutex) void {
+        const me = std.Thread.getCurrentId();
+        if (self.owner.load(.acquire) == me) {
+            self.depth += 1;
+            return;
+        }
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        self.owner.store(me, .release);
+        self.depth = 1;
+    }
+
+    pub fn unlock(self: *ReentrantMutex) void {
+        std.debug.assert(self.depth > 0 and self.owner.load(.acquire) == std.Thread.getCurrentId());
+        self.depth -= 1;
+        if (self.depth != 0) return;
+        self.owner.store(0, .release);
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+};
+
 pub const SecurityManager = struct {
     const Self = @This();
     allocator: Allocator,
@@ -760,7 +791,7 @@ pub const SecurityManager = struct {
     audit_log: AuditLog,
     password_policy: PasswordPolicy,
     elevation_ttl_ms: i64 = 5 * 60 * 1000, // default 5 minutes; configurable
-    /// SONNY-2394: serializes the credential entry points -- `authenticate`,
+    /// SONNY-2394: serialized the credential entry points -- `authenticate`,
     /// `authenticateWithMFA` and `updatePassword`. One SecurityManager is
     /// shared by every connection thread (server_init), and these paths mutate
     /// shared state with no other synchronization: a user's single-use
@@ -768,9 +799,19 @@ pub const SecurityManager = struct {
     /// counters, the `sessions` map and the `audit_log` entries. Concurrent MFA
     /// recovery-code redemption crashed on the unsynchronized audit-log /
     /// session-map growth (DebugAllocator: "Double free detected") and could
-    /// redeem one code twice. Not re-entrant: the three bodies never call each
-    /// other.
-    auth_mu: std.Io.Mutex = std.Io.Mutex.init,
+    /// redeem one code twice.
+    ///
+    /// SONNY-2410: every public method that reads or changes the users,
+    /// roles, permissions, role memberships, sessions, policies, MFA cache or
+    /// audit log takes it (`init`, `initEmpty` and `deinit` excepted: nothing
+    /// else holds the manager then). Re-entrant on one thread, so a locked
+    /// method may call another (`createUser` -> `createUserDetailed` ->
+    /// `hashPassword`). It is held across the auth-graph persistence
+    /// callbacks, as `updatePassword` already held it. Pointers the manager
+    /// answers (`createRole`, `createPermission`) point into its maps and
+    /// are moved by the next create on any thread: read them at once, or
+    /// only where no other thread changes the manager.
+    auth_mu: ReentrantMutex = .{},
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-001; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManager; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
     // Opaque pointer to AuthGraphManager for runtime mutation persistence (set by server_init).
     // Uses anyopaque because geode_auth_lib cannot import auth_graph_manager (circular dep).
@@ -861,6 +902,8 @@ pub const SecurityManager = struct {
         auth_version: u64,
         attributes_json: ?[]const u8,
     ) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var attrs = std.StringHashMap([]const u8).init(self.allocator);
         errdefer {
             var it = attrs.iterator();
@@ -1040,18 +1083,24 @@ pub const SecurityManager = struct {
     // ---- MFA Policies ----
 
     pub fn addMfaPolicy(self: *Self, p: MfaAdminPolicy) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         try self.mfa_policies.append(self.allocator, p);
         self.mfa_require_cache.clearRetainingCapacity();
         try self.audit_log.logMfaPolicyAdded(p.id, p.enabled);
     }
     // Backwards-compatible simple evaluation (no session/env context). Uses current time and null session.
     pub fn evaluateMfaPolicies(self: *Self, u: *User) bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.evaluateMfaPoliciesAdvanced(u, null, compat_milliTimestamp());
     }
 
     // Extended evaluation considering dynamic conditions (time window, risk, reauth interval).
     // CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval; OWNER=security; UPDATED=2025-09-26
     pub fn evaluateMfaPoliciesAdvanced(self: *Self, u: *User, session: ?*Session, now_ms: i64) bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         if (self.mfa_policies.items.len == 0) return false;
         // Dynamic conditions invalidate cache; detect presence.
         var has_dynamic = false;
@@ -1161,10 +1210,14 @@ pub const SecurityManager = struct {
 
     // ---- ABAC ----
     pub fn createABACPolicy(self: *Self, policy: ABACPolicy) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         try self.abac_policies.append(self.allocator, policy);
         try self.audit_log.logPolicyCreated(policy.id, policy.name);
     }
     pub fn evaluateABACPolicies(self: *Self, context: *SecurityContext, resource: []const u8, action: Action) !bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var allow = false;
         var explicit_deny = false;
         for (self.abac_policies.items) |policy| {
@@ -1229,10 +1282,14 @@ pub const SecurityManager = struct {
 
     // ---- RLS ----
     pub fn createRowLevelPolicy(self: *Self, policy: RowLevelPolicy) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         try self.row_policies.append(self.allocator, policy);
         try self.audit_log.logRowPolicyCreated(policy.id, policy.name);
     }
     pub fn applyRowLevelSecurity(self: *Self, user_id: UserId, query: []const u8, table: []const u8) ![]const u8 {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const roles_list = self.rbac.user_roles.get(user_id) orelse return query;
         var applicable = std.ArrayList(RowLevelPolicy).init(self.allocator);
         defer applicable.deinit();
@@ -1275,6 +1332,8 @@ pub const SecurityManager = struct {
 
     // ---- Sessions ----
     pub fn createSession(self: *Self, user_id: UserId) ![]const u8 {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var raw: [32]u8 = undefined;
         std.Io.Threaded.global_single_threaded.io().random(&raw);
         const enc = std.base64.url_safe_no_pad.Encoder;
@@ -1302,6 +1361,8 @@ pub const SecurityManager = struct {
     /// Unknown identifiers fail closed (classified as write => step-up required).
     /// CANARY: REQ=REQ-GQL-MFA-008; FEATURE="Session step-up requirement"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_gap0884_stepup_classification.zig; OWNER=security; UPDATED=2026-06-10
     pub fn requireStepUp(self: *Self, token: []const u8, action: []const u8) bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const s = self.sessions.get(token) orelse return true; // unknown session => demand step-up / re-auth
         const now = compat_milliTimestamp();
         if (s.elevation_expires_at) |exp| {
@@ -1319,12 +1380,16 @@ pub const SecurityManager = struct {
     /// lifetime_ms: duration the elevation should remain valid.
     /// CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
     pub fn markStepUp(self: *Self, token: []const u8, lifetime_ms: i64) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var s = self.sessions.getPtr(token) orelse return error.InvalidSession;
         const now = compat_milliTimestamp();
         s.last_mfa_ts = now;
         s.elevation_expires_at = now + lifetime_ms;
     }
     pub fn validateSession(self: *Self, token: []const u8) !UserId {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const s = self.sessions.get(token) orelse return error.InvalidSession;
         if (compat_milliTimestamp() > s.expires_at) {
             _ = self.sessions.remove(token);
@@ -1335,6 +1400,8 @@ pub const SecurityManager = struct {
 
     // ---- Authorization ----
     pub fn authorize(self: *Self, user_id: UserId, resource: []const u8, action: Action) !bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
         if (user.is_superuser) return true;
         if (self.rbac.hasPermission(user_id, resource, action)) return true;
@@ -1348,6 +1415,8 @@ pub const SecurityManager = struct {
 
     // ---- Role & Permission Mgmt ----
     pub fn createRole(self: *Self, name: []const u8, description: []const u8) !*Role {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const id = @as(RoleId, @intCast(self.roles.count() + 1));
         // GAP-0220 FIX: Use try for proper error propagation
         const role = Role{ .id = id, .name = try self.allocator.dupe(u8, name), .description = try self.allocator.dupe(u8, description), .permissions = try std.ArrayList(PermissionId).initCapacity(self.allocator, 0), .created_at = compat_milliTimestamp(), .is_system = false, .priority = 100, .parent_role = null };
@@ -1355,6 +1424,8 @@ pub const SecurityManager = struct {
         return self.roles.getPtr(id).?;
     }
     pub fn assignRole(self: *Self, user_id: UserId, role_id: RoleId) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         _ = self.users.get(user_id) orelse return error.UserNotFound;
         _ = self.roles.get(role_id) orelse return error.RoleNotFound;
         const entry = try self.rbac.user_roles.getOrPut(user_id);
@@ -1373,6 +1444,8 @@ pub const SecurityManager = struct {
         try self.audit_log.logRoleAssigned(user_id, role_id);
     }
     pub fn revokeRole(self: *Self, user_id: UserId, role_id: RoleId) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const roles_list = self.rbac.user_roles.getPtr(user_id) orelse return error.UserHasNoRoles;
         for (roles_list.items, 0..) |rid, i| {
             if (rid == role_id) {
@@ -1392,12 +1465,16 @@ pub const SecurityManager = struct {
         return error.RoleNotAssigned;
     }
     pub fn createPermission(self: *Self, name: []const u8, resource: []const u8, action: Action) !*Permission {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const id = @as(PermissionId, @intCast(self.permissions.count() + 1));
         const perm = Permission{ .id = id, .name = try self.allocator.dupe(u8, name), .resource = try self.allocator.dupe(u8, resource), .action = action, .conditions = null, .created_at = compat_milliTimestamp() };
         try self.permissions.put(id, perm);
         return self.permissions.getPtr(id).?;
     }
     pub fn grantPermission(self: *Self, role_id: RoleId, perm_id: PermissionId) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const role = self.roles.getPtr(role_id) orelse return error.RoleNotFound;
         const perm = self.permissions.get(perm_id) orelse return error.PermissionNotFound;
         for (role.permissions.items) |p| if (p == perm_id) return;
@@ -1413,6 +1490,8 @@ pub const SecurityManager = struct {
     // CANARY: REQ=REQ-AUTH-HASH-001; FEATURE="Argon2id Password Hashing"; ASPECT=PostQuantumSecurity; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_HASH_001_Argon2id; OWNER=security; UPDATED=2025-10-16
     // Delegates to the canonical standalone hashPasswordArgon2id after policy validation.
     pub fn hashPassword(self: *Self, password: []const u8) ![]const u8 {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         // CANARY: REQ=REQ-AUTH-POLICY-008; FEATURE="Pre-Hash Password Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_008_PreHashValidation; OWNER=security; UPDATED=2025-09-30
         // Validate password against policy before hashing
         try self.validatePasswordAgainstCurrentPolicy(password);
@@ -1494,6 +1573,8 @@ pub const SecurityManager = struct {
     // Create user helper
     // CANARY: REQ=REQ-GQL-AUTH-001; FEATURE="User creation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_001_CreateUser; OWNER=security; UPDATED=2025-09-26
     pub fn createUserDetailed(self: *Self, username: []const u8, email: []const u8, password: []const u8, is_superuser: bool) !UserId {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const id = @as(UserId, @intCast(self.users.count() + 1));
         const attrs = std.StringHashMap([]const u8).init(self.allocator);
         const hash = try self.hashPassword(password);
@@ -1525,10 +1606,14 @@ pub const SecurityManager = struct {
     }
     // Backwards compatible wrapper (previous signature without explicit is_superuser; defaults false). Some tests call createUser(username,email,password)
     pub fn createUser(self: *Self, username: []const u8, email: []const u8, password: []const u8) !UserId {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.createUserDetailed(username, email, password, false);
     }
     // CANARY: REQ=REQ-AUTH-POLICY-003; FEATURE="Enhanced Password Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_003_PassphraseValidation; OWNER=security; UPDATED=2025-09-30
     pub fn validatePassword(self: *Self, password: []const u8) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         if (password.len < self.password_policy.min_length) return error.PasswordTooShort;
         if (password.len > self.password_policy.max_length) return error.PasswordTooLong;
 
@@ -1718,12 +1803,16 @@ pub const SecurityManager = struct {
 
     // Check if a user requires password reset
     pub fn requiresPasswordReset(self: *Self, user_id: UserId) !bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const user = self.users.get(user_id) orelse return error.UserNotFound;
         return user.password_reset_required;
     }
 
     // Force password reset for a user
     pub fn forcePasswordReset(self: *Self, user_id: UserId) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
         user.password_reset_required = true;
         user.updated_at = compat_milliTimestamp();
@@ -1731,7 +1820,9 @@ pub const SecurityManager = struct {
     }
 
     /// Look up a user's ID by username. Returns null if no matching user found.
-    pub fn getUserIdByUsername(self: *const Self, username: []const u8) ?UserId {
+    pub fn getUserIdByUsername(self: *Self, username: []const u8) ?UserId {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var it = self.users.iterator();
         while (it.next()) |entry| {
             if (std.mem.eql(u8, entry.value_ptr.username, username)) {
@@ -1743,9 +1834,8 @@ pub const SecurityManager = struct {
 
     // Update password and clear reset requirement
     pub fn updatePassword(self: *Self, user_id: UserId, new_password: []const u8) !void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.auth_mu.lockUncancelable(io);
-        defer self.auth_mu.unlock(io);
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.updatePasswordLocked(user_id, new_password);
     }
 
@@ -1792,6 +1882,8 @@ pub const SecurityManager = struct {
     }
     // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Password Policy Validation Before Hashing"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_005_PreHashValidation; OWNER=security; UPDATED=2025-09-30
     pub fn validatePasswordAgainstCurrentPolicy(self: *Self, password: []const u8) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         // Pre-hash validation against current policy
         try self.validatePassword(password);
     }
@@ -1799,6 +1891,8 @@ pub const SecurityManager = struct {
     // Check if stored password hash meets current policy requirements
     // CANARY: REQ=REQ-AUTH-POLICY-006; FEATURE="Post-Authentication Policy Check"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_006_PostAuthPolicyCheck; OWNER=security; UPDATED=2025-09-30
     pub fn checkStoredPasswordMeetsCurrentPolicy(self: *Self, _: *User, password: []const u8) bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         // Since we can't reverse the hash, we validate the plaintext password
         // that was just successfully authenticated against current policy
         self.validatePassword(password) catch return false;
@@ -1810,9 +1904,8 @@ pub const SecurityManager = struct {
     // If MFA required, returns error.MFARequired after logging issuance.
     // CANARY: REQ=REQ-GQL-AUTH-002; FEATURE="Password authentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_002_AuthPassword; OWNER=security; UPDATED=2025-09-26
     pub fn authenticate(self: *Self, username: []const u8, password: []const u8) ![]const u8 {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.auth_mu.lockUncancelable(io);
-        defer self.auth_mu.unlock(io);
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.authenticateLocked(username, password);
     }
 
@@ -1928,9 +2021,8 @@ pub const SecurityManager = struct {
     // Recovery codes are single-use; upon successful use it is removed and audited.
     // CANARY: REQ=REQ-GQL-AUTH-004; FEATURE="MFA recovery code"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_004_Recovery|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse; OWNER=security; UPDATED=2025-09-26
     pub fn authenticateWithMFA(self: *Self, username: []const u8, password: []const u8, code: u32, recovery_code: ?[]const u8) ![]const u8 {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.auth_mu.lockUncancelable(io);
-        defer self.auth_mu.unlock(io);
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.authenticateWithMFALocked(username, password, code, recovery_code);
     }
 
