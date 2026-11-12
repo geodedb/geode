@@ -432,6 +432,20 @@
   `test_abac_enforcement.zig` are now IMPL: `SecurityManager.authorize`
   and its ABAC policies are called by no server request path (authorization
   is GPS), and `GEODE_ABAC_ENABLED` changes only a startup log line.
+- **The ThreadSanitizer companion steps instrument the code (SONNY-6328).**
+  With Zig 0.16 a Debug x86_64 build uses the self-hosted backend, which
+  ignores `-fsanitize-thread`: the six `test-*-tsan` steps had no TSan
+  instrumentation or runtime and passed while detecting nothing (a
+  deliberate race passed too). They are now built with the LLVM backend
+  (`tsanTest` in `build.zig`), configure refuses a `sanitize_thread` test
+  built any other way, and `test-sonny6328-tsan-detects-race` (in the
+  aggregate) requires ThreadSanitizer to report a deliberate race. The
+  companions now report real races, in the thread_pool dependency's
+  work-stealing queues and graph_storage's ordered B-tree cursor
+  (`docs/KNOWN_TEST_ISSUES.md`), so they stay out of the aggregate and no CI
+  job runs them until those are fixed. Until then concurrency fixes rest on
+  deterministic lock-wait proofs and stress tests. Regression:
+  `zig build test-sonny6328-tsan-detects-race`.
 - **The offline `geode user` CLI names the password-policy rule a password
   breaks; `reset-password` and `password` accept `--generate-password`
   (SONNY-6271).** `user create`, `update`, `password` and `reset-password`
