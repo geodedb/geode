@@ -584,7 +584,10 @@ pub const TxnCoordinator = struct {
                         }
                     },
                     .delete => {
-                        self.store.deleteNode(node_op.node_id);
+                        // SONNY-6302: a failed delete fails the apply, as a
+                        // failed create or property write does (the void form
+                        // only logged it).
+                        try self.store.deleteNodeChecked(node_op.node_id);
                     },
                 }
             },
@@ -620,7 +623,7 @@ pub const TxnCoordinator = struct {
                         }
                     },
                     .delete => {
-                        self.store.deleteEdge(edge_op.edge_id);
+                        try self.store.deleteEdgeChecked(edge_op.edge_id); // SONNY-6302
                     },
                 }
             },

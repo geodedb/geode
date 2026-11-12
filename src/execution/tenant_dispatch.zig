@@ -457,7 +457,7 @@ fn handleDrop(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !Execu
         }
 
         if (cascade) {
-            const counts = deleteTenantRows(store, edge_ids, node_ids);
+            const counts = try deleteTenantRows(store, tenant_id, edge_ids, node_ids);
             edges_deleted = counts.edges;
             nodes_deleted = counts.nodes;
         }
@@ -508,33 +508,54 @@ fn handleDrop(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure) !Execu
     return try maybeYield(allocator, result, call_stmt);
 }
 
+// CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="TenantLifecycle"; ASPECT=DropDeleteFailure; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=security; UPDATED=2026-11-11
 /// GAP-0847: shared scan-result deletion for a single tenant. Deletes EDGES
 /// before NODES (deleting a node first would leave dangling adjacency entries
 /// the edge delete relies on for slot routing), returning the count actually
 /// issued. The caller owns / frees the id slices.
 ///
-/// Failure posture (residual, documented in GAP_ANALYSIS.md): `deleteEdge` /
-/// `deleteNode` are infallible at this seam — adapter-tier delete failures are
-/// logged-and-swallowed by the store per the codebase-wide delete posture, so a
-/// cascade under adapter failure can OVER-report deleted counts and still proceed
-/// to registry removal. In-memory / OOM failures surface earlier (during the scan
-/// `getAll*ForTenant`, which is `try`) and abort cleanly BEFORE registry removal.
+/// SONNY-6302: a delete that fails (the storage engine refused it, or out of
+/// memory) fails the drop, BEFORE the hierarchy node and the registry record
+/// are removed: the tenant is still registered, what was deleted stays
+/// deleted (each delete is failure-atomic, in memory and in the engine), and
+/// the rest of its rows remain; the error and both counts are logged. A retry
+/// rescans and finishes the drop. (The void `deleteEdge` / `deleteNode` only
+/// logged a failed delete, so the drop went on to remove the tenant and
+/// reported success with the tenant's rows still in the store.)
 fn deleteTenantRows(
     store: *graph_store.GraphStore,
+    tenant_id: []const u8,
     edge_ids: []const u64,
     node_ids: []const u64,
-) struct { edges: usize, nodes: usize } {
+) !struct { edges: usize, nodes: usize } {
     var edges: usize = 0;
     var nodes: usize = 0;
     for (edge_ids) |eid| {
-        store.deleteEdge(eid);
+        store.deleteEdgeChecked(eid) catch |err| {
+            logDropDeleteFailed(tenant_id, err, edges, edge_ids.len, nodes, node_ids.len);
+            return err;
+        };
         edges += 1;
     }
     for (node_ids) |nid| {
-        store.deleteNode(nid);
+        store.deleteNodeChecked(nid) catch |err| {
+            logDropDeleteFailed(tenant_id, err, edges, edge_ids.len, nodes, node_ids.len);
+            return err;
+        };
         nodes += 1;
     }
     return .{ .edges = edges, .nodes = nodes };
+}
+
+fn logDropDeleteFailed(tenant_id: []const u8, err: anyerror, edges_done: usize, edges_total: usize, nodes_done: usize, nodes_total: usize) void {
+    log.err("tenant_admin.drop_delete_failed: the tenant was not dropped; rows remain", &.{
+        Attr.string("tenant", tenant_id),
+        Attr.string("error", @errorName(err)),
+        Attr.int("edges_deleted", @intCast(edges_done)),
+        Attr.int("edges_remaining", @intCast(edges_total - edges_done)),
+        Attr.int("nodes_deleted", @intCast(nodes_done)),
+        Attr.int("nodes_remaining", @intCast(nodes_total - nodes_done)),
+    });
 }
 
 /// GAP-0847: recursively cascade-drop every descendant of `tenant_id`,
@@ -563,7 +584,7 @@ fn dropChildrenCascade(
             defer allocator.free(edge_ids);
             const node_ids = try store.getAllNodesForTenant(allocator, child);
             defer allocator.free(node_ids);
-            const counts = deleteTenantRows(store, edge_ids, node_ids);
+            const counts = try deleteTenantRows(store, child, edge_ids, node_ids);
             c_edges = counts.edges;
             c_nodes = counts.nodes;
         }

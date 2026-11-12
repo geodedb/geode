@@ -5401,11 +5401,83 @@ pub const GraphStore = struct {
     ) !struct { key: []const u8, owned: ?[]u8 } {
         const key = std.fmt.bufPrint(scratch, "{s}:{s}", .{ graph_name, label }) catch |err| switch (err) {
             error.NoSpaceLeft => {
-                const owned = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ graph_name, label });
+                // One exact allocation (SONNY-6302: the removers' reserved
+                // room is sized for it; allocPrint grows a buffer).
+                const owned = try allocator.alloc(u8, graph_name.len + 1 + label.len);
+                @memcpy(owned[0..graph_name.len], graph_name);
+                owned[graph_name.len] = ':';
+                @memcpy(owned[graph_name.len + 1 ..], label);
                 return .{ .key = owned, .owned = owned };
             },
         };
         return .{ .key = key, .owned = null };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=LongNameRemoverKeys; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
+    /// SONNY-6302: the allocator the index and counter removers build a key
+    /// past their 512-byte stack buffers with: the room a delete reserved
+    /// before its point of no return (`RemoverKeyRoom`), else the store's.
+    /// A remover whose key could not be built left a deleted node in its label
+    /// posting, or a label or edge-type counter high.
+    fn removerKeyAllocator(self: *GraphStore) std.mem.Allocator {
+        if (tl_remover_key_room) |fba| return fba.allocator();
+        return self.allocator;
+    }
+
+    /// SONNY-6302: heap room for the removers' keys of one delete, allocated
+    /// before the engine delete when any name involved could make a key past
+    /// the removers' 512-byte stack buffers, and installed for this thread
+    /// around the in-memory removal (which then cannot fail). A key joins two
+    /// names and a separator; a remover holds at most two keys at once
+    /// (`decLabelPropertyCount`; `removeFromLabelIndex` around
+    /// `decGraphLabelCount`), and frees them in reverse order, which a
+    /// fixed-buffer allocator reclaims.
+    const RemoverKeyRoom = struct {
+        buf: []u8 = &.{},
+        fba: std.heap.FixedBufferAllocator = undefined,
+        prev: ?*std.heap.FixedBufferAllocator = null,
+        installed: bool = false,
+
+        fn reserve(allocator: std.mem.Allocator, longest_name: usize) !RemoverKeyRoom {
+            const longest_key = 2 * longest_name + 1;
+            if (longest_key <= 512) return .{};
+            return .{ .buf = try allocator.alloc(u8, 2 * longest_key) };
+        }
+
+        fn install(self: *RemoverKeyRoom) void {
+            if (self.buf.len == 0) return;
+            self.fba = std.heap.FixedBufferAllocator.init(self.buf);
+            self.prev = tl_remover_key_room;
+            tl_remover_key_room = &self.fba;
+            self.installed = true;
+        }
+
+        fn uninstall(self: *RemoverKeyRoom) void {
+            if (!self.installed) return;
+            tl_remover_key_room = self.prev;
+            self.installed = false;
+        }
+
+        fn deinit(self: *RemoverKeyRoom, allocator: std.mem.Allocator) void {
+            self.uninstall();
+            if (self.buf.len > 0) allocator.free(self.buf);
+        }
+    };
+
+    /// The longest name a node's removal builds a remover key from: its
+    /// graph, tenant, labels and property keys, and the graph, tenant and type
+    /// of each incident edge.
+    fn longestRemovalName(node: *const Node, incident: []const IncidentEdge) usize {
+        var n = @max(node.graph_name.len, node.tenant_id.len);
+        for (node.labels) |l| n = @max(n, l.len);
+        var it = node.properties.iterator();
+        while (it.next()) |p| n = @max(n, p.key_ptr.*.len);
+        for (incident) |e| n = @max(n, longestEdgeRemovalName(&e.body));
+        return n;
+    }
+
+    fn longestEdgeRemovalName(edge: *const Edge) usize {
+        return @max(@max(edge.graph_name.len, edge.tenant_id.len), edge.label.len);
     }
 
     fn ensureGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) !void {
@@ -5496,8 +5568,9 @@ pub const GraphStore = struct {
 
     fn decGraphLabelCount(self: *GraphStore, graph_name: []const u8, label: []const u8) void {
         var key_buf: [512]u8 = undefined;
-        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const formatted = formatGraphLabelKey(&key_buf, ka, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| ka.free(owned);
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.label_count_rwlock.lockSharedUncancelable(io);
@@ -5584,8 +5657,9 @@ pub const GraphStore = struct {
 
     fn decGraphEdgeTypeCount(self: *GraphStore, graph_name: []const u8, edge_type: []const u8) void {
         var key_buf: [512]u8 = undefined;
-        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type) catch return;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const formatted = formatGraphLabelKey(&key_buf, ka, graph_name, edge_type) catch return;
+        defer if (formatted.owned) |owned| ka.free(owned);
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.edge_type_count_rwlock.lockSharedUncancelable(io);
@@ -6001,8 +6075,9 @@ pub const GraphStore = struct {
 
     fn decLabelCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, label: []const u8) void {
         var scratch: [512]u8 = undefined;
-        const k = formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id) catch return;
-        defer if (k.owned) |buf| self.allocator.free(buf);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const k = formatGraphTenantKey(&scratch, ka, graph_name, tenant_id) catch return;
+        defer if (k.owned) |buf| ka.free(buf);
         self.decRefcount(&self.node_labels_by_tenant, k.key, label);
     }
 
@@ -6015,8 +6090,9 @@ pub const GraphStore = struct {
 
     fn decEdgeTypeCount(self: *GraphStore, graph_name: []const u8, tenant_id: []const u8, edge_type: []const u8) void {
         var scratch: [512]u8 = undefined;
-        const k = formatGraphTenantKey(&scratch, self.allocator, graph_name, tenant_id) catch return;
-        defer if (k.owned) |buf| self.allocator.free(buf);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const k = formatGraphTenantKey(&scratch, ka, graph_name, tenant_id) catch return;
+        defer if (k.owned) |buf| ka.free(buf);
         self.decRefcount(&self.edge_types_by_tenant, k.key, edge_type);
     }
 
@@ -6083,11 +6159,12 @@ pub const GraphStore = struct {
         prop_key: []const u8,
     ) void {
         var oscratch: [512]u8 = undefined;
-        const ok = formatGraphTenantKey(&oscratch, self.allocator, graph_name, tenant_id) catch return;
-        defer if (ok.owned) |buf| self.allocator.free(buf);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const ok = formatGraphTenantKey(&oscratch, ka, graph_name, tenant_id) catch return;
+        defer if (ok.owned) |buf| ka.free(buf);
         var scratch: [512]u8 = undefined;
-        const k = formatLabelPropKey(&scratch, self.allocator, label, prop_key) catch return;
-        defer if (k.owned) |buf| self.allocator.free(buf);
+        const k = formatLabelPropKey(&scratch, ka, label, prop_key) catch return;
+        defer if (k.owned) |buf| ka.free(buf);
         self.decRefcount(&self.label_properties_by_tenant, ok.key, k.key);
     }
 
@@ -6286,8 +6363,9 @@ pub const GraphStore = struct {
         // the other label-index paths build it: a delete or a rollback that
         // could not allocate the key left the node in the posting.
         var key_buf: [512]u8 = undefined;
-        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, label) catch return;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const formatted = formatGraphLabelKey(&key_buf, ka, graph_name, label) catch return;
+        defer if (formatted.owned) |owned| ka.free(owned);
         const key = formatted.key;
 
         const io = std.Io.Threaded.global_single_threaded.io();
@@ -10241,8 +10319,9 @@ pub const GraphStore = struct {
     fn removeFromEdgeTypeIndex(self: *GraphStore, graph_name: []const u8, edge_type: []const u8, edge_id: u64) void {
         // SONNY-6268: the key on the stack (see removeFromLabelIndex).
         var key_buf: [512]u8 = undefined;
-        const formatted = formatGraphLabelKey(&key_buf, self.allocator, graph_name, edge_type) catch return;
-        defer if (formatted.owned) |owned| self.allocator.free(owned);
+        const ka = self.removerKeyAllocator(); // SONNY-6302
+        const formatted = formatGraphLabelKey(&key_buf, ka, graph_name, edge_type) catch return;
+        defer if (formatted.owned) |owned| ka.free(owned);
         const key = formatted.key;
         // SONNY-3233 (round 15, F5).
         const eti_io = std.Io.Threaded.global_single_threaded.io();
@@ -10388,33 +10467,21 @@ pub const GraphStore = struct {
             if (prep) |p| self.cancelPropertyPut(&edge_meta.?.properties, p);
         };
 
-        blk_adapter: {
-            const vt = global_vtable orelse break :blk_adapter;
-            const f = vt.setEdgePropertyFn orelse break :blk_adapter;
-            const edge = self.getEdgeHydrated(edge_id) orelse break :blk_adapter;
-            const slot_from = self.requireNodeSlot(edge.graph_name, edge.from_id) catch |err| {
-                log.debug("adapter edge endpoint-slot lookup failed during setEdgeProperty", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                break :blk_adapter;
-            };
-            const slot_to = self.requireNodeSlot(edge.graph_name, edge.to_id) catch |err| {
-                log.debug("adapter edge endpoint-slot lookup failed during setEdgeProperty", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                break :blk_adapter;
-            };
-            const slot_edge = self.requireEdgeSlot(edge.graph_name, edge_id) catch |err| {
-                log.debug("adapter edge-slot lookup failed during setEdgeProperty", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                break :blk_adapter;
-            };
-            f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value) catch |err| {
-                log.debug("adapter setEdgeProperty failed", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-            };
+        // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=EdgePropertySet; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
+        // SONNY-6302: a failed slot lookup or engine write is returned, with
+        // nothing written in memory (the errdefer above cancels the prepared
+        // put), as in setNodeProperty. Both were logged at debug level and
+        // the property was then written in memory only: the client saw
+        // success and a restart lost the value.
+        if (global_vtable) |vt| {
+            if (vt.setEdgePropertyFn) |f| {
+                if (edge_meta) |edge| {
+                    const slot_from = try self.requireNodeSlot(edge.graph_name, edge.from_id);
+                    const slot_to = try self.requireNodeSlot(edge.graph_name, edge.to_id);
+                    const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
+                    try f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value);
+                }
+            }
         }
         if (prep) |p| {
             {
@@ -10597,42 +10664,52 @@ pub const GraphStore = struct {
         if (isInternalPersistedPropertyKey(key)) return;
         // SONNY-3348 (round 18): the value it removes.
         self.undoRecordEdgeProperty(edge_id, key, true) catch return undoRecordFailed();
+        // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="GraphStoreFailureAtomicity"; ASPECT=EdgePropertyRemove; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=storage; UPDATED=2026-11-11
+        // SONNY-6302: the map's shrunken slice is allocated before the engine
+        // write, as in removeNodeProperty, so the in-memory removal after it
+        // cannot fail. (It could: `fetchRemove` then kept the property in
+        // memory after the engine had removed it.) A failure of that
+        // allocation or of the engine write changes nothing and fails the
+        // statement (out of memory) or is logged (the engine).
+        const edge_meta = self.getEdgeHydrated(edge_id) orelse return;
+        const reservation = edge_meta.properties.reserveRemove(key) catch return undoRecordFailed();
+        var reserved = reservation != null;
+        defer if (reserved) edge_meta.properties.cancelRemove(reservation.?);
         if (global_vtable) |vt| {
             if (vt.removeEdgePropertyFn) |f| {
-                if (self.getEdgeHydrated(edge_id)) |edge_info| {
-                    const slot_from = self.requireNodeSlot(edge_info.graph_name, edge_info.from_id) catch |err| {
-                        log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
-                            Attr.string("error", @errorName(err)),
-                            Attr.int("edge_id", @intCast(edge_id)),
-                            Attr.string("graph", edge_info.graph_name),
-                        });
-                        return;
-                    };
-                    const slot_to = self.requireNodeSlot(edge_info.graph_name, edge_info.to_id) catch |err| {
-                        log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
-                            Attr.string("error", @errorName(err)),
-                            Attr.int("edge_id", @intCast(edge_id)),
-                            Attr.string("graph", edge_info.graph_name),
-                        });
-                        return;
-                    };
-                    const slot_edge = self.requireEdgeSlot(edge_info.graph_name, edge_id) catch |err| {
-                        log.err("adapter edge-slot lookup failed during removeEdgeProperty", &.{
-                            Attr.string("error", @errorName(err)),
-                            Attr.int("edge_id", @intCast(edge_id)),
-                            Attr.string("graph", edge_info.graph_name),
-                        });
-                        return;
-                    };
-                    f(vt.ctx, edge_info.graph_name, slot_from, slot_to, slot_edge, key) catch |err| {
-                        log.err("adapter removeEdgeProperty failed", &.{
-                            Attr.string("error", @errorName(err)),
-                            Attr.int("edge_id", @intCast(edge_id)),
-                            Attr.string("graph", edge_info.graph_name),
-                        });
-                        return;
-                    };
-                }
+                const edge_info = edge_meta;
+                const slot_from = self.requireNodeSlot(edge_info.graph_name, edge_info.from_id) catch |err| {
+                    log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge_info.graph_name),
+                    });
+                    return voidWriteFailed(err);
+                };
+                const slot_to = self.requireNodeSlot(edge_info.graph_name, edge_info.to_id) catch |err| {
+                    log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge_info.graph_name),
+                    });
+                    return voidWriteFailed(err);
+                };
+                const slot_edge = self.requireEdgeSlot(edge_info.graph_name, edge_id) catch |err| {
+                    log.err("adapter edge-slot lookup failed during removeEdgeProperty", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge_info.graph_name),
+                    });
+                    return voidWriteFailed(err);
+                };
+                f(vt.ctx, edge_info.graph_name, slot_from, slot_to, slot_edge, key) catch |err| {
+                    log.err("adapter removeEdgeProperty failed", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge_info.graph_name),
+                    });
+                    return voidWriteFailed(err);
+                };
             }
         }
         if (self.getEdgePtrHydrated(edge_id)) |edge| {
@@ -10640,9 +10717,17 @@ pub const GraphStore = struct {
                 // ENG-3954 / #874: edge parity with removeNodeProperty.
                 self.edges.lockShardExclusive(edge_id);
                 defer self.edges.unlockShardExclusive(edge_id);
-                if (edge.properties.fetchRemove(key)) |kv| {
-                    self.allocator.free(kv.key);
-                    freePropertyValue(self, kv.value);
+                // Edge writers of a graph are serialised, so the edge read
+                // above is this one, unless a bounded cache evicted it
+                // meanwhile (then the engine, written above, holds the removal
+                // and the reservation is cancelled by the defer).
+                if (reservation) |r| {
+                    if (edge.properties.entries.ptr == edge_meta.properties.entries.ptr) {
+                        reserved = false;
+                        const kv = edge.properties.commitRemove(r, key);
+                        self.allocator.free(kv.key);
+                        freePropertyValue(self, kv.value);
+                    }
                 }
             }
             self.dirty.store(true, .release);
@@ -15433,9 +15518,12 @@ pub const GraphStore = struct {
         // PHASE 1b chokepoint: hydrate before mutating indexes (must run BEFORE
         // the cache reads below — hydration mutates the node cache).
         self.ensureNodeGraphHydrated(node_id);
-        if ((try self.nodes.getOrHydrate(node_id)) == null) return;
+        const node = (try self.nodes.getOrHydrate(node_id)) orelse return;
         var incident = try self.collectIncidentEdges(node_id);
         defer incident.deinit(self.allocator);
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longestRemovalName(&node, incident.items)); // SONNY-6302
+        defer keys.deinit(self.allocator);
+        keys.install();
         self.removeNodeInMemory(node_id, incident.items);
     }
 
@@ -15473,9 +15561,11 @@ pub const GraphStore = struct {
     }
 
     /// The in-memory removal of a node and of its incident edges, read by
-    /// `collectIncidentEdges`. Cannot fail (its removers do not allocate for
-    /// names under 512 bytes; past that a key that cannot be built leaves a
-    /// stale counter or posting entry, logged nowhere: a known limit).
+    /// `collectIncidentEdges`. Cannot fail: its removers do not allocate for
+    /// names under 512 bytes, and past that build their keys in the room the
+    /// delete reserved beforehand (SONNY-6302, `RemoverKeyRoom`). A caller that
+    /// reserved none falls back to the store's allocator, where a key that
+    /// cannot be built leaves a stale counter or posting entry.
     fn removeNodeInMemory(self: *GraphStore, node_id: u64, incident: []const IncidentEdge) void {
         for (incident) |e| self.removeEdgeInMemory(e.id, e.body);
 
@@ -15571,6 +15661,9 @@ pub const GraphStore = struct {
         // from/to/label) would be skipped, leaving the edge id dangling in
         // those indexes.
         const body = (try self.edges.getOrHydrate(edge_id)) orelse return;
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longestEdgeRemovalName(&body)); // SONNY-6302
+        defer keys.deinit(self.allocator);
+        keys.install();
         self.removeEdgeInMemory(edge_id, body);
     }
 
@@ -15609,6 +15702,10 @@ pub const GraphStore = struct {
         defer self.allocator.free(gn);
         var incident = try self.collectIncidentEdges(node_id);
         defer incident.deinit(self.allocator);
+        // SONNY-6302: room for the removal's long-name keys, before the
+        // engine delete (the removal after it cannot fail).
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longestRemovalName(&node, incident.items));
+        defer keys.deinit(self.allocator);
 
         if (global_vtable) |vt| {
             const slot_id = try self.requireNodeSlot(gn, node_id);
@@ -15619,7 +15716,9 @@ pub const GraphStore = struct {
             }
         }
 
+        keys.install();
         self.removeNodeInMemory(node_id, incident.items);
+        keys.uninstall();
         self.dirty.store(true, .release);
         incrementMutationEpoch();
         // WAL notification: DeleteNode
@@ -15658,6 +15757,8 @@ pub const GraphStore = struct {
         const edge = (try self.edges.getOrHydrate(edge_id)) orelse return;
         const gn = try self.allocator.dupe(u8, edge.graph_name);
         defer self.allocator.free(gn);
+        var keys = try RemoverKeyRoom.reserve(self.allocator, longestEdgeRemovalName(&edge)); // SONNY-6302
+        defer keys.deinit(self.allocator);
 
         if (global_vtable) |vt| {
             const slot_from = try self.requireNodeSlot(edge.graph_name, edge.from_id);
@@ -15670,7 +15771,9 @@ pub const GraphStore = struct {
             }
         }
 
+        keys.install();
         self.removeEdgeInMemory(edge_id, edge);
+        keys.uninstall();
         self.dirty.store(true, .release);
         incrementMutationEpoch();
         // WAL notification: DeleteEdge
@@ -16000,6 +16103,10 @@ fn adapterWriteFault(op: AdapterWriteFault) bool {
     }
     return true;
 }
+
+/// SONNY-6302: the remover key room a delete installed on this thread
+/// (`GraphStore.RemoverKeyRoom`), or null.
+threadlocal var tl_remover_key_room: ?*std.heap.FixedBufferAllocator = null;
 
 pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
     return global_adapter;

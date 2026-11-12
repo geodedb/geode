@@ -28,6 +28,9 @@ const std = @import("std");
 const graph_store = @import("../graph_store.zig");
 const PropertyValue = graph_store.PropertyValue;
 const GraphStore = graph_store.GraphStore;
+const logging = @import("logging");
+const log = logging.scoped("cluster_replication");
+const Attr = logging.Attr;
 
 /// 4-byte magic prefix identifying a node-create payload in GraphMutation.data.
 /// (Legacy/MVP `_raft_data` payloads have no magic and take the fallback path.)
@@ -680,6 +683,15 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     };
 
     var removed: usize = 0;
+    // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="DistributedCluster"; ASPECT=ApplyDeleteFailure; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=distributed; UPDATED=2026-11-11
+    // SONNY-6302: a delete that fails is logged, the rest of the payload is
+    // still applied (the deletes are independent, and stopping would leave
+    // more of this node behind the leader), and the first error is returned
+    // so the raft apply loop logs the entry as not applied and counts it
+    // (`stats.apply_errors`). Apply stays idempotent, so a re-apply finishes
+    // it. (The void deletes only logged a failure, and the entry counted the
+    // id as removed and reported success.)
+    var first_err: ?anyerror = null;
 
     // Edges FIRST — a node-delete that precedes its incident-edge deletes in the
     // payload must not orphan those edges; deleting edges up front avoids it.
@@ -689,8 +701,15 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     while (ei < edge_count) : (ei += 1) {
         const edge_id = try r.readU64();
         if (store.getEdgePtr(edge_id) != null) {
-            store.deleteEdge(edge_id);
-            removed += 1;
+            if (store.deleteEdgeChecked(edge_id)) |_| {
+                removed += 1;
+            } else |err| {
+                log.err("replicated delete: edge delete failed; the edge remains", &.{
+                    Attr.uint("edge_id", edge_id),
+                    Attr.string("error", @errorName(err)),
+                });
+                if (first_err == null) first_err = err;
+            }
         }
     }
 
@@ -704,11 +723,19 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
             // crud_operations.zig:4161) so the wrapper can still resolve the
             // node's labels to find its covering indexes.
             fireFtsApplyHook(store, graph, node_id, .delete);
-            store.deleteNode(node_id);
-            removed += 1;
+            if (store.deleteNodeChecked(node_id)) |_| {
+                removed += 1;
+            } else |err| {
+                log.err("replicated delete: node delete failed; the node remains", &.{
+                    Attr.uint("node_id", node_id),
+                    Attr.string("error", @errorName(err)),
+                });
+                if (first_err == null) first_err = err;
+            }
         }
     }
 
+    if (first_err) |err| return err;
     return removed;
 }
 

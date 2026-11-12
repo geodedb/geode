@@ -181,6 +181,25 @@
   `deleteNode` and `deleteEdge` log it and fail the running statement on out
   of memory. Regression:
   `zig build test-sonny6268-graph-store-failure-atomicity`.
+- **No edge write, tenant drop or replicated delete reports success when the
+  storage engine did not store it (SONNY-6302):** `setEdgeProperty` logged a
+  failed engine write (or slot lookup) at debug level and wrote the property
+  in memory anyway, so the client saw success and a restart lost the value;
+  it now returns the error and leaves memory as it was, as `setNodeProperty`
+  does. `removeEdgeProperty` prepares its in-memory removal before the engine
+  write (memory could keep a property the engine had removed). A tenant drop
+  (`CALL geode.tenant.drop(t, true)`) whose delete fails now fails before the
+  tenant is removed, logs what was deleted and what remains, and a retry
+  finishes it; it used to remove the tenant and report success with its rows
+  left behind. The replicated-delete apply returns a failed delete to the raft
+  apply loop (logged as not applied, counted in `apply_errors`) after applying
+  the rest of the entry; the 2PC participant and coordinator fail a commit
+  whose delete fails, as they do a failed create; the 2PC undo of a create
+  logs a failed delete as an incomplete undo. Deleting a node or edge whose
+  names pass 512 bytes reserves its index-key room before the engine delete,
+  so the in-memory removal cannot leave the node in its label posting or a
+  counter high. Regression:
+  `zig build test-sonny6302-edge-write-and-delete-errors`.
 - **Documentation Accuracy:** Updated MIGRATION_GUIDE.md to reflect partial server wiring status and list in-progress functions (GAP-0291)
 - **SUM/FIRST/LAST Aggregations:** Added test coverage for missing aggregation types (GAP-0284)
 - **valueAt/timeBucketAvg Edge Cases:** Added boundary and empty-input tests (GAP-0285)

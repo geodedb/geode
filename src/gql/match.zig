@@ -777,9 +777,10 @@ pub const DMLEngine = struct {
         }
 
         // Perform the delete
+        // SONNY-6302: a failed delete is returned (and not audited as done).
         switch (id) {
-            .node => |nid| self.graph.deleteNode(nid),
-            .edge => |eid| self.graph.deleteEdge(eid),
+            .node => |nid| try self.graph.deleteNodeChecked(nid),
+            .edge => |eid| try self.graph.deleteEdgeChecked(eid),
         }
         try self.audit.logSuccess(.delete, entity_info.entity_type, entity_info.label, id);
     }
