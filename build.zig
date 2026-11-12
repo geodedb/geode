@@ -9467,6 +9467,24 @@ pub fn build(b: *std.Build) void {
     const sonny6374_step = b.step("test-sonny6374-lsp-auth-provider-lifetime", "Run SONNY-6374 regression (the embedded LSP AuthProvider outlives every session: two sessions get a -32002 answer to initialize, and SIGTERM with a session open closes it, stops the listener and frees the provider)");
     sonny6374_step.dependOn(&run_sonny6374_tests.step);
 
+    // SONNY-6374 items 3-8: serve --help, the ABAC startup log, a corrupt
+    // Argon2id parameter, always-true assertions, CANARY tokens naming
+    // missing files, and dead modules.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6374_server_residuals.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("build_options", build_options_mod);
+        mod.addImport("sonny6374_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        spawnsBuiltGeode(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6374-server-residuals", "Run SONNY-6374 items 3-8 regression (serve --help gives no gRPC example on the LSP port and documents --lsp-port; no log claims ABAC is enforced; a corrupt Argon2id parameter is refused, not a panic; no always-true assertions in the GAP-0193 batch 2 suites, which are built; every CANARY TEST= file exists; the dead modules are gone)").dependOn(&run_tests.step);
+    }
+
     // SONNY-3379: the I-4 vector case over in-process gRPC (the shared
     // round-12 fixture), in two fixture lifetimes; the fixture leaves no
     // index manager pointing into its freed request arena.
