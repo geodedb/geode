@@ -1,5 +1,16 @@
 # Nix Deployment Guide for Geode
 
+> **Status (2026-11-12, SONNY-6430): not in this repository.** The Nix
+> packaging this guide describes (`flake.nix`, `nix/packages/`,
+> `nix/modules/geode-daemon.nix`, the `services.geode` NixOS module) was
+> removed in commit `6d7d71dd` ("remove nix packaging temporarily") and has
+> not come back: none of the commands or options below work against this
+> tree. The guide is kept as the design for that packaging. Its former
+> `services.geode.federation` examples were removed: the module wrote
+> `federation_enable` / `federation_role` / `federation_peers` into a config
+> file whose keys the server does not read (cluster mode is
+> `GEODE_CLUSTER_TOKEN` plus the cluster flags of `geode serve`).
+
 This guide covers deploying and managing Geode using Nix, NixOS, and related tooling.
 
 ## Table of Contents
@@ -225,16 +236,6 @@ services.geode = {
     keyFile = "/etc/ssl/private/geode.key";
   };
 
-  # Federation for distributed setup
-  federation = {
-    enable = true;
-    role = "shard";           # or "coordinator"
-    peers = [
-      "coordinator1.prod.com:3141"
-      "coordinator2.prod.com:3141"
-    ];
-  };
-
   # No backup option: geode has no S3 / object-storage backup (backups are
   # local files written by `geode backup create`; SONNY-6290). Schedule that
   # command yourself and copy the file with your own tool.
@@ -333,16 +334,6 @@ services.promtail = {
 # Multi-node cluster setup
 services.geode = {
   enable = true;
-
-  federation = {
-    enable = true;
-    role = "coordinator";     # Primary coordinator
-    peers = [
-      "geode-shard-1.internal:3141"
-      "geode-shard-2.internal:3141"
-      "geode-shard-3.internal:3141"
-    ];
-  };
 
   # Load balancing
   network = {
@@ -895,7 +886,6 @@ services.geode = {
   logging.level = "warn";
   performance.memoryLimit = "16GB";
   tls.generateSelfSigned = false;
-  federation.enable = true;
   backup.enable = true;
   cdc.enable = true;
   monitoring.enable = true;

@@ -1662,6 +1662,19 @@
 
 ### Fixed
 
+- **Deployment config and docs describe only settings the server has
+  (SONNY-6430 item 9).** `docker-compose.yml`, `docker-compose.dev.yml` and
+  `docker-compose.gpu.yml` passed `S3_ENDPOINT` / `S3_ACCESS_KEY` /
+  `S3_SECRET_KEY` / `S3_BUCKET` to geode, which reads none of them.
+  `docs/SERVER_FEATURES.md` 1.3 named `GEODE_DISK_KEY_HEX`, XTS-AES, a key
+  hierarchy, Vault / AWS KMS integration and automatic rotation; the key is
+  `GEODE_TDE_KEY` (AES-256-GCM pages and WAL), with no KMS source and no
+  rotation, and Appendix B no longer lists `GEODE_DISK_*` / `GEODE_WAL_*`
+  variables nothing reads. `docs/NIX_DEPLOYMENT.md` now says the Nix
+  packaging was removed (commit `6d7d71dd`) and drops its federation
+  blocks; `docs/audit/security-phase1-inventory.md` names `GEODE_TDE_KEY`,
+  not `GEODE_WAL_KEY`, as the WAL key. Regression:
+  `zig build test-sonny6430-deploy-docs-truth`.
 - **`geode storage verify` checks the server's data directory, and `geode
   migrate create` refuses to write an unsigned migration without a key
   (SONNY-6430 items 6 and 8).** `storage verify` used the in-memory store

@@ -127,22 +127,31 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 
 ### 1.3 Disk Storage
 
-**Implementation**: `/src/storage/disk.zig`
-**CANARY**: `REQ-GQL-025`, `REQ-GQL-026`
+**Implementation**: the vendored `graph_storage` engine (pager, WAL,
+checkpoints), opened per graph by `src/storage/graph_storage_adapter.zig`;
+the key is loaded by `src/storage/tde_file_encryption.zig` (`loadKey`).
 
 **Transparent Data Encryption (TDE)**:
 
-- XTS-AES-256 mode for page-level encryption
-- Per-page tweak: `(page_id << 64) | sector_offset`
-- Software AES with future AES-NI optimization path
-- Key hierarchy with master key separation
+- AES-256-GCM per page (12-byte nonce, 16-byte tag); the storage-engine
+  WAL is encrypted with the same key
+- Enabled by `GEODE_TDE_KEY`; see [TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md)
 
-**Key Management**:
+**Key Management** (corrected 2026-11-12, SONNY-6430):
 
-- Master key from environment: `GEODE_DISK_KEY_HEX` (64-char hex)
-- Hierarchical key derivation for data, WAL, and backup keys
-- Integration with HashiCorp Vault and AWS KMS
-- Automatic key rotation support
+- One key from the environment: `GEODE_TDE_KEY`, exactly 64 hex characters
+  (32 bytes). A set but malformed value refuses startup. There is no
+  `GEODE_DISK_KEY_HEX` and no separate WAL key (`GEODE_WAL_KEY` refuses
+  startup).
+- No hierarchy of data, WAL and backup keys: the pages and the WAL use the
+  key itself, and a server with it set writes encrypted backups under it
+  (SONNY-6355).
+- No HashiCorp Vault or AWS KMS integration in the server: the Vault
+  provider code in `src/security/vault_kms_provider.zig` is not wired into
+  any server path. The key comes only from `GEODE_TDE_KEY`.
+- No automatic key rotation. Changing `GEODE_TDE_KEY` makes an existing
+  store unreadable; the offline `key_rotate` tool re-encrypts single
+  file-level-TDE files, not the storage engine's pages.
 
 **File Permissions**:
 
@@ -1155,17 +1164,20 @@ Total CANARY markers: 1284 tracking governance compliance
 **Storage**:
 
 - `GEODE_DATA_DIR`: Data directory path (default, per-user: `$XDG_STATE_HOME/geode`, else `$HOME/.local/state/geode`, else `$TMPDIR/geode-<uid>` (TMPDIR when absolute, else `/tmp`), which must be a 0700 directory of this user; SONNY-6325)
-- `GEODE_PAGE_SIZE`: Page size in bytes (default: 4096)
-- `GEODE_DISK_ENCRYPTION`: Enable TDE (`on`/`off`)
-- `GEODE_DISK_KEY_HEX`: Master encryption key (64 hex chars)
+- `GEODE_TDE_KEY`: Page and WAL encryption key (exactly 64 hex characters); unset runs without page encryption
+- `GEODE_MASTER_KEY` / `GEODE_MASTER_KEY_FORMAT`: Field-level encryption master key and its format ([FIELD_LEVEL_ENCRYPTION.md](FIELD_LEVEL_ENCRYPTION.md))
+
+The server reads none of `GEODE_PAGE_SIZE`, `GEODE_DISK_ENCRYPTION`,
+`GEODE_DISK_KEY_HEX` (corrected 2026-11-12, SONNY-6430).
 
 **WAL**:
 
-- `GEODE_WAL_ENCRYPTION`: Enable WAL encryption
-- `GEODE_WAL_SEGMENT_SIZE`: Segment rollover size (default: 1MB)
-- `GEODE_WAL_FLUSH_MODE`: `always`, `every_n`, or `time_window_ms`
-- `GEODE_WAL_FLUSH_EVERY_N`: Commit group size when `GEODE_WAL_FLUSH_MODE=every_n` (default: 10)
-- `GEODE_WAL_FLUSH_WINDOW_MS`: Flush window when `GEODE_WAL_FLUSH_MODE=time_window_ms` (default: 5ms)
+- `GEODE_WAL_SYNC`: `each_commit` (default, fsync per commit) or `deferred` (durable at the next checkpoint; replayable bulk loads only)
+
+The server reads none of `GEODE_WAL_ENCRYPTION`, `GEODE_WAL_SEGMENT_SIZE`,
+`GEODE_WAL_FLUSH_MODE`, `GEODE_WAL_FLUSH_EVERY_N`, `GEODE_WAL_FLUSH_WINDOW_MS`
+(corrected 2026-11-12, SONNY-6430): the WAL is encrypted with
+`GEODE_TDE_KEY`, and its segmenting and flushing are the storage engine's own.
 
 **CDC**:
 
