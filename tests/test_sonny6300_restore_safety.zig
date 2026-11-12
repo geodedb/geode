@@ -241,3 +241,45 @@ test "SONNY-6300 actual restore reports phases and file progress through durable
     try testing.expectEqual(backup.RestorePhase.completed, progress.last.?.phase);
     try testing.expectEqual(progress.total, progress.last.?.completed_files);
 }
+
+const PublicationRace = struct {
+    target: []const u8,
+    failure: ?anyerror = null,
+    fn update(raw: *anyopaque, progress: backup.RestoreProgress) void {
+        if (progress.phase != .publishing) return;
+        const self: *PublicationRace = @ptrCast(@alignCast(raw));
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const cwd = std.Io.Dir.cwd();
+        cwd.createDir(io, self.target, .fromMode(0o700)) catch |err| {
+            self.failure = err;
+            return;
+        };
+        var target = cwd.openDir(io, self.target, .{}) catch |err| {
+            self.failure = err;
+            return;
+        };
+        defer target.close(io);
+        target.writeFile(io, .{ .sub_path = "concurrent-data", .data = "preserve this writer" }) catch |err| {
+            self.failure = err;
+        };
+    }
+};
+
+test "SONNY-6300 exclusive directory publication preserves a concurrent target" {
+    var fixture = try Fixture.init();
+    defer fixture.deinit();
+    var manager = try backup.BackupManager.init(testing.allocator, fixture.backups, .{}, &fixture.store);
+    defer manager.deinit();
+    const meta = try manager.createFullBackup();
+    const target = try std.fmt.allocPrint(testing.allocator, "{s}/restored", .{fixture.root});
+    defer testing.allocator.free(target);
+    var race: PublicationRace = .{ .target = target };
+    try testing.expectError(error.PathAlreadyExists, manager.restoreWithProgress(target, meta.timestamp + 1, .{ .context = &race, .update = PublicationRace.update }));
+    try testing.expect(race.failure == null);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const bytes = try fixture.tmp.dir.readFileAlloc(io, "restored/concurrent-data", testing.allocator, .limited(100));
+    defer testing.allocator.free(bytes);
+    try testing.expectEqualStrings("preserve this writer", bytes);
+    var entries = fixture.tmp.dir.iterate();
+    while (try entries.next(io)) |entry| try testing.expect(!std.mem.startsWith(u8, entry.name, ".geode-restore-"));
+}

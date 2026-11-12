@@ -869,12 +869,45 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
     if (existing_empty) {
         try cwd.rename(stage, cwd, restore_dir, io);
     } else {
-        try cwd.renamePreserve(stage, cwd, restore_dir, io);
+        try publishMissingRestoreTarget(allocator, stage, restore_dir);
     }
     var parent_dir = try cwd.openDir(io, parent, .{ .iterate = true });
     defer parent_dir.close(io);
     try syncDirectory(parent_dir);
     RestoreObserver.report(observer, .{ .phase = .completed, .completed_files = entries.len, .total_files = entries.len });
+}
+
+fn publishMissingRestoreTarget(allocator: std.mem.Allocator, stage: []const u8, target: []const u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    if (comptime @import("builtin").os.tag.isDarwin()) {
+        // Zig 0.16's non-Linux POSIX renamePreserve falls back to linkat,
+        // which cannot publish a directory. Darwin's native exclusive rename
+        // is atomic for directories too (sys/stdio.h: RENAME_EXCL = 0x4).
+        const Darwin = struct {
+            extern "c" fn renameatx_np(c_int, [*:0]const u8, c_int, [*:0]const u8, c_uint) c_int;
+        };
+        const source_z = try allocator.dupeZ(u8, stage);
+        defer allocator.free(source_z);
+        const target_z = try allocator.dupeZ(u8, target);
+        defer allocator.free(target_z);
+        const result = Darwin.renameatx_np(cwd.handle, source_z, cwd.handle, target_z, 0x4);
+        switch (std.posix.errno(result)) {
+            .SUCCESS => {},
+            .EXIST, .NOTEMPTY => return error.PathAlreadyExists,
+            .ACCES, .PERM => return error.PermissionDenied,
+            .NOENT => return error.FileNotFound,
+            .NOSPC => return error.NoSpaceLeft,
+            .ROFS => return error.ReadOnlyFileSystem,
+            .XDEV => return error.RenameAcrossMountPoints,
+            .IO => return error.InputOutput,
+            else => |err| return std.posix.unexpectedErrno(err),
+        }
+    } else if (comptime @import("builtin").os.tag == .linux or @import("builtin").os.tag == .windows) {
+        try cwd.renamePreserve(stage, cwd, target, io);
+    } else {
+        return error.AtomicRestorePublicationUnsupported;
+    }
 }
 
 /// Result of compressData: the compressed payload plus the compression type

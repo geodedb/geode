@@ -229,3 +229,27 @@ fixture and runs it. A separate required `test-zig-compile` job compiles every
 aggregate artifact and executable alone. These jobs, all existing mandatory
 checks, and merge remain outstanding; focused local passes are not a full
 aggregate or cross-platform qualification.
+
+## Final-source CI corrections
+
+The first MR pipeline, 3057519349 on 9f77b3d4, failed its required macOS unit
+shard 0. Zig 0.16 implements non-Linux POSIX `renamePreserve` by hard-linking,
+which cannot publish a directory. Darwin publication now uses native
+`renameatx_np(RENAME_EXCL)` (the bundled Darwin sys/stdio.h defines flag 0x4).
+Linux and Windows keep their existing exclusive rename. Other platforms without
+an implemented exclusive directory publication fail closed. This preserves the
+no-replace guarantee rather than falling back to an overwrite-prone check/rename.
+
+A new real-storage race creates and populates the destination at the publishing
+phase. Restore must refuse with PathAlreadyExists, preserve that writer's bytes
+and clean its own private stage. Local `geode-6300-publication-fix` passed all
+18 safety/job tests, 38/38 steps (13 storage, 5 jobs). Actual macOS validation
+still requires a fresh pipeline; the failed older shard is retained as red proof.
+
+The required full compile gate also adopts the compile-only debug-symbol option
+from the auth MR: all 582+ aggregate registrations and the existing executable
+set still compile and link with Debug safety checks; disposable DWARF is omitted
+to avoid the observed AWS runner ENOSPC. Runtime and coverage configurations are
+unchanged. Auth source's same-input binary proof passed six real tests and shrank
+the test executable from 197316962 to 96105421 bytes. This size proof is not a
+passing full compile gate, which remains mandatory on final source.
