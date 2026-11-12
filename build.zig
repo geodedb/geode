@@ -12814,6 +12814,14 @@ pub fn build(b: *std.Build) void {
     const sonny3056_step = b.step("test-sonny3056-lean-merge-evicted-holder", "Run SONNY-3056 regression (lean index mode, a small node cache: the executor's MERGE and the server's bulk MERGE helpers match a holder written before its MERGE key was registered and evicted since, also for a key registered through another label and after a reopen)");
     sonny3056_step.dependOn(&run_sonny3056_tests.step);
 
+    const sonny3357_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3357_merge_relationship_properties.zig"), .target = target, .optimize = optimize });
+    sonny3357_test_mod.addImport("geode", root_mod);
+    const sonny3357_tests = b.addTest(.{ .root_module = sonny3357_test_mod });
+    const run_sonny3357_tests = b.addRunArtifact(sonny3357_tests);
+    shardDep(test_step, &run_sonny3357_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3357_step = b.step("test-sonny3357-merge-relationship-properties", "Run SONNY-3357 regression (a relationship MERGE matches on the relationship's properties too, on the executor's standalone MERGE and MATCH ... MERGE: a pattern whose properties differ creates an edge, ON MATCH / ON CREATE SET run on the right edge; the server's MATCH ... MERGE edge fast path declines a relationship with properties)");
+    sonny3357_step.dependOn(&run_sonny3357_tests.step);
+
     const sonny6354_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6354_lean_late_key_indexes.zig"), .target = target, .optimize = optimize });
     sonny6354_test_mod.link_libc = true; // setenv/unsetenv
     sonny6354_test_mod.addImport("geode", root_mod);
