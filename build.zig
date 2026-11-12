@@ -9439,6 +9439,20 @@ pub fn build(b: *std.Build) void {
     const sonny3147_step = b.step("test-sonny3147-audit-hash-coverage", "Run SONNY-3147 regression (changing any field of an audit record, deleting, reordering or inserting a record fails geode audit verify; a re-hashed change fails at the next signed DIGEST; format-1 logs verify as v1-only, the new writer appends format-2 records, a downgrade fails; one verdict, non-zero exit, no record contents; a clean close ends with a DIGEST; throughput printed)");
     sonny3147_step.dependOn(&run_sonny3147_tests.step);
 
+    // SONNY-6340: audit.* and tde.* procedures that cannot do what they
+    // report are refused (0A000), never answered with a made-up row;
+    // audit.get_merkle_digests hashes the server's audit log; the TDE self
+    // tests report success=false when nothing was encrypted; the diagnostic
+    // audit logger never keeps the query's allocator.
+    const sonny6340_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6340_no_fabricated_procedures.zig"), .target = target, .optimize = optimize });
+    sonny6340_test_mod.link_libc = true;
+    sonny6340_test_mod.addImport("geode", root_mod);
+    const sonny6340_tests = b.addTest(.{ .root_module = sonny6340_test_mod });
+    const run_sonny6340_tests = b.addRunArtifact(sonny6340_tests);
+    shardDep(test_step, &run_sonny6340_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6340_step = b.step("test-sonny6340-no-fabricated-procedures", "Run SONNY-6340 regression (audit.* and tde.* procedures that cannot do what they report are refused as unsupported; audit.get_merkle_digests hashes the server's audit log; tde.test_encryption/test_decryption report success=false with TDE off; the diagnostic audit logger never keeps the query allocator)");
+    sonny6340_step.dependOn(&run_sonny6340_tests.step);
+
     // SONNY-6299: a backup never holds the TLS private key, the auth-chain
     // HMAC key, the generated admin password or the data-directory lock;
     // server backups live under the data directory (or an absolute

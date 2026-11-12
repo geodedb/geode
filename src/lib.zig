@@ -852,6 +852,9 @@ pub const meta_dispatch = @import("execution/meta_dispatch.zig");
 // drive executeTde("tde.encrypt_page", ...) directly, and util/feature_flags so it
 // can flip the TDE feature flag deterministically without mutating real env.
 pub const storage_dispatch = @import("execution/storage_dispatch.zig");
+// SONNY-6340: re-export audit_dispatch so the regression test drives the
+// audit.* procedure handlers directly.
+pub const audit_dispatch = @import("execution/audit_dispatch.zig");
 pub const util_feature_flags = @import("feature_flags");
 // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=LibExport; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
 // GAP-0840: re-export the strict-tenancy decision module so server startup can
