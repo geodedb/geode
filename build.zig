@@ -9751,6 +9751,20 @@ pub fn build(b: *std.Build) void {
     const sonny3348b_step = b.step("test-sonny3348-round19-undo", "Run SONNY-3348 round 19 regression (the statement undo record counts against the write budget: a DETACH DELETE of a graph whose images do not fit answers 53200 and leaves the graph; the record is leak-checked; an undo that cannot undo answers 40003; ROLLBACK continues past it and reports it; every failure path aborts the transaction; COMMIT after a failure answers 40000 on every transport; the delete image reads the checked adjacency; gRPC in process)");
     sonny3348b_step.dependOn(&run_sonny3348b_tests.step);
 
+    const sonny2725_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2725_merge_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny2725_test_mod.link_libc = true;
+    sonny2725_test_mod.addImport("geode", root_mod);
+    sonny2725_test_mod.addImport("schema", schema_mod);
+    sonny2725_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2725_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2725_test_mod.addImport("logging", logging_mod);
+    sonny2725_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2725_tests = b.addTest(.{ .root_module = sonny2725_test_mod });
+    const run_sonny2725_tests = b.addRunArtifact(sonny2725_tests);
+    shardDep(test_step, &run_sonny2725_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2725_step = b.step("test-sonny2725-merge-atomicity", "Run SONNY-2725 regression (a MERGE statement that fails part-way leaves nothing: a later MERGE, ON CREATE SET, relationship MERGE, DELETE or RETURN that errors undoes the nodes and edges the earlier MERGE clauses created; gRPC in process)");
+    sonny2725_step.dependOn(&run_sonny2725_tests.step);
+
     // SONNY-3384: MATCH ... SET ... DETACH DELETE ... RETURN runs every clause,
     // or is refused. gRPC in process.
     const sonny3384_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3384_set_detach_delete.zig"), .target = target, .optimize = optimize });
