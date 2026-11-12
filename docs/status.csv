@@ -1396,7 +1396,7 @@ REQ-FTS-MAINT-HYDRATE-001,FullText,NonResidentFallback,TESTED,,,fts,2026-08-29,s
 REQ-FTS-MAINT-HYDRATE-001,FullText,NonResidentFallback,TESTED,,,fts,2026-08-29,tests/test_fts_bulk_merge_maintenance.zig,318
 REQ-FTS-MAINT-HYDRATE-001,FullText,NonResidentFallbackNoOp,TESTED,,,fts,2026-08-29,tests/test_fts_bulk_merge_maintenance.zig,411
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,Dispatch,TESTED,,,index,2026-08-28,src/execution/fts_dispatch.zig,81
-REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,MutatingClassification,TESTED,,,index,2026-08-28,src/execution/procedure_access.zig,94
+REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,MutatingClassification,TESTED,,,index,2026-08-28,src/execution/procedure_access.zig,100
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildBackfill,TESTED,,,index,2026-08-29,src/execution/fts_index_ops.zig,126
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildBackfill,TESTED,,,index,2026-08-28,tests/test_fts_rebuild.zig,1
 REQ-FTS-REBUILD-001,CALL geode.fts.rebuild,RebuildProc,TESTED,,,index,2026-08-28,src/execution/fts_dispatch.zig,341
@@ -1794,22 +1794,22 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,910
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,13676
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,196
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2020
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1464
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,MatchClassifiedAsMatch,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,160
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,NoPrincipalUnauthenticated,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,247
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserCreateQuery,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,130
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,MatchClassifiedAsMatch,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,162
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,NoPrincipalUnauthenticated,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,260
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserCreateQuery,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,132
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserDispatch,TESTED,,,security,2026-05-21,src/gql/parser.zig,6491
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserMatchQuery,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,121
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserNoConflict,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,148
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserShowQuery,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,139
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserMatchQuery,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,123
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserNoConflict,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,150
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ParserShowQuery,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,141
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,PrintTagName,TESTED,,,security,2026-05-21,src/gql/print.zig,202
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ReExport,TESTED,,,security,2026-05-21,src/execution.zig,292
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ReadOnlyAllowsMatch,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,268
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ReasonCodePresent,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,294
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ShowClassifiedAsShowMetadata,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,222
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,TestSuite,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,10
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ReadOnlyAllowsMatch,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,281
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ReasonCodePresent,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,307
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ShowClassifiedAsShowMetadata,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,232
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,TestSuite,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,12
 REQ-GPS-EXPR-001,GPS Expression Compilation,AndPredicate,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,147
 REQ-GPS-EXPR-001,GPS Expression Compilation,Compile,TESTED,,,security,2026-05-20,src/security/policy_expression.zig,100
 REQ-GPS-EXPR-001,GPS Expression Compilation,CurrentGraphEquality,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig,113
@@ -1940,7 +1940,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadOnlyForMutatingDenied,TESTED,,,se
 REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadOnlyForMutatingDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,71
 REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,137
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
-REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,120
+REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,126
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,13685
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1680
@@ -2870,7 +2870,7 @@ REQ-GQL-FOR-WRITE-BODY-876,ForStatement,BodyExecution,TESTED,,,engine,2026-08-29
 REQ-GQL-FOR-WRITE-BODY-876,ForStatement,BodyParse,TESTED,,,parser,2026-08-29,src/gql/parser.zig,6343
 REQ-GQL-FOR-WRITE-BODY-876,ForStatement,BodyResultAggregation,TESTED,,,engine,2026-08-29,src/execution/statement_handlers.zig,451
 REQ-GQL-FOR-WRITE-BODY-876,ForStatement,WriteBodyComposition,TESTED,,,parser,2026-08-29,tests/test_for_write_body.zig,1
-REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY,ForStatement,GpsActionClassification,TESTED,,,query_traits,2026-08-29,src/execution/statement_handlers.zig,1562
+REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY,ForStatement,GpsActionClassification,TESTED,,,query_traits,2026-08-29,src/execution/statement_handlers.zig,1636
 REQ-GQL-FOR-WRITE-BODY-876-CLASSIFY,ForStatement,MutationClassification,TESTED,,,query_traits,2026-08-29,tests/test_for_write_body.zig,2
 REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig,20
 REQ-GQL-FTS-001,BM25 Full-Text Search,FTS,TESTED,,,index,2026-05-30,src/index/fulltext.zig,91
@@ -2896,14 +2896,14 @@ REQ-GQL-FTS-ADV-001,Advanced FTS,PositionalSearch,TESTED,,,index,2026-06-10,src/
 REQ-GQL-FTS-ADV-001,Advanced FTS,ProximityProc,TESTED,,,index,2026-06-10,src/execution/fts_dispatch.zig,242
 REQ-GQL-FTS-ADV-001,Advanced FTS,ProximitySearch,TESTED,,,index,2026-06-10,src/index/fulltext.zig,207
 REQ-GQL-FTS-ADV-001,Advanced FTS,QUERY,TESTED,,,search,2026-06-10,src/fts/advanced.zig,15
-REQ-GQL-FTS-ADV-001,Advanced FTS,ReadOnlyClassification,TESTED,,,index,2026-06-10,src/execution/procedure_access.zig,83
+REQ-GQL-FTS-ADV-001,Advanced FTS,ReadOnlyClassification,TESTED,,,index,2026-06-10,src/execution/procedure_access.zig,89
 REQ-GQL-FTS-ADV-002,Advanced Text Analyzers,TESTING,TESTED,,,search,2025-10-04,tests/test_fts_advanced_analyzers.zig,158
 REQ-GQL-FTS-COVERAGE-001,Fulltext GQL coverage gaps,E2E,TESTED,,,index,2026-05-31,tests/test_fts_coverage.zig,4
 REQ-GQL-FTS-DDL-001,Fulltext CREATE/DROP INDEX,DDL,TESTED,,,index,2026-05-30,src/execution/fts_index_ops.zig,4
 REQ-GQL-FTS-DDL-001,Fulltext node write-maintenance,E2E,TESTED,,,index,2026-05-31,tests/test_fts_maintenance.zig,4
 REQ-GQL-FTS-E2E-001,Fulltext CREATE/DROP + search end-to-end,E2E,TESTED,,,index,2026-05-30,tests/test_fts_e2e.zig,1
 REQ-GQL-FTS-PROC-001,"CALL geode.fts.search YIELD node,score",Dispatch,TESTED,,,index,2026-05-31,src/execution/procedure_registry.zig,205
-REQ-GQL-FTS-PROC-001,"CALL geode.fts.search YIELD node,score",ReadOnlyClassification,TESTED,,,index,2026-05-31,src/execution/procedure_access.zig,81
+REQ-GQL-FTS-PROC-001,"CALL geode.fts.search YIELD node,score",ReadOnlyClassification,TESTED,,,index,2026-05-31,src/execution/procedure_access.zig,87
 REQ-GQL-FTS-STORAGE-PERF-001,FtsStorageBackend,SearchLatencyGate,TESTED,,,storage,2026-05-31,tests/test_fts_latency.zig,1
 REQ-GQL-FTS-STORAGE-PERF-001,FtsStorageBackend,VarianceEnvelope,BENCHED,,,storage,2026-05-31,benchmarks/benchmark_fts_storage.zig,18
 REQ-GQL-FTS-TEST,FTS Test Suite,Testing,TESTED,,,test,2026-05-30,tests/test_fulltext_bm25.zig,12
@@ -3318,7 +3318,7 @@ REQ-GQL-TOBOOLEAN-001,TypeConversionFunctions,ToBooleanConversion,TESTED,,,eval,
 REQ-GQL-TRIANGLE-COUNT-001,Statistics,TriangleCount,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_engine.zig,281
 REQ-GQL-TRIANGLE-COUNT-001,TriangleCounting,Statistics,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig,2442
 REQ-GQL-TS-PROC-001,CALL geode.ts.* native timeseries surface,Dispatch,TESTED,,,timeseries,2026-05-31,src/execution/procedure_registry.zig,213
-REQ-GQL-TS-PROC-001,CALL geode.ts.* read procedures,ReadOnlyClassification,TESTED,,,timeseries,2026-05-31,src/execution/procedure_access.zig,86
+REQ-GQL-TS-PROC-001,CALL geode.ts.* read procedures,ReadOnlyClassification,TESTED,,,timeseries,2026-05-31,src/execution/procedure_access.zig,92
 REQ-GQL-TS-STORAGE-PERF-001,TimeseriesStorageBackend,RangeLatencyGate,TESTED,,,storage,2026-05-31,tests/test_ts_latency.zig,1
 REQ-GQL-TS-STORAGE-PERF-001,TimeseriesStorageBackend,VarianceEnvelope,BENCHED,,,storage,2026-05-31,benchmarks/benchmark_ts_storage.zig,23
 REQ-GQL-TYPE-CONV-001,TypeConversionFunctions,Functionality,TESTED,,,eval,2025-01-05,docs/TYPE_CONVERSION_FUNCTIONS.md,164
@@ -5313,7 +5313,7 @@ REQ-SONNY-2732-RLS-STRICT-POLICIES,RLSExpressionCompilation,StrictCreatePolicy,T
 REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,HandlerLockBypass,TESTED,,,security,2026-09-25,src/query/query_traits.zig,995
 REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,OneGraphLockAtATime,TESTED,,,security,2026-09-25,src/graph_store.zig,8194
 REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2733_backfill_locking.zig,14
-REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,SelfLockingProcedures,TESTED,,,security,2026-09-25,src/execution/procedure_access.zig,155
+REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,SelfLockingProcedures,TESTED,,,security,2026-09-25,src/execution/procedure_access.zig,161
 REQ-SONNY-2739-CHECKED-NARROWING,NumericNarrowing,CheckedFloatAndDecimalToInt,TESTED,,,types,2026-09-25,src/types/narrowing.zig,21
 REQ-SONNY-2739-CHECKED-NARROWING,NumericNarrowing,HeapRounding,TESTED,,,types,2026-09-25,src/types/evaluator_functions.zig,1254
 REQ-SONNY-2739-CHECKED-NARROWING,NumericNarrowing,JsonNumbers,TESTED,,,eval,2026-09-25,src/eval.zig,2349
@@ -5359,6 +5359,7 @@ REQ-SONNY-2757-STORED-INT-CAST,AuthDDLPersistence,CheckedStoredCasts,TESTED,,,se
 REQ-SONNY-2769-DECIMAL-SCALE,IntegerOverflow,HeapDecimalScale,TESTED,,,codec,2026-09-26,src/property_value_codec.zig,481
 REQ-SONNY-2769-DECIMAL-TEXT,DecimalText,ExactAtAnyScale,TESTED,,,types,2026-09-26,src/types/decimal_text.zig,14
 REQ-SONNY-2769-INTEGER-OVERFLOW,IntegerOverflow,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2769_integer_overflow.zig,21
+REQ-SONNY-2773-RLS-POLICY-FREE,RLSExpressionCompilation,Regression,TESTED,,,security,2026-11-12,tests/test_sonny2773_rls_policy_free.zig,20
 REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,Change,TESTED,,,security,2026-09-26,src/execution/session_graph.zig,314
 REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,MayBind,TESTED,,,security,2026-09-26,src/execution/session_graph.zig,65
 REQ-SONNY-2775-SESSION-GRAPH-GATE,GraphRBACEnforcement,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2775_session_graph_gate.zig,17
@@ -5380,7 +5381,7 @@ REQ-SONNY-2781-GPS-ACTION-ENFORCEMENT,GPS Policy Evaluation,Regression,TESTED,,,
 REQ-SONNY-2781-GPS-ACTION-ENFORCEMENT,GPS Policy Evaluation,UnenforcedDenyRefused,TESTED,,,security,2026-11-11,src/security/policy_catalog.zig,248
 REQ-SONNY-2782-AUTH-DISABLED-PARITY,StatementAuthorization,Regression,TESTED,,,security,2026-11-11,tests/test_sonny2782_auth_disabled_transport_parity.zig,30
 REQ-SONNY-2782-AUTH-DISABLED-PARITY,StatementAuthorization,RequestGate,TESTED,,,security,2026-11-11,src/execution/session_graph.zig,125
-REQ-SONNY-2790-FTS-DEFAULT-GRAPH,FullText,DefaultGraphProcedures,TESTED,,,index,2026-09-26,src/execution/procedure_access.zig,163
+REQ-SONNY-2790-FTS-DEFAULT-GRAPH,FullText,DefaultGraphProcedures,TESTED,,,index,2026-09-26,src/execution/procedure_access.zig,169
 REQ-SONNY-2790-FTS-DEFAULT-GRAPH,FullText,Regression,TESTED,,,index,2026-09-26,tests/test_sonny2790_fts_graph_lock.zig,15
 REQ-SONNY-2791-INTERNAL-GRAPHS,GraphRBACEnforcement,RefuseInternal,TESTED,,,security,2026-09-26,src/execution/session_graph.zig,30
 REQ-SONNY-2791-INTERNAL-GRAPHS,GraphRBACEnforcement,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2791_internal_graphs_reseal.zig,19
@@ -5741,6 +5742,8 @@ REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,CallerOwnedUserCopies,TESTED,,,s
 REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6312_user_list_ownership.zig,19
 REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,UserListOwnsRows,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,672
 REQ-SONNY-6313-EXPLAIN-POLICY-GATES,GPS EXPLAIN POLICY,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6313_explain_policy_gates.zig,24
+REQ-SONNY-6313-EXPLAIN-POLICY-GATES,GPS EXPLAIN POLICY,SameQuestionsAsTheGates,TESTED,,,security,2026-11-12,src/execution/statement_handlers.zig,1465
+REQ-SONNY-6313-TENANT-LIST-READ-ONLY,PerTenantIsolation,ReadOnlyClassification,TESTED,,,security,2026-11-12,src/execution/procedure_access.zig,79
 REQ-SONNY-6329-AUTH-DDL-SERIALIZED,GQL Auth DDL Persistence,AuthDdlMutex,TESTED,,,security,2026-11-12,src/security/auth_ddl_lock.zig,1
 REQ-SONNY-6329-NO-AUTH-REFUSED,ServerCli,NoAuthFlagRefused,TESTED,,,security,2026-11-12,src/server/cli_args.zig,517
 REQ-SONNY-6329-USER-CACHE-LOCK,GQL Auth DDL Persistence,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6329_user_cache_and_ddl_serialization.zig,22

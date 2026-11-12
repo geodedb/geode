@@ -469,8 +469,14 @@ always creates allow policies. A deny reaches the catalog in two ways:
 - `CALL` procedures (read or write on the procedure);
 - FLE decryption (`decrypt_field`).
 
-EXPLAIN POLICY reports the decision a statement would get, but enforces
-nothing.
+EXPLAIN POLICY reports the decisions a statement would get, but enforces
+nothing. Since SONNY-6313 it asks what the gates ask, for the session's
+graph: one row per question, the read gate's `decide(match_, graph)` on
+every graph the statement reads, then the write gate's per-action
+questions on the graph it changes (`changePermittedOn`, or
+`writePermitted` on the database for a self-locking procedure). A
+statement neither gate asks about reports the one action it names on
+`database`.
 
 Regression suite:
 [`tests/test_sonny2744_gps_deny.zig`](../../tests/test_sonny2744_gps_deny.zig)

@@ -1462,27 +1462,41 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
 }
 
 // CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=ExecutorFunction; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
+// CANARY: REQ=REQ-SONNY-6313-EXPLAIN-POLICY-GATES; FEATURE="GPS EXPLAIN POLICY"; ASPECT=SameQuestionsAsTheGates; STATUS=TESTED; TEST=tests/test_sonny6313_explain_policy_gates.zig; OWNER=security; UPDATED=2026-11-12
 // EXPLAIN POLICY FOR <inner_query>
 //
-// Classifies the top-level action of the inner parsed statement, builds a
-// DecisionRequest with the current principal, calls gps.decide() once, and
-// returns a single result row with columns:
+// Reports, one row per question, the GPS decisions the QUIC and gRPC
+// handlers' gates would ask for the inner statement in this session, with
+// columns:
 //
 //   step | action | resource | decision | reason_code
 //
-// For Phase 7 only the top-level classification is performed (one row).
-// Multi-step decomposition (e.g. MATCH + CREATE in a single query) is Phase 8+.
+// SONNY-6313: the questions are the gates' own, for the session's graph:
+//   * the read gate (`session_graph.programReadPermitted`):
+//     `decide(match_, graph)` on every graph the statement reads
+//     (`query_traits.programReadGraphList`), unless it reads no store;
+//   * the write gate (`session_graph.requestChangePermitted`), for a
+//     statement that changes data (`write_walk.statementActions`): the
+//     actions `gps.changePermittedOn` asks on the graph it changes (CREATE,
+//     UPDATE, DELETE; WRITE and SCHEMA for DDL; WRITE, CREATE, UPDATE and
+//     DELETE for a change no finer action names), or, for a self-locking
+//     procedure, `gps.writePermitted` (write on the database, refused by a
+//     deny of a write on any graph).
+// A statement neither gate asks about (the security DDL, SHOW, session
+// statements) reports the one action `classifyAction` derives, on the
+// database. It used to report that one action on the database for every
+// statement, which no graph-scoped policy matches (SONNY-2753) and which
+// is not what the per-action gates ask (SONNY-2781).
 //
 // When the execution context carries no Principal, an unauthenticated decision
 // is returned (reason_code = "no_principal") — GPS's standard behaviour.
 pub fn executeExplainPolicy(allocator: std.mem.Allocator, ep: ast.ExplainPolicyStatement, context: ExecutionContext) anyerror!ExecutionResult {
     const gps = @import("../security/gps.zig");
     const principal_mod = @import("../security/principal.zig");
+    const query_traits = @import("../query/query_traits.zig");
+    const write_walk = @import("write_walk.zig");
+    const session_graph = @import("session_graph.zig");
 
-    // --- Step 1: classify the inner statement's top-level action ---------------
-    const action: gps.Action = classifyAction(ep.inner.*);
-
-    // --- Step 2: build a DecisionRequest --------------------------------------
     // Use the context's canonical Principal when available; otherwise fall back
     // to an anonymous stub so the call always reaches gps.decide().
     const anon_principal = principal_mod.Principal{
@@ -1505,18 +1519,50 @@ pub fn executeExplainPolicy(allocator: std.mem.Allocator, ep: ast.ExplainPolicyS
     };
     const principal: *const principal_mod.Principal = if (context.principal) |p| p else &anon_principal;
 
-    const resource = gps.ResourceRef{ .database = {} };
-    const req = gps.DecisionRequest{
-        .principal = principal,
-        .action = action,
-        .resource = resource,
-    };
+    // The inner statement as the one statement of a program, from the
+    // session's graph, as the handlers plan a request.
+    var stmts = [_]ast.Statement{ep.inner.*};
+    const program = ast.Program{ .statements = &stmts };
+    const start_graph = session_graph.current(context);
+    const home_graph = if (context.graph_bound) start_graph else graph_store.DEFAULT_GRAPH_NAME;
 
-    // --- Step 3: call gps.decide() -------------------------------------------
-    const decision = try gps.decide(allocator, &req);
+    var asks = std.ArrayList(PolicyAsk).empty;
+    defer asks.deinit(allocator);
 
-    // --- Step 4: emit result row ----------------------------------------------
-    // Columns: step, action, resource, decision, reason_code
+    // The read gate.
+    const analysis = query_traits.analyzeProgram(&program);
+    const store_free = analysis.kind == .rows and analysis.is_store_free and query_traits.restOfProgramIsNoop(&analysis, start_graph);
+    if (!store_free) {
+        const graphs = try query_traits.programReadGraphList(allocator, &program, start_graph, home_graph);
+        defer allocator.free(graphs);
+        for (graphs) |g| try addPolicyAsk(allocator, &asks, .match_, g);
+    }
+
+    // The write gate.
+    const actions = write_walk.statementActions(ep.inner, .{});
+    var self_locking_write = false;
+    if (actions.writesData()) {
+        if (query_traits.isSelfLockingProgram(&program)) {
+            self_locking_write = true;
+            try addPolicyAsk(allocator, &asks, .write, null);
+        } else {
+            const g = query_traits.programGraph(&program, start_graph, home_graph) orelse start_graph;
+            if (actions.create) try addPolicyAsk(allocator, &asks, .create, g);
+            if (actions.update) try addPolicyAsk(allocator, &asks, .update, g);
+            if (actions.delete) try addPolicyAsk(allocator, &asks, .delete, g);
+            if (actions.schema) {
+                try addPolicyAsk(allocator, &asks, .write, g);
+                try addPolicyAsk(allocator, &asks, .schema, g);
+            }
+            if (actions.write) {
+                for ([_]gps.Action{ .write, .create, .update, .delete }) |a| try addPolicyAsk(allocator, &asks, a, g);
+            }
+        }
+    }
+
+    // Neither gate asks: the one action the statement names, on the database.
+    if (asks.items.len == 0) try addPolicyAsk(allocator, &asks, classifyAction(ep.inner.*), null);
+
     const columns = try allocator.alloc([]const u8, 5);
     columns[0] = try allocator.dupe(u8, "step");
     columns[1] = try allocator.dupe(u8, "action");
@@ -1524,15 +1570,27 @@ pub fn executeExplainPolicy(allocator: std.mem.Allocator, ep: ast.ExplainPolicyS
     columns[3] = try allocator.dupe(u8, "decision");
     columns[4] = try allocator.dupe(u8, "reason_code");
 
-    const row = try allocator.alloc(Value, 5);
-    row[0] = Value{ .Int = 1 }; // step 1 (top-level classification only in Phase 7)
-    row[1] = Value{ .Str = try allocator.dupe(u8, @tagName(action)) };
-    row[2] = Value{ .Str = try allocator.dupe(u8, "database") };
-    row[3] = Value{ .Str = try allocator.dupe(u8, @tagName(decision.kind)) };
-    row[4] = Value{ .Str = try allocator.dupe(u8, decision.reason_code) };
-
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
+    const rows = try allocator.alloc([]Value, asks.items.len);
+    for (asks.items, 0..) |ask, i| {
+        const req = gps.DecisionRequest{
+            .principal = principal,
+            .action = ask.action,
+            .resource = if (ask.graph) |g| gps.ResourceRef{ .graph = g } else gps.ResourceRef{ .database = {} },
+        };
+        var decision = try gps.decide(allocator, &req);
+        // `gps.writePermitted` also refuses a change of every graph when a
+        // write is denied on any one graph.
+        if (self_locking_write and ask.graph == null and decision.kind == .allow and !gps.writePermitted(allocator, principal)) {
+            decision = .{ .kind = .deny, .reason_code = "deny_on_a_graph" };
+        }
+        const row = try allocator.alloc(Value, 5);
+        row[0] = Value{ .Int = @intCast(i + 1) };
+        row[1] = Value{ .Str = try allocator.dupe(u8, @tagName(ask.action)) };
+        row[2] = Value{ .Str = if (ask.graph) |g| try std.fmt.allocPrint(allocator, "graph:{s}", .{g}) else try allocator.dupe(u8, "database") };
+        row[3] = Value{ .Str = try allocator.dupe(u8, @tagName(decision.kind)) };
+        row[4] = Value{ .Str = try allocator.dupe(u8, decision.reason_code) };
+        rows[i] = row;
+    }
 
     return ExecutionResult{
         .columns = columns,
@@ -1542,8 +1600,24 @@ pub fn executeExplainPolicy(allocator: std.mem.Allocator, ep: ast.ExplainPolicyS
     };
 }
 
-/// Map an AST Statement to the GPS Action it primarily requires.
-/// Phase 7: top-level classification only.  Phase 8+ can decompose sub-statements.
+/// One question EXPLAIN POLICY reports: `action` on `graph`, or on the
+/// database when null.
+const PolicyAsk = struct {
+    action: @import("../security/gps.zig").Action,
+    graph: ?[]const u8,
+};
+
+fn addPolicyAsk(allocator: std.mem.Allocator, asks: *std.ArrayList(PolicyAsk), action: @import("../security/gps.zig").Action, graph: ?[]const u8) !void {
+    for (asks.items) |a| {
+        if (a.action != action) continue;
+        if (a.graph == null and graph == null) return;
+        if (a.graph != null and graph != null and std.mem.eql(u8, a.graph.?, graph.?)) return;
+    }
+    try asks.append(allocator, .{ .action = action, .graph = graph });
+}
+
+/// Map an AST Statement to the GPS Action it primarily requires. EXPLAIN
+/// POLICY reports it for a statement neither handler gate asks about.
 fn classifyAction(stmt: ast.Statement) @import("../security/gps.zig").Action {
     const gps = @import("../security/gps.zig");
     _ = gps; // Action enum values referenced via return type

@@ -282,7 +282,7 @@ Treat `CALL geode.tenant.*` as the standard, supported tenant DDL surface.
 |---|---|
 | `CALL geode.tenant.create(id[, parent])` | Register a tenant (durable) and add it to the hierarchy under `parent`. |
 | `CALL geode.tenant.list()` | One row per registered tenant (id, parent, active, effective quota). |
-| `CALL geode.tenant.show(id)` | 0 or 1 row for `id`. |
+| `CALL geode.tenant.show(id)` | 0 or 1 row for `id`. `list` and `show` are read-only procedures (SONNY-6313): a read-only request may run them. |
 | `CALL geode.tenant.set_quota(id, max_connections, max_concurrent_queries, max_graphs, max_nodes_per_graph)` | Set a per-tenant quota override (durable + live quota manager). |
 | `CALL geode.tenant.drop(id[, cascade])` | Drop a tenant — see safe drop semantics below. |
 | `CALL geode.tenant.backfill_edge_tags([dry_run])` | Re-tag legacy `default` edges from their endpoints and list mixed-tenant edges — see edge tenant tags below. |

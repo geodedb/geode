@@ -4,6 +4,26 @@
 
 ### Security
 
+- **EXPLAIN POLICY asks what the gates ask; tenant listings are read-only
+  (SONNY-6313).** (1) **Behaviour change:** `EXPLAIN POLICY FOR <statement>`
+  derived one action and asked `gps.decide` about it on the resource
+  `database`, which no graph-scoped policy matches since SONNY-2753, so a
+  graph-scoped deny or allow was reported as not applying, and it did not
+  know the per-action write gate (SONNY-2781). It now reports one row per
+  question the QUIC and gRPC handlers' gates ask, for the session's graph:
+  the read gate's `decide(match_, graph)` on every graph the statement reads
+  (`query_traits.programReadGraphList`), and the write gate's actions on the
+  graph it changes (`write_walk.statementActions`: CREATE, UPDATE, DELETE;
+  WRITE and SCHEMA for DDL; WRITE, CREATE, UPDATE and DELETE for a change
+  no finer action names; for a self-locking procedure `gps.writePermitted`
+  on the database). The `resource` column is `graph:<name>`, or `database`
+  for a statement neither gate asks about (the security DDL, SHOW, session
+  statements), which still reports the one action it names. A change now
+  has two or more rows (its read, then its write). It still enforces
+  nothing. (2) `geode.tenant.list` and `geode.tenant.show` were not on the
+  read-only procedure list, so they counted as changes: a read-only request
+  (`ExecuteRequest.read_only`, the MCP read-only mode) could not list
+  tenants. They are read-only now and still need `admin_tenant` (Admin).
 - **Offline user CLI and the remaining auth procedure failures
   (SONNY-6367).** (1) **Behaviour change:** `geode user create --role`,
   `user update --role`, `user import --role` and `user assign-role` stored a

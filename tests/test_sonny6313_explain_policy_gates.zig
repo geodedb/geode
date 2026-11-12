@@ -210,6 +210,13 @@ test "SONNY-6313: a read-only Admin request lists and shows tenants; a ReadOnly 
     try w.init();
     defer w.deinit();
     const ga = w.ga();
+    // The server's registry, in memory.
+    var reg = geode.security.tenant_registry.TenantRegistry.init(testing.allocator);
+    defer reg.deinit();
+    geode.security.tenant_registry.setGlobalRegistry(&reg);
+    defer geode.security.tenant_registry.setGlobalRegistry(null);
+    try reg.create("t6313", null);
+
     const admin = try w.session("ada", .Admin, null);
     for ([_][]const u8{ "CALL geode.tenant.list()", "CALL geode.tenant.show('t6313')" }) |q| {
         if (try executeReadOnly(ga, admin, q)) |e| {
@@ -219,6 +226,6 @@ test "SONNY-6313: a read-only Admin request lists and shows tenants; a ReadOnly 
         try wd.expectDenied(ga, try w.session("otto", .ReadOnly, null), q);
     }
     // A read-only request still refuses a tenant change.
-    const e = (try executeReadOnly(ga, admin, "CALL geode.tenant.create('t6313')")) orelse return error.ReadOnlyChangeRan;
+    const e = (try executeReadOnly(ga, admin, "CALL geode.tenant.create('t6314')")) orelse return error.ReadOnlyChangeRan;
     try testing.expectEqualStrings("42501", e.code);
 }
