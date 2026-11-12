@@ -10990,6 +10990,19 @@ pub fn build(b: *std.Build) void {
         step.dependOn(&run_tests.step);
     }
 
+    // SONNY-6333: the write harness keeps a persisted session's store on
+    // tmpfs, so the write suites are not fsync-bound on a loaded host.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6333_write_harness_tmpfs.zig"), .target = target, .optimize = optimize });
+        mod.addImport("geode", root_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("rls_types", rls_types_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6333-write-harness-tmpfs", "Run SONNY-6333 regression (a persisted write-harness session keeps its store on tmpfs when /dev/shm exists, and removes it when the session ends)").dependOn(&run_tests.step);
+    }
+
     // SONNY-738 Task W fix round 4a: the round-3 re-review's Critical and
     // blocking findings (C1, C2, C3, I2, I8, I11), in the four sessions, and
     // over gRPC (in process) and QUIC (against ./zig-out/bin/geode).
