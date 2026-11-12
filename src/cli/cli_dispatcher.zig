@@ -331,7 +331,10 @@ pub fn dispatch(
         var path: []const u8 = "audit.jsonl";
         var is_default_path = true;
         var require_digest = false;
-        var pubkey: ?[32]u8 = null;
+        // SONNY-6322: one --pubkey per audit key epoch, in order (epoch 0 is
+        // audit.jsonl.pub, epoch n audit.jsonl.pub.<n>).
+        var pubkeys: [64][32]u8 = undefined;
+        var pubkey_count: usize = 0;
         audit_i = subcommand_start + 1;
         while (audit_i < argv.len) : (audit_i += 1) {
             if (std.mem.eql(u8, argv[audit_i], "verify")) {
@@ -347,11 +350,21 @@ pub fn dispatch(
             } else if (std.mem.eql(u8, argv[audit_i], "--require-digest")) {
                 require_digest = true;
             } else if (std.mem.eql(u8, argv[audit_i], "--pubkey") and audit_i + 1 < argv.len) {
-                pubkey = audit_cli.hex32(argv[audit_i + 1]) catch null;
+                // An invalid key used to be dropped silently, which turned
+                // signature checking off.
+                if (pubkey_count == pubkeys.len) {
+                    std.debug.print("Error: at most {d} --pubkey values\n", .{pubkeys.len});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                }
+                pubkeys[pubkey_count] = audit_cli.hex32(argv[audit_i + 1]) catch {
+                    std.debug.print("Error: --pubkey takes a 64-character hex Ed25519 public key\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                };
+                pubkey_count += 1;
                 audit_i += 1;
             }
         }
-        try audit_cli.verifyFile(allocator, path, algo, 100, require_digest, pubkey, is_default_path);
+        _ = try audit_cli.verifyFileEpochs(allocator, path, algo, 100, require_digest, pubkeys[0..pubkey_count], is_default_path);
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "completion") or std.mem.eql(u8, subcommand, "completions")) {
         // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=TESTED; TEST=test_completion_scripts_use_external_cli_library; OWNER=cli; UPDATED=2026-04-01
@@ -782,11 +795,14 @@ fn printAuditHelp() void {
     std.debug.print("  --file <path>          Audit log file path (default: audit.jsonl)\n", .{});
     std.debug.print("  --algo <algorithm>     Hash algorithm: sha256, blake3 (default: sha256)\n", .{});
     std.debug.print("  --require-digest       Require all entries to have digest\n", .{});
-    std.debug.print("  --pubkey <hex>         Ed25519 public key for signature verification\n", .{});
+    std.debug.print("  --pubkey <hex>         Ed25519 public key of an audit key epoch, once per epoch in order\n", .{});
+    std.debug.print("                         (audit.jsonl.pub, then audit.jsonl.pub.1, ...); a signature that\n", .{});
+    std.debug.print("                         does not verify fails the command\n", .{});
     std.debug.print("  -h, --help             Show this help message\n\n", .{});
     std.debug.print("Examples:\n", .{});
     std.debug.print("  geode audit verify --file /var/log/geode/audit.jsonl\n", .{});
     std.debug.print("  geode audit verify --algo blake3 --require-digest\n", .{});
+    std.debug.print("  geode audit verify --file <graph dir>/audit.jsonl --pubkey <audit.jsonl.pub> --pubkey <audit.jsonl.pub.1>\n", .{});
 }
 
 /// Print bash completion script

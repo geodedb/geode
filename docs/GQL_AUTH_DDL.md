@@ -222,6 +222,22 @@ diamond issues: `PersistentUserWriter` (user create/delete/password/role/active)
 `RolePersistCallbacks` (role create/delete), and `GrantPersistCallbacks` (grant
 create/revoke) are wired at startup in `server_init`.
 
+### HMAC key
+
+The records are sealed with a 256-bit HMAC key, resolved in this order:
+`GEODE_AUTH_HMAC_KEY` (64 hex characters), `GEODE_TDE_KEY` (64 hex
+characters; the key is derived from it), then `<data dir>/.geode_hmac_key`
+(mode 0600). A server creates `.geode_hmac_key` only on a **first boot** (no
+auth records yet). **A data directory that has auth records and no key
+refuses to start** with `HMAC key required` naming the three sources, and
+writes nothing (SONNY-6322; it used to write a new random key that could never
+verify the chain, exit `AuthChainTampered`, and leave that key behind). Backups
+do not hold the key (SONNY-6299): restore with the source server's key. A
+server restore (QUIC/gRPC `restore`) verifies the restored copy's chain with
+the server's own key before it reports success; a backup sealed under another
+key fails and leaves nothing behind. To accept records whose key is lost, an
+operator re-seals them under a new key: `geode auth reseal --data-dir <dir>`.
+
 ---
 
 ## Known Limitations

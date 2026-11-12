@@ -176,6 +176,21 @@ pub const excluded_data_dir_files = [_][]const u8{ lock_file_name, hmac_key_file
 pub const lock_file_name = ".geode.lock";
 pub const hmac_key_file_name = ".geode_hmac_key";
 
+// CANARY: REQ=REQ-SONNY-6322-AUDIT-KEY-EPOCH; FEATURE="Backup Restore"; ASPECT=ExcludeAuditSeed; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=storage; UPDATED=2026-11-11
+/// SONNY-6322: the Ed25519 seed that signs an audit log (`<graph
+/// uuid>/audit.jsonl.key`, or `audit.jsonl.key` beside the process-global
+/// log): never archived, at any depth. Whoever read a backup could sign
+/// forged audit entries with it. The log and its public keys (`.pub`,
+/// `.pub.<n>`) stay in the backup; a restored store starts a new audit key
+/// epoch (security/audit.zig `key_epoch_resource_type`).
+pub const audit_seed_file_name = "audit.jsonl.key";
+
+/// Whether a file at any depth of the data directory stays out of a backup
+/// by its name (the audit signing seed).
+pub fn isExcludedNestedFile(name: []const u8) bool {
+    return std.mem.eql(u8, name, audit_seed_file_name);
+}
+
 /// The server's backup directory inside its data directory (SONNY-6299).
 /// Never archived, so a backup does not hold the previous backups.
 pub const server_backup_dir_name = "backups";
@@ -187,6 +202,7 @@ pub fn isExcludedFromBackup(name: []const u8, kind: std.Io.File.Kind) bool {
             for (excluded_data_dir_files) |f| {
                 if (std.mem.eql(u8, name, f)) return true;
             }
+            if (isExcludedNestedFile(name)) return true;
             return std.mem.endsWith(u8, name, ".backup") or std.mem.eql(u8, name, "backup_metadata.log");
         },
         .directory => return std.mem.eql(u8, name, server_backup_dir_name),
@@ -203,9 +219,11 @@ pub const KeyMaterial = struct {
     tls_cert: bool = false,
     admin_password: bool = false,
     lock: bool = false,
+    /// SONNY-6322: an audit signing seed (`audit.jsonl.key`, any depth).
+    audit_seed: bool = false,
 
     pub fn any(self: KeyMaterial) bool {
-        return self.hmac_key or self.tls_key or self.tls_cert or self.admin_password;
+        return self.hmac_key or self.tls_key or self.tls_cert or self.admin_password or self.audit_seed;
     }
 
     /// The key-material file names present, comma separated, into `buf`.
@@ -217,6 +235,7 @@ pub const KeyMaterial = struct {
             .{ self.tls_key, "server.key" },
             .{ self.tls_cert, "server.crt" },
             .{ self.admin_password, ".geode_admin_password" },
+            .{ self.audit_seed, audit_seed_file_name },
         };
         for (items) |it| {
             if (!it[0]) continue;
@@ -237,6 +256,7 @@ pub fn archiveKeyMaterial(archive: []const u8) !KeyMaterial {
         if (std.mem.eql(u8, entry.name, "server.crt")) km.tls_cert = true;
         if (std.mem.eql(u8, entry.name, ".geode_admin_password")) km.admin_password = true;
         if (std.mem.eql(u8, entry.name, lock_file_name)) km.lock = true;
+        if (isExcludedNestedFile(std.fs.path.basename(entry.name))) km.audit_seed = true;
     }
     return km;
 }
@@ -670,6 +690,8 @@ fn appendDirectoryTree(
 
         switch (entry.kind) {
             .file => {
+                // SONNY-6322: never the audit signing seed.
+                if (isExcludedNestedFile(entry.name)) continue;
                 try appendFileEntry(buffer, allocator, full_path, archive_name);
                 file_count += 1;
             },
@@ -1235,11 +1257,17 @@ fn copyHmacKeyFile(allocator: std.mem.Allocator, from_dir: []const u8, to_dir: [
 ///
 /// SONNY-6299: backups no longer hold `.geode_hmac_key`. This server
 /// restores its own backups, so its key file (when it has one) is copied
-/// into the restored directory; the restored `__geode_security` chain is
-/// then verified with this server's key when a server starts on it, and a
-/// backup sealed under another key fails that check (AuthChainTampered).
+/// into the restored directory. SONNY-6322: the staged copy's
+/// `__geode_security` chain is verified with that key (or the environment
+/// key) through `verify_auth` before anything is committed; a backup sealed
+/// under another key fails (error.AuthChainVerificationFailed) and leaves
+/// nothing behind.
 // CANARY: REQ=REQ-BACKUP-RESTORE-003; FEATURE="Backup Restore"; ASPECT=ServerRestoreBesideDataDir; STATUS=TESTED; TEST=tests/test_sonny6288_server_restore_target.zig; OWNER=storage; UPDATED=2026-11-11
-pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dirs: []const []const u8, live_data_dir: []const u8, target_time: i64) !SideRestore {
+/// SONNY-6322: verifies the `__geode_security` HMAC chain of the staged
+/// restore in the given directory the way a server starting on it would.
+pub const StagedAuthVerifier = *const fn (allocator: std.mem.Allocator, staging_dir: []const u8) anyerror!void;
+
+pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dirs: []const []const u8, live_data_dir: []const u8, target_time: i64, verify_auth: StagedAuthVerifier) !SideRestore {
     const live = std.mem.trimEnd(u8, live_data_dir, "/");
     const base = std.fs.path.basename(live);
     if (live.len == 0 or base.len == 0 or std.mem.eql(u8, base, ".") or std.mem.eql(u8, base, "..")) {
@@ -1271,6 +1299,22 @@ pub fn restoreBesideDataDir(allocator: std.mem.Allocator, backup_dirs: []const [
 
     const graphs = try countRestoredStore(allocator, staged.staging_dir);
     errdefer freeRestoredGraphs(allocator, graphs);
+
+    // CANARY: REQ=REQ-SONNY-6322-SERVER-RESTORE-CHAIN; FEATURE="Backup Restore"; ASPECT=VerifyStagedAuthChain; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=storage; UPDATED=2026-11-11
+    // SONNY-6322: a restored store with auth records must verify before it
+    // is committed: a backup sealed under another key used to restore
+    // "successfully" and then fail AuthChainTampered at the next startup.
+    for (graphs) |g| {
+        if (std.mem.eql(u8, g.name, graph_store.SECURITY_GRAPH_NAME) and g.nodes > 0) {
+            verify_auth(allocator, staged.staging_dir) catch |err| {
+                log.err("restored __geode_security chain does not verify; restore refused, nothing kept", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                return error.AuthChainVerificationFailed;
+            };
+            break;
+        }
+    }
 
     try staged.commit();
 

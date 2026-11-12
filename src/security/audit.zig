@@ -119,6 +119,50 @@ pub const SecurityGraphEvent = struct {
 pub var global_audit_logger: ?*AuditLogger = null;
 pub var global_audit_logger_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
+// CANARY: REQ=REQ-SONNY-6322-AUDIT-KEY-EPOCH; FEATURE="AuditDurability"; ASPECT=KeyEpochs; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6322: audit signing-key epochs. The file-backed key pair of a log
+/// `F` is `F.key` (the Ed25519 seed, 0600, never in a backup) and the public
+/// key of each epoch: `F.pub` for epoch 0, `F.pub.<n>` for epoch n. A log
+/// that has a public key but no seed (a restored store: backups leave the
+/// seed out) starts epoch n+1 with a new pair; the old public key files are
+/// never changed, and a KEY_EPOCH record is appended to the log:
+/// event_type system_event, resource {type "audit_key_epoch", id
+/// "epoch-<n>:<new public key hex>"} (both inside event_hash), action
+/// "KEY_EPOCH", signed by the NEW key. The previous key is gone, so it cannot
+/// sign the hand-over: continuity across the boundary rests on the hash chain
+/// and on the operator who restored the store, not on the previous key.
+pub const key_epoch_resource_type = "audit_key_epoch";
+pub const key_epoch_action = "KEY_EPOCH";
+/// Upper bound on the epochs scanned for `F.pub.<n>`.
+pub const max_key_epochs: u32 = 4096;
+
+/// Create a key file with O_CREAT | O_EXCL | O_NOFOLLOW, mode 0600 (set again
+/// on the open file): nothing already at the path is followed or replaced.
+fn writeKeyFileExclusive(path: []const u8, bytes: []const u8) !void {
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .EXCL = true,
+        .NOFOLLOW = true,
+        .CLOEXEC = true,
+    }, 0o600) catch |err| switch (err) {
+        error.PathAlreadyExists => return error.AuditKeyFileExists,
+        else => return err,
+    };
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer file.close(io);
+    errdefer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    try file.setPermissions(io, std.Io.File.Permissions.fromMode(0o600));
+    try file.writeStreamingAll(io, bytes);
+    try file.sync(io);
+}
+
+fn keyFileExists(path: []const u8) bool {
+    _ = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .follow_symlinks = false }) catch return false;
+    return true;
+}
+
 // GAP-0282: Per-thread tenant_id for audit event enrichment.
 // Set from the QUIC connection handler before query execution so that all
 // audit events created on this thread carry the correct tenant context.
@@ -207,6 +251,12 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
 
 pub const AuditLogger = struct {
     const DigestBuf = std.ArrayList([32]u8);
+    /// SONNY-6322: a KEY_EPOCH record to append once the chain tail is loaded.
+    const PendingEpoch = struct {
+        n: u32,
+        public_hex: [64]u8,
+        previous_public_hex: [64]u8,
+    };
     allocator: Allocator,
     file: ?std.Io.File,
     mutex: std.Io.Mutex,
@@ -225,6 +275,14 @@ pub const AuditLogger = struct {
     // Heap-allocated file path owned by this logger (set by `initForGraph`).
     // When non-null, freed in `deinit`. Avoids @constCast on Config.file_path.
     owned_path: ?[]u8 = null,
+
+    // SONNY-6322: the signing key's epoch (0 = `F.pub`, n = `F.pub.<n>`), the
+    // KEY_EPOCH record still to append once the chain tail is loaded, and
+    // whether the record being appended is that internal record (the only
+    // one allowed to use the reserved resource type).
+    key_epoch: u32 = 0,
+    pending_epoch: ?PendingEpoch = null,
+    appending_epoch_record: bool = false,
 
     // Config fields from original file (preserved/extended)
     retention_days: u32,
@@ -313,6 +371,12 @@ pub const AuditLogger = struct {
 
             // 3. Init from Tail (Recover state)
             try logger.initFromTail();
+
+            // 4. SONNY-6322: a new key epoch is recorded in the chain.
+            if (logger.pending_epoch) |pe| {
+                try logger.appendKeyEpochLocked(pe);
+                logger.pending_epoch = null;
+            }
         }
 
         return logger;
@@ -417,8 +481,21 @@ pub const AuditLogger = struct {
         const sec_path = try std.fmt.allocPrint(self.allocator, "{s}.key", .{self.config.file_path});
         defer self.allocator.free(sec_path);
 
+        // SONNY-6322: the newest epoch's public key file (`F.pub.<n>`, else `F.pub`).
+        var newest: u32 = 0;
+        while (newest < max_key_epochs) : (newest += 1) {
+            var nbuf: [std.fs.max_path_bytes]u8 = undefined;
+            const p = std.fmt.bufPrint(&nbuf, "{s}.pub.{d}", .{ self.config.file_path, newest + 1 }) catch break;
+            if (!keyFileExists(p)) break;
+        }
+        const newest_pub_path = if (newest == 0)
+            try self.allocator.dupe(u8, pub_path)
+        else
+            try std.fmt.allocPrint(self.allocator, "{s}.pub.{d}", .{ self.config.file_path, newest });
+        defer self.allocator.free(newest_pub_path);
+
         const io_rf = std.Io.Threaded.global_single_threaded.io();
-        const pub_hex_raw = std.Io.Dir.cwd().readFileAlloc(io_rf, pub_path, self.allocator, .limited(256)) catch |err| switch (err) {
+        const pub_hex_raw = std.Io.Dir.cwd().readFileAlloc(io_rf, newest_pub_path, self.allocator, .limited(256)) catch |err| switch (err) {
             error.FileNotFound => null,
             else => return err,
         };
@@ -429,44 +506,112 @@ pub const AuditLogger = struct {
             error.FileNotFound => null,
             else => return err,
         };
-        defer if (sec_hex_raw) |bytes| self.allocator.free(bytes);
+        defer if (sec_hex_raw) |bytes| {
+            std.crypto.secureZero(u8, bytes);
+            self.allocator.free(bytes);
+        };
         const sec_hex: ?[]const u8 = if (sec_hex_raw) |b| std.mem.trim(u8, b, " \t\r\n") else null;
 
-        if (pub_hex != null and sec_hex != null) {
-            if (pub_hex.?.len != 64 or (sec_hex.?.len != 64 and sec_hex.?.len != 128)) {
-                return error.ConfigError;
-            }
-            const seed_hex: []const u8 = if (sec_hex.?.len == 128) blk: {
+        if (sec_hex) |sh| {
+            if (sh.len != 64 and sh.len != 128) return error.ConfigError;
+            if (pub_hex) |ph| if (ph.len != 64) return error.ConfigError;
+            const seed_hex: []const u8 = if (sh.len == 128) blk: {
                 log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
-                break :blk sec_hex.?[0..64];
-            } else sec_hex.?;
+                break :blk sh[0..64];
+            } else sh;
             var seed: [32]u8 = undefined;
+            defer std.crypto.secureZero(u8, &seed);
             _ = try std.fmt.hexToBytes(&seed, seed_hex);
-            const kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
+            var kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
+            if (pub_hex == null) {
+                // A seed without a public key file: record the public key
+                // (exclusively; nothing existing is replaced).
+                var pb: [32]u8 = undefined;
+                _ = try kp.publicBytes(&pb);
+                const ph = std.fmt.bytesToHex(pb, .lower);
+                writeKeyFileExclusive(newest_pub_path, &ph) catch |err| {
+                    kp.deinit();
+                    return err;
+                };
+            }
             self.signing_key = kp;
+            self.key_epoch = newest;
             return;
         }
 
         var kp = try cb.Sig.generate(.ed25519);
+        errdefer kp.deinit();
         var pub_bytes: [32]u8 = undefined;
         _ = try kp.publicBytes(&pub_bytes);
         var seed_bytes: [32]u8 = undefined;
+        defer std.crypto.secureZero(u8, &seed_bytes);
         _ = try kp.privateSeed(&seed_bytes);
         const generated_pub = std.fmt.bytesToHex(pub_bytes, .lower);
-        const generated_sec = std.fmt.bytesToHex(seed_bytes, .lower);
+        var generated_sec = std.fmt.bytesToHex(seed_bytes, .lower);
+        defer std.crypto.secureZero(u8, &generated_sec);
 
-        const pub_file = try std.Io.Dir.cwd().createFile(io_rf, pub_path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
-        defer pub_file.close(io_rf);
-        try pub_file.writeStreamingAll(io_rf, &generated_pub);
-
-        const sec_file = try std.Io.Dir.cwd().createFile(io_rf, sec_path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
-        defer sec_file.close(io_rf);
-        try sec_file.writeStreamingAll(io_rf, &generated_sec);
-
+        if (pub_hex) |old_pub| {
+            // SONNY-6322: a public key but no seed — a restored store (backups
+            // leave the seed out). The old public key file must keep
+            // verifying the entries it signed, so it is never truncated:
+            // start epoch newest+1 with a new pair in `F.pub.<n>`.
+            if (old_pub.len != 64) return error.ConfigError;
+            const n = newest + 1;
+            if (n > max_key_epochs) return error.TooManyAuditKeyEpochs;
+            const new_pub_path = try std.fmt.allocPrint(self.allocator, "{s}.pub.{d}", .{ self.config.file_path, n });
+            defer self.allocator.free(new_pub_path);
+            try writeKeyFileExclusive(new_pub_path, &generated_pub);
+            try writeKeyFileExclusive(sec_path, &generated_sec);
+            var prev: [64]u8 = undefined;
+            @memcpy(&prev, old_pub[0..64]);
+            self.pending_epoch = .{ .n = n, .public_hex = generated_pub, .previous_public_hex = prev };
+            self.key_epoch = n;
+            log.warn("audit signing seed missing (restored store?); started a new audit key epoch", &.{
+                Attr.string("path", self.config.file_path),
+                Attr.int("epoch", @intCast(n)),
+            });
+            std.debug.print(
+                "[audit] {s}: the signing seed is missing (a restored store?); started audit key epoch {d}, public key in {s}. " ++
+                    "Entries before it verify with the previous public key ({s}); continuity across the boundary is attested by the operator who restored the store, not by the previous key.\n",
+                .{ self.config.file_path, n, new_pub_path, newest_pub_path },
+            );
+        } else {
+            try writeKeyFileExclusive(pub_path, &generated_pub);
+            try writeKeyFileExclusive(sec_path, &generated_sec);
+            self.key_epoch = 0;
+            log.info("Generated audit signing keys", &.{Attr.string("path", self.config.file_path)});
+        }
         self.signing_key = kp;
-        log.info("Generated audit signing keys", &.{Attr.string("path", self.config.file_path)});
 
         std.log.warn("Audit signing keys stored as files. Set GEODE_AUDIT_PUB and GEODE_AUDIT_SEC env vars for production.", .{});
+    }
+
+    /// SONNY-6322: append the KEY_EPOCH record of `pe`, signed by the new key
+    /// (see `key_epoch_resource_type`). Caller holds the mutex or is `init`.
+    fn appendKeyEpochLocked(self: *AuditLogger, pe: PendingEpoch) !void {
+        var id_buf: [96]u8 = undefined;
+        const id = try std.fmt.bufPrint(&id_buf, "epoch-{d}:{s}", .{ pe.n, &pe.public_hex });
+        var epoch_buf: [16]u8 = undefined;
+        const epoch_str = try std.fmt.bufPrint(&epoch_buf, "{d}", .{pe.n});
+        var details = std.StringHashMap([]const u8).init(self.allocator);
+        defer details.deinit();
+        try details.put("epoch", epoch_str);
+        try details.put("previous_public_key", &pe.previous_public_hex);
+        try details.put("continuity", "attested by the restore operator; the previous key did not sign this record");
+        var ev = AuditEvent{
+            .timestamp = compat_milliTimestamp(),
+            .event_type = .system_event,
+            .severity = .warning,
+            .user_id = 0,
+            .session_id = "",
+            .resource = .{ .type = key_epoch_resource_type, .id = id, .name = "audit key epoch", .graph = null, .table = null },
+            .action = key_epoch_action,
+            .result = .success,
+            .details = details,
+        };
+        self.appending_epoch_record = true;
+        defer self.appending_epoch_record = false;
+        try self.appendEventLocked(&ev);
     }
 
     fn initFromTail(self: *AuditLogger) !void {
@@ -548,6 +693,10 @@ pub const AuditLogger = struct {
     /// deadlock where appendAuditEvent → emitDigest → appendAuditEvent caused
     /// SIGABRT from Zig's deadlock detector.
     fn appendEventLocked(self: *AuditLogger, ev: *AuditEvent) !void {
+        // SONNY-6322: only the logger writes (and signs) a key-epoch record.
+        const is_epoch_record = std.mem.eql(u8, ev.resource.type, key_epoch_resource_type);
+        if (is_epoch_record and !self.appending_epoch_record) return error.ReservedAuditRecord;
+
         // GAP-0282: Enrich event with per-thread tenant_id if not already set
         if (ev.tenant_id == null) {
             ev.tenant_id = getCurrentAuditTenantId();
@@ -580,8 +729,8 @@ pub const AuditLogger = struct {
 
         self.last_hash = ev.event_hash;
 
-        // Sign if it is a DIGEST
-        if (ev.event_type == .DIGEST and self.signing_key != null) {
+        // Sign if it is a DIGEST, or the KEY_EPOCH record (SONNY-6322)
+        if ((ev.event_type == .DIGEST or is_epoch_record) and self.signing_key != null) {
             var sig_out: [64]u8 = undefined;
             _ = try cb.Sig.sign(.ed25519, &self.signing_key.?, ev.event_hash[0..], &sig_out);
             ev.signature = sig_out;

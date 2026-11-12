@@ -8,6 +8,33 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
+/// SONNY-6322: whether the store already holds `__geode_security` auth
+/// records (persisted :User records on disk, records loaded in memory, or a
+/// chain root). Fails closed: when it cannot tell, it answers yes, so no key
+/// is invented over records it could not see.
+fn storeHasAuthRecords(allocator: std.mem.Allocator, store: *graph_store.GraphStore) bool {
+    const persisted = auth_graph_manager.persistedSecurityUserCountOnDisk() catch return true;
+    if (persisted > 0) return true;
+    var agm = auth_graph_manager.AuthGraphManager.init(allocator, store) catch return true;
+    defer agm.deinit();
+    return agm.countAuthRecords() > 0 or agm.storage.loadChainRoot() != null;
+}
+
+/// SONNY-6322: the startup refusal when auth records exist and no HMAC key
+/// is available. Names the three ways to supply the key; no key bytes.
+fn printHmacKeyRequired(data_dir: []const u8) void {
+    std.debug.print(
+        "[startup] HMAC key required: {s} holds __geode_security auth records sealed with an HMAC key, and no key was found. " ++
+            "Supply the key the records were sealed with: GEODE_AUTH_HMAC_KEY=<64 hex characters>, GEODE_TDE_KEY=<64 hex characters> (the key is derived from it), " ++
+            "or the file {s}/.geode_hmac_key (mode 0600). Nothing was written. A restored backup does not carry the key: use the source server's key " ++
+            "(docs/GQL_AUTH_DDL.md, \"HMAC key\").\n",
+        .{ data_dir, data_dir },
+    );
+    log.err("HMAC key required: auth records exist and no HMAC key is available; refusing to start (nothing written)", &.{
+        Attr.string("data_dir", data_dir),
+    });
+}
+
 /// SONNY-2791: the policy record ids `env_name` lists (comma-separated):
 /// GEODE_AUTH_RESEAL_ACCEPT_LEGACY, the records the startup reseal may sign
 /// although they have no kind and their HMAC does not verify, and
@@ -380,7 +407,31 @@ pub fn initialize(
 
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     // Initialize AuthGraphManager: resolve HMAC key, verify or bootstrap auth chain
+    //
+    // CANARY: REQ=REQ-SONNY-6322-HMAC-KEY-REQUIRED; FEATURE="AuthGraphManager Integration"; ASPECT=NoKeyOverExistingRecords; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-6322: an existing key is looked up first; a new key file is
+    // created only for a store without auth records (a first boot). A store
+    // with records and no key (a restored or copied directory) refuses to
+    // start and writes nothing: generating a key there could never verify
+    // the chain (AuthChainTampered) and left the junk key behind.
     const hmac_key_result: ?auth_graph_manager.HmacKeyResult = hmac_blk: {
+        if (auth_graph_manager.AuthGraphManager.resolveExistingHmacKey(allocator, data_dir)) |existing| {
+            break :hmac_blk existing;
+        } else |err| switch (err) {
+            error.NoHmacKeyAvailable => {},
+            else => {
+                log.warn("Failed to resolve HMAC key for auth chain - auth graph disabled", &.{
+                    Attr.string("error", @errorName(err)),
+                });
+                break :hmac_blk null;
+            },
+        }
+        if (data_dir) |dir| {
+            if (storeHasAuthRecords(allocator, store)) {
+                printHmacKeyRequired(dir);
+                return error.HmacKeyRequired;
+            }
+        }
         const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
             switch (err) {
                 error.NoHmacKeyAvailable => {
