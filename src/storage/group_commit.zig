@@ -562,7 +562,10 @@ pub const ShardedCoordinator = struct {
             // MATCH), like bulk_insert_edge — nothing to resolve at submit.
             .bulk_merge_edge => {},
             .bulk_match_create_edge => |*p| {
-                if (self.adapter.lookupNodeByMergeKey(
+                // SONNY-3241: the key's only holder, or
+                // `error.MergeKeyNotUnique` (returned before anything is
+                // queued; the handler declines to the executor).
+                if (self.adapter.lookupSoleNodeByMergeKey(
                     self.graph_name,
                     p.src_label,
                     p.src_filter_key,
@@ -907,7 +910,10 @@ pub const ShardedCoordinator = struct {
                 .bulk_match_create_edge => |p| {
                     var target_id = p.target_id;
                     if (target_id == 0) {
-                        if (self.adapter.lookupNodeByMergeKey(
+                        // SONNY-3241: as the source at submit; a key more
+                        // nodes may hold reports `error.MergeKeyNotUnique`
+                        // and writes nothing.
+                        if (self.adapter.lookupSoleNodeByMergeKey(
                             self.graph_name,
                             p.dst_label,
                             p.dst_filter_key,

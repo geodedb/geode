@@ -202,6 +202,25 @@
 
 ### Fixed
 
+- **The server's MATCH ... CREATE and MATCH ... MERGE edge fast paths write
+  what the executor writes (SONNY-3241).** (1) `MATCH (a:P {k: 1}), (b:Q
+  {k: 9}) CREATE (a)-[:E]->(b)` resolved each endpoint to the lowest node
+  holding its key, so with two `(:P {k: 1})` it made one edge where the
+  executor makes one per matched pair (two); and a key MERGE's index cannot
+  hold (a non-integer number such as `1.5`, an over-long key) was taken as
+  "no such node", so it made none where the executor finds the nodes. The
+  fast path now takes an endpoint only when it is its key's single holder
+  (`StorageAdapter.lookupSoleNodeByMergeKey`) and otherwise hands the
+  statement to the executor, before writing anything; a key no node holds
+  still creates nothing. (2) The MATCH ... MERGE edge fast path wrote its
+  SET properties on the edge it matched as well as the one it created, so
+  `ON CREATE SET r.c = 1` (alone, or beside a bare `SET`) changed an
+  existing edge; such statements now go to the executor, and only a single
+  bare `SET` (which applies on both branches) stays on the fast path, as for
+  the node MERGE fast path. The node MERGE cases of this ticket (ON CREATE /
+  ON MATCH SET beside a bare SET, also through `/*+BATCH*/` and `USE GRAPH
+  g; MERGE`) were already declined since round 4a and are now pinned over
+  the wire. Regression: `zig build test-sonny3241-fast-path-parity-wire`.
 - **BEHAVIOUR CHANGE: a relationship MERGE matches on the relationship's
   properties (SONNY-3357).** `MERGE (a)-[:T {w: 1}]->(b)` then `MERGE
   (a)-[:T {w: 2}]->(b)` left one edge (`w: 1`): the edge was matched on

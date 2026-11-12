@@ -416,6 +416,13 @@ fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
     if (q.ret.distinct) return null;
     // The MERGE itself must not RETURN.
     if (merge_stmt.return_clause != null) return null;
+    // SONNY-3241: one SET clause at most (as the node MERGE fast path,
+    // `buildSimpleNodeMergeSpec`), and only a bare one: the adapter writes
+    // the SET's properties on the edge it creates AND on the one it
+    // matches, which is a bare SET's meaning; an ON CREATE SET ran on a
+    // matched edge too, and `ON CREATE SET r.c = 1 SET r.b = 2` set c there.
+    if (!write_shape.onlyFieldsOf(ast.MergeStatement, merge_stmt.*, &.{ "pattern", "on_create", "on_match", "set_is_bare" })) return null;
+    if (merge_stmt.on_create.len != 0 and !merge_stmt.set_is_bare) return null;
 
     // MATCH: exactly two simple node-pattern chains (the two endpoints).
     const match_chains = q.match.chains;

@@ -5384,6 +5384,40 @@ pub const StorageAdapter = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-3241-FAST-PATH-PARITY; FEATURE="WriteFastPathParity"; ASPECT=SoleHolderEndpoint; STATUS=TESTED; TEST=tests/test_sonny3241_fast_path_parity_wire.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-3241: `lookupNodeByMergeKey` for the MATCH ... CREATE edge fast
+    /// path, which writes ONE edge: the node holding the key when it is the
+    /// key's only holder; `missing_err` when no node holds it (the executor's
+    /// MATCH has no row, and creates nothing); `error.MergeKeyNotUnique` when
+    /// more nodes may hold it, or MERGE's index cannot hold the value (a
+    /// non-integer number, an over-long key). The executor creates an edge
+    /// per matched pair, and finds a value the index cannot hold by a scan,
+    /// so the caller declines to it. (The lowest holder was taken as the
+    /// only one, and an unindexable value as none.)
+    pub fn lookupSoleNodeByMergeKey(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: graph_store.PropertyValue,
+        missing_err: anyerror,
+    ) !u64 {
+        _ = self;
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        var id: u64 = undefined;
+        // Settles an entry left unresolved by a removed holder first.
+        switch (store.lookupMergeCandidate(graph_name, label, prop_key, prop_value, &id)) {
+            .found => {},
+            .not_found => return missing_err,
+            .not_indexable => return error.MergeKeyNotUnique,
+        }
+        return switch (store.lookupOnlyMergeHolder(graph_name, label, prop_key, prop_value, &id)) {
+            .found => id,
+            .not_found => missing_err,
+            .not_indexable => error.MergeKeyNotUnique,
+        };
+    }
+
     /// Task 15/16 (enterprise-ingest-throughput): write-phase counterpart of
     /// `bulkInsertEdge` that skips the MATCH lookups.
     ///
