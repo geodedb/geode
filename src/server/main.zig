@@ -13,7 +13,7 @@ fn compat_milliTimestamp() i64 {
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
-// CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=RateLimitPredicate; STATUS=TESTED; TEST=tests/test_gap0928_pool_exhausted.zig; OWNER=transport; UPDATED=2026-07-10
+// CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=RateLimitPredicate; STATUS=TESTED; TEST=test-gap0927; OWNER=transport; UPDATED=2026-11-12
 /// GAP-0928: rate-limit the POOL_EXHAUSTED diagnostic to at most once per
 /// `pool_exhausted_log_window_ms` while the pool stays at capacity. Pure and
 /// unit-testable — it reads no clock. `last_log_ms == 0` means "never logged"
@@ -327,13 +327,6 @@ const min_quic_admission_stack_mb: usize = 8;
 const max_quic_admission_stack_mb: usize = 512 * 1024 * 1024;
 var g_quic_admission_stack_size: usize = default_quic_admission_stack_mb * 1024 * 1024;
 
-// Process-global AuthProvider used by the embedded LSP TCP listener to
-// authenticate `initialize` bearer / session tokens.  `null` until the
-// server bootstraps it (and stays `null` if `--lsp-port=0`), in which
-// case the listener stays fail-closed.  The provider lives for the
-// lifetime of the server process — we never tear it down because the
-// listener and accepted sessions hold borrowed pointers into it.
-var g_lsp_auth_provider: ?*authn_mod.AuthProvider = null;
 // ENG-3979: the `__geode_security`-backed PersistentUserResolver callbacks
 // (and their role/duplication helpers) live in a dedicated module so the
 // regression suite can drive the REAL callbacks — the seam where a mutating
@@ -499,31 +492,147 @@ fn runLeakedConnReaper(context: *anyopaque) void {
 // `main()` once the QUIC server is up. It owns its own
 // `std.Io.Threaded` instance for the lifetime of the listener so the
 // `Io` vtable handed to the listener and to every accepted stream is
-// stable. Each accepted connection is dispatched to a detached
-// `runLspSession` thread — multiple LSP clients can therefore have
-// concurrent sessions, which is what enables a geode-ui tab plus a
-// terminal editor (or two browser tabs) to drive the LSP at the same
-// time without serializing on a single accept-and-run loop the way
-// standalone `geode lsp --listen` does.
+// stable. Each accepted connection is dispatched to a `runLspSession`
+// thread — multiple LSP clients can therefore have concurrent sessions,
+// which is what enables a geode-ui tab plus a terminal editor (or two
+// browser tabs) to drive the LSP at the same time without serializing on
+// a single accept-and-run loop the way standalone `geode lsp --listen`
+// does.
 //
-// Auth caveat: `verifier = null` and `allow_unauth = false` mean the
-// session is fail-closed. Until the AuthProvider→Verifier adapter
-// lands (follow-up task tracked in the plan), this listener is bound
-// but cannot satisfy any client's initialize request. See
-// `runLspSession`'s in-body TODO.
-const LspListenerArgs = struct {
+// Every session verifies its `initialize` token against `provider`
+// (through `verifier`); the TCP-embedded path always requires auth.
+//
+// CANARY: REQ=REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME; FEATURE="Embedded LSP"; ASPECT=ListenerOwnsProviderLifetime; STATUS=TESTED; TEST=tests/test_sonny6374_lsp_auth_provider_lifetime.zig; OWNER=lsp; UPDATED=2026-11-12
+// SONNY-6374: the provider used to be freed by a `defer` inside the `if`
+// block that spawned the listener, i.e. as soon as the thread had started,
+// so every session's verifier read freed memory (a debug server panicked on
+// the first `initialize`). `EmbeddedLsp` now owns the provider, the
+// listener thread and the live sessions together: `stop` wakes the accept
+// loop, the listener shuts down every open session's socket and waits for
+// the session threads to return, and only then is the provider freed. If a
+// session outlives the bounded drain, the provider (and the listener's Io)
+// is leaked deliberately rather than freed under it.
+const lsp_session_drain_timeout_ms: u64 = 5_000;
+
+const EmbeddedLsp = struct {
     allocator: std.mem.Allocator,
     port: u16,
     loopback_only: bool,
-    // Optional verifier installed into every accepted LSP session.
-    // `null` keeps the listener fail-closed (legacy behavior); a real
-    // verifier is built by `verifierFromAuthProvider(g_lsp_auth_provider)`
-    // when the server bootstraps an AuthProvider.
-    verifier: ?lsp_auth_mod.Verifier = null,
+    provider: *authn_mod.AuthProvider,
+    verifier: lsp_auth_mod.Verifier,
+    thread: ?std.Thread = null,
+    // Set by `stop`; the accept loop exits on the next accept.
+    stopping: std.atomic.Value(bool) = .init(false),
+    // Set by the listener thread as its last action.
+    finished: std.atomic.Value(bool) = .init(false),
+    // A session (or the listener) outlived the drain: nothing it may still
+    // touch is freed.
+    abandoned: std.atomic.Value(bool) = .init(false),
+    // Session threads that have not returned yet. Decremented as the last
+    // action of each session thread.
+    live_sessions: std.atomic.Value(usize) = .init(0),
+    // Open sessions whose sockets `stop` shuts down. A session removes
+    // itself before it closes its socket, so the listener never shuts down
+    // a closed (and possibly reused) descriptor.
+    sessions_mutex: std.Io.Mutex = .init,
+    sessions: std.ArrayList(*LspSessionArgs) = .empty,
+
+    fn create(allocator: std.mem.Allocator, port: u16, loopback_only: bool) !*EmbeddedLsp {
+        const provider = try allocator.create(authn_mod.AuthProvider);
+        errdefer allocator.destroy(provider);
+        // Empty stores. Nothing populates this provider yet (no procedure
+        // or CLI reaches it), so every `initialize` token is rejected.
+        provider.* = authn_mod.AuthProvider.init(allocator);
+        errdefer provider.deinit();
+        const self = try allocator.create(EmbeddedLsp);
+        self.* = .{
+            .allocator = allocator,
+            .port = port,
+            .loopback_only = loopback_only,
+            .provider = provider,
+            .verifier = lsp_auth_mod.verifierFromAuthProvider(provider),
+        };
+        return self;
+    }
+
+    fn start(self: *EmbeddedLsp) !void {
+        self.thread = try std.Thread.spawn(.{}, runLspListener, .{self});
+    }
+
+    fn unregister(self: *EmbeddedLsp, io: std.Io, session: *LspSessionArgs) void {
+        self.sessions_mutex.lockUncancelable(io);
+        defer self.sessions_mutex.unlock(io);
+        for (self.sessions.items, 0..) |s, i| {
+            if (s == session) {
+                _ = self.sessions.swapRemove(i);
+                return;
+            }
+        }
+    }
+
+    /// Unblock the listener's `accept` with a loopback connection, which the
+    /// listener closes on sight once `stopping` is set.
+    fn wakeAccept(self: *EmbeddedLsp) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", self.port) catch return;
+        const stream = addr.connect(io, .{ .mode = .stream }) catch return;
+        stream.close(io);
+    }
+
+    /// Stop accepting, close every open session and wait (bounded) for the
+    /// listener thread to return. Idempotent.
+    fn stop(self: *EmbeddedLsp) void {
+        if (self.thread == null) return;
+        const t0 = compat_milliTimestamp();
+        self.stopping.store(true, .release);
+        // The listener's own drain is bounded by
+        // lsp_session_drain_timeout_ms; allow it that plus a margin.
+        const deadline = t0 + @as(i64, @intCast(lsp_session_drain_timeout_ms)) + 2_000;
+        var next_wake: i64 = 0;
+        while (!self.finished.load(.acquire)) {
+            const now = compat_milliTimestamp();
+            if (now >= deadline) break;
+            // Repeat the wake: a stop that races the listener's bind can
+            // connect before it accepts.
+            if (now >= next_wake) {
+                self.wakeAccept();
+                next_wake = now + 250;
+            }
+            compat_sleepMs(10);
+        }
+        const thr = self.thread.?;
+        self.thread = null;
+        if (self.finished.load(.acquire)) {
+            thr.join();
+        } else {
+            self.abandoned.store(true, .release);
+            thr.detach();
+        }
+        if (self.abandoned.load(.acquire)) {
+            std.debug.print(
+                "[shutdown] LSP listener or {d} LSP session(s) still running after {d}ms; leaking the LSP AuthProvider to avoid use-after-free\n",
+                .{ self.live_sessions.load(.acquire), compat_milliTimestamp() - t0 },
+            );
+        } else {
+            std.debug.print("[shutdown] LSP listener stopped ({d}ms)\n", .{compat_milliTimestamp() - t0});
+        }
+    }
+
+    /// `stop`, then free the provider and this struct unless something that
+    /// borrows them is still running.
+    fn shutdown(self: *EmbeddedLsp) void {
+        self.stop();
+        if (self.abandoned.load(.acquire)) return;
+        self.sessions.deinit(self.allocator);
+        self.provider.deinit();
+        self.allocator.destroy(self.provider);
+        self.allocator.destroy(self);
+    }
 };
 
-fn runLspListener(args: LspListenerArgs) void {
-    const host: []const u8 = if (args.loopback_only) "127.0.0.1" else "0.0.0.0";
+fn runLspListener(self: *EmbeddedLsp) void {
+    defer self.finished.store(true, .release);
+    const host: []const u8 = if (self.loopback_only) "127.0.0.1" else "0.0.0.0";
 
     // LSP-SEC-008 / SEC-LSP-BIND-01: hard-assert the bind policy at the
     // layer that knows both the bind scope and the auth wiring. Embedded
@@ -533,13 +642,13 @@ fn runLspListener(args: LspListenerArgs) void {
     // listener without tripping this guard (and its regression test,
     // tests/test_gap0885_lsp_hardening.zig).
     lsp_server.validateBindPolicy(.{
-        .loopback_only = args.loopback_only,
+        .loopback_only = self.loopback_only,
         .allow_unauth = false,
-        .has_verifier = args.verifier != null,
+        .has_verifier = true,
     }) catch {
         log.err("LSP listener: refusing non-loopback bind without an authentication verifier (LSP-SEC-008)", &.{
             Attr.string("host", host),
-            Attr.int("port", @as(i64, args.port)),
+            Attr.int("port", @as(i64, self.port)),
         });
         return;
     };
@@ -548,21 +657,22 @@ fn runLspListener(args: LspListenerArgs) void {
     // `std.Io` vtable for the lifetime of the listener. A dedicated
     // `std.Io.Threaded` instance, owned by this thread, satisfies that
     // (same pattern as `metrics_server.zig` and the standalone
-    // `geode lsp --listen` path in `cli/main.zig`).
-    var threaded = std.Io.Threaded.init(args.allocator, .{});
-    defer threaded.deinit();
+    // `geode lsp --listen` path in `cli/main.zig`). Sessions that outlived
+    // the drain still use it, so it is then leaked with them.
+    var threaded = std.Io.Threaded.init(self.allocator, .{});
+    defer if (!self.abandoned.load(.acquire)) threaded.deinit();
     const io = threaded.io();
 
     // Zig 0.16 net stack: `std.Io.net.IpAddress.parse` handles v4 and
     // falls back to v6. We bind a numeric literal — no DNS — so the
     // narrow `parseIp4`/`parseIp6` fallbacks would also work, but
     // `parse` is the more forgiving entry point.
-    var bind_addr = std.Io.net.IpAddress.parse(host, args.port) catch
-        std.Io.net.IpAddress.parseIp4(host, args.port) catch
-        std.Io.net.IpAddress.parseIp6(host, args.port) catch {
+    var bind_addr = std.Io.net.IpAddress.parse(host, self.port) catch
+        std.Io.net.IpAddress.parseIp4(host, self.port) catch
+        std.Io.net.IpAddress.parseIp6(host, self.port) catch {
         log.err("LSP listener: failed to parse bind host", &.{
             Attr.string("host", host),
-            Attr.int("port", @as(i64, args.port)),
+            Attr.int("port", @as(i64, self.port)),
         });
         return;
     };
@@ -570,7 +680,7 @@ fn runLspListener(args: LspListenerArgs) void {
     var listener = std.Io.net.IpAddress.listen(&bind_addr, io, .{ .reuse_address = true }) catch |err| {
         log.err("LSP listener: bind failed", &.{
             Attr.string("host", host),
-            Attr.int("port", @as(i64, args.port)),
+            Attr.int("port", @as(i64, self.port)),
             Attr.string("error", @errorName(err)),
         });
         return;
@@ -579,74 +689,111 @@ fn runLspListener(args: LspListenerArgs) void {
 
     log.info("LSP server started", &.{
         Attr.string("address", host),
-        Attr.int("port", @as(i64, args.port)),
+        Attr.int("port", @as(i64, self.port)),
         Attr.string("transport", "tcp"),
     });
 
-    while (true) {
+    while (!self.stopping.load(.acquire)) {
         const accepted = listener.accept(io) catch |err| {
+            if (self.stopping.load(.acquire)) break;
             log.warn("LSP accept error", &.{Attr.string("error", @errorName(err))});
             continue;
         };
+        if (self.stopping.load(.acquire)) {
+            accepted.close(io);
+            break;
+        }
         // The session takes ownership of `accepted`. Spawning failure
         // means we still own it and must close it ourselves to avoid
         // leaking the FD.
-        const session_args = args.allocator.create(LspSessionArgs) catch {
+        const session_args = self.allocator.create(LspSessionArgs) catch {
             log.err("LSP session args alloc failed", &.{});
             accepted.close(io);
             continue;
         };
         session_args.* = .{
-            .allocator = args.allocator,
+            .owner = self,
+            .allocator = self.allocator,
             .io = io,
             .stream = accepted,
-            .verifier = args.verifier,
+            .verifier = self.verifier,
         };
+        {
+            self.sessions_mutex.lockUncancelable(io);
+            defer self.sessions_mutex.unlock(io);
+            self.sessions.append(self.allocator, session_args) catch {
+                log.err("LSP session registry alloc failed", &.{});
+                accepted.close(io);
+                self.allocator.destroy(session_args);
+                continue;
+            };
+        }
+        _ = self.live_sessions.fetchAdd(1, .acq_rel);
         const thr = std.Thread.spawn(.{}, runLspSession, .{session_args}) catch |err| {
             log.err("LSP session spawn error", &.{Attr.string("error", @errorName(err))});
+            self.unregister(io, session_args);
+            _ = self.live_sessions.fetchSub(1, .acq_rel);
             accepted.close(io);
-            args.allocator.destroy(session_args);
+            self.allocator.destroy(session_args);
             continue;
         };
         thr.detach();
     }
+
+    // Shut down every open session's socket so its blocked read returns
+    // end-of-stream, then wait for the session threads to return before
+    // the Io (and, in `EmbeddedLsp.shutdown`, the provider) is freed.
+    {
+        self.sessions_mutex.lockUncancelable(io);
+        defer self.sessions_mutex.unlock(io);
+        for (self.sessions.items) |s| s.stream.shutdown(io, .both) catch {};
+    }
+    const deadline = compat_milliTimestamp() + @as(i64, @intCast(lsp_session_drain_timeout_ms));
+    while (self.live_sessions.load(.acquire) > 0 and compat_milliTimestamp() < deadline) {
+        compat_sleepMs(10);
+    }
+    if (self.live_sessions.load(.acquire) > 0) self.abandoned.store(true, .release);
 }
 
 const LspSessionArgs = struct {
+    owner: *EmbeddedLsp,
     allocator: std.mem.Allocator,
     io: std.Io,
     stream: std.Io.net.Stream,
-    // Forwarded from the listener.  When non-null this is plumbed into
+    // Forwarded from the listener and plumbed into
     // `lsp_server.Server.initWithTransport` so the per-session
     // `AuthState.verify` call can validate the client's bearer / session
     // token against the live AuthProvider.
-    verifier: ?lsp_auth_mod.Verifier,
+    verifier: lsp_auth_mod.Verifier,
 };
 
 fn runLspSession(args: *LspSessionArgs) void {
+    const owner = args.owner;
+    // Last action of the thread: after it the listener may free the Io
+    // and the provider.
+    defer _ = owner.live_sessions.fetchSub(1, .acq_rel);
     // The listener allocated this struct; we own it now and must free
     // it on every return path.
     defer args.allocator.destroy(args);
 
-    // AuthProvider→Verifier adapter is wired below via `args.verifier`
-    // (built by `lsp_auth_mod.verifierFromAuthProvider`).  When the
-    // server bootstrapped an AuthProvider this is non-null and the LSP
-    // session validates `initialize` tokens against the live provider.
-    // Otherwise the verifier stays `null` and the session is fail-closed
-    // (every initialize is rejected) — same legacy behavior as before
-    // the adapter landed.  The TCP-embedded path still REQUIRES auth
-    // (`--no-auth` is stdio-only).
+    // The session validates `initialize` tokens against the live
+    // provider through `args.verifier`. The TCP-embedded path always
+    // REQUIRES auth (`--no-auth` is stdio-only).
     var tx = lsp_transport_mod.Transport.initTcp(args.allocator, args.io, args.stream) catch |err| {
         log.warn("LSP transport init error", &.{Attr.string("error", @errorName(err))});
+        owner.unregister(args.io, args);
         args.stream.close(args.io);
         return;
     };
     var srv = lsp_server.Server.initWithTransport(args.allocator, tx, args.verifier, false) catch |err| {
         log.warn("LSP server init error", &.{Attr.string("error", @errorName(err))});
+        owner.unregister(args.io, args);
         tx.deinit();
         return;
     };
+    // `srv.deinit` closes the socket; unregister first (defers run LIFO).
     defer srv.deinit();
+    defer owner.unregister(args.io, args);
     srv.run() catch |err| {
         log.warn("LSP session error", &.{Attr.string("error", @errorName(err))});
     };
@@ -2416,61 +2563,6 @@ pub fn main() !void {
             Attr.string("tls", "1.3"),
         });
 
-        // Task 28 (Phase 9): spawn the embedded LSP TCP listener so
-        // geode-ui / monaco-languageclient sessions can attach to the
-        // same in-process schema view as QUIC handlers. `lsp_port == 0`
-        // disables the listener entirely. The thread is detached and
-        // lives for the lifetime of the server process — there is no
-        // explicit join on shutdown because the listener will be torn
-        // down with the process. Per-session threads are similarly
-        // detached and exit when their LSP session terminates. See
-        // `runLspListener` for the auth caveat.
-        const lsp_bootstrap_cfg = parseLspBootstrapConfig(gpa);
-        if (lsp_bootstrap_cfg.port != 0) {
-            // Bootstrap the process-global AuthProvider used by every
-            // accepted LSP session.  AuthProvider.init is allocation-only
-            // (no I/O, no syscalls beyond the mutex pair); we keep it
-            // alive for the lifetime of the process.  Empty stores by
-            // default — operators populate API keys via the auth CLI /
-            // server-side procedures before clients can authenticate.
-            const lsp_provider = gpa.create(authn_mod.AuthProvider) catch |err| {
-                log.err("Failed to allocate LSP AuthProvider", &.{Attr.string("error", @errorName(err))});
-                return err;
-            };
-            lsp_provider.* = authn_mod.AuthProvider.init(gpa);
-            g_lsp_auth_provider = lsp_provider;
-            // The listener thread is detached and the verifier borrows
-            // `lsp_provider` for the lifetime of the process, so the
-            // tear-down has to wait until the rest of the server shutdown
-            // sequence has joined / cancelled every in-flight LSP session
-            // (see the QUIC drain block further down).  Order here matches
-            // graph_store: register a defer on the same scope so the
-            // free runs exactly once when `cmdServe` returns.  DebugAllocator
-            // otherwise reports the AuthProvider as leaked on graceful exit.
-            defer {
-                g_lsp_auth_provider = null;
-                lsp_provider.deinit();
-                gpa.destroy(lsp_provider);
-            }
-            const lsp_verifier = lsp_auth_mod.verifierFromAuthProvider(lsp_provider);
-
-            const lsp_thr = std.Thread.spawn(.{}, runLspListener, .{LspListenerArgs{
-                .allocator = gpa,
-                .port = lsp_bootstrap_cfg.port,
-                .loopback_only = lsp_bootstrap_cfg.loopback_only,
-                .verifier = lsp_verifier,
-            }}) catch |err| {
-                log.err("Failed to spawn LSP listener thread", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.int("port", @as(i64, lsp_bootstrap_cfg.port)),
-                });
-                return err;
-            };
-            lsp_thr.detach();
-        } else {
-            log.info("LSP listener disabled (--lsp-port=0 or GEODE_LSP_PORT=0)", &.{});
-        }
-
         // GAP-0260: Start background persistence thread for write coalescing
         graph_store.startPersistenceThread(config.persist_interval_ms);
         // Gap 0039: the graceful-shutdown tail now flushes EAGERLY (before the
@@ -2501,6 +2593,38 @@ pub fn main() !void {
                     Attr.int("grpc_inflight", @intCast(grpc_still_running)),
                 });
             }
+        }
+
+        // Task 28 (Phase 9): spawn the embedded LSP TCP listener so
+        // geode-ui / monaco-languageclient sessions can attach to the
+        // same in-process schema view as QUIC handlers. `lsp_port == 0`
+        // disables the listener entirely.
+        //
+        // SONNY-6374: `EmbeddedLsp` owns the listener thread, its sessions
+        // and the AuthProvider their verifier borrows. The shutdown tail
+        // stops it (closing open sessions) before the data flush, and this
+        // defer frees the provider only after the listener and every
+        // session thread have returned. It is registered after the store's
+        // deinit defer so it runs first: sessions read the global store.
+        var embedded_lsp: ?*EmbeddedLsp = null;
+        defer if (embedded_lsp) |lsp| lsp.shutdown();
+        const lsp_bootstrap_cfg = parseLspBootstrapConfig(gpa);
+        if (lsp_bootstrap_cfg.port != 0) {
+            const lsp = EmbeddedLsp.create(gpa, lsp_bootstrap_cfg.port, lsp_bootstrap_cfg.loopback_only) catch |err| {
+                log.err("Failed to allocate the embedded LSP listener", &.{Attr.string("error", @errorName(err))});
+                return err;
+            };
+            // `shutdown` with no thread started just frees.
+            embedded_lsp = lsp;
+            lsp.start() catch |err| {
+                log.err("Failed to spawn LSP listener thread", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("port", @as(i64, lsp_bootstrap_cfg.port)),
+                });
+                return err;
+            };
+        } else {
+            log.info("LSP listener disabled (--lsp-port=0 or GEODE_LSP_PORT=0)", &.{});
         }
 
         // #540: Spawn a dedicated poll thread to continuously process incoming
@@ -3344,7 +3468,7 @@ pub fn main() !void {
         posix.sigaction(posix.SIG.TERM, &sa, null);
         posix.sigaction(posix.SIG.INT, &sa, null);
 
-        // CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=AdmissionDiagnostic; STATUS=TESTED; TEST=tests/test_gap0928_pool_exhausted.zig; OWNER=transport; UPDATED=2026-07-10
+        // CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=AdmissionDiagnostic; STATUS=TESTED; TEST=test-gap0927; OWNER=transport; UPDATED=2026-11-12
         // GAP-0928: at `--max-connections` capacity the accept loop parks and
         // the N+1-th connection got NO server-side signal — the operator only
         // saw the client's own --timeout fire (pool exhaustion was invisible
@@ -3561,6 +3685,11 @@ pub fn main() !void {
                 );
             }
         }
+
+        // ── Embedded LSP (SONNY-6374) ──
+        // Stop accepting and close open LSP sessions (bounded) before the
+        // data flush. The provider is freed by the `embedded_lsp` defer.
+        if (embedded_lsp) |lsp| lsp.stop();
 
         // ── gRPC in-flight handler drain (REQ-TRANSPORT-GRPC-SHUTDOWN-001) ──
         // gRPC handlers run on threads the vendored accept loop detaches, so

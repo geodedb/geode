@@ -133,11 +133,34 @@ func Scan(root string) (report, error) {
     }
     var rows []requirementRow
     for id, feats := range reqMap {
+        // SONNY-6374: a total order. Entries that share FEATURE and ASPECT
+        // (different STATUS, OWNER, UPDATED or files) compared equal, so
+        // they came out in map-iteration order and status.csv lines moved
+        // between runs.
         sort.Slice(feats, func(i, j int) bool {
-            if feats[i].Feature == feats[j].Feature {
-                return feats[i].Aspect < feats[j].Aspect
+            a, b := feats[i], feats[j]
+            if a.Feature != b.Feature {
+                return a.Feature < b.Feature
             }
-            return feats[i].Feature < feats[j].Feature
+            if a.Aspect != b.Aspect {
+                return a.Aspect < b.Aspect
+            }
+            if a.Status != b.Status {
+                return a.Status < b.Status
+            }
+            if a.Owner != b.Owner {
+                return a.Owner < b.Owner
+            }
+            if a.Updated != b.Updated {
+                return a.Updated < b.Updated
+            }
+            if x, y := strings.Join(a.Files, "\n"), strings.Join(b.Files, "\n"); x != y {
+                return x < y
+            }
+            if x, y := strings.Join(a.Tests, "\n"), strings.Join(b.Tests, "\n"); x != y {
+                return x < y
+            }
+            return strings.Join(a.Benches, "\n") < strings.Join(b.Benches, "\n")
         })
         rows = append(rows, requirementRow{ID: id, Features: feats})
     }

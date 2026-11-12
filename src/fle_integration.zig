@@ -8,7 +8,7 @@ const key_types = @import("fle_key_types");
 const blind_index_mod = @import("fle_blind_index");
 
 // Field-Level Encryption Integration Layer
-// CANARY: REQ=REQ-FLE-INTEGRATION-001; FEATURE="FieldLevelEncryption"; ASPECT=INTEGRATION; STATUS=TESTED; TEST=test-gap0852; OWNER=security; UPDATED=2026-11-11
+// CANARY: REQ=REQ-FLE-INTEGRATION-001; FEATURE="FieldLevelEncryption"; ASPECT=INTEGRATION; STATUS=TESTED; TEST=test-gap0852; OWNER=security; UPDATED=2026-11-12
 
 // Re-export modules for external access
 pub const catalog_mod = fle_catalog;

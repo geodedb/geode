@@ -4428,17 +4428,6 @@ pub fn build(b: *std.Build) void {
     const run_raft_integration_tests = b.addRunArtifact(raft_integration_tests);
     shardDep(test_step, &run_raft_integration_tests.step, 10, test_shard_loads, test_shard_index);
 
-    // GAP-0513: federation_latency_aggregate unit tests (Welford stats, reservoir, archive ring)
-    const fed_latency_agg_test_mod = b.createModule(.{
-        .root_source_file = b.path("src/distributed/federation_latency_aggregate.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    fed_latency_agg_test_mod.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
-    const fed_latency_agg_tests = b.addTest(.{ .root_module = fed_latency_agg_test_mod });
-    const run_fed_latency_agg_tests = b.addRunArtifact(fed_latency_agg_tests);
-    shardDep(test_step, &run_fed_latency_agg_tests.step, 1, test_shard_loads, test_shard_index);
-
     // GAP-0513: network_transport compile-time verification tests
     const network_transport_test_mod = b.createModule(.{
         .root_source_file = b.path("src/distributed/network_transport.zig"),
@@ -5019,8 +5008,6 @@ pub fn build(b: *std.Build) void {
     const planner_enumerator_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_planner_enumerator.zig"), .target = target, .optimize = optimize }) });
     planner_enumerator_tests.root_module.addImport("planner_enumerator", planner_enumerator_mod);
     planner_enumerator_tests.root_module.addImport("perf_gate", perf_gate_mod);
-    const path_varlen_predicate_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_path_varlen_predicate.zig"), .target = target, .optimize = optimize }) });
-    path_varlen_predicate_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const txn_manager_mod_for_write_skew = b.createModule(.{ .root_source_file = b.path("src/transactions/manager.zig"), .target = target, .optimize = optimize });
     txn_manager_mod_for_write_skew.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     txn_manager_mod_for_write_skew.addImport("range_tracker", range_tracker_mod_for_tests);
@@ -5029,8 +5016,6 @@ pub fn build(b: *std.Build) void {
     const write_skew_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_write_skew.zig"), .target = target, .optimize = optimize }) });
     write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
     write_skew_tests.root_module.addImport("perf_gate", perf_gate_mod);
-    const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
-    redo_delta_tests.root_module.addImport("perf_gate", perf_gate_mod);
     const recovery_corrupt_latency_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_recovery_corrupt_latency.zig"), .target = target, .optimize = optimize }) });
     recovery_corrupt_latency_tests.root_module.addImport("geode", root_mod);
     recovery_corrupt_latency_tests.root_module.addImport("perf_gate", perf_gate_mod);
@@ -5060,18 +5045,10 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_planner_enumerator_tests.step, 1, test_shard_loads, test_shard_index);
     const planner_enumerator_tests_step = b.step("test-canary-planner-enumerator", "Run cost-based plan enumeration engine CANARY tests (REQ-GQL-024)");
     planner_enumerator_tests_step.dependOn(&run_planner_enumerator_tests.step);
-    const run_path_varlen_predicate_tests = b.addRunArtifact(path_varlen_predicate_tests);
-    shardDep(test_step, &run_path_varlen_predicate_tests.step, 1, test_shard_loads, test_shard_index);
-    const path_varlen_predicate_tests_step = b.step("test-canary-path-varlen-predicate", "Run variable-length path property predicate CANARY tests (REQ-GQL-017)");
-    path_varlen_predicate_tests_step.dependOn(&run_path_varlen_predicate_tests.step);
     const run_write_skew_tests = b.addRunArtifact(write_skew_tests);
     shardDep(test_step, &run_write_skew_tests.step, 1, test_shard_loads, test_shard_index);
     const write_skew_tests_step = b.step("test-canary-txn-write-skew", "Run MVCC write-skew detection CANARY tests (REQ-GQL-025)");
     write_skew_tests_step.dependOn(&run_write_skew_tests.step);
-    const run_redo_delta_tests = b.addRunArtifact(redo_delta_tests);
-    shardDep(test_step, &run_redo_delta_tests.step, 1, test_shard_loads, test_shard_index);
-    const redo_delta_tests_step = b.step("test-canary-storage-redo-delta", "Run redo optimization delta CANARY tests (REQ-GQL-022)");
-    redo_delta_tests_step.dependOn(&run_redo_delta_tests.step);
     const run_recovery_corrupt_latency_tests = b.addRunArtifact(recovery_corrupt_latency_tests);
     shardDep(test_step, &run_recovery_corrupt_latency_tests.step, 1, test_shard_loads, test_shard_index);
     const recovery_corrupt_latency_tests_step = b.step("test-canary-recovery-corrupt-latency", "Run corrupt-page recovery latency CANARY tests (REQ-GQL-028)");
@@ -6896,20 +6873,7 @@ pub fn build(b: *std.Build) void {
     const tde_nonce_step = b.step("test-tde-nonce", "TDE AES-GCM nonce uniqueness, round-trip and tamper detection (SONNY-6298)");
     tde_nonce_step.dependOn(&run_tde_nonce_tests.step);
 
-    // SONNY-6298: GAP-0193 batch-2 security module-structure checks against the
-    // geode module. Never compiled before (an unreferenced const in
-    // all_tests.zig); its four always-true `or true` assertions are removed.
-    // The engine and misc batch-2 files are not registered: 7 and 5 of their
-    // cases parse syntax the ISO GQL parser rejects (Cypher's UNWIND, CREATE
-    // CONSTRAINT ... ASSERT, BEGIN TRANSACTION, `[*]`, WHERE pattern
-    // predicates; CREATE MATERIALIZED VIEW ... AS).
-    const gap0193_b2_security_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap_0193_batch2_security.zig"), .target = target, .optimize = optimize });
-    gap0193_b2_security_mod.addImport("geode", root_mod);
-    const gap0193_b2_security_tests = b.addTest(.{ .root_module = gap0193_b2_security_mod });
-    const run_gap0193_b2_security_tests = b.addRunArtifact(gap0193_b2_security_tests);
-    shardDep(test_step, &run_gap0193_b2_security_tests.step, 1, test_shard_loads, test_shard_index);
-    const gap0193_b2_security_step = b.step("test-gap0193-batch2-security", "GAP-0193 batch-2 security module-structure checks (SONNY-6298)");
-    gap0193_b2_security_step.dependOn(&run_gap0193_b2_security_tests.step);
+    // The GAP-0193 batch-2 suites are registered further down (SONNY-6320 / SONNY-6374).
 
     // GAP-0881: crypto truth — real HMAC-SHA3 (FIPS 198-1 via stdlib, not the
     // old SHA3(key||data) placeholder) + TDE status() derives loaded/key_id
@@ -9453,6 +9417,115 @@ pub fn build(b: *std.Build) void {
     const sonny6332_step = b.step("test-sonny6332-no-fixed-ports", "Run SONNY-6332 regression (no test the build compiles binds a literal port; geode serve on port 0 reports the bound port; the embedded LSP listener is off for test servers via GEODE_LSP_PORT=0, moved by GEODE_LSP_PORT, and --lsp-port wins)");
     sonny6332_step.dependOn(&run_sonny6332_tests.step);
 
+    // SONNY-6374: the embedded LSP listener's AuthProvider outlives every LSP
+    // session (it was freed as soon as the listener thread was spawned), and
+    // SIGTERM closes open sessions and stops the listener before freeing it.
+    const sonny6374_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6374_lsp_auth_provider_lifetime.zig"), .target = target, .optimize = optimize });
+    sonny6374_test_mod.link_libc = true;
+    sonny6374_test_mod.addImport("geode", root_mod);
+    sonny6374_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6374_test_mod.addImport("schema", schema_mod);
+    sonny6374_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6374_tests = b.addTest(.{ .root_module = sonny6374_test_mod });
+    const run_sonny6374_tests = b.addRunArtifact(sonny6374_tests);
+    spawnsBuiltGeode(sonny6374_tests);
+    shardDep(test_step, &run_sonny6374_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6374_step = b.step("test-sonny6374-lsp-auth-provider-lifetime", "Run SONNY-6374 regression (the embedded LSP AuthProvider outlives every session: two sessions get a -32002 answer to initialize, and SIGTERM with a session open closes it, stops the listener and frees the provider)");
+    sonny6374_step.dependOn(&run_sonny6374_tests.step);
+
+    // SONNY-6321: the TDE self-test procedures through the executor, and no
+    // CANARY cites the TDEKeyManager suite for code it does not exercise.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6321_tde_procedures.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("sonny6321_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6321-tde-procedures", "Run SONNY-6321 regression (the TDE self-test procedures succeed through the executor with TDE on and claim nothing with TDE off; no CANARY cites tests/test_tde_kms_integration.zig for code it does not exercise)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-2439 (partial): gated benchmarks time with a monotonic clock, the
+    // test-local-only benchmarks are gone, and the enforced job's steps exist.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2439_perf_methodology.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny2439_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny2439-perf-methodology", "Run SONNY-2439 partial regression (every gated perf claim times with a monotonic clock; the gated benchmarks of test-local code are gone; every step the enforced perf-gate job runs exists)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-2441: KMSProvider has no dead remote path, every provider type
+    // round-trips the caller's key or refuses, and the KMS tests are built.
+    const sonny2441_kms_mod = b.createModule(.{ .root_source_file = b.path("src/security/kms.zig"), .target = target, .optimize = optimize });
+    sonny2441_kms_mod.addImport("crypto_backend", crypto_backend_mod);
+    sonny2441_kms_mod.addImport("logging", logging_mod);
+    sonny2441_kms_mod.addImport("json", json_mod);
+    sonny2441_kms_mod.addImport("transport/quic", transport_quic_mod);
+    sonny2441_kms_mod.addImport("feature_flags", runtime_flags_mod);
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2441_kms_provider_paths.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("security/kms", sonny2441_kms_mod);
+        mod.addImport("sonny2441_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny2441-kms-provider-paths", "Run SONNY-2441 regression (KMSProvider offers no remote_kms provider, every provider type round-trips the caller's key or refuses, and the KMS provider test is built)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-2441: the KMSProvider unit suite, built and run. (TDEKeyManager was
+    // removed as never-used code in SONNY-6298; wiring is story SONNY-6380.)
+    for ([_]struct { name: []const u8, path: std.Build.LazyPath, desc: []const u8 }{
+        .{ .name = "test-kms-provider", .path = b.path("tests/test_kms_provider.zig"), .desc = "Run the KMSProvider local_dev / external_kms unit suite (SONNY-2441: registered)" },
+    }) |t| {
+        const mod = b.createModule(.{ .root_source_file = t.path, .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("security/kms", sonny2441_kms_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step(t.name, t.desc).dependOn(&run_tests.step);
+    }
+
+    // SONNY-6272: the unbuildable Dockerfile.prod and its references are gone.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6272_dockerfile_prod.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6272_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6272-dockerfile-prod", "Run SONNY-6272 regression (the unbuildable Dockerfile.prod is removed and no Makefile target, compose file, operator doc or Dockerfile test names it)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6374 items 3-8: serve --help, the ABAC startup log, a corrupt
+    // Argon2id parameter, always-true assertions, CANARY tokens naming
+    // missing files, and dead modules.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6374_server_residuals.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("build_options", build_options_mod);
+        mod.addImport("sonny6374_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        spawnsBuiltGeode(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6374-server-residuals", "Run SONNY-6374 items 3-8 regression (serve --help gives no gRPC example on the LSP port and documents --lsp-port; no log claims ABAC is enforced; a corrupt Argon2id parameter is refused, not a panic; no always-true assertions in the GAP-0193 batch 2 suites, which are built; every CANARY TEST= file exists; the dead modules are gone)").dependOn(&run_tests.step);
+    }
+
     // SONNY-3379: the I-4 vector case over in-process gRPC (the shared
     // round-12 fixture), in two fixture lifetimes; the fixture leaves no
     // index manager pointing into its freed request arena.
@@ -9496,6 +9569,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "test-gap0193-batch2-engine", .path = b.path("tests/test_gap_0193_batch2_engine.zig"), .desc = "Run the GAP-0193 batch 2 engine parse suite (SONNY-6320: registered)" },
         .{ .name = "test-gap0193-batch2-misc", .path = b.path("tests/test_gap_0193_batch2_misc.zig"), .desc = "Run the GAP-0193 batch 2 misc parse suite (SONNY-6320: registered)" },
         .{ .name = "test-gap0193-impl-verification", .path = b.path("tests/test_gap_0193_impl_verification.zig"), .desc = "Run the GAP-0193 IMPL verification parse suite (SONNY-6320: registered)" },
+        .{ .name = "test-gap0193-batch2-security", .path = b.path("tests/test_gap_0193_batch2_security.zig"), .desc = "Run the GAP-0193 batch 2 security parse suite (SONNY-6374: registered, always-true assertions removed)" },
+        .{ .name = "test-gap0193-batch2-testing", .path = b.path("tests/test_gap_0193_batch2_testing.zig"), .desc = "Run the GAP-0193 batch 2 testing parse suite (SONNY-6374: registered, always-true assertions removed)" },
     }) |t| {
         const mod = b.createModule(.{ .root_source_file = t.path, .target = target, .optimize = optimize });
         mod.addImport("geode", root_mod);
@@ -10902,6 +10977,19 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         const step = b.step(spec.name, spec.desc);
         step.dependOn(&run_tests.step);
+    }
+
+    // SONNY-6333: the write harness keeps a persisted session's store on
+    // tmpfs, so the write suites are not fsync-bound on a loaded host.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6333_write_harness_tmpfs.zig"), .target = target, .optimize = optimize });
+        mod.addImport("geode", root_mod);
+        mod.addImport("logging", logging_mod);
+        mod.addImport("rls_types", rls_types_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6333-write-harness-tmpfs", "Run SONNY-6333 regression (a persisted write-harness session keeps its store on tmpfs when /dev/shm exists, and removes it when the session ends)").dependOn(&run_tests.step);
     }
 
     // SONNY-738 Task W fix round 4a: the round-3 re-review's Critical and

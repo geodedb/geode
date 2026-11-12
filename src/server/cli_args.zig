@@ -285,7 +285,9 @@ pub fn printHelp() void {
     std.debug.print("Options:\n", .{});
     std.debug.print("  -c, --config <path>          Path to config file (YAML, TOML, or JSON)\n", .{});
     std.debug.print("  --listen <addr:port>         Listen on QUIC/TLS (e.g., 0.0.0.0:3141). Also GEODE_PORT=<port> (binds 0.0.0.0:<port>)\n", .{});
-    std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:3142)\n", .{});
+    std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:50051)\n", .{});
+    std.debug.print("  --lsp-port=<port>            Embedded LSP TCP listener port (default 3142; 0 disables it; also GEODE_LSP_PORT)\n", .{});
+    std.debug.print("  --lsp-bind-all               Bind the embedded LSP listener on 0.0.0.0 instead of 127.0.0.1\n", .{});
     std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
     std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
     std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});

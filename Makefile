@@ -1260,14 +1260,6 @@ docker-build:
 	fi
 	@echo "Docker images built successfully"
 
-docker-build-prod:
-	@echo "Building production Docker image..."
-	@if [ -f "Dockerfile.prod" ]; then \
-		docker build -t geode:prod -f Dockerfile.prod .; \
-	else \
-		echo "Dockerfile.prod not found, skipping production build"; \
-	fi
-
 docker-up-singleton: docker-build
 	@echo "Starting Geode singleton container..."
 	@if [ -x "./scripts/docker/deploy.sh" ]; then \

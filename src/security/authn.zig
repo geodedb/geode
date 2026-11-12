@@ -1,5 +1,5 @@
 // Unified Authentication Provider Chain
-// CANARY: REQ=REQ-AUTH-UNIFIED-001; FEATURE="UnifiedAuthenticationProvider"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_authn.zig|geodetestlab/specs/authn_provider.yml; OWNER=security; UPDATED=2026-01-29
+// CANARY: REQ=REQ-AUTH-UNIFIED-001; FEATURE="UnifiedAuthenticationProvider"; ASPECT=SECURITY; STATUS=TESTED; TEST=test-sonny6342-authn-inline|geodetestlab/specs/authn_provider.yml; OWNER=security; UPDATED=2026-11-12
 //
 // This module provides a unified authentication entry point that chains multiple
 // authentication providers in order of priority:
@@ -136,7 +136,7 @@ pub const AuthRequest = struct {
 };
 
 /// Session token with rotation support
-/// CANARY: REQ=REQ-AUTH-SESSION-ROTATE-001; FEATURE="RotatingSessionToken"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_authn.zig; OWNER=security; UPDATED=2026-01-29
+/// CANARY: REQ=REQ-AUTH-SESSION-ROTATE-001; FEATURE="RotatingSessionToken"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 pub const RotatingSessionToken = struct {
     token: [32]u8,
     user_id: u64,
@@ -278,7 +278,7 @@ pub const AuthProvider = struct {
     }
 
     /// Authenticate a request through the provider chain
-    /// CANARY: REQ=REQ-AUTH-UNIFIED-002; FEATURE="AuthenticationChain"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_authn.zig; OWNER=security; UPDATED=2026-01-29
+    /// CANARY: REQ=REQ-AUTH-UNIFIED-002; FEATURE="AuthenticationChain"; ASPECT=SECURITY; STATUS=TESTED; TEST=test-sonny6342-authn-inline; OWNER=security; UPDATED=2026-11-12
     pub fn authenticate(self: *Self, request: AuthRequest) !AuthResult {
         // Check for anonymous access first
         if (self.allow_anonymous) {

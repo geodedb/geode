@@ -73,3 +73,41 @@ func mustWrite(t *testing.T, path, body string) {
         t.Fatalf("write: %v", err)
     }
 }
+
+// SONNY-6374 item 7: rows of one requirement that share FEATURE and ASPECT
+// but differ in STATUS, OWNER or UPDATED compared equal in the sort, so their
+// order followed Go's random map iteration and status.csv lines moved
+// between runs with no source change.
+func TestScanOrderIsDeterministic(t *testing.T) {
+    dir := t.TempDir()
+    var body string
+    for _, status := range []string{"IMPL", "TESTED", "EXEMPT", "STUB"} {
+        for _, owner := range []string{"a", "b", "c"} {
+            body += "// CANARY: REQ=REQ-ORDER-001; FEATURE=\"F\"; ASPECT=A; STATUS=" + status + "; OWNER=" + owner + "; UPDATED=2026-11-12\n"
+        }
+    }
+    mustWrite(t, filepath.Join(dir, "order.zig"), body)
+
+    var first string
+    for i := 0; i < 50; i++ {
+        rep, err := Scan(dir)
+        if err != nil {
+            t.Fatalf("scan: %v", err)
+        }
+        out := filepath.Join(t.TempDir(), "status.csv")
+        if err := WriteCSV(rep, out); err != nil {
+            t.Fatalf("write csv: %v", err)
+        }
+        b, err := os.ReadFile(out)
+        if err != nil {
+            t.Fatalf("read csv: %v", err)
+        }
+        if i == 0 {
+            first = string(b)
+            continue
+        }
+        if string(b) != first {
+            t.Fatalf("scan %d wrote a different status.csv:\n%s\nfirst:\n%s", i, b, first)
+        }
+    }
+}

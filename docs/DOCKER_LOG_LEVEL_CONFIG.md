@@ -13,16 +13,12 @@ Updated all Docker containers to use the `LOG_LEVEL` environment variable with a
    - Removed: `--log-level info` from CMD
    - Location: Line 75
 
-2. **Dockerfile.prod** (optimized production with GPU)
-   - Added: `ENV LOG_LEVEL=error`
-   - Location: Line 81
-
-3. **Dockerfile.simple** (simplified build)
+2. **Dockerfile.simple** (simplified build)
    - Added: `ENV LOG_LEVEL=error`
    - Removed: `--log-level debug` from CMD
    - Location: Line 111
 
-4. **Dockerfile.reliable** (reliable build with mirrors)
+3. **Dockerfile.reliable** (reliable build with mirrors)
    - Added: `ENV LOG_LEVEL=error`
    - Removed: `--log-level info` from CMD
    - Location: Line 95

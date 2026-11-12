@@ -5,27 +5,27 @@ const perf_gate = @import("perf_gate");
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
-        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
     } else {
-        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 fn compat_microTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
-        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
     } else {
-        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     }
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 fn compat_nanoTimestamp() i128 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
-        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
     } else {
-        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     }
     return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
 }

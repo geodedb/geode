@@ -10,7 +10,6 @@ fn compat_fillRandom(buf: []u8) void {
     }
 }
 const external_kms = @import("external_kms_client.zig");
-const kms_remote = @import("kms_remote.zig");
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
@@ -37,7 +36,6 @@ pub const WrappedKey = struct {
 pub const KMSProviderType = enum {
     local_dev, // Local development only - uses AES-GCM but with deterministic key derivation
     external_kms, // External deterministic KMS client
-    remote_kms, // Remote KMS over QUIC
     vault_transit, // HashiCorp Vault Transit (implemented)
     aws_kms, // AWS KMS (future)
     azure_kv, // Azure Key Vault (future)
@@ -48,7 +46,6 @@ pub const KMSProviderType = enum {
         return switch (self) {
             .local_dev => false, // Development only - deterministic key derivation
             .external_kms => false, // Simulated - no real external service
-            .remote_kms => true, // Real remote service
             .vault_transit => true, // Real Vault integration
             .aws_kms => true, // Real AWS integration
             .azure_kv => true, // Real Azure integration
@@ -64,25 +61,17 @@ pub const is_production_build = @import("builtin").mode == .ReleaseFast or
 pub const KMSConfig = struct {
     provider_type: KMSProviderType = .external_kms, // Default to external_kms (requires explicit configuration)
     seed: ?u64 = null, // For deterministic providers
-    endpoint: ?[]const u8 = null, // For remote providers
-    port: ?u16 = null, // For remote providers
+    endpoint: ?[]const u8 = null, // Reported by getProviderInfo
     auth_token: ?[]const u8 = null, // For authenticated providers
     master_key_id: ?[]const u8 = null, // Optional explicit master key ID
     vault_addr: ?[]const u8 = null, // Vault server address
     vault_key_path: ?[]const u8 = null, // Vault key storage path
-    /// Remote KMS: wall-clock bound on waiting for one response, in ms
-    /// (null = RemoteKmsClient.default_response_timeout_ms, 30 s). SONNY-2394.
-    remote_response_timeout_ms: ?u32 = null,
-    /// Remote KMS: wall-clock bound on QUIC/TLS connection establishment, in s
-    /// (null = RemoteKmsClient.default_handshake_timeout_secs, 30 s).
-    remote_handshake_timeout_secs: ?u32 = null,
 };
 
 pub const KMSProvider = struct {
     config: KMSConfig,
     allocator: std.mem.Allocator,
     external_client: ?external_kms.Client = null,
-    remote_client: ?kms_remote.RemoteKmsClient = null,
 
     /// Initialize KMS provider with production safety check
     /// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-002; FEATURE="KMS Provider Init Safety"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/external_kms_integration.yml; OWNER=security; UPDATED=2026-01-12
@@ -90,7 +79,7 @@ pub const KMSProvider = struct {
         // Production safety: block non-production-safe providers in release builds
         if (is_production_build and !config.provider_type.isProductionSafe()) {
             log.err("BLOCKED: Non-production-safe KMS provider in production build. " ++
-                "Configure vault_transit, aws_kms, azure_kv, or remote_kms.", &.{
+                "Configure vault_transit, aws_kms or azure_kv.", &.{
                 Attr.string("provider_type", @tagName(config.provider_type)),
             });
             return error.UnsafeKMSProvider;
@@ -100,7 +89,6 @@ pub const KMSProvider = struct {
             .config = config,
             .allocator = allocator,
             .external_client = null,
-            .remote_client = null,
         };
     }
 
@@ -112,11 +100,7 @@ pub const KMSProvider = struct {
     }
 
     pub fn deinit(self: *KMSProvider) void {
-        // Clean up any allocated resources
-        // SONNY-2394 (review): the client owns a QUIC endpoint and socket;
-        // this used to be a no-op that leaked them.
-        if (self.remote_client) |*client| client.deinit();
-        self.remote_client = null;
+        _ = self;
     }
 
     /// Returns a stable master key identifier
@@ -134,14 +118,6 @@ pub const KMSProvider = struct {
                 const owned = try self.allocator.dupe(u8, slice);
                 return owned;
             },
-            .remote_kms => {
-                const endpoint = self.config.endpoint orelse "localhost";
-                const port = self.config.port orelse 3141;
-                var buf: [128]u8 = undefined;
-                const slice = std.fmt.bufPrint(&buf, "remote-kms-{s}:{}", .{ endpoint, port }) catch return error.BufferTooSmall;
-                const owned = try self.allocator.dupe(u8, slice);
-                return owned;
-            },
             else => error.UnsupportedProvider,
         };
     }
@@ -153,15 +129,14 @@ pub const KMSProvider = struct {
             return error.NonProductionKmsBlocked;
         }
         const key_id = try self.fetchActiveMasterKey();
-        // Free key_id if it was dynamically allocated (external_kms, remote_kms without custom master_key_id)
+        // Free key_id if it was dynamically allocated (external_kms without custom master_key_id)
         const needs_free = self.config.master_key_id == null and
-            (self.config.provider_type == .external_kms or self.config.provider_type == .remote_kms);
+            self.config.provider_type == .external_kms;
         defer if (needs_free) self.allocator.free(key_id);
 
         const result = switch (self.config.provider_type) {
             .local_dev => try self.wrapLocalDev(key_id, plaintext),
             .external_kms => try self.wrapExternalKMS(key_id, plaintext),
-            .remote_kms => try self.wrapRemoteKMS(key_id, plaintext),
             else => error.UnsupportedProvider,
         };
         return result;
@@ -172,7 +147,6 @@ pub const KMSProvider = struct {
         return switch (self.config.provider_type) {
             .local_dev => self.unwrapLocalDev(wrapped),
             .external_kms => self.unwrapExternalKMS(wrapped),
-            .remote_kms => self.unwrapRemoteKMS(wrapped),
             else => error.UnsupportedProvider,
         };
     }
@@ -297,101 +271,11 @@ pub const KMSProvider = struct {
         return try self.allocator.dupe(u8, &plaintext);
     }
 
-    /// The remote-KMS client, created on first use with the configured
-    /// response and handshake deadlines (SONNY-2394) and auth token.
-    fn remoteClient(self: *KMSProvider) *kms_remote.RemoteKmsClient {
-        if (self.remote_client == null) {
-            self.remote_client = kms_remote.RemoteKmsClient.initWithOptions(self.allocator, .{
-                .response_timeout_ms = self.config.remote_response_timeout_ms orelse
-                    kms_remote.RemoteKmsClient.default_response_timeout_ms,
-                .handshake_timeout_secs = self.config.remote_handshake_timeout_secs orelse
-                    kms_remote.RemoteKmsClient.default_handshake_timeout_secs,
-            });
-            if (self.config.auth_token) |token| self.remote_client.?.setAuthToken(token);
-        }
-        return &self.remote_client.?;
-    }
-
-    /// The remote client, connected. SONNY-2394 (review): (re)connect only
-    /// when there is no live connection -- every wrap/unwrap used to call
-    /// connect() again, replacing (and leaking) the previous QUIC endpoint.
-    fn connectedRemoteClient(self: *KMSProvider) !*kms_remote.RemoteKmsClient {
-        const client = self.remoteClient();
-        const live = client.connected and client.quic_client != null and !client.quic_client.?.isClosed();
-        if (!live) {
-            client.deinit(); // release a failed or closed connection's endpoint
-            const endpoint = self.config.endpoint orelse "localhost";
-            const port = self.config.port orelse 3141;
-            try client.connect(endpoint, port);
-        }
-        return client;
-    }
-
-    // Remote KMS provider (QUIC-based)
-    fn wrapRemoteKMS(self: *KMSProvider, key_id: MasterKeyId, plaintext: []const u8) !WrappedKey {
-        _ = plaintext; // Will use remote generation
-
-        const client = try self.connectedRemoteClient();
-
-        // Generate new key remotely (ignores input plaintext)
-        const envelope = try client.generate();
-
-        // Serialize envelope to JSON metadata
-        var aw_km: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
-        errdefer aw_km.deinit();
-
-        const writer = &aw_km.writer;
-        try writer.writeAll("{{\"version\":");
-        try writer.print("{d},", .{envelope.version});
-        try writer.print("\"alg\":\"{s}\",", .{envelope.alg});
-        try writer.writeAll("\"nonce\":\"");
-        for (envelope.nonce) |byte| {
-            try writer.print("{x:0>2}", .{byte});
-        }
-        try writer.writeAll("\",\"tag\":\"");
-        for (envelope.tag) |byte| {
-            try writer.print("{x:0>2}", .{byte});
-        }
-        try writer.writeAll("\",\"ct\":\"");
-        for (envelope.ct) |byte| {
-            try writer.print("{x:0>2}", .{byte});
-        }
-        try writer.writeAll("\"}}");
-
-        var json_buf = aw_km.toArrayList();
-        const metadata = try json_buf.toOwnedSlice(self.allocator);
-        const ciphertext = try self.allocator.dupe(u8, &envelope.ct);
-
-        // Duplicate key_id since the original will be freed
-        const key_id_copy = try self.allocator.dupe(u8, key_id);
-        return WrappedKey{
-            .key_id = key_id_copy,
-            .ciphertext = ciphertext,
-            .metadata = metadata,
-        };
-    }
-
-    fn unwrapRemoteKMS(self: *KMSProvider, wrapped: WrappedKey) ![]u8 {
-        if (wrapped.metadata == null) return error.MissingMetadata;
-
-        const client = try self.connectedRemoteClient();
-
-        // Parse envelope from metadata
-        const envelope = try external_kms.envelopeFromJson(wrapped.metadata.?);
-        // P2-3: envelope.ct is inline array [32]u8, not allocated memory - no need to free
-
-        // Convert to remote KMS envelope format
-        const remote_envelope = kms_remote.Envelope{
-            .version = envelope.version,
-            .alg = envelope.alg,
-            .nonce = envelope.nonce,
-            .tag = envelope.tag,
-            .ct = envelope.ct[0..32].*,
-        };
-
-        const plaintext = try client.unwrap(remote_envelope);
-        return try self.allocator.dupe(u8, &plaintext);
-    }
+    // SONNY-2441: the remote_kms provider is gone. Its wrap ignored the key
+    // it was given and returned one the remote KMS generated (the remote
+    // protocol has GENERATE and UNWRAP, no WRAP), so unwrap(wrap(k)) was not
+    // k, and nothing called it. The remote KMS client (kms_remote.zig) is
+    // driven directly by test-remote-kms.
 
     /// Get provider information for diagnostics
     pub fn getProviderInfo(self: *KMSProvider) struct { provider_type: KMSProviderType, endpoint: ?[]const u8, authenticated: bool } {
@@ -410,10 +294,6 @@ pub fn localDevProvider(allocator: std.mem.Allocator) !KMSProvider {
 
 pub fn externalKMSProvider(allocator: std.mem.Allocator, seed: u64) !KMSProvider {
     return KMSProvider.init(allocator, KMSConfig{ .provider_type = .external_kms, .seed = seed });
-}
-
-pub fn remoteKMSProvider(allocator: std.mem.Allocator, endpoint: []const u8, port: u16, auth_token: ?[]const u8) !KMSProvider {
-    return KMSProvider.init(allocator, KMSConfig{ .provider_type = .remote_kms, .endpoint = endpoint, .port = port, .auth_token = auth_token });
 }
 
 pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) !KMSProvider {
@@ -473,7 +353,7 @@ test "KMS provider types" {
     const configs = [_]KMSConfig{
         .{ .provider_type = .local_dev },
         .{ .provider_type = .external_kms, .seed = 0x12345 },
-        .{ .provider_type = .remote_kms, .endpoint = "test.example.com", .port = 9443, .auth_token = "test_token" },
+        .{ .provider_type = .vault_transit, .endpoint = "https://vault.example.com", .auth_token = "test_token" },
     };
 
     for (configs) |config| {
@@ -523,10 +403,6 @@ test "GAP-0066: isProductionSafe identifies local_dev as unsafe" {
 
 test "GAP-0066: isProductionSafe identifies external_kms as unsafe" {
     try std.testing.expect(!KMSProviderType.external_kms.isProductionSafe());
-}
-
-test "GAP-0066: isProductionSafe identifies remote_kms as safe" {
-    try std.testing.expect(KMSProviderType.remote_kms.isProductionSafe());
 }
 
 test "GAP-0066: isProductionSafe identifies vault_transit as safe" {

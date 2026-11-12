@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // GQL Schema Annotation Parsing
-// CANARY: REQ=REQ-FLE-SCHEMA-001; FEATURE="FieldLevelEncryption"; ASPECT=SCHEMA; STATUS=IMPL; OWNER=security; UPDATED=2026-11-11
+// CANARY: REQ=REQ-FLE-SCHEMA-001; FEATURE="FieldLevelEncryption"; ASPECT=SCHEMA; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 
 /// Field encryption configuration
 pub const EncryptionConfig = struct {

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T14:39:02.597658329Z",
+  "generated_at": "2026-11-12T16:48:03.562310404Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -3087,7 +3087,7 @@
             "src/cli/geode_audit_verify.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_auth.yml",
+            "geodetestlab/specs/geode_auth.yml",
             "tests/test_audit_verify_chain_roundtrip.zig"
           ],
           "benches": [],
@@ -4813,11 +4813,11 @@
             "src/security/mtls_provider.zig"
           ],
           "tests": [
-            "tests/test_mtls_provider.zig|geodetestlab/specs/mtls_auth.yml"
+            "geodetestlab/specs/mtls_auth.yml"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-29"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -5564,11 +5564,11 @@
             "src/security/authn.zig"
           ],
           "tests": [
-            "tests/test_authn.zig|geodetestlab/specs/authn_provider.yml"
+            "test-sonny6342-authn-inline|geodetestlab/specs/authn_provider.yml"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-29"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -7414,7 +7414,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7433,7 +7433,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7452,7 +7452,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7471,7 +7471,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7490,7 +7490,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7509,7 +7509,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7528,7 +7528,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7547,7 +7547,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7566,7 +7566,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7585,7 +7585,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7604,7 +7604,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7623,7 +7623,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7642,7 +7642,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7661,7 +7661,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7680,7 +7680,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7699,7 +7699,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7718,7 +7718,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7737,7 +7737,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7756,7 +7756,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7775,7 +7775,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7794,7 +7794,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7813,7 +7813,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7832,7 +7832,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7851,7 +7851,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7870,7 +7870,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -7889,7 +7889,7 @@
             "src/execution/storage_dispatch.zig"
           ],
           "tests": [
-            "tests/geodetestlab/specs/geode_cdc_comprehensive.yml"
+            "geodetestlab/specs/geode_cdc_comprehensive.yml"
           ],
           "benches": [],
           "owner": "cdc",
@@ -10120,11 +10120,11 @@
             "src/cli/main.zig"
           ],
           "tests": [
-            "geodetestlab/specs/geode_auth_ddl.yml"
+            "tests/test_cli_subprocess_elimination_integration.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-06-11"
+          "updated": "2026-01-15"
         },
         {
           "feature": "CLI Subprocess Elimination",
@@ -10134,11 +10134,11 @@
             "src/cli/main.zig"
           ],
           "tests": [
-            "tests/test_cli_subprocess_elimination_integration.zig"
+            "geodetestlab/specs/geode_auth_ddl.yml"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-01-15"
+          "updated": "2026-06-11"
         },
         {
           "feature": "CLI Subprocess Elimination",
@@ -11569,20 +11569,6 @@
           "aspect": "Addition",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_impl_verification.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_verification.zig"
-          ],
-          "benches": [],
-          "owner": "eval",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "DateIntervalArithmetic",
-          "aspect": "Addition",
-          "status": "TESTED",
-          "files": [
             "src/eval.zig"
           ],
           "tests": [
@@ -11591,6 +11577,20 @@
           "benches": [],
           "owner": "eval",
           "updated": "2026-01-09"
+        },
+        {
+          "feature": "DateIntervalArithmetic",
+          "aspect": "Addition",
+          "status": "TESTED",
+          "files": [
+            "tests/test_gap_0193_impl_verification.zig"
+          ],
+          "tests": [
+            "test_gap_0193_impl_verification.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-01-15"
         }
       ]
     },
@@ -14483,20 +14483,6 @@
           "aspect": "NodeLookup",
           "status": "TESTED",
           "files": [
-            "src/distributed/node_registry.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-11"
-        },
-        {
-          "feature": "Node Registry",
-          "aspect": "NodeLookup",
-          "status": "TESTED",
-          "files": [
             "src/distributed/test_query_transport_node_registry.zig"
           ],
           "tests": [
@@ -14505,6 +14491,20 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-04-06"
+        },
+        {
+          "feature": "Node Registry",
+          "aspect": "NodeLookup",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/node_registry.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-06-11"
         }
       ]
     },
@@ -15828,20 +15828,6 @@
           "aspect": "ToStringNullPropagation",
           "status": "TESTED",
           "files": [
-            "src/types/evaluator_functions.zig"
-          ],
-          "tests": [
-            "tests/test_eng3916_edge_id_projection.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-08-25"
-        },
-        {
-          "feature": "StringFunctions",
-          "aspect": "ToStringNullPropagation",
-          "status": "TESTED",
-          "files": [
             "src/eval/call_handlers.zig"
           ],
           "tests": [
@@ -15849,6 +15835,20 @@
           ],
           "benches": [],
           "owner": "eval",
+          "updated": "2026-08-25"
+        },
+        {
+          "feature": "StringFunctions",
+          "aspect": "ToStringNullPropagation",
+          "status": "TESTED",
+          "files": [
+            "src/types/evaluator_functions.zig"
+          ],
+          "tests": [
+            "tests/test_eng3916_edge_id_projection.zig"
+          ],
+          "benches": [],
+          "owner": "types",
           "updated": "2026-08-25"
         }
       ]
@@ -15946,10 +15946,10 @@
           "aspect": "DefaultDataDirScoping",
           "status": "TESTED",
           "files": [
-            "tests/test_default_data_dir.zig"
+            "src/graph_store.zig"
           ],
           "tests": [
-            "self"
+            "tests/test_default_data_dir.zig"
           ],
           "benches": [],
           "owner": "storage",
@@ -15960,10 +15960,10 @@
           "aspect": "DefaultDataDirScoping",
           "status": "TESTED",
           "files": [
-            "src/graph_store.zig"
+            "tests/test_default_data_dir.zig"
           ],
           "tests": [
-            "tests/test_default_data_dir.zig"
+            "self"
           ],
           "benches": [],
           "owner": "storage",
@@ -16090,20 +16090,6 @@
           "aspect": "PrePassGraphScope",
           "status": "TESTED",
           "files": [
-            "src/execution/write_precheck.zig"
-          ],
-          "tests": [
-            "tests/test_eng3922_dim_guard.zig"
-          ],
-          "benches": [],
-          "owner": "index",
-          "updated": "2026-08-29"
-        },
-        {
-          "feature": "VectorIndex",
-          "aspect": "PrePassGraphScope",
-          "status": "TESTED",
-          "files": [
             "src/execution.zig"
           ],
           "tests": [
@@ -16111,6 +16097,20 @@
           ],
           "benches": [],
           "owner": "execution",
+          "updated": "2026-08-29"
+        },
+        {
+          "feature": "VectorIndex",
+          "aspect": "PrePassGraphScope",
+          "status": "TESTED",
+          "files": [
+            "src/execution/write_precheck.zig"
+          ],
+          "tests": [
+            "tests/test_eng3922_dim_guard.zig"
+          ],
+          "benches": [],
+          "owner": "index",
           "updated": "2026-08-29"
         },
         {
@@ -17044,11 +17044,11 @@
           "aspect": "CreateExecution",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch3_comprehensive.zig"
+            "tests/test_gap_0193_batch4_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "execution",
+          "owner": "exec",
           "updated": "2026-01-16"
         },
         {
@@ -17056,11 +17056,11 @@
           "aspect": "CreateExecution",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch4_comprehensive.zig"
+            "tests/test_gap_0193_batch3_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "exec",
+          "owner": "execution",
           "updated": "2026-01-16"
         }
       ]
@@ -17128,11 +17128,11 @@
           "aspect": "MatchExecution",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch3_comprehensive.zig"
+            "tests/test_gap_0193_batch4_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "execution",
+          "owner": "exec",
           "updated": "2026-01-16"
         },
         {
@@ -17140,11 +17140,11 @@
           "aspect": "MatchExecution",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch4_comprehensive.zig"
+            "tests/test_gap_0193_batch3_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "exec",
+          "owner": "execution",
           "updated": "2026-01-16"
         }
       ]
@@ -18380,7 +18380,7 @@
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -18397,7 +18397,7 @@
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -18467,7 +18467,7 @@
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -18547,7 +18547,7 @@
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19110,6 +19110,18 @@
         {
           "feature": "FieldLevelEncryption",
           "aspect": "EXECUTION",
+          "status": "IMPL",
+          "files": [
+            "src/execution/fle_hooks.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "EXECUTION",
           "status": "TESTED",
           "files": [
             "src/execution.zig"
@@ -19120,18 +19132,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2025-10-15"
-        },
-        {
-          "feature": "FieldLevelEncryption",
-          "aspect": "EXECUTION",
-          "status": "IMPL",
-          "files": [
-            "src/execution/fle_hooks.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-11-11"
         },
         {
           "feature": "FieldLevelEncryption",
@@ -19316,7 +19316,7 @@
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19335,25 +19335,13 @@
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
     {
       "id": "REQ-FLE-MIGRATE-001",
       "features": [
-        {
-          "feature": "FieldLevelEncryption",
-          "aspect": "Migration",
-          "status": "TESTED",
-          "files": [
-            "src/admin/fle_commands.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-16"
-        },
         {
           "feature": "FieldLevelEncryption",
           "aspect": "Migration",
@@ -19367,6 +19355,18 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-01-15"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Migration",
+          "status": "TESTED",
+          "files": [
+            "src/admin/fle_commands.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-01-16"
         }
       ]
     },
@@ -19383,7 +19383,7 @@
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19417,7 +19417,7 @@
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19636,7 +19636,7 @@
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19665,7 +19665,7 @@
           "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-11-11"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -19874,20 +19874,6 @@
           "aspect": "NoneAndSingleQuantifiers",
           "status": "TESTED",
           "files": [
-            "src/gql/parser.zig"
-          ],
-          "tests": [
-            "tests/test_fn_dispatch_parity.zig"
-          ],
-          "benches": [],
-          "owner": "parser",
-          "updated": "2026-08-25"
-        },
-        {
-          "feature": "ListComprehension",
-          "aspect": "NoneAndSingleQuantifiers",
-          "status": "TESTED",
-          "files": [
             "src/eval/quantifier_call_handlers.zig"
           ],
           "tests": [
@@ -19895,6 +19881,20 @@
           ],
           "benches": [],
           "owner": "eval",
+          "updated": "2026-08-25"
+        },
+        {
+          "feature": "ListComprehension",
+          "aspect": "NoneAndSingleQuantifiers",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_fn_dispatch_parity.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
           "updated": "2026-08-25"
         },
         {
@@ -21235,6 +21235,18 @@
         {
           "feature": "DistributedMode",
           "aspect": "ClusterBootstrap",
+          "status": "IMPL",
+          "files": [
+            "src/server/cluster_bootstrap.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "core",
+          "updated": "2026-05-25"
+        },
+        {
+          "feature": "DistributedMode",
+          "aspect": "ClusterBootstrap",
           "status": "TESTED",
           "files": [
             "tests/test_cluster_bootstrap.zig"
@@ -21259,18 +21271,6 @@
           "benches": [],
           "owner": "core",
           "updated": "2026-06-11"
-        },
-        {
-          "feature": "DistributedMode",
-          "aspect": "ClusterBootstrap",
-          "status": "IMPL",
-          "files": [
-            "src/server/cluster_bootstrap.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "core",
-          "updated": "2026-05-25"
         },
         {
           "feature": "DistributedMode",
@@ -21971,16 +21971,14 @@
         {
           "feature": "Migrations",
           "aspect": "StreamCloseBeforeTeardown",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/cli/backup_cli.zig"
           ],
-          "tests": [
-            "tests/test_gap0902_migrate_connect.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-07-10"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -22759,11 +22757,11 @@
             "src/server/quic_connection_handler.zig"
           ],
           "tests": [
-            "tests/test_gap0927_idle_reap.zig"
+            "test-gap0927"
           ],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-07-10"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -22778,11 +22776,11 @@
             "src/server/main.zig"
           ],
           "tests": [
-            "tests/test_gap0928_pool_exhausted.zig"
+            "test-gap0927"
           ],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-07-10"
+          "updated": "2026-11-12"
         },
         {
           "feature": "ConnectionPool",
@@ -22792,11 +22790,11 @@
             "src/server/main.zig"
           ],
           "tests": [
-            "tests/test_gap0928_pool_exhausted.zig"
+            "test-gap0927"
           ],
           "benches": [],
           "owner": "transport",
-          "updated": "2026-07-10"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -22965,20 +22963,6 @@
           "aspect": "CheckedFloatToDecimal",
           "status": "TESTED",
           "files": [
-            "src/types/decimal128.zig"
-          ],
-          "tests": [
-            "tests/test_vector_knn_silent_failures.zig"
-          ],
-          "benches": [],
-          "owner": "types",
-          "updated": "2026-08-29"
-        },
-        {
-          "feature": "VectorSimilarityFunctions",
-          "aspect": "CheckedFloatToDecimal",
-          "status": "TESTED",
-          "files": [
             "src/eval.zig",
             "src/eval_extended.zig",
             "src/server/proto_util.zig",
@@ -22989,6 +22973,20 @@
           ],
           "benches": [],
           "owner": "eval",
+          "updated": "2026-08-29"
+        },
+        {
+          "feature": "VectorSimilarityFunctions",
+          "aspect": "CheckedFloatToDecimal",
+          "status": "TESTED",
+          "files": [
+            "src/types/decimal128.zig"
+          ],
+          "tests": [
+            "tests/test_vector_knn_silent_failures.zig"
+          ],
+          "benches": [],
+          "owner": "types",
           "updated": "2026-08-29"
         }
       ]
@@ -23040,20 +23038,6 @@
           "aspect": "BackfillReturnsIndexedCount",
           "status": "TESTED",
           "files": [
-            "tests/test_geode875_nonblocking_backfill.zig"
-          ],
-          "tests": [
-            "tests/test_geode875_nonblocking_backfill.zig"
-          ],
-          "benches": [],
-          "owner": "index",
-          "updated": "2026-09-01"
-        },
-        {
-          "feature": "VectorIndex",
-          "aspect": "BackfillReturnsIndexedCount",
-          "status": "TESTED",
-          "files": [
             "tests/test_geode875_incremental_index.zig"
           ],
           "tests": [
@@ -23062,6 +23046,20 @@
           "benches": [],
           "owner": "index",
           "updated": "2026-08-31"
+        },
+        {
+          "feature": "VectorIndex",
+          "aspect": "BackfillReturnsIndexedCount",
+          "status": "TESTED",
+          "files": [
+            "tests/test_geode875_nonblocking_backfill.zig"
+          ],
+          "tests": [
+            "tests/test_geode875_nonblocking_backfill.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-09-01"
         }
       ]
     },
@@ -23261,6 +23259,20 @@
           "aspect": "UnrelatedIndexMustNotShadowScan",
           "status": "TESTED",
           "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_vector_knn_silent_failures.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-08-29"
+        },
+        {
+          "feature": "VectorKnn",
+          "aspect": "UnrelatedIndexMustNotShadowScan",
+          "status": "TESTED",
+          "files": [
             "src/eval.zig",
             "tests/test_vector_knn_silent_failures.zig"
           ],
@@ -23269,20 +23281,6 @@
           ],
           "benches": [],
           "owner": "eval",
-          "updated": "2026-08-29"
-        },
-        {
-          "feature": "VectorKnn",
-          "aspect": "UnrelatedIndexMustNotShadowScan",
-          "status": "TESTED",
-          "files": [
-            "src/graph_store.zig"
-          ],
-          "tests": [
-            "tests/test_vector_knn_silent_failures.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
           "updated": "2026-08-29"
         }
       ]
@@ -23431,6 +23429,18 @@
           "aspect": "DecidePopulateAttributes",
           "status": "TESTED",
           "files": [
+            "tests/test_gps_abac_predicates.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-05-20"
+        },
+        {
+          "feature": "GPS ABAC Predicates",
+          "aspect": "DecidePopulateAttributes",
+          "status": "TESTED",
+          "files": [
             "src/security/gps.zig"
           ],
           "tests": [
@@ -23439,18 +23449,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-05-22"
-        },
-        {
-          "feature": "GPS ABAC Predicates",
-          "aspect": "DecidePopulateAttributes",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gps_abac_predicates.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-05-20"
         },
         {
           "feature": "GPS ABAC Predicates",
@@ -26751,6 +26749,18 @@
           "aspect": "BuiltinRoleGrants",
           "status": "TESTED",
           "files": [
+            "tests/test_gps_decide.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-05-20"
+        },
+        {
+          "feature": "GPS Decision Engine",
+          "aspect": "BuiltinRoleGrants",
+          "status": "TESTED",
+          "files": [
             "src/security/gps.zig"
           ],
           "tests": [
@@ -26759,18 +26769,6 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-05-21"
-        },
-        {
-          "feature": "GPS Decision Engine",
-          "aspect": "BuiltinRoleGrants",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gps_decide.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-05-20"
         }
       ]
     },
@@ -29404,38 +29402,6 @@
           "updated": "2025-09-24"
         },
         {
-          "feature": "Path Execution",
-          "aspect": "PathVariableLengthPropertyPredicate",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_path_varlen_predicate.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicate"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicateVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Path Execution",
-          "aspect": "PathVariableLengthPropertyPredicateVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_path_varlen_predicate.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicate"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicateVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
           "feature": "Property Access",
           "aspect": "Engine",
           "status": "TESTED",
@@ -30683,22 +30649,6 @@
           ],
           "owner": "storage",
           "updated": "2026-02-04"
-        },
-        {
-          "feature": "Storage/Recovery",
-          "aspect": "SnapshotLoadOptimizationDeltaVariance",
-          "status": "BENCHED",
-          "files": [
-            "tests/canary_storage_redo_delta.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_022_RedoOptimizationDeltaSmoke"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_022_RedoOptimizationDeltaVarianceEnvelope"
-          ],
-          "owner": "storage",
-          "updated": "2026-02-04"
         }
       ]
     },
@@ -30754,14 +30704,14 @@
         {
           "feature": "MVCC Phantom Prevention",
           "aspect": "RangeTracker",
-          "status": "TESTED",
+          "status": "BENCHED",
           "files": [
             "tests/canary_txn_phantom_range.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
           ],
-          "benches": [],
           "owner": "txn",
           "updated": "2025-09-22"
         },
@@ -30785,14 +30735,14 @@
         {
           "feature": "MVCC Phantom Prevention",
           "aspect": "RangeTracker",
-          "status": "BENCHED",
+          "status": "TESTED",
           "files": [
             "tests/canary_txn_phantom_range.zig"
           ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope"
+          "tests": [
+            "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection"
           ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-22"
         }
@@ -30954,22 +30904,6 @@
           "aspect": "PlanEnumerationEngine",
           "status": "BENCHED",
           "files": [
-            "src/planner/enumerator.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_PlanEnumerationEngine"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "Cost Based Optimizer",
-          "aspect": "PlanEnumerationEngine",
-          "status": "BENCHED",
-          "files": [
             "tests/canary_planner_enumerator.zig"
           ],
           "tests": [
@@ -30980,6 +30914,22 @@
           ],
           "owner": "planner",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "Cost Based Optimizer",
+          "aspect": "PlanEnumerationEngine",
+          "status": "BENCHED",
+          "files": [
+            "src/planner/enumerator.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_024_PlanEnumerationEngine"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope"
+          ],
+          "owner": "planner",
+          "updated": "2025-09-26"
         },
         {
           "feature": "Cost Based Optimizer",
@@ -31103,217 +31053,18 @@
           "updated": "2025-10-05"
         },
         {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "Archive",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/federation_latency_aggregate.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2026-04-05"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "Archive",
+          "feature": "FederationMismatchFlag",
+          "aspect": "Federation",
           "status": "TESTED",
           "files": [
-            "tests/test_federation_latency_aggregates.zig"
+            "tests/e2e_federation_mismatch_flag.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_024_FedLatencyArchive"
+            "TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol"
           ],
           "benches": [],
           "owner": "federation",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "MultiRun",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/federation_latency_aggregate.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2026-04-05"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "MultiRun",
-          "status": "TESTED",
-          "files": [
-            "tests/test_federation_latency_aggregates.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_FedLatencyMultiRun"
-          ],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "RobustStats",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/federation_latency_aggregate.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2026-04-05"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "RobustStats",
-          "status": "TESTED",
-          "files": [
-            "tests/test_federation_latency_aggregates.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_FedLatencyRobustStats"
-          ],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "RobustStatsP99",
-          "status": "BENCHED",
-          "files": [
-            "benchmarks/benchmark_federation_latency_aggregate_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateVarianceEnvelope"
-          ],
-          "owner": "federation",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "SchemaValidation",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/federation_latency_aggregate.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2026-04-05"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "SchemaValidation",
-          "status": "TESTED",
-          "files": [
-            "tests/test_federation_latency_aggregates.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_FedLatencySchemaValidation"
-          ],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "Streak",
-          "status": "TESTED",
-          "files": [
-            "tests/test_federation_latency_aggregates.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_FedLatencyStreak"
-          ],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "Streak",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/federation_latency_aggregate.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2026-04-05"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "Summary",
-          "status": "TESTED",
-          "files": [
-            "tests/test_federation_latency_aggregates.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_FedLatencySummary"
-          ],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "Summary",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/federation_latency_aggregate.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2026-04-05"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "TailLatencyP999Envelope",
-          "status": "BENCHED",
-          "files": [
-            "benchmarks/benchmark_federation_latency_aggregate_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateTailP999"
-          ],
-          "owner": "federation",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "Tests",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/federation_latency_aggregate.zig"
-          ],
-          "tests": [
-            "\"federation_latency_aggregate unit tests\""
-          ],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2026-04-06"
-        },
-        {
-          "feature": "FederationLatencyAggregates",
-          "aspect": "VarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "benchmarks/benchmark_federation_latency_aggregate_variance.zig",
-            "tests/benchmark_federation_latency_aggregate_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateVarianceEnvelope"
-          ],
-          "owner": "federation",
-          "updated": "2025-09-26"
+          "updated": "2025-09-23"
         },
         {
           "feature": "FederationMismatchFlag",
@@ -31328,20 +31079,6 @@
           "benches": [],
           "owner": "federation",
           "updated": "2026-04-05"
-        },
-        {
-          "feature": "FederationMismatchFlag",
-          "aspect": "Federation",
-          "status": "TESTED",
-          "files": [
-            "tests/e2e_federation_mismatch_flag.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol"
-          ],
-          "benches": [],
-          "owner": "federation",
-          "updated": "2025-09-23"
         },
         {
           "feature": "FederationMismatchFlag",
@@ -31409,22 +31146,6 @@
           "aspect": "WriteSkewDetection",
           "status": "BENCHED",
           "files": [
-            "src/transactions/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_025_WriteSkewDetection"
-          ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope"
-          ],
-          "owner": "txn",
-          "updated": "2025-09-26"
-        },
-        {
-          "feature": "Transactions/MVCC",
-          "aspect": "WriteSkewDetection",
-          "status": "BENCHED",
-          "files": [
             "tests/canary_txn_write_skew.zig"
           ],
           "tests": [
@@ -31435,6 +31156,22 @@
           ],
           "owner": "txn",
           "updated": "2025-09-21"
+        },
+        {
+          "feature": "Transactions/MVCC",
+          "aspect": "WriteSkewDetection",
+          "status": "BENCHED",
+          "files": [
+            "src/transactions/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_025_WriteSkewDetection"
+          ],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope"
+          ],
+          "owner": "txn",
+          "updated": "2025-09-26"
         }
       ]
     },
@@ -31638,20 +31375,6 @@
         {
           "feature": "SnapshotCompaction",
           "aspect": "CorruptPageRecoveryLatency",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_recovery_corrupt_latency.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2026-09-23"
-        },
-        {
-          "feature": "SnapshotCompaction",
-          "aspect": "CorruptPageRecoveryLatency",
           "status": "BENCHED",
           "files": [
             "tests/canary_recovery_corrupt_latency.zig"
@@ -31660,6 +31383,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope"
           ],
+          "owner": "storage",
+          "updated": "2026-09-23"
+        },
+        {
+          "feature": "SnapshotCompaction",
+          "aspect": "CorruptPageRecoveryLatency",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_recovery_corrupt_latency.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency"
+          ],
+          "benches": [],
           "owner": "storage",
           "updated": "2026-09-23"
         },
@@ -32919,20 +32656,6 @@
           "aspect": "Storage",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_tde_key_rotate.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_046_KeyRotateThroughput"
-          ],
-          "owner": "security",
-          "updated": "2026-06-10"
-        },
-        {
-          "feature": "TDE Key Rotation Throughput",
-          "aspect": "Storage",
-          "status": "BENCHED",
-          "files": [
             "src/canary.zig"
           ],
           "tests": [],
@@ -32941,6 +32664,20 @@
           ],
           "owner": "security",
           "updated": "2025-09-20"
+        },
+        {
+          "feature": "TDE Key Rotation Throughput",
+          "aspect": "Storage",
+          "status": "BENCHED",
+          "files": [
+            "tests/benchmark_tde_key_rotate.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "BenchmarkCANARY_REQ_GQL_046_KeyRotateThroughput"
+          ],
+          "owner": "security",
+          "updated": "2026-06-10"
         },
         {
           "feature": "TDE Multi-Key",
@@ -33609,20 +33346,6 @@
         {
           "feature": "Shortest Paths",
           "aspect": "UnweightedBFSPaths",
-          "status": "TESTED",
-          "files": [
-            "src/graph/shortest_unweighted_bfs_paths.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
-          ],
-          "benches": [],
-          "owner": "graph",
-          "updated": "2025-09-20"
-        },
-        {
-          "feature": "Shortest Paths",
-          "aspect": "UnweightedBFSPaths",
           "status": "BENCHED",
           "files": [
             "tests/benchmark_unweighted_bfs_paths.zig"
@@ -33633,6 +33356,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths"
           ],
+          "owner": "graph",
+          "updated": "2025-09-20"
+        },
+        {
+          "feature": "Shortest Paths",
+          "aspect": "UnweightedBFSPaths",
+          "status": "TESTED",
+          "files": [
+            "src/graph/shortest_unweighted_bfs_paths.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_063_UnweightedBFSPaths"
+          ],
+          "benches": [],
           "owner": "graph",
           "updated": "2025-09-20"
         }
@@ -33797,7 +33534,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "tests/benchmark_flow_edmonds_karp.zig"
+            "src/graph/flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -33813,7 +33550,7 @@
           "aspect": "EdmondsKarp",
           "status": "BENCHED",
           "files": [
-            "src/graph/flow_edmonds_karp.zig"
+            "tests/benchmark_flow_edmonds_karp.zig"
           ],
           "tests": [
             "TestCANARY_REQ_GQL_066_EdmondsKarp"
@@ -34310,20 +34047,6 @@
         {
           "feature": "MvccAdvanced",
           "aspect": "PredictiveSkewFilter",
-          "status": "TESTED",
-          "files": [
-            "src/transactions/manager.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
-          ],
-          "benches": [],
-          "owner": "txn",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "MvccAdvanced",
-          "aspect": "PredictiveSkewFilter",
           "status": "BENCHED",
           "files": [
             "src/transactions/mvcc_adv/predictive_skew_filter.zig"
@@ -34334,6 +34057,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_073_PredictiveSkewFilter"
           ],
+          "owner": "txn",
+          "updated": "2025-09-21"
+        },
+        {
+          "feature": "MvccAdvanced",
+          "aspect": "PredictiveSkewFilter",
+          "status": "TESTED",
+          "files": [
+            "src/transactions/manager.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_073_PredictiveSkewFilter"
+          ],
+          "benches": [],
           "owner": "txn",
           "updated": "2025-09-21"
         },
@@ -34504,20 +34241,6 @@
           "aspect": "QUICCore",
           "status": "TESTED",
           "files": [
-            "src/transport/quic.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_074_QUICCore"
-          ],
-          "benches": [],
-          "owner": "wire",
-          "updated": "2025-11-21"
-        },
-        {
-          "feature": "Network Transport",
-          "aspect": "QUICCore",
-          "status": "TESTED",
-          "files": [
             "tests/canary_quic.zig"
           ],
           "tests": [
@@ -34526,6 +34249,20 @@
           "benches": [],
           "owner": "wire",
           "updated": "2025-09-22"
+        },
+        {
+          "feature": "Network Transport",
+          "aspect": "QUICCore",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_074_QUICCore"
+          ],
+          "benches": [],
+          "owner": "wire",
+          "updated": "2025-11-21"
         },
         {
           "feature": "Network Transport",
@@ -34959,20 +34696,6 @@
         {
           "feature": "Cost Model Enumeration Seed",
           "aspect": "EstimatorPrimitives",
-          "status": "TESTED",
-          "files": [
-            "tests/cost_model_seed.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
-          ],
-          "benches": [],
-          "owner": "planner",
-          "updated": "2025-09-22"
-        },
-        {
-          "feature": "Cost Model Enumeration Seed",
-          "aspect": "EstimatorPrimitives",
           "status": "BENCHED",
           "files": [
             "benchmarks/benchmark_cost_model_seed_variance.zig",
@@ -34984,6 +34707,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_075_CostModelSeedVarianceEnvelope"
           ],
+          "owner": "planner",
+          "updated": "2025-09-22"
+        },
+        {
+          "feature": "Cost Model Enumeration Seed",
+          "aspect": "EstimatorPrimitives",
+          "status": "TESTED",
+          "files": [
+            "tests/cost_model_seed.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_075_CostModelSeedBasicEstimates"
+          ],
+          "benches": [],
           "owner": "planner",
           "updated": "2025-09-22"
         },
@@ -35420,20 +35157,6 @@
         {
           "feature": "MonitoringVariance",
           "aspect": "UnifiedVarianceEnvelope",
-          "status": "TESTED",
-          "files": [
-            "tests/canary_monitoring_variance_unified.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified"
-          ],
-          "benches": [],
-          "owner": "ops-team",
-          "updated": "2025-09-27"
-        },
-        {
-          "feature": "MonitoringVariance",
-          "aspect": "UnifiedVarianceEnvelope",
           "status": "BENCHED",
           "files": [
             "benchmarks/benchmark_monitoring_metrics_variance_unified.zig",
@@ -35443,6 +35166,20 @@
           "benches": [
             "BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified"
           ],
+          "owner": "ops-team",
+          "updated": "2025-09-27"
+        },
+        {
+          "feature": "MonitoringVariance",
+          "aspect": "UnifiedVarianceEnvelope",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_monitoring_variance_unified.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified"
+          ],
+          "benches": [],
           "owner": "ops-team",
           "updated": "2025-09-27"
         },
@@ -35803,20 +35540,6 @@
           "aspect": "FORMATTER",
           "status": "TESTED",
           "files": [
-            "tests/canary_extended_builtins.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_083_DecimalFormatterRoundTrip"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-27"
-        },
-        {
-          "feature": "ExtendedDecimalFormatting",
-          "aspect": "FORMATTER",
-          "status": "TESTED",
-          "files": [
             "src/types/extended.zig"
           ],
           "tests": [
@@ -35825,6 +35548,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-09-26"
+        },
+        {
+          "feature": "ExtendedDecimalFormatting",
+          "aspect": "FORMATTER",
+          "status": "TESTED",
+          "files": [
+            "tests/canary_extended_builtins.zig"
+          ],
+          "tests": [
+            "TestCANARY_REQ_GQL_083_DecimalFormatterRoundTrip"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-09-27"
         }
       ]
     },
@@ -43896,16 +43633,14 @@
         {
           "feature": "KeyRotationScaffold",
           "aspect": "TEST",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/security/key_rotation.zig"
           ],
-          "tests": [
-            "tests/test_key_rotation.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2025-09-26"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -44605,11 +44340,11 @@
             "src/security/tde.zig"
           ],
           "tests": [
-            "tests/e2e_security_tde_mfa.zig:1|tests/test_tde_integration.zig:1"
+            "tests/e2e_security_tde_mfa.zig:1"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2025-11-12"
+          "updated": "2026-11-12"
         },
         {
           "feature": "TDE performance benchmark",
@@ -45699,11 +45434,11 @@
             "src/execution.zig"
           ],
           "tests": [
-            "\"GAP-0514 P3: reverse variable-length traversal honors direction\""
+            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-06-11"
+          "updated": "2026-04-10"
         },
         {
           "feature": "VariableLengthPaths",
@@ -45713,11 +45448,11 @@
             "src/execution.zig"
           ],
           "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
+            "\"GAP-0514 P3: reverse variable-length traversal honors direction\""
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2026-04-10"
+          "updated": "2026-06-11"
         }
       ]
     },
@@ -45779,16 +45514,14 @@
         {
           "feature": "VaultKMSProvider",
           "aspect": "SECURITY",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/security/vault_kms_provider.zig"
           ],
-          "tests": [
-            "tests/test_vault_kms_provider.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2025-10-05"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -47247,16 +46980,14 @@
         {
           "feature": "Safe Hex Parsing",
           "aspect": "Security",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/security/key_rotation.zig"
           ],
-          "tests": [
-            "tests/test_key_rotation.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -47266,16 +46997,14 @@
         {
           "feature": "Safe Hex Parsing",
           "aspect": "Security",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/security/key_rotation.zig"
           ],
-          "tests": [
-            "tests/test_key_rotation.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -50016,11 +49745,11 @@
             "src/security/auth_graph_manager.zig"
           ],
           "tests": [
-            "tests/test_auth_graph_manager_unit.zig"
+            "test_canUserAccessGraph_grant_revoke_round_trip"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-06-11"
+          "updated": "2026-05-14"
         },
         {
           "feature": "LspPermissionAwareCompletion",
@@ -50030,11 +49759,11 @@
             "src/security/auth_graph_manager.zig"
           ],
           "tests": [
-            "test_canUserAccessGraph_grant_revoke_round_trip"
+            "tests/test_auth_graph_manager_unit.zig"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-05-14"
+          "updated": "2026-06-11"
         }
       ]
     },
@@ -53850,6 +53579,20 @@
           "aspect": "EdgeGraphTag",
           "status": "TESTED",
           "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "EdgeGraphTag",
+          "status": "TESTED",
+          "files": [
             "tests/test_gap_0193_high_priority.zig",
             "tests/test_gap_0193_high_priority_comprehensive.zig"
           ],
@@ -53859,20 +53602,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "EdgeGraphTag",
-          "status": "TESTED",
-          "files": [
-            "src/graph_store.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -53966,18 +53695,6 @@
           "aspect": "SessionGraph",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_high_priority_comprehensive.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphSupport",
-          "aspect": "SessionGraph",
-          "status": "TESTED",
-          "files": [
             "src/server/server_state.zig"
           ],
           "tests": [
@@ -53986,25 +53703,24 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-20"
+        },
+        {
+          "feature": "MultiGraphSupport",
+          "aspect": "SessionGraph",
+          "status": "TESTED",
+          "files": [
+            "tests/test_gap_0193_high_priority_comprehensive.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         }
       ]
     },
     {
       "id": "REQ-MULTI-GRAPH-005",
       "features": [
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "ClearGraphNodes",
-          "status": "TESTED",
-          "files": [
-            "tests/test_gap_0193_high_priority_comprehensive.zig",
-            "tests/test_gap_0193_priority_categories.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
         {
           "feature": "MultiGraphIsolation",
           "aspect": "ClearGraphNodes",
@@ -54021,15 +53737,13 @@
         },
         {
           "feature": "MultiGraphIsolation",
-          "aspect": "CreateEdge",
+          "aspect": "ClearGraphNodes",
           "status": "TESTED",
           "files": [
             "tests/test_gap_0193_high_priority_comprehensive.zig",
-            "tests/test_gap_0193_impl_verification.zig"
+            "tests/test_gap_0193_priority_categories.zig"
           ],
-          "tests": [
-            "test_gap_0193_impl_verification.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
@@ -54047,6 +53761,21 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "CreateEdge",
+          "status": "TESTED",
+          "files": [
+            "tests/test_gap_0193_high_priority_comprehensive.zig",
+            "tests/test_gap_0193_impl_verification.zig"
+          ],
+          "tests": [
+            "test_gap_0193_impl_verification.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         },
         {
           "feature": "MultiGraphSupport",
@@ -54230,6 +53959,20 @@
           "aspect": "MultiNodeMatch",
           "status": "TESTED",
           "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "MultiNodeMatch",
+          "status": "TESTED",
+          "files": [
             "tests/test_gap_0193_high_priority.zig",
             "tests/test_gap_0193_high_priority_comprehensive.zig"
           ],
@@ -54239,20 +53982,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "MultiNodeMatch",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
         }
       ]
     },
@@ -54276,20 +54005,6 @@
           "aspect": "OptionalMatchFiltering",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_high_priority.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "OptionalMatchFiltering",
-          "status": "TESTED",
-          "files": [
             "src/execution/match_operations.zig"
           ],
           "tests": [
@@ -54298,6 +54013,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "OptionalMatchFiltering",
+          "status": "TESTED",
+          "files": [
+            "tests/test_gap_0193_high_priority.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         }
       ]
     },
@@ -54321,20 +54050,6 @@
           "aspect": "MatchCallFiltering",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_high_priority.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "MatchCallFiltering",
-          "status": "TESTED",
-          "files": [
             "src/execution/match_operations.zig"
           ],
           "tests": [
@@ -54343,6 +54058,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "MatchCallFiltering",
+          "status": "TESTED",
+          "files": [
+            "tests/test_gap_0193_high_priority.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         }
       ]
     },
@@ -54535,20 +54264,6 @@
           "aspect": "CreateQuery",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_impl_verification.zig"
-          ],
-          "tests": [
-            "test_gap_0193_impl_verification.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "CreateQuery",
-          "status": "TESTED",
-          "files": [
             "src/execution/crud_operations.zig"
           ],
           "tests": [
@@ -54557,6 +54272,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "CreateQuery",
+          "status": "TESTED",
+          "files": [
+            "tests/test_gap_0193_impl_verification.zig"
+          ],
+          "tests": [
+            "test_gap_0193_impl_verification.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -54861,6 +54590,20 @@
           "aspect": "VarLengthPathFilter",
           "status": "TESTED",
           "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/multi_graph.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-22"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "VarLengthPathFilter",
+          "status": "TESTED",
+          "files": [
             "tests/test_gap_0193_impl_verification.zig",
             "tests/test_gap_0193_priority_categories.zig"
           ],
@@ -54870,10 +54613,15 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
+        }
+      ]
+    },
+    {
+      "id": "REQ-MULTI-GRAPH-022",
+      "features": [
         {
           "feature": "MultiGraphIsolation",
-          "aspect": "VarLengthPathFilter",
+          "aspect": "RelPatternFilter",
           "status": "TESTED",
           "files": [
             "src/execution/match_operations.zig"
@@ -54884,12 +54632,7 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-22"
-        }
-      ]
-    },
-    {
-      "id": "REQ-MULTI-GRAPH-022",
-      "features": [
+        },
         {
           "feature": "MultiGraphIsolation",
           "aspect": "RelPatternFilter",
@@ -54903,20 +54646,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "RelPatternFilter",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -55371,20 +55100,6 @@
           "aspect": "DeleteGraphFilter",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_high_priority.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "DeleteGraphFilter",
-          "status": "TESTED",
-          "files": [
             "src/execution/crud_operations.zig"
           ],
           "tests": [
@@ -55393,6 +55108,20 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-24"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "DeleteGraphFilter",
+          "status": "TESTED",
+          "files": [
+            "tests/test_gap_0193_high_priority.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         }
       ]
     },
@@ -58814,11 +58543,11 @@
           "aspect": "IndexPerformance",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch3_comprehensive.zig"
+            "tests/test_gap_0193_batch4_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "performance",
+          "owner": "perf",
           "updated": "2026-01-16"
         },
         {
@@ -58826,11 +58555,11 @@
           "aspect": "IndexPerformance",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch4_comprehensive.zig"
+            "tests/test_gap_0193_batch3_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "perf",
+          "owner": "performance",
           "updated": "2026-01-16"
         }
       ]
@@ -60583,11 +60312,11 @@
           "aspect": "QueryPerformance",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch3_comprehensive.zig"
+            "tests/test_gap_0193_batch4_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "performance",
+          "owner": "perf",
           "updated": "2026-01-16"
         },
         {
@@ -60595,11 +60324,11 @@
           "aspect": "QueryPerformance",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch4_comprehensive.zig"
+            "tests/test_gap_0193_batch3_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "perf",
+          "owner": "performance",
           "updated": "2026-01-16"
         }
       ]
@@ -63616,13 +63345,11 @@
         {
           "feature": "QUIC High-Concurrency Requests",
           "aspect": "QueryMetricThreadSafety",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
-            "tests/test_otel_facade_smoke.zig"
+            "src/monitoring/otel_metrics.zig"
           ],
-          "tests": [
-            "tests/test_otel_facade_smoke.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "monitoring",
           "updated": "2026-05-26"
@@ -63630,11 +63357,13 @@
         {
           "feature": "QUIC High-Concurrency Requests",
           "aspect": "QueryMetricThreadSafety",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
-            "src/monitoring/otel_metrics.zig"
+            "tests/test_otel_facade_smoke.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_otel_facade_smoke.zig"
+          ],
           "benches": [],
           "owner": "monitoring",
           "updated": "2026-05-26"
@@ -63706,20 +63435,6 @@
           "aspect": "BoundedDetachedFirstStreams",
           "status": "TESTED",
           "files": [
-            "src/server/main.zig"
-          ],
-          "tests": [
-            "test_quic_condition_timedwait_cadence"
-          ],
-          "benches": [],
-          "owner": "transport",
-          "updated": "2026-06-11"
-        },
-        {
-          "feature": "QUIC High-Concurrency Requests",
-          "aspect": "BoundedDetachedFirstStreams",
-          "status": "TESTED",
-          "files": [
             "src/server/quic_connection_handler.zig"
           ],
           "tests": [
@@ -63728,6 +63443,20 @@
           "benches": [],
           "owner": "transport",
           "updated": "2026-06-10"
+        },
+        {
+          "feature": "QUIC High-Concurrency Requests",
+          "aspect": "BoundedDetachedFirstStreams",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "test_quic_condition_timedwait_cadence"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-06-11"
         }
       ]
     },
@@ -63758,20 +63487,6 @@
           "aspect": "CooperativeFirstStreams",
           "status": "TESTED",
           "files": [
-            "src/server/main.zig"
-          ],
-          "tests": [
-            "test_quic_condition_timedwait_cadence"
-          ],
-          "benches": [],
-          "owner": "transport",
-          "updated": "2026-06-11"
-        },
-        {
-          "feature": "QUIC High-Concurrency Requests",
-          "aspect": "CooperativeFirstStreams",
-          "status": "TESTED",
-          "files": [
             "src/server/quic_connection_handler.zig",
             "src/server/server_init.zig"
           ],
@@ -63781,6 +63496,20 @@
           "benches": [],
           "owner": "transport",
           "updated": "2026-06-10"
+        },
+        {
+          "feature": "QUIC High-Concurrency Requests",
+          "aspect": "CooperativeFirstStreams",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "test_quic_condition_timedwait_cadence"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-06-11"
         }
       ]
     },
@@ -64799,20 +64528,6 @@
           "aspect": "GraphLockFreeLabelCount",
           "status": "TESTED",
           "files": [
-            "src/server/quic_connection_handler.zig"
-          ],
-          "tests": [
-            "test_quic_condition_timedwait_cadence"
-          ],
-          "benches": [],
-          "owner": "transport",
-          "updated": "2026-05-28"
-        },
-        {
-          "feature": "QUIC High-Concurrency Reads",
-          "aspect": "GraphLockFreeLabelCount",
-          "status": "TESTED",
-          "files": [
             "src/execution/match_operations.zig"
           ],
           "tests": [
@@ -64820,6 +64535,20 @@
           ],
           "benches": [],
           "owner": "execution",
+          "updated": "2026-05-28"
+        },
+        {
+          "feature": "QUIC High-Concurrency Reads",
+          "aspect": "GraphLockFreeLabelCount",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "test_quic_condition_timedwait_cadence"
+          ],
+          "benches": [],
+          "owner": "transport",
           "updated": "2026-05-28"
         },
         {
@@ -69980,11 +69709,11 @@
             "src/client/repl/repl_dispatch.zig"
           ],
           "tests": [
-            "tests/test_repl.zig"
+            "tests/test_gap0514_repl_dispatch.zig"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-01-30"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -70490,11 +70219,13 @@
             "src/client/repl/repl_dispatch.zig"
           ],
           "tests": [
-            "tests/test_spinner.zig"
+            "error extraction\"",
+            "re-source tracking",
+            "tests/test_gap0514_repl_dispatch.zig:\"executeSourceFile: small batch path"
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-01-30"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -71076,6 +70807,44 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-23"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2439-PERF-METHODOLOGY",
+      "features": [
+        {
+          "feature": "Perf Gates",
+          "aspect": "MonotonicClockNoTestLocalBenchmarks",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2439_perf_methodology.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2439_perf_methodology.zig"
+          ],
+          "benches": [],
+          "owner": "performance",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2441-KMS-REMOTE-PATH",
+      "features": [
+        {
+          "feature": "KMSProviderSystem",
+          "aspect": "NoDeadRemotePath",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2441_kms_provider_paths.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2441_kms_provider_paths.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -76838,20 +76607,6 @@
           "aspect": "IterativeWalkers",
           "status": "TESTED",
           "files": [
-            "src/query/query_traits.zig"
-          ],
-          "tests": [
-            "tests/test_sonny3181_expr_chain_cap.zig"
-          ],
-          "benches": [],
-          "owner": "query",
-          "updated": "2026-09-27"
-        },
-        {
-          "feature": "QueryAnalysis",
-          "aspect": "IterativeWalkers",
-          "status": "TESTED",
-          "files": [
             "src/execution/return_and_sorting.zig"
           ],
           "tests": [
@@ -76859,6 +76614,20 @@
           ],
           "benches": [],
           "owner": "execution",
+          "updated": "2026-09-27"
+        },
+        {
+          "feature": "QueryAnalysis",
+          "aspect": "IterativeWalkers",
+          "status": "TESTED",
+          "files": [
+            "src/query/query_traits.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3181_expr_chain_cap.zig"
+          ],
+          "benches": [],
+          "owner": "query",
           "updated": "2026-09-27"
         }
       ]
@@ -78681,6 +78450,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6272-NO-DOCKERFILE-PROD",
+      "features": [
+        {
+          "feature": "Container Images",
+          "aspect": "UnsupportedImageRemoved",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6272_dockerfile_prod.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6272_dockerfile_prod.zig"
+          ],
+          "benches": [],
+          "owner": "release",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6290-BACKUP-DOC-COMMANDS",
       "features": [
         {
@@ -78759,6 +78547,25 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6321-TDE-FLE-CANARY-EVIDENCE",
+      "features": [
+        {
+          "feature": "TDEProcedures",
+          "aspect": "SelfTestProceduresAndHonestMarkers",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
+          "benches": [],
+          "owner": "tde",
           "updated": "2026-11-12"
         }
       ]
@@ -79084,6 +78891,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6333-WRITE-HARNESS-TMPFS",
+      "features": [
+        {
+          "feature": "Test Infrastructure",
+          "aspect": "WriteHarnessStoresOnTmpfs",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6333_write_harness_tmpfs.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6333_write_harness_tmpfs.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6339-RESOLVED-DATA-DIR",
       "features": [
         {
@@ -79338,6 +79164,58 @@
           ],
           "benches": [],
           "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME",
+      "features": [
+        {
+          "feature": "Embedded LSP",
+          "aspect": "AuthProviderOutlivesSessions",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6374_lsp_auth_provider_lifetime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6374_lsp_auth_provider_lifetime.zig"
+          ],
+          "benches": [],
+          "owner": "lsp",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "Embedded LSP",
+          "aspect": "ListenerOwnsProviderLifetime",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6374_lsp_auth_provider_lifetime.zig"
+          ],
+          "benches": [],
+          "owner": "lsp",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6374-SERVER-RESIDUALS",
+      "features": [
+        {
+          "feature": "Server Hygiene",
+          "aspect": "HelpAbacArgonCanaryDeadCode",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6374_server_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6374_server_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "server",
           "updated": "2026-11-12"
         }
       ]
@@ -81080,16 +80958,14 @@
         {
           "feature": "Page Re-encryption",
           "aspect": "ReEncryption",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/security/key_rotation.zig"
           ],
-          "tests": [
-            "tests/test_key_rotation.zig"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -81814,11 +81690,13 @@
         {
           "feature": "TDEProcedures",
           "aspect": "EncryptionTest",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
           "benches": [],
           "owner": "tde",
           "updated": "2026-11-12"
@@ -81831,11 +81709,13 @@
         {
           "feature": "TDEProcedures",
           "aspect": "DecryptionTest",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
           "benches": [],
           "owner": "tde",
           "updated": "2026-11-12"
@@ -81881,11 +81761,13 @@
         {
           "feature": "TDETestProcedures",
           "aspect": "EncryptPageTest",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
           "benches": [],
           "owner": "tde",
           "updated": "2026-11-12"
@@ -81898,11 +81780,13 @@
         {
           "feature": "TDETestProcedures",
           "aspect": "EncryptBackupTest",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
           "benches": [],
           "owner": "tde",
           "updated": "2026-11-12"
@@ -81915,11 +81799,13 @@
         {
           "feature": "TDETestProcedures",
           "aspect": "RoundtripTest",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
           "benches": [],
           "owner": "tde",
           "updated": "2026-11-12"
@@ -81932,11 +81818,13 @@
         {
           "feature": "TDETestProcedures",
           "aspect": "MeasureOverhead",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
           "benches": [],
           "owner": "tde",
           "updated": "2026-11-12"
@@ -82000,11 +81888,13 @@
         {
           "feature": "TDETestProcedures",
           "aspect": "TestKMSWrapUnwrap",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
           "benches": [],
           "owner": "tde",
           "updated": "2026-11-12"
@@ -82017,11 +81907,13 @@
         {
           "feature": "TDETestProcedures",
           "aspect": "TestKMSAttestation",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/storage_dispatch.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6321_tde_procedures.zig"
+          ],
           "benches": [],
           "owner": "tde",
           "updated": "2026-11-12"
@@ -83289,20 +83181,6 @@
           "aspect": "Integration",
           "status": "TESTED",
           "files": [
-            "tests/test_gap0866_ts_scalar_eval.zig"
-          ],
-          "tests": [
-            "tests/test_gap0866_ts_scalar_eval.zig:\"GAP-0866: timeseries.value through real parse+execute\""
-          ],
-          "benches": [],
-          "owner": "timeseries",
-          "updated": "2026-06-10"
-        },
-        {
-          "feature": "TimeSeriesGqlExecute",
-          "aspect": "Integration",
-          "status": "TESTED",
-          "files": [
             "src/timeseries/gql_functions.zig"
           ],
           "tests": [
@@ -83311,6 +83189,20 @@
           "benches": [],
           "owner": "timeseries",
           "updated": "2026-04-01"
+        },
+        {
+          "feature": "TimeSeriesGqlExecute",
+          "aspect": "Integration",
+          "status": "TESTED",
+          "files": [
+            "tests/test_gap0866_ts_scalar_eval.zig"
+          ],
+          "tests": [
+            "tests/test_gap0866_ts_scalar_eval.zig:\"GAP-0866: timeseries.value through real parse+execute\""
+          ],
+          "benches": [],
+          "owner": "timeseries",
+          "updated": "2026-06-10"
         }
       ]
     },
@@ -84166,22 +84058,6 @@
           "aspect": "UndoLogCore",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_high_priority.zig",
-            "tests/test_gap_0193_high_priority_comprehensive.zig",
-            "tests/test_gap_0193_priority_categories.zig"
-          ],
-          "tests": [
-            "test_gap_0193_high_priority.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "UndoLogCore",
-          "status": "TESTED",
-          "files": [
             "src/txn_undo_log.zig"
           ],
           "tests": [
@@ -84190,15 +84066,10 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-23"
-        }
-      ]
-    },
-    {
-      "id": "REQ-TXN-UNDO-002",
-      "features": [
+        },
         {
           "feature": "TransactionUndoLog",
-          "aspect": "NoSaveOperations",
+          "aspect": "UndoLogCore",
           "status": "TESTED",
           "files": [
             "tests/test_gap_0193_high_priority.zig",
@@ -84211,7 +84082,12 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
+        }
+      ]
+    },
+    {
+      "id": "REQ-TXN-UNDO-002",
+      "features": [
         {
           "feature": "TransactionUndoLog",
           "aspect": "NoSaveOperations",
@@ -84225,6 +84101,22 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "NoSaveOperations",
+          "status": "TESTED",
+          "files": [
+            "tests/test_gap_0193_high_priority.zig",
+            "tests/test_gap_0193_high_priority_comprehensive.zig",
+            "tests/test_gap_0193_priority_categories.zig"
+          ],
+          "tests": [
+            "test_gap_0193_high_priority.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-01-15"
         },
         {
           "feature": "TransactionUndoLog",
@@ -84250,6 +84142,20 @@
           "aspect": "LibExport",
           "status": "TESTED",
           "files": [
+            "src/lib.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "LibExport",
+          "status": "TESTED",
+          "files": [
             "tests/test_gap_0193_high_priority.zig",
             "tests/test_gap_0193_high_priority_comprehensive.zig",
             "tests/test_gap_0193_priority_categories.zig"
@@ -84260,20 +84166,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "LibExport",
-          "status": "TESTED",
-          "files": [
-            "src/lib.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         },
         {
           "feature": "TransactionUndoLog",
@@ -84382,6 +84274,20 @@
           "aspect": "CommitTransaction",
           "status": "TESTED",
           "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "CommitTransaction",
+          "status": "TESTED",
+          "files": [
             "tests/test_gap_0193_high_priority.zig",
             "tests/test_gap_0193_high_priority_comprehensive.zig",
             "tests/test_gap_0193_priority_categories.zig"
@@ -84392,20 +84298,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "CommitTransaction",
-          "status": "TESTED",
-          "files": [
-            "src/execution.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         }
       ]
     },
@@ -84417,6 +84309,20 @@
           "aspect": "RollbackTransaction",
           "status": "TESTED",
           "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "RollbackTransaction",
+          "status": "TESTED",
+          "files": [
             "tests/test_gap_0193_high_priority.zig",
             "tests/test_gap_0193_high_priority_comprehensive.zig",
             "tests/test_gap_0193_priority_categories.zig"
@@ -84427,20 +84333,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "RollbackTransaction",
-          "status": "TESTED",
-          "files": [
-            "src/execution.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         }
       ]
     },
@@ -84668,6 +84560,20 @@
           "aspect": "ExecuteCreateUndoLog",
           "status": "TESTED",
           "files": [
+            "src/execution/crud_operations.zig"
+          ],
+          "tests": [
+            "geodetestlab/specs/transaction_state_basic.yml"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2025-12-23"
+        },
+        {
+          "feature": "TransactionUndoLog",
+          "aspect": "ExecuteCreateUndoLog",
+          "status": "TESTED",
+          "files": [
             "tests/test_gap_0193_high_priority.zig",
             "tests/test_gap_0193_priority_categories.zig"
           ],
@@ -84677,20 +84583,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "TransactionUndoLog",
-          "aspect": "ExecuteCreateUndoLog",
-          "status": "TESTED",
-          "files": [
-            "src/execution/crud_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/transaction_state_basic.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         },
         {
           "feature": "TransactionUndoLog",
@@ -85663,11 +85555,11 @@
           "aspect": "ParserTests",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch3_comprehensive.zig"
+            "tests/test_gap_0193_batch5_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "testing",
+          "owner": "test",
           "updated": "2026-01-16"
         },
         {
@@ -85675,11 +85567,11 @@
           "aspect": "ParserTests",
           "status": "TESTED",
           "files": [
-            "tests/test_gap_0193_batch5_comprehensive.zig"
+            "tests/test_gap_0193_batch3_comprehensive.zig"
           ],
           "tests": [],
           "benches": [],
-          "owner": "test",
+          "owner": "testing",
           "updated": "2026-01-16"
         }
       ]
@@ -86978,11 +86870,11 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 221,
+      "BENCHED": 215,
       "COMPLETE": 2,
       "EXEMPT": 217,
-      "IMPL": 181,
-      "TESTED": 4629
+      "IMPL": 173,
+      "TESTED": 4632
     },
     "by_aspect": {
       "2PC": 3,
@@ -87124,7 +87016,6 @@
       "ApplyTxnDecide": 1,
       "ApplyTxnPrepare": 1,
       "ApplyUpdate": 1,
-      "Archive": 2,
       "ArgParsing": 1,
       "ArgReachability": 1,
       "ArithmeticRounding": 1,
@@ -87166,6 +87057,7 @@
       "AuthIndep": 1,
       "AuthIntegration": 1,
       "AuthModule": 1,
+      "AuthProviderOutlivesSessions": 1,
       "AuthRefreshSingleFlight": 1,
       "AuthRoleGraphLookup": 1,
       "AuthRoleGraphLookupIsolated": 1,
@@ -88545,6 +88437,7 @@
       "HelloRequest": 1,
       "HelloResponseOwnership": 1,
       "HelloWithCredentials": 1,
+      "HelpAbacArgonCanaryDeadCode": 1,
       "Helper": 3,
       "HelperFunctions": 1,
       "Helpers": 1,
@@ -88837,6 +88730,7 @@
       "ListType": 1,
       "ListUnwind": 1,
       "ListenerCertProbe": 1,
+      "ListenerOwnsProviderLifetime": 1,
       "LiteralParsing": 2,
       "LiteralTrue": 1,
       "Literals": 1,
@@ -89029,6 +88923,7 @@
       "ModuleSplit": 1,
       "ModuleStructure": 3,
       "ModuleSystem": 1,
+      "MonotonicClockNoTestLocalBenchmarks": 1,
       "MultiByteRange": 1,
       "MultiChain": 2,
       "MultiChainDispatch": 1,
@@ -89051,7 +88946,6 @@
       "MultiPropertyMergeCoordinator": 1,
       "MultiPropertyMergeFastPath": 1,
       "MultiPropertyMergeIndexedProbe": 1,
-      "MultiRun": 2,
       "MultiTargetExpand": 1,
       "MultiTenantSignal": 1,
       "MultiWayOptimization": 1,
@@ -89101,6 +88995,7 @@
       "NoAutoCreate": 1,
       "NoCatalog": 1,
       "NoDeadBackupTestsOrStaleCanaryRows": 1,
+      "NoDeadRemotePath": 1,
       "NoEnvOverride": 1,
       "NoFabricatedKeyManagement": 1,
       "NoFabricatedResults": 1,
@@ -89382,8 +89277,6 @@
       "PathTraversal": 1,
       "PathType": 1,
       "PathVariable": 1,
-      "PathVariableLengthPropertyPredicate": 1,
-      "PathVariableLengthPropertyPredicateVarianceEnvelope": 1,
       "PathZeroLengthInclusionPolicy": 1,
       "Paths": 1,
       "Pattern": 2,
@@ -89989,8 +89882,6 @@
       "Right": 1,
       "RingOperations": 1,
       "RiskModel": 1,
-      "RobustStats": 2,
-      "RobustStatsP99": 1,
       "RobustnessBase32Decode": 1,
       "Role": 1,
       "RoleAssignment": 2,
@@ -90075,7 +89966,6 @@
       "SchemaManagement": 1,
       "SchemaMetadata": 1,
       "SchemaMigration": 1,
-      "SchemaValidation": 2,
       "SchemaVariation": 1,
       "ScopeCheck": 1,
       "ScopeCorrespondence": 1,
@@ -90113,6 +90003,7 @@
       "SelfLockingProcedures": 1,
       "SelfLoop": 1,
       "SelfMatch": 1,
+      "SelfTestProceduresAndHonestMarkers": 1,
       "SemanticQueryMatching": 1,
       "SemanticValidation": 1,
       "Send": 1,
@@ -90289,7 +90180,6 @@
       "SnapshotFlushQueueDepthVarianceEnvelope": 1,
       "SnapshotIOThrottleVarianceEnvelope": 1,
       "SnapshotInstallation": 1,
-      "SnapshotLoadOptimizationDeltaVariance": 1,
       "SnapshotOwnsLabels": 1,
       "SnapshotReadView": 1,
       "SnapshotRestore": 1,
@@ -90382,7 +90272,6 @@
       "StoreStats": 1,
       "StoreUndoCapture": 1,
       "StoreWriteFence": 1,
-      "Streak": 2,
       "StreamAliasParity": 1,
       "StreamCloseBeforeTeardown": 1,
       "StreamExecution": 1,
@@ -90433,7 +90322,7 @@
       "SumAggregation": 1,
       "SumEvaluation": 1,
       "SumStats": 1,
-      "Summary": 3,
+      "Summary": 1,
       "SummaryColumns": 1,
       "SuppressOutput": 1,
       "SwallowedTypeErrorRelay": 1,
@@ -90456,7 +90345,7 @@
       "TablePreScan": 1,
       "TaggedUnion": 1,
       "TailElements": 1,
-      "TailLatencyP999Envelope": 3,
+      "TailLatencyP999Envelope": 2,
       "TamperDetection": 1,
       "TargetBuild": 1,
       "TargetNodeMatch": 1,
@@ -90504,7 +90393,7 @@
       "TestTransparentEncryption": 1,
       "Testing": 19,
       "TestingBatch2": 1,
-      "Tests": 3,
+      "Tests": 2,
       "TextPropertyValidation": 1,
       "ThreadExhaustionPrevention": 1,
       "ThreadPool": 1,
@@ -90654,6 +90543,7 @@
       "UnsuppliedParameter": 1,
       "UnsupportedAggregateReject": 1,
       "UnsupportedAlgorithm": 2,
+      "UnsupportedImageRemoved": 1,
       "UnsupportedSignal": 2,
       "UnsupportedVersion": 1,
       "UnweightedBFSPaths": 2,
@@ -90722,7 +90612,7 @@
       "VariableScoping": 1,
       "VarianceConfigHelper": 1,
       "VarianceConfigStats": 1,
-      "VarianceEnvelope": 7,
+      "VarianceEnvelope": 6,
       "VarianceEnvelopeGuard": 1,
       "Vector": 1,
       "VectorDimension": 1,
@@ -90783,6 +90673,7 @@
       "WriteChokepointLabels": 1,
       "WriteDoesNotFullRebuild": 1,
       "WriteGate": 1,
+      "WriteHarnessStoresOnTmpfs": 1,
       "WriteReplicationNodeCreate": 1,
       "WriteSetApplication": 1,
       "WriteSetParser": 1,

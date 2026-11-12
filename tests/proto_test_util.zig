@@ -989,6 +989,11 @@ pub const QuicProtoClient = struct {
         // then use a bounded adaptive park until bytes arrive and reset the
         // miss counter.
         try self.client.poll(0);
+        // SONNY-6374: a connection the server closed (a refused admission
+        // sends CONNECTION_CLOSE) can deliver nothing more. The stream read
+        // reports WouldBlock regardless, so without this check a live
+        // server's refusal ran out the whole liveness cap (120 s).
+        if (self.client.isClosed()) return error.ConnectionClosed;
         const now_ns = compat_monoNs();
         if (now_ns >= deadline.soft_ns) return self.extendReadDeadline(deadline);
         self.read_wait_misses +|= 1;

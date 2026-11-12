@@ -5,26 +5,26 @@ const builtin = @import("builtin");
 // Cross-platform: Linux uses the vDSO-accelerated std.os.linux.*; other
 // platforms (macOS / BSD) go through libc via std.c.*. Matches the pattern
 // used by src/admin/fle_commands.zig and src/types/evaluator_functions.zig.
-fn compat_clock_gettime_realtime(ts: *std.posix.timespec) void {
+fn compat_clock_gettime_monotonic(ts: *std.posix.timespec) void {
     if (comptime builtin.os.tag == .linux) {
-        _ = std.os.linux.clock_gettime(.REALTIME, ts);
+        _ = std.os.linux.clock_gettime(.MONOTONIC, ts);
     } else {
-        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, ts);
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, ts);
     }
 }
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    compat_clock_gettime_realtime(&ts);
+    compat_clock_gettime_monotonic(&ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 fn compat_microTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    compat_clock_gettime_realtime(&ts);
+    compat_clock_gettime_monotonic(&ts);
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 fn compat_nanoTimestamp() i128 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    compat_clock_gettime_realtime(&ts);
+    compat_clock_gettime_monotonic(&ts);
     return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
 }
 fn compat_sleep(ns: u64) void {

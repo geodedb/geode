@@ -1999,7 +1999,7 @@ pub const BufferedProtoReader = struct {
     // intent for reaping lingering client connections.
     pub const proto_reader_idle_reap_deadline_ms: i64 = 300_000; // ~300s default wall-clock idle reap deadline
 
-    // CANARY: REQ=REQ-GAP-0927-IDLE-TIMEOUT-REAP-WIRING; FEATURE="ConnectionPool"; ASPECT=IdleReapDeadline; STATUS=TESTED; TEST=tests/test_gap0927_idle_reap.zig; OWNER=transport; UPDATED=2026-07-10
+    // CANARY: REQ=REQ-GAP-0927-IDLE-TIMEOUT-REAP-WIRING; FEATURE="ConnectionPool"; ASPECT=IdleReapDeadline; STATUS=TESTED; TEST=test-gap0927; OWNER=transport; UPDATED=2026-11-12
     // GAP-0927: the per-connection idle-reap deadline used to be the hardcoded
     // 300000ms const, DECOUPLED from --idle-timeout (which only fed the QUIC
     // transport's max_idle_timeout_ms). It is now a runtime value set from

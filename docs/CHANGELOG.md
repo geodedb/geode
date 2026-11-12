@@ -4,6 +4,60 @@
 
 ### Security
 
+- **BREAKING (library API): `KMSProvider` has no `remote_kms` provider
+  (SONNY-2441).** `wrapDataKey` with `remote_kms` ignored the key it was
+  given and returned one the remote KMS generated (the remote protocol has
+  GENERATE and UNWRAP, no WRAP), so unwrapping never returned the caller's
+  key; nothing called it, and the CANARYs claiming it TESTED cited test
+  files no build step compiled. The provider, `remoteKMSProvider`,
+  `createRemoteKMSTDE` and the `KMSConfig` port/remote-timeout fields are
+  removed; the remote KMS client (`kms_remote.zig`, `test-remote-kms`)
+  stays. `tests/test_kms_provider.zig` and `tests/test_tde_kms_integration.zig`
+  are built and run (`test-kms-provider` 10/10, `test-tde-kms-integration`
+  8/8); building them exposed and fixed two compile errors and three leaks
+  in `TDEKeyManager` (the provider struct and the external-KMS key id were
+  never freed). `docs/KMS_PROVIDER_SYSTEM.md` now says what `KMSProvider`
+  does: local_dev and external_kms only (Vault/AWS/Azure configurations are
+  refused), and neither it nor `TDEKeyManager` is used by the server.
+  Regression: `zig build test-sonny2441-kms-provider-paths`.
+- **A corrupt stored Argon2id hash is refused, not a panic; GEODE_ENABLE_ABAC
+  no longer claims enforcement; `serve --help` (SONNY-6374 items 3-8).**
+  `verifyPasswordArgon2id` narrowed the stored hash's `p` into Argon2's u24
+  with `@intCast`, so a hash with `p` above 2^24-1 panicked a safe build; an
+  unparseable `m`, `t` or `p` fell back to the default. Such a hash now fails
+  verification. The startup log no longer says "ABAC enforcement enabled":
+  no request path enforces ABAC (SONNY-6376), and the line now says so;
+  `docs/DOCKER_OVERVIEW.md` described `GEODE_ENABLE_ABAC` as enabling ABAC.
+  `geode serve --help` gave `--listen-grpc 0.0.0.0:3142`, the embedded LSP
+  default port, as its gRPC example; it now gives 50051 and documents
+  `--lsp-port` and `--lsp-bind-all`. Also: the GAP-0193 batch 2 security
+  and testing suites lose their `... or true` assertions and are built
+  (`test-gap0193-batch2-security`, `test-gap0193-batch2-testing`);
+  canaryscan sorts rows of one requirement in a total order, so
+  `tools/canaryscan/status.csv` no longer reorders between runs (both
+  outputs regenerated); 51 CANARY `TEST=` tokens that named missing files
+  are re-pointed to the tests that exercise them or, where none does,
+  downgraded to IMPL (`REQ-AUTH-SESSION-ROTATE-001`, `REQ-AUTH-MTLS-002..004`,
+  `REQ-HEX-PARSE-KEYPROV-001`, `REQ-HEX-PARSE-KEYROT-001/002`,
+  `REQ-STREAMING-KEYROT-REENCRYPT-001`, `REQ-GQL-SEC-KEYROT-001`,
+  `REQ-GQL-VAULT-KMS-001`, `REQ-GQL-2PC-001`); and the unimported
+  `src/performance/async_io_simple.zig` and
+  `src/distributed/federation_latency_aggregate.zig` (with its unbuilt tests
+  and benchmark) are deleted. Regression:
+  `zig build test-sonny6374-server-residuals`, `go test` in
+  `tools/canaryscan`.
+- **The embedded LSP listener no longer frees its AuthProvider while
+  sessions use it (SONNY-6374 item 1).** `geode serve` freed the listener's
+  `AuthProvider` in a `defer` inside the block that spawned the listener
+  thread, so it was freed as soon as the thread started, and every LSP
+  session's `initialize` verified its token against freed memory. A debug
+  server panicked on the first such session, taking the whole server down.
+  The listener, its sessions and the provider are now owned together: on
+  shutdown the listener stops accepting, closes open sessions and waits up
+  to 5 s for them, and only then is the provider freed (it is leaked, with a
+  `[shutdown]` line, if a session outlives the wait). SIGTERM now prints
+  `[shutdown] LSP listener stopped`. Regression:
+  `zig build test-sonny6374-lsp-auth-provider-lifetime`.
 - **BREAKING: a corrupt tenant registry line refuses startup (SONNY-6348
   item 2).** `TenantRegistry.hydrate` skipped a `registry.jsonl` line it
   could not parse, or that was not an object with a valid string
@@ -308,6 +362,66 @@
 
 ### Fixed
 
+- **The long write suites finish in minutes on a loaded host
+  (SONNY-6333).** `tests/sonny738_write_harness.zig` opens, writes, reloads
+  and closes a persisted store for every case in three sessions; on a
+  loaded host's shared ext4 disk the test thread waited on the journal
+  (`jbd2_log_wait_commit`) at about 14% of one core, and
+  `test-sonny3139-write-shapes` was still running at a 25-minute cap
+  (`test-sonny-write-allowlist` and `-r4b` had hit 50 and 60). A persisted
+  session's store now lives on tmpfs (`/dev/shm`) when the host has one:
+  the storage code paths are the same and fsync there returns at once.
+  Three runs in a row with other builds running (load average 36-481):
+  `test-sonny3139-write-shapes` 43-69 s, `test-sonny-write-allowlist`
+  80-87 s, `test-sonny-write-allowlist-r4b` 285-345 s, all inside a
+  10-minute budget; `test-sonny3040-chained-writes` 7 s (was 11 minutes).
+  `-r4b` still runs 500-900 threads at 12-15 cores (now CPU-bound, not
+  fsync-bound). Regression: `zig build test-sonny6333-write-harness-tmpfs`.
+- **The TDE self-test procedure and FLE CANARYs cite tests that exercise
+  them; GAP-0514 is reopened (SONNY-6321).** Twenty markers cited
+  `tests/test_tde_kms_integration.zig`, which tests `TDEKeyManager` only.
+  `test-sonny6321-tde-procedures` now drives `tde.test_encryption`,
+  `test_decryption`, `encrypt_page_test`, `encrypt_backup_test`,
+  `roundtrip_test`, `measure_overhead`, `test_kms_wrap_unwrap` and
+  `test_kms_attestation` through the executor (real success with TDE on and
+  a key; no success claim with TDE off from those that use the key), and
+  their markers cite it. REQ-FLE-CATALOG-001, REQ-FLE-INTEGRATION-001 and
+  REQ-FLE-KEY-001 cite `test-fle-online-grant`, `test-gap0852` and
+  `test-fle-lifecycle`; REQ-TDE-PROC-046 and the FLE AST, PARSER, STORAGE,
+  BI-002, SCHEMA, EXECUTION, ADMIN and MIGRATE-CLI markers are IMPL. IMPL is
+  267 of 6,161 (4.3%), above GAP-0514's 250 target, so GAP-0514 is back in
+  `docs/GAP_ANALYSIS.md` as Partial.
+- **The perf-gated benchmarks time with a monotonic clock, and the two that
+  timed only test-local code are removed (SONNY-2439, partial).** Every
+  benchmark that makes a claim through `tests/perf_gate.zig` read
+  `CLOCK_REALTIME`, which NTP slews and steps; they read `CLOCK_MONOTONIC`.
+  `tests/canary_storage_redo_delta.zig` (a synthetic `simulateRedo` loop
+  whose result was discarded) and `tests/canary_path_varlen_predicate.zig`
+  (a 4-node test-local DFS) imported no product code, so a missed claim
+  could not mean a product regression; they, their steps
+  (`test-canary-storage-redo-delta`, `test-canary-path-varlen-predicate`) and
+  their entries in the scheduled `test-perf-gates-enforced` job are removed.
+  Still open: batch timing, the production allocator, interleaved A/B with
+  median/IQR, calibrated thresholds, the phantom-range baseline that never
+  enables phantom prevention, and the job's GitLab schedule. Regression:
+  `zig build test-sonny2439-perf-methodology`.
+- **BREAKING: `Dockerfile.prod` and `make docker-build-prod` are removed
+  (SONNY-6272).** The image could not build: it installed Zig 0.15.2
+  (build.zig.zon requires 0.16.0) and copied a `vendor/` directory that does
+  not exist, its builder (ubuntu:26.04) and runtime (cuda
+  base-ubuntu24.04, `libssl3`) did not match, and no CI job built it or
+  checked it. The supported GPU image is `Dockerfile.release.gpu`, under
+  `release/dockerfile_manifest.json` and its compatibility checks.
+  `docker-compose.example.yml` now builds `Dockerfile` like the other
+  compose files. Regression: `zig build test-sonny6272-dockerfile-prod`.
+- **The QUIC test client fails at once on a connection the server closed
+  (SONNY-6374 item 2).** `QuicProtoClient` (tests/proto_test_util.zig)
+  waited for a reply until the 120 s liveness cap whenever the server was
+  still alive, because a stream read on a closed connection reports
+  WouldBlock. A refused connection (the server sends CONNECTION_CLOSE) now
+  fails with `error.ConnectionClosed`: the F13 case of
+  `test-sonny3253-round14-minors` failed every run at 120 s and now sees the
+  refusal in about 250 ms.
 - **No in-place restore; a restore syncs once; the CLI's server wait is
   configurable (SONNY-6300).** `BackupManager.restoreToPointInTime` wrote a
   backup over whatever directory it was given, the live data directory
@@ -431,7 +545,7 @@
   duplicate or mock-module cases). The ABAC-WIRE CANARY markers that cited
   `test_abac_enforcement.zig` are now IMPL: `SecurityManager.authorize`
   and its ABAC policies are called by no server request path (authorization
-  is GPS), and `GEODE_ABAC_ENABLED` changes only a startup log line.
+  is GPS), and `GEODE_ENABLE_ABAC` changes only a startup log line.
 - **The ThreadSanitizer companion steps instrument the code (SONNY-6328).**
   With Zig 0.16 a Debug x86_64 build uses the self-hosted backend, which
   ignores `-fsanitize-thread`: the six `test-*-tsan` steps had no TSan

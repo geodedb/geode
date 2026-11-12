@@ -6,7 +6,7 @@ services:
     image: geode:latest
     build:
       context: .
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile
     container_name: geode-example
     ports:
       - "3141:3141"  # QUIC+TLS

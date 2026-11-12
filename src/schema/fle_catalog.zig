@@ -20,7 +20,7 @@ const global_allocator = std.heap.smp_allocator;
 // CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=FLECatalog; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 
 // Global Schema Metadata Catalog
-// CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=SCHEMA; STATUS=TESTED; TEST=test-fle-online-grant; OWNER=security; UPDATED=2026-11-11
+// CANARY: REQ=REQ-FLE-CATALOG-001; FEATURE="FieldLevelEncryption"; ASPECT=SCHEMA; STATUS=TESTED; TEST=test-fle-online-grant; OWNER=security; UPDATED=2026-11-12
 
 /// Thread-safe global schema catalog for field-level encryption metadata
 pub const SchemaCatalog = struct {

@@ -51,7 +51,7 @@ const builtin = @import("builtin");
 const platform = @import("platform.zig");
 const pooled = @import("transport/thread_pool");
 
-/// CANARY: REQ=REQ-SHELL-SPINNER-001; FEATURE="ShellProcessingIndicator"; ASPECT=Module; STATUS=TESTED; TEST=tests/test_spinner.zig; OWNER=cli; UPDATED=2026-01-30
+/// CANARY: REQ=REQ-SHELL-SPINNER-001; FEATURE="ShellProcessingIndicator"; ASPECT=Module; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig:"drain: quiet-connection timeout lanes and interrupt lanes"; OWNER=cli; UPDATED=2026-11-12
 /// Cross-platform spinner/activity indicator for long-running shell operations.
 /// Supports multiple terminal types including Unix TTY, Windows Console, and PowerShell.
 /// Terminal type detection for choosing appropriate spinner characters

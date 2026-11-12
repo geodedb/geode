@@ -1309,8 +1309,6 @@ test-perf-gates-enforced:
         test-perf-gate \
         test-canary-txn-phantom-anomaly \
         test-canary-txn-phantom-range \
-        test-canary-path-varlen-predicate \
-        test-canary-storage-redo-delta \
         test-json-optimization \
         test-canary-physiological-redo \
         test-canary-planner-prune \

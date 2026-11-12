@@ -243,7 +243,7 @@ fn printServeUsage() void {
     std.debug.print("\nExamples:\n" ++
         "  geode serve\n" ++
         "  geode serve --data-dir /var/lib/geode --listen 0.0.0.0:3141\n" ++
-        "  geode serve --listen 0.0.0.0:3141 --listen-grpc 0.0.0.0:3142\n" ++
+        "  geode serve --listen 0.0.0.0:3141 --listen-grpc 0.0.0.0:50051\n" ++
         "  geode serve --log-level info  # Auth enabled by default\n" ++
         "\n", .{});
 }

@@ -168,14 +168,17 @@ Without a notifier the TTL alone bounds staleness to ≤5 seconds.
 
 ## Limitations
 
-- **Embedded LSP fails closed.** The TCP listener inside `geode serve` is wired
-  with `verifier=null` until the AuthProvider→Verifier adapter lands. Until
-  then no client can complete an authenticated initialize over TCP. The
-  AuthProvider→Verifier adapter is blocked by a pre-existing Zig 0.16
-  migration issue in `src/security/authn.zig` (`std.crypto.random.bytes` was
-  retired). The stdio path with `--no-auth` works for local development; the
-  WS bridge from geode-ui is wired and accepts connections but will be
-  rejected at the LSP `initialize` step until the adapter is in place.
+- **Embedded LSP fails closed.** The TCP listener inside `geode serve`
+  verifies every `initialize` token against its own `AuthProvider` through
+  the `AuthProvider → Verifier` adapter (`verifierFromAuthProvider`). That
+  provider starts empty and nothing populates it yet: no procedure, CLI
+  command or startup option reaches it, so no client can complete an
+  authenticated initialize over TCP (each gets JSON-RPC -32002 "invalid auth
+  token"). The stdio path with `--no-auth` works for local development; the
+  WS bridge from geode-ui is wired and accepts connections but is rejected at
+  the LSP `initialize` step. The listener stops on SIGTERM: it closes open
+  sessions and waits up to 5 s for them before it frees the provider
+  (SONNY-6374).
 - **Property catalog is a live scan.** `listPropertiesForLabel` walks every
   node carrying the requested label in the requested tenant on every call
   (cached for the TTL window). This is O(n) in matching nodes; a persistent
@@ -213,10 +216,10 @@ Without a notifier the TTL alone bounds staleness to ≤5 seconds.
 - **Plan F**: UI affordances in `geode-ui` — schema browser panel that
   mirrors LSP data, "Run with EXPLAIN" button, format-on-save, settings
   page for completion sources.
-- **Auth adapter**: migrate `src/security/authn.zig` to Zig 0.16
-  (`std.crypto.random.bytes` → `std.crypto.random.bytesUncancelable` or
-  the new `std.Random` API), then write the `AuthProvider → Verifier`
-  adapter and pass it into the embedded LSP listener.
+- **Auth provisioning**: give the embedded LSP listener a way to accept
+  real credentials (share the QUIC server's API keys / sessions, or a
+  procedure that issues LSP tokens). The `AuthProvider → Verifier` adapter
+  itself is wired.
 
 ## Build & test reference
 

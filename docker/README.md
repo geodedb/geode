@@ -24,7 +24,6 @@ environment variables.
 |------|---------|------------|
 | `Dockerfile` | Main development build | debian:bookworm-slim |
 | `Dockerfile.base` | Shared runtime base | debian:bookworm-slim |
-| `Dockerfile.prod` | Production build with GPU support | ubuntu:24.04 + nvidia/cuda |
 | `Dockerfile.gpu` | GPU-enabled build | nvidia/cuda:12.3.2-devel |
 | `Dockerfile.simple` | Simple fallback build | debian:bookworm-slim |
 | `Dockerfile.reliable` | Reliable build with retry logic | debian:bookworm-slim |
@@ -71,13 +70,6 @@ environment variables.
 ```bash
 docker build -t geode:dev .
 docker run -p 3141:3141/udp geode:dev
-```
-
-### Production Build
-
-```bash
-docker build -f Dockerfile.prod -t geode:prod .
-docker run -p 3141:3141/udp geode:prod
 ```
 
 ### CI Build

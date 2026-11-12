@@ -375,8 +375,9 @@ test "TestSONNY2394_KmsServeUntilStoppedDoesNotSpin" {
     try std.testing.expect(returned_on_its_own);
 }
 
-// The response deadline has a configuration route (KMSConfig.remote_response_timeout_ms
-// reaches production KMSProvider callers through initWithOptions).
+// The response deadline has a configuration route (initWithOptions). The
+// KMSProvider remote_kms wrapper that passed KMSConfig timeouts through it
+// was removed by SONNY-2441.
 test "TestSONNY2394_KmsClientOptionsCarryDeadline" {
     const default_client = kms.RemoteKmsClient.init(std.heap.page_allocator);
     try std.testing.expectEqual(kms.RemoteKmsClient.default_response_timeout_ms, default_client.response_timeout_ms);

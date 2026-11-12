@@ -741,7 +741,7 @@ pub const DropGraphStatement = struct {
 };
 
 // Field-Level Encryption AST Extensions
-// CANARY: REQ=REQ-FLE-AST-001; FEATURE="FieldLevelEncryption"; ASPECT=AST; STATUS=IMPL; OWNER=security; UPDATED=2026-11-11
+// CANARY: REQ=REQ-FLE-AST-001; FEATURE="FieldLevelEncryption"; ASPECT=AST; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 
 /// Field annotation for FLE (e.g., @encrypted, @searchable)
 pub const FieldAnnotation = struct {
