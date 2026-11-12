@@ -13356,6 +13356,21 @@ pub fn build(b: *std.Build) void {
     const sonny2756_step = b.step("test-sonny2756-policy-catalog-concurrency", "Run the SONNY-2756 regression (a policy change waits for a decision walking the GPS policy catalog and a decision for a change in progress; one decision sees one catalog; no cached decision outlives a change; decisions, helpers and SHOW POLICIES stay well-formed during rounds of policy DDL)");
     sonny2756_step.dependOn(&run_sonny2756_tests.step);
 
+    // SONNY-2782: with authentication disabled the QUIC and gRPC handlers
+    // gate a request the same way (one shared request gate).
+    const sonny2782_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2782_auth_disabled_transport_parity.zig"), .target = target, .optimize = optimize });
+    sonny2782_test_mod.link_libc = true;
+    sonny2782_test_mod.addImport("geode", root_mod);
+    sonny2782_test_mod.addImport("schema", schema_mod);
+    sonny2782_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2782_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny2782_test_mod.addImport("logging", logging_mod);
+    const sonny2782_tests = b.addTest(.{ .root_module = sonny2782_test_mod });
+    const run_sonny2782_tests = b.addRunArtifact(sonny2782_tests);
+    shardDep(test_step, &run_sonny2782_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2782_step = b.step("test-sonny2782-auth-disabled-transport-parity", "Run the SONNY-2782 regression (with authentication disabled every request runs on QUIC and gRPC alike, --insecure-allow-all or not; with it enabled the gates are unchanged; both handlers gate through the one shared request gate)");
+    sonny2782_step.dependOn(&run_sonny2782_tests.step);
+
     // SONNY-2781: every action a GPS policy can name is enforced: the write
     // gate asks CREATE / UPDATE / DELETE / WRITE+SCHEMA per statement, the
     // read gate asks MATCH on every graph read, for every principal; a deny
