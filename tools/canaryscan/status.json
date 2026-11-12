@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:53:14.443312153Z",
+  "generated_at": "2026-11-12T18:53:46.457210107Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -36404,25 +36404,6 @@
           "benches": [],
           "owner": "execution",
           "updated": "2025-10-14"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-201",
-      "features": [
-        {
-          "feature": "BackupIntegration",
-          "aspect": "CommandProcessing",
-          "status": "TESTED",
-          "files": [
-            "tests/test_backup_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_201_BackupIntegration"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2025-10-03"
         }
       ]
     },
@@ -87074,7 +87055,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4477
+      "TESTED": 4476
     },
     "by_aspect": {
       "2PC": 3,
@@ -87602,7 +87583,6 @@
       "ColumnSchema": 1,
       "CommaSeparatedMergeChains": 1,
       "CommandDispatch": 2,
-      "CommandProcessing": 1,
       "CommandRouting": 1,
       "Commit": 5,
       "CommitAdvancementVarianceEnvelope": 1,

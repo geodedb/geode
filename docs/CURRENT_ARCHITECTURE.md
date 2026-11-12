@@ -46,7 +46,7 @@ and [GAP_ANALYSIS.md](GAP_ANALYSIS.md))
 
 ### Architecture Style
 
-- **Language**: Zig 0.15.1+
+- **Language**: Zig 0.16.0+ (`build.zig.zon` `minimum_zig_version`)
 - **Paradigm**: Modular with some monolithic components
 - **Build System**: Zig build system with module injection
 - **Testing**: Unit tests (Zig) + Integration tests (geodetestlab)
@@ -529,17 +529,30 @@ compiled and was removed 2026-11-11 (SONNY-6279).
 
 #### 6. Backup & Recovery Path (P2 MEDIUM)
 
-**Flow**:
+**Flow** (corrected 2026-11-12, SONNY-6386; it used to show an S3 upload
+step, with encryption before compression):
 
 ```
-Backup Command → Backup Manager → S3 Upload → Encryption → Compression
+geode backup create (CLI --local, or the server's BACKUP request over QUIC/gRPC)
+  → BackupManager: archive the data directory
+  → compress (gzip, opt-in; no other codec has an encoder)
+  → encrypt (AES-256-GCM under GEODE_TDE_KEY, when it is set)
+  → local file: temporary file beside --output, fsync, rename, fsync directory
 ```
+
+No command uploads to or restores from object storage (SONNY-6290): copy the
+backup file with your own tool. `src/storage/s3_backup.zig` is compiled only
+by the SigV4 known-answer test step; nothing in the CLI or server calls it.
+Restore (`geode restore`) decrypts with `GEODE_TDE_KEY`, verifies the archive
+and the `__geode_security` auth chain on a throwaway copy, and renames a
+staged directory into place.
 
 **Key Files**:
 
-- `src/storage/backup.zig` (572 LOC)
-- `src/storage/s3_backup.zig` (778 LOC)
-- `src/security/tde.zig` (1,482 LOC)
+- `src/storage/backup.zig`: archive, compression, encryption, file format, restore staging
+- `src/cli/backup_cli.zig`: `geode backup create` / `geode restore`
+- `src/server/backup_manager.zig`: the server's backup and restore requests
+- `src/security/tde_key_manager.zig`, `src/storage/tde_file_encryption.zig`: `GEODE_TDE_KEY`
 
 **Risk**:
 
@@ -547,7 +560,11 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 - Must be reliable and tested
 - Encryption must be secure
 
-**Test Coverage**: 90% (good coverage, critical feature)
+**Tests**: `zig build test-sonny6277-backup-restore-roundtrip`,
+`test-sonny6355-backup-encryption-fsync-output`,
+`test-sonny6386-remote-backup-atomic-output`,
+`test-sonny6300-staged-restore-paths` (the former "90%" coverage figure was
+never measured).
 
 ---
 

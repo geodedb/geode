@@ -2432,7 +2432,6 @@ REQ-GQL-101,Specialized Indexes,DomainTriePersistence,TESTED,src/canary.zig,Test
 REQ-GQL-164,Pattern Comprehension Shorthand,Parser,TESTED,src/gql/parser.zig,,,parser,2025-10-14
 REQ-GQL-165,Pattern Comprehension Execution,Evaluator,TESTED,src/eval.zig,,,eval,2025-10-14
 REQ-GQL-167,Variable-Length Path Binding,Execution,TESTED,src/execution/match_operations.zig,,,execution,2025-10-14
-REQ-GQL-201,BackupIntegration,CommandProcessing,TESTED,tests/test_backup_integration.zig,TestCANARY_REQ_GQL_201_BackupIntegration,,storage,2025-10-03
 REQ-GQL-202,UserManagement,PersistentStorage,TESTED,tests/test_user_management.zig,TestCANARY_REQ_GQL_202_UserManagement,,security,2025-10-04
 REQ-GQL-202,UserManagementComprehensive,Integration,TESTED,tests/test_user_management_comprehensive.zig,TestCANARY_REQ_GQL_202_UserManagementComprehensive,,auth,2025-10-04
 REQ-GQL-202,UserStorage,PersistentStorage,TESTED,src/storage/user_storage.zig,TestCANARY_REQ_GQL_202_UserStorage,,security,2026-02-24

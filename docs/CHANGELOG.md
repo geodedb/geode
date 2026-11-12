@@ -46,6 +46,18 @@
   synced; a failure removes only the temporary file. `--local` already wrote
   this way (SONNY-6323). `geode backup create --help` says so. Regression:
   `zig build test-sonny6386-remote-backup-atomic-output`.
+- **Dead mock test removed and stale architecture docs corrected
+  (SONNY-6386 items 4 and 8).** `tests/test_backup_integration.zig`
+  redefined `BackupConfig`, `BackupType`, `BackupMetadata` and a backup
+  manager inside the test and tested those copies; no build step compiled
+  it, and its CANARY (REQ-GQL-201, TESTED) claimed evidence for code it never
+  touched. It is removed (`git rm`), with its status rows.
+  `docs/CURRENT_ARCHITECTURE.md` described the backup path as "S3 Upload →
+  Encryption → Compression" (no command uploads to object storage, and the
+  payload is compressed before it is encrypted) and the language as Zig
+  0.15.1+; it now describes the real path, files and tests and Zig 0.16.0+.
+  The SONNY-2441 entry below no longer claims a `test-tde-kms-integration`
+  run. Regression: `zig build test-sonny6386-dead-mock-and-stale-docs`.
 - **BREAKING (operator): backups are encrypted under `GEODE_TDE_KEY` when it
   is set (SONNY-6355 items 1, 2, 5, 6).** `BackupManager` has encrypted the
   payload with AES-256-GCM under `GEODE_TDE_KEY` (and every restore path
@@ -123,11 +135,13 @@
   files no build step compiled. The provider, `remoteKMSProvider`,
   `createRemoteKMSTDE` and the `KMSConfig` port/remote-timeout fields are
   removed; the remote KMS client (`kms_remote.zig`, `test-remote-kms`)
-  stays. `tests/test_kms_provider.zig` and `tests/test_tde_kms_integration.zig`
-  are built and run (`test-kms-provider` 10/10, `test-tde-kms-integration`
-  8/8); building them exposed and fixed two compile errors and three leaks
-  in `TDEKeyManager` (the provider struct and the external-KMS key id were
-  never freed). `docs/KMS_PROVIDER_SYSTEM.md` now says what `KMSProvider`
+  stays. `tests/test_kms_provider.zig` is built and run (`test-kms-provider`
+  10/10). (Correction, SONNY-6386: this entry also said
+  `tests/test_tde_kms_integration.zig` was built and run as a
+  `test-tde-kms-integration` step, 8/8, and that building it fixed two
+  compile errors and three leaks in `TDEKeyManager`. No such step, test or
+  `src/security/tde_kms_integration.zig` exists in this tree: both files
+  were removed as never compiled, SONNY-6298.) `docs/KMS_PROVIDER_SYSTEM.md` now says what `KMSProvider`
   does: local_dev and external_kms only (Vault/AWS/Azure configurations are
   refused), and neither it nor `TDEKeyManager` is used by the server.
   Regression: `zig build test-sonny2441-kms-provider-paths`.
