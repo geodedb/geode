@@ -476,6 +476,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
+    .{ .name = "test-sonny6325-no-fixed-tmp-paths", .reason = "failing: intentionally red SONNY-6325 reproduction (auto TLS key at /tmp/geode-server.key, unchecked /tmp/geode-<uid>, /tmp in backup list, audit diagnostics and createFullBackup); moves to shardDep with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9348,6 +9349,27 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6301_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6301_step = b.step("test-sonny6301-test-ports-and-timeouts", "Run SONNY-6301 regression (test ports come from the kernel, not a constant: distinct, usable UDP/TCP ports and two servers at once each answering on its own; shared QUIC and gRPC test clients wait for a live server past the old reply deadline and fail at once when it exited)");
     sonny6301_step.dependOn(&run_sonny6301_tests.step);
+
+    // SONNY-6325: no secret or temp directory at a fixed shared /tmp path:
+    // the auto TLS key lives in the data directory (exclusive, no-follow,
+    // 0600; an existing auto key must be ours and owner-only), S3 restore
+    // stages in a private temp dir, the audit diagnostics write private
+    // data-directory files, backup list skips /tmp, the per-user tmp data
+    // directory is checked, and a backup without a data directory is refused.
+    const sonny6325_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6325_no_fixed_tmp_paths.zig"), .target = target, .optimize = optimize });
+    sonny6325_test_mod.link_libc = true;
+    sonny6325_test_mod.addImport("geode", root_mod);
+    sonny6325_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6325_test_mod.addImport("schema", schema_mod);
+    sonny6325_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6325_test_mod.addImport("storage/backup", storage_backup_mod);
+    sonny6325_test_mod.addImport("cert_gen", cert_provided_mod);
+    const sonny6325_tests = b.addTest(.{ .root_module = sonny6325_test_mod });
+    const run_sonny6325_tests = b.addRunArtifact(sonny6325_tests);
+    spawnsBuiltGeode(sonny6325_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6325_tests.step);
+    const sonny6325_step = b.step("test-sonny6325-no-fixed-tmp-paths", "Run SONNY-6325 regression (spawns servers: the auto TLS key is created in the data directory exclusive/no-follow/0600, an existing group-readable, linked or half-pair auto key is refused, no /tmp fallback; S3 restore staging is a private temp dir; audit diagnostics write private data-directory files; backup list skips /tmp; the per-user tmp data directory is checked 0700/owner and honours TMPDIR; a backup without a data directory is refused)");
+    sonny6325_step.dependOn(&run_sonny6325_tests.step);
 
     // SONNY-6299: a backup never holds the TLS private key, the auth-chain
     // HMAC key, the generated admin password or the data-directory lock;
