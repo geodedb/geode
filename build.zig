@@ -12245,6 +12245,22 @@ pub fn build(b: *std.Build) void {
     const sonny3036_step = b.step("test-sonny3036-rls-policy-keys", "Run SONNY-3036 regression (deleting an RLS policy through UserManager leaves the engine's policy map no key into its freed strings; an emptied graph and table lose their entry; leak-checked)");
     sonny3036_step.dependOn(&run_sonny3036_tests.step);
 
+    // SONNY-2773: the RLS engine frees the bytecode it compiled, and the
+    // strings handed to it, on delete, on replace and at deinit.
+    const sonny2773_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2773_rls_policy_free.zig"), .target = target, .optimize = optimize });
+    sonny2773_test_mod.link_libc = true;
+    sonny2773_test_mod.addImport("geode", root_mod);
+    sonny2773_test_mod.addImport("geode_auth", auth_mod);
+    sonny2773_test_mod.addImport("rls", rls_mod);
+    sonny2773_test_mod.addImport("rls_types", rls_types_mod);
+    sonny2773_test_mod.addImport("user_manager", user_manager_mod);
+    sonny2773_test_mod.addImport("user_storage", user_storage_mod);
+    const sonny2773_tests = b.addTest(.{ .root_module = sonny2773_test_mod });
+    const run_sonny2773_tests = b.addRunArtifact(sonny2773_tests);
+    shardDep(test_step, &run_sonny2773_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2773_step = b.step("test-sonny2773-rls-policy-free", "Run the SONNY-2773 regression (RLSEngine.deletePolicy, updatePolicy and deinit free the bytecode the engine compiled and the strings handed to it; geode.rls.add_attribute_policy / remove_attribute_policy and UserManager create / update / delete leak nothing; leak-checked)");
+    sonny2773_step.dependOn(&run_sonny2773_tests.step);
+
     const sonny2750_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2750_policy_record_kind.zig"), .target = target, .optimize = optimize });
     sonny2750_test_mod.link_libc = true;
     sonny2750_test_mod.addImport("geode", root_mod);
