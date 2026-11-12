@@ -583,6 +583,31 @@
 
 ### Fixed
 
+- **`ORDER BY <indexed> LIMIT` served from the value-ordered index no
+  longer reads a freed or changing tree (SONNY-6375, geode side).**
+  graph_storage's `OrderedBTree` has no locking of its own, and its cursor
+  must not be iterated across a mutation. `StorageAdapter.orderedScan` read
+  each shard's tree under that shard's lock only, while write statements
+  change the tree under the graph's EXCLUSIVE lock with no shard lock, and
+  the engine-direct and snapshot reads that reach it hold no graph lock;
+  it also kept each shard's cursor across the lock release between two
+  256-entry batches, so an ordered-index rebuild in that gap (the full
+  checkpoint's refresh, `createOrderedIndex`, the ORDER BY auto-build)
+  freed the nodes the cursor pointed into, and the next batch crashed. Each
+  batch now holds `mg.rwlock` SHARED and then the shard lock (the order
+  `createOrderedIndex` uses), opens a fresh cursor and resumes strictly
+  after the last key it visited, and checks node liveness under that hold.
+  A thread that already holds the graph's read or write lock through the
+  graph-lock API (the point-read and fallback reads, a read statement of a
+  write program) does not take `mg.rwlock` again; the API now records
+  per thread which graphs it holds. `test-ordered-scan-tsan` reported 4
+  ordered-scan races (`OrderedBTree.Cursor.next` / `normalizeForward` /
+  `lowerBound` against `insertIntoLeaf`, `getNode` against `putNode`) and
+  now reports none; its remaining reports are the thread_pool 0.2.9 queue
+  races, fixed in thread_pool 0.2.10. The race test's writer now holds the
+  graph write lock, as production writers do. Regressions:
+  `zig build test-sonny6375-ordered-scan-locking` (and its `-tsan`
+  companion).
 - **The long write suites finish in minutes on a loaded host
   (SONNY-6333).** `tests/sonny738_write_harness.zig` opens, writes, reloads
   and closes a persisted store for every case in three sessions; on a

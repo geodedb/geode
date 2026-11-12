@@ -78,7 +78,9 @@ test "SONNY-6375: orderedScan survives an ordered-index rebuild between two batc
     const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer allocator.free(path);
 
-    const adapter = try StorageAdapter.init(allocator, path, .{ .page_size = 4096, .buffer_pool_pages = 1024 });
+    // Deferred WAL sync: 9600 writes with a per-commit fsync took minutes, and
+    // durability is not under test here.
+    const adapter = try StorageAdapter.init(allocator, path, .{ .page_size = 4096, .buffer_pool_pages = 1024, .sync_mode = .deferred });
     defer adapter.deinit();
     const graph = "g";
 
