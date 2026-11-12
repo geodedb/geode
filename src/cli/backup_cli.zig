@@ -1845,11 +1845,13 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
                 "\n" ++
                 "Options:\n" ++
                 "  --dir <path>           Migrations directory (default: ./migrations)\n" ++
-                "  --no-sign              Skip auto-signing (dev only, not recommended)\n" ++
+                "  --no-sign              Create the file unsigned (dev only; `migrate run` refuses it\n" ++
+                "                         without --allow-unsigned)\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n" ++
-                "Requires HMAC key (GEODE_MIGRATION_HMAC_KEY env var or <dir>/.hmac_key file).\n" ++
-                "Created migrations are automatically signed unless --no-sign is specified.\n" ++
+                "Requires an HMAC key (GEODE_MIGRATION_HMAC_KEY env var, 64 hex characters, or\n" ++
+                "<dir>/.hmac_key): the created migration is signed with it. Without a key the\n" ++
+                "command fails and writes nothing, unless --no-sign is given.\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--dir") and i + 1 < argv.len) {
@@ -1873,15 +1875,23 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // SEC-MIG-03: Use HMAC key for migrate create when available.
-    // If an HMAC key is configured, sign the created migration file.
-    // If no key is configured, create unsigned (operators who want signing
-    // must set up a key via env var or .hmac_key file).
+    // CANARY: REQ=REQ-SONNY-6430-MIGRATE-CREATE-SIGNED; FEATURE="Migrations"; ASPECT=NoKeyNoFile; STATUS=TESTED; TEST=tests/test_sonny6430_cli_fail_closed.zig; OWNER=cli; UPDATED=2026-11-12
+    // SEC-MIG-03: the created migration is signed with the HMAC key, which
+    // is required. SONNY-6430: with no key configured this created an
+    // unsigned file and exited 0, though the help (and SEC-MIG-03's
+    // resolution) said the key is required. --no-sign is the explicit way
+    // to create an unsigned file.
     var hmac_key_buf: [32]u8 = undefined;
     var hmac_key_ptr: ?*const [32]u8 = null;
     if (!no_sign) {
         hmac_key_ptr = loadMigrationHmacKey(&hmac_key_buf, migrations_dir, allocator);
-        // If no key is configured, proceed without signing (graceful degradation)
+        if (hmac_key_ptr == null) {
+            std.debug.print("Error: No HMAC key to sign the migration with; nothing was created.\n" ++
+                "  Set GEODE_MIGRATION_HMAC_KEY (64 hex chars), or\n" ++
+                "  create {s}/.hmac_key, or\n" ++
+                "  use --no-sign to create an unsigned migration (dev only).\n", .{migrations_dir});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
     }
 
     // Validate migration name for path traversal (GAP-0285/0301)
@@ -1972,19 +1982,23 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
-    printStdout("Created migration file: {s}\n", .{filename});
-
-    // SEC-MIG-03: Auto-sign the newly created migration file
+    // SEC-MIG-03: sign the newly created migration file
     if (hmac_key_ptr) |key| {
         const cfg = migration.MigrationConfig{
             .migrations_dir = migrations_dir,
             .hmac_key = key,
         };
         migration.signMigrationFile(allocator, cfg, basename) catch |err| {
-            std.debug.print("Warning: Failed to auto-sign migration: {}\n", .{err});
+            // SONNY-6430: no unsigned file is left behind.
+            std.Io.Dir.cwd().deleteFile(io_wf, filename) catch {};
+            std.debug.print("Error: Failed to sign the migration ({}); nothing was created.\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
+        printStdout("Created migration file: {s}\n", .{filename});
         printStdout("  Signed: {s}\n", .{basename});
+    } else {
+        printStdout("Created migration file: {s}\n", .{filename});
+        printStdout("  Not signed (--no-sign): unsigned; `geode migrate run` refuses it without --allow-unsigned\n", .{});
     }
 
     std.process.exit(@intFromEnum(ExitCode.success));

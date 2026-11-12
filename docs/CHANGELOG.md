@@ -1662,6 +1662,20 @@
 
 ### Fixed
 
+- **`geode storage verify` checks the server's data directory, and `geode
+  migrate create` refuses to write an unsigned migration without a key
+  (SONNY-6430 items 6 and 8).** `storage verify` used the in-memory store
+  `getGlobalStore` gives with no `GEODE_DATA_DIR` (it ignored
+  `--data-dir`), printed PASS for nothing, and its verbose form exited 0
+  when the check failed. It now opens the directory `geode serve` opens
+  (`--data-dir`, else `GEODE_DATA_DIR`, else the per-user default), names
+  it, takes the data directory's lock, reports the node count, and exits 1
+  on any failure. `migrate create` with no `GEODE_MIGRATION_HMAC_KEY` and no
+  `.hmac_key` wrote an unsigned file and exited 0, although its help said
+  the key is required (SEC-MIG-03); it now exits 1 and writes nothing, and
+  `--no-sign` is the explicit way to create an unsigned file. A file whose
+  signing fails is removed. Regression:
+  `zig build test-sonny6430-cli-fail-closed`.
 - **`geode backup create --server` bounds the whole transfer by `--timeout`
   (SONNY-6430 item 1, partial).** Each 64 KiB chunk of a remote backup had
   a fixed 30 s wait of its own, whatever `--timeout` said, so a backup that
