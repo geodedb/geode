@@ -12796,6 +12796,15 @@ pub fn build(b: *std.Build) void {
     const sonny6268_step = b.step("test-sonny6268-graph-store-failure-atomicity", "Run SONNY-6268 regression (allocation-failure sweep over the graph store's node, label and edge primitives, in memory and with a storage adapter: a failed create, property SET/REMOVE, label add/remove or delete leaves the store unchanged, reports the failure, leaks nothing, and the retry succeeds)");
     sonny6268_step.dependOn(&run_sonny6268_tests.step);
 
+    const sonny6274_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6274_fle_catalog_no_tmp.zig"), .target = target, .optimize = optimize });
+    sonny6274_test_mod.addImport("geode", root_mod);
+    sonny6274_test_mod.link_libc = true; // setenv/unsetenv/umask
+    const sonny6274_tests = b.addTest(.{ .root_module = sonny6274_test_mod });
+    const run_sonny6274_tests = b.addRunArtifact(sonny6274_tests);
+    shardDep(test_step, &run_sonny6274_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6274_step = b.step("test-sonny6274-fle-catalog-no-tmp", "Run SONNY-6274 regression (with no data directory the FLE catalog is in memory and never reads or writes /tmp/geode_fle_catalog.dat; with one it lives in the store's data directory, mode 0600, across a restart; a symbolic link at the catalog path is neither read nor written through)");
+    sonny6274_step.dependOn(&run_sonny6274_tests.step);
+
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once
     // per candidate row (RC-6, O(N^2) query), and the backfill reports no indexed
