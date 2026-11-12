@@ -725,6 +725,19 @@
 
 ### Fixed
 
+- **A CLI command fails on a data directory it cannot open instead of
+  working on an empty in-memory store (SONNY-6422 item 6).** A command that
+  reached the store through `getGlobalStore` with a data directory
+  (`GEODE_DATA_DIR`) but no `initGlobalStore` opened the storage adapter in
+  `graph_store.syncGlobalAdapterForDataDir`, and when that failed logged a
+  warning and carried on in memory: `geode storage verify --check
+  graph_store` printed `{"graph_store_ok":true,"node_count":0}` for a
+  directory it never opened. That path now exits 1 with `Error: cannot open
+  the data directory <dir> (<reason>); refusing to continue on an empty
+  in-memory store.` The offline auth, API-key and tenant commands
+  (`initCliAuthManager`) fell back the same way when `initGlobalStore`
+  failed; they now report the directory and the error and change nothing.
+  Regression: `zig build test-sonny6422-cli-data-dir-fail-closed`.
 - **The long write suites finish in minutes on a loaded host
   (SONNY-6333).** `tests/sonny738_write_harness.zig` opens, writes, reloads
   and closes a persisted store for every case in three sessions; on a

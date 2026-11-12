@@ -298,11 +298,12 @@ pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !
     // saveIfDirty actually persists node/edge data to disk.  Without the
     // adapter, saveToFile is a no-op and user mutations are lost between
     // CLI invocations (GAP-0266).
+    // SONNY-6422: a data directory that cannot be opened is an error. This
+    // fell back to an empty in-memory store, so the command ran against no
+    // users and its changes were discarded at exit.
     const store = graph_store.initGlobalStore(allocator, resolved_dir) catch |err| {
-        // Fall back to getGlobalStore if adapter init fails (e.g., permissions)
-        graph_store.setDataDirOverride(allocator, resolved_dir);
-        std.log.warn("Failed to init storage adapter for CLI auth (falling back): {}", .{err});
-        return AuthGraphManager.init(allocator, graph_store.getGlobalStore(allocator));
+        std.debug.print("Error: cannot open the data directory {s} ({s}); nothing was changed.\n", .{ resolved_dir, @errorName(err) });
+        return err;
     };
     return AuthGraphManager.init(allocator, store);
 }

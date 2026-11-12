@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T20:31:43.950519225Z",
+  "generated_at": "2026-11-12T20:43:45.061649271Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81256,6 +81256,7 @@
           "aspect": "NoInMemoryFallback",
           "status": "TESTED",
           "files": [
+            "src/graph_store.zig",
             "tests/test_sonny6422_cli_data_dir_fail_closed.zig"
           ],
           "tests": [
@@ -81357,6 +81358,44 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6422-PHANTOM-ONCE-PER-COMMIT",
+      "features": [
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "RangeLookupOncePerCommit",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_phantom_check_once_per_commit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_phantom_check_once_per_commit.zig"
+          ],
+          "benches": [],
+          "owner": "txn",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6422-REMOTE-BACKUP-PROGRESS",
+      "features": [
+        {
+          "feature": "CLI Backup",
+          "aspect": "ProgressPrintedOncePerStep",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6422_remote_backup_progress.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6422_remote_backup_progress.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
           "updated": "2026-11-12"
         }
       ]
@@ -89047,7 +89086,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4603
+      "TESTED": 4605
     },
     "by_aspect": {
       "2PC": 3,
@@ -91789,6 +91828,7 @@
       "ProgramGraphGate": 1,
       "ProgramReadGate": 1,
       "ProgramWriteLock": 1,
+      "ProgressPrintedOncePerStep": 1,
       "ProgressTracking": 2,
       "ProjectionWalker": 1,
       "PrometheusBridge": 1,
@@ -91965,6 +92005,7 @@
       "RandomizedEncryption": 1,
       "RangeCheckedHeaderDecode": 1,
       "RangeLatencyGate": 1,
+      "RangeLookupOncePerCommit": 1,
       "RangeOperatorsFailClosed": 1,
       "RangeOverlap": 1,
       "RangeQueryValidation": 1,
