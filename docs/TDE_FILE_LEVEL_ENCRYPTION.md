@@ -34,6 +34,17 @@ export GEODE_TDE_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 | Key Format           | 64 hexadecimal characters  |
 | Environment Variable | `GEODE_TDE_KEY`            |
 
+A `GEODE_TDE_KEY` that is set but is not exactly 64 hex characters is an
+error, never "no key" (SONNY-6386). `geode serve` refuses to start before it
+creates or opens the data directory, prints `[startup] GEODE_TDE_KEY is set
+but unusable (InvalidKey) ... Refusing to start`, and never prints the value.
+Before this, a malformed key silently opened the store with no page key and
+every page was written in plaintext. A non-empty `GEODE_WAL_KEY` that is not
+64 hex characters is likewise `InvalidKey` (it no longer falls back to
+`GEODE_TDE_KEY`), and the auth-chain HMAC key derivation refuses a
+`GEODE_TDE_KEY` of the wrong length instead of using `.geode_hmac_key`. An
+unset or empty `GEODE_TDE_KEY` still runs without page encryption.
+
 ## Encrypted File Types
 
 ### Index Persistence Files
@@ -148,7 +159,8 @@ For typical index files (kilobytes to megabytes), this overhead is negligible (<
 
 ## Graceful Degradation
 
-When TDE is not configured (`GEODE_TDE_KEY` not set):
+When TDE is not configured (`GEODE_TDE_KEY` not set, or set to the empty
+string; a malformed value refuses startup, see Key Requirements):
 
 - Files are written **unencrypted** (plaintext)
 - Files can be read regardless of encryption state
@@ -227,6 +239,7 @@ zig build test
 | `InvalidMagic`     | File not TDE-encrypted or corrupted  | Check if file was created with TDE enabled |
 | `DecryptionFailed` | Wrong key or corrupted data          | Verify `GEODE_TDE_KEY` matches original    |
 | `KeyNotFound`      | TDE key not configured               | Set `GEODE_TDE_KEY` environment variable   |
+| `InvalidKey` at startup (`GEODE_TDE_KEY is set but unusable`) | `GEODE_TDE_KEY` is not 64 hex characters | Fix the key (`openssl rand -hex 32` for a new store) or unset it |
 
 ### Verifying Encryption
 

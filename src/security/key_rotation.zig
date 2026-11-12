@@ -64,13 +64,18 @@ const Attr = logging.Attr;
 //     keys nothing encrypts with. Scheduling is operator-invoked.
 //   - Re-encryption of existing pages is LAZY (reencryptPage on access /
 //     reencryptBatch on demand). There is no eager full-scan re-encrypt.
-//   - saveState()/loadState() predate the Zig 0.16 std.Io migration; they
-//     are not exercised by test-gap0890.
+//   - The registry is in memory only. It has no production caller: it is
+//     exported from lib.zig and used by tests and a benchmark.
+//   - There is no persistence and no KMS wrapping (SONNY-6386). saveState()
+//     / loadState() predated the Zig 0.16 std.Io migration and never
+//     compiled; loadState could unwrap a persisted envelope only with the
+//     local simulated KMS (a key derived from a seed), and the KMS rotation
+//     method wrapped with the same simulator. Their only tests were in no
+//     build step. They were removed, with the simulator seed and its setter.
 //   - There is no remote-KMS rotation (SONNY-6378). The former method
 //     never compiled (ArrayList.writer() is gone in Zig 0.16), installed an
-//     all-zero key as the active data key, and loadState unwraps envelopes
-//     with the local simulated KMS only, so a remotely wrapped key could not
-//     be reloaded. Nothing called it, and it was removed.
+//     all-zero key as the active data key, and nothing called it; it was
+//     removed.
 
 /// Audit log entry for rotation events
 pub const RotationAuditEntry = struct {
@@ -150,7 +155,6 @@ pub const KeyRegistry = struct {
     rollback_state: RollbackState,
     // persisted state path (optional)
     state_path: ?[]const u8 = null,
-    kms_seed: ?u64 = null, // deterministic seed for simulated external KMS
     // Version tracking
     current_version: u32 = 1,
 
@@ -163,7 +167,6 @@ pub const KeyRegistry = struct {
                 .pages_to_restore = .empty,
             },
             .state_path = null,
-            .kms_seed = null,
         };
     }
 
@@ -242,10 +245,6 @@ pub const KeyRegistry = struct {
         self.rollback_state.pages_to_restore.clearRetainingCapacity();
     }
 
-    pub fn setKmsSeed(self: *KeyRegistry, seed: u64) void {
-        self.kms_seed = seed;
-    }
-
     /// Load or generate active data key using cryptographically secure random source
     // CANARY: REQ=REQ-KEY-ROTATION-001; FEATURE="SecureKeyGeneration"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
     pub fn loadActiveDataKey(self: *KeyRegistry) !DataKeyRef {
@@ -316,250 +315,6 @@ pub const KeyRegistry = struct {
         self.active = key;
         try self.logAuditEvent(.rotation_completed, if (old) |o| o.id else 0, key.id, .success, 0, null, 0);
         return .{ .old_id = if (old) |o| o.id else 0, .new_id = key.id, .ts = now_epoch, .method = method };
-    }
-
-    /// Rotate key with KMS wrapping using cryptographically secure random source
-    // CANARY: REQ=REQ-KEY-ROTATION-003; FEATURE="SecureKmsKeyRotation"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
-    pub fn rotateWithKms(self: *KeyRegistry) !RotationEvent {
-        if (self.kms_seed == null) return error.KmsNotConfigured;
-        const old = self.active;
-        // Generate plaintext key material using cryptographically secure random
-        var plaintext: [32]u8 = undefined;
-        try cb.Csprng.bytes(&plaintext);
-        // Wrap key using KMS client
-        const kms = @import("external_kms_client.zig");
-        // GAP-0216: Handle potential error from LocalSimulated KMS init
-        var client = try kms.Client.init(self.allocator, self.kms_seed.?);
-        const env = try client.wrap(plaintext);
-        const env_json = try kms.envelopeToJson(env, self.allocator);
-        const key_ref: DataKeyRef = .{
-            .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
-            .created_unix_epoch = compat_timestamp(),
-            .material = plaintext,
-            .envelope_json = env_json,
-            .is_wrapped = true,
-        };
-        try self.history.append(self.allocator, key_ref);
-        self.active = key_ref;
-        return .{ .old_id = if (old) |o| o.id else 0, .new_id = key_ref.id, .ts = compat_timestamp(), .method = .manual };
-    }
-
-    pub fn saveState(self: *KeyRegistry, path: []const u8) !void {
-        var file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = true });
-        defer file.close();
-        var w = file.writer();
-        // Compute checksum over stored representation (envelope JSON if wrapped else plaintext material)
-        var h = try cb.Hash.Stream.init(.sha256);
-        defer h.deinit();
-        for (self.history.items) |entry| {
-            if (entry.is_wrapped and entry.envelope_json) |ej| {
-                try h.update(ej);
-            } else {
-                try h.update(&entry.material);
-            }
-        }
-        var digest: [32]u8 = undefined;
-        _ = try h.final(&digest);
-        var checksum_buf: [16]u8 = undefined;
-        @memcpy(checksum_buf[0..16], digest[0..16]);
-        try w.print("{{\n", .{});
-        try w.print("  \"version\": 1,\n", .{});
-        if (self.active) |a| {
-            try w.print("  \"active_id\": {},\n", .{a.id});
-        } else {
-            try w.print("  \"active_id\": null,\n", .{});
-        }
-        try w.print("  \"checksum\": \"", .{});
-        var i_cs: usize = 0;
-        while (i_cs < 16) : (i_cs += 1) try w.print("{x:0>2}", .{checksum_buf[i_cs]});
-        try w.print("\",\n", .{});
-        try w.print("  \"history\": [\n", .{});
-        var i: usize = 0;
-        while (i < self.history.items.len) : (i += 1) {
-            const hist_entry = self.history.items[i];
-            if (hist_entry.is_wrapped and hist_entry.envelope_json) |ej| {
-                try w.print("    {\"id\":{},\"created\":{},\"envelope\":", .{ hist_entry.id, hist_entry.created_unix_epoch });
-                // envelope JSON already object; write raw
-                try w.print("{s}}}{s}\n", .{ ej, if (i + 1 == self.history.items.len) "" else "," });
-            } else {
-                try w.print("    {\"id\":{},\"created\":{},\"material_hex\":\"", .{ hist_entry.id, hist_entry.created_unix_epoch });
-                for (hist_entry.material) |b| try w.print("{x:0>2}", .{b});
-                try w.print("\"}}{s}\n", .{if (i + 1 == self.history.items.len) "" else ","});
-            }
-        }
-        try w.print("  ]\n}}\n", .{});
-    }
-
-    pub fn loadState(self: *KeyRegistry, path: []const u8) !void {
-        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch |e| switch (e) {
-            error.FileNotFound => return, // nothing to load
-            else => return e,
-        };
-        defer file.close();
-        const data = try file.readToEndAlloc(self.allocator, 1 << 16);
-        defer self.allocator.free(data);
-        // Minimal JSON scan (avoid full parser): find history and active_id tokens
-        // NOT robust JSON; acceptable for internal persistence (documented)
-        var it = std.mem.tokenizeAny(u8, data, "\n\r");
-        var parsed_checksum: [16]u8 = [_]u8{0} ** 16;
-        var have_checksum = false;
-        self.history.clearRetainingCapacity();
-        self.active = null;
-        while (it.next()) |line| {
-            if (std.mem.indexOf(u8, line, "\"active_id\"")) |idx| {
-                const colon = std.mem.indexOfScalarPos(u8, line, idx, ':') orelse continue;
-                const tail = std.mem.trim(u8, line[colon + 1 ..], " \t,");
-                if (!std.mem.startsWith(u8, tail, "null")) {
-                    const id_val = std.fmt.parseInt(u64, tail, 10) catch continue;
-                    // active will be resolved after reading history
-                    self.active = .{ .id = id_val, .created_unix_epoch = 0, .material = [_]u8{0} ** 32, .envelope_json = null, .is_wrapped = false };
-                }
-            } else if (std.mem.indexOf(u8, line, "\"checksum\"")) |_| {
-                // extract checksum hex (first 32 hex chars representing 16 bytes)
-                const first_quote = std.mem.indexOfScalar(u8, line, '"') orelse continue;
-                const second_quote = std.mem.indexOfScalarPos(u8, line, first_quote + 1, '"') orelse continue;
-                const third_quote = std.mem.indexOfScalarPos(u8, line, second_quote + 1, '"') orelse continue;
-                // GAP-0141: Safe hex parsing with proper error handling
-                // CANARY: REQ=REQ-HEX-PARSE-KEYROT-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
-                const fourth_quote = std.mem.indexOfScalarPos(u8, line, third_quote + 1, '"') orelse continue;
-                const hex_slice = line[third_quote + 1 .. fourth_quote];
-                if (hex_slice.len == 32) {
-                    var j: usize = 0;
-                    var checksum_valid = true;
-                    while (j < 16) : (j += 1) {
-                        parsed_checksum[j] = std.fmt.parseInt(u8, hex_slice[j * 2 .. j * 2 + 2], 16) catch {
-                            log.warn("Invalid hex in checksum", &.{
-                                Attr.int("position", @intCast(j * 2)),
-                            });
-                            checksum_valid = false;
-                            break;
-                        };
-                    }
-                    have_checksum = checksum_valid;
-                }
-            } else if (std.mem.indexOf(u8, line, "\"id\"")) |idx2| {
-                // parse history entry line simplistic
-                if (std.mem.indexOf(u8, line, "material_hex")) |_| {
-                    // Extract id
-                    const id_colon = std.mem.indexOfScalarPos(u8, line, idx2, ':') orelse continue;
-                    const after = std.mem.trim(u8, line[id_colon + 1 ..], " \t,");
-                    const id_end = std.mem.indexOfScalar(u8, after, ',') orelse continue;
-                    const id_slice = after[0..id_end];
-                    const id_parsed = std.fmt.parseInt(u64, id_slice, 10) catch continue;
-                    // created
-                    const created_pos = std.mem.indexOf(u8, line, "\"created\"") orelse continue;
-                    const created_colon = std.mem.indexOfScalarPos(u8, line, created_pos, ':') orelse continue;
-                    const created_after = std.mem.trim(u8, line[created_colon + 1 ..], " \t,");
-                    const created_end = std.mem.indexOfScalar(u8, created_after, ',') orelse continue;
-                    const created_slice = created_after[0..created_end];
-                    const created_parsed = std.fmt.parseInt(i64, created_slice, 10) catch continue;
-                    // hex material
-                    const hex_quote = std.mem.lastIndexOfScalar(u8, line, '"') orelse continue;
-                    const second_last_quote = blk: {
-                        var j: usize = hex_quote - 1;
-                        while (true) : (j -= 1) {
-                            if (line[j] == '"') break :blk j;
-                            if (j == 0) break :blk 0;
-                        }
-                    };
-                    // GAP-0141: Safe hex parsing with proper error handling
-                    // CANARY: REQ=REQ-HEX-PARSE-KEYROT-002; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
-                    const hex_slice = line[second_last_quote + 1 .. hex_quote];
-                    if (hex_slice.len == 64) {
-                        var material: [32]u8 = undefined;
-                        var k: usize = 0;
-                        var material_valid = true;
-                        while (k < 32) : (k += 1) {
-                            material[k] = std.fmt.parseInt(u8, hex_slice[k * 2 .. k * 2 + 2], 16) catch {
-                                log.warn("Invalid hex in key material", &.{
-                                    Attr.int("position", @intCast(k * 2)),
-                                });
-                                material_valid = false;
-                                break;
-                            };
-                        }
-                        if (material_valid) {
-                            const entry = DataKeyRef{ .id = id_parsed, .created_unix_epoch = created_parsed, .material = material, .envelope_json = null, .is_wrapped = false };
-                            try self.history.append(self.allocator, entry);
-                        }
-                    }
-                } else if (std.mem.indexOf(u8, line, "\"envelope\"")) |_| {
-                    // expect envelope JSON starts after : and may span single line
-                    const id_colon = std.mem.indexOfScalarPos(u8, line, idx2, ':') orelse continue;
-                    const after = std.mem.trim(u8, line[id_colon + 1 ..], " \t,");
-                    const id_end = std.mem.indexOfScalar(u8, after, ',') orelse continue;
-                    const id_slice = after[0..id_end];
-                    const id_parsed = std.fmt.parseInt(u64, id_slice, 10) catch continue;
-                    const created_pos = std.mem.indexOf(u8, line, "\"created\"") orelse continue;
-                    const created_colon = std.mem.indexOfScalarPos(u8, line, created_pos, ':') orelse continue;
-                    const created_after = std.mem.trim(u8, line[created_colon + 1 ..], " \t,");
-                    const created_end = std.mem.indexOfScalar(u8, created_after, ',') orelse continue;
-                    const created_slice = created_after[0..created_end];
-                    const created_parsed = std.fmt.parseInt(i64, created_slice, 10) catch continue;
-                    // envelope raw JSON object assumed to follow "envelope":{ ... }}
-                    const env_start = std.mem.indexOf(u8, line, "{\"version\"") orelse continue;
-                    const env_end = std.mem.lastIndexOfScalar(u8, line, '}') orelse continue;
-                    const env_slice = line[env_start .. env_end + 1];
-                    const env_copy = try self.allocator.alloc(u8, env_slice.len);
-                    @memcpy(env_copy, env_slice);
-                    // unwrap if kms_seed configured
-                    var material: [32]u8 = [_]u8{0} ** 32;
-                    var wrapped_flag = true;
-                    if (self.kms_seed) |seed| {
-                        const kms = @import("external_kms_client.zig");
-                        // GAP-0216: Handle potential error from LocalSimulated KMS init
-                        var client = kms.Client.init(self.allocator, seed) catch {
-                            wrapped_flag = false; // KMS init failed (production block)
-                            continue;
-                        };
-                        const parsed = kms.envelopeFromJson(env_slice) catch {
-                            wrapped_flag = false; // mark invalid
-                            continue;
-                        };
-                        const plain = client.unwrap(parsed) catch {
-                            wrapped_flag = false;
-                            continue;
-                        };
-                        material = plain;
-                    } else {
-                        // KMS not configured; leave material zero; caller must unwrap later
-                        wrapped_flag = true;
-                    }
-                    const entry = DataKeyRef{ .id = id_parsed, .created_unix_epoch = created_parsed, .material = material, .envelope_json = env_copy, .is_wrapped = wrapped_flag };
-                    try self.history.append(self.allocator, entry);
-                }
-            }
-        }
-        if (self.active) |act| {
-            // match active id to history entry
-            var found: ?DataKeyRef = null;
-            for (self.history.items) |h| if (h.id == act.id) {
-                found = h;
-                break;
-            };
-            if (found) |f| self.active = f else self.active = null;
-        }
-        if (have_checksum) {
-            // verify checksum matches current history
-            var h2 = try cb.Hash.Stream.init(.sha256);
-            defer h2.deinit();
-            for (self.history.items) |entry| {
-                if (entry.is_wrapped and entry.envelope_json) |ej| try h2.update(ej) else try h2.update(&entry.material);
-            }
-            var digest2: [32]u8 = undefined;
-            _ = try h2.final(&digest2);
-            var mismatch = false;
-            var k: usize = 0;
-            while (k < 16) : (k += 1) if (digest2[k] != parsed_checksum[k]) {
-                mismatch = true;
-                break;
-            };
-            if (mismatch) {
-                // integrity failure: clear loaded state (treat as no-op load)
-                self.history.clearRetainingCapacity();
-                self.active = null;
-            }
-        }
     }
 
     /// Rotation-eligibility predicate for the operator-invoked scheduler
@@ -726,7 +481,6 @@ pub const KeyRegistry = struct {
     }
 };
 
-// CANARY: REQ=REQ-GQL-SEC-KEYROT-STATE-001; FEATURE="KeyRotationStatePersistence"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave; OWNER=security; UPDATED=2026-01-15
 // Simple unit test for scaffold ensuring rotate increases key id and history grows.
 // CANARY: REQ=REQ-GQL-SEC-KEYROT-001; FEATURE="KeyRotationScaffold"; ASPECT=TEST; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 test "key rotation scaffold increments id" {

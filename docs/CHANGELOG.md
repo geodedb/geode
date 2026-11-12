@@ -4,6 +4,122 @@
 
 ### Security
 
+- **BREAKING (operator): a set but malformed `GEODE_TDE_KEY` refuses
+  startup instead of writing plaintext pages (SONNY-6386 item 1).**
+  `initGlobalAdapter` loaded the page key with `catch null`, so a value that
+  is not 64 hex characters opened the store with no encryption key and every
+  page (users, roles, data) was written in plaintext while TDE looked
+  configured. `geode serve` now checks the key before it creates or opens
+  the data directory and exits with `[startup] GEODE_TDE_KEY is set but
+  unusable (InvalidKey) ... Refusing to start ... Nothing was written`,
+  never printing the value; the adapter itself returns `InvalidKey`. The
+  same swallow is fixed in two other loaders: a non-empty `GEODE_WAL_KEY`
+  that is not 64 hex characters is `InvalidKey` (it fell back to
+  `GEODE_TDE_KEY` or plaintext), and the auth-chain HMAC key resolver
+  refuses a `GEODE_TDE_KEY` of the wrong length (`HmacKeyInvalid`) instead
+  of sealing with `.geode_hmac_key`. An unset or empty `GEODE_TDE_KEY`
+  behaves as before. `docs/TDE_FILE_LEVEL_ENCRYPTION.md` documents it.
+  Regression: `zig build test-sonny6386-tde-key-fail-closed`.
+- **BREAKING (operator): `geode fle rotate-key` refuses as unsupported
+  instead of reporting a rotation it did not perform (SONNY-6386 item 2).**
+  The CLI built a throwaway in-memory key manager from `GEODE_MASTER_KEY`,
+  bumped a version in it, printed `Rotated FEK ... to version 2` (or
+  `Rewrapped SK/TRK`) and exited 0; nothing was persisted and no field value
+  was re-encrypted. `fle_commands.rotateKey` printed `TRK/SK/FEK rotation
+  complete. New key version active.` without touching a key. Both now exit
+  non-zero (`error.Unsupported`) with `FLE key rotation is not supported in
+  this release (SONNY-6387)`, after the usual argument checks; `geode fle
+  --help` says so, and `geode fle show-rotation` no longer reports the TRK
+  as "Active" or a "Last rotation check: Now" that nothing measured. Real
+  rotation is story SONNY-6387. `docs/GAP_ANALYSIS_RESOLVED.md` (GAP-0083,
+  GAP-0004) is corrected. Regression:
+  `zig build test-sonny6386-fle-rotate-key-unsupported`.
+- **`geode backup create --server` writes `--output` atomically and durably
+  (SONNY-6386 item 3).** It opened `--output` with a truncating create,
+  streamed the server's backup into it in place, never synced it, and
+  deleted it when the transfer failed: a previous backup at that path was
+  destroyed as soon as a transfer started (and lost for good if it then
+  failed), and a crash after "Backup completed" could leave a short file
+  under the backup's name. The backup is now received into a private
+  temporary file beside `--output` (`.<name>.tmp-<random>`, 0600, created
+  exclusively), synced, renamed onto `--output`, and the directory is
+  synced; a failure removes only the temporary file. `--local` already wrote
+  this way (SONNY-6323). `geode backup create --help` says so. Regression:
+  `zig build test-sonny6386-remote-backup-atomic-output`.
+- **The phantom-prevention overhead claims state the measured cost, not 5%
+  (SONNY-6386 item 9).** `test-canary-txn-phantom-anomaly` and
+  `test-canary-txn-phantom-range` claimed at most 5% per transaction; with
+  the SONNY-2439 methodology the transaction manager measures 27-36% and
+  84-96% in ReleaseFast (61-63% and 54-61% in Debug; ten and three runs), so the enforced perf-gate job
+  failed on them with no product change. Profiling the arms shows the cost is
+  the tracking itself (a hash-map entry and a list allocation per tracking
+  structure, a heap copy of every prefix and range bound, the commit-time
+  scan of the transaction's writes; about 100-125 ns) against synthetic
+  transactions of 120-350 ns that do no storage work, not an accidental scan
+  or lock, and no server path runs it. The bounds are recalibrated per build
+  mode to about 1.3-1.4x the highest median measured (anomaly 50% ReleaseFast
+  / 90% Debug, range 125% / 80%), and
+  `docs/ENHANCED_TRANSACTION_ISOLATION.md` gains a "Phantom prevention
+  overhead" section with the measurements. Regression:
+  `zig build test-sonny6386-phantom-overhead-claims`.
+- **The JSON and scheduler latency bounds are batched perf_gate medians
+  (SONNY-6386 item 6, the part SONNY-2439 left open).** The four claims in
+  `src/performance/test_json_optimization.zig` (parse, serialize, 1000-row
+  streaming, the REQ-PERF-JSON-001 query-result serialization) and
+  `tests/test_performance_optimizations.zig` ("scheduler overhead") were one
+  timed run on `std.testing.allocator`, read with their own clock helpers.
+  They now take 31 batched samples through `tests/perf_gate.zig` from
+  `perf_gate.bench_allocator`, claim on the median and check the robust
+  envelope; correctness checks moved to their own test blocks. The unused
+  `json_optimized_fixed.benchmarkJsonProcessing` is removed. Measured on a
+  shared dev host, ReleaseFast with `GEODE_PERF_GATES=enforce`, three runs
+  each, all passing: parse 1.25-1.31 µs, serialize 2.13-2.23 µs, CANARY
+  serialization 77-80 µs (bounds 100 / 150 / 300 µs), scheduler 736-754 ns
+  per call (bound 10 µs). Regression:
+  `zig build test-sonny6386-latency-bound-methodology`.
+- **`geode restore --hmac-key-file` with `GEODE_TDE_KEY` set: the refusal
+  is documented and explained (SONNY-6386 item 7).** A server with
+  `GEODE_TDE_KEY` set derives its auth-chain HMAC key from it
+  (`GEODE_AUTH_HMAC_KEY` takes precedence) and never reads
+  `.geode_hmac_key`, so restore refuses `--hmac-key-file` alongside either
+  variable (`HmacKeySourceConflict`), and an encrypted backup, which needs
+  `GEODE_TDE_KEY` to decrypt, is always restored with the source server's
+  `GEODE_TDE_KEY` and no key file. The refusal used to read "both are set; a
+  server uses the environment key, so give one"; it now says why, what to
+  do, and that nothing was restored. `geode restore --help`,
+  `docs/GQL_AUTH_DDL.md` ("HMAC key"), `docs/API_REFERENCE.md`,
+  `docs/USAGE.md` and `docs/deployment/DEPLOYMENT.md` say so. Regression:
+  `zig build test-sonny6386-restore-hmac-key-file-with-tde`.
+- **BREAKING (library API): `security.key_rotation.KeyRegistry` loses the
+  uncompiled `saveState` / `loadState` and the simulated-KMS
+  `rotateWithKms` / `setKmsSeed` (SONNY-6386 item 5).** The registry has no
+  production caller (it is exported from `lib.zig` and used by tests and
+  `bench-tde-key-rotate`). The persistence functions predated the Zig 0.16
+  std.Io migration and never compiled; `loadState` could unwrap a persisted
+  envelope only with the local simulated KMS (a key derived from a seed),
+  and `rotateWithKms` wrapped with that simulator. Their only tests
+  (`tests/test_key_rotation_persistence.zig`, `_checksum.zig`,
+  `_kms_envelopes.zig`) were in no build step and are removed. The markers
+  that cited them are corrected: REQ-GQL-SEC-KEYROT-STATE-001 is removed;
+  REQ-GQL-KMS-BACKEND-001, -CONFIG-001, REQ-KMS-TLS-SAFETY-001 and
+  REQ-HEX-PARSE-001 are TESTED against new tests of the KMS production
+  guards and envelope hex parsing, REQ-GQL-KMS-LOCALSIM-001 against
+  `test-external-kms-provider`, and REQ-GQL-TDE-VAULT-001 / -AWS-001 (the
+  Vault and AWS network clients, which no test reaches) are IMPL.
+  `docs/DESIGN_TDE_KMS.md` no longer lists rotation persistence as
+  implemented. Regression: `zig build test-sonny6386-key-rotation-truth`.
+- **Dead mock test removed and stale architecture docs corrected
+  (SONNY-6386 items 4 and 8).** `tests/test_backup_integration.zig`
+  redefined `BackupConfig`, `BackupType`, `BackupMetadata` and a backup
+  manager inside the test and tested those copies; no build step compiled
+  it, and its CANARY (REQ-GQL-201, TESTED) claimed evidence for code it never
+  touched. It is removed (`git rm`), with its status rows.
+  `docs/CURRENT_ARCHITECTURE.md` described the backup path as "S3 Upload →
+  Encryption → Compression" (no command uploads to object storage, and the
+  payload is compressed before it is encrypted) and the language as Zig
+  0.15.1+; it now describes the real path, files and tests and Zig 0.16.0+.
+  The SONNY-2441 entry below no longer claims a `test-tde-kms-integration`
+  run. Regression: `zig build test-sonny6386-dead-mock-and-stale-docs`.
 - **BREAKING (operator): backups are encrypted under `GEODE_TDE_KEY` when it
   is set (SONNY-6355 items 1, 2, 5, 6).** `BackupManager` has encrypted the
   payload with AES-256-GCM under `GEODE_TDE_KEY` (and every restore path
@@ -81,11 +197,13 @@
   files no build step compiled. The provider, `remoteKMSProvider`,
   `createRemoteKMSTDE` and the `KMSConfig` port/remote-timeout fields are
   removed; the remote KMS client (`kms_remote.zig`, `test-remote-kms`)
-  stays. `tests/test_kms_provider.zig` and `tests/test_tde_kms_integration.zig`
-  are built and run (`test-kms-provider` 10/10, `test-tde-kms-integration`
-  8/8); building them exposed and fixed two compile errors and three leaks
-  in `TDEKeyManager` (the provider struct and the external-KMS key id were
-  never freed). `docs/KMS_PROVIDER_SYSTEM.md` now says what `KMSProvider`
+  stays. `tests/test_kms_provider.zig` is built and run (`test-kms-provider`
+  10/10). (Correction, SONNY-6386: this entry also said
+  `tests/test_tde_kms_integration.zig` was built and run as a
+  `test-tde-kms-integration` step, 8/8, and that building it fixed two
+  compile errors and three leaks in `TDEKeyManager`. No such step, test or
+  `src/security/tde_kms_integration.zig` exists in this tree: both files
+  were removed as never compiled, SONNY-6298.) `docs/KMS_PROVIDER_SYSTEM.md` now says what `KMSProvider`
   does: local_dev and external_kms only (Vault/AWS/Azure configurations are
   refused), and neither it nor `TDEKeyManager` is used by the server.
   Regression: `zig build test-sonny2441-kms-provider-paths`.

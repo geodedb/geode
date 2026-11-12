@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:50:16.332043707Z",
+  "generated_at": "2026-11-12T19:35:42.814506017Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -36369,25 +36369,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-201",
-      "features": [
-        {
-          "feature": "BackupIntegration",
-          "aspect": "CommandProcessing",
-          "status": "TESTED",
-          "files": [
-            "tests/test_backup_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_201_BackupIntegration"
-          ],
-          "benches": [],
-          "owner": "storage",
-          "updated": "2025-10-03"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-202",
       "features": [
         {
@@ -43665,78 +43646,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-SEC-KEYROT-KMS-001",
-      "features": [
-        {
-          "feature": "KeyRotationKmsEnvelopes",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "tests/test_key_rotation_kms_envelopes.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_KMS_001_Envelopes"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-SEC-KEYROT-STATE-001",
-      "features": [
-        {
-          "feature": "KeyRotationStatePersistence",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "src/security/key_rotation.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-15"
-        },
-        {
-          "feature": "KeyRotationStatePersistence",
-          "aspect": "TEST",
-          "status": "TESTED",
-          "files": [
-            "tests/test_key_rotation_persistence.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave",
-            "TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_NoFile"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-SEC-KEYROT-STATE-CHK-001",
-      "features": [
-        {
-          "feature": "KeyRotationStateChecksum",
-          "aspect": "SECURITY",
-          "status": "TESTED",
-          "files": [
-            "tests/test_key_rotation_checksum.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_SEC_KEYROT_STATE_CHK_001"
-          ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2025-09-26"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-SEC-KMS-001",
       "features": [
         {
@@ -46918,42 +46827,8 @@
             "src/security/external_kms_client.zig"
           ],
           "tests": [
-            "tests/test_key_rotation_kms_envelopes.zig"
+            "tests/test_sonny6386_key_rotation_truth.zig"
           ],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-HEX-PARSE-KEYROT-001",
-      "features": [
-        {
-          "feature": "Safe Hex Parsing",
-          "aspect": "Security",
-          "status": "IMPL",
-          "files": [
-            "src/security/key_rotation.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-HEX-PARSE-KEYROT-002",
-      "features": [
-        {
-          "feature": "Safe Hex Parsing",
-          "aspect": "Security",
-          "status": "IMPL",
-          "files": [
-            "src/security/key_rotation.zig"
-          ],
-          "tests": [],
           "benches": [],
           "owner": "security",
           "updated": "2026-11-12"
@@ -47593,23 +47468,6 @@
       ]
     },
     {
-      "id": "REQ-KEY-ROTATION-003",
-      "features": [
-        {
-          "feature": "SecureKmsKeyRotation",
-          "aspect": "Security",
-          "status": "EXEMPT",
-          "files": [
-            "src/security/key_rotation.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-01-10"
-        }
-      ]
-    },
-    {
       "id": "REQ-KMS-REMOTE-CLIENT-001",
       "features": [
         {
@@ -47774,11 +47632,11 @@
             "src/security/external_kms_client.zig"
           ],
           "tests": [
-            "tests/test_key_rotation_kms_envelopes.zig"
+            "tests/test_sonny6386_key_rotation_truth.zig"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-01-15"
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -58661,7 +58519,7 @@
           ],
           "benches": [],
           "owner": "performance",
-          "updated": "2025-10-04"
+          "updated": "2026-11-12"
         },
         {
           "feature": "OptimizedJSON",
@@ -81283,6 +81141,174 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6386-DEAD-MOCK-STALE-DOCS",
+      "features": [
+        {
+          "feature": "Test Hygiene",
+          "aspect": "NoMockBackupTestNoStaleArchitectureDocs",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_dead_mock_and_stale_docs.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_dead_mock_and_stale_docs.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "RotateKeyRefusedAsUnsupported",
+          "status": "TESTED",
+          "files": [
+            "src/admin/fle_commands.zig",
+            "tests/test_sonny6386_fle_rotate_key_unsupported.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_fle_rotate_key_unsupported.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6386-KEYROT-TRUTH",
+      "features": [
+        {
+          "feature": "KeyRotation",
+          "aspect": "NoUncompiledPersistenceOrSimulatedKmsClaims",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_key_rotation_truth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_key_rotation_truth.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6386-LATENCY-BOUND-METHODOLOGY",
+      "features": [
+        {
+          "feature": "Perf Gates",
+          "aspect": "JsonAndSchedulerLatencyBoundsBatched",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_latency_bound_methodology.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_latency_bound_methodology.zig"
+          ],
+          "benches": [],
+          "owner": "performance",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6386-PHANTOM-OVERHEAD-CLAIMS",
+      "features": [
+        {
+          "feature": "MVCC Phantom Prevention",
+          "aspect": "OverheadClaimsMatchMeasurement",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_phantom_overhead_claims.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_phantom_overhead_claims.zig"
+          ],
+          "benches": [],
+          "owner": "txn",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC",
+      "features": [
+        {
+          "feature": "CLI Backup",
+          "aspect": "RemoteOutputAtomicDurable",
+          "status": "TESTED",
+          "files": [
+            "src/cli/backup_cli.zig",
+            "tests/test_sonny6386_remote_backup_atomic_output.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_remote_backup_atomic_output.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6386-RESTORE-HMAC-FILE-TDE",
+      "features": [
+        {
+          "feature": "Backup Restore",
+          "aspect": "HmacKeyFileVsTdeKeyExplained",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "TDE baseline",
+          "aspect": "MalformedKeyRefusesStartup",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_tde_key_fail_closed.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_tde_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "TDE baseline",
+          "aspect": "ServerStartupRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/server/server_init.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_tde_key_fail_closed.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -88936,9 +88962,9 @@
     "by_status": {
       "BENCHED": 215,
       "COMPLETE": 2,
-      "EXEMPT": 217,
-      "IMPL": 338,
-      "TESTED": 4595
+      "EXEMPT": 216,
+      "IMPL": 336,
+      "TESTED": 4599
     },
     "by_aspect": {
       "2PC": 3,
@@ -89473,7 +89499,6 @@
       "ColumnSchema": 1,
       "CommaSeparatedMergeChains": 1,
       "CommandDispatch": 2,
-      "CommandProcessing": 1,
       "CommandRouting": 1,
       "Commit": 5,
       "CommitAdvancementVarianceEnvelope": 1,
@@ -90560,6 +90585,7 @@
       "HistogramStats": 1,
       "HistoryPersistence": 1,
       "HitCounter": 1,
+      "HmacKeyFileVsTdeKeyExplained": 1,
       "HomogeneousDetection": 1,
       "HomogeneousNodes": 1,
       "HomogeneousOperations": 1,
@@ -90710,6 +90736,7 @@
       "Jan2026Fixes": 1,
       "JoinAuditTextUnambiguous": 1,
       "JoinKind": 1,
+      "JsonAndSchedulerLatencyBoundsBatched": 1,
       "JsonFieldExtraction": 1,
       "JsonMemberAccess": 1,
       "JsonNumbers": 1,
@@ -90915,6 +90942,7 @@
       "Main": 4,
       "MainImports": 1,
       "MalformedEnvelope": 1,
+      "MalformedKeyRefusesStartup": 1,
       "Management": 1,
       "ManagerRestoreIsStaged": 1,
       "MandatoryEnforcement": 1,
@@ -91137,6 +91165,7 @@
       "NoLeakOnInitDeinit": 1,
       "NoLegacyAlias": 1,
       "NoMatchAll": 1,
+      "NoMockBackupTestNoStaleArchitectureDocs": 1,
       "NoNodeWalk": 1,
       "NoPerEdgePropsPage": 1,
       "NoPlaintextFallback": 1,
@@ -91149,6 +91178,7 @@
       "NoSaveOperations": 2,
       "NoSilentResubmission": 1,
       "NoTmpCertFallback": 1,
+      "NoUncompiledPersistenceOrSimulatedKmsClaims": 1,
       "NodeCache": 1,
       "NodeCapture": 1,
       "NodeCompare": 1,
@@ -91284,6 +91314,7 @@
       "OverCapErrorIdentity": 1,
       "OverCapErrorMapping": 1,
       "OverflowPrevention": 1,
+      "OverheadClaimsMatchMeasurement": 1,
       "OverlapAndContains": 1,
       "OverlongStoredPolicy": 1,
       "OversizedValueErrorMapping": 1,
@@ -91936,6 +91967,7 @@
       "RemainingCategories": 1,
       "RemoteBackup": 1,
       "RemoteFailureIsAnError": 1,
+      "RemoteOutputAtomicDurable": 1,
       "RemoteQuery": 1,
       "RemoteRestore": 1,
       "Remove": 2,
@@ -92044,6 +92076,7 @@
       "RollbackToSavepoint": 1,
       "RollbackTransaction": 2,
       "RollbackUseGraphStore": 1,
+      "RotateKeyRefusedAsUnsupported": 1,
       "Rotation": 1,
       "RotationTesting": 1,
       "Round19UndoRegression": 1,
@@ -92070,7 +92103,7 @@
       "SCC_WRAPPER": 1,
       "SCHEMA": 2,
       "SEARCH": 2,
-      "SECURITY": 41,
+      "SECURITY": 38,
       "SERVER_INIT": 1,
       "SERVER_STATE": 1,
       "SERVER_STATE_STRUCT": 1,
@@ -92129,7 +92162,7 @@
       "SecondsPrecisionDeclaration": 1,
       "SecureConnection": 1,
       "SecureDefaults": 1,
-      "Security": 52,
+      "Security": 49,
       "SecurityAudit": 3,
       "SecurityBatch2": 1,
       "SecurityBoundaries": 1,
@@ -92189,6 +92222,7 @@
       "ServerStartup": 5,
       "ServerStartupCache": 1,
       "ServerStartupCatalog": 1,
+      "ServerStartupRefusal": 1,
       "ServerStderrPassThrough": 1,
       "ServerUnpack": 1,
       "ServerValidation": 2,
@@ -92487,7 +92521,7 @@
       "SyslogTests": 1,
       "TDE": 2,
       "TDERotationVarianceEnvelope": 1,
-      "TEST": 13,
+      "TEST": 12,
       "TESTING": 13,
       "TLS": 1,
       "TLSConnection": 1,

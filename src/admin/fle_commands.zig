@@ -45,6 +45,9 @@ const annotations = @import("../schema/annotations.zig");
 
 // Field-Level Encryption Admin Commands
 // CANARY: REQ=REQ-FLE-ADMIN-001; FEATURE="FieldLevelEncryption"; ASPECT=ADMIN; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
+// SONNY-6386: rotateKey no longer fabricates a rotation (it refuses as
+// unsupported, REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED); this marker stays IMPL
+// for grant/revoke/migrate/show, which have no executed test here.
 
 /// Admin CLI commands for Field-Level Encryption management
 /// Provides commands for key rotation, policy management, and migration
@@ -339,68 +342,39 @@ fn buildAAD(
     });
 }
 
-/// Execute key rotation command
+// CANARY: REQ=REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED; FEATURE="FieldLevelEncryption"; ASPECT=RotateKeyRefusedAsUnsupported; STATUS=TESTED; TEST=tests/test_sonny6386_fle_rotate_key_unsupported.zig; OWNER=security; UPDATED=2026-11-12
+/// Message for every FLE key-rotation entry point until real rotation
+/// (new key version persisted, wrapped keys rewrapped, field values and
+/// blind indexes re-encrypted) exists: story SONNY-6387.
+pub const rotation_unsupported_message =
+    "FLE key rotation is not supported in this release (SONNY-6387): no key was rotated, rewrapped or re-encrypted.";
+
+/// Key rotation request. SONNY-6386: this printed "TRK/SK/FEK rotation
+/// complete. New key version active." without touching any key. The
+/// arguments are still validated (a missing schema or field is
+/// InvalidArguments); a well-formed request is refused with
+/// error.Unsupported until SONNY-6387 implements rotation.
 pub fn rotateKey(allocator: std.mem.Allocator, args: KeyRotationArgs) !void {
-    const catalog = try fle_catalog.globalCatalog(allocator);
-    _ = catalog; // Catalog accessed for validation
-
-    std.debug.print("Key Rotation Request\n", .{});
-    std.debug.print("====================\n", .{});
-    std.debug.print("Scope: {s}\n", .{@tagName(args.scope)});
-    std.debug.print("Tenant: {s}\n", .{args.tenant_id});
-
-    if (args.schema_name) |schema| {
-        std.debug.print("Schema: {s}\n", .{schema});
-    }
-    if (args.field_name) |field| {
-        std.debug.print("Field: {s}\n", .{field});
-    }
-
-    // Key rotation steps based on scope
+    _ = allocator;
     switch (args.scope) {
-        .trk => {
-            // Tenant Root Key rotation
-            std.debug.print("\nRotating Tenant Root Key (TRK)...\n", .{});
-            std.debug.print("  1. Generating new TRK version\n", .{});
-            std.debug.print("  2. Re-encrypting all Schema Keys (SK) with new TRK\n", .{});
-            std.debug.print("  3. Marking old TRK version for deprecation\n", .{});
-            std.debug.print("TRK rotation complete. New key version active.\n", .{});
-        },
-        .sk => {
-            // Schema Key rotation
-            if (args.schema_name) |schema| {
-                std.debug.print("\nRotating Schema Key (SK) for '{s}'...\n", .{schema});
-                std.debug.print("  1. Generating new SK version\n", .{});
-                std.debug.print("  2. Re-encrypting all Field Encryption Keys (FEK) with new SK\n", .{});
-                std.debug.print("  3. Marking old SK version for deprecation\n", .{});
-                std.debug.print("SK rotation complete for schema '{s}'.\n", .{schema});
-            } else {
-                std.debug.print("Error: Schema name required for SK rotation\n", .{});
-                return error.InvalidArguments;
-            }
+        .trk => {},
+        .sk => if (args.schema_name == null) {
+            std.debug.print("Error: Schema name required for SK rotation\n", .{});
+            return error.InvalidArguments;
         },
         .fek => {
-            // Field Encryption Key rotation (requires data re-encryption)
-            if (args.schema_name) |schema| {
-                if (args.field_name) |field| {
-                    std.debug.print("\nRotating Field Encryption Key (FEK) for '{s}.{s}'...\n", .{ schema, field });
-                    std.debug.print("  1. Generating new FEK version\n", .{});
-                    std.debug.print("  2. Re-encrypting all field values with new FEK\n", .{});
-                    std.debug.print("  3. Updating blind indexes if searchable\n", .{});
-                    std.debug.print("  4. Marking old FEK version for deprecation\n", .{});
-                    std.debug.print("FEK rotation complete for field '{s}.{s}'.\n", .{ schema, field });
-                } else {
-                    std.debug.print("Error: Field name required for FEK rotation\n", .{});
-                    return error.InvalidArguments;
-                }
-            } else {
+            if (args.schema_name == null) {
                 std.debug.print("Error: Schema name required for FEK rotation\n", .{});
                 return error.InvalidArguments;
             }
+            if (args.field_name == null) {
+                std.debug.print("Error: Field name required for FEK rotation\n", .{});
+                return error.InvalidArguments;
+            }
         },
     }
-
-    std.debug.print("\nNote: Full key rotation with data re-encryption requires storage engine integration.\n", .{});
+    std.debug.print("Error: {s}\n", .{rotation_unsupported_message});
+    return error.Unsupported;
 }
 
 /// Grant plaintext read permission for a field
@@ -577,15 +551,14 @@ pub fn showRotationStatus(allocator: std.mem.Allocator, tenant_id: []const u8) !
     const type_count = catalog.count();
     if (type_count == 0) {
         std.debug.print("No encrypted schemas registered.\n", .{});
+        std.debug.print("Key rotation: not supported in this release (SONNY-6387); no rotation has been performed.\n", .{});
         return;
     }
 
     std.debug.print("Registered encrypted schemas: {d}\n", .{type_count});
-    std.debug.print("Key rotation tracking:\n", .{});
-    std.debug.print("  - Tenant Root Key (TRK): Active\n", .{});
-    std.debug.print("  - Schema Keys (SK): {d} active\n", .{type_count});
-    std.debug.print("  - Last rotation check: Now\n", .{});
-    std.debug.print("\nNote: Full key rotation history requires audit log integration.\n", .{});
+    // SONNY-6386: this printed "TRK: Active" and "Last rotation check: Now",
+    // which nothing measured. No rotation exists to report.
+    std.debug.print("Key rotation: not supported in this release (SONNY-6387); no rotation has been performed.\n", .{});
 }
 
 /// Show policy status for encrypted fields
@@ -724,7 +697,7 @@ pub fn executeCommand(allocator: std.mem.Allocator, args: []const []const u8) !v
 fn printUsage() void {
     std.debug.print("Geode Field-Level Encryption Admin Commands:\n\n", .{});
     std.debug.print("  geode fle rotate-key <tenant> <scope> <schema> [field]\n", .{});
-    std.debug.print("    Rotate encryption keys (scope: fek, sk, or trk)\n\n", .{});
+    std.debug.print("    not supported in this release (SONNY-6387); refused with an error\n\n", .{});
     std.debug.print("  geode fle grant-plaintext <schema> <field> <role>\n", .{});
     std.debug.print("    Grant plaintext read permission to a role\n\n", .{});
     std.debug.print("  geode fle revoke-plaintext <schema> <field> <role>\n", .{});

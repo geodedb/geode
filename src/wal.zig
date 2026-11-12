@@ -130,6 +130,9 @@ pub const WalRecord = union(WalOpType) {
 
 /// Load the WAL encryption key. Checks GEODE_WAL_KEY first (WAL-specific key),
 /// then falls back to GEODE_TDE_KEY. Returns null if neither is set.
+/// SONNY-6386: a non-empty GEODE_WAL_KEY that is not 64 hex characters is
+/// InvalidKey; it used to be skipped, so the WAL fell back to GEODE_TDE_KEY
+/// or, with that unset, was written in plaintext.
 fn loadWalKey(allocator: std.mem.Allocator) !?[32]u8 {
     // Try WAL-specific key first
     const wal_hex = getEnvVarOwned(allocator, "GEODE_WAL_KEY") catch |e| switch (e) {
@@ -138,6 +141,7 @@ fn loadWalKey(allocator: std.mem.Allocator) !?[32]u8 {
     };
     if (wal_hex) |hex| {
         defer allocator.free(hex);
+        if (hex.len != 0 and hex.len != 64) return tde.TdeError.InvalidKey;
         if (hex.len == 64) {
             var key: [32]u8 = undefined;
             var i: usize = 0;

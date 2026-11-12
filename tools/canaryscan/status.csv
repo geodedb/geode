@@ -2429,7 +2429,6 @@ REQ-GQL-101,Specialized Indexes,DomainTriePersistence,TESTED,src/canary.zig,Test
 REQ-GQL-164,Pattern Comprehension Shorthand,Parser,TESTED,src/gql/parser.zig,,,parser,2025-10-14
 REQ-GQL-165,Pattern Comprehension Execution,Evaluator,TESTED,src/eval.zig,,,eval,2025-10-14
 REQ-GQL-167,Variable-Length Path Binding,Execution,TESTED,src/execution/match_operations.zig,,,execution,2025-10-14
-REQ-GQL-201,BackupIntegration,CommandProcessing,TESTED,tests/test_backup_integration.zig,TestCANARY_REQ_GQL_201_BackupIntegration,,storage,2025-10-03
 REQ-GQL-202,UserManagement,PersistentStorage,TESTED,tests/test_user_management.zig,TestCANARY_REQ_GQL_202_UserManagement,,security,2025-10-04
 REQ-GQL-202,UserManagementComprehensive,Integration,TESTED,tests/test_user_management_comprehensive.zig,TestCANARY_REQ_GQL_202_UserManagementComprehensive,,auth,2025-10-04
 REQ-GQL-202,UserStorage,PersistentStorage,TESTED,src/storage/user_storage.zig,TestCANARY_REQ_GQL_202_UserStorage,,security,2026-02-24
@@ -2876,11 +2875,6 @@ REQ-GQL-SEC-KEYROT-001,KeyRotationScaffold,TEST,IMPL,src/security/key_rotation.z
 REQ-GQL-SEC-KEYROT-002,KeyRotationScheduling,SchedulerTick,TESTED,tests/test_gap0890_rotation_policy.zig,tests/test_gap0890_rotation_policy.zig,,security,2026-06-10
 REQ-GQL-SEC-KEYROT-002,KeyRotationScheduling,Security,TESTED,src/security/key_rotation.zig,tests/test_gap0890_rotation_policy.zig,,security,2026-06-10
 REQ-GQL-SEC-KEYROT-002,KeyRotationScheduling,TEST,TESTED,tests/test_key_rotation_schedule.zig,TestCANARY_REQ_GQL_SEC_KEYROT_002_Schedule,,security,2025-09-26
-REQ-GQL-SEC-KEYROT-KMS-001,KeyRotationKmsEnvelopes,SECURITY,TESTED,tests/test_key_rotation_kms_envelopes.zig,TestCANARY_REQ_GQL_SEC_KEYROT_KMS_001_Envelopes,,security,2026-01-15
-REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,SECURITY,TESTED,src/security/key_rotation.zig,TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave,,security,2026-01-15
-REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,TEST,TESTED,tests/test_key_rotation_persistence.zig,TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave,,security,2025-09-26
-REQ-GQL-SEC-KEYROT-STATE-001,KeyRotationStatePersistence,TEST,TESTED,,TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_NoFile,,security,2025-09-26
-REQ-GQL-SEC-KEYROT-STATE-CHK-001,KeyRotationStateChecksum,SECURITY,TESTED,tests/test_key_rotation_checksum.zig,TestCANARY_REQ_GQL_SEC_KEYROT_STATE_CHK_001,,security,2025-09-26
 REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,src/security/kms.zig,TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider,,security,2025-10-05
 REQ-GQL-SEC-KMS-001,KMSProviderSystem,SECURITY,TESTED,tests/test_kms_provider.zig,tests/test_kms_provider.zig,,security,2025-10-05
 REQ-GQL-SEC-TDE-OVERHEAD-001,TDEEncryptBenchmark,PERFORMANCE,BENCHED,benchmarks/benchmark_tde_encrypt_pages.zig,,BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001,security,2025-09-26
@@ -3077,9 +3071,7 @@ REQ-GROUPED-UNKNOWN-FUNCTION,GroupedProjection,UnknownFunctionEscapes,TESTED,tes
 REQ-GRPC-FULL-ROUTING-001,GrpcFullMessageRouting,HandlerParity,IMPL,src/transport/grpc_server.zig,,,transport,2026-02-13
 REQ-HELPER-001,Helper,Utilities,TESTED,tests/test_gap_0193_batch3_comprehensive.zig,,,core,2026-01-16
 REQ-HELPER-COALESCE-001,Helper,Coalesce,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,builtins,2026-01-16
-REQ-HEX-PARSE-001,Safe Hex Parsing,Security,TESTED,src/security/external_kms_client.zig,tests/test_key_rotation_kms_envelopes.zig,,security,2026-01-15
-REQ-HEX-PARSE-KEYROT-001,Safe Hex Parsing,Security,IMPL,src/security/key_rotation.zig,,,security,2026-11-12
-REQ-HEX-PARSE-KEYROT-002,Safe Hex Parsing,Security,IMPL,src/security/key_rotation.zig,,,security,2026-11-12
+REQ-HEX-PARSE-001,Safe Hex Parsing,Security,TESTED,src/security/external_kms_client.zig,tests/test_sonny6386_key_rotation_truth.zig,,security,2026-11-12
 REQ-HEX-PARSE-KMS-001,Safe Hex Parsing,Security,EXEMPT,src/security/kms_remote.zig,,,security,2026-01-13
 REQ-HEX-PARSE-VAULT-001,Safe Hex Parsing,Security,EXEMPT,src/security/vault_kms_provider.zig,,,security,2026-01-13
 REQ-HNSW-INDEX-OPTIMIZER-ENHANCEMENT-001,Enhanced HNSW Vector Index Integration,DynamicIndexSelection,TESTED,tests/test_hnsw_index_optimizer_enhancement.zig,TestCANARY_REQ_HNSW_INDEX_OPTIMIZER_ENHANCEMENT_001_DynamicIndexSelection,,vector,2025-10-05
@@ -3118,7 +3110,6 @@ REQ-JSON-PARSE-KMS-001,Safe JSON Parsing,Security,TESTED,src/security/kms_remote
 REQ-KEY-ROTATION-001,SecureKeyGeneration,Security,EXEMPT,src/security/key_rotation.zig,,,security,2026-01-10
 REQ-KEY-ROTATION-002,SecureKeyRotation,PolicyEnforcement,TESTED,tests/test_gap0890_rotation_policy.zig,tests/test_gap0890_rotation_policy.zig,,security,2026-06-10
 REQ-KEY-ROTATION-002,SecureKeyRotation,Security,TESTED,src/security/key_rotation.zig,tests/test_gap0890_rotation_policy.zig,,security,2026-06-10
-REQ-KEY-ROTATION-003,SecureKmsKeyRotation,Security,EXEMPT,src/security/key_rotation.zig,,,security,2026-01-10
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,ClosedConnectionFailFast,TESTED,tests/test_sonny2394_kms_client_deadline.zig,TestSONNY2394_KmsClientFailsFastOnClosedConnection,,security,2026-09-23
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,DeadlineConfigRoute,TESTED,tests/test_sonny2394_kms_client_deadline.zig,TestSONNY2394_KmsClientOptionsCarryDeadline,,security,2026-09-24
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,HandshakeBusyServer,TESTED,tests/test_sonny2394_kms_client_deadline.zig,TestSONNY2394_KmsClientHandshakeWaitsOutBusyServer,,security,2026-10-29
@@ -3129,7 +3120,7 @@ REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,ResponseDeadlineWallClock,TESTED,tests
 REQ-KMS-SECURITY-001,KMS,KeyManagement,IMPL,tests/test_gap_0193_batch2_security.zig,,,security,2026-11-12
 REQ-KMS-SECURITY-002,KMS,KeyGeneration,IMPL,tests/test_gap_0193_batch2_security.zig,,,security,2026-11-12
 REQ-KMS-SECURITY-003,KMS,KeyDerivation,IMPL,tests/test_gap_0193_batch2_security.zig,,,security,2026-11-12
-REQ-KMS-TLS-SAFETY-001,KMS TLS Production Guard,Security,TESTED,src/security/external_kms_client.zig,tests/test_key_rotation_kms_envelopes.zig,,security,2026-01-15
+REQ-KMS-TLS-SAFETY-001,KMS TLS Production Guard,Security,TESTED,src/security/external_kms_client.zig,tests/test_sonny6386_key_rotation_truth.zig,,security,2026-11-12
 REQ-LABEL-TAXONOMY-001,GitLab Label Setup,Core,IMPL,tools/setup_gitlab_labels.sh,,,ci,2026-01-14
 REQ-LIB-MIGRATION-CLI-001,External Library Migration,CLIFramework,EXEMPT,src/cli/cli_dispatcher.zig,,,core,2026-01-24
 REQ-LIB-MIGRATION-CLI-002,External Library Migration,ShellCompletions,TESTED,src/cli/cli_dispatcher.zig,test_completion_scripts_use_external_cli_library,,cli,2026-04-01
@@ -3819,7 +3810,7 @@ REQ-PERF-JSON-001,JSONPerformanceImprovement,Benchmarking,EXEMPT,tests/benchmark
 REQ-PERF-JSON-001,JSONPerformanceImprovement,Integration,TESTED,tests/benchmark_json_improvement.zig,TestCANARY_REQ_PERF_JSON_001,,performance,2025-10-04
 REQ-PERF-JSON-001,JSONPerformanceValidation,Integration,TESTED,tests/json_perf_validation.zig,TestCANARY_REQ_PERF_JSON_001,,performance,2025-10-04
 REQ-PERF-JSON-001,JSONPerformanceValidation,Testing,TESTED,tests/json_perf_validation.zig,TestCANARY_JSONPerfValidation,,performance,2025-10-04
-REQ-PERF-JSON-001,OptimizedJSON,Integration,TESTED,src/performance/test_json_optimization.zig,TestCANARY_REQ_PERF_JSON_001,,performance,2025-10-04
+REQ-PERF-JSON-001,OptimizedJSON,Integration,TESTED,src/performance/test_json_optimization.zig,TestCANARY_REQ_PERF_JSON_001,,performance,2026-11-12
 REQ-PERF-JSON-001,OptimizedJSON,Performance,TESTED,src/performance/json_optimized_fixed.zig,TestCANARY_OptimizedJSON,,performance,2025-10-04
 REQ-PERF-JSON-001,OptimizedJSON,Testing,TESTED,src/performance/test_json_optimization.zig,TestCANARY_OptimizedJSON,,performance,2025-10-04
 REQ-PERF-LABEL-INDEX-001,LabelBasedIndex,NodeLookup,TESTED,src/graph_store.zig,tests/test_match_set_label_scan_regression.zig,,perf,2026-04-23
@@ -5214,6 +5205,17 @@ REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME,Embedded LSP,AuthProviderOutlivesSessi
 REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME,Embedded LSP,ListenerOwnsProviderLifetime,TESTED,src/server/main.zig,tests/test_sonny6374_lsp_auth_provider_lifetime.zig,,lsp,2026-11-12
 REQ-SONNY-6374-SERVER-RESIDUALS,Server Hygiene,HelpAbacArgonCanaryDeadCode,TESTED,tests/test_sonny6374_server_residuals.zig,tests/test_sonny6374_server_residuals.zig,,server,2026-11-12
 REQ-SONNY-6378-SERVER-EXIT-HYGIENE,Server Hygiene,ExitLeaksArgonBoundsLoggerDocker,TESTED,tests/test_sonny6378_server_exit_and_hygiene.zig,tests/test_sonny6378_server_exit_and_hygiene.zig,,server,2026-11-12
+REQ-SONNY-6386-DEAD-MOCK-STALE-DOCS,Test Hygiene,NoMockBackupTestNoStaleArchitectureDocs,TESTED,tests/test_sonny6386_dead_mock_and_stale_docs.zig,tests/test_sonny6386_dead_mock_and_stale_docs.zig,,storage,2026-11-12
+REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED,FieldLevelEncryption,RotateKeyRefusedAsUnsupported,TESTED,src/admin/fle_commands.zig,tests/test_sonny6386_fle_rotate_key_unsupported.zig,,security,2026-11-12
+REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED,FieldLevelEncryption,RotateKeyRefusedAsUnsupported,TESTED,tests/test_sonny6386_fle_rotate_key_unsupported.zig,,,security,2026-11-12
+REQ-SONNY-6386-KEYROT-TRUTH,KeyRotation,NoUncompiledPersistenceOrSimulatedKmsClaims,TESTED,tests/test_sonny6386_key_rotation_truth.zig,tests/test_sonny6386_key_rotation_truth.zig,,security,2026-11-12
+REQ-SONNY-6386-LATENCY-BOUND-METHODOLOGY,Perf Gates,JsonAndSchedulerLatencyBoundsBatched,TESTED,tests/test_sonny6386_latency_bound_methodology.zig,tests/test_sonny6386_latency_bound_methodology.zig,,performance,2026-11-12
+REQ-SONNY-6386-PHANTOM-OVERHEAD-CLAIMS,MVCC Phantom Prevention,OverheadClaimsMatchMeasurement,TESTED,tests/test_sonny6386_phantom_overhead_claims.zig,tests/test_sonny6386_phantom_overhead_claims.zig,,txn,2026-11-12
+REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,src/cli/backup_cli.zig,tests/test_sonny6386_remote_backup_atomic_output.zig,,cli,2026-11-12
+REQ-SONNY-6386-REMOTE-BACKUP-ATOMIC,CLI Backup,RemoteOutputAtomicDurable,TESTED,tests/test_sonny6386_remote_backup_atomic_output.zig,,,cli,2026-11-12
+REQ-SONNY-6386-RESTORE-HMAC-FILE-TDE,Backup Restore,HmacKeyFileVsTdeKeyExplained,TESTED,tests/test_sonny6386_restore_hmac_key_file_with_tde.zig,tests/test_sonny6386_restore_hmac_key_file_with_tde.zig,,cli,2026-11-12
+REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED,TDE baseline,MalformedKeyRefusesStartup,TESTED,tests/test_sonny6386_tde_key_fail_closed.zig,tests/test_sonny6386_tde_key_fail_closed.zig,,security,2026-11-12
+REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED,TDE baseline,ServerStartupRefusal,TESTED,src/server/server_init.zig,tests/test_sonny6386_tde_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,TESTED,src/server/cli_args.zig,tests/test_capability_gate.zig,,server,2026-09-08

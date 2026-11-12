@@ -9495,6 +9495,33 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny2439-perf-methodology", "Run SONNY-2439 partial regression (every gated perf claim times with a monotonic clock; the gated benchmarks of test-local code are gone; every step the enforced perf-gate job runs exists)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6386 item 6: the JSON and scheduler latency bounds SONNY-2439 left
+    // open are batched through tests/perf_gate.zig from the production
+    // allocator and claim on the median.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_latency_bound_methodology.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6386_lb_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6386-latency-bound-methodology", "Run SONNY-6386 item 6 regression (the JSON optimization and scheduler-overhead latency bounds sample batches through perf_gate from perf_gate.bench_allocator, take no reading from their own clock, and claim on the median with a robust envelope)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6386 item 9: the phantom-prevention benchmarks claim the measured
+    // overhead (recalibrated per build mode), not 5%, and the doc states it.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_phantom_overhead_claims.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6386_ph_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6386-phantom-overhead-claims", "Run SONNY-6386 item 9 regression (the phantom-range and phantom-anomaly benchmarks claim the overhead bound recalibrated from the measurement, not 5%, and docs/ENHANCED_TRANSACTION_ISOLATION.md states the measured figures and the same bounds)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2441: KMSProvider has no dead remote path, every provider type
     // round-trips the caller's key or refuses, and the KMS tests are built.
     const sonny2441_kms_mod = b.createModule(.{ .root_source_file = b.path("src/security/kms.zig"), .target = target, .optimize = optimize });
@@ -9680,6 +9707,19 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-external-kms-provider", "Run the external KMS client envelope wrap/unwrap and tamper-detection tests (SONNY-6320: registered)").dependOn(&run_tests.step);
+
+        // SONNY-6386 item 5: no uncompiled KeyRegistry persistence or
+        // simulated-KMS rotation, no marker or doc claiming them, and the
+        // external_kms_client guards those markers named, tested for real.
+        const kr_opts = b.addOptions();
+        kr_opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const kr_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_key_rotation_truth.zig"), .target = target, .optimize = optimize });
+        kr_mod.addImport("external_kms_client", ext_kms_mod);
+        kr_mod.addImport("sonny6386_kr_options", kr_opts.createModule());
+        const kr_tests = b.addTest(.{ .root_module = kr_mod });
+        const run_kr_tests = b.addRunArtifact(kr_tests);
+        shardDep(test_step, &run_kr_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6386-key-rotation-truth", "Run SONNY-6386 item 5 regression (KeyRegistry has no uncompiled saveState/loadState or simulated-KMS rotateWithKms and their unbuilt tests are gone; no marker or doc claims them; KMS backend/TLS production guards and envelope JSON hex parsing are tested)").dependOn(&run_kr_tests.step);
     }
 
     // SONNY-6328: a deliberate data race built exactly like the TSan
@@ -9717,6 +9757,21 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6355-dead-backup-tests", "Run SONNY-6355 item 4 regression (no mock S3 backup tests, tests/all_tests.zig imports only existing files, every canaryscan status row names an existing source file)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6386 items 4 and 8: the self-contained mock backup integration
+    // test is gone and nothing cites it; CURRENT_ARCHITECTURE.md and the
+    // CHANGELOG no longer describe an S3 backup path, Zig 0.15 or a
+    // test-tde-kms-integration step.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_dead_mock_and_stale_docs.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6386_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6386-dead-mock-and-stale-docs", "Run SONNY-6386 items 4 and 8 regression (the unbuilt mock backup integration test is removed and no status row cites it; CURRENT_ARCHITECTURE.md describes the real backup path and Zig 0.16; the CHANGELOG does not claim a test-tde-kms-integration run)").dependOn(&run_tests.step);
     }
 
     // SONNY-6322: a backup never holds the audit signing seed; a store
@@ -9800,6 +9855,51 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6342_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6342_step = b.step("test-sonny6342-tde-stub-procedures", "Run SONNY-6342 regression (tde.* key-management stubs are refused as unsupported with TDE on or off; the real TDE self tests still answer; the dead blind-index predicate rewrite is removed)");
     sonny6342_step.dependOn(&run_sonny6342_tests.step);
+    const sonny6386_tde_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_tde_key_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6386_tde_test_mod.link_libc = true;
+    sonny6386_tde_test_mod.addImport("geode", root_mod);
+    sonny6386_tde_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    sonny6386_tde_test_mod.addImport("logging", logging_mod);
+    const sonny6386_tde_tests = b.addTest(.{ .root_module = sonny6386_tde_test_mod });
+    const run_sonny6386_tde_tests = b.addRunArtifact(sonny6386_tde_tests);
+    spawnsBuiltGeode(sonny6386_tde_tests);
+    shardDep(test_step, &run_sonny6386_tde_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6386_tde_step = b.step("test-sonny6386-tde-key-fail-closed", "Run SONNY-6386 item 1 regression (spawns servers: a set but malformed GEODE_TDE_KEY refuses startup, names the variable, never echoes it and creates nothing; the adapter, WAL and HMAC key loaders refuse a malformed key instead of falling back to no encryption or another key)");
+    sonny6386_tde_step.dependOn(&run_sonny6386_tde_tests.step);
+    const sonny6386_fle_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_fle_rotate_key_unsupported.zig"), .target = target, .optimize = optimize });
+    sonny6386_fle_test_mod.link_libc = true;
+    sonny6386_fle_test_mod.addImport("geode", root_mod);
+    const sonny6386_fle_tests = b.addTest(.{ .root_module = sonny6386_fle_test_mod });
+    const run_sonny6386_fle_tests = b.addRunArtifact(sonny6386_fle_tests);
+    spawnsBuiltGeode(sonny6386_fle_tests);
+    shardDep(test_step, &run_sonny6386_fle_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6386_fle_step = b.step("test-sonny6386-fle-rotate-key-unsupported", "Run SONNY-6386 item 2 regression (geode fle rotate-key and fle_commands.rotateKey refuse every scope as unsupported, SONNY-6387, exit non-zero and claim no rotation; fle --help and show-rotation do not advertise or report one)");
+    sonny6386_fle_step.dependOn(&run_sonny6386_fle_tests.step);
+    const sonny6386_rb_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_remote_backup_atomic_output.zig"), .target = target, .optimize = optimize });
+    sonny6386_rb_test_mod.link_libc = true;
+    sonny6386_rb_test_mod.addImport("geode", root_mod);
+    sonny6386_rb_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6386_rb_test_mod.addImport("schema", schema_mod);
+    sonny6386_rb_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6386_rb_test_mod.addImport("storage/backup", storage_backup_mod);
+    const sonny6386_rb_tests = b.addTest(.{ .root_module = sonny6386_rb_test_mod });
+    const run_sonny6386_rb_tests = b.addRunArtifact(sonny6386_rb_tests);
+    spawnsBuiltGeode(sonny6386_rb_tests);
+    shardDep(test_step, &run_sonny6386_rb_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6386_rb_step = b.step("test-sonny6386-remote-backup-atomic-output", "Run SONNY-6386 item 3 regression (spawns a server: geode backup create --server receives into a synced temporary file and renames it onto --output, so a previous backup is never truncated in place, the result is a complete 0600 backup with nothing left beside it, and a failed backup leaves --output untouched)");
+    sonny6386_rb_step.dependOn(&run_sonny6386_rb_tests.step);
+    const sonny6386_rh_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"), .target = target, .optimize = optimize });
+    sonny6386_rh_test_mod.link_libc = true;
+    sonny6386_rh_test_mod.addImport("geode", root_mod);
+    sonny6386_rh_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6386_rh_test_mod.addImport("schema", schema_mod);
+    sonny6386_rh_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6386_rh_tests = b.addTest(.{ .root_module = sonny6386_rh_test_mod });
+    const run_sonny6386_rh_tests = b.addRunArtifact(sonny6386_rh_tests);
+    spawnsBuiltGeode(sonny6386_rh_tests);
+    shardDep(test_step, &run_sonny6386_rh_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6386_rh_step = b.step("test-sonny6386-restore-hmac-key-file-with-tde", "Run SONNY-6386 item 7 regression (spawns a server: geode restore refuses --hmac-key-file with GEODE_TDE_KEY set, explains that the HMAC key is derived from GEODE_TDE_KEY and the key file never read, restores nothing; the help says so; GEODE_TDE_KEY alone restores the encrypted backup)");
+    sonny6386_rh_step.dependOn(&run_sonny6386_rh_tests.step);
     const sonny6342_authn_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"AuthProvider:"} });
     const run_sonny6342_authn_tests = b.addRunArtifact(sonny6342_authn_tests);
     shardDep(test_step, &run_sonny6342_authn_tests.step, 1, test_shard_loads, test_shard_index);

@@ -2724,6 +2724,11 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ### GAP-0083: FLE Key Rotation (Resolved - previously completed)
 
 - **Resolution:** Key rotation with version tracking and re-encryption support
+- **Correction (2026-11-12, SONNY-6386):** not true. Nothing rotated an FLE
+  key: `fle_commands.rotateKey` printed a completed rotation without touching
+  a key, and `geode fle rotate-key` bumped a version in a throwaway in-memory
+  key manager and exited 0 (nothing persisted, no field re-encrypted). Both
+  now refuse as unsupported. Real rotation is story SONNY-6387.
 
 ---
 
@@ -2983,6 +2988,10 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Resolution Evidence:**
   - src/admin/fle_commands.zig — All 6 FLE admin commands implemented:
     - rotateKey() — Key rotation for FEK, SK, and TRK scopes with proper validation
+      (correction 2026-11-12, SONNY-6386: it printed a rotation it did not
+      perform; it now validates its arguments and returns `error.Unsupported`
+      until SONNY-6387, and `showRotationStatus()` no longer reports a TRK as
+      "Active" or a rotation check it never made)
     - grantPlaintext() — Grants READ_PLAINTEXT permission via FLE catalog
     - revokePlaintext() — Revokes READ_PLAINTEXT permission via FLE catalog
     - showRotationStatus() — Displays tenant key rotation status

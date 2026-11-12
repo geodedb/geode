@@ -1,6 +1,5 @@
 const std = @import("std");
 const geode = @import("geode");
-const fle_key_manager = geode.fle_key_manager;
 const fle_commands = geode.fle_commands;
 
 /// FLE command handler
@@ -43,26 +42,29 @@ fn printFLEUsage() void {
         "Usage: geode fle <subcommand> [args...]\n" ++
         "\n" ++
         "Subcommands:\n" ++
-        "  rotate-key <tenant> <scope> [args...]         Rotate encryption keys\n" ++
+        "  rotate-key <tenant> <scope> [args...]         not supported in this release (SONNY-6387):\n" ++
+        "                                                refused with an error; no key is rotated\n" ++
         "     Scopes:\n" ++
-        "       fek <schema> <field>    Rotate Field Encryption Key\n" ++
-        "       sk <schema>             Rewrap Schema Key\n" ++
-        "       trk                     Rewrap Tenant Root Key\n" ++
+        "       fek <schema> <field>    Field Encryption Key\n" ++
+        "       sk <schema>             Schema Key\n" ++
+        "       trk                     Tenant Root Key\n" ++
         "  show-rotation <tenant>                        Show key rotation status\n" ++
         "  show-policy <schema>                          Show encryption policy for schema\n" ++
         "  grant-plaintext <schema> <field> <role>       Grant READ_PLAINTEXT privilege\n" ++
         "  migrate-encrypt <tenant> <schema> <field> [batch_size]  Migrate plaintext to encrypted\n" ++
         "\n" ++
         "Examples:\n" ++
-        "  geode fle rotate-key default fek Person ssn\n" ++
-        "  geode fle rotate-key default sk Person\n" ++
-        "  geode fle rotate-key default trk\n" ++
         "  geode fle show-rotation default\n" ++
         "  geode fle show-policy Person\n" ++
         "  geode fle grant-plaintext Person ssn pii_reader\n" ++
         "\n", .{});
 }
 
+// SONNY-6386: this built a throwaway in-memory KeyManager from
+// GEODE_MASTER_KEY, bumped a version in it, printed "Rotated FEK ... to
+// version N" / "Rewrapped SK/TRK" and exited 0. Nothing was persisted and no
+// field value was re-encrypted. Rotation is refused as unsupported until
+// SONNY-6387 (fle_commands.rotateKey).
 fn handleRotateKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     if (start_idx + 1 >= argv.len) {
         std.debug.print("Error: rotate-key requires: <tenant> <scope> [args...]\n", .{});
@@ -70,39 +72,16 @@ fn handleRotateKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
     }
 
     const tenant = argv[start_idx];
-    const scope = argv[start_idx + 1];
-
-    // Instantiate KeyManager (Offline mode assumption)
-    // In strict enterprise mode, this would require connecting to the server or loading secure config.
-    const manager = try fle_key_manager.initFromEnv(allocator);
-    defer manager.deinit();
-
-    if (std.mem.eql(u8, scope, "fek")) {
-        if (start_idx + 3 >= argv.len) {
-            std.debug.print("Error: rotate-key ... fek requires: <schema> <field>\n", .{});
-            return error.InvalidArguments;
-        }
-        const schema = argv[start_idx + 2];
-        const field = argv[start_idx + 3];
-
-        const new_ver = try manager.rotateFEK(tenant, schema, field);
-        std.debug.print("✓ Rotated FEK for {s}.{s}.{s} to version {d}\n", .{ tenant, schema, field, new_ver });
-    } else if (std.mem.eql(u8, scope, "sk")) {
-        if (start_idx + 2 >= argv.len) {
-            std.debug.print("Error: rotate-key ... sk requires: <schema>\n", .{});
-            return error.InvalidArguments;
-        }
-        const schema = argv[start_idx + 2];
-
-        try fle_key_manager.rewrapSchemaKey(allocator, manager, tenant, schema);
-        std.debug.print("✓ Rewrapped SK for {s}.{s}\n", .{ tenant, schema });
-    } else if (std.mem.eql(u8, scope, "trk")) {
-        try fle_key_manager.rewrapTenantRootKey(allocator, manager, tenant);
-        std.debug.print("✓ Rewrapped TRK for {s}\n", .{tenant});
-    } else {
-        std.debug.print("Error: unknown scope '{s}' (expected: fek, sk, trk)\n", .{scope});
+    const scope = std.meta.stringToEnum(fle_commands.KeyRotationArgs.KeyRotationScope, argv[start_idx + 1]) orelse {
+        std.debug.print("Error: unknown scope '{s}' (expected: fek, sk, trk)\n", .{argv[start_idx + 1]});
         return error.InvalidArguments;
-    }
+    };
+    try fle_commands.rotateKey(allocator, .{
+        .tenant_id = tenant,
+        .scope = scope,
+        .schema_name = if (start_idx + 2 < argv.len) argv[start_idx + 2] else null,
+        .field_name = if (start_idx + 3 < argv.len) argv[start_idx + 3] else null,
+    });
 }
 
 fn handleShowRotation(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {

@@ -614,8 +614,21 @@ test "Performance: thread pool throughput baseline" {
     try testing.expect(throughput >= 1000);
 }
 
+const SchedulerBench = struct {
+    scheduler: *stream_scheduler.StreamScheduler,
+    order: [100]u64 = undefined,
+
+    fn schedule(self: *SchedulerBench) !usize {
+        return self.scheduler.getScheduledStreams(&self.order);
+    }
+};
+
 test "Performance: scheduler overhead" {
-    var scheduler = stream_scheduler.StreamScheduler.init(testing.allocator);
+    // SONNY-6386 (6): batched samples through tests/perf_gate.zig (each
+    // result passed to doNotOptimizeAway, CLOCK_MONOTONIC), the scheduler on
+    // perf_gate.bench_allocator, the claim on the median. It used to be one
+    // 10k-iteration run on the testing allocator, timed with its own clock.
+    var scheduler = stream_scheduler.StreamScheduler.init(perf_gate.bench_allocator);
     defer scheduler.deinit();
 
     // Add many streams
@@ -623,39 +636,32 @@ test "Performance: scheduler overhead" {
         try scheduler.addStream(@intCast(i), 1000);
     }
 
-    const start = compat_nanoTimestamp();
-    const iterations = 10000;
+    var bench: SchedulerBench = .{ .scheduler = &scheduler };
+    _ = try perf_gate.timeBatch(&bench, SchedulerBench.schedule, 10000);
+    var samples: [31]f64 = undefined;
+    try perf_gate.sampleBatches(&bench, SchedulerBench.schedule, 10000, &samples);
+    const r = perf_gate.robust(&samples);
 
-    var order: [100]u64 = undefined;
-    for (0..iterations) |_| {
-        _ = scheduler.getScheduledStreams(&order);
-    }
-
-    const end = compat_nanoTimestamp();
-    const elapsed_ns = end - start;
-    const per_call_ns = @divFloor(elapsed_ns, iterations);
-
-    std.debug.print("\nScheduler overhead: {} ns/call\n", .{per_call_ns});
+    std.debug.print("\nScheduler overhead: median {d:.1} ns/call (rel_iqr {d:.3}, 31 batches of 10000)\n", .{ r.median, r.rel_iqr });
 
     // Should be fast: < 10μs per call in optimized builds. Debug builds
     // (the default for `zig build test-*`) carry ~2-3x overhead, so allow
     // 50μs there — still catches the O(n²)-regression class this test
     // exists for.
     //
-    // This is a wall-clock latency claim on a 10k-iteration microbenchmark,
-    // so it goes through the shared perf gate (tests/perf_gate.zig,
-    // SONNY-2394/2439): reported by default, enforced by the scheduled
-    // `test-perf-gates-enforced` job (ReleaseFast, GEODE_PERF_GATES=enforce).
-    // On the shared CI pools it measured a loaded host, not the scheduler:
-    // the same code took 3.9μs (ReleaseSafe) and 13.6μs (Debug) on an idle
-    // dev box but 10.3-13.4μs (ReleaseSafe, AWS-spot release-safe shard 0)
-    // and 62-179μs (Debug, k8s unit shard 0) in CI, so it failed main's
-    // pipelines with no change to the scheduler.
-    const threshold_ns: i128 = if (@import("builtin").mode == .Debug) 50000 else 10000;
+    // A wall-clock latency claim, so it goes through the shared perf gate
+    // (tests/perf_gate.zig, SONNY-2394/2439): reported by default, enforced
+    // by the scheduled `test-perf-gates-enforced` job (ReleaseFast,
+    // GEODE_PERF_GATES=enforce). On the shared CI pools the former
+    // single-run mean measured a loaded host, not the scheduler: 3.9μs
+    // (ReleaseSafe) and 13.6μs (Debug) on an idle dev box but 10.3-13.4μs
+    // (ReleaseSafe, AWS-spot) and 62-179μs (Debug, k8s) in CI.
+    const threshold_ns: f64 = if (@import("builtin").mode == .Debug) 50000 else 10000;
+    try perf_gate.robustEnvelope("scheduler overhead per getScheduledStreams call (100 streams)", r, 0.30, 2.55);
     try perf_gate.check(
         "scheduler overhead per getScheduledStreams call (100 streams)",
-        per_call_ns < threshold_ns,
-        "per_call_ns={d} (max {d})",
-        .{ per_call_ns, threshold_ns },
+        r.median < threshold_ns,
+        "median_ns={d:.1} (max {d})",
+        .{ r.median, threshold_ns },
     );
 }
