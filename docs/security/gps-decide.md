@@ -12,9 +12,10 @@ All three transport sites (QUIC, gRPC, distributed coordinator) now call
 `derivePrincipal()` instead of each constructing a `Principal` literal
 independently.
 
-`execution.checkPermission()` is now a thin adapter: it builds a
-`DecisionRequest` from the `ExecutionContext` and delegates to `decide()`.
-The function body no longer contains any authorization logic of its own.
+`execution.checkPermission()` was then a thin adapter that built a
+`DecisionRequest` from the `ExecutionContext` and delegated to `decide()`.
+It never gained a caller and was removed in SONNY-2781; the handlers' gates
+call `decide()` (see "What each action enforces").
 
 The two direct `user_mgmt.hasPermission()` calls in
 `src/transport/grpc_server.zig` (formerly at lines 1506 and 2077) have been
@@ -66,8 +67,9 @@ existing CLI/test fixtures that do not pass `--insecure-allow-all`. Phase 3
 will remove this shim and require the explicit flag.
 
 **Closure status:** partially closed. The `decide()` code path is fully
-fail-closed; the `checkPermission` shim remains for compatibility.
-Closing commit: `36742374`.
+fail-closed; the `checkPermission` shim remained for compatibility.
+Closing commit: `36742374`. (SONNY-2781 removed `checkPermission`, shim
+included: it had no callers.)
 
 ### Site #4 — RLS VM no-result implicit allow (fully closed)
 
@@ -170,14 +172,15 @@ GRANT and REVOKE update the live table at once (`server_init.grantApply`,
 `grantRevoke`) and bump the policy version, so no cached decision outlives
 them. The table is guarded by a mutex: every request reads it now.
 
-**Handler gates.** QUIC and gRPC gate a program that changes data with
-`gps.writePermittedOn(principal, lock_graph)`, `decide(write, graph)`, for
-every principal, and a self-locking CALL (which takes each graph's lock
-itself) with the database-wide `writePermitted`. Schema DDL goes through
+**Handler gates.** QUIC and gRPC gate a program that changes data on the
+graph it changes (`lock_graph`), for every principal: originally
+`gps.writePermittedOn`, `decide(write, graph)`; since SONNY-2781
+`gps.changePermittedOn`, by the program's actions (see "What each action
+enforces"). A self-locking CALL (which takes each graph's lock itself) goes
+through the database-wide `writePermitted`. Schema DDL goes through
 `session_graph.maySchema` (`decide(schema, graph)`), so a SCHEMA grant
 counts there at once; `maySchemaDatabase` (index and constraint DDL) asks
-for schema on `*`, which no grant gives. `execution.checkPermission` asks
-on the active graph when there is one.
+for schema on `*`, which no grant gives.
 
 **Restart.** Grants are hydrated from the `(:GraphGrant)` nodes into the
 live table (`wireAuthDDLCallbacks`). They are no longer migrated to
@@ -224,7 +227,9 @@ schedule in that document.
 - `decide()` with empty Principal → unauthenticated
 - Builtin-role grant table (Admin/User/ReadWrite/ReadOnly × Read/Write/Schema)
 - Graph-grant widening (ReadOnly + GRANT WRITE ON GRAPH hr)
-- `checkPermission` / `decide()` parity across all 4 roles × 2 permissions
+- the handlers' read, write and schema gates follow the builtin role table
+  for all 4 roles (it replaced the `checkPermission` / `decide()` parity
+  test when SONNY-2781 removed `checkPermission`)
 
 `tests/test_gps_principal_derive.zig` — covers `derivePrincipal()` for QUIC
 and anonymous inputs.
@@ -290,43 +295,87 @@ check, before every path that can allow:
 4. The special cases (Admin shortcuts, bind_graph, admin_tenant), the
    builtin roles and the allow policies, as before.
 
-### What a deny enforces today (SONNY-2781)
+### What each action enforces (SONNY-2781)
 
-A policy can name read, match, write, create, update, delete, schema,
-decrypt_field and unwrap_key, and `decide()` evaluates a deny for any of them.
-But a deny only takes effect where enforcement calls `decide()`, and it calls
-it for few actions:
+Every action a policy can name is asked for by an enforcement point, so a
+deny naming it takes effect, and an allow naming it allows exactly that. A
+statement's actions come from the one write walk that also decides the
+lock and the read-only floor (`write_walk.Actions`, `StatementPlan.actions`),
+so "does it change anything" and "which action is it" cannot disagree.
 
-- **DENY WRITE** refuses every request that changes data on the graphs it
-  covers. The QUIC and gRPC write gate (`gps.writePermittedOn`,
-  `decide(write, graph)` on the graph the program changes; for a
-  self-locking CALL `gps.writePermitted`, `decide(write, database)`) runs
-  for every program that `isMutatingProgram` counts as a change. That is all DML
-  (CREATE, MERGE, SET, REMOVE, DELETE, INSERT), the graph, graph type,
-  schema, index and constraint DDL, BACKUP and RESTORE, and CALLs of
-  procedures that change data.
-  - Not covered: the security DDL (CREATE/ALTER/DROP USER, CREATE/DROP ROLE,
-    GRANT, REVOKE, CREATE/ALTER/DROP POLICY). It changes stored security
-    state, not graph data: a read-only request refuses it (SONNY-2751), but
-    it takes no graph write lock and no write gate, and has its own Admin
-    (or self) check, so a DENY WRITE does not reach it.
-- **DENY READ and DENY WRITE** apply to `CALL` procedures. A read-only
-  procedure asks for read on the procedure, and one that changes data asks
-  for write; a graph-scoped deny applies on its graph only (see "Policy
-  scope" below).
-- **DENY DECRYPT_FIELD** applies to field-level decryption.
+| Policy action | Requests it matches (`policyMatchesAction`) | Where they are asked |
+|---|---|---|
+| `READ` | `read`, `match_` | the read gate; read-only `CALL`s |
+| `MATCH` | `match_` | the read gate |
+| `WRITE` (umbrella) | `write`, `create`, `update`, `delete` | the write gate |
+| `CREATE` | `create` | the write gate |
+| `UPDATE` | `update` | the write gate |
+| `DELETE` | `delete` | the write gate |
+| `SCHEMA` | `schema` | the write gate for DDL; the executor's DDL gates |
+| `DECRYPT_FIELD` | `decrypt_field` | field-level decryption |
+| `UNWRAP_KEY` | `unwrap_key` | nothing: a deny naming it is refused |
 
-A deny on any other action is accepted but **not enforced**, because nothing
-calls `decide()` with that action:
+**The read gate** (`session_graph.programReadPermitted`, both handlers)
+asks `decide(match_, g)` for every principal, on every graph `g` the
+program touches (`query_traits.programReadGraphList`): every statement on
+graph data, subqueries and UNION arms with it, the MATCH of a data change
+included, a PROFILE's statement, and the statement an EXPLAIN plans (its
+plan reports the graph's indexes and estimates). A builtin role with Read,
+a READ grant on `g`, or an allow naming READ or MATCH on `g` passes it. A
+program that reads no store (`RETURN 1`) or touches no graph data (a lone
+`USE GRAPH`; the security DDL) passes. A data change passes it too, on the
+graph it changes, since it reads that graph: an allow-only principal needs
+READ (or MATCH) there as well as the change action. The gate skipped
+`decide` for every principal whose builtin role holds Read, so a DENY READ
+or DENY MATCH did not stop a plain MATCH.
 
-- DENY READ does not stop a plain MATCH.
-- DENY MATCH, CREATE, UPDATE, DELETE, SCHEMA and UNWRAP_KEY stop nothing.
-- `execution.checkPermission()` would ask for read, write or schema, but it
-  has no callers.
+**The write gate** (`gps.changePermittedOn`, both handlers, on the graph
+the program changes) asks, by what the program does:
 
-SONNY-2781 tracks wiring the rest (v0.8.24). bind_graph, admin_tenant,
-execute_procedure and show_metadata have no policy analogue, so no policy
-names them.
+| Statement | Asks |
+|---|---|
+| `CREATE`, `INSERT`, `INSERT VALUE`, `MERGE` | `create` |
+| `SET`, `REMOVE`, a `MERGE`'s `ON MATCH SET` (or bare `SET`) | `update` |
+| `DELETE`, `DETACH DELETE` | `delete` |
+| graph, graph type, schema, index, constraint DDL | `write` and `schema` |
+| a `CALL` of a procedure that changes data, `BACKUP`, `RESTORE` | `write`, `create`, `update` and `delete` |
+
+So a DENY CREATE stops CREATE, INSERT and MERGE (and their PROFILE) and
+nothing else; a DENY UPDATE stops SET, REMOVE and a MERGE that updates; a
+DENY DELETE stops DELETE; a DENY WRITE stops all of them and the DDL; a
+change the engine cannot break down (a procedure, BACKUP, RESTORE) is
+stopped by a deny of WRITE, CREATE, UPDATE or DELETE. An allow naming
+CREATE (and READ for the read gate) lets a principal create and nothing
+more; an allow naming WRITE allows every data change but not DDL, which also
+needs SCHEMA. A builtin role with Write, and a per-graph WRITE grant, allow
+create, update, delete and write. A self-locking CALL, which writes every
+graph, is gated by `gps.writePermitted` (see "Policy scope").
+
+**DDL** also passes the executor's gates: `session_graph.maySchema` asks
+`decide(schema, g)` on the graph a CREATE / DROP GRAPH names or index /
+constraint DDL runs on, and `maySchemaDatabase` asks schema on every graph
+for index, constraint and CREATE / DROP SCHEMA DDL.
+
+**Procedures** ask `read` (read-only) or `write` (changes data) on the
+procedure (`gps.procedurePermitted`), besides the read and write gates on
+the graph they run on.
+
+**Not covered:** the security DDL (CREATE/ALTER/DROP USER, CREATE/DROP
+ROLE, GRANT, REVOKE, CREATE/ALTER/DROP POLICY). It changes stored security
+state, not graph data: a read-only request refuses it (SONNY-2751), but it
+takes no graph lock and no write gate, and keeps its own Admin (or self)
+check, so a DENY WRITE does not reach it.
+
+**Refused:** a deny naming UNWRAP_KEY, which no enforcement point asks for,
+is refused when it is added (`PolicyCatalog.addPolicy*`,
+`error.PolicyActionNotEnforced`), in DDL and at startup hydration alike (a
+stored record has no bit for it, so hydration never meets one). An allow
+naming it grants nothing and is accepted.
+
+bind_graph, admin_tenant, execute_procedure and show_metadata have no policy
+analogue, so no policy names them. `execution.checkPermission`, which had no
+callers, was removed. Regression:
+`zig build test-sonny2781-gps-action-enforcement`.
 
 ### Policy scope (SONNY-2753)
 

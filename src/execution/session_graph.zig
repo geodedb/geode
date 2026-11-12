@@ -85,21 +85,24 @@ pub fn mayBind(principal: ?*const principal_mod.Principal, graph: []const u8) bo
 // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=ProgramGraphGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
 // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=ProgramReadGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
 /// The QUIC and gRPC handlers' read gate. May `principal` run a program
-/// whose statements touch the data of the graphs `programDataGraphList`
+/// whose statements touch the data of the graphs `programReadGraphList`
 /// names (from `start_graph`, the session's graph, with `home_graph` its
-/// home)? A principal whose builtin role holds Read reads every graph, as
-/// before; its graph access is `bind_graph`'s. Any other principal (a user
-/// with no stored role) needs `gps.graphReadPermitted` on every graph: a
-/// READ grant on it, read from the live grant table so a GRANT or REVOKE
-/// counts at once, or an allow policy on it.
+/// home; the graph an EXPLAIN'd statement would run on included)? Every
+/// principal needs `gps.graphReadPermitted` (`decide(match_, graph)`) on
+/// every one: a builtin role with Read, a READ grant on the graph (read from
+/// the live grant table, so a GRANT or REVOKE counts at once), or an allow
+/// policy naming READ or MATCH on it; and no deny naming READ or MATCH on it.
+/// SONNY-2781: a principal whose builtin role holds Read skipped this, so a
+/// DENY READ or DENY MATCH never stopped a plain MATCH.
 ///
-/// `bind_graph` alone cannot hold such a user: every session starts on
-/// the default graph, which any authenticated user may bind
+/// `bind_graph` alone cannot hold a user with no stored role: every session
+/// starts on the default graph, which any authenticated user may bind
 /// (`mayBind`), so without this gate the user read the default graph with
 /// no grant on it. A program that reads no store (`RETURN 1`, analysed as
 /// `analysis`) or touches no graph data (a lone USE GRAPH, which
-/// `bind_graph` decides) passes. Writes are gated separately, by
-/// `gps.writePermittedOn`.
+/// `bind_graph` decides; the security DDL) passes. A data change passes
+/// this gate too, on the graph it changes: it reads that graph. Writes are
+/// gated separately, by `gps.changePermittedOn`.
 pub fn programReadPermitted(
     allocator: std.mem.Allocator,
     principal: *const principal_mod.Principal,
@@ -108,9 +111,8 @@ pub fn programReadPermitted(
     start_graph: []const u8,
     home_graph: []const u8,
 ) !bool {
-    if (gps.holdsGlobalPermission(principal, .Read)) return true;
     if (analysis.kind == .rows and analysis.is_store_free and query_traits.restOfProgramIsNoop(analysis, start_graph)) return true;
-    const graphs = try query_traits.programDataGraphList(allocator, program, start_graph, home_graph);
+    const graphs = try query_traits.programReadGraphList(allocator, program, start_graph, home_graph);
     defer allocator.free(graphs);
     for (graphs) |g| {
         if (!gps.graphReadPermitted(allocator, principal, g)) return false;

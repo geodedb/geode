@@ -74,6 +74,18 @@ pub const max_policy_name_len: usize = 63;
 pub const max_policy_scope_len: usize = 63;
 pub const max_policy_expression_len: usize = 511;
 
+/// SONNY-2781: does some enforcement point ask `gps.decide` for a request a
+/// deny naming `action` matches? READ and MATCH: the handlers' read gate and
+/// read-only procedures; WRITE, CREATE, UPDATE, DELETE: the handlers' write
+/// gate per statement; SCHEMA: the DDL gates; DECRYPT_FIELD: field
+/// decryption. UNWRAP_KEY: nothing.
+pub fn denyEnforced(action: Action) bool {
+    return switch (action) {
+        .read, .match_, .write, .create, .update, .delete, .schema, .decrypt_field => true,
+        .unwrap_key => false,
+    };
+}
+
 pub const PolicyCatalog = struct {
     allocator: std.mem.Allocator,
     // Use ArrayList which in Zig 0.16 is the unmanaged form: allocator passed
@@ -153,6 +165,23 @@ pub const PolicyCatalog = struct {
                     .{ args.name[0..@min(args.name.len, max_policy_name_len)], args.name.len, max_policy_name_len, args.scope_graph.len, max_policy_scope_len, args.expression_source.len, max_policy_expression_len },
                 );
                 return error.PolicyFieldTooLong;
+            }
+        }
+        // CANARY: REQ=REQ-SONNY-2781-GPS-ACTION-ENFORCEMENT; FEATURE="GPS Policy Evaluation"; ASPECT=UnenforcedDenyRefused; STATUS=TESTED; TEST=tests/test_sonny2781_gps_action_enforcement.zig; OWNER=security; UPDATED=2026-11-11
+        // SONNY-2781: a deny must deny. No enforcement point asks for
+        // UNWRAP_KEY (key unwrapping is Admin-only and not policy-gated), so a
+        // deny naming it would be accepted and do nothing: refused, in every
+        // mode (DDL and hydration alike; hydration fails closed on it, and no
+        // stored record can carry it: the record has no bit for it). Every
+        // other action a policy can name is enforced (docs/security/
+        // gps-decide.md, "What each action enforces"). An allow naming
+        // UNWRAP_KEY grants nothing and is accepted, as before.
+        if (args.effect == .deny) {
+            for (args.actions) |a| {
+                if (!denyEnforced(a)) {
+                    std.log.scoped(.gps).warn("refusing deny policy '{s}': no enforcement point asks for the {s} action, so the deny would do nothing", .{ args.name[0..@min(args.name.len, max_policy_name_len)], @tagName(a) });
+                    return error.PolicyActionNotEnforced;
+                }
             }
         }
         // CANARY: REQ=REQ-GAP-0923-ABAC-POLICY-VALIDATION; FEATURE="ABAC"; ASPECT=DuplicateNameReject; STATUS=TESTED; TEST=tests/test_gap0923_abac_policy_validation.zig; OWNER=security; UPDATED=2026-07-10

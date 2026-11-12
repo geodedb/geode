@@ -729,9 +729,22 @@ pub fn programDataGraph(program: *const ast.Program, start_graph: []const u8, ho
 /// `start_graph` or `home_graph`; the caller frees the slice. Empty when no
 /// statement touches graph data.
 pub fn programDataGraphList(allocator: std.mem.Allocator, program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) ![]const []const u8 {
+    return graphList(allocator, program, start_graph, home_graph, false);
+}
+
+// CANARY: REQ=REQ-SONNY-2781-GPS-ACTION-ENFORCEMENT; FEATURE="GPS Policy Evaluation"; ASPECT=ReadGraphList; STATUS=TESTED; TEST=tests/test_sonny2781_gps_action_enforcement.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2781: the graphs the handlers' read gate checks: `programDataGraphList`
+/// plus the graph an EXPLAIN'd statement would run on. An EXPLAIN runs
+/// nothing and takes no lock, but its plan reports the graph's indexes and
+/// estimates, so a DENY READ on the graph refuses it too.
+pub fn programReadGraphList(allocator: std.mem.Allocator, program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) ![]const []const u8 {
+    return graphList(allocator, program, start_graph, home_graph, true);
+}
+
+fn graphList(allocator: std.mem.Allocator, program: *const ast.Program, start_graph: []const u8, home_graph: []const u8, explain_reads: bool) ![]const []const u8 {
     var list: GraphList = .{ .allocator = allocator };
     errdefer list.names.deinit(allocator);
-    var walk: DataGraphWalk = .{ .current = start_graph, .home_graph = home_graph, .collect = &list };
+    var walk: DataGraphWalk = .{ .current = start_graph, .home_graph = home_graph, .collect = &list, .explain_reads = explain_reads };
     for (program.statements) |*stmt| _ = walk.statement(stmt);
     if (list.oom) return error.OutOfMemory;
     const names = try list.names.toOwnedSlice(allocator);
@@ -787,6 +800,10 @@ const DataGraphWalk = struct {
     /// SONNY-3312: when set, every graph a statement touches is added here,
     /// and a second graph is not a conflict.
     collect: ?*GraphList = null,
+    /// SONNY-2781: an EXPLAIN'd statement counts on the graph it would run
+    /// on (the read gate's list, `programReadGraphList`); otherwise EXPLAIN
+    /// touches nothing (it takes no lock).
+    explain_reads: bool = false,
 
     fn note(self: *DataGraphWalk, graph: []const u8) bool {
         self.only_graph_ddl = false;
@@ -814,7 +831,14 @@ const DataGraphWalk = struct {
                 if (sessionResetClearsGraph(sr)) self.current = self.home_graph;
             },
             .SessionClose => self.current = self.home_graph,
-            .Commit, .Rollback, .Explain => {},
+            .Commit, .Rollback => {},
+            .Explain => |e| if (self.explain_reads) return self.statement(e.query),
+            // SONNY-2781: the security DDL and EXPLAIN POLICY touch no
+            // graph's data (the security DDL writes `__geode_security`
+            // through its owners; EXPLAIN POLICY runs nothing). They counted
+            // as statements on the session's graph, so a DENY READ on that
+            // graph refused CREATE USER.
+            .CreateUser, .AlterUser, .DropUser, .CreateRole, .DropRole, .Grant, .Revoke, .CreatePolicy, .DropPolicy, .AlterPolicy, .ExplainPolicy => {},
             // SONNY-3026: a PROFILE runs the statement it wraps: that
             // statement's graph is the program's. `PROFILE USE GRAPH g` moved
             // the session to g with no statement counted at all.

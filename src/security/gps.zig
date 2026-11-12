@@ -202,6 +202,7 @@ pub const DecisionRequest = struct {
 // REQ-GPS-INVARIANT-001 ASPECT=FailOpenInterim STATUS=COMPLETE for site #2.
 const user_mgmt = @import("user_management.zig");
 const execution = @import("../execution.zig");
+const write_walk = @import("../execution/write_walk.zig");
 const tenancy = @import("../execution/tenancy.zig");
 
 /// Map a GPS Action to the user_management.Permission it requires.
@@ -255,8 +256,8 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
     // --insecure-allow-all: process-wide kill-switch that short-circuits all
     // authorization logic. Set only when the flag is present at CLI startup.
-    // This is the canonical bypass path; the legacy auth-disabled short-circuit
-    // in checkPermission() is preserved as a Phase 1 compat path (see Task 2-9).
+    // This is the canonical bypass path. (The legacy auth-disabled
+    // short-circuit lived in execution.checkPermission, removed in SONNY-2781.)
     if (g_insecure_allow_all.load(.acquire)) {
         return PolicyDecision{
             .kind = .allow,
@@ -683,17 +684,6 @@ pub fn isGrantOnly(principal: *const principal_mod.Principal) bool {
     return false;
 }
 
-/// Does one of `principal`'s builtin roles hold `perm` globally, on every
-/// graph? A per-graph grant never counts here.
-pub fn holdsGlobalPermission(principal: *const principal_mod.Principal, perm: user_mgmt.Permission) bool {
-    for (principal.roles) |role_name| {
-        if (user_mgmt.Role.fromString(role_name)) |role| {
-            if (user_mgmt.hasPermission(role, perm)) return true;
-        }
-    }
-    return false;
-}
-
 /// The per-graph grant action code (`GraphRBACPolicy`: 0=read, 1=write,
 /// 2=schema) that covers `action`, or null when no per-graph grant does.
 fn grantActionCode(action: Action) ?u8 {
@@ -731,13 +721,15 @@ fn allowedOn(allocator: std.mem.Allocator, principal: *const principal_mod.Princ
 }
 
 // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GraphReadGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
-/// May `principal` read the data of `graph`? A principal whose builtin role
-/// holds Read may read every graph, as before (its graph access is
-/// governed by `bind_graph`). Any other (a user with no stored role) needs
-/// `decide(read, graph)`: a READ grant on the graph, or a policy on it.
+// CANARY: REQ=REQ-SONNY-2781-GPS-ACTION-ENFORCEMENT; FEATURE="GPS Policy Evaluation"; ASPECT=ReadGateDecide; STATUS=TESTED; TEST=tests/test_sonny2781_gps_action_enforcement.zig; OWNER=security; UPDATED=2026-11-11
+/// May `principal` read the data of `graph`? `decide(match_, graph)`, for
+/// every principal: a builtin role with Read (every graph, as before), a
+/// READ grant on the graph, or an allow policy naming READ or MATCH on it;
+/// and no deny naming READ or MATCH on it. SONNY-2781: a principal whose
+/// builtin role holds Read skipped `decide`, so a DENY READ or DENY MATCH
+/// never stopped a plain MATCH.
 pub fn graphReadPermitted(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, graph: []const u8) bool {
-    if (holdsGlobalPermission(principal, .Read)) return true;
-    return allowedOn(allocator, principal, .read, graph);
+    return allowedOn(allocator, principal, .match_, graph);
 }
 
 // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GraphWriteGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
@@ -752,6 +744,46 @@ pub fn graphReadPermitted(allocator: std.mem.Allocator, principal: *const princi
 /// graph.
 pub fn writePermittedOn(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, graph: []const u8) bool {
     return allowedOn(allocator, principal, .write, graph);
+}
+
+// CANARY: REQ=REQ-SONNY-2781-GPS-ACTION-ENFORCEMENT; FEATURE="GPS Policy Evaluation"; ASPECT=PerActionWriteGate; STATUS=TESTED; TEST=tests/test_sonny2781_gps_action_enforcement.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2781: the QUIC and gRPC handlers' write gate for a program that
+/// changes `graph`'s data (`StatementPlan.lock_graph`), by the actions the
+/// program needs (`StatementPlan.actions`, the write walk that also decides
+/// the lock and the read-only floor):
+///
+/// - CREATE / INSERT / INSERT VALUE / MERGE: `decide(create, graph)`;
+/// - SET / REMOVE / a MERGE's ON MATCH SET: `decide(update, graph)`;
+/// - DELETE / DETACH DELETE: `decide(delete, graph)`;
+/// - graph, graph type, schema, index and constraint DDL:
+///   `decide(write, graph)` and `decide(schema, graph)` (the executor's DDL
+///   gates also ask SCHEMA on the graph the statement names, and on every
+///   graph for catalog-wide DDL);
+/// - a change no finer action names (a CALL of a procedure that changes
+///   data, BACKUP / RESTORE): `decide` of WRITE, CREATE, UPDATE and DELETE.
+///
+/// WRITE is the umbrella (`policyMatchesAction`): a deny naming WRITE matches
+/// every one of these requests, and an allow naming WRITE allows all but
+/// SCHEMA; a deny naming CREATE, UPDATE or DELETE stops only the statements
+/// that need it, and an allow naming one allows only them. A builtin role
+/// with Write, and a per-graph WRITE grant, allow all of CREATE, UPDATE,
+/// DELETE and WRITE. The gate used to ask `decide(write, graph)` alone, so a
+/// deny naming CREATE, UPDATE or DELETE stopped nothing and an allow naming
+/// one allowed nothing. An error answers no.
+pub fn changePermittedOn(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, graph: []const u8, actions: write_walk.Actions) bool {
+    if (actions.create and !allowedOn(allocator, principal, .create, graph)) return false;
+    if (actions.update and !allowedOn(allocator, principal, .update, graph)) return false;
+    if (actions.delete and !allowedOn(allocator, principal, .delete, graph)) return false;
+    if (actions.schema) {
+        if (!allowedOn(allocator, principal, .write, graph)) return false;
+        if (!allowedOn(allocator, principal, .schema, graph)) return false;
+    }
+    if (actions.write) {
+        for ([_]Action{ .write, .create, .update, .delete }) |a| {
+            if (!allowedOn(allocator, principal, a, graph)) return false;
+        }
+    }
+    return true;
 }
 
 // CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=WriteGate; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25

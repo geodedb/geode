@@ -121,15 +121,16 @@ pub fn execute(
 // Authorization
 // ---------------------------------------------------------------------------
 
-/// Gate tenant administration on the `admin_tenant` GPS action. Mirrors
-/// `execution.checkPermission`'s synth-principal + `gps.decide()` pattern but
-/// for the admin_tenant action. Fail-closed: a missing principal/role yields
-/// Unauthenticated; a non-admin yields Unauthorized.
+/// Gate tenant administration on the `admin_tenant` GPS action: a
+/// synthesized principal + `gps.decide()` (the pattern of the removed
+/// `execution.checkPermission`, SONNY-2781) for the admin_tenant action.
+/// Fail-closed: a missing principal/role yields Unauthenticated; a non-admin
+/// yields Unauthorized.
 ///
 /// When auth is disabled (single-tenant dev / CLI / tests), the operation is
-/// permitted — identical posture to checkPermission's auth-disabled short
-/// circuit — so the in-process test path and `--insecure-allow-all` continue to
-/// work exactly as every other admin op does.
+/// permitted (the auth-disabled posture of the other admin gates), so the
+/// in-process test path and `--insecure-allow-all` continue to work exactly
+/// as every other admin op does.
 fn requireAdminTenant(
     allocator: std.mem.Allocator,
     context: ExecutionContext,

@@ -3391,12 +3391,13 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GrpcWriteGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
             // REQ-SEC-PER-GRAPH-GRANTS: write on the graph the program
             // changes, for every principal; a self-locking CALL needs
-            // database-wide write. See the QUIC handler.
+            // database-wide write. SONNY-2781: by the actions the program
+            // needs (`changePermittedOn`). See the QUIC handler.
             if (is_mutation) {
                 const write_ok = if (stmt_plan.self_locking)
                     geode.security.gps.writePermitted(std.heap.smp_allocator, &principal_for_request)
                 else
-                    geode.security.gps.writePermittedOn(std.heap.smp_allocator, &principal_for_request, lock_graph);
+                    geode.security.gps.changePermittedOn(std.heap.smp_allocator, &principal_for_request, lock_graph, stmt_plan.actions);
                 if (!write_ok) {
                     var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     defer resp.deinit(allocator);

@@ -220,6 +220,34 @@
   graph-scoped allow of DECRYPT_FIELD now allows decryption on its graph
   (it never applied before).
   Regression: `zig build test-sonny2753-graph-scoped-deny`.
+- **Every GPS action a policy can name is enforced (SONNY-2781).**
+  Enforcement asked `gps.decide` about `write` (one gate for all DML and
+  DDL), `read` / `write` on procedures and `decrypt_field` only, and the
+  handlers' read gate skipped `decide` for every principal whose builtin
+  role holds Read: a DENY READ or MATCH did not stop a plain MATCH, a DENY
+  CREATE, UPDATE or DELETE stopped nothing, and an allow naming one of
+  those allowed nothing (v0.8.23 documented them as accepted but not
+  enforced). Now the handlers' write gate (`gps.changePermittedOn`) asks
+  by what the program does, from the same write walk that decides the lock
+  and the read-only floor: CREATE for CREATE / INSERT / MERGE, UPDATE for
+  SET / REMOVE / a MERGE's ON MATCH SET, DELETE for DELETE, WRITE and
+  SCHEMA for DDL, and WRITE with CREATE, UPDATE and DELETE for a procedure
+  that changes data, BACKUP and RESTORE. WRITE is the umbrella (a DENY WRITE
+  still stops every change; an ALLOW WRITE allows every data change). The
+  read gate asks MATCH (matched by a READ or MATCH policy) for every
+  principal, on every graph the program reads, an EXPLAIN'd statement's
+  graph included. A deny naming UNWRAP_KEY, which nothing asks for, is
+  refused when added (`error.PolicyActionNotEnforced`); an allow naming it
+  is still accepted. `execution.checkPermission`, which had no callers, is
+  removed. The security DDL no longer counts as touching the session's
+  graph. Behaviour changes: a DENY READ / MATCH on a graph refuses every
+  read of it, writes included (a change reads the graph it changes), and
+  EXPLAIN of a statement on it; a DENY CREATE, UPDATE or DELETE refuses the
+  matching statements; an allow naming CREATE, UPDATE or DELETE (with READ
+  on the graph) now allows them; a DENY SCHEMA now also refuses CREATE /
+  DROP GRAPH TYPE; adding a deny naming UNWRAP_KEY fails. See
+  docs/security/gps-decide.md, "What each action enforces".
+  Regression: `zig build test-sonny2781-gps-action-enforcement`.
 
 ### Added
 

@@ -7782,11 +7782,15 @@ fn handleClientMessage(
             // WRITE grant or a graph-scoped policy on that graph only. A
             // self-locking CALL writes no one graph and needs database-wide
             // write (`writePermitted`).
+            // SONNY-2781: by the actions the program needs
+            // (`changePermittedOn`: CREATE, UPDATE, DELETE, WRITE+SCHEMA for
+            // DDL, WRITE for the rest), not `write` alone, so a deny or an
+            // allow naming one of them applies.
             if (is_mutation and state.authenticated_role != null) {
                 const write_ok = if (self_locking)
                     geode.security.gps.writePermitted(gpa, &principal_for_request)
                 else
-                    geode.security.gps.writePermittedOn(gpa, &principal_for_request, lock_graph);
+                    geode.security.gps.changePermittedOn(gpa, &principal_for_request, lock_graph, stmt_plan.actions);
                 if (!write_ok) {
                     try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     return;

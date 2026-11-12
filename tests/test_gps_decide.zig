@@ -246,106 +246,48 @@ test "decide() returns allow when --insecure-allow-all is set, regardless of pri
     try std.testing.expectEqualStrings("insecure_allow_all", decision.reason_code);
 }
 
-// CANARY: REQ=REQ-GPS-PDP-004; FEATURE="GPS Decision Engine"; ASPECT=CheckPermissionAdapter; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
-test "checkPermission with no principal still works through legacy synthesis" {
+// CANARY: REQ=REQ-GPS-PDP-004; FEATURE="GPS Decision Engine"; ASPECT=HandlerGateRoleParity; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-11-11
+// SONNY-2781: `execution.checkPermission` had no callers and was removed; its
+// two tests (the legacy role-only adapter, and its parity with decide) went
+// with it. The gates that decide instead, the handlers' read gate
+// (`graphReadPermitted`), write gate (`changePermittedOn`) and the DDL gate
+// (`session_graph.maySchema`), must follow the builtin role table.
+test "the handlers' read, write and schema gates follow the builtin role table for every role" {
     const user_mgmt = geode.user_management;
-
-    execution.cleanupCatalogInstance();
-    defer execution.cleanupCatalogInstance();
-    const catalog = try execution.ensureCatalogInstance(std.testing.allocator);
-
-    // Save and force-enable auth (isAuthEnabled() defaults to true, but be explicit).
-    const was_enabled = user_mgmt.isAuthEnabled();
-    user_mgmt.setAuthEnabled(true);
-    defer user_mgmt.setAuthEnabled(was_enabled);
-
-    // Legacy-style: only role+user, no principal pointer.
-    const ctx_admin = execution.ExecutionContext{
-        .catalog = catalog,
-        .user = "alice",
-        .role = .Admin,
-    };
-    // Admin can Write — should not error.
-    try execution.checkPermission(ctx_admin, .Write);
-
-    const ctx_readonly = execution.ExecutionContext{
-        .catalog = catalog,
-        .user = "alice",
-        .role = .ReadOnly,
-    };
-    // ReadOnly cannot Write — should return Unauthorized.
-    const err = execution.checkPermission(ctx_readonly, .Write);
-    try std.testing.expectError(error.Unauthorized, err);
-}
-
-// CANARY: REQ=REQ-GPS-PDP-008; FEATURE="GPS Decision Engine"; ASPECT=CheckPermissionDecideParity; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
-test "checkPermission and decide agree for every (role, permission) combination" {
-    const user_mgmt = geode.user_management;
-
-    execution.cleanupCatalogInstance();
-    defer execution.cleanupCatalogInstance();
-    const catalog = try execution.ensureCatalogInstance(std.testing.allocator);
-
     const was_enabled = user_mgmt.isAuthEnabled();
     user_mgmt.setAuthEnabled(true);
     defer user_mgmt.setAuthEnabled(was_enabled);
 
     const roles = [_]user_mgmt.Role{ .Admin, .User, .ReadWrite, .ReadOnly };
-    const perms = [_]user_mgmt.Permission{ .Read, .Write, .Schema };
-
     for (roles) |role| {
-        for (perms) |perm| {
-            // Legacy path: checkPermission with role-only context
-            const ctx = execution.ExecutionContext{
-                .catalog = catalog,
-                .user = "parity-user",
-                .role = role,
-            };
-            var cp_allows = true;
-            execution.checkPermission(ctx, perm) catch {
-                cp_allows = false;
-            };
-
-            // GPS path: decide() with a freshly-built principal
-            const role_names = [_][]const u8{@tagName(role)};
-            const p = principal_mod.Principal{
-                .user_id = null,
-                .username = "parity-user",
-                .session_id = null,
-                .tenant_id = null,
-                .active_graph = null,
-                .roles = &role_names,
-                .custom_roles = &.{},
-                .auth_method = .password,
-                .auth_version = 0,
-                .mfa_state = .none,
-                .elevation_until = null,
-                .api_key_id = null,
-                .certificate_subject = null,
-                .risk_context = principal_mod.RiskContext.unknown,
-                .attributes = principal_mod.AttributeMap.emptySentinel(),
-                .source = .test_harness,
-            };
-            const action: gps.Action = switch (perm) {
-                .Read => .read,
-                .Write => .write,
-                .Schema => .schema,
-            };
-            const req = gps.DecisionRequest{
-                .principal = &p,
-                .action = action,
-                .resource = .{ .database = {} },
-            };
-            const decision = try gps.decide(std.testing.allocator, &req);
-            const gps_allows = decision.kind == .allow;
-
-            if (cp_allows != gps_allows) {
-                std.debug.print(
-                    "PARITY FAIL: role={s} perm={s} checkPermission={any} decide={any}\n",
-                    .{ @tagName(role), @tagName(perm), cp_allows, gps_allows },
-                );
-                return error.ParityViolation;
-            }
-        }
+        const role_names = [_][]const u8{@tagName(role)};
+        const p = principal_mod.Principal{
+            .user_id = null,
+            .username = "parity-user",
+            .session_id = null,
+            .tenant_id = null,
+            .active_graph = null,
+            .roles = &role_names,
+            .custom_roles = &.{},
+            .auth_method = .password,
+            .auth_version = 0,
+            .mfa_state = .none,
+            .elevation_until = null,
+            .api_key_id = null,
+            .certificate_subject = null,
+            .risk_context = principal_mod.RiskContext.unknown,
+            .attributes = principal_mod.AttributeMap.emptySentinel(),
+            .source = .test_harness,
+        };
+        const reads = user_mgmt.hasPermission(role, .Read);
+        const writes = user_mgmt.hasPermission(role, .Write);
+        const schemas = user_mgmt.hasPermission(role, .Schema);
+        const a = std.testing.allocator;
+        try std.testing.expectEqual(reads, gps.graphReadPermitted(a, &p, "g"));
+        try std.testing.expectEqual(writes, gps.changePermittedOn(a, &p, "g", .{ .create = true }));
+        try std.testing.expectEqual(writes, gps.changePermittedOn(a, &p, "g", .{ .update = true, .delete = true }));
+        try std.testing.expectEqual(writes, gps.changePermittedOn(a, &p, "g", .{ .write = true }));
+        try std.testing.expectEqual(writes and schemas, gps.changePermittedOn(a, &p, "g", .{ .schema = true }));
+        try std.testing.expectEqual(schemas, execution.session_graph.maySchema(&p, "default"));
     }
 }
