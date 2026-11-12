@@ -26,7 +26,57 @@ pub const VerifyError = error{
     // GAP-0727 / SEC-AUD-01 (2026-04-16): seq_no must be monotonic +1
     // across the whole file.  Any gap, duplicate, or reorder fails here.
     SequenceMonotonicityViolation,
+    // SONNY-6322: audit key epochs (see verifyFileEpochs).
+    KeyEpochOrder,
+    KeyEpochHashMismatch,
+    UntrustedKeyEpoch,
 };
+
+// CANARY: REQ=REQ-SONNY-6322-AUDIT-KEY-EPOCH; FEATURE="Audit Verification"; ASPECT=EpochVerification; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6322: what `verifyFileEpochs` checked.
+pub const EpochSummary = struct {
+    records: u64 = 0,
+    digests: u32 = 0,
+    /// KEY_EPOCH records seen (the log's last epoch number when they are
+    /// contiguous).
+    epochs: u32 = 0,
+    signatures_verified: u32 = 0,
+    signatures_failed: u32 = 0,
+};
+
+const key_epoch_action_pattern = "\"action\":\"KEY_EPOCH\"";
+const key_epoch_id_pattern = "\"type\":\"audit_key_epoch\",\"id\":\"";
+
+/// The quoted string value of `field` in `line`, or null.
+fn stringField(line: []const u8, comptime field: []const u8) ?[]const u8 {
+    const patt = "\"" ++ field ++ "\":\"";
+    const idx = std.mem.indexOf(u8, line, patt) orelse return null;
+    const start = idx + patt.len;
+    const end = std.mem.indexOfScalarPos(u8, line, start, '"') orelse return null;
+    return line[start..end];
+}
+
+/// Verify the record's Ed25519 `signature` over its event hash with `key`.
+fn signatureValid(line: []const u8, ev_hash: [32]u8, key: [32]u8, seq: u64) bool {
+    const sig_hex = stringField(line, "signature") orelse {
+        std.debug.print("SIGNATURE_ERROR ❌  at_seq={} reason=MISSING_SIGNATURE\n", .{seq});
+        return false;
+    };
+    const sig_bytes = hex64(sig_hex) catch {
+        std.debug.print("SIGNATURE_ERROR ❌  at_seq={} reason=INVALID_SIGNATURE_FORMAT\n", .{seq});
+        return false;
+    };
+    var pub_kp = cb.Sig.KeyPair.fromPublicBytes(.ed25519, &key) catch {
+        std.debug.print("SIGNATURE_ERROR ❌  at_seq={} reason=INVALID_PUBLIC_KEY\n", .{seq});
+        return false;
+    };
+    defer pub_kp.deinit();
+    cb.Sig.verify(.ed25519, &pub_kp, &ev_hash, &sig_bytes) catch {
+        std.debug.print("SIGNATURE_ERROR ❌  at_seq={} reason=VERIFICATION_FAILED\n", .{seq});
+        return false;
+    };
+    return true;
+}
 
 pub fn hex32(buf: []const u8) VerifyError![32]u8 {
     if (buf.len != 64) return error.BadHexLen;
@@ -47,11 +97,34 @@ pub fn hex64(buf: []const u8) VerifyError![64]u8 {
 /// GAP-0151: Full audit verification with Ed25519 signature and digest interval validation
 /// CANARY: REQ=REQ-AUDIT-VERIFY-002; FEATURE="Audit Signature Verification"; ASPECT=Ed25519Verify; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
 pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo, digest_interval_events: u32, require_digest: bool, pubkey: ?[32]u8, is_default_path: bool) VerifyError!void {
+    var one: [1][32]u8 = undefined;
+    const keys: []const [32]u8 = if (pubkey) |pk| blk: {
+        one[0] = pk;
+        break :blk one[0..1];
+    } else &.{};
+    _ = try verifyFileEpochs(allocator, path, algo, digest_interval_events, require_digest, keys, is_default_path);
+}
+
+/// SONNY-6322: `verifyFile` across audit key epochs. `trusted_keys[n]` is the
+/// public key of epoch n (`audit.jsonl.pub` for 0, `audit.jsonl.pub.<n>`
+/// after); supply them from a trusted copy, not from beside the log. With
+/// keys, every DIGEST must verify with its epoch's key and every KEY_EPOCH
+/// record must name exactly `trusted_keys[n]`, carry an event_hash that
+/// commits to that key, and be signed by it; epochs must increase. Any
+/// failed signature fails the verification (error.InvalidSignature). Without
+/// keys only the chain, sequence and digest interval are checked.
+///
+/// What a pass attests across a KEY_EPOCH boundary: the records before it
+/// were signed by the previous key and the records after by the new one,
+/// in one unbroken hash chain. The previous key did not sign the hand-over
+/// (after a restore it is not available), so that the new epoch belongs to
+/// the same store is attested by the operator who restored it.
+pub fn verifyFileEpochs(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo, digest_interval_events: u32, require_digest: bool, trusted_keys: []const [32]u8, is_default_path: bool) VerifyError!EpochSummary {
     var file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch |err| {
         if (err == error.FileNotFound and is_default_path) {
             // Default path not found — nothing to verify, treat as clean.
             std.debug.print("audit log not found: {s} (0 records verified)\n", .{path});
-            return;
+            return .{};
         }
         return error.ReadError;
     };
@@ -68,6 +141,10 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
     var events_since_digest: u32 = 0;
     var signature_verified_count: u32 = 0;
     var signature_failed_count: u32 = 0;
+    // SONNY-6322: the current key epoch and its key.
+    var epoch: u32 = 0;
+    var epochs_seen: u32 = 0;
+    var epoch_key: ?[32]u8 = if (trusted_keys.len > 0) trusted_keys[0] else null;
 
     while (true) {
         line_buf.clearRetainingCapacity();
@@ -170,12 +247,57 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
             return error.SequenceMonotonicityViolation;
         }
 
+        // SONNY-6322: a KEY_EPOCH record starts a new signing-key epoch.
+        if (std.mem.indexOf(u8, line, key_epoch_action_pattern) != null and std.mem.indexOf(u8, line, key_epoch_id_pattern) != null) {
+            const at_seq = seq + 1;
+            const id_start = std.mem.indexOf(u8, line, key_epoch_id_pattern).? + key_epoch_id_pattern.len;
+            const id_end = std.mem.indexOfScalarPos(u8, line, id_start, '"') orelse return error.Invalid;
+            const id = line[id_start..id_end];
+            const colon = std.mem.indexOfScalar(u8, id, ':') orelse return error.Invalid;
+            if (!std.mem.startsWith(u8, id, "epoch-") or colon <= "epoch-".len) return error.Invalid;
+            const n = std.fmt.parseInt(u32, id["epoch-".len..colon], 10) catch return error.Invalid;
+            const new_key = try hex32(id[colon + 1 ..]);
+            if (n <= epoch) {
+                std.debug.print("TAMPER key_epoch ❌  at_seq={} reason=EPOCH_NOT_INCREASING epoch={} previous={}\n", .{ at_seq, n, epoch });
+                return error.KeyEpochOrder;
+            }
+            // The event hash must commit to the epoch and the key it names.
+            var hasher = cb.Hash.Stream.init(.sha256) catch return error.ReadError;
+            defer hasher.deinit();
+            hasher.update(&prev_buf) catch return error.ReadError;
+            hasher.update("system_event") catch return error.ReadError;
+            hasher.update(id) catch return error.ReadError;
+            hasher.update("KEY_EPOCH") catch return error.ReadError;
+            var expect_hash: [32]u8 = undefined;
+            _ = hasher.final(&expect_hash) catch return error.ReadError;
+            if (!std.mem.eql(u8, &expect_hash, &last_hash)) {
+                std.debug.print("TAMPER key_epoch ❌  at_seq={} reason=EVENT_HASH_MISMATCH\n", .{at_seq});
+                return error.KeyEpochHashMismatch;
+            }
+            if (trusted_keys.len > 0) {
+                if (n >= trusted_keys.len or !std.mem.eql(u8, &trusted_keys[n], &new_key)) {
+                    std.debug.print("UNTRUSTED key_epoch ❌  at_seq={} epoch={} reason=KEY_NOT_IN_TRUSTED_LIST (pass the public key of every epoch with --pubkey, in order)\n", .{ at_seq, n });
+                    return error.UntrustedKeyEpoch;
+                }
+                if (signatureValid(line, last_hash, new_key, at_seq)) {
+                    signature_verified_count += 1;
+                } else {
+                    signature_failed_count += 1;
+                }
+            }
+            epoch = n;
+            epoch_key = new_key;
+            epochs_seen += 1;
+            std.debug.print("KEY_EPOCH ⚠  at_seq={} epoch={} key={s}... (records before verify with the previous key; continuity across this boundary is attested by the operator who restored the store, not by the previous key)\n", .{ at_seq, n, id[colon + 1 ..][0..16] });
+        }
+
         // Handle DIGEST events
         if (std.mem.eql(u8, typ, "DIGEST")) {
             digest_count += 1;
 
-            // GAP-0151: Verify Ed25519 signature on DIGEST events
-            if (pubkey) |pk| {
+            // GAP-0151: Verify Ed25519 signature on DIGEST events, with the
+            // current epoch's key (SONNY-6322).
+            if (epoch_key) |pk| {
                 var patt_sig_buf: [64]u8 = undefined;
                 const patt_sig = std.fmt.bufPrint(&patt_sig_buf, "\"{s}\":\"", .{"signature"}) catch return error.Invalid;
 
@@ -252,7 +374,8 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
         .blake3 => "blake3",
     } });
 
-    if (pubkey != null) {
+    if (epochs_seen > 0) std.debug.print(" key_epochs={}", .{epochs_seen});
+    if (trusted_keys.len > 0) {
         std.debug.print(" signatures_verified={} signatures_failed={}", .{ signature_verified_count, signature_failed_count });
     }
 
@@ -264,6 +387,20 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
     // assert `stderr_contains: "records verified"` pass uniformly whether
     // or not the default audit log exists (empty or populated).
     std.debug.print(" ({} records verified)\n", .{records});
+
+    // SONNY-6322: a signature that does not verify fails the verification
+    // (it was only counted, and the command still exited 0).
+    if (signature_failed_count > 0) {
+        std.debug.print("SIGNATURE_ERROR ❌  {} signature(s) did not verify\n", .{signature_failed_count});
+        return error.InvalidSignature;
+    }
+    return .{
+        .records = records,
+        .digests = digest_count,
+        .epochs = epochs_seen,
+        .signatures_verified = signature_verified_count,
+        .signatures_failed = signature_failed_count,
+    };
 }
 
 // Unit tests for audit verification

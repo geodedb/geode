@@ -32,6 +32,39 @@ Geode's audit stream is a canonical JSON Lines (JSONL) append-only log. Each rec
 - If missing in non-test builds: CONFIG_ERROR SIGNING_KEYS_MISSING (exit 78)
 - Test builds derive a deterministic key from a fixed seed
 
+### File-Backed Keys and Key Epochs (SONNY-6322)
+
+Without `GEODE_AUDIT_PUB`/`GEODE_AUDIT_SEC`, a log `F` (for example
+`<data dir>/<graph uuid>/audit.jsonl` of the `__geode_security` graph) keeps
+its keys beside it, created exclusive and no-follow, mode 0600:
+
+- `F.key`: the Ed25519 seed that signs DIGEST records. **Backups never hold
+  it** (at any depth): whoever reads a backup must not be able to sign
+  forged audit entries.
+- `F.pub`: the public key of epoch 0; `F.pub.<n>`: the public key of epoch n.
+
+A log that has a public key but no seed (a restored store) starts a **new key
+epoch** n+1 the first time it is opened: a new pair, the new public key in
+`F.pub.<n+1>`, and a `KEY_EPOCH` record appended to the chain
+(`event_type` `system_event`, `resource` `{"type":"audit_key_epoch",
+"id":"epoch-<n>:<public key hex>"}`, both covered by `event_hash`, `action`
+`KEY_EPOCH`, signed by the NEW key). The old public key files are never
+changed, so the restored entries still verify. Old backups that still hold the
+seed restore with a warning naming `audit.jsonl.key` (written 0600) and keep
+signing in the same epoch.
+
+What a verifier can and cannot attest across an epoch boundary:
+
+- It can attest that every DIGEST before the boundary was signed by the
+  previous epoch's key, every DIGEST after it by the new key, that the
+  `KEY_EPOCH` record names exactly the trusted new key and is signed by it,
+  and that the hash chain and `seq_no` run unbroken through the boundary.
+- It cannot attest that the holder of the previous key handed over to the new
+  one: the previous seed is not in the backup, so it cannot sign the hand-over.
+  That the new epoch continues the same store is attested by the operator who
+  restored it. Keep each epoch's public key in a trusted place (not only beside
+  the log, where whoever can rewrite the log can rewrite the key file too).
+
 ### File Rotation
 
 - Time/size rotation continues `seq_no`
@@ -46,7 +79,16 @@ Use the unified `geode audit verify` subcommand to validate an audit file:
 # Note: GAP-0159 - Updated to use unified CLI (geode audit verify)
 zig build
 ./zig-out/bin/geode audit verify --file /var/log/geode/audit.jsonl --algo sha256 --pubkey $GEODE_AUDIT_PUB
+# A log with key epochs: one --pubkey per epoch, in order
+./zig-out/bin/geode audit verify --file <graph dir>/audit.jsonl \
+  --pubkey "$(cat trusted/audit.jsonl.pub)" --pubkey "$(cat trusted/audit.jsonl.pub.1)"
 ```
+
+With `--pubkey`, every DIGEST must verify with its epoch's key and every
+`KEY_EPOCH` record must name the next trusted key; **any signature that does
+not verify makes the command fail** (it used to report `signatures_failed=N`
+and exit 0; an invalid `--pubkey` used to be ignored silently). A log with more
+epochs than keys given fails (`UntrustedKeyEpoch`).
 
 ### Verification Outputs
 
@@ -55,6 +97,11 @@ zig build
 - `TAMPER digest` - at_seq=s reason=DIGEST_MISMATCH expected=hex got=hex
 - `SCHEMA_ERROR` - at_seq=s field=name detail=msg
 - `WARN ignored trailing partial record` (non-fatal)
+- `KEY_EPOCH` - at_seq=s epoch=n key=hex... (a key-epoch boundary; see above)
+- `UNTRUSTED key_epoch` / `TAMPER key_epoch` - the epoch record names a key not
+  given with `--pubkey`, epochs do not increase, or its `event_hash` does not
+  commit to the key it names
+- `SIGNATURE_ERROR` - a signature did not verify (the command fails)
 
 ## Quick Start
 

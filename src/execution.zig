@@ -368,22 +368,11 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
         return instance;
     }
 
-    // Prefer GraphStore data dir override; fall back to GEODE_DATA_DIR or /tmp
-    var data_dir_owned: ?[]u8 = null;
-    const data_dir = if (graph_store.getDataDirOverride()) |override| blk: {
-        data_dir_owned = try allocator.dupe(u8, override);
-        break :blk data_dir_owned.?;
-    } else blk: {
-        const env = getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| {
-            if (err == error.EnvironmentVariableNotFound) {
-                break :blk "/tmp";
-            }
-            return err;
-        };
-        data_dir_owned = env;
-        break :blk env;
-    };
-    defer if (data_dir_owned) |owned| allocator.free(owned);
+    // The store's data directory: the override, GEODE_DATA_DIR, or the
+    // per-user default. SONNY-6325: the catalog used to fall back to the
+    // shared /tmp (reading and writing /tmp/geode_catalog.dat).
+    const data_dir = try graph_store.getPersistenceFilePath(allocator);
+    defer allocator.free(data_dir);
 
     // Create the catalog instance with provided allocator
     const instance = try catalog_mod.Catalog.init(allocator, data_dir);

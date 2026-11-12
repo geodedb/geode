@@ -144,14 +144,18 @@ test "TestSONNY2394_ListenerCertAutogenExplicitPolicy" {
 const openssl_shim =
     \\#!/bin/sh
     \\out=""
+    \\keyout=""
     \\while [ "$#" -gt 0 ]; do
     \\  if [ "$1" = "-out" ]; then out="$2"; fi
+    \\  if [ "$1" = "-keyout" ]; then keyout="$2"; fi
     \\  shift
     \\done
     \\# A handler is reset by exec; an ignored signal stays ignored. A child
     \\# with default SIGPIPE exits here, before it can record success.
     \\kill -s PIPE "$$"
     \\printf 'geode-openssl-shim OPENSSL_CONF=%s\nSIGPIPE=ignored\n' "$OPENSSL_CONF" > "$out"
+    \\# SONNY-6325: like openssl, write the key too; the generator installs both.
+    \\printf 'geode-openssl-shim key\n' > "$keyout"
     \\
 ;
 

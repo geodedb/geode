@@ -173,14 +173,19 @@ pub const S3BackupManager = struct {
         const metadata = try self.downloadMetadata(backup_id);
 
         const io = std.Io.Threaded.global_single_threaded.io();
-        const tmp_dir = try std.fmt.allocPrint(self.allocator, "/tmp/geode_s3_restore_{x}", .{backup_id});
-        defer self.allocator.free(tmp_dir);
-        std.Io.Dir.cwd().createDirPath(io, tmp_dir) catch |err| switch (err) {
+        // SONNY-6325: stage in a private directory (random name, 0700,
+        // created exclusively) beside the restore target, never the
+        // predictable /tmp/geode_s3_restore_<id> that another local user
+        // could create, or link elsewhere, ahead of the restore.
+        const target_parent = std.fs.path.dirname(std.mem.trimEnd(u8, target_dir, "/")) orelse ".";
+        std.Io.Dir.cwd().createDirPath(io, target_parent) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
-        // error-policy: A — best-effort cleanup of the restore staging dir
-        // under /tmp; a leftover tree affects nothing but disk hygiene.
+        const tmp_dir = try backup.makePrivateTempDir(self.allocator, target_parent, "geode-s3-restore");
+        defer self.allocator.free(tmp_dir);
+        // error-policy: A — best-effort cleanup of the private staging dir on
+        // every exit path; a leftover tree affects nothing but disk hygiene.
         defer std.Io.Dir.cwd().deleteTree(io, tmp_dir) catch {};
 
         const s3_key = try std.fmt.allocPrint(

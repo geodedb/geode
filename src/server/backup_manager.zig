@@ -8,6 +8,10 @@ const audit = @import("../security/audit.zig");
 const logging = @import("logging");
 const log = logging.scoped("backup");
 const Attr = logging.Attr;
+// SONNY-6322: spawns this binary's offline auth-chain verifier (no
+// signal-handler swap, the process environment; see spawn_io).
+const spawn_io = @import("spawn_io");
+const builtin = @import("builtin");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-002; FEATURE="ServerRefactoring"; ASPECT=BACKUP_MANAGER; STATUS=EXEMPT; OWNER=refactor; UPDATED=2026-01-10
 // CANARY: REQ=REQ-BACKUP-REAL-DATA-001; FEATURE="BackupRealData"; ASPECT=DataIntegrity; STATUS=TESTED; TEST=geodetestlab/specs/backup_restore_operations.yml; OWNER=backup; UPDATED=2026-01-10
@@ -213,7 +217,10 @@ fn restoreForServerInner(allocator: std.mem.Allocator, backup_dirs: []const []co
     };
     const live_dir = adapter.data_dir;
 
-    var restored = backup.restoreBesideDataDir(allocator, backup_dirs, live_dir, target_ms) catch |err| {
+    var restored = backup.restoreBesideDataDir(allocator, backup_dirs, live_dir, target_ms, verifyStagedAuthChain) catch |err| {
+        if (err == error.AuthChainVerificationFailed) {
+            return refused(allocator, "Restore failed: AuthChainVerificationFailed: the backup's __geode_security auth records do not verify with this server's HMAC key (sealed under another key?); nothing was restored and the data directory {s} was not changed. Restore it offline with geode restore <file> --data-dir <dir> --hmac-key-file <the source server's .geode_hmac_key>", .{live_dir});
+        }
         return refused(allocator, "Restore failed: {s}; nothing was restored and the data directory {s} was not changed", .{ @errorName(err), live_dir });
     };
     defer restored.deinit();
@@ -231,7 +238,7 @@ fn restoreForServerInner(allocator: std.mem.Allocator, backup_dirs: []const []co
         try msg.print(allocator, ". The backup came from the legacy {s} directory; new backups are written to {s}", .{ legacy_backup_dir, backup_dirs[0] });
     }
     if (restored.copied_hmac_key) {
-        try msg.appendSlice(allocator, ". This server's HMAC key file was copied in: the restored auth chain is verified with it when a server starts on that directory");
+        try msg.appendSlice(allocator, ". This server's HMAC key file was copied in; the restored auth chain, if any, was verified with this server's key before the restore was kept");
     }
     if (restored.key_material.any()) {
         var names_buf: [128]u8 = undefined;
@@ -241,6 +248,50 @@ fn restoreForServerInner(allocator: std.mem.Allocator, backup_dirs: []const []co
     const dir = try allocator.dupe(u8, restored.target_dir);
     errdefer allocator.free(dir);
     return .{ .success = true, .message = try msg.toOwnedSlice(allocator), .restore_dir = dir };
+}
+
+// CANARY: REQ=REQ-SONNY-6322-SERVER-RESTORE-CHAIN; FEATURE="Backup Restore"; ASPECT=ChildVerifier; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=storage; UPDATED=2026-11-11
+/// SONNY-6322: verify the staged restore's `__geode_security` chain the way
+/// a server starting on it would: the key from GEODE_AUTH_HMAC_KEY or
+/// GEODE_TDE_KEY, else the staged `.geode_hmac_key` (this server's, copied
+/// in by `restoreBesideDataDir`, or an older archive's). The running server
+/// cannot open a second store in this process (the store is a process
+/// global), so this runs its own binary's offline verifier, `geode auth
+/// verify --data-dir <staging>`, as a child with the server's environment;
+/// it opens only the staging copy and prints no key bytes. A non-zero exit
+/// is error.AuthChainVerificationFailed. Fails closed where the binary
+/// cannot be located (non-Linux).
+fn verifyStagedAuthChain(allocator: std.mem.Allocator, staging_dir: []const u8) anyerror!void {
+    if (comptime builtin.os.tag != .linux) return error.AuthChainVerificationUnavailable;
+    var threaded = spawn_io.threaded();
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    // The verifier takes the directory's lock; a staging copy has no lock
+    // file of its own (an archive's is never written), so remove the one
+    // the child leaves.
+    const lock_path = try std.fs.path.join(allocator, &.{ staging_dir, backup.lock_file_name });
+    defer allocator.free(lock_path);
+    const fs_io = std.Io.Threaded.global_single_threaded.io();
+    const lock_existed = if (std.Io.Dir.cwd().access(fs_io, lock_path, .{})) |_| true else |_| false;
+    defer if (!lock_existed) std.Io.Dir.cwd().deleteFile(fs_io, lock_path) catch {};
+
+    const result = try std.process.run(allocator, io, .{
+        .argv = &.{ "/proc/self/exe", "auth", "verify", "--data-dir", staging_dir },
+        .stdout_limit = .limited(1 << 20),
+        .stderr_limit = .limited(1 << 20),
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    const ok = result.term == .exited and result.term.exited == 0;
+    if (!ok) {
+        const tail = if (result.stderr.len > 512) result.stderr[result.stderr.len - 512 ..] else result.stderr;
+        log.err("restored __geode_security chain does not verify", &.{
+            Attr.string("staging_dir", staging_dir),
+            Attr.string("verifier_output", tail),
+        });
+        return error.AuthChainVerificationFailed;
+    }
 }
 
 fn realtimeMs() i64 {

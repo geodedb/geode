@@ -1080,47 +1080,11 @@ pub fn deinitGlobalUndoLog() void {
     t_txn_state = .{};
 }
 
-/// File-based persistence for undo log (to survive across CLI invocations)
-fn getUndoLogFilePath(allocator: std.mem.Allocator) ![]const u8 {
-    var env_map = try std.process.getEnvMap(allocator);
-    defer env_map.deinit();
-
-    if (env_map.get("GEODE_DATA_DIR")) |data_dir| {
-        return try std.fmt.allocPrint(allocator, "{s}/geode_undo_log.bin", .{data_dir});
-    }
-    return try allocator.dupe(u8, "/tmp/geode_undo_log.bin");
-}
-
-/// Save undo log to disk for persistence across CLI invocations
-pub fn saveUndoLog(allocator: std.mem.Allocator, log: *UndoLog) !void {
-    if (!log.active or log.entries.items.len == 0) {
-        // No active transaction or no entries, clear the file
-        try clearUndoLogFile(allocator);
-        return;
-    }
-
-    const file_path = try getUndoLogFilePath(allocator);
-    defer allocator.free(file_path);
-
-    const io_fs = std.Io.Threaded.global_single_threaded.io();
-    const file = try std.Io.Dir.cwd().createFile(io_fs, file_path, .{});
-    defer file.close(io_fs);
-
-    var file_writer_buf: [4096]u8 = undefined;
-    var file_writer = file.writer(io_fs, &file_writer_buf);
-    const w = &file_writer.interface;
-
-    // Write number of entries
-    var count_buf: [8]u8 = undefined;
-    std.mem.writeInt(u64, &count_buf, log.entries.items.len, .little);
-    try w.writeAll(&count_buf);
-
-    // Write each entry (simplified binary format)
-    for (log.entries.items) |entry| {
-        try writeUndoEntry(w, entry);
-    }
-    try w.flush();
-}
+// SONNY-6325: the undo log's file persistence (saveUndoLog, loadUndoLog,
+// clearUndoLogFile) was removed: nothing called it, it no longer compiled
+// against Zig 0.16 (std.process.getEnvMap, an Io-less deleteFile), and
+// without GEODE_DATA_DIR it used the fixed /tmp/geode_undo_log.bin. The
+// entry encoders below remain (round-trip tested).
 
 fn writeU32(file: *std.Io.Writer, value: u32) !void {
     var buf: [4]u8 = undefined;
@@ -1241,58 +1205,6 @@ fn writeUndoEntry(file: *std.Io.Writer, entry: UndoEntry) !void {
             try writeString(file, e.label);
         },
     }
-}
-
-/// Load undo log from disk
-pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
-    const file_path = try getUndoLogFilePath(allocator);
-    defer allocator.free(file_path);
-
-    const io_fs = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.cwd().openFile(io_fs, file_path, .{}) catch |err| {
-        if (err == error.FileNotFound) return null;
-        return err;
-    };
-    defer file.close(io_fs);
-
-    var file_reader_buf: [4096]u8 = undefined;
-    var file_reader_obj = file.reader(io_fs, &file_reader_buf);
-    const r = &file_reader_obj.interface;
-
-    var log = getGlobalUndoLog(allocator);
-    log.clear();
-    // Legacy CLI persistence: the process that saved the log owned the
-    // transaction.  On reload, stamp the current thread with a fresh txn
-    // id so rollback()/commit() can find the entries.
-    t_txn_state.txn_id = allocTxnId();
-    t_txn_state.active = true;
-    log.active = true;
-
-    // Read number of entries
-    const count = try r.takeInt(u64, .little);
-
-    // Read entries
-    var i: u64 = 0;
-    while (i < count) : (i += 1) {
-        const entry = try readUndoEntry(allocator, r);
-        if (entry) |e| {
-            log.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            log.entries.append(allocator, e) catch |append_err| {
-                log.freeEntry(e);
-                log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-                return append_err;
-            };
-            log.entry_txns.append(allocator, t_txn_state.txn_id) catch |append_err| {
-                _ = log.entries.pop();
-                log.freeEntry(e);
-                log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-                return append_err;
-            };
-            log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        }
-    }
-
-    return log;
 }
 
 fn readU32(file: *std.Io.Reader) !u32 {
@@ -1466,15 +1378,6 @@ fn readUndoEntry(allocator: std.mem.Allocator, file: *std.Io.Reader) !?UndoEntry
             return .{ .RemoveNodeLabel = .{ .node_id = node_id, .label = label } };
         },
     }
-}
-
-/// Clear the undo log file
-pub fn clearUndoLogFile(allocator: std.mem.Allocator) !void {
-    const file_path = try getUndoLogFilePath(allocator);
-    defer allocator.free(file_path);
-    std.Io.Dir.cwd().deleteFile(file_path) catch |err| {
-        if (err != error.FileNotFound) return err;
-    };
 }
 
 test "basic undo log operations" {

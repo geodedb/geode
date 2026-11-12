@@ -740,15 +740,17 @@ quic-status:
 		echo "Run: git submodule update --init --recursive"; \
 	fi
 
-# Generate TLS certificates
+# Generate TLS certificates into CERT_DIR (default ./certs; cert_gen has no
+# default directory, SONNY-6325).
+CERT_DIR ?= certs
 cert-gen: build
 	@if [ -f "./zig-out/bin/cert_gen" ]; then \
-		./zig-out/bin/cert_gen; \
+		./zig-out/bin/cert_gen "$(CERT_DIR)"; \
 	else \
 		echo "cert_gen not found, building it..."; \
 		$(ZIG) build $(ZIG_FLAGS); \
 		if [ -f "./zig-out/bin/cert_gen" ]; then \
-			./zig-out/bin/cert_gen; \
+			./zig-out/bin/cert_gen "$(CERT_DIR)"; \
 		else \
 			echo "cert_gen build failed"; \
 		fi \

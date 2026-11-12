@@ -441,20 +441,9 @@ fn appendString(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, str: []co
 pub var g_wal: ?*WriteAheadLog = null;
 pub var g_wal_storage: ?WriteAheadLog = null;
 
-/// Initialize the global WAL instance using the data directory
-pub fn initGlobalWal(allocator: std.mem.Allocator, data_dir: ?[]const u8) !void {
-    const dir = data_dir orelse "/tmp";
-    const wal_path = try std.fmt.allocPrint(allocator, "{s}/geode_wal.log", .{dir});
-    defer allocator.free(wal_path);
-
-    // Ensure the directory exists
-    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), dir) catch |err| {
-        log.err("WAL: failed to create data directory", &.{Attr.string("error", @errorName(err))});
-    };
-
-    g_wal_storage = try WriteAheadLog.init(allocator, wal_path);
-    g_wal = &g_wal_storage.?;
-}
+// SONNY-6325: `initGlobalWal(allocator, ?data_dir)` was removed: nothing
+// called it, and with no data directory it put the WAL at /tmp/geode_wal.log.
+// Tests that need the global WAL set `g_wal_storage`/`g_wal` themselves.
 
 /// Get the global WAL instance (null if not initialized)
 pub fn getGlobalWal() ?*WriteAheadLog {

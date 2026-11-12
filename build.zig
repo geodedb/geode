@@ -1100,6 +1100,13 @@ pub fn build(b: *std.Build) void {
     // a file may belong to only one module per compilation.
     const spawn_io_mod = b.createModule(.{ .root_source_file = b.path("src/transport/spawn_io.zig"), .target = target, .optimize = optimize, .link_libc = true });
     transport_quic_mod.addImport("spawn_io", spawn_io_mod);
+    // SONNY-6325: auto-generated TLS material (private staging, exclusive
+    // no-follow install, key 0600, existing-key checks), shared by the QUIC
+    // listener and the `geode serve` startup generator for the same reason
+    // spawn_io is a module of its own.
+    const tls_material_mod = b.createModule(.{ .root_source_file = b.path("src/transport/tls_material.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    tls_material_mod.addImport("spawn_io", spawn_io_mod);
+    transport_quic_mod.addImport("tls_material", tls_material_mod);
 
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
     // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
@@ -1194,6 +1201,9 @@ pub fn build(b: *std.Build) void {
 
     // Create root module early so it can be used by executables
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+    // SONNY-6322: server/backup_manager.zig spawns the offline auth-chain
+    // verifier on a staged restore through spawn_io.
+    root_mod.addImport("spawn_io", spawn_io_mod);
 
     // Phase C1: `server/runtime_metrics.zig` must be reachable from both the
     // public `geode` module (lib.zig re-export, plus group_commit.zig /
@@ -1313,6 +1323,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("geode", root_mod);
     // server/main.zig -> tools/cert_gen.zig (SONNY-2394).
     geode_exe.root_module.addImport("spawn_io", spawn_io_mod);
+    geode_exe.root_module.addImport("tls_material", tls_material_mod);
     // FIPS seam: wire crypto_backend into the executable for later routing tasks.
     geode_exe.root_module.addImport("crypto_backend", crypto_backend_mod);
     // GAP-0810: named-module form to keep a single owning module for
@@ -2208,6 +2219,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     cert_provided_mod.addImport("spawn_io", spawn_io_mod);
+    cert_provided_mod.addImport("tls_material", tls_material_mod);
     const cert_provided_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_cert_provided_cert_honored.zig"),
         .target = target,
@@ -6125,6 +6137,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/tools/cert_gen.zig"), .target = target, .optimize = optimize }),
     });
     cert_gen_exe.root_module.addImport("spawn_io", spawn_io_mod);
+    cert_gen_exe.root_module.addImport("tls_material", tls_material_mod);
     b.installArtifact(cert_gen_exe);
     tools_step.dependOn(&cert_gen_exe.step);
 
@@ -9351,6 +9364,47 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6301_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6301_step = b.step("test-sonny6301-test-ports-and-timeouts", "Run SONNY-6301 regression (test ports come from the kernel, not a constant: distinct, usable UDP/TCP ports and two servers at once each answering on its own; shared QUIC and gRPC test clients wait for a live server past the old reply deadline and fail at once when it exited)");
     sonny6301_step.dependOn(&run_sonny6301_tests.step);
+
+    // SONNY-6325: no secret or temp directory at a fixed shared /tmp path:
+    // the auto TLS key lives in the data directory (exclusive, no-follow,
+    // 0600; an existing auto key must be ours and owner-only), S3 restore
+    // stages in a private temp dir, the audit diagnostics write private
+    // data-directory files, backup list skips /tmp, the per-user tmp data
+    // directory is checked, and a backup without a data directory is refused.
+    const sonny6325_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6325_no_fixed_tmp_paths.zig"), .target = target, .optimize = optimize });
+    sonny6325_test_mod.link_libc = true;
+    sonny6325_test_mod.addImport("geode", root_mod);
+    sonny6325_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6325_test_mod.addImport("schema", schema_mod);
+    sonny6325_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6325_test_mod.addImport("storage/backup", storage_backup_mod);
+    sonny6325_test_mod.addImport("cert_gen", cert_provided_mod);
+    const sonny6325_tests = b.addTest(.{ .root_module = sonny6325_test_mod });
+    const run_sonny6325_tests = b.addRunArtifact(sonny6325_tests);
+    spawnsBuiltGeode(sonny6325_tests);
+    shardDep(test_step, &run_sonny6325_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6325_step = b.step("test-sonny6325-no-fixed-tmp-paths", "Run SONNY-6325 regression (spawns servers: the auto TLS key is created in the data directory exclusive/no-follow/0600, an existing group-readable, linked or half-pair auto key is refused, no /tmp fallback; S3 restore staging is a private temp dir; audit diagnostics write private data-directory files; backup list skips /tmp; the per-user tmp data directory is checked 0700/owner and honours TMPDIR; a backup without a data directory is refused)");
+    sonny6325_step.dependOn(&run_sonny6325_tests.step);
+
+    // SONNY-6322: a backup never holds the audit signing seed; a store
+    // without it starts a new audit key epoch (old public key kept, a
+    // KEY_EPOCH record in the log) that `geode audit verify` checks per
+    // epoch; startup never invents an HMAC key over auth records; a server
+    // restore verifies the staged copy's auth chain.
+    const sonny6322_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6322_audit_seed_and_hmac_startup.zig"), .target = target, .optimize = optimize });
+    sonny6322_test_mod.link_libc = true;
+    sonny6322_test_mod.addImport("geode", root_mod);
+    sonny6322_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6322_test_mod.addImport("schema", schema_mod);
+    sonny6322_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny6322_test_mod.addImport("storage/backup", storage_backup_mod);
+    sonny6322_test_mod.addImport("audit_verify", audit_mod);
+    const sonny6322_tests = b.addTest(.{ .root_module = sonny6322_test_mod });
+    const run_sonny6322_tests = b.addRunArtifact(sonny6322_tests);
+    spawnsBuiltGeode(sonny6322_tests);
+    shardDep(test_step, &run_sonny6322_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6322_step = b.step("test-sonny6322-audit-seed-and-hmac-startup", "Run SONNY-6322 regression (spawns servers: a backup holds no audit.jsonl.key; a restored store starts a new audit key epoch, old public key intact, both epochs verify with geode audit verify and a made-up key fails; startup with auth records and no HMAC key refuses and writes nothing; a server restore of a backup sealed under another key fails, leaving nothing; an older archive with the seed restores with a warning, 0600)");
+    sonny6322_step.dependOn(&run_sonny6322_tests.step);
 
     // SONNY-6299: a backup never holds the TLS private key, the auth-chain
     // HMAC key, the generated admin password or the data-directory lock;

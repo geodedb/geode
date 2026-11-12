@@ -53,6 +53,89 @@ const log = std.log.scoped(.audit_dispatch);
 
 // CANARY: REQ=REQ-AUDIT-PROC-001; FEATURE="AuditProcedures"; ASPECT=EventID; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
 pub var audit_event_id_counter: std.atomic.Value(u32) = std.atomic.Value(u32).init(1001);
+const graph_store = @import("../graph_store.zig");
+
+// CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=AuditDiagnosticsPrivateFiles; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6325: the files the audit diagnostic procedures write live in
+/// `<data dir>/audit-diagnostics/` (0700, files 0600, opened without
+/// following a symbolic link). They used fixed paths in the shared /tmp
+/// (created and truncated through any link planted there, with the logger's
+/// signing key beside them), and `audit.cleanup_test_artifacts` deleted
+/// those paths and /etc/geode/geode_audit.jsonl.
+const diagnostics_dir_name = "audit-diagnostics";
+
+/// `<data dir>/audit-diagnostics`, a private directory (graph_store.ensurePrivateDir).
+/// Allocated with `allocator`; caller frees.
+fn diagnosticsDir(allocator: std.mem.Allocator) ![]u8 {
+    const data_dir = try graph_store.getPersistenceFilePath(allocator);
+    defer allocator.free(data_dir);
+    const dir = try std.fs.path.join(allocator, &.{ data_dir, diagnostics_dir_name });
+    errdefer allocator.free(dir);
+    try graph_store.ensurePrivateDir(dir);
+    return dir;
+}
+
+/// `<data dir>/audit-diagnostics/<name>`, allocated with the process
+/// allocator because it may become the long-lived diagnostic logger's file
+/// path. Caller owns it.
+fn diagnosticPath(name: []const u8) ![]u8 {
+    const gpa = std.heap.smp_allocator;
+    const dir = try diagnosticsDir(gpa);
+    defer gpa.free(dir);
+    return std.fs.path.join(gpa, &.{ dir, name });
+}
+
+/// Create or truncate the diagnostic file `path`, mode 0600, never through a
+/// symbolic link (error.SymLinkLoop).
+fn openDiagnosticFile(path: []const u8) !std.Io.File {
+    const fd = try std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .TRUNC = true,
+        .NOFOLLOW = true,
+        .CLOEXEC = true,
+    }, 0o600);
+    const file = std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    errdefer file.close(std.Io.Threaded.global_single_threaded.io());
+    try file.setPermissions(std.Io.Threaded.global_single_threaded.io(), std.Io.File.Permissions.fromMode(0o600));
+    return file;
+}
+
+/// The diagnostic audit logger's file path once it has one (kept for the
+/// process lifetime with the logger).
+var diagnostic_logger_path: ?[]u8 = null;
+
+/// Initialize the dispatch module's diagnostic logger on `name` in the
+/// diagnostics directory when there is none. Caller holds
+/// global_audit_logger_mutex.
+fn initDiagnosticLoggerLocked(allocator: std.mem.Allocator, name: []const u8, redact_pii: bool) void {
+    if (global_audit_logger != null) return;
+    const path = diagnosticPath(name) catch |err| {
+        log.warn("audit diagnostics directory unavailable: {s}", .{@errorName(err)});
+        return;
+    };
+    // The logger opens the file itself; make sure it is a regular file of
+    // ours first (no link is followed into it).
+    if (openDiagnosticFile(path)) |f| {
+        f.close(std.Io.Threaded.global_single_threaded.io());
+    } else |err| {
+        log.warn("audit diagnostic file refused: {s}", .{@errorName(err)});
+        std.heap.smp_allocator.free(path);
+        return;
+    }
+    global_audit_logger = audit_mod.AuditLogger.init(allocator, .{
+        .enabled = true,
+        .file_path = path,
+        .redact_pii = redact_pii,
+        .log_denies_only = false,
+    }) catch null;
+    if (global_audit_logger == null) {
+        std.heap.smp_allocator.free(path);
+        return;
+    }
+    diagnostic_logger_path = path;
+}
+
 pub var global_audit_logger: ?audit_mod.AuditLogger = null;
 pub var global_audit_logger_mutex: std.Io.Mutex = std.Io.Mutex.init;
 pub var global_audit_file_path: []const u8 = "/etc/geode/geode_audit.jsonl";
@@ -74,12 +157,9 @@ fn getOrCreateTestLogger(allocator: std.mem.Allocator) !*audit_mod.AuditLogger {
     // Fall back to dispatch module's own logger (e.g., in unit test or standalone mode)
     global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (global_audit_logger == null) {
-        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "audit_test.jsonl",
-        });
-    }
+    // SONNY-6325: in the diagnostics directory, not the working directory.
+    initDiagnosticLoggerLocked(allocator, "audit_test.jsonl", true);
+    if (global_audit_logger == null) return error.AuditDiagnosticsUnavailable;
     // Return a pointer to the optional's payload — safe because global_audit_logger
     // is a module-level var and remains alive for the process lifetime.
     return &global_audit_logger.?;
@@ -730,15 +810,16 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
     // CANARY: REQ=REQ-AUDIT-PROC-009; FEATURE="AuditProcedures"; ASPECT=FileOutput; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
     // audit.test_file_output() -> success, file_path, events_written
 
-    // Test file path
-    const test_file_path = "/tmp/geode_audit_file_output_test.jsonl";
+    // SONNY-6325: a private file in the data directory (was a fixed /tmp path).
+    const test_file_path = try diagnosticPath("test_file_output.jsonl");
+    defer std.heap.smp_allocator.free(test_file_path);
 
     var success = false;
     var events_written: i64 = 0;
 
     // Write test audit events to file
     const io_ad3 = std.Io.Threaded.global_single_threaded.io();
-    if (std.Io.Dir.cwd().createFile(io_ad3, test_file_path, .{})) |file| {
+    if (openDiagnosticFile(test_file_path)) |file| {
         defer file.close(io_ad3);
 
         // Write sample audit events in JSONL format
@@ -763,14 +844,7 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
         global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        if (global_audit_logger == null) {
-            global_audit_logger = audit_mod.AuditLogger.init(allocator, .{
-                .enabled = true,
-                .file_path = test_file_path,
-                .redact_pii = false,
-                .log_denies_only = false,
-            }) catch null;
-        }
+        initDiagnosticLoggerLocked(allocator, "audit_diagnostics.jsonl", false);
 
         if (global_audit_logger) |*logger| {
             // Log additional test event
@@ -840,14 +914,7 @@ fn handleAuditTestAuthCategories(allocator: std.mem.Allocator, _: ast.CallProced
     global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-    if (global_audit_logger == null) {
-        global_audit_logger = audit_mod.AuditLogger.init(allocator, .{
-            .enabled = true,
-            .file_path = "/tmp/geode_audit_auth_categories.jsonl",
-            .redact_pii = false,
-            .log_denies_only = false,
-        }) catch null;
-    }
+    initDiagnosticLoggerLocked(allocator, "audit_diagnostics.jsonl", false);
 
     // Create result rows for multiple categories
     const rows = try allocator.alloc([]Value, auth_categories.len);
@@ -1733,21 +1800,30 @@ fn handleAuditCleanupTestArtifacts(allocator: std.mem.Allocator, _: ast.CallProc
     // CANARY: REQ=REQ-AUDIT-PROC-036; FEATURE="AuditProcedures"; ASPECT=TestCleanup; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
     // audit.cleanup_test_artifacts() -> files_cleaned, logs_archived, test_data_removed
 
-    // Clean up test audit log files
+    // SONNY-6325: remove the diagnostic files in <data dir>/audit-diagnostics
+    // only (never following a link out of it). This used to delete fixed
+    // /tmp paths and /etc/geode/geode_audit.jsonl. The diagnostic logger's
+    // own file and keys stay while the logger is open.
     var files_cleaned: i64 = 0;
-    const test_audit_paths = [_][]const u8{
-        "/tmp/geode_audit_test.jsonl",
-        "/tmp/geode_audit_test.jsonl.1",
-        "/tmp/geode_audit_test.jsonl.2",
-        "/etc/geode/geode_audit.jsonl",
-    };
-
-    for (test_audit_paths) |path| {
-        std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {
-            // Ignore errors if files don't exist
-            continue;
-        };
-        files_cleaned += 1;
+    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const io_ct = std.Io.Threaded.global_single_threaded.io();
+    if (diagnosticsDir(allocator)) |dir_path| {
+        defer allocator.free(dir_path);
+        if (std.Io.Dir.cwd().openDir(io_ct, dir_path, .{ .iterate = true })) |dir_const| {
+            var dir = dir_const;
+            defer dir.close(io_ct);
+            const keep: []const u8 = if (diagnostic_logger_path) |p| std.fs.path.basename(p) else "";
+            var it = dir.iterate();
+            while (it.next(io_ct) catch null) |entry| {
+                if (entry.kind != .file and entry.kind != .sym_link) continue;
+                if (keep.len > 0 and std.mem.startsWith(u8, entry.name, keep)) continue;
+                dir.deleteFile(io_ct, entry.name) catch continue;
+                files_cleaned += 1;
+            }
+        } else |_| {}
+    } else |err| {
+        log.warn("audit diagnostics directory unavailable: {s}", .{@errorName(err)});
     }
 
     const columns = try allocator.alloc([]const u8, 3);
