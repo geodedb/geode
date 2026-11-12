@@ -4,6 +4,26 @@
 
 ### Security
 
+- **`geode query` never sends a write again once the server may have
+  applied it (SONNY-6377).** `geode query --file` on a file over 16 KiB
+  ships each 32 KiB chunk as one program. A chunk of ~400 CREATEs takes
+  ~38 s in a Debug server, past the default 30 s `--timeout`; the client's
+  read timed out while the server was applying the chunk, and
+  `executeChunkedQueries` took any transport error for a rejected chunk and
+  replayed its statements one by one, so each landed twice (400 nodes
+  became 800; `test-cli-file-chunked` failed 2 of 12). Over gRPC,
+  `executeGrpcQuery` retried any error but a timeout or an incomplete
+  response on a new connection, even after the Execute request was sent, so
+  a connection reset after the server applied a CREATE ran it up to three
+  times. The QUIC auto-retry in `executeQuicQuery` was not a cause (it
+  retries only a failed HELLO); it now also checks that the query was not
+  sent. **Behaviour change:** a chunk that was sent and got no answer is not
+  sent again; the run stops there, says its statements may still be
+  executing, and exits 4 for a timeout (as a single query does) or 1
+  otherwise; the chunks after it are not run. A gRPC query whose connection
+  fails after it was sent exits 1 with "may or may not have executed" and is
+  not retried. `--retry` retries only before the query is sent.
+  `test-sonny6377-query-no-resend`.
 - **One label-deny engine for the executor and the transport post-filter
   (SONNY-2729 part 2).** The post-filter (`server/rls_filter.zig`) had an
   engine type and global of its own, beside the executor's

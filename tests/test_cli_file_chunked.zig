@@ -285,10 +285,18 @@ const Fixture = struct {
     }
 
     /// Run `geode query <extra_args>` against the fixture server.
+    ///
+    /// SONNY-6377: `--timeout 300`. A 32 KiB chunk of ~400 CREATEs takes
+    /// ~38 s in a Debug server, past the default 30 s. Before SONNY-6377 the
+    /// client timed out and replayed the chunk statement by statement, so
+    /// every statement landed twice (400 expected, 800 found). A chunk that
+    /// times out now stops the run with exit 4 and is never replayed
+    /// (tests/test_sonny6377_query_no_resend.zig); these cases are about
+    /// chunking, so they give each chunk room to finish.
     fn runQuery(self: *Fixture, extra_args: []const u8) !Proc {
         const cmd = try std.fmt.allocPrint(
             self.aa(),
-            "{s} query --server {s} --insecure-tls-skip-verify --format json -U {s} -P '{s}' {s} < /dev/null",
+            "{s} query --server {s} --insecure-tls-skip-verify --timeout 300 --format json -U {s} -P '{s}' {s} < /dev/null",
             .{ binary_path, self.listen, admin_username, admin_password, extra_args },
         );
         const argv = try self.aa().alloc([]const u8, 3);
