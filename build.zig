@@ -10300,6 +10300,32 @@ pub fn build(b: *std.Build) void {
     const sonny3184_step = b.step("test-sonny3184-optional-match-distinct-call", "Run SONNY-6337 / SONNY-3184 / SONNY-3167 / SONNY-3389 regression (OPTIONAL MATCH is a left outer join whose WHERE restricts the match only, after WITH too; WITH DISTINCT and RETURN DISTINCT on every session; the RETURN after a statement-level CALL { } is computed over the body's rows: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny3184_step.dependOn(&run_sonny3184_tests.step);
 
+    // SONNY-2672 / SONNY-2680 / SONNY-2811 / SONNY-2779 / SONNY-3128 /
+    // SONNY-2695 / SONNY-2698 / SONNY-2682 / SONNY-2699 / SONNY-2688 /
+    // SONNY-3127: read and write-RETURN semantics batch.
+    const sonny2672_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2672_read_semantics_batch.zig"), .target = target, .optimize = optimize });
+    sonny2672_test_mod.addImport("geode", root_mod);
+    sonny2672_test_mod.addImport("logging", logging_mod);
+    sonny2672_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2672_tests = b.addTest(.{ .root_module = sonny2672_test_mod });
+    const run_sonny2672_tests = b.addRunArtifact(sonny2672_tests);
+    shardDep(test_step, &run_sonny2672_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2672_step = b.step("test-sonny2672-read-semantics-batch", "Run the SONNY-2672 read-semantics batch (FILTER before the read's LIMIT; SKIP / LIMIT parameters; ORDER BY key errors and unprojected keys; CALL YIELD windows; ORDER BY after a write RETURN; RETURN after SET; WITH before GROUP BY / HAVING; implicit grouping; GROUP BY a node HAVING EXISTS; multi-hop aggregates: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny2672_step.dependOn(&run_sonny2672_tests.step);
+    // The batch's still-red reproductions (SONNY-2698, SONNY-2699, SONNY-2779
+    // CALL RETURN / YIELD alias / MATCH ... CALL, SONNY-3128 CREATE, SONNY-2811
+    // WITH ORDER BY): intentionally RED, listed in docs/KNOWN_TEST_ISSUES.md,
+    // compiled by test-compile but kept out of shardDep until fixed.
+    const sonny2672_red_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2672_read_semantics_red.zig"), .target = target, .optimize = optimize });
+    sonny2672_red_test_mod.addImport("geode", root_mod);
+    sonny2672_red_test_mod.addImport("logging", logging_mod);
+    sonny2672_red_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2672_red_tests = b.addTest(.{ .root_module = sonny2672_red_test_mod });
+    if (g_test_compile_step) |c| c.dependOn(&sonny2672_red_tests.step);
+    const run_sonny2672_red_tests = b.addRunArtifact(sonny2672_red_tests);
+    const sonny2672_red_step = b.step("test-sonny2672-read-semantics-red", "Run the SONNY-2672 batch's still-red reproductions (intentionally RED; docs/KNOWN_TEST_ISSUES.md)");
+    sonny2672_red_step.dependOn(&run_sonny2672_red_tests.step);
+
     // SONNY-738 Task W fix round: the one write step (a SET, REMOVE, CREATE,
     // MERGE or DELETE applied over the rows the pattern binds, after the WITH
     // and its WHERE) and the structural guard that refuses a write clause an
