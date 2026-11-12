@@ -4,6 +4,26 @@
 
 ### Security
 
+- **Writes made after a checkpoint and a crash survive the next crash
+  (SONNY-6384).** After an offline `geode user` change on a data directory,
+  the server's later writes to `__geode_security` (CREATE USER, ALTER USER)
+  were lost to a SIGKILL, and with enough of them the next start could fail
+  to load the security graph (`admin bootstrap SKIPPED`,
+  `hydration-time exact-index build failed … error.DataCorruption`). The
+  cause was in graph persistence, for any graph, not in security code or in
+  the CLI's hydration snapshots (the writes were lost with every snapshot
+  removed). A full checkpoint compacts a shard WAL to empty and the WAL
+  library deletes its `graph.wal.ckpt` sidecar, the only record of an empty
+  WAL's LSN. A process that ended there without closing the engine (the
+  offline CLI always did; so does a SIGKILL after any checkpoint) left the
+  next open numbering the WAL from 0 while recovery replayed from the
+  manifest's `last_checkpoint_lsn`: every later record was skipped after a
+  crash, or past that many records only a torn tail was replayed. Opening a
+  graph now appends a no-op checkpoint marker at the manifest's checkpoint
+  LSN, and fsyncs it, when a shard WAL numbers below it (logged as "healed
+  shard WAL LSN anchor"); an open whose marker cannot be written fails.
+  Records an earlier recovery already skipped are not recovered.
+  `test-sonny6384-offline-change-crash-durability`.
 - **`geode query` never sends a write again once the server may have
   applied it (SONNY-6377).** `geode query --file` on a file over 16 KiB
   ships each 32 KiB chunk as one program. A chunk of ~400 CREATEs takes

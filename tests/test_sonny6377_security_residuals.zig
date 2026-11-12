@@ -24,7 +24,8 @@
 //    offline `geode user import`; after an offline mutation, the server's
 //    later security-graph writes, statement or not, are lost to a SIGKILL,
 //    and the next start may fail to load the security graph at all: a
-//    storage recovery defect reported separately, not this item.)
+//    storage recovery defect, SONNY-6384, fixed and pinned by
+//    tests/test_sonny6384_offline_change_crash_durability.zig.)
 //
 // CANARY: REQ=REQ-SONNY-6377-SECURITY-RESIDUALS; FEATURE="RLS Expression Wiring"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6377_security_residuals.zig; OWNER=security; UPDATED=2026-11-12
 

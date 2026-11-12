@@ -2379,6 +2379,49 @@ fn healSecurityEngineCounters(mg: *ManagedGraph) void {
     }
 }
 
+// CANARY: REQ=REQ-SONNY-6384-WAL-LSN-ANCHOR; FEATURE="Auth DDL Persistence"; ASPECT=WalLsnAnchorAtOpen; STATUS=TESTED; TEST=tests/test_sonny6384_offline_change_crash_durability.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6384: keep each shard WAL's LSN at or past its manifest's
+/// `last_checkpoint_lsn` before anything writes to the graph.
+///
+/// A full checkpoint sets `last_checkpoint_lsn = L` and compacts the WAL up
+/// to L; when that leaves the WAL empty, the WAL library deletes its
+/// `graph.wal.ckpt` sidecar, the only record of the WAL's LSN for an empty
+/// file (the clean close rewrites it). A process that ends after such a
+/// checkpoint without closing the engine (a SIGKILL, or the offline CLI,
+/// which never closes it) leaves the next open numbering the WAL from 0, while
+/// recovery replays from L by that same numbering: every record written
+/// afterwards is skipped by the next crash recovery (lost), or, once more
+/// than L were written, only a torn tail of them is replayed.
+///
+/// Heal: append one no-op `checkpoint_marker` at exactly LSN L and fsync it,
+/// the anchor the clean close would have left. Recovery replays from L + 1,
+/// so it never replays the marker; the next checkpoint compacts it away.
+/// Records already skipped by an earlier recovery are not recovered here.
+/// A failure fails the open: serving the graph would acknowledge writes that
+/// the next crash recovery drops.
+fn healWalLsnAnchor(engine: *gs.ShardedGraphEngine) !void {
+    for (engine.shards) |shard| {
+        if (shard.read_only) continue;
+        const covered = shard.manifest.last_checkpoint_lsn;
+        if (shard.wal.inner.currentLsn() >= covered) continue;
+        var rec = gs.wal_record.WalRecord{
+            .lsn = covered,
+            .txn_id = 0,
+            .record_type = .checkpoint_marker,
+            .file_id = 0,
+            .page_id = 0,
+            .payload = &.{},
+            .checksum = 0,
+        };
+        var buf: [64]u8 = undefined;
+        const n = try rec.serializeInto(&buf);
+        _ = try shard.wal.inner.appendWithLsn(covered, buf[0..n]);
+        try shard.wal.inner.sync();
+        if (shard.wal.current_lsn < covered) shard.wal.current_lsn = covered;
+        log.warn("healed shard WAL LSN anchor: the WAL numbered below its last checkpoint LSN {d} (an empty WAL left by a checkpoint and no clean close)", .{covered});
+    }
+}
+
 fn initMergeTupleLocks(allocator: Allocator) ![]std.Io.Mutex {
     const locks = try allocator.alloc(std.Io.Mutex, merge_tuple_lock_count);
     for (locks) |*lock| {
@@ -10255,6 +10298,12 @@ pub const StorageAdapter = struct {
         };
         // error-policy: A — best-effort close on an already-failing path.
         errdefer engine.close() catch {};
+
+        // SONNY-6384: before any write can land in a WAL that recovery would skip.
+        healWalLsnAnchor(engine) catch |err| {
+            log.err("failed to anchor the WAL LSNs of graph '{s}' at their last checkpoint: {}", .{ name, err });
+            return err;
+        };
 
         const mg = try self.allocator.create(ManagedGraph);
         errdefer self.allocator.destroy(mg);
