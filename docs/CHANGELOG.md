@@ -405,6 +405,21 @@
   empty `src/gpu/driver_link.zig` were named by no build option either;
   the Vulkan GPU path is unchanged, and OpenCL has no detection path
   (`tests/test_gap0878_gpu_truth.zig`).
+- **Never-compiled tests registered or corrected (SONNY-6298).**
+  `src/security/test_tde_nonce.zig` is now `tests/test_tde_nonce.zig`,
+  step `test-tde-nonce` (6/6: nonce uniqueness over 10,000 encryptions,
+  nonce byte diversity, round-trip, wrong AAD and tampered ciphertext
+  rejected). `tests/test_gap_0193_batch2_security.zig` is registered as
+  `test-gap0193-batch2-security` (37/37). The always-true `or true`
+  assertions in the GAP-0193 batch-2 security, engine and misc files and in
+  `test_gap_0193_impl_verification.zig`, and the
+  `x != y or x == y` assertion in `tests/priority_implementations.zig`, now
+  assert what they meant. The engine and misc files stay unregistered: 7
+  and 5 of their cases parse syntax the ISO GQL parser rejects (UNWIND,
+  `CREATE CONSTRAINT ... ASSERT`, `BEGIN TRANSACTION`, `[*]`). In
+  `test_gap_0193_impl_verification.zig` the CDC, metrics and CLI cases
+  would now fail (the geode module exports no `cdc`, `metrics`/`telemetry`
+  or `cli`). The mock-only `tests/e2e_cbo_small_n.zig` is removed.
 
 ---
 

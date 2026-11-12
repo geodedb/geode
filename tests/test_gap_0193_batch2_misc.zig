@@ -18,7 +18,7 @@ test "GAP-0193: 2PC - Distributed transaction coordinator" {
     if (has_distributed) {
         const distributed = geode.distributed;
         try testing.expect(@hasDecl(distributed, "TxnCoordinator") or
-            @hasDecl(distributed, "twophase") or true);
+            @hasDecl(distributed, "twophase"));
     }
     var result = try geode.parse(testing.allocator, "BEGIN TRANSACTION", .{});
     defer result.deinit();
@@ -38,7 +38,7 @@ test "GAP-0193: 2PC - Raft integration" {
     if (has_distributed) {
         const distributed = geode.distributed;
         try testing.expect(@hasDecl(distributed, "RaftConsensus") or
-            @hasDecl(distributed, "raft") or true);
+            @hasDecl(distributed, "raft"));
     }
     var result = try geode.parse(testing.allocator, "RETURN 'raft_ready' AS status", .{});
     defer result.deinit();
@@ -269,7 +269,7 @@ test "GAP-0193: QUIC - Connection handling" {
     if (has_transport) {
         const transport = geode.transport;
         try testing.expect(@hasDecl(transport, "QUIC") or
-            @hasDecl(transport, "quic") or true);
+            @hasDecl(transport, "quic"));
     }
     var result = try geode.parse(testing.allocator, "RETURN 'quic_connected' AS status", .{});
     defer result.deinit();
