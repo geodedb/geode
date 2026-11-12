@@ -9472,6 +9472,20 @@ pub fn build(b: *std.Build) void {
     const sonny6342_authn_step = b.step("test-sonny6342-authn-inline", "Run src/security/authn.zig AuthProvider inline unit tests (SONNY-6342: the API-key test leaked its result)");
     sonny6342_authn_step.dependOn(&run_sonny6342_authn_tests.step);
 
+    // SONNY-6346: a tenant registry that cannot be durable is an error and
+    // the server refuses to start (it ran in memory); an audit record keeps
+    // every detail key (more than 32 were dropped); cleanupOldLogs cleans the
+    // log's own directory, not the working directory.
+    const sonny6346_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6346_silent_degrade_audit_housekeeping.zig"), .target = target, .optimize = optimize });
+    sonny6346_test_mod.link_libc = true;
+    sonny6346_test_mod.addImport("geode", root_mod);
+    const sonny6346_tests = b.addTest(.{ .root_module = sonny6346_test_mod });
+    const run_sonny6346_tests = b.addRunArtifact(sonny6346_tests);
+    spawnsBuiltGeode(sonny6346_tests);
+    shardDep(test_step, &run_sonny6346_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6346_step = b.step("test-sonny6346-silent-degrade-audit-housekeeping", "Run SONNY-6346 regression (spawns a server: an uncreatable <data dir>/tenants refuses startup and TenantRegistry.initWithDataDir fails instead of running in memory; an audit record with more than 32 detail keys is written with every key; cleanupOldLogs deletes the log's own expired rotated files, never files in the working directory)");
+    sonny6346_step.dependOn(&run_sonny6346_tests.step);
+
     // SONNY-6299: a backup never holds the TLS private key, the auth-chain
     // HMAC key, the generated admin password or the data-directory lock;
     // server backups live under the data directory (or an absolute
