@@ -129,7 +129,6 @@ pub fn canSatisfyQuery(self: *MaterializedViewManager, query: []const u8) ?[]con
 - **Query Acceleration**: 10-100x speedup for complex analytical queries
 - **Memory Efficiency**: Intelligent view storage with compression
 - **Cache Hit Optimization**: Automatic query routing to compatible views
-- **Distributed Coordination**: Cross-shard view consistency with MVCC integration
 
 ## Dependency Tracking & Incremental Refresh
 
@@ -214,7 +213,6 @@ pub const MaterializedViewManager = struct {
 
 - **Transaction-Safe Refreshes**: View refresh operations execute within proper transaction boundaries
 - **Isolation Guarantees**: MVCC snapshot isolation ensures consistent view refreshes
-- **Distributed Coordination**: Cross-shard transaction coordination for federated view refreshes
 
 ## Enterprise Features
 
@@ -296,7 +294,6 @@ pub const MaterializedViewManager = struct {
 
 ### Integration Performance
 
-- **Distributed Coordination**: Leverages existing QUIC transport for <5ms cross-shard communication
 - **MVCC Integration**: <1ms overhead for transaction-safe view operations
 - **Query Optimization**: 10-100x speedup for queries served from materialized views
 
