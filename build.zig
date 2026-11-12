@@ -10030,6 +10030,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6430_so_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6430_so_step = b.step("test-sonny6430-storage-open-fail-closed", "Run SONNY-6430 items 5 and 7 regression (__geode_security does not open without its audit logger when the audit log cannot be opened or created; StorageAdapter.init refuses a graph registry that exists but cannot be loaded)");
     sonny6430_so_step.dependOn(&run_sonny6430_so_tests.step);
+    // SONNY-6435 (3): a GEODE_MASTER_KEY other than the recorded one
+    // refuses startup (spawns the built server).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_master_key_check.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6435-master-key-check", "Run SONNY-6435 item 3 regression (geode serve records a GEODE_MASTER_KEY check value on first start with a key, refuses a restart with another key or format, records one for a store without it, and checks nothing without a key)").dependOn(&run_tests.step);
+    }
     // SONNY-6435 (4): initAuditForGraph's type has no optional.
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_audit_init_type.zig"), .target = target, .optimize = optimize });

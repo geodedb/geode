@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:30:20.017046413Z",
+  "generated_at": "2026-11-12T23:33:46.17104862Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84433,6 +84433,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6435-MASTER-KEY-CHECK",
+      "features": [
+        {
+          "feature": "Key configuration",
+          "aspect": "MasterKeyCheckValue",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6435_master_key_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_master_key_check.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92118,7 +92137,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4790
+      "TESTED": 4791
     },
     "by_aspect": {
       "2PC": 3,
@@ -94166,6 +94185,7 @@
       "MapMerge": 1,
       "MapProjection": 1,
       "MapType": 1,
+      "MasterKeyCheckValue": 1,
       "MasterKeyMinimumLength": 1,
       "MasterKeyRequired": 2,
       "Match": 1,
