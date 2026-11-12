@@ -6663,8 +6663,10 @@ pub fn build(b: *std.Build) void {
     // SONNY-2819: the tests of the audit writer (the chain, the tenant
     // enrichment and the writer/verifier round-trip) had no named step, so a
     // change to the writer could be checked only through the whole aggregate.
-    const audit_writer_step = b.step("test-audit-writer", "Run the audit writer's chain, tenant-enrichment and writer/verifier round-trip tests");
+    const audit_writer_step = b.step("test-audit-writer", "Run the audit writer's chain, tenant-enrichment and writer/verifier round-trip tests, and the verifier's seq_no tests");
     audit_writer_step.dependOn(&run_audit_chain_tests.step);
+    // SONNY-3147: the verifier's seq_no tests had no named step.
+    audit_writer_step.dependOn(&run_audit_verify_seq_tests.step);
     audit_writer_step.dependOn(&run_audit_tenant_tests.step);
     audit_writer_step.dependOn(&run_audit_verify_roundtrip_tests.step);
 
@@ -9405,6 +9407,40 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6322_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6322_step = b.step("test-sonny6322-audit-seed-and-hmac-startup", "Run SONNY-6322 regression (spawns servers: a backup holds no audit.jsonl.key; a restored store starts a new audit key epoch, old public key intact, both epochs verify with geode audit verify and a made-up key fails; startup with auth records and no HMAC key refuses and writes nothing; a server restore of a backup sealed under another key fails, leaving nothing; an older archive with the seed restores with a warning, 0600)");
     sonny6322_step.dependOn(&run_sonny6322_tests.step);
+
+    // SONNY-6339: the server's data directory, however it was given (the
+    // --data-dir flag, GEODE_DATA_DIR, the per-user default), is the one the
+    // HMAC key lookup, the auth graph, the audit log, the tenant registry and
+    // the timeseries store use; an unusable HMAC key source refuses startup;
+    // startup reads the raw flag once (a source check).
+    const sonny6339_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6339_resolved_data_dir.zig"), .target = target, .optimize = optimize });
+    sonny6339_test_mod.link_libc = true;
+    sonny6339_test_mod.addImport("geode", root_mod);
+    sonny6339_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6339_test_mod.addImport("schema", schema_mod);
+    sonny6339_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6339_tests = b.addTest(.{ .root_module = sonny6339_test_mod });
+    const run_sonny6339_tests = b.addRunArtifact(sonny6339_tests);
+    spawnsBuiltGeode(sonny6339_tests);
+    shardDep(test_step, &run_sonny6339_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6339_step = b.step("test-sonny6339-resolved-data-dir", "Run SONNY-6339 regression (spawns servers with --data-dir, GEODE_DATA_DIR only, and the per-user default under a private HOME/TMPDIR: users, roles, per-graph grants and policies survive a restart, the HMAC key, TLS pair, audit log, tenant registry and timeseries land in the resolved directory, never the working directory, and geode auth verify passes; a malformed .geode_hmac_key or GEODE_AUTH_HMAC_KEY refuses startup; startup reads the raw flag once)");
+    sonny6339_step.dependOn(&run_sonny6339_tests.step);
+
+    // SONNY-3147: an audit record's event_hash covers the whole record (hash
+    // format 2); the verifier recomputes every record's hash, reports format-1
+    // records as weaker and refuses a downgrade; one verdict, no record
+    // contents; tamper matrix through the writer, the verifier and the CLI.
+    const sonny3147_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3147_audit_hash_coverage.zig"), .target = target, .optimize = optimize });
+    sonny3147_test_mod.link_libc = true;
+    sonny3147_test_mod.addImport("audit", audit_security_mod);
+    sonny3147_test_mod.addImport("rls", rls_mod);
+    sonny3147_test_mod.addImport("audit_verify", audit_mod);
+    const sonny3147_tests = b.addTest(.{ .root_module = sonny3147_test_mod });
+    const run_sonny3147_tests = b.addRunArtifact(sonny3147_tests);
+    spawnsBuiltGeode(sonny3147_tests);
+    shardDep(test_step, &run_sonny3147_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3147_step = b.step("test-sonny3147-audit-hash-coverage", "Run SONNY-3147 regression (changing any field of an audit record, deleting, reordering or inserting a record fails geode audit verify; a re-hashed change fails at the next signed DIGEST; format-1 logs verify as v1-only, the new writer appends format-2 records, a downgrade fails; one verdict, non-zero exit, no record contents; a clean close ends with a DIGEST; throughput printed)");
+    sonny3147_step.dependOn(&run_sonny3147_tests.step);
 
     // SONNY-6299: a backup never holds the TLS private key, the auth-chain
     // HMAC key, the generated admin password or the data-directory lock;

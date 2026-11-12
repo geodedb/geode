@@ -1128,6 +1128,30 @@ fn enforceCapabilityProfile(allocator: std.mem.Allocator, path: []const u8) !voi
     try geode.capability_gate.validateProfile(allocator, bytes, rows, geode.capability_gate.engineVersionFromBuildLabel(build_options.version));
 }
 
+// CANARY: REQ=REQ-SONNY-6339-RESOLVED-DATA-DIR; FEATURE="Server Startup"; ASPECT=OneResolver; STATUS=TESTED; TEST=tests/test_sonny6339_resolved_data_dir.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6339: the server's data directory: the `--data-dir` flag, else
+/// GEODE_DATA_DIR, else the per-user default (graph_store's own chain,
+/// `getPersistenceFilePath`, the one the storage engine resolves). The only
+/// place startup reads the raw flag. It replaces the flag field of `config`
+/// with the resolved path (owned by `config`), and returns it non-optional, so no
+/// consumer can take "no flag" for "no directory": the HMAC key lookup, the
+/// auth graph, the audit log path, the tenant registry, timeseries and raft
+/// storage did, and ran without durable state. A source check in
+/// tests/test_sonny6339_resolved_data_dir.zig fails when main.zig reads the
+/// flag anywhere else.
+fn resolveServerDataDir(gpa: std.mem.Allocator, config: *cli_args.ServerConfig) ![]const u8 {
+    const resolved: []u8 = if (config.data_dir) |flag|
+        try gpa.dupe(u8, flag)
+    else
+        try graph_store.getPersistenceFilePath(gpa);
+    if (config._allocated_data_dir) {
+        if (config.data_dir) |old| gpa.free(old);
+    }
+    config.data_dir = resolved;
+    config._allocated_data_dir = true;
+    return resolved;
+}
+
 pub fn main() !void {
     // Return freed large per-connection allocations to the OS (see notes on
     // tuneServerMalloc). Must run before the first glibc allocation.
@@ -1172,7 +1196,6 @@ pub fn main() !void {
     const listen_quic = config.listen_quic;
     const listen_grpc = config.listen_grpc;
     const order_keys_mode_expr = config.order_keys_mode_expr;
-    const data_dir = config.data_dir;
     const log_level_arg = config.log_level_arg;
 
     // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-001; FEATURE="DataDirLock"; ASPECT=ServerStartup; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-31
@@ -1185,24 +1208,24 @@ pub fn main() !void {
     // The lock covers the RESOLVED directory, not the raw flag: an omitted
     // --data-dir still resolves (GEODE_DATA_DIR, else the per-user default
     // from graph_store.defaultDataDir) to a real directory that a second
-    // process would share, so resolve it exactly the way graph_store does
-    // before locking. `--data-dir` is not yet installed as the store override
-    // at this point (server_init.initialize does that), so apply the flag
-    // first and fall back to graph_store's own chain.
-    const resolved_data_dir: []const u8 = if (data_dir) |dir|
-        try gpa.dupe(u8, dir)
-    else
-        try graph_store.getPersistenceFilePath(gpa);
-    defer gpa.free(resolved_data_dir);
+    // process would share.
+    //
+    // SONNY-6339: and so does everything else. `data_dir` is the resolved
+    // directory, never null; it is installed as the store override at once,
+    // so every later consumer (the storage engine, the HMAC key and auth
+    // graph, the audit log, the tenant registry, timeseries, raft, TLS,
+    // backups, the catalog) sees the same directory however it was given.
+    const data_dir: []const u8 = try resolveServerDataDir(gpa, &config);
+    graph_store.setDataDirOverride(gpa, data_dir);
 
     // GAP-0909: a --data-dir that does not exist used to crash the server at
     // startup. Create it (mkdir -p); refuse cleanly only if creation fails.
     // ENG-3921 R1: the RESOLVED directory is created, not just the flag —
     // the per-user default ($XDG_STATE_HOME/geode, $HOME/.local/state/geode)
     // does not exist on a fresh machine, and the lockfile below lives in it.
-    graph_store.ensureDataDir(resolved_data_dir) catch |err| {
+    graph_store.ensureDataDir(data_dir) catch |err| {
         log.err("data dir unavailable; refusing to start", &.{
-            Attr.string("path", resolved_data_dir),
+            Attr.string("path", data_dir),
             Attr.string("error", @errorName(err)),
         });
         return error.DataDirUnavailable;
@@ -1213,15 +1236,15 @@ pub fn main() !void {
     // used to start cleanly INSIDE a running server's tree and write into it.
     // Refuse when any ANCESTOR holds a live `.geode.lock` (flock probe, so a
     // stale lockfile left by a dead holder never blocks a legitimate start).
-    if (data_dir_lock_mod.findLiveAncestorLock(gpa, resolved_data_dir)) |ancestor| {
+    if (data_dir_lock_mod.findLiveAncestorLock(gpa, data_dir)) |ancestor| {
         var holder = ancestor;
         defer holder.deinit(gpa);
         std.debug.print(
             "[startup] data directory {s} is nested inside {s}, which is locked by pid {d}; refusing to start\n",
-            .{ resolved_data_dir, holder.dir, holder.pid },
+            .{ data_dir, holder.dir, holder.pid },
         );
         log.err("data directory is nested inside a locked data directory; refusing to start", &.{
-            Attr.string("path", resolved_data_dir),
+            Attr.string("path", data_dir),
             Attr.string("locked_ancestor", holder.dir),
             Attr.int("holder_pid", holder.pid),
         });
@@ -1231,19 +1254,19 @@ pub fn main() !void {
     const lock_budget_ms = data_dir_lock_mod.timeoutFromEnv();
     var data_dir_guard = data_dir_lock_mod.DataDirLock.acquireWithTimeout(
         gpa,
-        resolved_data_dir,
+        data_dir,
         lock_budget_ms,
     ) catch |err| switch (err) {
         error.DataDirLocked => {
-            const holder = data_dir_lock_mod.readHolderPid(gpa, resolved_data_dir) orelse -1;
+            const holder = data_dir_lock_mod.readHolderPid(gpa, data_dir) orelse -1;
             // Message wording is load-bearing: operators and the e2e test
             // both key off "data directory is locked by pid".
             std.debug.print(
                 "[startup] data directory is locked by pid {d} ({s}); refusing to start\n",
-                .{ holder, resolved_data_dir },
+                .{ holder, data_dir },
             );
             log.err("data directory is locked by pid; refusing to start", &.{
-                Attr.string("path", resolved_data_dir),
+                Attr.string("path", data_dir),
                 Attr.int("holder_pid", holder),
                 Attr.int("waited_ms", @intCast(lock_budget_ms)),
             });
@@ -1261,10 +1284,10 @@ pub fn main() !void {
                 "[startup] cannot acquire data directory lock for {s}: {s}; refusing to start\n" ++
                     "  Check that {s}/{s} is a regular file this user can read and write,\n" ++
                     "  and that the filesystem supports advisory locks.\n",
-                .{ resolved_data_dir, @errorName(err), resolved_data_dir, data_dir_lock_mod.lock_filename },
+                .{ data_dir, @errorName(err), data_dir, data_dir_lock_mod.lock_filename },
             );
             log.err("cannot acquire data directory lock; refusing to start (fail-closed)", &.{
-                Attr.string("path", resolved_data_dir),
+                Attr.string("path", data_dir),
                 Attr.string("error", @errorName(err)),
             });
             return error.DataDirLockUnavailable;
@@ -1394,12 +1417,8 @@ pub fn main() !void {
     decision_cache_mod.setGlobalCache(&global_decision_cache);
     defer decision_cache_mod.clearGlobalCache();
 
-    // NOTE: ensureDefaultUser() is called AFTER server_init.initialize() below
-    // so that users from the auth graph store are synced first (avoiding a
-    // second admin with a different password).
-
     // Resolve certificate paths and ensure they exist
-    const cert_paths = try cli_args.resolveCertPaths(gpa, &config, resolved_data_dir);
+    const cert_paths = try cli_args.resolveCertPaths(gpa, &config, data_dir);
     const cert_path = cert_paths.cert_path;
     const key_path = cert_paths.key_path;
     const cert_explicit = cert_paths.cert_explicit or cert_paths.key_explicit;
@@ -1568,8 +1587,10 @@ pub fn main() !void {
     defer if (audit_path_env) |p| gpa.free(p);
     if (audit_path_env) |p| {
         audit_config.file_path = p;
-    } else if (data_dir) |dir| {
-        default_audit_path = try std.fmt.allocPrint(gpa, "{s}/audit.jsonl", .{dir});
+    } else {
+        // SONNY-6339: without --data-dir this was the working directory's
+        // audit.jsonl.
+        default_audit_path = try std.fmt.allocPrint(gpa, "{s}/audit.jsonl", .{data_dir});
         audit_config.file_path = default_audit_path.?;
     }
 
@@ -1609,55 +1630,30 @@ pub fn main() !void {
     std.debug.print("[startup] server initialized ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     phase_start = compat_milliTimestamp();
-    if (init_ctx.auth_graph_mgr) |agm| {
-        user_mgmt.setPersistentUserResolver(.{
-            .lookup_fn = lookupPersistentAuthUser,
-            .has_users_fn = persistentAuthUsersExist,
-            .list_fn = listPersistentAuthUsers,
-            .auth_version_fn = lookupPersistentAuthVersion,
-        });
-        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-036; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_auth_persistence.zig; OWNER=security; UPDATED=2026-06-11
-        // P7: Install write-through callbacks for user/role/grant DDL and hydrate
-        // in-memory state from __geode_security.
-        server_init.wireAuthDDLCallbacks(agm, gpa);
-        log.info("Authentication configured for persistent auth graph with LRU cache", &.{});
+    // SONNY-6339: server_init.initialize refuses to start rather than return
+    // without an auth graph manager. There is no in-memory-only
+    // authentication mode any more: it was the silent fallback when the HMAC
+    // key or the store was unavailable (always, without --data-dir), and
+    // auth DDL then succeeded into process memory and was gone on restart.
+    const agm = init_ctx.auth_graph_mgr orelse return error.AuthGraphUnavailable;
+    user_mgmt.setPersistentUserResolver(.{
+        .lookup_fn = lookupPersistentAuthUser,
+        .has_users_fn = persistentAuthUsersExist,
+        .list_fn = listPersistentAuthUsers,
+        .auth_version_fn = lookupPersistentAuthVersion,
+    });
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-036; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_auth_persistence.zig; OWNER=security; UPDATED=2026-06-11
+    // P7: Install write-through callbacks for user/role/grant DDL and hydrate
+    // in-memory state from __geode_security.
+    server_init.wireAuthDDLCallbacks(agm, gpa);
+    log.info("Authentication configured for persistent auth graph with LRU cache", &.{});
 
-        // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=StartupHydration; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
-        // GPS Phase 4 (Task 4-5): hydrate the in-memory PolicyCatalog from the
-        // persisted :Policy nodes in __geode_security.  Errors are non-fatal —
-        // the server continues without pre-loaded policies (operators can
-        // recreate them via DDL).
-        server_init.wireGpsPolicyHooks(gpa, agm, &global_policy_catalog);
-    } else {
-        user_mgmt.setPersistentUserResolver(null);
-        // Review-0016 Important-3 (2026-07-01 incident residual): this branch
-        // runs when NO AuthGraphManager is active (AGM.init threw, HMAC key
-        // unavailable, or the store fell back to in-memory). Historically it
-        // unconditionally seeded an IN-MEMORY admin from GEODE_ADMIN_PASSWORD —
-        // so on a data dir that still holds a persisted admin credential, the
-        // env password became the working admin credential for the session
-        // (the operator-visible "password tracks the env var" symptom). Run
-        // the same engine-level persisted-admin check the bootstrap guard
-        // uses and REFUSE env seeding (fail closed) when persisted records
-        // exist or the engine check itself fails. The persisted credential on
-        // disk stays authoritative; admin login may be unavailable this
-        // session until the operator repairs the store — strictly better than
-        // silently activating the env credential.
-        const agm_mod = @import("auth_graph_manager");
-        const persisted_on_disk: ?u64 = agm_mod.persistedSecurityUserCountOnDisk() catch null; // null => engine error => fail closed
-        if (persisted_on_disk == null or persisted_on_disk.? > 0) {
-            log.err("ADMIN ENV SEEDING SKIPPED (fail-closed): no auth graph manager is active this session, but the storage engine reports persisted admin records in __geode_security (or errored while checking); refusing to seed an in-memory admin from GEODE_ADMIN_PASSWORD — the persisted credential remains authoritative. Repair the auth graph / HMAC key setup and restart.", &.{
-                Attr.uint("persisted_user_records", persisted_on_disk orelse 0),
-                Attr.string("engine_check", if (persisted_on_disk == null) "error (fail-closed)" else "ok"),
-            });
-            std.debug.print("[startup] admin env seeding SKIPPED: persisted admin records exist on disk (or the engine check failed) but the auth graph manager is unavailable; GEODE_ADMIN_PASSWORD ignored (fail-closed)\n", .{});
-        } else {
-            user_mgmt.ensureDefaultUser(gpa) catch |err| {
-                log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
-                return err;
-            };
-        }
-    }
+    // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=StartupHydration; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+    // GPS Phase 4 (Task 4-5): hydrate the in-memory PolicyCatalog from the
+    // persisted :Policy nodes in __geode_security.  Errors are non-fatal —
+    // the server continues without pre-loaded policies (operators can
+    // recreate them via DDL).
+    server_init.wireGpsPolicyHooks(gpa, agm, &global_policy_catalog);
     std.debug.print("[startup] auth cache configured ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     // Extract initialization values for compatibility with existing code

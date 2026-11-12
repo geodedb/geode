@@ -364,7 +364,14 @@ pub fn dispatch(
                 audit_i += 1;
             }
         }
-        _ = try audit_cli.verifyFileEpochs(allocator, path, algo, 100, require_digest, pubkeys[0..pubkey_count], is_default_path);
+        // SONNY-3147 / SONNY-6340 (3): one verdict. The verifier prints its
+        // OK summary only when everything verified; a failure ends with this
+        // FAILED line and a non-zero exit (3 for a broken chain link, as
+        // before; 1 otherwise). No record contents are printed.
+        _ = audit_cli.verifyFileEpochs(allocator, path, algo, 100, require_digest, pubkeys[0..pubkey_count], is_default_path) catch |err| {
+            std.debug.print("FAILED ❌  audit log {s} did not verify: {s}\n", .{ path, @errorName(err) });
+            std.process.exit(if (err == error.ChainMismatch) 3 else @intFromEnum(ExitCode.general_error));
+        };
         std.process.exit(@intFromEnum(ExitCode.success));
     } else if (std.mem.eql(u8, subcommand, "completion") or std.mem.eql(u8, subcommand, "completions")) {
         // CANARY: REQ=REQ-LIB-MIGRATION-CLI-002; FEATURE="External Library Migration"; ASPECT=ShellCompletions; STATUS=TESTED; TEST=test_completion_scripts_use_external_cli_library; OWNER=cli; UPDATED=2026-04-01

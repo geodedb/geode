@@ -35,6 +35,34 @@ fn printHmacKeyRequired(data_dir: []const u8) void {
     });
 }
 
+/// SONNY-6339: the startup refusal when an HMAC key source is set but cannot
+/// be used (a malformed or unreadable `.geode_hmac_key`, a malformed
+/// GEODE_AUTH_HMAC_KEY) or the key file cannot be created. The server used to
+/// run with the auth graph disabled. No key bytes.
+fn printHmacKeyUnusable(data_dir: []const u8, err: anyerror) void {
+    std.debug.print(
+        "[startup] HMAC key unusable ({s}): the auth-chain key (GEODE_AUTH_HMAC_KEY, GEODE_TDE_KEY or {s}/.geode_hmac_key) " ++
+            "cannot be read or created, so users, roles, grants and policies would not be durable. Refusing to start. " ++
+            "Fix the key source (64 hex characters; the file mode 0600) (docs/GQL_AUTH_DDL.md, \"HMAC key\").\n",
+        .{ @errorName(err), data_dir },
+    );
+    log.err("HMAC key unusable: refusing to start (the auth graph would be disabled)", &.{
+        Attr.string("data_dir", data_dir),
+        Attr.string("error", @errorName(err)),
+    });
+}
+
+/// SONNY-6339: the startup refusal for any other failure to establish the
+/// durable auth state. No secrets.
+fn printAuthStateUnavailable(data_dir: []const u8, what: []const u8, err: anyerror) void {
+    std.debug.print("[startup] {s} failed in {s} ({s}); refusing to start without durable auth state\n", .{ what, data_dir, @errorName(err) });
+    log.err("cannot establish durable auth state; refusing to start", &.{
+        Attr.string("step", what),
+        Attr.string("data_dir", data_dir),
+        Attr.string("error", @errorName(err)),
+    });
+}
+
 /// SONNY-2791: the policy record ids `env_name` lists (comma-separated):
 /// GEODE_AUTH_RESEAL_ACCEPT_LEGACY, the records the startup reseal may sign
 /// although they have no kind and their HMAC does not verify, and
@@ -351,9 +379,8 @@ pub const ensureSecureDataDirPermissions = data_dir_permissions.ensureSecureData
 /// Wrap `ensureSecureDataDirPermissions` with structured log emission so
 /// the audit trail captures every tightening / refusal.  Returns the same
 /// enum so callers can branch on `.refuse` to fail-closed.
-fn logAndApplyDataDirPermissionCheck(data_dir_opt: ?[]const u8) DataDirPermissionResult {
-    const result = ensureSecureDataDirPermissions(data_dir_opt);
-    const path: []const u8 = data_dir_opt orelse ".";
+fn logAndApplyDataDirPermissionCheck(path: []const u8) DataDirPermissionResult {
+    const result = ensureSecureDataDirPermissions(path);
     switch (result) {
         .ok, .not_applicable => {},
         .tightened => log.warn("Tightened data directory permissions to 0700 before bootstrap (was world/group-readable; CWE-538)", &.{
@@ -370,11 +397,20 @@ fn logAndApplyDataDirPermissionCheck(data_dir_opt: ?[]const u8) DataDirPermissio
     return result;
 }
 
-/// Complete server initialization
+// CANARY: REQ=REQ-SONNY-6339-RESOLVED-DATA-DIR; FEATURE="Server Startup"; ASPECT=DurableAuthStateOrRefuse; STATUS=TESTED; TEST=tests/test_sonny6339_resolved_data_dir.zig; OWNER=security; UPDATED=2026-11-12
+/// Complete server initialization. `data_dir` is the RESOLVED data directory
+/// (main.zig resolveServerDataDir: the flag, GEODE_DATA_DIR or the per-user
+/// default), never the raw flag. SONNY-6339: it was the flag, so without
+/// --data-dir the store fell back to memory and the HMAC key lookup got no
+/// directory, and the auth graph was disabled without an error. It now
+/// returns an error (the server refuses to start) whenever the durable auth
+/// state cannot be established: the store does not open, the HMAC key cannot
+/// be read or created, the auth graph manager does not initialize, the chain
+/// does not verify, or a first boot cannot bootstrap the admin.
 pub fn initialize(
     allocator: std.mem.Allocator,
     order_keys_mode_expr: bool,
-    data_dir: ?[]const u8,
+    data_dir: []const u8,
     memcurve_profile_ref: *bool,
 ) !InitContext {
     // Initialize index catalog (idempotent)
@@ -395,15 +431,13 @@ pub fn initialize(
 
     // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-007; FEATURE="EngineBackedPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=storage; UPDATED=2026-06-11
     // Initialize global store with engine-backed adapter (creates adapter + loads from engine).
-    const store = if (data_dir) |dir|
-        graph_store.initGlobalStore(allocator, dir) catch |err| blk: {
-            log.warn("Failed to initialize engine-backed store, falling back to in-memory", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            break :blk graph_store.getGlobalStore(allocator);
-        }
-    else
-        graph_store.getGlobalStore(allocator);
+    // SONNY-6339: no in-memory fallback. A store that does not open refuses
+    // startup: in memory, users, roles, grants, policies and data are lost
+    // at the next restart.
+    const store = graph_store.initGlobalStore(allocator, data_dir) catch |err| {
+        printAuthStateUnavailable(data_dir, "opening the storage engine", err);
+        return error.StorageUnavailable;
+    };
 
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     // Initialize AuthGraphManager: resolve HMAC key, verify or bootstrap auth chain
@@ -414,47 +448,36 @@ pub fn initialize(
     // with records and no key (a restored or copied directory) refuses to
     // start and writes nothing: generating a key there could never verify
     // the chain (AuthChainTampered) and left the junk key behind.
-    const hmac_key_result: ?auth_graph_manager.HmacKeyResult = hmac_blk: {
+    //
+    // SONNY-6339: every failure here refuses startup. A malformed or
+    // unreadable key source, or a key file that cannot be created, used to
+    // log "auth graph disabled" and run with in-memory authentication.
+    const hmac_key_result: auth_graph_manager.HmacKeyResult = hmac_blk: {
         if (auth_graph_manager.AuthGraphManager.resolveExistingHmacKey(allocator, data_dir)) |existing| {
             break :hmac_blk existing;
         } else |err| switch (err) {
             error.NoHmacKeyAvailable => {},
             else => {
-                log.warn("Failed to resolve HMAC key for auth chain - auth graph disabled", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                break :hmac_blk null;
+                printHmacKeyUnusable(data_dir, err);
+                return error.HmacKeyUnusable;
             },
         }
-        if (data_dir) |dir| {
-            if (storeHasAuthRecords(allocator, store)) {
-                printHmacKeyRequired(dir);
-                return error.HmacKeyRequired;
-            }
+        if (storeHasAuthRecords(allocator, store)) {
+            printHmacKeyRequired(data_dir);
+            return error.HmacKeyRequired;
         }
-        const kr = auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
-            switch (err) {
-                error.NoHmacKeyAvailable => {
-                    log.warn("No HMAC key available for auth chain verification - auth graph disabled", &.{});
-                },
-                else => {
-                    log.warn("Failed to resolve HMAC key for auth chain - auth graph disabled", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
-                },
-            }
-            break :hmac_blk null;
+        break :hmac_blk auth_graph_manager.AuthGraphManager.resolveHmacKey(allocator, data_dir) catch |err| {
+            printHmacKeyUnusable(data_dir, err);
+            return error.HmacKeyUnusable;
         };
-        break :hmac_blk kr;
     };
 
     var agm_storage: ?auth_graph_manager.AuthGraphManager = agm_blk: {
-        if (hmac_key_result) |*kr| {
+        {
+            const kr = &hmac_key_result;
             var agm = auth_graph_manager.AuthGraphManager.init(allocator, store) catch |err| {
-                log.warn("AuthGraphManager initialization failed", &.{
-                    Attr.string("error", @errorName(err)),
-                });
-                break :agm_blk null;
+                printAuthStateUnavailable(data_dir, "initializing the auth graph manager", err);
+                return error.AuthGraphUnavailable;
             };
 
             if (agm.hasAuthRecords()) {
@@ -575,11 +598,9 @@ pub fn initialize(
                         agm.hmac_key = kr.key;
                         break :agm_blk agm;
                     }
-                    log.err("Failed to bootstrap default admin user", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
                     agm.deinit();
-                    break :agm_blk null;
+                    printAuthStateUnavailable(data_dir, "bootstrapping the default admin user", err);
+                    return error.AuthGraphUnavailable;
                 };
                 // SEC: never print the generated admin password to stderr.
                 // When neither `GEODE_ADMIN_PASSWORD` nor the documented
@@ -611,7 +632,8 @@ pub fn initialize(
                         // over an existing file or through a symlink, and never
                         // into the current working directory
                         // (`geode_auth.writeAdminPasswordFile`).
-                        if (data_dir) |dir| {
+                        {
+                            const dir = data_dir;
                             if (geode_auth.writeAdminPasswordFile(allocator, dir, result.password)) |path| {
                                 defer allocator.free(path);
                                 // Discoverable, SECRET-FREE breadcrumb on stdout/stderr,
@@ -637,9 +659,6 @@ pub fn initialize(
                                 });
                                 std.debug.print("[startup] generated initial admin password NOT written to {s}/.geode_admin_password ({s}); an existing file is never overwritten. Rotate via 'geode user reset-password'\n", .{ dir, @errorName(err) });
                             }
-                        } else {
-                            log.err("Generated admin password NOT written: no data directory; rotate via 'geode user reset-password' or set GEODE_ADMIN_PASSWORD", &.{});
-                            std.debug.print("[startup] generated initial admin password NOT written: there is no data directory; set GEODE_ADMIN_PASSWORD, or rotate via 'geode user reset-password'\n", .{});
                         }
                     }
                 }
@@ -660,7 +679,6 @@ pub fn initialize(
 
             break :agm_blk agm;
         }
-        break :agm_blk null;
     };
 
     // Initialize shared AST cache (cross-connection) if enabled.
@@ -733,8 +751,13 @@ pub fn initialize(
     // runtime password changes are persisted to disk.  ABAC policy enforcement
     // is gated separately; the SecurityManager is needed for persistence even
     // when ABAC is disabled.
-    if (agm_storage != null) {
-        // Auth graph is available: hydrate SecurityManager from graph records
+    //
+    // SONNY-6339: the auth graph is always available here (initialize refuses
+    // to start otherwise). The legacy SecurityManager.init fallback that ran
+    // without it seeded its own admin from GEODE_DEFAULT_PASSWORD and wrote a
+    // random, never-used password to $GEODE_DATA_DIR/.geode_admin_password;
+    // it is gone.
+    {
         ctx.security_manager_storage = hydrateSecurityManagerFromGraph(allocator, &agm_storage.?, hmac_key_result) catch |err| blk: {
             log.err("Failed to hydrate SecurityManager from auth graph", &.{Attr.string("error", @errorName(err))});
             break :blk null;
@@ -745,15 +768,6 @@ pub fn initialize(
             } else {
                 log.info("SecurityManager hydrated from auth graph (ABAC enforcement disabled)", &.{});
             }
-        }
-    } else if (env_config.abac_enabled) {
-        // Fallback: old behavior (no auth graph, create default user)
-        ctx.security_manager_storage = initializeSecurityManager(allocator) catch |err| blk: {
-            log.err("Failed to initialize SecurityManager", &.{Attr.string("error", @errorName(err))});
-            break :blk null;
-        };
-        if (ctx.security_manager_storage != null) {
-            log.info("ABAC enforcement enabled - SecurityManager initialized (legacy mode)", &.{});
         }
     }
 

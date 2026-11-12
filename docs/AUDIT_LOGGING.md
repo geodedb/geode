@@ -20,10 +20,70 @@ Geode's audit stream is a canonical JSON Lines (JSONL) append-only log. Each rec
 
 ### Record Structure
 
-- **Canonical keys** (order): `["stream","seq_no","timestamp","event_type","actor","origin","resource","action","result","details","prev_hash","event_hash","signature"]`
-- **Hash algorithm**: SHA-256 (default) or BLAKE3. `event_hash` excludes `prev_hash` to avoid circularity
-- **Chain**: `prev_hash` of record i equals `hash(event_hash of i-1)`. First `prev_hash` is 32 zero bytes
-- **Digest**: Every 100 events (configurable), a DIGEST record is appended containing the Merkle root over the last N event_hashes and an Ed25519 signature
+- **Canonical keys** (order): `stream`, `hash_v`, `seq_no`, `timestamp`,
+  `event_type`, `tenant`?, `actor`, `origin`, `resource` (`type`, `id`,
+  `graph`?), `action`, `result` (these three not in a DIGEST), `session`?,
+  `reason`?, `policy_id`?, `ip_address`?, `query_hash`?, `details`,
+  `prev_hash`, `event_hash`, `signature`. `?` marks a field written only
+  when it is set; `details` keys are sorted.
+- **Hash algorithm**: SHA-256.
+- **Chain**: `prev_hash` of record i equals `SHA-256(event_hash of i-1)`. First `prev_hash` is `SHA-256` of 32 zero bytes
+- **Digest**: Every 100 events (configurable), a DIGEST record is appended containing the Merkle root over the event_hashes written since the last DIGEST (since the logger opened, after a restart) and an Ed25519 signature over its own event_hash. A clean close and a rotation also append one when records were written since the last DIGEST.
+
+### What `event_hash` covers (hash format 2, SONNY-3147)
+
+Every record the writer emits carries `"hash_v":2` and
+
+```text
+event_hash = SHA-256( "geode.audit.event_hash.v2" 0x00
+                      || kind || 0x00
+                      || prev_hash (32 raw bytes)
+                      || body )
+```
+
+- `kind` is `event`, `digest` (`event_type` `DIGEST`) or `key_epoch`
+  (`resource.type` `audit_key_epoch` and `action` `KEY_EPOCH`), so one kind
+  of record cannot be passed off as another.
+- `body` is the record line's exact bytes from `{` up to and including the
+  `,` before `"prev_hash"`: every field the record carries, in the order
+  above. The writer has one encoding: strings are JSON-escaped one way
+  (`writeJsonString`), numbers are decimal without sign or exponent, the
+  timestamp is `YYYY-MM-DDTHH:MM:SS.mmmZ`, `details` keys are sorted, an
+  absent optional field is omitted and an empty one is written (`""`,
+  `null` details vs `{}`), so absent and empty hash differently. The line
+  ends `"prev_hash":"<64 hex>","event_hash":"<64 hex>","signature":null}` or
+  `...,"signature":"<128 hex>"}`; a verifier splits a line from that fixed
+  tail, never by searching for the field names.
+- A change to any field of a record (the timestamp, actor, tenant, session,
+  client address, reason, policy id, query hash, result, resource type, id
+  or graph, action, event type, details) changes its event_hash.
+
+**Format 1 (before SONNY-3147).** Records without `hash_v` were hashed as
+`SHA-256(prev_hash || event_type || resource.id || action)` (for a DIGEST,
+`"digest"` and `"EMIT_DIGEST"`). Their timestamp, actor, tenant, session,
+client address, reason, result, resource type and details are **not
+tamper-evident**. `geode audit verify` checks such records with the format-1
+rule, counts them (`hash_v1=<n>`) and prints a `NOTICE` saying so. The first
+record a new binary appends to an old log is format 2; a format-1 record
+after a format-2 record fails verification (`HASH_VERSION_DOWNGRADE`).
+
+**What a pass attests, and what it cannot.** The hashes are keyless: whoever
+can rewrite the log can recompute a changed record's event_hash and every
+later record's. What stops that is the signed DIGEST after it: its
+event_hash depends on the whole chain before it and its signature needs the
+seed. So, with the trusted `--pubkey` values:
+
+- a changed field, a deleted, inserted or reordered record fails, at the
+  record itself (event_hash, prev_hash, seq_no) when the attacker did not
+  recompute, and at the next signed DIGEST when they did;
+- records after the last signed DIGEST can be changed and re-hashed, or
+  removed, without detection. A running server keeps up to
+  `digest_interval - 1` (99 by default) such records; a cleanly closed or
+  rotated log ends with a DIGEST. **Truncating the log back to an earlier
+  DIGEST is never detectable from the log alone**: keep an external anchor
+  (the last `seq_no` and `event_hash`, e.g. shipped to a SIEM) to detect it;
+- without `--pubkey`, only consistency is checked (chain, record hashes,
+  `seq_no`): a log rewritten from scratch passes.
 
 ### Signing Configuration
 
@@ -92,16 +152,35 @@ epochs than keys given fails (`UntrustedKeyEpoch`).
 
 ### Verification Outputs
 
-- `OK chain` - records=N digests=D algo=sha256|blake3
-- `TAMPER chain` - at_seq=s reason=PREV_HASH_MISMATCH expected=hex got=hex
-- `TAMPER digest` - at_seq=s reason=DIGEST_MISMATCH expected=hex got=hex
-- `SCHEMA_ERROR` - at_seq=s field=name detail=msg
-- `WARN ignored trailing partial record` (non-fatal)
-- `KEY_EPOCH` - at_seq=s epoch=n key=hex... (a key-epoch boundary; see above)
+One verdict: `OK chain ✅ ...` is printed only when everything verified
+(chain, every record's hash, sequence, signatures); a failure prints the
+first failing record and its class, then `FAILED ❌ ...`, and exits non-zero
+(3 for a broken chain link, 1 for anything else). Until SONNY-3147 a
+signature failure printed `OK chain` first. No record contents are printed.
+
+- `OK chain` - records=N digests=D algo=sha256 record_hashes=verified hash_v2=N hash_v1=M (signatures_verified=S, or signatures=not_checked without `--pubkey`)
+- `NOTICE` - M records use hash format 1 (see above)
+- `TAMPER chain` - at_record=r reason=PREV_HASH_MISMATCH
+- `TAMPER record` - at_record=r reason=EVENT_HASH_MISMATCH hash_v=v (a covered field changed, or the stored hash replaced)
+- `TAMPER sequence` - at_record=r reason=SEQ_NO_MONOTONICITY
+- `TAMPER hash_format` - at_record=r reason=HASH_VERSION_DOWNGRADE
+- `SCHEMA_ERROR` - at_record=r field=name or reason (not one JSON object, a duplicate key, not the fixed record tail, an unknown `hash_v`)
+- `KEY_EPOCH` - at_record=r epoch=n key=hex... (a key-epoch boundary; see above)
 - `UNTRUSTED key_epoch` / `TAMPER key_epoch` - the epoch record names a key not
   given with `--pubkey`, epochs do not increase, or its `event_hash` does not
-  commit to the key it names
+  match the record
 - `SIGNATURE_ERROR` - a signature did not verify (the command fails)
+
+The Merkle root in a DIGEST's `details` is covered by its event_hash and
+signature but is not recomputed by the verifier (after a restart it covers
+only the records since the logger opened). The server-side
+`CALL audit.verify_hash_chain()` is not supported (SONNY-3147): it returned
+`valid=true` for any log without comparing anything; verify with
+`geode audit verify` and trusted keys.
+
+A rotated file (`audit.jsonl.<ms>`) continues the chain of the file before
+it, so it does not verify on its own (its first `prev_hash` follows the
+previous file's last record, and its `seq_no` does not start at 1); verify the files concatenated in order.
 
 ## Quick Start
 

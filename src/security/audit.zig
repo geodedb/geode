@@ -308,16 +308,18 @@ pub const AuditLogger = struct {
         return self.write_failure_count.load(.acquire);
     }
 
-    /// GAP-0920: serialize + positionally append one event's canonical JSON
-    /// line. Extracted so the write funnel can catch its failure in one place.
-    fn writeChain(f: std.Io.File, allocator: Allocator, ev: *AuditEvent) !void {
-        var aw: std.Io.Writer.Allocating = .init(allocator);
-        defer aw.deinit();
-        try AuditEvent.writeCanonicalJson(&aw.writer, "geode", ev);
-        try aw.writer.writeAll("\n");
+    /// SONNY-3147: the uncovered tail of a record line and its newline.
+    fn finishLine(w: *std.Io.Writer, ev: *const AuditEvent) !void {
+        try AuditEvent.writeHashSuffix(w, ev);
+        try w.writeAll("\n");
+    }
+
+    /// GAP-0920: positionally append one serialized record line. Extracted
+    /// so the write funnel can catch its failure in one place.
+    fn writeChain(f: std.Io.File, line: []const u8) !void {
         const io_aw = std.Io.Threaded.global_single_threaded.io();
         const st = try f.stat(io_aw);
-        try f.writePositionalAll(io_aw, aw.written(), st.size);
+        try f.writePositionalAll(io_aw, line, st.size);
     }
 
     pub const Config = struct {
@@ -428,6 +430,13 @@ pub const AuditLogger = struct {
     }
 
     pub fn deinit(self: *AuditLogger) void {
+        // SONNY-3147: a clean close signs the records written since the last
+        // DIGEST, so a cleanly closed log ends with a signed DIGEST.
+        if (self.config.enabled and self.file != null and self.digest_buf.items.len > 0) {
+            self.emitDigestLocked() catch |err| {
+                log.warn("Failed to emit the closing audit digest", &.{Attr.string("error", @errorName(err))});
+            };
+        }
         self.digest_buf.deinit(self.allocator);
         if (self.file) |f| {
             f.close(std.Io.Threaded.global_single_threaded.io());
@@ -716,25 +725,44 @@ pub const AuditLogger = struct {
         _ = try cb.Hash.digest(.sha256, &self.last_hash, &new_prev_hash);
         ev.prev_hash = new_prev_hash;
 
-        // Compute Event Hash (Hash of content excluding signatures)
-        var hasher = try cb.Hash.Stream.init(.sha256);
-        defer hasher.deinit();
-        try hasher.update(&ev.prev_hash);
-        try hasher.update(@tagName(ev.event_type));
-        try hasher.update(ev.resource.id);
-        try hasher.update(ev.action);
-        var eh: [32]u8 = undefined;
-        _ = try hasher.final(&eh);
-        ev.event_hash = eh;
-
-        self.last_hash = ev.event_hash;
+        // CANARY: REQ=REQ-SONNY-3147-AUDIT-HASH-COVERAGE; FEATURE="AuditDurability"; ASPECT=WriterHashesWholeRecord; STATUS=TESTED; TEST=tests/test_sonny3147_audit_hash_coverage.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-3147: the event hash covers the whole record: the canonical
+        // bytes the line is made of up to "prev_hash" (every field written,
+        // in a fixed order), under the record kind's tag, with the previous
+        // hash (AuditEvent.eventHashV2, hash format 2). It covered only
+        // event_type, resource.id and action, so the timestamp, actor,
+        // tenant, session, client address, reason, result, resource type and
+        // details could be edited without breaking the chain. The body is
+        // serialized once and hashed in place.
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+        AuditEvent.writeCanonicalBody(&aw.writer, "geode", ev) catch |err| {
+            self.last_seq = prev_seq_snapshot;
+            return err;
+        };
+        const kind: AuditEvent.RecordKind = if (ev.event_type == .DIGEST)
+            .digest
+        else if (is_epoch_record)
+            .key_epoch
+        else
+            .event;
+        ev.event_hash = AuditEvent.eventHashV2(kind, &ev.prev_hash, aw.written());
 
         // Sign if it is a DIGEST, or the KEY_EPOCH record (SONNY-6322)
         if ((ev.event_type == .DIGEST or is_epoch_record) and self.signing_key != null) {
             var sig_out: [64]u8 = undefined;
-            _ = try cb.Sig.sign(.ed25519, &self.signing_key.?, ev.event_hash[0..], &sig_out);
+            _ = cb.Sig.sign(.ed25519, &self.signing_key.?, ev.event_hash[0..], &sig_out) catch |err| {
+                self.last_seq = prev_seq_snapshot;
+                return err;
+            };
             ev.signature = sig_out;
         }
+        finishLine(&aw.writer, ev) catch |err| {
+            self.last_seq = prev_seq_snapshot;
+            return err;
+        };
+
+        self.last_hash = ev.event_hash;
 
         if (self.file) |f| {
             // CANARY: REQ=REQ-GAP-0920-AUDIT-WRITE-FAILURE-DIAGNOSTIC; FEATURE="AuditDurability"; ASPECT=MidRunWriteFailure; STATUS=TESTED; TEST=tests/test_gap0920_audit_write_failure.zig; OWNER=security; UPDATED=2026-07-10
@@ -744,7 +772,7 @@ pub const AuditLogger = struct {
             // gap. Emit a LOUD diagnostic at the single write funnel (so no
             // swallowing caller can hide it), flag the logger degraded, roll
             // the chain state back to keep it consistent, and re-raise.
-            writeChain(f, self.allocator, ev) catch |err| {
+            writeChain(f, aw.written()) catch |err| {
                 self.last_seq = prev_seq_snapshot;
                 self.last_hash = prev_hash_snapshot;
                 self.write_degraded.store(true, .release);
@@ -943,6 +971,13 @@ pub const AuditLogger = struct {
             const size_mb = stat.size / (1024 * 1024);
 
             if (size_mb >= self.config.rotation_size_mb) {
+                // SONNY-3147: sign what the closing file holds since its
+                // last DIGEST before it is rotated away.
+                if (self.digest_buf.items.len > 0) {
+                    self.emitDigestLocked() catch |err| {
+                        log.warn("Failed to emit the audit digest before rotation", &.{Attr.string("error", @errorName(err))});
+                    };
+                }
                 // Close current file
                 f.close(io_rl);
 

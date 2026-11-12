@@ -37,23 +37,28 @@ fn hexHash(bytes: [32]u8) [64]u8 {
     return out;
 }
 
+/// A format-1 record as the writer printed it before SONNY-3147. Its
+/// event_hash is the real format-1 hash (SONNY-3147: the verifier recomputes
+/// every record's hash, so the arbitrary hashes this fixture used are now
+/// refused); returns it.
 fn appendRecord(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(u8),
     seq: u64,
     prev_hash: [32]u8,
-    event_hash: [32]u8,
     event_type: []const u8,
-) !void {
+) ![32]u8 {
+    const event_hash = audit_verify.hashV1(&prev_hash, event_type, "n1", "read");
     const prev_hex = hexHash(prev_hash);
     const ev_hex = hexHash(event_hash);
     const line = try std.fmt.allocPrint(
         allocator,
-        "{{\"stream\":\"geode\",\"seq_no\":{d},\"timestamp\":\"2026-04-16T00:00:00Z\",\"event_type\":\"{s}\",\"prev_hash\":\"{s}\",\"event_hash\":\"{s}\"}}\n",
+        "{{\"stream\":\"geode\",\"seq_no\":{d},\"timestamp\":\"2026-04-16T00:00:00Z\",\"event_type\":\"{s}\",\"resource\":{{\"type\":\"node\",\"id\":\"n1\"}},\"action\":\"read\",\"details\":null,\"prev_hash\":\"{s}\",\"event_hash\":\"{s}\",\"signature\":null}}\n",
         .{ seq, event_type, prev_hex, ev_hex },
     );
     defer allocator.free(line);
     try out.appendSlice(allocator, line);
+    return event_hash;
 }
 
 /// Build a synthetic 3-record audit log that passes the verifier's chain
@@ -73,15 +78,10 @@ fn buildValidLog(allocator: std.mem.Allocator) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
 
-    // Choose arbitrary but distinct 32-byte event hashes.
     const zero: [32]u8 = [_]u8{0} ** 32;
-    const ev1: [32]u8 = [_]u8{0x11} ** 32;
-    const ev2: [32]u8 = [_]u8{0x22} ** 32;
-    const ev3: [32]u8 = [_]u8{0x33} ** 32;
-
-    try appendRecord(allocator, &out, 1, sha256(zero), ev1, "ACCESS");
-    try appendRecord(allocator, &out, 2, sha256(ev1), ev2, "MUTATE");
-    try appendRecord(allocator, &out, 3, sha256(ev2), ev3, "ACCESS");
+    const ev1 = try appendRecord(allocator, &out, 1, sha256(zero), "ACCESS");
+    const ev2 = try appendRecord(allocator, &out, 2, sha256(ev1), "MUTATE");
+    _ = try appendRecord(allocator, &out, 3, sha256(ev2), "ACCESS");
 
     return out.toOwnedSlice(allocator);
 }
@@ -94,14 +94,11 @@ fn buildTamperedLog(allocator: std.mem.Allocator) ![]u8 {
     errdefer out.deinit(allocator);
 
     const zero: [32]u8 = [_]u8{0} ** 32;
-    const ev1: [32]u8 = [_]u8{0x11} ** 32;
-    const ev3: [32]u8 = [_]u8{0x33} ** 32;
-
-    try appendRecord(allocator, &out, 1, sha256(zero), ev1, "ACCESS");
+    const ev1 = try appendRecord(allocator, &out, 1, sha256(zero), "ACCESS");
     // Attacker deletes seq=2 and rewrites seq=3 so the hash chain still
     // verifies (prev_hash = SHA256(seq=1's event_hash) per the writer's
     // format), leaving only seq_no as evidence of the tampering.
-    try appendRecord(allocator, &out, 3, sha256(ev1), ev3, "ACCESS");
+    _ = try appendRecord(allocator, &out, 3, sha256(ev1), "ACCESS");
 
     return out.toOwnedSlice(allocator);
 }

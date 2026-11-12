@@ -4,6 +4,56 @@
 
 ### Security
 
+- **BREAKING: the audit `event_hash` covers the whole record; old logs
+  verify as format 1 (SONNY-3147).** A record's `event_hash` covered only
+  the previous hash, the event type, `resource.id` and the action: the
+  timestamp, actor, tenant, session, client address, reason, result,
+  resource type and details could be edited in the log without breaking
+  the chain, and `geode audit verify` never recomputed `event_hash` for an
+  ordinary record at all. Every record now carries `"hash_v":2` (and
+  `resource.graph` when set) and its `event_hash` is
+  `SHA-256("geode.audit.event_hash.v2" 0x00 || kind || 0x00 || prev_hash ||
+  body)`, `body` being the record's exact canonical bytes up to
+  `"prev_hash"` and `kind` separating ordinary, DIGEST and KEY_EPOCH
+  records. The verifier recomputes every record's hash (format 1 for
+  records without `hash_v`, counted and reported in a `NOTICE` as not
+  covering those fields), refuses a format-1 record after a format-2 one,
+  reads `prev_hash`/`event_hash`/`signature` from the fixed record tail,
+  rejects duplicate keys, returns an error instead of exiting the process
+  on a broken chain link, and prints one verdict: `OK chain` only when
+  everything verified (it was printed before a signature failure), else
+  the first failing record and class and `FAILED`, exit 3 for a broken
+  chain link and 1 otherwise, no record contents. A clean close and a
+  rotation append a DIGEST when records were written since the last one.
+  `CALL audit.verify_hash_chain()` is refused as unsupported: it reported
+  `valid=true` for any log. Records after the last signed DIGEST, and a
+  truncation back to a DIGEST, stay undetectable from the log alone (see
+  docs/AUDIT_LOGGING.md). Regression:
+  `zig build test-sonny3147-audit-hash-coverage`.
+- **BREAKING: a server without `--data-dir` keeps its auth state and data
+  (SONNY-6339).** A server resolves and locks its data directory from
+  `--data-dir`, else `GEODE_DATA_DIR`, else the per-user default
+  (`$XDG_STATE_HOME/geode`, `$HOME/.local/state/geode`,
+  `$TMPDIR/geode-<uid>`), but then handed the raw flag (empty without it) to
+  the HMAC key lookup, the auth graph, the default audit log path, the tenant
+  registry, timeseries and raft storage. With `GEODE_DATA_DIR` only, the
+  `.geode_hmac_key` was neither read nor created and the HMAC-chained auth
+  graph was disabled without an error: `CREATE USER`, `CREATE ROLE`,
+  `GRANT` and `CREATE POLICY` reported success, a per-graph grant did not
+  take effect, and all of it was gone after a restart. With neither, the
+  storage engine was not opened at all (every graph lived in memory), and
+  the audit log went to the working directory. Now one resolver
+  (`resolveServerDataDir`) reads the flag once and every consumer gets the
+  resolved directory, which is also the store's data-directory override.
+  The server refuses to start, instead of running with in-memory
+  authentication, when the store does not open, when an HMAC key source is
+  set but unusable (a malformed or unreadable `.geode_hmac_key`, a
+  `GEODE_AUTH_HMAC_KEY` that is not 64 hex characters: it used to be skipped
+  in favour of the file key), or when the auth graph manager or the first-boot
+  admin cannot be set up. Operators who ran without `--data-dir` find their
+  auth state, timeseries, tenants and audit log in the resolved directory
+  from now on (none of it had been kept). Regression:
+  `zig build test-sonny6339-resolved-data-dir`.
 - **BREAKING: fail-closed default role.** A user with no stored built-in
   role (not a superuser, no `HAS_ROLE` edge to `admin`, `user`, `readwrite`
   or `readonly`) used to fall back to `readwrite` and could read and write
