@@ -163,8 +163,15 @@ fn hasHelpFlag(argv: [][:0]u8, start_idx: usize) bool {
     return false;
 }
 
-fn requirePasswordStrong(password: []const u8) bool {
-    return cli_auth.isPasswordStrong(password);
+/// Exits with the password-policy rule `password` breaks, if any. Names the
+/// rule (`PasswordPolicy.validate`'s reason), never the password. SONNY-6271:
+/// every caller used to print "min 8 chars, letters and numbers", the rule
+/// this CLI enforced before it adopted the unified passphrase policy.
+fn requirePasswordPolicy(password: []const u8) void {
+    if (cli_auth.passwordPolicyError(password)) |reason| {
+        std.debug.print("Error: password does not meet policy requirements: {s}\n", .{reason});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
 }
 
 /// GAP-0154 FIX: Generate a cryptographically secure random password
@@ -420,10 +427,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                     std.debug.print("Error: password cannot be empty\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }
-                if (!requirePasswordStrong(pw)) {
-                    std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.general_error));
-                }
+                requirePasswordPolicy(pw);
                 break :blk pw;
             }
             if (generate_password) {
@@ -655,12 +659,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
 
-        if (new_password) |pw| {
-            if (!requirePasswordStrong(pw)) {
-                std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-        }
+        if (new_password) |pw| requirePasswordPolicy(pw);
 
         if (mgr.storage.getUserByUsername(username)) |existing| {
             try mgr.storage.updateUser(existing.id, new_email, new_password, null, null, null);
@@ -679,10 +678,6 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             const pw = new_password.?;
-            if (!requirePasswordStrong(pw)) {
-                std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
             const user_id = mgr.next_user_id;
             mgr.next_user_id += 1;
             try mgr.storage.persistUser(user_id, username, new_email orelse "unknown@example.com", pw, "");
@@ -1015,8 +1010,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         var generated_pw: [32]u8 = undefined;
         const final_new: []const u8 = blk: {
             if (new_pw) |pw| {
+                requirePasswordPolicy(pw);
                 break :blk pw;
             }
+            // SONNY-6271: a generated secret (128 random bits, hex) is not
+            // checked against the passphrase policy, as in `user create`:
+            // it can never have an uppercase letter or three words, so the
+            // check refused every --generate-password.
             if (generate_password) {
                 generated_pw = try generateSecurePassword();
                 std.debug.print("Generated password: {s}\n", .{generated_pw});
@@ -1026,10 +1026,6 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.debug.print("Use --new-password <password> or --generate-password\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
-        if (!requirePasswordStrong(final_new)) {
-            std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
         // Verify old password if provided. Bug 731 (adjacent finding): this
         // used to compare Blake2(stored_field) against Blake2(plaintext), which
         // only ever matched when the stored field WAS the plaintext — see the
@@ -1093,8 +1089,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         var generated_pw: [32]u8 = undefined;
         const final_new: []const u8 = blk: {
             if (new_pw) |pw| {
+                requirePasswordPolicy(pw);
                 break :blk pw;
             }
+            // SONNY-6271: a generated secret (128 random bits, hex) is not
+            // checked against the passphrase policy, as in `user create`:
+            // it can never have an uppercase letter or three words, so the
+            // check refused every --generate-password.
             if (generate_password) {
                 generated_pw = try generateSecurePassword();
                 std.debug.print("Generated password: {s}\n", .{generated_pw});
@@ -1104,10 +1105,6 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.debug.print("Use --new-password <password> or --generate-password\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
-        if (!requirePasswordStrong(final_new)) {
-            std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
         // Review-0016 Important-2: `reset-password` is the DOCUMENTED escape
         // hatch for the fail-closed admin-bootstrap refusal (see
         // auth_init_cli.zig and the [startup] breadcrumbs). It used to print

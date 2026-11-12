@@ -89,6 +89,21 @@
 
 ### Fixed
 
+- **The offline `geode user` CLI names the password-policy rule a password
+  breaks; `reset-password` and `password` accept `--generate-password`
+  (SONNY-6271).** `user create`, `update`, `password` and `reset-password`
+  answered "password does not meet policy requirements (min 8 chars, letters
+  and numbers)", the CLI's rule before it adopted the unified passphrase
+  policy (20+ characters, upper and lower case, 3+ words; docs/USER_AUTH.md),
+  so `resetpass12345` was refused with a message it satisfied. The message
+  now ends with the rule that failed, e.g. `: Password too short (minimum 20
+  characters)`, and never echoes the password. `reset-password` and
+  `password` checked the policy against a `--generate-password` secret too
+  (32 lower-case hex digits, which can never pass), so they refused every
+  generated password; like `user create`, they now check only a password
+  the operator supplies. `test-first-boot-admin-breadcrumb` uses a
+  compliant passphrase and runs in the aggregate. Regression:
+  `zig build test-sonny6271-password-policy-rules`.
 - **`geode backup cleanup` deletes old backups instead of reporting a
   cleanup it never did; `geode backup info` no longer crashes (SONNY-6289).**
   `backup cleanup` printed "Cleaned 0 backup files" / "Backup cleanup

@@ -200,9 +200,14 @@ test "reset-password reports failure honestly when the target user cannot be loa
     std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
     defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
 
+    // A password the documented policy accepts (docs/USER_AUTH.md: 20+
+    // characters, upper and lower case, 3+ words), so the command gets past
+    // the policy check to the user lookup under test. SONNY-6271: it used
+    // `resetpass12345`, valid under the CLI's old 8-character rule and
+    // refused since the CLI adopted the passphrase policy (d8709a2a).
     const args = [_][]const u8{
-        BINARY_PATH,      "user",           "reset-password", "geode",
-        "--new-password", "resetpass12345", "--data-dir",     data_dir,
+        BINARY_PATH,      "user",                             "reset-password", "geode",
+        "--new-password", "Reset Breadcrumb Test Passphrase", "--data-dir",     data_dir,
     };
     const env_ptr = try buildCleanChildEnv(aa);
 

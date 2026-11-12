@@ -475,7 +475,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-cli-file-chunked", .reason = "subprocess e2e (geode serve + geode query --file on real ports); promotion owes a green run" },
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
-    .{ .name = "test-first-boot-admin-breadcrumb", .reason = "failing: reset-password checks the password policy before loading the user (KNOWN_TEST_ISSUES)" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
 };
 
@@ -4199,6 +4198,8 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_raft_envelope_roundtrip_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_gap0838_cluster_tls_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cert_provided_tests.step, 1, test_shard_loads, test_shard_index);
+    // SONNY-6271: green again since the test uses a policy-compliant password.
+    shardDep(test_step, &run_first_boot_pw_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_steady_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_replicable_mut_tests.step, 1, test_shard_loads, test_shard_index);
     // "committed write -> client Timeout -> retry double-insert" fix (2026-06-12):
