@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T18:32:07.930343408Z",
+  "generated_at": "2026-11-12T18:33:40.392378188Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79327,6 +79327,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6386-FLE-ROTATE-UNSUPPORTED",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "RotateKeyRefusedAsUnsupported",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6386_fle_rotate_key_unsupported.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6386_fle_rotate_key_unsupported.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6386-TDE-KEY-FAIL-CLOSED",
       "features": [
         {
@@ -87015,7 +87034,7 @@
       "COMPLETE": 2,
       "EXEMPT": 217,
       "IMPL": 338,
-      "TESTED": 4474
+      "TESTED": 4475
     },
     "by_aspect": {
       "2PC": 3,
@@ -90047,6 +90066,7 @@
       "RollbackToSavepoint": 1,
       "RollbackTransaction": 2,
       "RollbackUseGraphStore": 1,
+      "RotateKeyRefusedAsUnsupported": 1,
       "Rotation": 1,
       "RotationTesting": 1,
       "Round19UndoRegression": 1,

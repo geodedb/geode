@@ -9812,6 +9812,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6386_tde_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6386_tde_step = b.step("test-sonny6386-tde-key-fail-closed", "Run SONNY-6386 item 1 regression (spawns servers: a set but malformed GEODE_TDE_KEY refuses startup, names the variable, never echoes it and creates nothing; the adapter, WAL and HMAC key loaders refuse a malformed key instead of falling back to no encryption or another key)");
     sonny6386_tde_step.dependOn(&run_sonny6386_tde_tests.step);
+    const sonny6386_fle_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_fle_rotate_key_unsupported.zig"), .target = target, .optimize = optimize });
+    sonny6386_fle_test_mod.link_libc = true;
+    sonny6386_fle_test_mod.addImport("geode", root_mod);
+    const sonny6386_fle_tests = b.addTest(.{ .root_module = sonny6386_fle_test_mod });
+    const run_sonny6386_fle_tests = b.addRunArtifact(sonny6386_fle_tests);
+    spawnsBuiltGeode(sonny6386_fle_tests);
+    shardDep(test_step, &run_sonny6386_fle_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6386_fle_step = b.step("test-sonny6386-fle-rotate-key-unsupported", "Run SONNY-6386 item 2 regression (geode fle rotate-key and fle_commands.rotateKey refuse every scope as unsupported, SONNY-6387, exit non-zero and claim no rotation; fle --help and show-rotation do not advertise or report one)");
+    sonny6386_fle_step.dependOn(&run_sonny6386_fle_tests.step);
     const sonny6342_authn_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"AuthProvider:"} });
     const run_sonny6342_authn_tests = b.addRunArtifact(sonny6342_authn_tests);
     shardDep(test_step, &run_sonny6342_authn_tests.step, 1, test_shard_loads, test_shard_index);
