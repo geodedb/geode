@@ -12814,6 +12814,20 @@ pub fn build(b: *std.Build) void {
     const sonny6324_step = b.step("test-sonny6324-fle-catalog-fail-closed", "Run SONNY-6324 regression (a failed FLE catalog save is an error: configureField and grants roll back, a revoke stays applied in memory and is reported; a catalog file that cannot be loaded is an error and never an empty catalog, and string writes and reads are refused until it is resolved; no leaks under allocation failure)");
     sonny6324_step.dependOn(&run_sonny6324_tests.step);
 
+    const sonny6327_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6327_fle_read_gaps.zig"), .target = target, .optimize = optimize });
+    sonny6327_test_mod.link_libc = true; // setenv/unsetenv/chmod
+    sonny6327_test_mod.addImport("geode", root_mod);
+    sonny6327_test_mod.addImport("schema", schema_mod);
+    sonny6327_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6327_test_mod.addImport("logging", logging_mod);
+    sonny6327_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6327_tests = b.addTest(.{ .root_module = sonny6327_test_mod });
+    const run_sonny6327_tests = b.addRunArtifact(sonny6327_tests);
+    run_sonny6327_tests.step.dependOn(&install_geode_exe.step);
+    // SONNY-6327: red TDD reproduction; joins shardDep with the fix.
+    const sonny6327_step = b.step("test-sonny6327-fle-read-gaps", "Run SONNY-6327 regression (an encrypted edge property is read by the node FLE policy on every surface: member access, WHERE, aggregates, properties(), the wire and JSON encodings; a value that does not decrypt is an error, never the stored bytes; the FLE catalog answers under its mutex; CALL geode.fle.revokePlaintext; the QUIC write fast paths never store an encrypted field's plaintext)");
+    sonny6327_step.dependOn(&run_sonny6327_tests.step);
+
     const sonny6294_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6294_drop_index_rules.zig"), .target = target, .optimize = optimize });
     sonny6294_test_mod.link_libc = true;
     sonny6294_test_mod.addImport("geode", root_mod);
