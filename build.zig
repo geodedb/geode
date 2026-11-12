@@ -12859,6 +12859,19 @@ pub fn build(b: *std.Build) void {
     const sonny6341_step = b.step("test-sonny6341-fle-role-binding", "Run SONNY-6341 regression (the FLE role a session acts under is one the authenticated user holds: CALL geode.fle.grantRole/revokeRole, Admin only, audited, stored in the HMAC-chained security graph and reloaded; a HELLO naming an unheld role connects with no FLE role and is audited; grant/revoke count from the next request; auth off unchanged; QUIC, gRPC and the CLI, across a restart)");
     sonny6341_step.dependOn(&run_sonny6341_tests.step);
 
+    const sonny6335_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6335_fle_identity_and_indexes.zig"), .target = target, .optimize = optimize });
+    sonny6335_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6335_test_mod.addImport("geode", root_mod);
+    sonny6335_test_mod.addImport("schema", schema_mod);
+    sonny6335_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6335_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6335_test_mod.addImport("logging", logging_mod);
+    const sonny6335_tests = b.addTest(.{ .root_module = sonny6335_test_mod });
+    const run_sonny6335_tests = b.addRunArtifact(sonny6335_tests);
+    shardDep(test_step, &run_sonny6335_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6335_step = b.step("test-sonny6335-fle-identity-and-indexes", "Run SONNY-6335 regression (one FLE encryption identity for every writer and reader: a value the graph-store primitive encrypts -- raft apply, internal callers -- decrypts, and values under the old store identity still do; no index of any type, and no UNIQUE / NODE KEY constraint, over an FLE-encrypted field, configureField on an indexed field refused, a pre-existing fulltext index over an encrypted field refuses searches; no plaintext in any file)");
+    sonny6335_step.dependOn(&run_sonny6335_tests.step);
+
     const sonny6294_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6294_drop_index_rules.zig"), .target = target, .optimize = optimize });
     sonny6294_test_mod.link_libc = true;
     sonny6294_test_mod.addImport("geode", root_mod);
