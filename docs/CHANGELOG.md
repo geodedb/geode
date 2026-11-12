@@ -202,6 +202,36 @@
 
 ### Fixed
 
+- **Full-text and vector indexes follow SET n:L, REMOVE n.prop and every
+  label; a repeated SET target answers 22G0M (SONNY-6368).** (1) **BEHAVIOUR
+  CHANGE:** one SET clause assigning one property of an element twice
+  (`SET q.c = 1, q.c = 2`, or two variables bound to one node) is refused
+  with GQLSTATE 22G0M, data exception - multiple assignments to a graph
+  element property (ISO/IEC 39075:2024 13.3 General Rule 7 a); it answered
+  22G03 (invalid value type). Clients matching on 22G03 for it must match
+  22G0M. (2) A live `SET n:L` put the node into neither the full-text nor the
+  vector indexes on `L`, so neither search found it; the node now joins them
+  with the properties it holds (`property_mutation.addNodeLabel`, every SET
+  executor). (3) A committed `REMOVE n.prop` left the removed text in the
+  full-text index, so the node stayed findable by the removed word. The
+  engine cannot take one property's postings out of a document, so every
+  full-text index covering the removed text is rebuilt from the store at the
+  end of the statement, once per index however many rows it removed from.
+  Cost: an O(nodes of the label) rebuild per statement that removes indexed
+  text. (4) Vector and other advanced-index maintenance used only the node's
+  first label (SET, `SET n = {map}`, REMOVE, and the batch CREATE path), so an
+  index on a second label went stale; it now maintains every label's.
+  (5) An undo (failed statement, ROLLBACK) whose index repair found a
+  rebuild of the same full-text index running (`CALL geode.fts.rebuild`, a
+  restore's or snapshot install's rebuild) was refused, logged and dropped,
+  and the index kept the undone value that rebuild had read; the running
+  rebuild now runs again from the store after its pass
+  (`FtsStorageAdapter.requestRebuildAgain`). `CALL geode.fts.rebuild` itself
+  still refuses a second concurrent rebuild of one index. Not changed:
+  `CALL geode.fts.rebuild` from a session on another graph rebuilds the
+  default graph's index, where every full-text index lives (SONNY-2790); the
+  ticket's item asking it to use the session graph described the design.
+  Regression: `zig build test-sonny6368-index-maintenance`.
 - **The statement undo record is the statement's, not the thread's
   (SONNY-6362, item 1).** A write another thread made for a statement was
   not in the statement's undo record (`statement_undo` kept it in a

@@ -21,7 +21,11 @@
 //! table's order; it takes no graph lock. The full-text engines are built
 //! with the single-writer thread check off (`fts_storage_adapter`), and the
 //! rebuild's window queues a concurrent writer's node instead of racing the
-//! drop and recreate (`fts_index_ops.rebuildFulltextIndex`).
+//! drop and recreate (`fts_index_ops.rebuildFulltextIndex`). A full-text
+//! repair that finds a rebuild of the index running (`geode.fts.rebuild`, a
+//! restore's or snapshot install's rebuild, another undo's repair) has that
+//! rebuild run again from the store after its pass instead of being dropped
+//! (`fts_index_ops.rebuildOrRequestAgain`, SONNY-6368).
 //!
 //! Cost: a rebuild is O(nodes of the label). It runs only for an undo that
 //! reverted a change to a property, label or node an index covers.
@@ -124,7 +128,10 @@ fn repairFulltextIndexes(a: std.mem.Allocator, targets: []const Target, everythi
         for (entries) |entry| {
             if (!covers(targets, everything, gname, entry.label, entry.properties)) continue;
             if ((try done.getOrPut(a, entry.name)).found_existing) continue;
-            _ = fts_index_ops.rebuildFulltextIndex(a, catalog, gname, entry.name) catch |err| {
+            // SONNY-6368: a rebuild of the index already running runs again
+            // after its pass (its backfill may have read the undone value);
+            // the repair was refused (RebuildInProgress) and dropped.
+            fts_index_ops.rebuildOrRequestAgain(a, catalog, gname, entry.name) catch |err| {
                 noteFailure("fulltext", entry.name, err);
                 continue;
             };

@@ -6744,7 +6744,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 .Labels => |label_set| {
                     if (binding.vars.get(label_set.node)) |target_node| {
                         for (label_set.labels) |label| {
-                            try store.addNodeLabel(target_node.id, label);
+                            try property_mutation.addNodeLabel(allocator, store, target_node.id, label);
                         }
                     }
                 },
@@ -8955,7 +8955,7 @@ fn applyPathEndWrites(
                 try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value);
             },
             .Labels => |ls| if (pathEnd(ls.node, left, right, left_var, right_var)) |node| {
-                for (ls.labels) |label| try store.addNodeLabel(node.id, label);
+                for (ls.labels) |label| try property_mutation.addNodeLabel(allocator, store, node.id, label);
             },
             .AllProperties => |ap| if (pathEnd(ap.node, left, right, left_var, right_var)) |node| {
                 const props_value = try eval.evalExpr(allocator, ap.properties, fresh_env);
@@ -9248,11 +9248,11 @@ fn executeSingleHopEdgeTraversal(
                         // Handle label setting for nodes in relationship pattern
                         if (left_node_var != null and std.mem.eql(u8, label_set.node, left_node_var.?)) {
                             for (label_set.labels) |label| {
-                                try store.addNodeLabel(left_node.id, label);
+                                try property_mutation.addNodeLabel(allocator, store, left_node.id, label);
                             }
                         } else if (right_node_var != null and std.mem.eql(u8, label_set.node, right_node_var.?)) {
                             for (label_set.labels) |label| {
-                                try store.addNodeLabel(right_node_ptr.id, label);
+                                try property_mutation.addNodeLabel(allocator, store, right_node_ptr.id, label);
                             }
                         }
                     },
@@ -9901,7 +9901,7 @@ pub fn applySetRemoveOverRows(
                 switch (cell.*) {
                     .Node => |node| switch (sc) {
                         .Property => |prop| try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value),
-                        .Labels => |ls| for (ls.labels) |label| try store.addNodeLabel(node.id, label),
+                        .Labels => |ls| for (ls.labels) |label| try property_mutation.addNodeLabel(allocator, store, node.id, label),
                         .AllProperties => {
                             const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
                             try property_mutation.replaceNodeProperties(allocator, store, node_ptr, value);
@@ -11967,7 +11967,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .Labels => |label_set| {
                             if (std.mem.eql(u8, label_set.node, match_variable orelse "")) {
                                 for (label_set.labels) |label| {
-                                    try store.addNodeLabel(node.id, label);
+                                    try property_mutation.addNodeLabel(allocator, store, node.id, label);
                                 }
                             }
                         },
@@ -12605,7 +12605,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .Labels => |label_set| {
                             if (std.mem.eql(u8, label_set.node, match_variable orelse "")) {
                                 for (label_set.labels) |label| {
-                                    try store.addNodeLabel(node.id, label);
+                                    try property_mutation.addNodeLabel(allocator, store, node.id, label);
                                 }
                             }
                         },

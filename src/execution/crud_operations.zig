@@ -1275,9 +1275,10 @@ fn executeBatchCreateHomogeneous(
     // nodes are written. In the common batch-CREATE case no advanced
     // index is registered for these labels, so this is a fast O(1)
     // probe per key.
-    if (template_props.len > 0 and labels.len > 0) {
+    // SONNY-6368: every label's indexes, not only the first label's.
+    for (labels) |label| {
         for (template_props) |prop| {
-            property_mutation.rebuildAdvancedIndexesForPropertyPublic(store, labels[0], prop.key);
+            property_mutation.rebuildAdvancedIndexesForPropertyPublic(store, label, prop.key);
         }
     }
 

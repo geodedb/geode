@@ -18,7 +18,7 @@
 //   (SONNY-3318); chained MERGE actions follow the last MERGE clause
 //   (SONNY-3320); the node-scan stream serves only the fields it reads
 //   (SONNY-3321: a LET, or a WHERE with a FILTER, goes to the executor);
-//   SKIP / LIMIT parameters, a repeated SET target (22G03) and LET scope
+//   SKIP / LIMIT parameters, a repeated SET target (22G0M, SONNY-6368) and LET scope
 //   (SONNY-3248).
 // - Round 4b-1c (the round 4b-1b re-review): `WITH *` and FOR carry kinds
 //   (42000); EXISTS and IN subqueries read the statement's LETs, and a LET
@@ -234,8 +234,8 @@ const cases = [_]Case{
     .{
         .name = "3248 SET target, LET scope",
         .steps = &.{
-            .{ .query = "MATCH (q:LQ {i: 1}) SET q.c = 1, q.c = 2", .code = "22G03" },
-            .{ .query = "MATCH (a:LQ {i: 1}), (b:LQ {i: 1}) SET a.c = 1, b.c = 2 RETURN a.c", .code = "22G03" },
+            .{ .query = "MATCH (q:LQ {i: 1}) SET q.c = 1, q.c = 2", .code = "22G0M" },
+            .{ .query = "MATCH (a:LQ {i: 1}), (b:LQ {i: 1}) SET a.c = 1, b.c = 2 RETURN a.c", .code = "22G0M" },
             .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i, $z AS z", .code = "42P02" },
             nothing_written_q,
             .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i", .want = "1" },
@@ -278,11 +278,11 @@ const cases = [_]Case{
     // SONNY-3248 (I-2, I-3): refused before anything is written, on the QUIC
     // MERGE fast path too (go/oidc's MERGE shape was last-wins there).
     .{ .name = "3248 repeated SET target", .steps = &.{
-        .{ .query = "MERGE (t:LT1 {k: 1}) SET t.a = 1, t.a = 2", .code = "22G03" },
-        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v, t.a = 9", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G03" },
-        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v ON MATCH SET t.a = 9, t.a = 10", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G03" },
-        .{ .query = "CREATE (z:LT3 {k: 1}) SET z.a = 1, z.a = 2", .code = "22G03" },
-        .{ .query = "MATCH (q:LQ {i: 1}) CREATE (z:LT4) SET z.a = 1, z.a = 2", .code = "22G03" },
+        .{ .query = "MERGE (t:LT1 {k: 1}) SET t.a = 1, t.a = 2", .code = "22G0M" },
+        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v, t.a = 9", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G0M" },
+        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v ON MATCH SET t.a = 9, t.a = 10", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G0M" },
+        .{ .query = "CREATE (z:LT3 {k: 1}) SET z.a = 1, z.a = 2", .code = "22G0M" },
+        .{ .query = "MATCH (q:LQ {i: 1}) CREATE (z:LT4) SET z.a = 1, z.a = 2", .code = "22G0M" },
         .{ .query = "MATCH (t:LT1) RETURN count(t) AS c", .want = "0" },
         .{ .query = "MATCH (t:LT2) RETURN count(t) AS c", .want = "0" },
         .{ .query = "MATCH (t:LT3) RETURN count(t) AS c", .want = "0" },
@@ -343,7 +343,7 @@ const cases = [_]Case{
             .{ .query = "CALL { MATCH (n:L) RETURN n.i AS k ORDER BY k LIMIT $l } RETURN k", .params = &.{.{ .name = "l", .int = 2 }}, .want = "0;1" },
             .{ .query = "CALL { MATCH (n:L) RETURN n.i AS k ORDER BY k SKIP $l LIMIT 1 } RETURN k", .params = &.{.{ .name = "l", .int = 2 }}, .want = "2" },
             // m-c: two MERGEs of one node, one property set through both.
-            .{ .query = "MERGE (a:LW {k: 1}) MERGE (b:LW {k: 1}) SET a.x = 1, b.x = 2", .code = "22G03" },
+            .{ .query = "MERGE (a:LW {k: 1}) MERGE (b:LW {k: 1}) SET a.x = 1, b.x = 2", .code = "22G0M" },
             .{ .query = "MATCH (n:LW) RETURN count(n) AS c", .want = "0" },
         },
     },

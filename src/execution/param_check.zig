@@ -18,7 +18,7 @@
 //!   LIMIT parameter the request supplies is a non-negative integer.
 //! - SONNY-3367, variable kinds (42000, `VariableKindConflict`): one name is
 //!   one kind of element (`queryKindsConflict`).
-//! - SONNY-3248, repeated SET targets (22G03, `RepeatedSetTarget`): one SET
+//! - SONNY-3248, repeated SET targets (22G0M, `RepeatedSetTarget`): one SET
 //!   clause assigns a property once (`setListRepeatsTarget`).
 //! - SONNY-3318, a path variable on an OPTIONAL MATCH after the first
 //!   pattern (0A000, `OptionalPathVariable`): no executor binds it (`count(p)`
@@ -35,7 +35,7 @@ const ast = @import("../gql/ast.zig");
 const Value = @import("../value_types.zig").Value;
 
 /// What the checks refuse (the module doc has each one): `MissingParameter`
-/// (42P02), `VariableKindConflict` (42000), `RepeatedSetTarget` (22G03),
+/// (42P02), `VariableKindConflict` (42000), `RepeatedSetTarget` (22G0M),
 /// `InvalidWindowParameter` (22G03) and `OptionalPathVariable` (0A000).
 pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable };
 

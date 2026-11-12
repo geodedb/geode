@@ -239,24 +239,50 @@ pub fn rebuildFulltextIndex(
         allocator.free(leftover);
     };
 
-    fa.dropIndex(index_name) catch |err| switch (err) {
-        adapter_mod.Error.IndexNotFound => {}, // engine absent (e.g. post-restart) — fine
-        else => return err,
-    };
-    try fa.createIndex(index_name);
-    errdefer fa.dropIndex(index_name) catch {};
-
-    // Snapshot the label's node ids EXACTLY ONCE: this is both backfill's
-    // input and the drain's exclusion set below (see `backfillExistingNodes`'
-    // `node_ids_override` doc comment for why a second independent read
-    // would corrupt that exclusion set).
     const store = graph_store.getGlobalStore(graph_store.global_allocator());
-    const raw_snapshot = store.getNodesByLabel(graph_name, label) orelse &[_]u64{};
-    const snapshot = try allocator.dupe(u64, raw_snapshot);
+    var created = false;
+    errdefer if (created) fa.dropIndex(index_name) catch {};
+    var snapshot: []u64 = &[_]u64{};
     defer allocator.free(snapshot);
 
-    const backfill_count = try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, snapshot);
-    if (rebuild_backfilled_hook) |hook| hook(index_name);
+    // CANARY: REQ=REQ-SONNY-6368-REBUILD-AGAIN; FEATURE="FullText"; ASPECT=RebuildPasses; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+    // SONNY-6368: one pass per iteration. An undo whose index repair found
+    // this rebuild running asked it to run again
+    // (`FtsStorageAdapter.requestRebuildAgain`): its backfill may have read
+    // the value the undo took back, which no pending id carries (the undo
+    // writes through the store only). Such a pass starts over from the store
+    // with the window still armed; the last pass ends the rebuild
+    // (`finishRebuildPass`). The repair used to be refused and dropped.
+    const backfill_count: usize, const pending: []u64 = while (true) {
+        fa.dropIndex(index_name) catch |err| switch (err) {
+            adapter_mod.Error.IndexNotFound => {}, // engine absent (e.g. post-restart) — fine
+            else => return err,
+        };
+        created = false;
+        try fa.createIndex(index_name);
+        created = true;
+
+        // Snapshot the label's node ids EXACTLY ONCE per pass: this is both
+        // backfill's input and the drain's exclusion set below (see
+        // `backfillExistingNodes`' `node_ids_override` doc comment for why a
+        // second independent read would corrupt that exclusion set).
+        allocator.free(snapshot);
+        snapshot = &[_]u64{};
+        const raw_snapshot = store.getNodesByLabel(graph_name, label) orelse &[_]u64{};
+        snapshot = try allocator.dupe(u64, raw_snapshot);
+
+        const count = try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, snapshot);
+        if (rebuild_backfilled_hook) |hook| hook(index_name);
+
+        // Clearing the rebuild flag (on the last pass) allows live writes to
+        // resume while the drain below processes its snapshot. See the drain.
+        const pass = try fa.finishRebuildPass(index_name, allocator);
+        if (!pass.again) break .{ count, pass.pending };
+        // The next pass's backfill reads every queued id's current state.
+        allocator.free(pass.pending);
+    };
+    drained = true;
+    defer allocator.free(pending);
 
     // Drain: reindex every write queued during the window whose id is NOT
     // already covered by the snapshot backfill above just processed.
@@ -281,7 +307,7 @@ pub fn rebuildFulltextIndex(
     try snapshot_set.ensureTotalCapacity(allocator, @intCast(snapshot.len));
     for (snapshot) |nid| snapshot_set.putAssumeCapacity(nid, {});
 
-    // Clearing the rebuild flag allows live writes to resume while this drain
+    // The rebuild flag is clear: live writes resume while this drain
     // processes its snapshot. Both the drain and live create hooks append
     // only if the engine has not indexed the id, under the same writer lock,
     // so a delayed notification cannot double the document's postings.
@@ -291,9 +317,6 @@ pub fn rebuildFulltextIndex(
     // resolution drops ids absent from the live store, so the stale posting
     // is not returned to a caller. Mid-backfill updates retain the documented
     // snapshot-staleness behavior above.
-    const pending = try fa.endRebuild(index_name, allocator);
-    drained = true;
-    defer allocator.free(pending);
     // Task 4 (geode-vectorization-and-reranking): count only drained ids that
     // were ACTUALLY indexed — `indexNodeDocument` returns `false` (not an
     // error) for a node whose id vanished by drain time or that carried no
@@ -314,6 +337,126 @@ pub fn rebuildFulltextIndex(
     };
 
     return @intCast(backfill_count + drain_count);
+}
+
+// CANARY: REQ=REQ-SONNY-6368-REBUILD-AGAIN; FEATURE="FullText"; ASPECT=RebuildOrRequestAgain; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6368: bring `index_name` up to the store after a change its live
+/// maintenance cannot express (an undo, a removed property): rebuild it, or,
+/// when a rebuild of it is already running, have that rebuild run again from
+/// the store once its pass is done (`FtsStorageAdapter.requestRebuildAgain`)
+/// rather than drop the repair. Returns once one of the two is certain.
+pub fn rebuildOrRequestAgain(
+    allocator: std.mem.Allocator,
+    catalog: *catalog_mod.Catalog,
+    graph_name: []const u8,
+    index_name: []const u8,
+) !void {
+    // A running rebuild that ends between our refusal and our request is
+    // rebuilt by us on the next attempt; the bound only stops a pathological
+    // stream of short rebuilds from holding the caller.
+    var attempts: usize = 0;
+    while (attempts < 16) : (attempts += 1) {
+        _ = rebuildFulltextIndex(allocator, catalog, graph_name, index_name) catch |err| switch (err) {
+            adapter_mod.Error.RebuildInProgress => {
+                const adapter = graph_store.getGlobalAdapter() orelse return Error.FulltextUnavailable;
+                const mg = adapter.lookupManagedGraph(graph_name) catch return Error.FulltextUnavailable;
+                const fa = mg.fts_adapter orelse return Error.FulltextUnavailable;
+                if (try fa.requestRebuildAgain(index_name)) return;
+                continue;
+            },
+            else => return err,
+        };
+        return;
+    }
+    return adapter_mod.Error.RebuildInProgress;
+}
+
+// CANARY: REQ=REQ-SONNY-6368-REMOVE-MAINTENANCE; FEATURE="FullText"; ASPECT=RemovedTextRebuildQueue; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6368: the full-text indexes whose node lost indexed text (a
+/// committed `REMOVE n.prop`) and so must be rebuilt: the engine cannot take
+/// one property's postings out of a document (append-only; a tombstone hides
+/// the node for good, and a later SET could not bring it back). A REMOVE
+/// queues the index (`queueRebuildForRemovedText`); the statement's end
+/// rebuilds each queued index once (`flushQueuedRebuilds`), so `MATCH (d:Doc)
+/// REMOVE d.body` costs one O(nodes of the label) rebuild, not one per row.
+/// Whoever ends a statement first takes the queue: every entry is rebuilt
+/// after the REMOVE that queued it. `queue_mutex` is a leaf lock: held only
+/// to add or take entries, never across a rebuild.
+const QueuedRebuild = struct { graph: []u8, index: []u8 };
+const queue_allocator = std.heap.smp_allocator;
+var queue_mutex: std.Io.Mutex = .init;
+var queued_rebuilds: std.ArrayListUnmanaged(QueuedRebuild) = .empty;
+var queued_count: std.atomic.Value(usize) = .init(0);
+
+/// SONNY-6368: node of `labels` in `graph_name` lost its text in `property`
+/// (the caller saw a non-empty string there): queue every full-text index
+/// covering one of the labels over that property for a rebuild at the end
+/// of the statement. Never fails the write; an index that cannot be queued
+/// is logged (it keeps answering for the removed text until rebuilt).
+pub fn queueRebuildForRemovedText(graph_name: []const u8, labels: []const []const u8, property: []const u8) void {
+    const adapter = graph_store.getGlobalAdapter() orelse return;
+    const mg = adapter.lookupManagedGraph(graph_name) catch return;
+    if (mg.fts_adapter == null) return;
+    for (labels) |label| {
+        const specs = mg.coveringFtsIndexes(label) orelse continue;
+        for (specs) |spec| {
+            for (spec.properties) |p| {
+                if (!std.mem.eql(u8, p, property)) continue;
+                queueRebuild(graph_name, spec.name) catch |err| {
+                    log.err("fulltext index '{s}' could not be queued for a rebuild after a REMOVE: {}; it answers for the removed text until rebuilt", .{ spec.name, err });
+                };
+                break;
+            }
+        }
+    }
+}
+
+fn queueRebuild(graph_name: []const u8, index_name: []const u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    queue_mutex.lockUncancelable(io);
+    defer queue_mutex.unlock(io);
+    for (queued_rebuilds.items) |q| {
+        if (std.mem.eql(u8, q.graph, graph_name) and std.mem.eql(u8, q.index, index_name)) return;
+    }
+    const g = try queue_allocator.dupe(u8, graph_name);
+    errdefer queue_allocator.free(g);
+    const i = try queue_allocator.dupe(u8, index_name);
+    errdefer queue_allocator.free(i);
+    try queued_rebuilds.append(queue_allocator, .{ .graph = g, .index = i });
+    _ = queued_count.fetchAdd(1, .release);
+}
+
+/// SONNY-6368: rebuild every queued index (`queueRebuildForRemovedText`).
+/// Called at the end of each outermost statement (`execution`), still under
+/// the graph lock it holds; a rebuild takes no graph lock. A rebuild already
+/// running for an index runs again instead (`rebuildOrRequestAgain`).
+pub fn flushQueuedRebuilds(catalog: *catalog_mod.Catalog) void {
+    if (queued_count.load(.acquire) == 0) return;
+    var taken: std.ArrayListUnmanaged(QueuedRebuild) = .empty;
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        queue_mutex.lockUncancelable(io);
+        defer queue_mutex.unlock(io);
+        taken = queued_rebuilds;
+        queued_rebuilds = .empty;
+        queued_count.store(0, .release);
+    }
+    defer {
+        for (taken.items) |q| {
+            queue_allocator.free(q.graph);
+            queue_allocator.free(q.index);
+        }
+        taken.deinit(queue_allocator);
+    }
+    var arena = std.heap.ArenaAllocator.init(queue_allocator);
+    defer arena.deinit();
+    for (taken.items) |q| {
+        rebuildOrRequestAgain(arena.allocator(), catalog, q.graph, q.index) catch |err| switch (err) {
+            // Dropped since it was queued: nothing left to answer for.
+            Error.IndexNotFound => {},
+            else => log.err("fulltext index '{s}' could not be rebuilt after a REMOVE: {}; it answers for the removed text until rebuilt", .{ q.index, err }),
+        };
+    }
 }
 
 /// GAP-0922: scan existing nodes of `label` and reject the fulltext index if

@@ -387,7 +387,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // edges) or on a path variable.
         // SONNY-3248 (round-4a review M-2): one SET clause assigned one
         // property of an element twice; the second silently won.
-        error.RepeatedSetTarget => .{ .code = "22G03", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
+        // SONNY-6368: 22G0M, data exception - multiple assignments to a
+        // graph element property (ISO/IEC 39075:2024 13.3 General Rule 7 a).
+        // It answered 22G03 (invalid value type).
+        error.RepeatedSetTarget => .{ .code = "22G0M", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
         error.OptionalPathVariable => .{ .code = "0A000", .message = "A path variable on an OPTIONAL MATCH pattern after the first is not supported; return the pattern's nodes and relationships instead" },
         error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
         // SONNY-3384: a SET or REMOVE before a DELETE in one query runs only

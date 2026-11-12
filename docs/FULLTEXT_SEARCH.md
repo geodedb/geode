@@ -189,7 +189,16 @@ graph dir
 After an index exists, ordinary write paths keep it current automatically:
 
 - **Node create** — newly created nodes matching the index label/property are tokenized and indexed (including nodes inserted *after* the index was created).
-- **`SET`** — updating an indexed property re-indexes the node.
+- **`SET`** — updating an indexed property re-indexes the node (the old
+  value's postings stay, see the stale-posting residual below).
+- **`SET n:L`** — a node given a label joins the label's fulltext (and
+  vector) indexes with the properties it holds (SONNY-6368).
+- **`REMOVE n.prop`** — removing an indexed text property rebuilds every
+  fulltext index covering it from the store at the end of the statement
+  (once per index, however many rows the statement removed from): the
+  engine cannot take one property's postings out of a document, and a
+  tombstone would hide the node for good (SONNY-6368). Cost: an O(nodes of
+  the label) rebuild per statement that removes indexed text.
 - **Delete** — deleting a node removes it from the index.
 - **Bulk-MERGE fast path** — `MERGE` statements shaped for the connection-thread
   fast path (`executeBulkSimpleMerge` in `quic_connection_handler.zig`, and its
@@ -250,7 +259,10 @@ cannot be resolved against the live store — so correctness at query time is
 preserved. A second `CALL geode.fts.rebuild` on the SAME index while one is
 already in flight is refused (`RebuildInProgress`) rather than racing two
 drop→create sequences. Regression: `tests/test_fts_rebuild.zig` (`zig build
-test-fts-rebuild`).
+test-fts-rebuild`). An undo repair or a statement-end rebuild after a REMOVE
+(below) that finds a rebuild of the index running is not refused: that
+rebuild runs again from the store after its pass
+(`FtsStorageAdapter.requestRebuildAgain`, SONNY-6368).
 
 **Undo rebuilds the indexes it touched (SONNY-3381):** a statement that fails
 and a `ROLLBACK` (or rollback to a savepoint) undo their changes through the
@@ -261,8 +273,11 @@ index) covering a property, label or node it reverted is rebuilt from the
 store as the undo left it (`execution/undo_index_repair.zig`, through
 `rebuildFulltextIndex` above), so a search no longer finds a node by a word
 an undone SET wrote, and finds a node whose DELETE was undone. The rebuild is
-O(nodes of the label) and runs only for such an undo. Regression:
-`zig build test-sonny3381-undo-index-entries`.
+O(nodes of the label) and runs only for such an undo. If a rebuild of the
+same index is already running (its backfill may have read the undone value),
+that rebuild runs again after its pass instead of the repair being dropped
+(SONNY-6368). Regression: `zig build test-sonny3381-undo-index-entries`,
+`zig build test-sonny6368-index-maintenance`.
 
 **Ingestion invariant:** after any bulk-ingestion run, verify FTS visibility
 with a canary query (`CALL geode.fts.search(index, term)` for a term known to

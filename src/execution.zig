@@ -1731,9 +1731,22 @@ pub fn endStatementFailed(owns: bool, err: anytype) (@TypeOf(err) || StatementSc
         storage_adapter.abortThreadSessionTxn();
     }
     const over_budget = owns and statement_undo.budgetExceeded();
-    if (!statement_undo.finishFailed(owns)) return error.StatementUndoIncomplete;
+    const undone = statement_undo.finishFailed(owns);
+    flushFulltextRebuilds(owns, null); // SONNY-6368
+    if (!undone) return error.StatementUndoIncomplete;
     if (over_budget) return error.WriteQueryBudgetExceeded;
     return err;
+}
+
+// CANARY: REQ=REQ-SONNY-6368-REMOVE-MAINTENANCE; FEATURE="FullText"; ASPECT=StatementEndRebuild; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-6368: at the end of the outermost statement, rebuild the full-text
+/// indexes a REMOVE of indexed text queued (`fts_index_ops.flushQueuedRebuilds`),
+/// once each, still under the graph lock the statement holds. After a failed
+/// statement too: its undo repaired its own, and the queue is drained.
+fn flushFulltextRebuilds(owns: bool, catalog: ?*catalog_mod.Catalog) void {
+    if (!owns) return;
+    const cat = catalog orelse (if (getActiveContext()) |ctx| ctx.catalog else getCatalogInstanceIfPresent()) orelse return;
+    fts_index_ops.flushQueuedRebuilds(cat);
 }
 
 /// SONNY-3348: the statement that opened the scope `owns` evaluated without
@@ -1750,6 +1763,7 @@ pub fn endStatementSucceeded(owns: bool, catalog: *catalog_mod.Catalog) (stateme
     if (owns) unique_constraints.checkStatementWrites(catalog) catch |err| return endStatementFailed(owns, err);
     statement_proposals.flush(owns) catch |err| return endStatementFailed(owns, err);
     try statement_undo.finishSucceeded(owns);
+    flushFulltextRebuilds(owns, catalog); // SONNY-6368
 }
 
 fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
