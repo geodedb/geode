@@ -4646,6 +4646,32 @@ pub const GraphStore = struct {
         if (std.mem.eql(u8, graph_name, DEFAULT_GRAPH_NAME)) {
             return error.CannotDropDefaultGraph;
         }
+        // CANARY: REQ=REQ-SONNY-3135-LOCKLESS-DROP-WAITS; FEATURE="MultiGraphIsolation"; ASPECT=DropTakesWriteLock; STATUS=TESTED; TEST=tests/test_sonny3135_lockless_drop_waits.zig; OWNER=storage; UPDATED=2026-11-12
+        // SONNY-3135 (N7c): the drop runs under the graph's write lock, so it
+        // waits for the graph's readers and writers and none starts during
+        // it. DROP GRAPH's handlers take the lock before the executor gets
+        // here; every other caller held none (an executor DROP / CREATE OR
+        // REPLACE GRAPH of a graph created after the handler's lock attempt,
+        // an embedded executor, the CREATE GRAPH, HELLO auto-create and
+        // SchemaManager rollbacks), and the adapter's drop only marks a
+        // pinned graph dropped, so it returned under another request's
+        // writes. Taken first and released last (tier 1, before
+        // `graphs_mutex`, the hydration entry and the adapter's `mutex`, the
+        // order the handlers' drops already have). A missing graph is not
+        // locked: the adapter's lock never creates one. The writer-preferring
+        // acquire (readers back off while it waits) with no deadline: the
+        // plain one is starved by a steady stream of readers.
+        const drop_lock_adapter = global_adapter;
+        var drop_lock: ?*graph_storage_adapter.ManagedGraph = null;
+        if (drop_lock_adapter) |adapter| {
+            if (!adapter.threadHoldsGraphWriteLock(graph_name)) {
+                drop_lock = adapter.acquireGraphWriteLockCancelable(graph_name, std.math.maxInt(u64)) catch |err| switch (err) {
+                    error.GraphNotFound => null,
+                    error.Deadline => unreachable, // no deadline
+                };
+            }
+        }
+        defer if (drop_lock) |mg| drop_lock_adapter.?.releaseGraphWriteLock(mg);
         // CANARY: REQ=REQ-SONNY-3134-DROP-GRAPH-OTHER-TXN; FEATURE="MultiGraphIsolation"; ASPECT=DropRefusedWhileTxnHolds; STATUS=TESTED; TEST=tests/test_sonny3134_drop_graph_other_txn.zig; OWNER=storage; UPDATED=2026-09-27
         // SONNY-3134: nor a graph an open session transaction changed, any
         // session's (`graphHeldByTxn`). Only the calling thread's was refused

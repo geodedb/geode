@@ -79,9 +79,23 @@
   <user>, '*')` answers 0A000 (`GrantWildcardNotSupported`) and stores
   nothing; it stored a grant on a graph named `*`, which no request matches,
   and reported it granted. A revoke of `*` still removes one an older
-  release stored. N7c (graph drops that do not wait for the graph's lock
-  holders: a graph created between a request's lock attempt and its
-  execution, a raft apply, a HELLO rollback) remains open.
+  release stored. N7c: see the next entry.
+- **A graph drop waits for the graph's lock holders, whoever drops it
+  (SONNY-3135 N7c).** DROP GRAPH's handlers take the graph's write lock
+  before the executor drops it (SONNY-3028); every other caller of
+  `GraphStore.dropGraph` held none: the executor's DROP GRAPH and CREATE OR
+  REPLACE GRAPH of a graph created after the handler's lock attempt (or run
+  by an embedded executor), the CREATE GRAPH rollback, the QUIC and gRPC
+  HELLO auto-create rollbacks and `SchemaManager.createGraph`'s rollback.
+  `StorageAdapter.dropGraph` only marks a pinned graph dropped (the pins
+  kept its holders memory-safe), so such a drop returned while another
+  request read or wrote the graph, and that request's writes went to a
+  dropped graph while it reported success. `GraphStore.dropGraph` now takes
+  the graph's write lock itself unless the calling thread holds it
+  (`ManagedGraph.write_holder`, `StorageAdapter.threadHoldsGraphWriteLock`),
+  first and released last; a missing graph is not locked (and not
+  created). The raft apply already took the lock (SONNY-3350).
+  `test-sonny3135-lockless-drop-waits`.
 - **`geode query` exit code, superuser roles, procedure errors, EXPLAIN
   POLICY's executor checks, legacy hashes (SONNY-6369).** (1) **Behaviour
   change:** `geode query` exits 1 when the server answers the query with an

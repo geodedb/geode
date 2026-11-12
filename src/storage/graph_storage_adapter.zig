@@ -1771,6 +1771,14 @@ pub const ManagedGraph = struct {
     /// committed writes on crash recovery.
     batch_txns_open: std.atomic.Value(u32) = .init(0),
     write_lock_claims: std.atomic.Value(u32) = .init(0),
+    // CANARY: REQ=REQ-SONNY-3135-LOCKLESS-DROP-WAITS; FEATURE="MultiGraphIsolation"; ASPECT=WriteHolder; STATUS=TESTED; TEST=tests/test_sonny3135_lockless_drop_waits.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-3135 (N7c): the id (plus one) of the thread that holds `rwlock`
+    /// EXCLUSIVE through the graph lock API (`acquireGraphWriteLock*`, until
+    /// `releaseGraphWriteLock`), 0 when none does. `GraphStore.dropGraph`
+    /// takes the write lock itself unless the calling thread holds it
+    /// (`threadHoldsGraphWriteLock`), so a drop waits for the graph's
+    /// holders without waiting for its own caller.
+    write_holder: std.atomic.Value(u64) = .init(0),
 
     /// Explicit writer-preference counter for ALL EXCLUSIVE acquirers of
     /// `rwlock` (the periodic checkpoint AND the edge-phase schema/MERGE ops).
@@ -10888,7 +10896,23 @@ pub const StorageAdapter = struct {
             mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
             return error.GraphNotFound;
         }
+        mg.write_holder.store(currentThreadTag(), .release);
         return mg;
+    }
+
+    /// SONNY-3135 (N7c): this thread's tag for `ManagedGraph.write_holder`.
+    fn currentThreadTag() u64 {
+        return @as(u64, std.Thread.getCurrentId()) + 1;
+    }
+
+    /// SONNY-3135 (N7c): does the calling thread hold `graph_name`'s write
+    /// lock through the graph lock API? A brief lookup under `mutex` (tier
+    /// 0); no graph lock is taken.
+    pub fn threadHoldsGraphWriteLock(self: *StorageAdapter, graph_name: []const u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(graph_name) orelse return false;
+        return mg.write_holder.load(.acquire) == currentThreadTag();
     }
 
     /// Deadline-aware variant of `acquireGraphWriteLock`.
@@ -11031,6 +11055,7 @@ pub const StorageAdapter = struct {
     }
 
     pub fn releaseGraphWriteLock(self: *StorageAdapter, mg: *ManagedGraph) void {
+        mg.write_holder.store(0, .release);
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         unclaimWriteLock(mg);
         // SONNY-3028: and the pin the acquire took. A graph this thread
