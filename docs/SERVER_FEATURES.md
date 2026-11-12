@@ -1080,7 +1080,8 @@ pub fn evaluatePolicy(
 
 - Policy evaluation: <10μs per policy
 - Expression compilation: JIT to bytecode
-- Policy cache: 90%+ hit rate
+- Policy cache: a row-level decision is not cached (the verdict depends on
+  the row, and the cache key has none; SONNY-6377)
 - Minimal query overhead (<5%)
 
 ### 7.4 Multi-Factor Authentication (MFA)

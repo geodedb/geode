@@ -1,8 +1,8 @@
 REQ,Feature,Aspect,Status,Test,Bench,Owner,Updated,File,Line
 GAP-0284,ABAC user attribute store,GlobalStore,TESTED,,,security,2026-05-22,src/security/user_attribute_store.zig,1
-GAP-0284,ABAC user attribute store,RLSExprAttrLoad,TESTED,,,security,2026-05-22,src/security/rls_core.zig,1346
-GAP-0284,ABAC user attribute store,RLSExprAttrLoad,TESTED,,,security,2026-05-22,src/security/rls_core.zig,2073
-GAP-0284,ABAC user attribute store,RLSExprAttrResolve,TESTED,,,security,2026-05-22,src/security/rls_core.zig,1707
+GAP-0284,ABAC user attribute store,RLSExprAttrLoad,TESTED,,,security,2026-05-22,src/security/rls_core.zig,1342
+GAP-0284,ABAC user attribute store,RLSExprAttrLoad,TESTED,,,security,2026-05-22,src/security/rls_core.zig,2069
+GAP-0284,ABAC user attribute store,RLSExprAttrResolve,TESTED,,,security,2026-05-22,src/security/rls_core.zig,1703
 GAP-0335,IntervalComparisons,OverlapAndContains,TESTED,,,datetime,2026-05-22,src/eval.zig,4576
 GAP-0436,JsonbDepthGuard,SECURITY,TESTED,,,security,2026-02-18,src/types/jsonb.zig,5
 GAP-0514-PHASE1A,GraphStoreRegressionCoverage,Scaffold,TESTED,,,engine,2026-04-11,tests/test_gap0514_graph_store_regression.zig,1
@@ -278,7 +278,7 @@ REQ-AUTH-ENFORCE-030,AuthEnforcement,ControlCharacterPrevention,TESTED,,,securit
 REQ-AUTH-ENFORCE-031,MutationAuthorization,RoleU8Enforcement,TESTED,,,security,2026-04-09,src/security/test_auth_enforcement.zig,804
 REQ-AUTH-GRANT-PERSIST-001,GQL Auth DDL Persistence,Storage,TESTED,,,security,2026-05-12,src/storage/user_storage.zig,331
 REQ-AUTH-GRANT-PERSIST-002,GQL Auth DDL Persistence,WriteThrough,TESTED,,,security,2026-05-12,src/security/user_management.zig,214
-REQ-AUTH-GRANT-PERSIST-029,GQL Auth DDL Persistence,UserEnableDisable,TESTED,,,security,2026-05-12,src/execution/auth_dispatch.zig,764
+REQ-AUTH-GRANT-PERSIST-029,GQL Auth DDL Persistence,UserEnableDisable,TESTED,,,security,2026-05-12,src/execution/auth_dispatch.zig,765
 REQ-AUTH-GRAPH-GLOBAL-001,AuthGraphManagerGlobal,GlobalAccessor,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,213
 REQ-AUTH-GRAPH-MGR-001,AuthGraphManager,Orchestration,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig,1
 REQ-AUTH-GRAPH-MGR-002,AuthGraphManagerTests,ChainIntegrity,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig,2834
@@ -303,18 +303,18 @@ REQ-AUTH-GRAPH-PERSIST-017,AuthDDLPersistence,GrantIdAboveI64Max,TESTED,,,securi
 REQ-AUTH-GRAPH-PERSIST-017,AuthDDLPersistence,RevokeUserGraphPermission,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,1848
 REQ-AUTH-GRAPH-PERSIST-018,AuthDDLPersistence,ListGraphGrants,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,2130
 REQ-AUTH-GRAPH-PERSIST-019,AuthDDLPersistence,RolePersistCallbacks,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,129
-REQ-AUTH-GRAPH-PERSIST-021,AuthDDLPersistence,RoleCreatePersist,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1234
+REQ-AUTH-GRAPH-PERSIST-021,AuthDDLPersistence,RoleCreatePersist,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1235
 REQ-AUTH-GRAPH-PERSIST-022,AuthDDLPersistence,GrantGraphPermission,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,11
 REQ-AUTH-GRAPH-PERSIST-022,AuthDDLPersistence,GrantGraphPermission,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,180
-REQ-AUTH-GRAPH-PERSIST-022,AuthDDLPersistence,RoleDeletePersist,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1275
+REQ-AUTH-GRAPH-PERSIST-022,AuthDDLPersistence,RoleDeletePersist,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1276
 REQ-AUTH-GRAPH-PERSIST-023,AuthDDLPersistence,ListRoles,TESTED,,,security,2026-06-11,src/security/auth_graph_manager.zig,1394
 REQ-AUTH-GRAPH-PERSIST-023,AuthDDLPersistence,RevokeGraphPermission,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,181
-REQ-AUTH-GRAPH-PERSIST-024,AuthDDLPersistence,CustomRoleHydration,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1830
+REQ-AUTH-GRAPH-PERSIST-024,AuthDDLPersistence,CustomRoleHydration,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1831
 REQ-AUTH-GRAPH-PERSIST-024,AuthDDLPersistence,HasGraphGrant,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,182
 REQ-AUTH-GRAPH-PERSIST-025,AuthDDLPersistence,LoadGraphGrants,IMPL,,,security,2026-05-11,src/security/multi_graph_security.zig,374
 REQ-AUTH-GRAPH-PERSIST-025,AuthDDLPersistence,LoadGraphGrants,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig,207
 REQ-AUTH-GRAPH-PERSIST-026,AuthDDLPersistence,GrantPersistCallbacks,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,160
-REQ-AUTH-GRAPH-PERSIST-027,AuthDDLPersistence,HandleGrantRevoke,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1453
+REQ-AUTH-GRAPH-PERSIST-027,AuthDDLPersistence,HandleGrantRevoke,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig,1454
 REQ-AUTH-GRAPH-PERSIST-030,AuthDDLPersistence,LibExport,IMPL,,,security,2026-05-12,src/lib.zig,845
 REQ-AUTH-GRAPH-PERSIST-031,AuthDDLPersistence,UserWriterCallbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,869
 REQ-AUTH-GRAPH-PERSIST-032,AuthDDLPersistence,RoleCallbacks,TESTED,,,security,2026-06-11,src/server/server_init.zig,929
@@ -393,7 +393,7 @@ REQ-AUTH-ROLE-001,RoleAssignment,ErrorHandling,TESTED,,,security,2026-05-11,src/
 REQ-AUTH-ROLE-001,RoleAssignment,Idempotent,TESTED,,,security,2026-05-11,src/security/user_management.zig,2254
 REQ-AUTH-ROLE-001,RoleAssignment,Mutation,TESTED,,,security,2026-05-11,src/security/user_management.zig,1367
 REQ-AUTH-ROLE-001,RoleAssignment,Mutation,TESTED,,,security,2026-05-11,src/security/user_management.zig,2233
-REQ-AUTH-ROLE-002,BuiltinRoleHardening,Validation,TESTED,,,security,2026-05-11,src/execution/auth_dispatch.zig,1866
+REQ-AUTH-ROLE-002,BuiltinRoleHardening,Validation,TESTED,,,security,2026-05-11,src/execution/auth_dispatch.zig,1867
 REQ-AUTH-SALT-001,SecurePasswordSalt,Security,EXEMPT,,,security,2026-02-24,src/security/user_management.zig,650
 REQ-AUTH-SESSION-001,LocalSessionStorage,SECURITY,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,1
 REQ-AUTH-SESSION-002,SaveSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,175
@@ -1494,7 +1494,7 @@ REQ-GAP-0514-QUIC-HANDLER,CanaryReconciliation,QuicHandlerRegression,TESTED,,,se
 REQ-GAP-0514-REPL-DISPATCH,CanaryReconciliation,ReplDispatchRegression,TESTED,,,cli,2026-06-11,tests/test_gap0514_repl_dispatch.zig,17
 REQ-GAP-0723-RLS-VM-BOUNDS,RLSBytecodeVMBounds,MemorySafety,TESTED,,,security,2026-04-16,tests/test_rls_vm_bounds.zig,1
 REQ-GAP-0727-AUDIT-SEQ-NO,AuditVerifySeqNo,TamperDetection,TESTED,,,security,2026-05-21,tests/test_audit_verify_seq_no.zig,1
-REQ-GAP-0732-RLS-FAIL-CLOSED,RLSRawStringFailClosed,Security,TESTED,,,security,2026-04-16,src/security/rls_core.zig,1176
+REQ-GAP-0732-RLS-FAIL-CLOSED,RLSRawStringFailClosed,Security,TESTED,,,security,2026-04-16,src/security/rls_core.zig,1172
 REQ-GAP-0737-INSECURE-GATE,ClusterInsecureRefusal,DefenseInDepth,TESTED,,,security,2026-04-16,tests/test_cluster_insecure_gate.zig,1
 REQ-GAP-0741-VAULT-PATH-VALIDATE,VaultKeyPathValidation,InputSafety,TESTED,,,security,2026-04-16,src/security/vault_kms_provider.zig,441
 REQ-GAP-0838-CLUSTER-IDENTITY,DistributedMode,IdentityContractDiagnostic,TESTED,,,core,2026-06-02,src/server/cluster_identity.zig,4
@@ -1693,7 +1693,7 @@ REQ-GPS-CATALOG-002,GPS Policy Persistence,StartupHydration,TESTED,,,security,20
 REQ-GPS-CATALOG-002,GPS Policy Persistence,StartupWiring,TESTED,,,security,2026-05-20,src/server/server_init.zig,1086
 REQ-GPS-CATALOG-002,GPS Policy Persistence,WriteThroughHooks,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig,488
 REQ-GPS-DDL-001,GPS Policy DDL,ASTAction,TESTED,,,security,2026-05-20,src/gql/ast.zig,860
-REQ-GPS-DDL-001,GPS Policy DDL,AuthDispatchPolicyCreate,TESTED,,,security,2026-05-20,src/execution/auth_dispatch.zig,1337
+REQ-GPS-DDL-001,GPS Policy DDL,AuthDispatchPolicyCreate,TESTED,,,security,2026-05-20,src/execution/auth_dispatch.zig,1338
 REQ-GPS-DDL-001,GPS Policy DDL,CreateMultiActionPolicy,TESTED,,,security,2026-05-20,tests/test_gps_policy_ddl_integration.zig,142
 REQ-GPS-DDL-001,GPS Policy DDL,CreatePolicyAST,TESTED,,,security,2026-05-20,src/gql/ast.zig,873
 REQ-GPS-DDL-001,GPS Policy DDL,CreatePolicyAllActions,TESTED,,,security,2026-05-20,tests/test_gps_policy_ddl_parser.zig,48
@@ -1718,7 +1718,7 @@ REQ-GPS-DDL-001,GPS Policy DDL,PolicyCatalogMultiple,TESTED,,,security,2026-05-2
 REQ-GPS-DDL-001,GPS Policy DDL,ServerStartupCatalog,TESTED,,,security,2026-05-20,src/server/main.zig,1380
 REQ-GPS-DDL-001,GPS Policy DDL,ShowPoliciesParse,TESTED,,,security,2026-05-20,tests/test_gps_policy_ddl_parser.zig,135
 REQ-GPS-DDL-001,GPS Policy DDL,ShowPolicySingular,TESTED,,,security,2026-05-20,tests/test_gps_policy_ddl_parser.zig,145
-REQ-GPS-DDL-002,GPS Policy DDL,AuthDispatchPolicyDelete,TESTED,,,security,2026-05-20,src/execution/auth_dispatch.zig,1429
+REQ-GPS-DDL-002,GPS Policy DDL,AuthDispatchPolicyDelete,TESTED,,,security,2026-05-20,src/execution/auth_dispatch.zig,1430
 REQ-GPS-DDL-002,GPS Policy DDL,DropPolicyExecution,TESTED,,,security,2026-05-20,src/execution.zig,2854
 REQ-GPS-DDL-002,GPS Policy DDL,DropPolicyIfExists,TESTED,,,security,2026-05-20,tests/test_gps_policy_ddl_integration.zig,189
 REQ-GPS-DDL-002,GPS Policy DDL,DropPolicyNotFound,TESTED,,,security,2026-05-20,tests/test_gps_policy_ddl_integration.zig,170
@@ -1750,7 +1750,7 @@ REQ-GPS-DDL-003,GPS ALTER POLICY DDL,RenameAndToggleTogether,TESTED,,,security,2
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,RenameSurvivesRestartNoStale,TESTED,,,security,2026-06-09,tests/test_gap0858_alter_policy_persist.zig,154
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,ShowPoliciesReflectsEnabled,TESTED,,,security,2026-05-21,tests/test_gps_alter_policy.zig,213
 REQ-GPS-DDL-003,GPS ALTER POLICY DDL,TestSuite,TESTED,,,security,2026-05-21,tests/test_gps_alter_policy.zig,5
-REQ-GPS-DDL-003,GPS Policy DDL,AuthDispatchPolicyList,TESTED,,,security,2026-05-20,src/execution/auth_dispatch.zig,1403
+REQ-GPS-DDL-003,GPS Policy DDL,AuthDispatchPolicyList,TESTED,,,security,2026-05-20,src/execution/auth_dispatch.zig,1404
 REQ-GPS-DDL-003,GPS Policy DDL,PolicyCatalogDeinit,TESTED,,,security,2026-05-20,tests/test_gps_policy_catalog.zig,120
 REQ-GPS-DDL-003,GPS Policy DDL,PolicyCatalogList,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig,403
 REQ-GPS-DDL-003,GPS Policy DDL,ShowPoliciesEmpty,TESTED,,,security,2026-05-20,tests/test_gps_policy_ddl_integration.zig,210
@@ -1852,7 +1852,7 @@ REQ-GPS-FLE-001,GPS FLE Enforcement,UnwrapKeyGate,TESTED,,,security,2026-05-20,s
 REQ-GPS-FLE-001,GPS FLE Enforcement,UnwrapKeyReadOnlyDenied,TESTED,,,security,2026-05-20,tests/test_gps_fle_enforcement.zig,192
 REQ-GPS-FLE-001,GPS FLE Enforcement,UnwrapKeyReadWriteDenied,TESTED,,,security,2026-05-20,tests/test_gps_fle_enforcement.zig,205
 REQ-GPS-FLE-001,GPS FLE Enforcement,UnwrapKeyUnauthenticated,TESTED,,,security,2026-05-20,tests/test_gps_fle_enforcement.zig,218
-REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,EXEMPT,,,security,2026-05-20,src/security/rls_core.zig,1891
+REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,EXEMPT,,,security,2026-05-20,src/security/rls_core.zig,1887
 REQ-GPS-MCP-001,GPS MCP Principal,AdminAllowed,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,90
 REQ-GPS-MCP-001,GPS MCP Principal,DecisionLayer,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,6
 REQ-GPS-MCP-001,GPS MCP Principal,NoRolesUnauthorized,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig,127
@@ -4461,7 +4461,7 @@ REQ-PERF-RLS-DISPATCH-001,RLSAwareDispatch,PointReadReclassify,TESTED,,,performa
 REQ-PERF-RLS-ROW-BUILD-001,RLSRowBuildHotPath,PreSizeAndReuse,TESTED,,,performance,2026-04-26,tests/test_rls_row_build_hot_path.zig,9
 REQ-PERF-RLS-ROW-SKIP-001,RLSRowBuildSkip,NeedsRowFlag,TESTED,,,performance,2026-06-11,src/security/rls_core.zig,265
 REQ-PERF-RLS-ROW-SKIP-001,RLSRowBuildSkip,VarianceEnvelope,BENCHED,,,performance,2026-06-11,benchmarks/benchmark_rls_row_skip.zig,28
-REQ-PERF-RLS-ROW-SKIP-002,RLSRowBuildSkip,TablePreScan,TESTED,,,performance,2026-06-11,src/security/rls_core.zig,1801
+REQ-PERF-RLS-ROW-SKIP-002,RLSRowBuildSkip,TablePreScan,TESTED,,,performance,2026-06-11,src/security/rls_core.zig,1797
 REQ-PERF-RLS-ROW-SKIP-003,RLSRowBuildSkip,MatchLoopSkip,TESTED,,,performance,2026-06-11,src/execution/match_operations.zig,590
 REQ-PERF-RWLOCK-FAIRNESS-001,MgRwLockFairness,ExclusiveAcquireUnderLoad,TESTED,,,perf,2026-04-25,tests/test_rwlock_fairness_under_load.zig,9
 REQ-PERF-RWLOCK-HOLD-TIME-001,MgRwLockSharedHoldTimeAtomics,AtomicReadWrite,TESTED,,,perf,2026-04-25,tests/test_graph_storage_adapter_metrics.zig,13
@@ -4871,16 +4871,16 @@ REQ-RLS-ENHANCED-006,Enhanced RLS Implementation,QueryRewriting,TESTED,,,securit
 REQ-RLS-ENHANCED-007,Enhanced RLS Implementation,CacheManager,TESTED,,,security,2025-10-05,tests/test_rls_enhanced.zig,435
 REQ-RLS-ENHANCED-008,Enhanced RLS Implementation,StatisticsCollector,TESTED,,,security,2025-10-05,tests/test_rls_enhanced.zig,479
 REQ-RLS-ENHANCED-009,Enhanced RLS Implementation,PolicyOptimizer,TESTED,,,security,2025-10-05,tests/test_rls_enhanced.zig,527
-REQ-RLS-EVAL-001,RLSExpressionEvaluation,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,2371
+REQ-RLS-EVAL-001,RLSExpressionEvaluation,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,2367
 REQ-RLS-EXPR-001,RLSExpressionCompilation,Bytecode,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,276
 REQ-RLS-EXPR-001,RLSExpressionCompilation,Compilation,TESTED,,,security,2026-01-15,tests/test_gap_0193_impl_verification.zig,383
 REQ-RLS-EXPR-002,RLSExpressionCompilation,PolicyCompilation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,545
-REQ-RLS-EXPR-003,RLSExpressionCompilation,ExpressionCompiler,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,876
-REQ-RLS-EXPR-004,RLSExpressionCompilation,BytecodeVM,TESTED,,,security,2026-04-16,src/security/rls_core.zig,1210
-REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,3088
+REQ-RLS-EXPR-003,RLSExpressionCompilation,ExpressionCompiler,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,872
+REQ-RLS-EXPR-004,RLSExpressionCompilation,BytecodeVM,TESTED,,,security,2026-04-16,src/security/rls_core.zig,1206
+REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig,3084
 REQ-RLS-EXPR-VM-BOUNDS,RLSBytecodeVM,MemorySafety,TESTED,,,security,2026-04-16,src/security/rls_core.zig,50
 REQ-RLS-FAILCLOSED-001,RLSFailClosed,ExpressionEvaluation,IMPL,,,security,2026-04-05,src/security/rls_enhanced.zig,116
-REQ-RLS-PERM-001,RLSPermissionCheck,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,2599
+REQ-RLS-PERM-001,RLSPermissionCheck,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,2595
 REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CompileErrorSurfaced,TESTED,,,security,2026-08-25,tests/test_rls_policy_ddl.zig,65
 REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CompileFailureMode,TESTED,,,security,2026-08-25,src/security/policy_catalog.zig,192
 REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy DDL,CreatePolicyStrictCompile,TESTED,,,security,2026-08-25,src/execution.zig,2810
@@ -4891,9 +4891,9 @@ REQ-RLS-POLICY-COMPILE-ERROR-AT-DDL,GPS Policy Persistence,HydrationTolerance,TE
 REQ-RLS-SECURITY-001,RLS,PolicyEnforcement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,252
 REQ-RLS-SECURITY-002,RLS,RowFiltering,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,259
 REQ-RLS-SECURITY-003,RLS,PolicyCompilation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig,266
-REQ-RLS-SESSION-001,RLSSessionAccess,Security,TESTED,,,security,2026-04-16,src/security/rls_core.zig,1306
-REQ-RLS-TEMPORAL-001,RLSTemporalConstraints,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,1731
-REQ-RLS-TEST-001,RLSUnitTests,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,3584
+REQ-RLS-SESSION-001,RLSSessionAccess,Security,TESTED,,,security,2026-04-16,src/security/rls_core.zig,1302
+REQ-RLS-TEMPORAL-001,RLSTemporalConstraints,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,1727
+REQ-RLS-TEST-001,RLSUnitTests,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig,3580
 REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,TESTED,,,storage,2025-10-05,tests/test_s3_backup.zig,5
 REQ-SEC-ABAC-001,Security,ABAC,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,21
 REQ-SEC-ACCESS-001,Security,AccessControl,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,35
@@ -4990,7 +4990,7 @@ REQ-SEC-RLS-WIRE-010,RLS Expression Wiring,ValueBridge,TESTED,,,security,2026-04
 REQ-SEC-RLS-WIRE-011,RLS Expression Wiring,ExprEngineGlobal,IMPL,,,security,2026-04-06,src/security/rls_types.zig,433
 REQ-SEC-RLS-WIRE-012,RLS Expression Wiring,ServerInitLabelEngine,TESTED,,,security,2026-06-11,src/server/main.zig,2050
 REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,ExecContextWiring,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig,7702
-REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,UsernameRowAccess,IMPL,,,security,2026-04-06,src/security/rls_core.zig,1847
+REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,UsernameRowAccess,IMPL,,,security,2026-04-06,src/security/rls_core.zig,1843
 REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,MatchLabelDeny,TESTED,,,security,2026-06-11,src/execution/match_operations.zig,523
 REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,ServerInitExprEngine,TESTED,,,security,2026-06-11,src/server/main.zig,1680
 REQ-SEC-RLS-WIRE-015,RLS Expression Wiring,MatchExprEval,TESTED,,,security,2026-06-11,src/execution/match_operations.zig,553
@@ -5174,11 +5174,11 @@ REQ-SONNY-1330-PARALLEL-UNION-ARM-SAFETY,ParallelUnionArms,ReadOnlyArmHydration,
 REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,CreateUserFailureReported,TESTED,,,security,2026-11-11,src/security/user_management.zig,923
 REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,CreateUserWriteThrough,TESTED,,,security,2026-11-11,src/security/auth_graph_manager.zig,1987
 REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,DiscardGraphGrant,TESTED,,,security,2026-11-11,src/storage/user_storage.zig,932
-REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,GrantFailureReported,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1538
+REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,GrantFailureReported,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1539
 REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,GrantWriteThrough,TESTED,,,security,2026-11-11,src/security/auth_graph_manager.zig,1860
 REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,Regression,TESTED,,,security,2026-11-11,tests/test_sonny1333_grant_persist_show_grants.zig,27
 REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED,GQL Auth DDL Persistence,RevokeWriteThrough,TESTED,,,security,2026-11-11,src/security/auth_graph_manager.zig,1937
-REQ-SONNY-1333-SHOW-GRANTS,GQL Auth DDL,GrantListProcedure,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1657
+REQ-SONNY-1333-SHOW-GRANTS,GQL Auth DDL,GrantListProcedure,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1658
 REQ-SONNY-1333-SHOW-GRANTS,GQL Auth DDL,Regression,TESTED,,,security,2026-11-11,tests/test_sonny1333_grant_persist_show_grants.zig,28
 REQ-SONNY-1333-SHOW-GRANTS,GQL Auth DDL,ShowGrants,TESTED,,,security,2026-11-11,src/execution/admin_ddl.zig,160
 REQ-SONNY-2394-VARLEN-ROW-OWNERSHIP,VariableLengthPathRowOwnership,Regression,TESTED,,,engine,2026-09-23,tests/test_sonny2394_varlen_rel_list_ownership.zig,22
@@ -5229,7 +5229,7 @@ REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED,RLS Query Enforcement,SnapshotOwnsLabels,TES
 REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED,RLS Query Enforcement,SnapshotOwnsLabels,TESTED,,,security,2026-09-25,src/server/rls_filter.zig,545
 REQ-SONNY-2679-RLS-HOP-TARGETS,TraversalRowVisibility,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2679_rls_hop_targets.zig,61
 REQ-SONNY-2679-RLS-POLICY-LOCK,RLS Expression Wiring,PolicyMapLock,TESTED,,,security,2026-09-25,src/security/rls_core.zig,143
-REQ-SONNY-2679-RLS-POLICY-LOCK,RLS Expression Wiring,PolicyMapLock,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4387
+REQ-SONNY-2679-RLS-POLICY-LOCK,RLS Expression Wiring,PolicyMapLock,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4383
 REQ-SONNY-2683-RETURN-SHAPES,ForStatement,NoGroupedReturn,TESTED,,,parser,2026-09-25,src/gql/parser.zig,6400
 REQ-SONNY-2683-RETURN-SHAPES,LegacyReturnProjection,ExcludedShapes,TESTED,,,engine,2026-09-25,src/execution/match_operations.zig,9367
 REQ-SONNY-2683-RETURN-SHAPES,LegacyReturnProjection,Regression,TESTED,,,engine,2026-09-25,tests/test_sonny2683_return_shapes.zig,32
@@ -5280,16 +5280,16 @@ REQ-SONNY-2694-STABLE-BINDINGS,WriteBehindAggregate,StableBindings,TESTED,,,engi
 REQ-SONNY-2694-WRITE-BEHIND-AGGREGATE,ReadFastPaths,Regression,TESTED,,,engine,2026-09-27,tests/test_sonny2694_write_behind_aggregate.zig,43
 REQ-SONNY-2707-VARLEN-WRITE,VariableLengthPaths,PathEndWrites,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,8744
 REQ-SONNY-2707-VARLEN-WRITE,VariableLengthPaths,Regression,TESTED,,,engine,2026-09-27,tests/test_sonny2707_varlen_set.zig,34
-REQ-SONNY-2709-RLS-EQUALITY-3VL,RLSExpressionCompilation,EqualityThreeValued,TESTED,,,security,2026-09-25,src/security/rls_core.zig,1454
-REQ-SONNY-2709-RLS-EQUALITY-3VL,RLSExpressionCompilation,EqualityThreeValued,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4484
+REQ-SONNY-2709-RLS-EQUALITY-3VL,RLSExpressionCompilation,EqualityThreeValued,TESTED,,,security,2026-09-25,src/security/rls_core.zig,1450
+REQ-SONNY-2709-RLS-EQUALITY-3VL,RLSExpressionCompilation,EqualityThreeValued,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4480
 REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED,RLS Expression Wiring,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2709_rls_range_fail_closed.zig,18
-REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED,RLSExpressionCompilation,RangeOperatorsFailClosed,TESTED,,,security,2026-09-25,src/security/rls_core.zig,1517
-REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED,RLSExpressionCompilation,RangeOperatorsFailClosed,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4220
+REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED,RLSExpressionCompilation,RangeOperatorsFailClosed,TESTED,,,security,2026-09-25,src/security/rls_core.zig,1513
+REQ-SONNY-2709-RLS-RANGE-FAIL-CLOSED,RLSExpressionCompilation,RangeOperatorsFailClosed,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4216
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,ExecutorPerTableVerdict,TESTED,,,security,2026-09-26,src/execution/match_operations.zig,343
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,LabelEntries,TESTED,,,security,2026-09-26,src/security/rls_types.zig,191
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,PermissiveRestrictive,TESTED,,,security,2026-09-26,src/security/rls_core.zig,89
 REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2710_policy_combination.zig,25
-REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,SeededVerdict,TESTED,,,security,2026-09-26,src/security/rls_core.zig,1863
+REQ-SONNY-2710-PG-POLICY-COMBINATION,RLS Expression Wiring,SeededVerdict,TESTED,,,security,2026-09-26,src/security/rls_core.zig,1859
 REQ-SONNY-2724-NODE-MERGE-TENANT-FAST-PATH,MergeRowVisibility,NodeMergeFastPathGate,TESTED,,,security,2026-11-11,src/server/quic_connection_handler.zig,6691
 REQ-SONNY-2724-NODE-MERGE-TENANT-FAST-PATH,MergeRowVisibility,SessionGate,TESTED,,,security,2026-11-11,src/execution/bulk_ingest.zig,111
 REQ-SONNY-2724-QUIC-FAST-PATH-GATE,MergeRowVisibility,QuicFastPathGateBehaviour,TESTED,,,security,2026-09-26,tests/test_sonny2724_quic_fast_path_gate.zig,32
@@ -5303,15 +5303,15 @@ REQ-SONNY-2729-ONE-LABEL-DENY-ENGINE,RLS Query Enforcement,Regression,TESTED,,,s
 REQ-SONNY-2729-POSTFILTER-FAIL-CLOSED,RLS Query Enforcement,FailClosed,TESTED,,,security,2026-09-26,src/server/rls_filter.zig,45
 REQ-SONNY-2729-POSTFILTER-FAIL-CLOSED,RLS Query Enforcement,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2729_postfilter_fail_closed.zig,24
 REQ-SONNY-2730-RLS-COMPILER-LIMITS,RLSExpressionCompilation,CompilerLimits,TESTED,,,security,2026-09-25,src/security/rls_core.zig,57
-REQ-SONNY-2730-RLS-COMPILER-LIMITS,RLSExpressionCompilation,CompilerLimits,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4742
+REQ-SONNY-2730-RLS-COMPILER-LIMITS,RLSExpressionCompilation,CompilerLimits,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4738
 REQ-SONNY-2731-POLICY-TEXT-LIMITS,GPS Policy Persistence,OverlongStoredPolicy,TESTED,,,security,2026-09-25,src/storage/user_storage.zig,787
 REQ-SONNY-2731-POLICY-TEXT-LIMITS,GPS Policy Persistence,PersistableLengths,TESTED,,,security,2026-09-25,src/security/policy_catalog.zig,66
 REQ-SONNY-2731-POLICY-TEXT-LIMITS,GPS Policy Persistence,RestartSameMeaning,TESTED,,,security,2026-09-25,tests/test_gps_policy_persistence.zig,201
 REQ-SONNY-2732-RLS-STRICT-POLICIES,GPS Policy DDL,InvalidPolicyListing,TESTED,,,security,2026-09-25,src/security/policy_catalog.zig,382
 REQ-SONNY-2732-RLS-STRICT-POLICIES,GPS Policy DDL,InvalidPolicyListing,TESTED,,,security,2026-09-25,tests/test_rls_policy_ddl.zig,361
-REQ-SONNY-2732-RLS-STRICT-POLICIES,RLS deny-policy procedure,AttributePolicyIdentifiers,TESTED,,,security,2026-09-25,src/execution/rls_dispatch.zig,343
+REQ-SONNY-2732-RLS-STRICT-POLICIES,RLS deny-policy procedure,AttributePolicyIdentifiers,TESTED,,,security,2026-09-25,src/execution/rls_dispatch.zig,348
 REQ-SONNY-2732-RLS-STRICT-POLICIES,RLSExpressionCompilation,AtomicUpdatePolicy,TESTED,,,security,2026-09-25,src/security/rls_core.zig,672
-REQ-SONNY-2732-RLS-STRICT-POLICIES,RLSExpressionCompilation,Regression,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4835
+REQ-SONNY-2732-RLS-STRICT-POLICIES,RLSExpressionCompilation,Regression,TESTED,,,security,2026-09-25,src/security/rls_core.zig,4831
 REQ-SONNY-2732-RLS-STRICT-POLICIES,RLSExpressionCompilation,StrictCreatePolicy,TESTED,,,security,2026-09-25,src/security/rls_core.zig,469
 REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,HandlerLockBypass,TESTED,,,security,2026-09-25,src/query/query_traits.zig,995
 REQ-SONNY-2733-BACKFILL-LOCKING,PerTenantIsolation,OneGraphLockAtATime,TESTED,,,security,2026-09-25,src/graph_store.zig,8194
@@ -5330,7 +5330,7 @@ REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,Regression,TESTED,,,sec
 REQ-SONNY-2743-WHOLE-PROGRAM-GATE,StatementAuthorization,WriteGate,TESTED,,,security,2026-09-25,src/security/gps.zig,814
 REQ-SONNY-2744-GPS-DENY-OVERRIDES,GPS Policy Evaluation,DenyOverridesAllow,TESTED,,,security,2026-09-25,src/security/gps.zig,339
 REQ-SONNY-2744-GPS-DENY-OVERRIDES,GPS Policy Evaluation,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2744_gps_deny.zig,12
-REQ-SONNY-2746-RLS-ATTRIBUTE-POLICY-OOM,RLS deny-policy procedure,AttributePolicyOomCleanup,TESTED,,,security,2026-09-25,src/execution/rls_dispatch.zig,494
+REQ-SONNY-2746-RLS-ATTRIBUTE-POLICY-OOM,RLS deny-policy procedure,AttributePolicyOomCleanup,TESTED,,,security,2026-09-25,src/execution/rls_dispatch.zig,499
 REQ-SONNY-2746-RLS-ATTRIBUTE-POLICY-OOM,RLS deny-policy procedure,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2746_rls_attribute_policy_oom.zig,23
 REQ-SONNY-2749-PROGRAM-GRAPH-LOCK,StatementAuthorization,GrpcHandler,TESTED,,,security,2026-09-25,src/transport/grpc_server.zig,3361
 REQ-SONNY-2749-PROGRAM-GRAPH-LOCK,StatementAuthorization,ProgramGraph,TESTED,,,security,2026-09-25,src/query/query_traits.zig,640
@@ -5357,7 +5357,7 @@ REQ-SONNY-2756-POLICY-CATALOG-LOCK,GPS Policy Evaluation,DecideOneCatalog,TESTED
 REQ-SONNY-2756-POLICY-CATALOG-LOCK,GPS Policy Evaluation,Regression,TESTED,,,security,2026-11-11,tests/test_sonny2756_policy_catalog_concurrency.zig,27
 REQ-SONNY-2757-DURABLE-POLICY-DDL,GPS Policy Persistence,DurableDdl,TESTED,,,security,2026-09-26,src/execution/policy_ddl.zig,1
 REQ-SONNY-2757-POLICY-HYGIENE,GPS Policy Persistence,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2757_policy_hygiene.zig,23
-REQ-SONNY-2757-RLS-STACK-BOUND,RLSExpressionCompilation,CompileTimeStackBound,TESTED,,,security,2026-09-26,src/security/rls_core.zig,930
+REQ-SONNY-2757-RLS-STACK-BOUND,RLSExpressionCompilation,CompileTimeStackBound,TESTED,,,security,2026-09-26,src/security/rls_core.zig,926
 REQ-SONNY-2757-STORED-INT-CAST,AuthDDLPersistence,CheckedStoredCasts,TESTED,,,security,2026-09-26,src/storage/user_storage.zig,1806
 REQ-SONNY-2769-DECIMAL-SCALE,IntegerOverflow,HeapDecimalScale,TESTED,,,codec,2026-09-26,src/property_value_codec.zig,481
 REQ-SONNY-2769-DECIMAL-TEXT,DecimalText,ExactAtAnyScale,TESTED,,,types,2026-09-26,src/types/decimal_text.zig,14
@@ -5434,7 +5434,7 @@ REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED
 REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED,,,transport,2026-09-27,tests/test_sonny2816_bulk_ingest_txn.zig,26
 REQ-SONNY-2818-PARAM-MAP-DUP-KEYS,WireParameters,DuplicateMapKeys,TESTED,,,security,2026-09-27,src/server/proto_util.zig,132
 REQ-SONNY-2818-PARAM-MAP-DUP-KEYS,WireParameters,DuplicateMapKeys,TESTED,,,security,2026-09-27,tests/test_sonny2818_param_map_dup_keys.zig,18
-REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,JsonStringEscape,TESTED,,,security,2026-09-27,src/security/rls_core.zig,3236
+REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,JsonStringEscape,TESTED,,,security,2026-09-27,src/security/rls_core.zig,3232
 REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,RefusalKeysHexEncoded,TESTED,,,security,2026-09-27,src/execution/crud_operations.zig,221
 REQ-SONNY-2819-AUDIT-JSON-ESCAPE,AuditDurability,Regression,TESTED,,,security,2026-09-27,tests/test_sonny2819_audit_log_injection.zig,21
 REQ-SONNY-2820-KNN-HIDDEN-PROPERTY-EMPTY,VectorKnn,HiddenOnlyPropertyEmptyList,TESTED,,,security,2026-11-12,src/eval.zig,3394
@@ -5495,7 +5495,7 @@ REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE,RLS deny-policy procedure,PersistRestric
 REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE,RLS deny-policy procedure,RecordKinds,TESTED,,,security,2026-11-12,src/storage/user_storage.zig,228
 REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE,RLS deny-policy procedure,Regression,TESTED,,,security,2026-11-12,tests/test_sonny3034_rls_restrictions_durable.zig,18
 REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE,RLS deny-policy procedure,ServerHydration,TESTED,,,security,2026-11-12,src/server/main.zig,2155
-REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE,RLS deny-policy procedure,StartupHydration,TESTED,,,security,2026-11-12,src/execution/rls_dispatch.zig,396
+REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE,RLS deny-policy procedure,StartupHydration,TESTED,,,security,2026-11-12,src/execution/rls_dispatch.zig,401
 REQ-SONNY-3035-OFFLINE-CHAIN-ROOT,OfflineAuthStoreSafety,NoKeyBeforeVerify,TESTED,,,security,2026-09-27,src/security/auth_graph_manager.zig,411
 REQ-SONNY-3035-OFFLINE-CHAIN-ROOT,OfflineAuthStoreSafety,Regression,TESTED,,,security,2026-09-27,tests/test_sonny3035_offline_chain_root.zig,16
 REQ-SONNY-3036-RLS-POLICY-KEYS,RLSExpressionCompilation,OwnedKeys,TESTED,,,security,2026-09-27,src/security/rls_core.zig,623
@@ -5504,9 +5504,9 @@ REQ-SONNY-3037-REVOKE-PRINCIPAL,OfflineAuthStoreSafety,PermissionIdSequence,TEST
 REQ-SONNY-3037-REVOKE-PRINCIPAL,OfflineAuthStoreSafety,Regression,TESTED,,,security,2026-09-27,tests/test_sonny3037_revoke_principal.zig,14
 REQ-SONNY-3037-REVOKE-PRINCIPAL,OfflineAuthStoreSafety,RevokeMatchesPrincipal,TESTED,,,security,2026-09-27,src/cli/auth_cli.zig,323
 REQ-SONNY-3038-ALGO-EVICTED-NODE,RLS Algorithm Filtering,EvictedNode,TESTED,,,security,2026-11-11,src/server/rls_filter.zig,183
-REQ-SONNY-3038-AUTH-WRITE-THROUGH,GQL Auth DDL Persistence,CreateRoleFailureReported,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1235
+REQ-SONNY-3038-AUTH-WRITE-THROUGH,GQL Auth DDL Persistence,CreateRoleFailureReported,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1236
 REQ-SONNY-3038-AUTH-WRITE-THROUGH,GQL Auth DDL Persistence,DisableFailClosed,TESTED,,,security,2026-11-11,src/security/user_management.zig,1436
-REQ-SONNY-3038-AUTH-WRITE-THROUGH,GQL Auth DDL Persistence,DropRoleFailClosed,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1276
+REQ-SONNY-3038-AUTH-WRITE-THROUGH,GQL Auth DDL Persistence,DropRoleFailClosed,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1277
 REQ-SONNY-3038-AUTH-WRITE-THROUGH,GQL Auth DDL Persistence,DropUserFailClosed,TESTED,,,security,2026-11-11,src/security/user_management.zig,1247
 REQ-SONNY-3038-AUTH-WRITE-THROUGH,GQL Auth DDL Persistence,PasswordChangeFailClosed,TESTED,,,security,2026-11-11,src/security/user_management.zig,1320
 REQ-SONNY-3038-AUTH-WRITE-THROUGH,GQL Auth DDL Persistence,Regression,TESTED,,,security,2026-11-11,tests/test_sonny3038_auth_rls_low_findings.zig,49
@@ -5518,7 +5518,7 @@ REQ-SONNY-3038-AUTH-WRITE-THROUGH,GQL Auth DDL Persistence,UserWriteThroughs,TES
 REQ-SONNY-3038-FEDERATION-FILTER,RLS Federation Filter,CacheKeyPerPrincipal,IMPL,,,security,2026-11-11,src/distributed/federation.zig,1262
 REQ-SONNY-3038-FEDERATION-FILTER,RLS Federation Filter,RemovedRowsFreed,TESTED,,,security,2026-11-11,src/server/rls_filter.zig,390
 REQ-SONNY-3038-REVOKE-DURABLE,GQL Auth DDL Persistence,Regression,TESTED,,,security,2026-09-27,tests/test_sonny3038_revoke_and_schema_ddl.zig,12
-REQ-SONNY-3038-REVOKE-DURABLE,GQL Auth DDL Persistence,RevokeFailureReported,TESTED,,,security,2026-09-27,src/execution/auth_dispatch.zig,1534
+REQ-SONNY-3038-REVOKE-DURABLE,GQL Auth DDL Persistence,RevokeFailureReported,TESTED,,,security,2026-09-27,src/execution/auth_dispatch.zig,1535
 REQ-SONNY-3038-SCHEMA-DDL-GATE,GraphRBACEnforcement,Regression,TESTED,,,security,2026-09-27,tests/test_sonny3038_revoke_and_schema_ddl.zig,13
 REQ-SONNY-3038-SCHEMA-DDL-GATE,GraphRBACEnforcement,SchemaDDL,TESTED,,,security,2026-09-27,src/execution.zig,2609
 REQ-SONNY-3039-WITH-WHERE-WRITES,WriteStep,Regression,TESTED,,,engine,2026-09-27,tests/test_sonny3039_with_where_writes.zig,20
@@ -5559,9 +5559,9 @@ REQ-SONNY-3134-DROP-GRAPH-OTHER-TXN,MultiGraphIsolation,Regression,TESTED,,,stor
 REQ-SONNY-3134-DROP-GRAPH-OTHER-TXN,MultiGraphIsolation,TxnGraphHolds,TESTED,,,storage,2026-09-27,src/graph_store.zig,15767
 REQ-SONNY-3135-FAILED-TXN-ABORT,TransactionManagement,ProgramEndAbort,TESTED,,,storage,2026-09-27,src/execution.zig,1251
 REQ-SONNY-3135-FAILED-TXN-ABORT,TransactionManagement,SettleAtWriteRelease,TESTED,,,storage,2026-09-27,src/storage/graph_storage_adapter.zig,3035
-REQ-SONNY-3135-GRANT-WILDCARD-REFUSED,GQL Auth DDL,GrantOnStarRefused,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,1481
-REQ-SONNY-3135-POLICY-CACHE-GRANT-WILDCARD,RLS Expression Wiring,Regression,TESTED,,,security,2026-11-12,tests/test_sonny3135_policy_cache_keys_grant_wildcard.zig,17
-REQ-SONNY-3135-POLICY-CACHE-OWNED-KEYS,RLS Expression Wiring,CacheOwnsKeys,TESTED,,,security,2026-11-12,src/security/rls_core.zig,2185
+REQ-SONNY-3135-GRANT-WILDCARD-REFUSED,GQL Auth DDL,GrantOnStarRefused,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,1482
+REQ-SONNY-3135-POLICY-CACHE-GRANT-WILDCARD,RLS Expression Wiring,Regression,TESTED,,,security,2026-11-12,tests/test_sonny3135_policy_cache_keys_grant_wildcard.zig,19
+REQ-SONNY-3135-POLICY-CACHE-OWNED-KEYS,RLS Expression Wiring,CacheOwnsKeys,TESTED,,,security,2026-11-12,src/security/rls_core.zig,2181
 REQ-SONNY-3135-PROFILE-ALLOWLIST,StatementAuthorization,ExplainProfileAllowlist,TESTED,,,security,2026-09-27,src/query/query_traits.zig,972
 REQ-SONNY-3135-PROFILE-ALLOWLIST,StatementAuthorization,Regression,TESTED,,,security,2026-09-27,tests/test_sonny3135_profile_allowlist_failed_txn.zig,22
 REQ-SONNY-3139-WRITE-SHAPES,WriteShapeValidator,DispatcherCall,TESTED,,,engine,2026-09-27,src/execution.zig,1681
@@ -5737,22 +5737,22 @@ REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,NameCollectionAllocFailur
 REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,PersistenceDeleteFailure,TESTED,,,security,2026-11-11,tests/test_sonny4877_grant_retire_fail_closed.zig,212
 REQ-SONNY-4877-GRANT-RETIRE-FAIL-CLOSED,PerGraphGrants,Regression,TESTED,,,security,2026-11-11,tests/test_sonny4877_grant_retire_fail_closed.zig,22
 REQ-SONNY-6269-PERMISSIONS-ADMIN-GATE,GQL Auth DDL,Regression,TESTED,,,security,2026-11-11,tests/test_sonny6269_permissions_admin_gate.zig,16
-REQ-SONNY-6269-PERMISSIONS-ADMIN-GATE,GQL Auth DDL,SelfOrAdminGate,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1613
-REQ-SONNY-6269-PERMISSIONS-ADMIN-GATE,GQL Auth DDL,UserPermissionsGate,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,943
+REQ-SONNY-6269-PERMISSIONS-ADMIN-GATE,GQL Auth DDL,SelfOrAdminGate,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,1614
+REQ-SONNY-6269-PERMISSIONS-ADMIN-GATE,GQL Auth DDL,UserPermissionsGate,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,944
 REQ-SONNY-6273-DROP-POLICY-ATOMIC,GPS Policy Persistence,DropPolicySealBeforeRemove,TESTED,,,security,2026-11-11,src/security/auth_graph_manager.zig,1543
 REQ-SONNY-6273-DROP-POLICY-ATOMIC,GPS Policy Persistence,Regression,TESTED,,,security,2026-11-11,tests/test_sonny6273_drop_policy_atomic.zig,22
 REQ-SONNY-6278-CUSTOM-ROLE-LIFETIME,GQL Auth DDL,CustomRoleStoreOwnsMemory,TESTED,,,security,2026-11-11,src/execution/auth_dispatch.zig,88
 REQ-SONNY-6278-CUSTOM-ROLE-LIFETIME,GQL Auth DDL,Regression,TESTED,,,security,2026-11-11,tests/test_sonny6278_custom_role_lifetime.zig,20
-REQ-SONNY-6291-APIKEY-USER-SHOW,GQL Auth DDL,ApiKeysNotSupported,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,1710
+REQ-SONNY-6291-APIKEY-USER-SHOW,GQL Auth DDL,ApiKeysNotSupported,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,1711
 REQ-SONNY-6291-APIKEY-USER-SHOW,GQL Auth DDL,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6291_apikey_user_show.zig,23
-REQ-SONNY-6291-APIKEY-USER-SHOW,GQL Auth DDL,UserShowSelfOrAdmin,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,723
-REQ-SONNY-6292-CUSTOM-ROLE-GRANT-REFUSED,GQL Auth DDL,CustomRoleGrantRefused,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,839
+REQ-SONNY-6291-APIKEY-USER-SHOW,GQL Auth DDL,UserShowSelfOrAdmin,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,724
+REQ-SONNY-6292-CUSTOM-ROLE-GRANT-REFUSED,GQL Auth DDL,CustomRoleGrantRefused,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,840
 REQ-SONNY-6292-CUSTOM-ROLE-GRANT-REFUSED,GQL Auth DDL,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6292_custom_role_membership.zig,23
 REQ-SONNY-6293-CHECKED-AUTH-DELETES,GQL Auth DDL Persistence,CheckedRecordRemoval,TESTED,,,security,2026-11-12,src/storage/user_storage.zig,1205
 REQ-SONNY-6293-CHECKED-AUTH-DELETES,GQL Auth DDL Persistence,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6293_checked_auth_deletes.zig,18
 REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,CallerOwnedUserCopies,TESTED,,,security,2026-11-12,src/security/user_management.zig,167
 REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6312_user_list_ownership.zig,19
-REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,UserListOwnsRows,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,672
+REQ-SONNY-6312-USER-LIST-OWNERSHIP,GQL Auth DDL,UserListOwnsRows,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,673
 REQ-SONNY-6313-EXPLAIN-POLICY-GATES,GPS EXPLAIN POLICY,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6313_explain_policy_gates.zig,24
 REQ-SONNY-6313-EXPLAIN-POLICY-GATES,GPS EXPLAIN POLICY,SameQuestionsAsTheGates,TESTED,,,security,2026-11-12,src/execution/statement_handlers.zig,1465
 REQ-SONNY-6313-TENANT-LIST-READ-ONLY,PerTenantIsolation,ReadOnlyClassification,TESTED,,,security,2026-11-12,src/execution/procedure_access.zig,79
@@ -5775,7 +5775,7 @@ REQ-SONNY-6345-AUTH-RESULT-OWNERSHIP,GQL Auth DDL,StatusRowsOwned,TESTED,,,secur
 REQ-SONNY-6345-AUTH-VERIFY-NO-STATE,OfflineAuthStoreSafety,ReadOnlyRegistryProbe,TESTED,,,security,2026-11-12,src/storage/graph_storage_adapter.zig,12760
 REQ-SONNY-6345-AUTH-VERIFY-NO-STATE,OfflineAuthStoreSafety,VerifyCreatesNothing,TESTED,,,security,2026-11-12,src/cli/auth_init_cli.zig,355
 REQ-SONNY-6345-CLI-DEFAULT-DATA-DIR,OfflineAuthStoreSafety,ServerDefaultDataDir,TESTED,,,security,2026-11-12,src/cli/cli_auth_helpers.zig,388
-REQ-SONNY-6345-GRANT-MISSING-USER,GQL Auth DDL,GrantMissingUserIsError,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,1519
+REQ-SONNY-6345-GRANT-MISSING-USER,GQL Auth DDL,GrantMissingUserIsError,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,1520
 REQ-SONNY-6352-AUTH-READERS-LOCKED,GQL Auth DDL Persistence,CanUserAccessGraphLocked,TESTED,,,security,2026-11-12,src/security/auth_graph_manager.zig,2139
 REQ-SONNY-6352-AUTH-READERS-LOCKED,GQL Auth DDL Persistence,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6352_auth_verify_locking.zig,19
 REQ-SONNY-6352-AUTH-READERS-LOCKED,GQL Auth DDL Persistence,VerifyRoundHoldsAuthDdlLock,TESTED,,,security,2026-11-12,src/security/auth_graph_manager.zig,356
@@ -5786,10 +5786,10 @@ REQ-SONNY-6358-OFFLINE-PASSWORD-HASH,OfflineAuthStoreSafety,ChangeKey,TESTED,,,s
 REQ-SONNY-6358-OFFLINE-PASSWORD-HASH,OfflineAuthStoreSafety,HashBeforeStore,TESTED,,,security,2026-11-12,src/cli/user_mgmt_cli.zig,173
 REQ-SONNY-6358-OFFLINE-PASSWORD-HASH,OfflineAuthStoreSafety,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6358_offline_password_hash.zig,18
 REQ-SONNY-6359-ALTER-USER-OTHER-PASSWORD,GQL Auth DDL,AdminResetOverWire,TESTED,,,security,2026-11-12,src/server/proto_util.zig,175
-REQ-SONNY-6359-AUTH-FAILURES-ARE-ERRORS,GQL Auth DDL,GrantRevokeRefusals,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,1473
+REQ-SONNY-6359-AUTH-FAILURES-ARE-ERRORS,GQL Auth DDL,GrantRevokeRefusals,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,1474
 REQ-SONNY-6359-AUTH-RESIDUALS,GQL Auth DDL,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6359_auth_residuals.zig,32
 REQ-SONNY-6359-AUTH-VERIFY-SAVES-NOTHING,OfflineAuthStoreSafety,VerifyReadOnlyTeardown,TESTED,,,security,2026-11-12,src/cli/auth_init_cli.zig,384
-REQ-SONNY-6359-CHANGE-PASSWORD-OLD-REQUIRED,GQL Auth DDL,OldPasswordAlwaysChecked,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,995
+REQ-SONNY-6359-CHANGE-PASSWORD-OLD-REQUIRED,GQL Auth DDL,OldPasswordAlwaysChecked,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,996
 REQ-SONNY-6359-GRANT-READERS-LOCKED,GQL Auth DDL Persistence,GrantListingsLocked,TESTED,,,security,2026-11-12,src/security/auth_graph_manager.zig,1969
 REQ-SONNY-6359-GRANT-READERS-LOCKED,GQL Auth DDL Persistence,HasGraphGrantLocked,TESTED,,,security,2026-11-12,src/storage/user_storage.zig,921
 REQ-SONNY-6359-ONE-WORD-COUNT,Unified Password Policy Validation,WordCount,TESTED,,,security,2026-11-12,src/security/geode_auth_lib.zig,528
@@ -5805,12 +5805,14 @@ REQ-SONNY-6369-QUERY-EXIT-CODE,QueryExitCode,FailedQueryExitsNonZero,TESTED,,,cl
 REQ-SONNY-6369-RLS-PROCEDURE-ERRORS,RLS deny-policy procedure,FailuresAreErrors,TESTED,,,security,2026-11-12,src/execution/rls_dispatch.zig,188
 REQ-SONNY-6369-SUPERUSER-ROLE-FIXED,OfflineAuthStoreSafety,OfflineSuperuserKeepsAdmin,TESTED,,,security,2026-11-12,src/cli/cli_auth_helpers.zig,120
 REQ-SONNY-6369-SUPERUSER-ROLE-FIXED,RoleAssignment,SuperuserKeepsAdmin,TESTED,,,security,2026-11-12,src/security/user_management.zig,1380
-REQ-SONNY-6369-USER-ATTRIBUTE-RESULTS,GQL Auth DDL,RemoveAttributeErrors,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,905
+REQ-SONNY-6369-USER-ATTRIBUTE-RESULTS,GQL Auth DDL,RemoveAttributeErrors,TESTED,,,security,2026-11-12,src/execution/auth_dispatch.zig,906
+REQ-SONNY-6377-ATTR-STORE-OOM,ABAC user attribute store,AllOrNothingSet,TESTED,,,security,2026-11-12,src/security/user_attribute_store.zig,51
 REQ-SONNY-6377-QUERY-NO-RESEND,ChunkedExecution,GrpcNoRetryAfterSend,TESTED,,,cli,2026-11-12,src/cli/main.zig,2106
 REQ-SONNY-6377-QUERY-NO-RESEND,ChunkedExecution,NoReplayAfterSend,TESTED,,,cli,2026-11-12,src/cli/main.zig,2728
 REQ-SONNY-6377-QUERY-NO-RESEND,ChunkedExecution,NoResendAfterSend,TESTED,,,cli,2026-11-12,tests/test_sonny6377_query_no_resend.zig,36
 REQ-SONNY-6377-QUERY-NO-RESEND,ChunkedExecution,SentSignal,TESTED,,,cli,2026-11-12,src/cli/main.zig,1953
-REQ-SONNY-6377-SECURITY-RESIDUALS,RLS Expression Wiring,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6377_security_residuals.zig,21
+REQ-SONNY-6377-RLS-ROW-DECISION-UNCACHED,RLS Expression Wiring,NoPerTableCacheOfRowVerdict,TESTED,,,security,2026-11-12,src/security/rls_core.zig,768
+REQ-SONNY-6377-SECURITY-RESIDUALS,RLS Expression Wiring,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6377_security_residuals.zig,29
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,,,execution,2026-09-08,src/execution/admin_ddl.zig,295
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,,,execution,2026-09-08,tests/test_sonny_capability_profile.zig,1
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,IMPL,,,server,2026-09-08,src/server/cli_args.zig,66

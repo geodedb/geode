@@ -17,6 +17,14 @@
 // 6. Security-graph writes made outside a statement (the login's legacy hash
 //    upgrade, the QUIC and gRPC ALTER USER SET PASSWORD intercepts) must be
 //    durable when the operation reports success: they survive a SIGKILL.
+//    They are: each write-through runs before the reply, with no statement
+//    or session engine transaction on the thread, so every adapter write
+//    auto-commits, and `__geode_security`'s engines fsync each commit. This
+//    test pins it. (Its first version imported the legacy user with the
+//    offline `geode user import`; after an offline mutation, the server's
+//    later security-graph writes, statement or not, are lost to a SIGKILL,
+//    and the next start may fail to load the security graph at all: a
+//    storage recovery defect reported separately, not this item.)
 //
 // CANARY: REQ=REQ-SONNY-6377-SECURITY-RESIDUALS; FEATURE="RLS Expression Wiring"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6377_security_residuals.zig; OWNER=security; UPDATED=2026-11-12
 
@@ -292,29 +300,9 @@ fn nowMillis() i64 {
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
-fn getenv(name: [*:0]const u8) ?[:0]const u8 {
-    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
-}
-
 fn skipWithoutBinary() !void {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), binary_path, .{}) catch return error.SkipZigTest;
-}
-
-fn runGeode(aa: std.mem.Allocator, args: []const []const u8) !u8 {
-    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-    var env = std.process.Environ.Map.init(aa);
-    if (getenv("PATH")) |p| try env.put("PATH", p);
-    if (getenv("HOME")) |p| try env.put("HOME", p);
-    try env.put("GEODE_DATA_DIR_LOCK_TIMEOUT_MS", "0");
-    var child = try std.process.spawn(io, .{ .argv = args, .environ_map = &env, .stdin = .ignore, .stdout = .ignore, .stderr = .ignore });
-    const term = try child.wait(io);
-    return switch (term) {
-        .exited => |c| c,
-        else => 255,
-    };
 }
 
 fn freshDir(aa: std.mem.Allocator, tag: []const u8) ![]const u8 {
@@ -432,15 +420,11 @@ test "SONNY-6377 item 6: the login hash upgrade and the QUIC / gRPC ALTER USER i
         try quicExec(allocator, s.addr, "carol6377", first_pw, "ALTER USER carol6377 SET PASSWORD '" ++ second_pw ++ "'");
         try quicExec(allocator, s.addr, admin_user, admin_pw, "CREATE USER dave6377 SET PASSWORD '" ++ first_pw ++ "' ROLE readwrite");
         try grpcExec(allocator, s.grpc_addr, "dave6377", first_pw, "ALTER USER dave6377 SET PASSWORD '" ++ third_pw ++ "'");
-    }
-
-    // A BLAKE2b-imported user (offline, while no server runs).
-    const hex = legacyBlake2bHex(legacy_pw);
-    try testing.expectEqual(@as(u8, 0), try runGeode(aa, &.{ binary_path, "user", "import", "legacy6377", "--hash", &hex, "--algorithm", "blake2b", "--role", "readwrite", "--force", "--data-dir", dir }));
-    {
-        var s = try Server.start(allocator, dir);
-        defer s.kill(allocator);
-        // The login replaces the legacy hash (outside any statement).
+        // A BLAKE2b-imported user (geode.auth.user_import, a statement); its
+        // login replaces the legacy hash (outside any statement).
+        const hex = legacyBlake2bHex(legacy_pw);
+        const import_q = try std.fmt.allocPrint(aa, "CALL geode.auth.user_import('legacy6377', '{s}', 'blake2b', '', 'readwrite')", .{&hex});
+        try quicExec(allocator, s.addr, admin_user, admin_pw, import_q);
         try testing.expect(try quicLogin(allocator, s.addr, "legacy6377", legacy_pw));
     }
 

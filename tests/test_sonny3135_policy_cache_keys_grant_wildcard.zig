@@ -6,6 +6,8 @@
 //     key, which for a library caller that had freed those strings was a
 //     use-after-free read, and the entry could no longer be found. The cache
 //     now keeps its own copy of each key and frees it when the entry goes.
+//     (Since SONNY-6377 checkRowAccess caches no decision at all: the
+//     verdict is per row and the cache key has no row.)
 //
 // N7d. `geode.auth.grant(priv, user, '*')` stored a per-graph grant on a
 //     graph literally named `*`. Per-graph grants are matched by the graph a
@@ -77,7 +79,7 @@ test "SONNY-3135 N6: PolicyCache keeps its own copy of each key; the caller may 
 
 const role_user: auth.RoleId = 7;
 
-test "SONNY-3135 N6: checkRowAccess with caller-owned graph and table strings caches a decision that outlives them" {
+test "SONNY-3135 N6: checkRowAccess with caller-owned graph and table strings keeps no reference to them" {
     var engine = try RLSEngine.init(testing.allocator);
     defer engine.deinit();
     try engine.createPolicy(.{
@@ -139,11 +141,13 @@ test "SONNY-3135 N6: checkRowAccess with caller-owned graph and table strings ca
     release(g);
     release(t);
 
-    if (engine.policy_cache.get(.{ .graph = "g3135", .table = "Doc3135" }, 9, .select) == null) {
-        std.debug.print("checkRowAccess cached its decision under the caller's freed strings\n", .{});
-        return error.CacheKeyBorrowed;
-    }
-    // A policy change on the table invalidates the cached decision.
+    // SONNY-6377: the verdict is the row's, and the cache key has no row in
+    // it, so checkRowAccess caches nothing (it returned one row's deny for
+    // every row of the table). Nothing holds the caller's strings, and a
+    // policy change still finds nothing stale (PolicyCache itself keeps its
+    // own key copies, the test above).
+    try testing.expectEqual(@as(?bool, null), engine.policy_cache.get(.{ .graph = "g3135", .table = "Doc3135" }, 9, .select));
+    try testing.expectEqual(@as(u32, 0), engine.policy_cache.cache.count());
     try engine.deletePolicy(3135);
     try testing.expectEqual(@as(?bool, null), engine.policy_cache.get(.{ .graph = "g3135", .table = "Doc3135" }, 9, .select));
 }

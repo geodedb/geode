@@ -765,14 +765,15 @@ pub const RLSEngine = struct {
     ) !bool {
         const key = PolicyKey{ .graph = graph, .table = table };
 
-        // Exclusive: this path also writes `policy_cache`.
-        self.lockPoliciesExclusive();
-        defer self.unlockPoliciesExclusive();
-
-        // Check cache first
-        if (self.policy_cache.get(key, context.user.id, operation)) |allowed| {
-            if (!allowed) return false;
-        }
+        // CANARY: REQ=REQ-SONNY-6377-RLS-ROW-DECISION-UNCACHED; FEATURE="RLS Expression Wiring"; ASPECT=NoPerTableCacheOfRowVerdict; STATUS=TESTED; TEST=tests/test_sonny6377_security_residuals.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6377: the verdict depends on `row`, and `policy_cache` is keyed
+        // by (graph, table, user, operation), with no row in it. Caching it
+        // returned one row's deny for every later row of the table (fail
+        // closed, wrong results), so a row-level decision is neither read
+        // from nor written to the cache (as checkRowAccessByUsernameSeeded,
+        // GAP-0284). Shared: the evaluation only reads the policy list.
+        self.lockPoliciesShared();
+        defer self.unlockPoliciesShared();
 
         const policies = self.policies.get(key) orelse return true; // No policies
 
@@ -813,12 +814,7 @@ pub const RLSEngine = struct {
             }
         }
 
-        const allowed = verdict.allows(no_permissive_policy_allows);
-
-        // Cache the result
-        try self.policy_cache.put(key, context.user.id, operation, allowed);
-
-        return allowed;
+        return verdict.allows(no_permissive_policy_allows);
     }
 
     fn findApplicablePolicies(

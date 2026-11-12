@@ -304,35 +304,40 @@ fn handleListDenyPolicies(
     _: ast.CallProcedure,
     _: ExecutionContext,
 ) anyerror!ExecutionResult {
+    // SONNY-6377: no filter engine in this process is 55000, as for the
+    // other geode.rls procedures (SONNY-6369); it answered an empty list,
+    // which reads as "no deny policies".
+    const list_fn = g_callbacks.list_deny_fn orelse return error.RlsEngineNotInitialized;
+    const listed = try list_fn(g_callbacks.ctx, allocator);
+    defer {
+        for (listed) |p| {
+            allocator.free(p.graph);
+            allocator.free(p.label);
+            allocator.free(p.username);
+        }
+        allocator.free(listed);
+    }
+
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "graph");
     columns[1] = try allocator.dupe(u8, "label");
     columns[2] = try allocator.dupe(u8, "username");
 
     var rows_list = std.ArrayList([]Value).empty;
-    if (g_callbacks.list_deny_fn) |list_fn| {
-        const listed = try list_fn(g_callbacks.ctx, allocator);
-        defer {
-            for (listed) |p| {
-                allocator.free(p.graph);
-                allocator.free(p.label);
-                allocator.free(p.username);
-            }
-            allocator.free(listed);
-        }
-        for (listed) |p| {
-            const row = try allocator.alloc(Value, 3);
-            row[0] = Value{ .Str = try allocator.dupe(u8, p.graph) };
-            row[1] = Value{ .Str = try allocator.dupe(u8, p.label) };
-            row[2] = Value{ .Str = try allocator.dupe(u8, if (p.username.len == 0) "*" else p.username) };
-            try rows_list.append(allocator, row);
-        }
+    for (listed) |p| {
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try allocator.dupe(u8, p.graph) };
+        row[1] = Value{ .Str = try allocator.dupe(u8, p.label) };
+        row[2] = Value{ .Str = try allocator.dupe(u8, if (p.username.len == 0) "*" else p.username) };
+        try rows_list.append(allocator, row);
     }
 
+    // SONNY-6377: the result owns the strings it copied (they leaked).
     return .{
         .columns = columns,
         .rows = try rows_list.toOwnedSlice(allocator),
         .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
     };
 }
 
@@ -620,11 +625,12 @@ fn handlePolicyCount(
     _: ast.CallProcedure,
     _: ExecutionContext,
 ) anyerror!ExecutionResult {
+    // SONNY-6377: no filter engine is 55000, not a count of 0.
+    const cnt = g_callbacks.policy_count_fn orelse return error.RlsEngineNotInitialized;
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "count");
     const row = try allocator.alloc(Value, 1);
-    const count: i64 = if (g_callbacks.policy_count_fn) |cnt| @intCast(cnt(g_callbacks.ctx)) else 0;
-    row[0] = Value{ .Int = count };
+    row[0] = Value{ .Int = @intCast(cnt(g_callbacks.ctx)) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };

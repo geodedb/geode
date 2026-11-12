@@ -48,16 +48,33 @@ pub fn setAttribute(
     g_attrs_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_attrs_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureInit();
+    // CANARY: REQ=REQ-SONNY-6377-ATTR-STORE-OOM; FEATURE="ABAC user attribute store"; ASPECT=AllOrNothingSet; STATUS=TESTED; TEST=tests/test_sonny6377_security_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-6377: every allocation that can fail happens before the store
+    // changes. An allocation failure after a new user's entry was inserted
+    // left it with the caller's (borrowed) username as its key and an
+    // undefined attribute map; one after the old value was removed lost it.
+    const key_copy = try store_alloc.dupe(u8, key);
+    errdefer store_alloc.free(key_copy);
+    const value_copy = try store_alloc.dupe(u8, value);
+    errdefer store_alloc.free(value_copy);
+
     const entry = try g_attrs.getOrPut(username);
     if (!entry.found_existing) {
-        entry.key_ptr.* = try store_alloc.dupe(u8, username);
+        const username_copy = store_alloc.dupe(u8, username) catch |err| {
+            g_attrs.removeByPtr(entry.key_ptr);
+            return err;
+        };
+        entry.key_ptr.* = username_copy;
         entry.value_ptr.* = std.StringHashMap([]const u8).init(store_alloc);
     }
-    if (entry.value_ptr.fetchRemove(key)) |old| {
-        store_alloc.free(old.key);
-        store_alloc.free(old.value);
+    // A failure here leaves the user's entry whole (possibly empty).
+    const attr = try entry.value_ptr.getOrPut(key);
+    if (attr.found_existing) {
+        store_alloc.free(attr.key_ptr.*);
+        store_alloc.free(attr.value_ptr.*);
     }
-    try entry.value_ptr.put(try store_alloc.dupe(u8, key), try store_alloc.dupe(u8, value));
+    attr.key_ptr.* = key_copy;
+    attr.value_ptr.* = value_copy;
 }
 
 /// Remove attribute key from username. Returns true if removed.

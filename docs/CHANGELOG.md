@@ -24,6 +24,25 @@
   fails after it was sent exits 1 with "may or may not have executed" and is
   not retried. `--retry` retries only before the query is sent.
   `test-sonny6377-query-no-resend`.
+- **RLS row decisions, procedure results and the ABAC attribute store
+  (SONNY-6377 items 3-5).** (3) `RLSEngine.checkRowAccess` cached its
+  verdict under (graph, table, user, operation), a key with no row in it,
+  and returned a cached deny before evaluating, so once one row was denied
+  every later row of the table was denied to that user until the entry
+  expired (fail closed, wrong results). A row-level decision is no longer
+  cached, as `checkRowAccessByUsernameSeeded` already did (GAP-0284), and
+  the evaluation holds the policy lock shared. (4) `geode.auth.user_import`
+  and `geode.rls.list_deny_policies` results now own their rows (their
+  strings leaked). **Behaviour change:** `geode.rls.policy_count()` and
+  `list_deny_policies()` with no filter engine answer 55000, as the other
+  `geode.rls` procedures do since SONNY-6369, instead of 0 and an empty
+  list. (5) `user_attribute_store.setAttribute` allocates everything before
+  it changes the store: an allocation failure after it inserted a new
+  user's entry left that entry with the caller's username as its key and an
+  undefined attribute map, and one after it removed the old value lost the
+  attribute. (Item 6, security-graph writes outside a statement, did not
+  reproduce: the login's hash upgrade and the ALTER USER intercepts survive
+  a SIGKILL; the test pins it.) `test-sonny6377-security-residuals`.
 - **One label-deny engine for the executor and the transport post-filter
   (SONNY-2729 part 2).** The post-filter (`server/rls_filter.zig`) had an
   engine type and global of its own, beside the executor's

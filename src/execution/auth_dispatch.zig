@@ -666,7 +666,8 @@ fn handleUserImport(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     row[2] = Value{ .Str = try allocator.dupe(u8, algorithm) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    // SONNY-6377: the result owns the strings it copied (they leaked).
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty, .owns_value_memory = true };
 }
 
 // CANARY: REQ=REQ-SONNY-6312-USER-LIST-OWNERSHIP; FEATURE="GQL Auth DDL"; ASPECT=UserListOwnsRows; STATUS=TESTED; TEST=tests/test_sonny6312_user_list_ownership.zig; OWNER=security; UPDATED=2026-11-12
