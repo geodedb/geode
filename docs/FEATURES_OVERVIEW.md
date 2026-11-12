@@ -68,7 +68,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 ### **Authentication & Authorization**
 
 - **RBAC/ABAC**: Role and attribute-based access control
-- **Enhanced RLS**: Row-level security with policy evaluation
+- **Row-level security**: policy evaluation and bytecode-compiled expression policies (`src/security/rls_core.zig`)
 - **MFA Support**: Multi-factor authentication integration
 - **Session Management**: Secure session handling
 

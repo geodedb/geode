@@ -432,6 +432,23 @@
   `keys/types.zig` → `test-fle-lifecycle`. `docs/status.csv`: TESTED
   5,272 → 5,230, IMPL 216 → 258 of 5,940, above GAP-0514's ≤250 target;
   `CLAUDE.md`, `README.md` and the docs that state the counts say so.
+- **`src/security/rls_enhanced.zig` (SONNY-6298).** The "Enhanced RLS"
+  layer (`EnhancedRLSEngine`, `ExpressionCompiler`, `RLSStatisticsCollector`,
+  `EnhancedCacheManager`) was exported from `src/lib.zig` but never analyzed
+  by any build artifact: compile-error probes at file scope and in its
+  public functions stayed silent in `zig build` and five RLS steps while
+  control probes in `lib.zig`, `rls_core.zig` and `rls_filter.zig` fired.
+  It is removed with its export. Row-level security is
+  `src/security/rls_core.zig` (policies, bytecode expression policies in
+  the MATCH loop, `current_user()` / `has_role()`, temporal and IPv4 CIDR
+  conditions, policy cache) and `src/server/rls_filter.zig`, unchanged.
+  `CLAUDE.md`, `README.md`, `docs/FEATURES_OVERVIEW.md`, `docs/README.md`,
+  `docs/SERVER_FEATURES.md` and `docs/CURRENT_ARCHITECTURE.md` say so and no
+  longer claim an RLS policy optimizer; status notes in
+  `docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md` and
+  `docs/GAP_ANALYSIS_RESOLVED.md` (GAP-0047, GAP-0287, GAP-0294).
+  `docs/status.csv`: 5,940 → 5,937 rows (its one IMPL and two EXEMPT
+  markers); IMPL is 257, still above GAP-0514's ≤250 target.
 
 ---
 

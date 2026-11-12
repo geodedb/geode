@@ -463,7 +463,6 @@ Request → Authentication → Authorization → RLS Policies → Audit → Resp
 
 - `src/security/auth.zig` (1,226 LOC)
 - `src/security/rls.zig` (1,158 LOC)
-- `src/security/rls_enhanced.zig` (972 LOC)
 - `src/security/audit.zig` (1,701 LOC)
 - `src/security/user_manager.zig` (733 LOC)
 
@@ -743,7 +742,7 @@ Based on this architecture analysis, the modularization phases should proceed as
 | planner | Query planning | 15 | pipeline.zig (854), cost_model.zig (594), cbo.zig (579), wcoj.zig (473), rewrite.zig (360) |
 | query | Query management | ~5 | enhanced_materialized_views.zig (884), materialized_views.zig (650) |
 | schema | Schema management | ~5 | catalog.zig (568) |
-| security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), rls_enhanced.zig (972), user_manager.zig (733) |
+| security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), user_manager.zig (733) |
 | server | Server implementation | ~40 | quic_connection_handler.zig (10,995), main.zig (3,628), query_plan_cache.zig (1,136), graph/exec.zig (756), txn/mvcc.zig (799; no server caller), txn/phantom_read_prevention.zig (706; no server caller) |
 | storage | Storage engine | ~8 | heap.zig (860), user_storage.zig (763), s3_backup.zig (521), backup.zig (498), tde_file_encryption.zig (262) |
 | streaming | CDC and streaming | ~5 | cdc_enhanced.zig (1,390) |

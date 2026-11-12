@@ -7,7 +7,7 @@ Geode is a single-tenant graph database server with strong ISO GQL alignment. Th
 **Status**: Development Ready (single-tenant). Multi-tenant and distributed deployments require operator review of [Known Limitations](../CLAUDE.md#known-limitations) before production. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
 **ISO Conformance Suite**: 96/96 named cases in `tests/gql_iso_conformance.zig` (`zig build test-iso-conformance`; parse-only scope — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
 **Test Baseline**: local per-step baseline in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (canonical); a fresh geodetestlab harness run is owed — the prior ~97% (1644/1688) is a dated historical snapshot
-**CANARY Markers**: 5,940 governance markers (258 IMPL / 4.3%, 2026-11-11; run `make status-generate`)
+**CANARY Markers**: 5,937 governance markers (257 IMPL / 4.3%, 2026-11-11; run `make status-generate`)
 
 ---
 
@@ -882,9 +882,9 @@ const kms = try VaultKMSProvider.init(allocator, vault_config);
 const dek = try kms.unwrapKey(wrapped_dek);
 ```
 
-### 7.3 Enhanced Row-Level Security (RLS)
+### 7.3 Row-Level Security (RLS)
 
-**Implementation**: `/src/security/rls_enhanced.zig`
+**Implementation**: `/src/security/rls_core.zig` (the `rls` module: policies, expression bytecode, temporal and IPv4 CIDR conditions, policy cache), wired into the MATCH loop through `passesRLSExprFilter` (`src/execution/match_operations.zig`); label-level post-result filter in `/src/server/rls_filter.zig`. The struct and function below are illustrative, not the source.
 
 **Policy Types**:
 

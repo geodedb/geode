@@ -80,14 +80,14 @@ docs/
 7. **Distributed Query Coordination** - Not implemented (removed 2026-11-11, SONNY-6279; the code was never compiled)
 8. **Materialized Views** - Refresh strategies with dependency tracking
 9. **CLI Subprocess Elimination** - Unified binary architecture
-10. **Advanced Security** - Enhanced RLS with policy evaluation
+10. **Advanced Security** - Row-level security with policy evaluation (`src/security/rls_core.zig`)
 
 ### Quality Metrics
 
 - **Local test baseline**: see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (canonical; expected ~175/179 named `zig build test-*` steps pass)
 - **Integration (geodetestlab)**: fresh harness run owed; last dated snapshot ~97% (1644/1688, historical)
 - **ISO conformance suite**: 96/96 named cases (`zig build test-iso-conformance`; parse-only scope); executed-query `gql_conformance` suite 20/20 (`zig build test-gql-conformance`)
-- **5,940 CANARY Markers** (258 IMPL / 4.3%, 2026-11-11; run `make status-generate`)
+- **5,937 CANARY Markers** (257 IMPL / 4.3%, 2026-11-11; run `make status-generate`)
 
 ### Known Issues
 

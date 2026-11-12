@@ -17,7 +17,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 
 - **ISO/IEC 39075:2024 GQL Conformance Suite** - 96/96 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
 - **Transactions** - `START TRANSACTION` / `COMMIT` / `ROLLBACK` with undo-log rollback; writes are serialized per graph and each read sees one snapshot. There are no isolation levels and no SSI (see [docs/ENHANCED_TRANSACTION_ISOLATION.md](docs/ENHANCED_TRANSACTION_ISOLATION.md))
-- **Enterprise Security** - Enhanced RLS, TDE, audit logging, MFA support
+- **Enterprise Security** - Row-level security, TDE, audit logging, MFA support
 
 ### **Advanced Capabilities**
 
@@ -193,7 +193,7 @@ COMMIT;
 
 - **Vector Processing** - SIMD-accelerated operations with hardware optimization
 - **Machine Learning** - Integrated graph embedding algorithms for AI applications
-- **Security Layer** - Enhanced RLS, policy evaluation, temporal constraints
+- **Security Layer** - Row-level security: policy evaluation, temporal constraints
 - **Analytics Engine** - Real-time stream processing with pattern detection
 
 ## 📊 Performance Benchmarks
@@ -215,7 +215,7 @@ COMMIT;
 
 ### **Authentication & Authorization**
 
-- **Enhanced Row-Level Security (RLS)** - Policy-based access control with expression evaluation
+- **Row-Level Security (RLS)** - Policy-based access control with expression evaluation
 - **RBAC/ABAC** - Role and attribute-based access control
 - **Multi-Factor Authentication** - Integrated MFA support
 - **Session Management** - Secure session handling with timeout controls
@@ -311,7 +311,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 - **Local Test Baseline** - 167/175 named `zig build test-*` steps pass; see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) for the canonical baseline (6 FAIL / 2 TIMEOUT with file:line evidence) and the geodetestlab integration suite (separate harness run owed)
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
-- **CANARY Governance** - 5,940 governance markers (88.0% TESTED, 4.3% IMPL, 4.1% EXEMPT, 3.5% BENCHED, 2026-11-11; run `make status-generate` for current counts)
+- **CANARY Governance** - 5,937 governance markers (88.1% TESTED, 4.3% IMPL, 4.1% EXEMPT, 3.5% BENCHED, 2026-11-11; run `make status-generate` for current counts)
 - **Cross-Platform** - Linux, macOS, Windows compatibility
 - **GPU Build Foundation** - Vulkan backend scaffold with honest device detection (`zig build test-gpu` self-skips hardware dispatch); algorithms run the CPU path, GPU acceleration planned
 

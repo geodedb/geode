@@ -3,6 +3,25 @@
 **Last Updated**: January 2026 (GAP-0111 fix)
 **Status**: Implemented (single-tenant scope) — see [GAP_ANALYSIS.md](GAP_ANALYSIS.md) and [CLAUDE.md Known Limitations](../CLAUDE.md#known-limitations)
 
+> **Status note (2026-11-11, SONNY-6298):** the RLS section below names
+> `src/security/rls.zig`, which does not exist, and the "Enhanced RLS"
+> layer (`src/security/rls_enhanced.zig`: `EnhancedRLSEngine`,
+> `ExpressionCompiler`, `RLSStatisticsCollector`, `EnhancedCacheManager`)
+> was never compiled by any build artifact and has been removed. What the
+> server runs is `src/security/rls_core.zig` (the `rls` module): policy
+> CRUD, bytecode-compiled expression policies enforced in the MATCH loop
+> through `passesRLSExprFilter` (`src/execution/match_operations.zig`; engine
+> installed at startup by `setGlobalExprRLSEngine`), `current_user()` and
+> `has_role()`, temporal and IPv4 CIDR conditions, and a policy cache; plus
+> the label-level post-result filter in `src/server/rls_filter.zig` and GPS
+> policy DDL. Test steps: `test-rls-core`, `test-rls-filter`,
+> `test-rls-expr-engine-wiring`, `test-rls-policy-ddl`,
+> `test-gps-policy-expression`. Not implemented: an RLS policy optimizer,
+> per-policy evaluation statistics, and "index-aware filtering". Policy
+> expressions still have to be pinned as pre-compiled bytecode (see
+> CLAUDE.md Known Limitations). The `ALTER TABLE ... ENABLE ROW LEVEL
+> SECURITY` example below is SQL, not Geode syntax.
+
 ## Overview
 
 This document details the advanced security features implemented in Geode, including the Enhanced Row-Level Security (RLS) system and related enterprise security capabilities.
