@@ -1024,9 +1024,17 @@ fn handleUserPermissions(allocator: std.mem.Allocator, proc_name: []const u8, ca
     const username = targetUserOrSelf(call_stmt, context);
     try requireSelfOrAdmin(allocator, proc_name, context, username, "auth procedure denied: admin role required to list another user's permissions");
     // SONNY-6291: a user that does not exist is an error; it was answered
-    // with the `user` role's permissions.
-    const user = user_mgmt.getUser(username) orelse return missingUser(allocator, proc_name, context);
-    const perms = user_mgmt.Permission.fromRole(user.role);
+    // with the `user` role's permissions. The caller asking about itself
+    // with no stored record (a session principal the user store does not
+    // hold) gets its session's role, the permissions it actually has.
+    const own = if (context.user) |u| std.mem.eql(u8, u, username) else false;
+    const role: user_mgmt.Role = if (user_mgmt.getUser(username)) |u|
+        u.role
+    else if (own and context.role != null)
+        context.role.?
+    else
+        return missingUser(allocator, proc_name, context);
+    const perms = user_mgmt.Permission.fromRole(role);
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "username");
     columns[1] = try allocator.dupe(u8, "permission");
