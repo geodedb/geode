@@ -280,6 +280,30 @@ pub inline fn passesTenantFilterSlice(node_tenant: []const u8, filter_tenant: ?[
     return hm.canAccessTenantSafe(tid, node_tenant);
 }
 
+// CANARY: REQ=REQ-SONNY-6338-TENANT-VISIBILITY-CONSISTENCY; FEATURE="PerTenantIsolation"; ASPECT=StorageFilterAndDescendants; STATUS=TESTED; TEST=tests/test_sonny6338_tenant_visibility_consistency.zig; OWNER=security; UPDATED=2026-11-12
+/// GAP-0846: the tenant to hand a storage primitive that filters by EXACT tag
+/// (`getNodesByLabels(..., tenant)`, `labelSolelyCarriesProperty`): the
+/// session's tenant when it sees only its own rows, null (every tenant) when
+/// the hierarchy grants it more, so the caller filters each candidate with
+/// `passesTenantFilter*` instead. (Moved here from match_operations.zig so
+/// MERGE and knn() use the same decision, SONNY-6338 / SONNY-2820.)
+pub inline fn storageTenantFilter(filter_tenant: ?[]const u8) ?[]const u8 {
+    const tid = filter_tenant orelse return null;
+    if (hierarchyForFilter(tid) != null) return null;
+    return tid;
+}
+
+/// SONNY-6338: does the session's tenant see rows of a tenant other than
+/// itself, i.e. does it have descendants in the hierarchy? False for an
+/// unscoped session (null), a tenant outside the hierarchy and a leaf. When
+/// false, "visible to the session" and "tagged exactly with its tenant" are
+/// the same set, which is what the exact-tag storage MERGE primitives rely on.
+pub fn tenantHasDescendants(filter_tenant: ?[]const u8) bool {
+    const tid = filter_tenant orelse return false;
+    const hm = hierarchyForFilter(tid) orelse return false;
+    return hm.hasChildren(tid);
+}
+
 /// GAP-0279 / GAP-0846: is this node visible to the session's tenant scope?
 pub inline fn passesTenantFilter(node: graph_store.Node, filter_tenant: ?[]const u8) bool {
     return passesTenantFilterSlice(node.tenant_id, filter_tenant);

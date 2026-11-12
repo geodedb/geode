@@ -229,11 +229,9 @@ const passesTenantFilterEdge = tenant_visibility.passesTenantFilterEdge;
 // This trades a wider candidate scan for hierarchy correctness ONLY when a
 // hierarchy is provisioned and the session tenant participates in it; ordinary
 // single-tenant and flat multi-tenant deployments are completely unaffected.
-inline fn storageTenantFilter(filter_tenant: ?[]const u8) ?[]const u8 {
-    const tid = filter_tenant orelse return null;
-    if (hierarchyForFilter(tid) != null) return null;
-    return tid;
-}
+// SONNY-6338: the decision lives in `tenant_visibility.zig` now, so MERGE and
+// knn() make the same one.
+const storageTenantFilter = tenant_visibility.storageTenantFilter;
 
 // Spec geode-vectorization-and-reranking (FTS data boundary): engine-direct
 // read paths that resolve candidate ids OUTSIDE the MATCH loop (e.g. fulltext

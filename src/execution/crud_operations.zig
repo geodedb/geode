@@ -31,6 +31,8 @@ const executeReturnClauseWithEnv = execution.executeReturnClauseWithEnv;
 
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
+// SONNY-6338: the one tenant-visibility rule (hierarchy-aware, GAP-0846).
+const tenant_visibility = @import("tenant_visibility.zig");
 const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 
 // SONNY-2686: the RLS scratch row MERGE's match phase hands to
@@ -176,17 +178,21 @@ fn nodeMatchesEvaluatedProps(node: *const graph_store.Node, props: ?[]const Eval
     return true;
 }
 
+// CANARY: REQ=REQ-SONNY-6338-TENANT-VISIBILITY-CONSISTENCY; FEATURE="PerTenantIsolation"; ASPECT=MergeMatchesVisibleSet; STATUS=TESTED; TEST=tests/test_sonny6338_tenant_visibility_consistency.zig; OWNER=security; UPDATED=2026-11-12
+/// Does `node` match the pattern, in the statement's graph and among the rows
+/// the session sees? SONNY-6338: `filter_tenant` is tested with the MATCH
+/// path's own predicate (`passesTenantFilterSlice`, hierarchy-aware), not an
+/// exact tag comparison: a parent tenant's MERGE of a key its child holds
+/// matched nothing and created a duplicate its MATCH then returned twice.
 fn nodeMatchesPattern(
     node: *const graph_store.Node,
     graph_name: []const u8,
-    tenant_id: ?[]const u8,
+    filter_tenant: ?[]const u8,
     labels: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
 ) bool {
     if (!std.mem.eql(u8, node.graph_name, graph_name)) return false;
-    if (tenant_id) |tid| {
-        if (!std.mem.eql(u8, node.tenant_id, tid)) return false;
-    }
+    if (!tenant_visibility.passesTenantFilterSlice(node.tenant_id, filter_tenant)) return false;
     if (labels.len > 0 and !nodeHasAllLabels(node, labels)) return false;
     return nodeMatchesEvaluatedProps(node, props);
 }
@@ -244,7 +250,8 @@ pub fn joinAuditText(allocator: std.mem.Allocator, items: []const []const u8) ![
 /// finds, for a node chain and for each relationship endpoint alike.
 ///
 /// The pattern predicate (`nodeMatchesPattern`) confines a candidate to the
-/// statement's graph and the session's exact tenant, and it matched on labels
+/// statement's graph and the session's visible tenants (SONNY-6338: the
+/// hierarchy-aware rule MATCH applies), and it matched on labels
 /// and properties only. It never applied the session's RLS policies, so a MERGE
 /// bound a node the session may not read: RETURN projected it, ON MATCH SET and
 /// a bare SET rewrote it, and a relationship MERGE attached an edge to it. Every
@@ -400,7 +407,8 @@ const MergeMatch = union(enum) {
 };
 
 /// Find the node MERGE binds for a pattern: the first node in the graph and
-/// the tenant that carries every label and property of the pattern AND that
+/// the session's visible tenants (SONNY-6338) that carries every label and
+/// property of the pattern AND that
 /// the session may see (SONNY-2686). A visible match is preferred over a
 /// hidden one wherever the two sit, so a hidden node found first (for
 /// example, by the merge index) never ends the search.
@@ -520,17 +528,20 @@ fn findMergeMatch(
 
 /// Collect ALL candidate node IDs matching labels (used by relationship MERGE and DELETE).
 /// For single-node MERGE, prefer findMergeMatch which uses the merge property index.
+/// SONNY-6338: a superset of the rows the session sees (with a tenant
+/// hierarchy, every tenant's: `storageTenantFilter`); the callers test each
+/// candidate with `nodeMatchesPattern`.
 fn collectCandidateNodeIds(
     allocator: std.mem.Allocator,
     read_store: *graph_store.GraphStore,
     graph_name: []const u8,
-    tenant_id: ?[]const u8,
+    filter_tenant: ?[]const u8,
     labels: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
 ) ![]u64 {
     _ = props;
     if (labels.len > 0) {
-        var candidates = try read_store.getNodesByLabels(allocator, graph_name, labels, tenant_id);
+        var candidates = try read_store.getNodesByLabels(allocator, graph_name, labels, tenant_visibility.storageTenantFilter(filter_tenant));
         return try candidates.toOwnedSlice(allocator);
     }
 
@@ -541,25 +552,25 @@ fn collectCandidateNodeIds(
     while (iter.next()) |entry| {
         const node = entry.value_ptr;
         if (!std.mem.eql(u8, node.graph_name, graph_name)) continue;
-        if (tenant_id) |tid| {
-            if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-        }
+        if (!tenant_visibility.passesTenantFilterSlice(node.tenant_id, filter_tenant)) continue;
         try candidates.append(allocator, entry.key_ptr.*);
     }
 
     return try candidates.toOwnedSlice(allocator);
 }
 
+/// SONNY-6338: the edge's own tag is tested with the MATCH path's predicate
+/// (`passesTenantFilterEdge`, hierarchy-aware). Its endpoints are the ones
+/// MERGE resolved, each a node the session sees (or one it bound or
+/// created), so the edge satisfies SONNY-2693's whole rule.
 fn edgeMatchesScopeAndType(
     edge: *const graph_store.Edge,
     graph_name: []const u8,
-    tenant_id: ?[]const u8,
+    filter_tenant: ?[]const u8,
     rel_types: []const []const u8,
 ) bool {
     if (!std.mem.eql(u8, edge.graph_name, graph_name)) return false;
-    if (tenant_id) |tid| {
-        if (!std.mem.eql(u8, edge.tenant_id, tid)) return false;
-    }
+    if (!tenant_visibility.passesTenantFilterEdge(edge.*, filter_tenant)) return false;
     if (rel_types.len == 0) return true;
     for (rel_types) |rel_type| {
         if (std.mem.eql(u8, edge.label, rel_type)) return true;

@@ -314,6 +314,26 @@
   exact node-property index, or in lean mode a label scan) on each call.
   Regressions: `zig build test-sonny2976-merge-fast-path-tenant-scope`,
   `zig build test-sonny2724-quic-fast-path-gate`.
+- **MERGE matches the rows the session's MATCH sees, with a tenant
+  hierarchy too (SONNY-6338).** The executor's MERGE compared tenant tags
+  exactly, while MATCH lets a parent tenant see its descendants' rows
+  (GAP-0846). A parent's `MERGE (:L {k: 1})` of a key its child holds found
+  no match and created a second node, and the parent's MATCH then returned
+  both. Node, multi-property and relationship MERGE (the endpoints and the
+  edge's own tag) now use the MATCH path's tenant predicate
+  (`tenant_visibility.passesTenantFilterSlice` / `passesTenantFilterEdge`),
+  so the parent binds the child's node. `ON MATCH SET` then writes it as the
+  parent's `MATCH ... SET` already could, and never changes its tenant tag;
+  `ON CREATE` still tags the new node with the session's tenant. A child
+  still does not see, or match, its parent's rows, and unrelated tenants
+  and unscoped sessions are unchanged. **Behaviour change:** the node MERGE
+  fast paths (node, graph-selector and `/*+BATCH*/` MERGE) match the exact
+  tenant tag, so they now decline a session whose tenant has descendants;
+  its MERGEs take the executor (correct, slower). Sessions of a tenant with
+  no descendants are served exactly as before. The cluster leader's
+  MATCH ... SET and MATCH ... CREATE target resolution uses the same
+  predicate and so also sees a parent's descendants' rows, as MATCH does.
+  Regression: `zig build test-sonny6338-tenant-visibility-consistency`.
 
 ### Added
 

@@ -25,6 +25,7 @@ const ast = @import("../gql/ast.zig");
 // SONNY-2686: the session gate below (`sessionAllowsKeyResolvedWrites`).
 const execution = @import("../execution.zig");
 const tenancy = @import("tenancy.zig");
+const tenant_visibility = @import("tenant_visibility.zig");
 const write_shape = @import("write_shape.zig");
 
 // ----------------------------------------------------------------------
@@ -117,6 +118,10 @@ pub fn sessionAllowsKeyResolvedWrites(ctx: *const execution.ExecutionContext) bo
 /// Still refused:
 ///   * an unscoped request under strict tenancy (the executor refuses it,
 ///     42501);
+///   * SONNY-6338: a tenant with descendants in the tenant hierarchy. Such a
+///     session sees its descendants' rows too (GAP-0846), and the executor's
+///     MERGE matches them, while the adapter primitives match the exact tag;
+///     for every other tenant the two sets are the same;
 ///   * a user while an RLS policy is installed (the executor applies the
 ///     policy to the match, and refuses a hidden one);
 /// The relationship MERGE and the MATCH … CREATE edge fast paths keep the
@@ -124,7 +129,8 @@ pub fn sessionAllowsKeyResolvedWrites(ctx: *const execution.ExecutionContext) bo
 /// for a tenant-scoped session (MATCH is tenant-hierarchy aware, and an edge
 /// must be visible with both endpoints, SONNY-2693).
 pub fn sessionAllowsTenantScopedNodeMerges(ctx: *const execution.ExecutionContext) bool {
-    _ = tenancy.resolveTenantFilter(ctx.tenant_id) catch return false;
+    const filter_tenant = tenancy.resolveTenantFilter(ctx.tenant_id) catch return false;
+    if (tenant_visibility.tenantHasDescendants(filter_tenant)) return false;
     const has_user = blk: {
         if (ctx.principal) |p| {
             if (p.username != null) break :blk true;
