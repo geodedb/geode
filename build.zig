@@ -13641,6 +13641,19 @@ pub fn build(b: *std.Build) void {
     const sonny2410_step = b.step("test-sonny2410-security-manager-locking", "Run the SONNY-2410 regression (SecurityManager's mutating methods - hydrateUser, createSession, markStepUp, forcePasswordReset, createRole, createPermission, grantPermission, assignRole, revokeRole, addMfaPolicy - race its readers from 8 threads under std.testing.allocator; every write lands exactly once)");
     sonny2410_step.dependOn(&run_sonny2410_tests.step);
 
+    // SONNY-2729 part 2: one label-deny engine (rls_types'); the transport
+    // post-filter uses that type and its global.
+    const sonny2729_engine_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2729_one_label_deny_engine.zig"), .target = target, .optimize = optimize });
+    sonny2729_engine_test_mod.link_libc = true;
+    sonny2729_engine_test_mod.addImport("geode", root_mod);
+    sonny2729_engine_test_mod.addImport("rls_types", rls_types_mod);
+    sonny2729_engine_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    const sonny2729_engine_tests = b.addTest(.{ .root_module = sonny2729_engine_test_mod });
+    const run_sonny2729_engine_tests = b.addRunArtifact(sonny2729_engine_tests);
+    shardDep(test_step, &run_sonny2729_engine_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2729_engine_step = b.step("test-sonny2729-one-label-deny-engine", "Run the SONNY-2729 part 2 regression (the transport post-filter's label-deny engine is rls_types' engine, with one global: a deny installed once is applied by the post-filter and the executor; a deny add is all or nothing)");
+    sonny2729_engine_step.dependOn(&run_sonny2729_engine_tests.step);
+
     // SONNY-2751: a read-only request refuses every statement that changes
     // stored state, the security DDL included; reads still run. Two modules:
     // the gRPC Execute handler, and the MCP read-only mode's classifier.
