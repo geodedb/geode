@@ -3052,7 +3052,7 @@ REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ClientVerifiesPinnedFreshAttestation
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ExpiredAttestation,TESTED,,,security,2025-09-26,tests/canary_remote_kms_hardening.zig,23
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,,,security,2026-11-12,docs/SECURITY_PROGRESS.md,41
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,,,security,2026-11-12,src/security/kms_remote.zig,48
-REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SignatureVerifyTamperDetect,TESTED,,,security,2026-11-12,tests/canary_remote_kms_hardening.zig,123
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SignatureVerifyTamperDetect,TESTED,,,security,2026-11-12,tests/canary_remote_kms_hardening.zig,129
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,,,security,2025-09-26,tests/canary_remote_kms.zig,13
 REQ-GQL-TDE-ATTEST-REAL-001,RealEd25519Attestation,SECURITY,TESTED,,,security,2026-01-16,src/security/tde.zig,787
 REQ-GQL-TDE-AWS-001,AwsKmsIntegration,SECURITY,IMPL,,,security,2026-11-12,src/security/external_kms_client.zig,463
@@ -3230,7 +3230,7 @@ REQ-GRPC-FULL-ROUTING-001,GrpcFullMessageRouting,HandlerParity,IMPL,,,transport,
 REQ-HELPER-001,Helper,Utilities,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,438
 REQ-HELPER-COALESCE-001,Helper,Coalesce,TESTED,,,builtins,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,520
 REQ-HEX-PARSE-001,Safe Hex Parsing,Security,TESTED,,,security,2026-11-12,src/security/external_kms_client.zig,962
-REQ-HEX-PARSE-KMS-001,Safe Hex Parsing,Security,EXEMPT,,,security,2026-01-13,src/security/kms_remote.zig,75
+REQ-HEX-PARSE-KMS-001,Safe Hex Parsing,Security,EXEMPT,,,security,2026-01-13,src/security/kms_remote.zig,97
 REQ-HEX-PARSE-VAULT-001,Safe Hex Parsing,Security,EXEMPT,,,security,2026-01-13,src/security/vault_kms_provider.zig,368
 REQ-HNSW-INDEX-OPTIMIZER-ENHANCEMENT-001,Enhanced HNSW Vector Index Integration,DynamicIndexSelection,TESTED,,,vector,2025-10-05,tests/test_hnsw_index_optimizer_enhancement.zig,4
 REQ-HNSW-INDEX-OPTIMIZER-INTEGRATION-001,HNSW IndexOptimizer Integration,ProductionIntegration,TESTED,,,vector,2025-10-05,tests/test_hnsw_index_optimizer_integration.zig,4
@@ -3266,7 +3266,7 @@ REQ-INTTEST-E2E-001,IntegrationTesting,E2E,TESTED,,,testing,2026-01-16,tests/tes
 REQ-INTTEST-FULL-001,IntegrationTesting,FullStackTest,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig,323
 REQ-INTTEST-SRV-001,IntegrationTesting,ServerClient,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,236
 REQ-INTTEST-TRANS-001,IntegrationTesting,TransportIntegration,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig,316
-REQ-JSON-PARSE-KMS-001,Safe JSON Parsing,Security,TESTED,,,security,2026-01-13,src/security/kms_remote.zig,76
+REQ-JSON-PARSE-KMS-001,Safe JSON Parsing,Security,TESTED,,,security,2026-01-13,src/security/kms_remote.zig,98
 REQ-KEY-ROTATION-001,SecureKeyGeneration,Security,EXEMPT,,,security,2026-01-10,src/security/key_rotation.zig,249
 REQ-KEY-ROTATION-002,SecureKeyRotation,PolicyEnforcement,TESTED,,,security,2026-06-10,tests/test_gap0890_rotation_policy.zig,18
 REQ-KEY-ROTATION-002,SecureKeyRotation,Security,TESTED,,,security,2026-06-10,src/security/key_rotation.zig,272
@@ -3274,7 +3274,7 @@ REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,ClosedConnectionFailFast,TESTED,,,secu
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,DeadlineConfigRoute,TESTED,,,security,2026-09-24,tests/test_sonny2394_kms_client_deadline.zig,24
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,HandshakeBusyServer,TESTED,,,security,2026-10-29,tests/test_sonny2394_kms_client_deadline.zig,25
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,HandshakeDeadlineBounded,TESTED,,,security,2026-10-29,tests/test_sonny2394_kms_client_deadline.zig,26
-REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,NETWORK,TESTED,,,security,2026-01-09,src/security/kms_remote.zig,634
+REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,NETWORK,TESTED,,,security,2026-01-09,src/security/kms_remote.zig,681
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,ResponseDeadline,TESTED,,,security,2026-09-23,tests/test_sonny2394_kms_client_deadline.zig,18
 REQ-KMS-REMOTE-CLIENT-001,RemoteKMSClient,ResponseDeadlineWallClock,TESTED,,,security,2026-09-23,tests/test_sonny2394_kms_client_deadline.zig,19
 REQ-KMS-SECURITY-001,KMS,KeyManagement,IMPL,,,security,2026-11-12,tests/test_gap_0193_batch2_security.zig,277
@@ -4200,7 +4200,7 @@ REQ-PHASE6-007,Phase6Modularization,FeatureFlags,TESTED,,,engine,2026-01-15,test
 REQ-PHASE6-008,Phase6Modularization,LayeredArchitecture,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig,73
 REQ-PITR-GS-001,Point-in-Time Recovery,SnapshotSelection,TESTED,,,backup,2026-11-11,src/storage/backup.zig,1190
 REQ-PLANNER-CARD-001,Cardinality Estimator,RealImplementation,TESTED,,,planner,2025-10-05,tests/test_cardinality_estimator.zig,5
-REQ-PRNG-CRYPTO-001,Cryptographic PRNG,Security,TESTED,,,security,2026-01-13,src/security/kms_remote.zig,113
+REQ-PRNG-CRYPTO-001,Cryptographic PRNG,Security,TESTED,,,security,2026-01-13,src/security/kms_remote.zig,135
 REQ-PROFILE-RLS-TENANT-001,PROFILE,ActiveContextPush,TESTED,,,security,2026-08-29,src/execution/planned_read_runtime.zig,475
 REQ-PROFILE-RLS-TENANT-001,PROFILE,RLSBlindFastPathDemotion,TESTED,,,security,2026-08-29,src/execution/planned_read_runtime.zig,260
 REQ-PROFILE-RLS-TENANT-001,PROFILE,TenantScopedProfile,TESTED,,,security,2026-08-29,tests/test_profile_rls_tenant.zig,1
@@ -4498,7 +4498,7 @@ REQ-REFACTOR-MATCH-009,MatchOperationsRefactor,ResultUtils,TESTED,,,refactor,202
 REQ-REFACTOR-MATCH-009,MatchOperationsRefactor,ResultUtilsImport,TESTED,,,refactor,2026-01-30,src/execution/match_operations.zig,171
 REQ-REGRESSION-PREV-001,RegressionTesting,RegressionPrevention,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig,531
 REQ-REMOTE-KMS-SERVER-001,Remote KMS Server,PerConnectionRequestAssembly,TESTED,,,security,2026-09-24,tests/test_sonny2394_kms_client_deadline.zig,22
-REQ-REMOTE-KMS-SERVER-001,Remote KMS Server,QUICTransport,TESTED,,,security,2026-01-09,src/security/kms_remote.zig,181
+REQ-REMOTE-KMS-SERVER-001,Remote KMS Server,QUICTransport,TESTED,,,security,2026-01-09,src/security/kms_remote.zig,225
 REQ-REMOTE-KMS-SERVER-001,Remote KMS Server,ServingLoopNoSpin,TESTED,,,security,2026-09-24,tests/test_sonny2394_kms_client_deadline.zig,23
 REQ-REMOTE-KMS-SERVER-001,Remote KMS Server,SplitRequestAnsweredOnce,TESTED,,,security,2026-09-24,tests/test_sonny2394_kms_client_deadline.zig,21
 REQ-REPL-ADVANCED-001,REPL Advanced Features,Testing,TESTED,,,repl,2025-11-17,src/client/repl/test_repl_advanced_features.zig,4

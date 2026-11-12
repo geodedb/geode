@@ -4,6 +4,28 @@
 
 ### Security
 
+- **BREAKING (remote KMS protocol): the remote KMS client accepts only a
+  fresh attestation signed by a pinned key (SONNY-6435 item 1).**
+  `RemoteKmsClient.attest` returned whatever hash the server sent. It
+  checked no signature, and a check would have proved nothing: the server
+  signed with a key it handed out in the same reply, the client pinned no
+  key (it dials with an unverified TLS certificate), and the signed message
+  had no nonce, so a recorded reply replayed. An unconnected client made up
+  a constant hash. The server now signs `GEODE-KMS-ATTEST-V2 || nonce ||
+  hash` over the client's fresh 32-byte nonce and refuses an `Attest`
+  without one (`AttestNonceRequired`); an operator provisions its key with
+  `Server.setAttestationKeySeed` and gives clients the public key
+  (`attestationPublicKey`) to pin (`pinAttestationKey` or
+  `Options.attestation_public_key`). `attest` fails closed with no pinned
+  key (`AttestationTrustAnchorMissing`), with no connection, for another
+  key (`AttestationKeyMismatch`), another nonce
+  (`AttestationNonceMismatch`) or a bad signature
+  (`AttestationSignatureInvalid`), always verifying under the pinned key
+  and its own nonce. The attestation is not bound to the TLS channel, so it
+  authenticates the server's key, not the connection carrying later
+  unwraps. Regression: `zig build test-sonny6435-kms-attestation` (real
+  server over QUIC: no pin, unconnected, wrong-key server, tampered and
+  replayed replies, nonce-less request).
 - **The security graph never opens unaudited, and an unreadable graph
   registry refuses startup (SONNY-6430 items 5 and 7).**
   `StorageAdapter.initAuditForGraph` returned null for any failure other

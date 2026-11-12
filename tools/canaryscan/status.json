@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:24:01.054348708Z",
+  "generated_at": "2026-11-12T23:27:32.855879556Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -44254,7 +44254,7 @@
             "src/security/kms_remote.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect"
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect|tests/test_sonny6435_kms_attestation.zig"
           ],
           "benches": [],
           "owner": "security",

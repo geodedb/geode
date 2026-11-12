@@ -2902,7 +2902,7 @@ REQ-GQL-TDE-001,TDE performance benchmark,PERFORMANCE,BENCHED,benchmarks/benchma
 REQ-GQL-TDE-002,Snapshot encryption,TEST,TESTED,tests/unit_graphstore_encryption_round_trip.zig,,,security,2026-02-04
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ClientVerifiesPinnedFreshAttestation,TESTED,tests/test_sonny6435_kms_attestation.zig,tests/test_sonny6435_kms_attestation.zig,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ExpiredAttestation,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation,,security,2025-09-26
-REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect,,security,2026-11-12
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect|tests/test_sonny6435_kms_attestation.zig,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SignatureVerifyTamperDetect,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,tests/canary_remote_kms.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub,,security,2025-09-26
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSIntegration,SECURITY,TESTED,src/security/external_kms_client.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_001,,security,2026-01-15

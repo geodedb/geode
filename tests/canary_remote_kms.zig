@@ -73,8 +73,10 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub" {
     var client = kms.RemoteKmsClient.init(gpa.allocator());
     try client.connect("127.0.0.1", server.port);
     client.setAuthToken("TOKEN123");
+    // SONNY-6435: the client trusts only a pinned attestation key.
+    client.pinAttestationKey(try server.server.attestationPublicKey());
     const hash = try client.attest();
-    try std.testing.expect(hash.len == 32);
+    try std.testing.expectEqualSlices(u8, &server.server.attestation_hash, &hash);
 }
 
 test "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap" {
