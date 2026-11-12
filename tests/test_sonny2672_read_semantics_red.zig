@@ -17,6 +17,7 @@ const overflow = batch.overflow;
 const sonny2779 = [_]Case{
     .{ .q = "CALL db.labels() YIELD label AS l RETURN l ORDER BY l DESC LIMIT 1", .want = &.{"'Z'"}, .columns = &.{"l"} },
     .{ .q = "CALL db.labels() YIELD label AS l RETURN l AS m ORDER BY m DESC LIMIT 1", .want = &.{"'Z'"}, .columns = &.{"m"} },
+    .{ .q = "CALL db.labels() YIELD label RETURN label AS x, 1 AS one ORDER BY x DESC LIMIT 1", .want = &.{"'Z', 1"}, .columns = &.{ "x", "one" } },
     .{ .q = "MATCH (q:Q {k: 0}) CALL db.labels() YIELD label RETURN q.k AS k, label ORDER BY label DESC LIMIT 1", .want = &.{"0, 'Z'"} },
     .{ .q = "MATCH (q:Q) WHERE q.k < 2 CALL db.labels() YIELD label RETURN q.k AS k, label ORDER BY label DESC, k LIMIT 2", .want = &.{ "0, 'Z'", "1, 'Z'" }, .ordered = true },
 };
@@ -31,6 +32,23 @@ const sonny3128 = [_]Case{
 const sonny2811 = [_]Case{
     .{ .q = "MATCH (z:Z) WITH z ORDER BY z.k + " ++ overflow ++ " RETURN z.k AS k", .err = error.IntegerOverflow },
 };
+
+// SONNY-6351 item 1: on the legacy executor an error evaluating a RETURN
+// item (or an ORDER BY key computed with the projection) leaks the column
+// names and the rows projected so far; each case runs on a leak-checked
+// allocator.
+const sonny6351_leaks = [_]Case{
+    .{ .q = "MATCH (z:Z) RETURN z.k + " ++ overflow ++ " AS k", .err = error.IntegerOverflow },
+    .{ .q = "MATCH (z:Z) RETURN z.k AS k ORDER BY z.k + " ++ overflow, .err = error.IntegerOverflow },
+    .{ .q = "MATCH (z:Z) WHERE z.k < 4 RETURN z.k AS k ORDER BY z.k + " ++ overflow ++ " LIMIT 2", .err = error.IntegerOverflow },
+    .{ .q = "MATCH (q:Q)-[:R]->(x:X) RETURN x.k + " ++ overflow ++ " AS k", .err = error.IntegerOverflow },
+    .{ .q = "MATCH (q:Q)-[:R]->(x:X) RETURN x.k AS k ORDER BY q.k + " ++ overflow, .err = error.IntegerOverflow },
+    .{ .q = "MATCH (z:Z) WITH z RETURN z.k + " ++ overflow ++ " AS k", .err = error.IntegerOverflow },
+};
+
+test "SONNY-6351 (red): a RETURN item error frees what was projected" {
+    try batch.inEveryMode("SONNY-6351", &sonny6351_leaks);
+}
 
 test "SONNY-2779 (red): CALL's RETURN clause, YIELD alias, MATCH ... CALL" {
     try batch.inEveryMode("SONNY-2779", &sonny2779);
