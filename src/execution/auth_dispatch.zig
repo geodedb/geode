@@ -1491,7 +1491,10 @@ fn handlePolicyList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProc
     columns[2] = try allocator.dupe(u8, "valid");
     var rows_list = std.ArrayList([]Value).empty;
     if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-        for (pol_cat.listPolicies()) |*pol| {
+        // SONNY-2756: copied under a shared hold of the catalog.
+        const view = pol_cat.acquireRead();
+        defer view.release();
+        for (view.policies()) |*pol| {
             const row = try allocator.alloc(Value, 3);
             row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
             row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };

@@ -248,6 +248,24 @@
   DROP GRAPH TYPE; adding a deny naming UNWRAP_KEY fails. See
   docs/security/gps-decide.md, "What each action enforces".
   Regression: `zig build test-sonny2781-gps-action-enforcement`.
+- **The GPS policy catalog has a lock (SONNY-2756).** `gps.decide` walks
+  the policy catalog on every read and write the handlers gate, and SHOW
+  POLICIES, SHOW GRANTS FOR and `geode.auth.policy_list` list it, while
+  CREATE, ALTER (RENAME, SET ENABLED) and DROP POLICY on other connections
+  appended to, renamed in and freed from it with no lock: a reader could
+  walk a list being reallocated or read a dropped policy's freed strings
+  (SHOW POLICIES crashed under concurrent policy DDL), and a decision's deny
+  scan and allow scan could see two different catalogs, so it could allow
+  what no catalog allowed. The catalog now has a reader-writer lock: a
+  decision holds it shared from its deny scan to its allow scan, listings
+  copy their rows under it, and each change holds it exclusively for the
+  change alone (never across the `__geode_security` write-through), with
+  the policy version bumped and cached decisions invalidated under the same
+  hold. Behaviour change: a policy change waits for the decisions and
+  listings in progress (microseconds) and they wait for it. The DROP GRAPH
+  half of the ticket was closed by SONNY-3028 (pinned graphs, DROP GRAPH
+  waits for the graph's lock holders).
+  Regression: `zig build test-sonny2756-policy-catalog-concurrency`.
 
 ### Added
 

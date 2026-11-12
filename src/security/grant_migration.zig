@@ -70,19 +70,25 @@ pub fn retireMigratedGrantPolicies(
 ) !u32 {
     _ = cat.disableAllowPoliciesWithPrefix(migrated_policy_prefix);
 
-    // Collect first: removePolicy reorders the catalog's list.
+    // Collect first: removePolicy reorders the catalog's list. SONNY-2756:
+    // the names are copied under a shared hold of the catalog.
     var names: std.ArrayList([]u8) = .empty;
     defer {
         for (names.items) |n| allocator.free(n);
         names.deinit(allocator);
     }
-    for (cat.listPolicies()) |p| {
-        if (!std.mem.startsWith(u8, p.name, migrated_policy_prefix)) continue;
-        const name = try allocator.dupe(u8, p.name);
-        names.append(allocator, name) catch |err| {
-            allocator.free(name);
-            return err;
-        };
+    {
+        // Released before removePolicy below, which takes it exclusively.
+        const view = cat.acquireRead();
+        defer view.release();
+        for (view.policies()) |p| {
+            if (!std.mem.startsWith(u8, p.name, migrated_policy_prefix)) continue;
+            const name = try allocator.dupe(u8, p.name);
+            names.append(allocator, name) catch |err| {
+                allocator.free(name);
+                return err;
+            };
+        }
     }
 
     var retired: u32 = 0;

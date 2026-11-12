@@ -20,7 +20,9 @@
 // real policy DDL under `std.testing.allocator`, which catches leaks and
 // double frees and makes most reads of freed memory visible (the freed bytes
 // are overwritten), but is not a sanitizer: a clean run is evidence, not
-// proof. The TSan companion step runs the same file under ThreadSanitizer.
+// proof. (ThreadSanitizer is not usable with this toolchain: `zig test
+// -fsanitize-thread` links no TSan runtime and reports no race, even a
+// trivial one.)
 //
 // CANARY: REQ=REQ-SONNY-2756-POLICY-CATALOG-LOCK; FEATURE="GPS Policy Evaluation"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2756_policy_catalog_concurrency.zig; OWNER=security; UPDATED=2026-11-11
 
@@ -415,4 +417,99 @@ test "SONNY-2756: decisions, the GPS helpers and SHOW POLICIES stay well-formed 
     try testing.expect(s.decisions.load(.acquire) > 0);
     try testing.expect(s.listings.load(.acquire) > 0);
     try testing.expectEqual(@as(usize, 0), cat.listPolicies().len);
+}
+
+// ---------------------------------------------------------------------------
+// The lock, held from the test.
+// ---------------------------------------------------------------------------
+
+const Decider = struct {
+    done: std.atomic.Value(bool) = .init(false),
+    kind: Kind = .indeterminate,
+
+    fn run(self: *Decider) void {
+        const p = principal("nora", &no_role, 0);
+        self.kind = decideKind(&p, .match_, .{ .graph = "g" }) catch .indeterminate;
+        self.done.store(true, .release);
+    }
+};
+
+const Changer = struct {
+    cat: *PolicyCatalog,
+    done: std.atomic.Value(bool) = .init(false),
+    failed: bool = false,
+
+    fn run(self: *Changer) void {
+        self.cat.removePolicy("d") catch {
+            self.failed = true;
+        };
+        self.done.store(true, .release);
+    }
+};
+
+test "SONNY-2756: a decision waits while a change holds the catalog exclusively, and runs after it" {
+    test_mutex.lockUncancelable(io);
+    defer test_mutex.unlock(io);
+
+    var cat = PolicyCatalog.init(testing.allocator);
+    defer cat.deinit();
+    policy_catalog.setGlobalCatalog(&cat);
+    defer policy_catalog.clearGlobalCatalog();
+    try cat.addPolicyStrict(spec("d", .deny));
+
+    cat.rwlock.lockUncancelable(io);
+    var d: Decider = .{};
+    const t = try std.Thread.spawn(.{}, Decider.run, .{&d});
+    sleepMs(200);
+    const finished_under_change = d.done.load(.acquire);
+    cat.rwlock.unlock(io);
+    t.join();
+
+    try testing.expect(!finished_under_change);
+    try testing.expect(d.done.load(.acquire));
+    try testing.expectEqual(Kind.deny, d.kind);
+}
+
+test "SONNY-2756: a policy change waits while a reader holds the catalog, and runs after it" {
+    test_mutex.lockUncancelable(io);
+    defer test_mutex.unlock(io);
+
+    var cat = PolicyCatalog.init(testing.allocator);
+    defer cat.deinit();
+    try cat.addPolicyStrict(spec("d", .deny));
+
+    const view = cat.acquireRead();
+    var c: Changer = .{ .cat = &cat };
+    const t = try std.Thread.spawn(.{}, Changer.run, .{&c});
+    sleepMs(200);
+    const finished_under_reader = c.done.load(.acquire);
+    // What the reader holds is still the policy it saw.
+    try testing.expectEqual(@as(usize, 1), view.policies().len);
+    try testing.expectEqualStrings("d", view.policies()[0].name);
+    view.release();
+    t.join();
+
+    try testing.expect(!finished_under_reader);
+    try testing.expect(!c.failed);
+    try testing.expectEqual(@as(usize, 0), cat.count());
+}
+
+test "SONNY-2756: no code in src/ walks the catalog without its lock (listPolicies is for a catalog no other thread reaches)" {
+    const a = testing.allocator;
+    var dir = try std.Io.Dir.cwd().openDir(io, "src", .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(a);
+    defer walker.deinit();
+    var offenders: usize = 0;
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+        if (std.mem.eql(u8, entry.path, "security/policy_catalog.zig")) continue;
+        const text = try entry.dir.readFileAlloc(io, entry.basename, a, .unlimited);
+        defer a.free(text);
+        if (std.mem.indexOf(u8, text, ".listPolicies(") != null) {
+            std.debug.print("src/{s} calls listPolicies (unlocked); use acquireRead\n", .{entry.path});
+            offenders += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), offenders);
 }

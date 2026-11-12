@@ -25,14 +25,6 @@ const Attr = logging.Attr;
 
 const PolicyCatalog = policy_catalog.PolicyCatalog;
 
-/// The policy named `name`, if the catalog has one.
-fn find(pol_cat: *PolicyCatalog, name: []const u8) ?*const policy_catalog.Policy {
-    for (pol_cat.listPolicies()) |*p| {
-        if (std.mem.eql(u8, p.name, name)) return p;
-    }
-    return null;
-}
-
 /// CREATE POLICY: the DDL checks (`addPolicyStrict`: lengths, a USING
 /// expression that compiles, a unique name), then the write-through. If the
 /// write-through fails the policy is taken out again and the error returned.
@@ -57,7 +49,8 @@ pub const DropOutcome = enum { removed, not_found };
 /// stored record (the write-through reports PolicyNotFound) is dropped from
 /// the catalog. `if_exists`: a missing policy is `.not_found`, not an error.
 pub fn drop(pol_cat: *PolicyCatalog, name: []const u8, if_exists: bool) !DropOutcome {
-    if (find(pol_cat, name) == null) {
+    // SONNY-2756: a locked lookup; the policy is not held past it.
+    if (!pol_cat.contains(name)) {
         if (if_exists) return .not_found;
         return error.PolicyNotFound;
     }
@@ -83,7 +76,9 @@ pub fn drop(pol_cat: *PolicyCatalog, name: []const u8, if_exists: bool) !DropOut
 /// the name's length); if the write-through then fails, the catalog is put
 /// back as it was (the name and the enabled flag) and the error returned.
 pub fn alter(pol_cat: *PolicyCatalog, name: []const u8, set_enabled: ?bool, rename_to: ?[]const u8) !void {
-    const old_enabled = (find(pol_cat, name) orelse return error.PolicyNotFound).enabled;
+    // SONNY-2756: the flag is copied under the catalog's lock; a pointer to
+    // the policy was kept past it before.
+    const old_enabled = pol_cat.enabledOf(name) orelse return error.PolicyNotFound;
     try pol_cat.alterPolicy(name, set_enabled, rename_to);
     const hooks = policy_catalog.getWriteThroughHooks() orelse return;
     hooks.alter(hooks.ctx, name, set_enabled, rename_to) catch |err| {

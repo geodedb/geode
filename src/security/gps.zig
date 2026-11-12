@@ -322,6 +322,20 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         });
     }
 
+    // CANARY: REQ=REQ-SONNY-2756-POLICY-CATALOG-LOCK; FEATURE="GPS Policy Evaluation"; ASPECT=DecideOneCatalog; STATUS=TESTED; TEST=tests/test_sonny2756_policy_catalog_concurrency.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-2756: one shared hold on the policy catalog from the deny scan to
+    // the allow scan, so the decision is the one a single catalog gives and
+    // no policy change frees what the scans read. A change (CREATE, ALTER or
+    // DROP POLICY on another connection) waits for it, briefly: nothing in
+    // between blocks. The cache key above carries the policy version read
+    // before this hold; a change bumps the version under its exclusive hold,
+    // after changing the catalog, so a decision computed from the old
+    // catalog is never cached under the new version.
+    const pc = @import("policy_catalog.zig");
+    const view: ?pc.PolicyCatalog.ReadView = if (pc.getGlobalCatalog()) |cat| cat.acquireRead() else null;
+    defer if (view) |v| v.release();
+    const policies: []const pc.Policy = if (view) |v| v.policies() else &.{};
+
     // CANARY: REQ=REQ-SONNY-2744-GPS-DENY-OVERRIDES; FEATURE="GPS Policy Evaluation"; ASPECT=DenyOverridesAllow; STATUS=TESTED; TEST=tests/test_sonny2744_gps_deny.zig; OWNER=security; UPDATED=2026-09-25
     // SONNY-2744: a matching deny-effect policy refuses the request, whatever
     // would allow it below: a builtin role, an Admin shortcut (decrypt_field,
@@ -329,7 +343,7 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     // deny policies, so a deny never denied. Only actions a policy can name
     // (`policyMatchesAction`) can be denied; --insecure-allow-all, above,
     // still overrides everything.
-    if (denyPolicyApplies(allocator, req)) {
+    if (denyPolicyIn(policies, allocator, req)) {
         return cacheAndReturn(cache_key, PolicyDecision{
             .kind = .deny,
             .reason_code = "policy_deny",
@@ -532,20 +546,17 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     // Phase 4: explicit policy match via the global PolicyCatalog.
     // Phase 5 (Task 5-4): attribute-based expression predicates are now
     // evaluated via the compiled CompiledExpression stored on each Policy.
-    const pc = @import("policy_catalog.zig");
-    if (pc.getGlobalCatalog()) |cat| {
-        for (cat.listPolicies()) |*policy| {
-            // SONNY-2744: deny policies were applied above.
-            if (policy.effect != .allow) continue;
-            if (!policy.enabled) continue;
-            if (!policyMatchesAction(policy.*, req.action)) continue;
-            if (!policyCovers(policy.*, req.resource)) continue;
-            if (policyExpressionHolds(allocator, policy, req)) {
-                return cacheAndReturn(cache_key, PolicyDecision{
-                    .kind = .allow,
-                    .reason_code = "policy_match",
-                });
-            }
+    for (policies) |*policy| {
+        // SONNY-2744: deny policies were applied above.
+        if (policy.effect != .allow) continue;
+        if (!policy.enabled) continue;
+        if (!policyMatchesAction(policy.*, req.action)) continue;
+        if (!policyCovers(policy.*, req.resource)) continue;
+        if (policyExpressionHolds(allocator, policy, req)) {
+            return cacheAndReturn(cache_key, PolicyDecision{
+                .kind = .allow,
+                .reason_code = "policy_match",
+            });
         }
     }
 
@@ -555,14 +566,13 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     });
 }
 
-/// SONNY-2744: is there an enabled deny-effect policy that matches `req`
-/// (action, resource and USING expression)? SONNY-2753: resources match by
-/// `policyCovers`, as for allow policies: a policy scoped to one graph covers
-/// that graph and its nodes and edges only.
-fn denyPolicyApplies(allocator: std.mem.Allocator, req: *const DecisionRequest) bool {
-    const pc = @import("policy_catalog.zig");
-    const cat = pc.getGlobalCatalog() orelse return false;
-    for (cat.listPolicies()) |*policy| {
+/// SONNY-2744: is there an enabled deny-effect policy among `policies` (a
+/// catalog the caller holds, SONNY-2756) that matches `req` (action, resource
+/// and USING expression)? SONNY-2753: resources match by `policyCovers`, as
+/// for allow policies: a policy scoped to one graph covers that graph and its
+/// nodes and edges only.
+fn denyPolicyIn(policies: []const @import("policy_catalog.zig").Policy, allocator: std.mem.Allocator, req: *const DecisionRequest) bool {
+    for (policies) |*policy| {
         if (policy.effect != .deny) continue;
         if (!policy.enabled) continue;
         if (!policyMatchesAction(policy.*, req.action)) continue;
@@ -580,12 +590,23 @@ fn denyPolicyApplies(allocator: std.mem.Allocator, req: *const DecisionRequest) 
 /// and schema DDL, catalogued database-wide, `schemaPermittedEverywhere`)
 /// changes the graph a deny is scoped to as well, so such a deny refuses it.
 /// --insecure-allow-all bypasses this too, as it bypasses `decide`.
-fn denyOnAnyGraph(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, action: Action) bool {
+///
+/// SONNY-2756: `actions` are checked under one shared hold of the catalog.
+fn denyOnAnyGraph(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, actions: []const Action) bool {
     if (g_insecure_allow_all.load(.acquire)) return false;
     const pc = @import("policy_catalog.zig");
     const cat = pc.getGlobalCatalog() orelse return false;
+    const view = cat.acquireRead();
+    defer view.release();
+    for (actions) |action| {
+        if (denyOnAnyGraphIn(view.policies(), allocator, principal, action)) return true;
+    }
+    return false;
+}
+
+fn denyOnAnyGraphIn(policies: []const @import("policy_catalog.zig").Policy, allocator: std.mem.Allocator, principal: *const principal_mod.Principal, action: Action) bool {
     const req = DecisionRequest{ .principal = principal, .action = action, .resource = .{ .database = {} } };
-    for (cat.listPolicies()) |*policy| {
+    for (policies) |*policy| {
         if (policy.effect != .deny) continue;
         if (!policy.enabled) continue;
         if (!policyMatchesAction(policy.*, action)) continue;
@@ -600,8 +621,12 @@ fn denyOnAnyGraph(allocator: std.mem.Allocator, principal: *const principal_mod.
 /// graph, which the graph's policies cover.
 fn denyOnGraph(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, action: Action, graph: []const u8) bool {
     if (g_insecure_allow_all.load(.acquire)) return false;
+    const pc = @import("policy_catalog.zig");
+    const cat = pc.getGlobalCatalog() orelse return false;
+    const view = cat.acquireRead();
+    defer view.release();
     const req = DecisionRequest{ .principal = principal, .action = action, .resource = .{ .graph = graph } };
-    return denyPolicyApplies(allocator, &req);
+    return denyPolicyIn(view.policies(), allocator, &req);
 }
 
 /// Does `policy`'s USING expression hold for `req`? The trivial "true" holds.
@@ -807,10 +832,7 @@ pub fn writePermitted(allocator: std.mem.Allocator, principal: *const principal_
     };
     const decision = decide(allocator, &req) catch return false;
     if (decision.kind != .allow) return false;
-    for ([_]Action{ .write, .create, .update, .delete }) |a| {
-        if (denyOnAnyGraph(allocator, principal, a)) return false;
-    }
-    return true;
+    return !denyOnAnyGraph(allocator, principal, &.{ .write, .create, .update, .delete });
 }
 
 /// SONNY-2753: may `principal` change the schema of every graph at once
@@ -827,7 +849,7 @@ pub fn schemaPermittedEverywhere(allocator: std.mem.Allocator, principal: *const
     };
     const decision = decide(allocator, &req) catch return false;
     if (decision.kind != .allow) return false;
-    return !denyOnAnyGraph(allocator, principal, .schema);
+    return !denyOnAnyGraph(allocator, principal, &.{.schema});
 }
 
 // CANARY: REQ=REQ-SONNY-2753-GRAPH-SCOPED-DENY; FEATURE="GPS Procedure Enforcement"; ASPECT=ProcedureGraphDeny; STATUS=TESTED; TEST=tests/test_sonny2753_graph_scoped_deny.zig; OWNER=security; UPDATED=2026-11-11

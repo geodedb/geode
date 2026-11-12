@@ -183,7 +183,10 @@ pub fn executeShowGrants(allocator: std.mem.Allocator, target: ?[]const u8, ctx:
     if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
         const user_expr = try std.fmt.allocPrint(allocator, "current_user() = '{s}'", .{user_name});
         defer allocator.free(user_expr);
-        for (pol_cat.listPolicies()) |pol| {
+        // SONNY-2756: copied under a shared hold of the catalog.
+        const view = pol_cat.acquireRead();
+        defer view.release();
+        for (view.policies()) |pol| {
             const is_universal = std.mem.eql(u8, pol.expression_source, "true");
             const is_user_specific = std.mem.indexOf(u8, pol.expression_source, user_expr) != null;
             if (!is_universal and !is_user_specific) continue;

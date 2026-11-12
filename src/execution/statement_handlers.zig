@@ -271,7 +271,11 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .policies => {
             const policy_catalog_mod = @import("../security/policy_catalog.zig");
             if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-                for (pol_cat.listPolicies()) |*pol| {
+                // SONNY-2756: the rows copy each policy under a shared hold
+                // of the catalog; a policy change waits for it.
+                const view = pol_cat.acquireRead();
+                defer view.release();
+                for (view.policies()) |*pol| {
                     // Build "actions" column: comma-separated action names.
                     var actions_buf = std.ArrayList(u8).empty;
                     for (pol.actions, 0..) |a, ai| {
