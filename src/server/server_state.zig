@@ -370,11 +370,6 @@ pub const ServerState = struct {
     // Type is query_ast_cache.SharedAstCache but we use opaque pointer to avoid circular dependency
     query_ast_cache: ?*anyopaque = null,
 
-    // Distributed query planner for federation-aware optimization
-    // Types are DistributedQueryPlanner/FederationManager but we use opaque to avoid circular dep
-    distributed_planner: ?*anyopaque = null,
-    federation_manager: ?*anyopaque = null,
-
     // Catalog management for schemas and graphs
     catalog_schemas: std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
     catalog_graphs: std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,

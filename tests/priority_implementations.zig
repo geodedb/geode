@@ -1,8 +1,5 @@
 const std = @import("std");
-const memory_governor = @import("../src/util/memory_governor.zig");
 const txn_manager = @import("../src/transactions/manager.zig");
-const graph_store = @import("geode").graph_store;
-const snapshot_pipeline = @import("../src/storage/snapshot_pipeline.zig");
 const selectivity = @import("../src/index/selectivity.zig");
 const text_formatter = @import("../src/util/text_formatter.zig");
 const protocol = @import("../src/protocol.zig");
@@ -10,16 +7,7 @@ const protocol = @import("../src/protocol.zig");
 test "priority implementations integration" {
     const ally = std.testing.allocator;
 
-    // Test 1: Memory Governor
-    var governor = memory_governor.MemoryGovernor.init(ally, 1024, 2048);
-    defer governor.deinit();
-
-    const mem = try governor.allocate(512);
-    try std.testing.expect(governor.currentUsage() == 512);
-    try std.testing.expect(!governor.shouldSpill());
-    governor.deallocate(mem);
-
-    // Test 2: Enhanced Transaction Manager
+    // Test 1: Enhanced Transaction Manager
     var mgr: txn_manager.Manager = undefined;
     mgr.init(ally);
     defer mgr.deinit();
@@ -34,30 +22,7 @@ test "priority implementations integration" {
     mgr.commit(&t1);
     mgr.commit(&t2);
 
-    // Test 3: GraphStore Snapshot Compaction Cadence
-    var store = try graph_store.GraphStore.init(ally);
-    defer store.deinit();
-    var pipeline = snapshot_pipeline.Pipeline.init(ally, &store, .{
-        .checkpoint_interval_override = 5,
-        .compaction_interval = 3,
-    });
-
-    pipeline.recordCommit(5);
-    var res = try pipeline.tick();
-    try std.testing.expect(res.checkpoint);
-    try std.testing.expect(!res.compacted);
-
-    pipeline.recordCommit(5);
-    res = try pipeline.tick();
-    try std.testing.expect(res.checkpoint);
-    try std.testing.expect(!res.compacted);
-
-    pipeline.recordCommit(5);
-    res = try pipeline.tick();
-    try std.testing.expect(res.checkpoint);
-    try std.testing.expect(res.compacted);
-
-    // Test 4: Selectivity Estimator
+    // Test 2: Selectivity Estimator
     var estimator = selectivity.SelectivityEstimator.init(ally);
     defer estimator.deinit();
 
@@ -68,7 +33,7 @@ test "priority implementations integration" {
     const should_use_index = estimator.shouldUseIndex("user_id", .Equality, 1000);
     try std.testing.expect(should_use_index);
 
-    // Test 5: Text Formatter
+    // Test 3: Text Formatter
     var formatter = text_formatter.TextFormatter.init(ally);
 
     const cols = [_]protocol.SchemaCol{
@@ -84,33 +49,6 @@ test "priority implementations integration" {
     const bindings_text = try formatter.formatBindings(rows_json, false, &.{});
     defer ally.free(bindings_text);
     try std.testing.expect(std.mem.indexOf(u8, bindings_text, "test") != null);
-}
-
-test "memory governor spill integration" {
-    const ally = std.testing.allocator;
-
-    var governor = memory_governor.MemoryGovernor.init(ally, 512, 1024);
-    defer governor.deinit();
-
-    var spill_triggered = false;
-    const SpillContext = struct {
-        triggered: *bool,
-
-        fn spillCallback(ctx: *anyopaque) void {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
-            self.triggered.* = true;
-        }
-    };
-
-    var spill_ctx = SpillContext{ .triggered = &spill_triggered };
-    try governor.registerSpillCallback(&spill_ctx, SpillContext.spillCallback, "test_spill");
-
-    // Allocate beyond soft limit to trigger spill
-    const mem = try governor.allocate(600);
-    try std.testing.expect(spill_triggered);
-    try std.testing.expect(governor.shouldSpill());
-
-    governor.deallocate(mem);
 }
 
 test "transaction deadlock detection" {

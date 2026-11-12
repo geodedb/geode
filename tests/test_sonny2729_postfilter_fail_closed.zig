@@ -1,8 +1,7 @@
 // SONNY-2729 part (1) regression: the transport RLS post-filter fails CLOSED.
 //
-// `rls_filter.applyRLSFilter`, `applyAlgorithmRLSFilter` and
-// `applyRLSToFederatedResults` snapshot the session's denied labels before
-// they scan the rows. When that allocation failed they returned 0 and left
+// `rls_filter.applyRLSFilter` and `applyAlgorithmRLSFilter` snapshot the
+// session's denied labels before they scan the rows. When that allocation failed they returned 0 and left
 // every row in place, unfiltered, and both handlers returned those rows. The
 // executor filters first (SONNY-2679), so the post-filter is the second layer,
 // but a filter that cannot run must not pass what it did not check.
@@ -146,46 +145,6 @@ test "SONNY-2729: applyAlgorithmRLSFilter withholds every row, and errs, at ever
     }
 }
 
-const FedRow = struct { cols: []const Value };
-const FedResults = struct { rows: []const FedRow };
-
-fn federationFilter(a: std.mem.Allocator, results: *FedResults, engine: *rls_filter.RLSFilterEngine) anyerror!usize {
-    return rls_filter.applyRLSToFederatedResults(a, results, engine, "alice", "default");
-}
-
-test "SONNY-2729: applyRLSToFederatedResults errs, and passes no row, when it cannot snapshot the policies" {
-    var engine = rls_filter.RLSFilterEngine.init(testing.allocator);
-    defer engine.deinit();
-    try engine.addDenyPolicy("default", "Secret", "alice");
-
-    var secret_labels = [_][]const u8{"Secret"};
-    var public_labels = [_][]const u8{"Public"};
-    const secret = graph_store.Node{ .id = 1, .labels = &secret_labels, .properties = graph_store.CompactPropertyMap.init(testing.allocator) };
-    const public = graph_store.Node{ .id = 2, .labels = &public_labels, .properties = graph_store.CompactPropertyMap.init(testing.allocator) };
-    const cols = [_][1]Value{ .{.{ .Node = &public }}, .{.{ .Node = &secret }}, .{.{ .Node = &public }} };
-
-    var fail_index: usize = 0;
-    while (true) : (fail_index += 1) {
-        if (fail_index > 64) return error.NeverSucceeded;
-        var rows = [_]FedRow{ .{ .cols = &cols[0] }, .{ .cols = &cols[1] }, .{ .cols = &cols[2] } };
-        var results = FedResults{ .rows = &rows };
-        var failing = FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
-        const outcome = federationFilter(failing.allocator(), &results, &engine);
-        if (failing.has_induced_failure) {
-            // The caller must withhold the rows (free the result and fail the
-            // query); the filter must say it did not run.
-            try testing.expectError(error.RowSecurityFilterUnavailable, outcome);
-            continue;
-        }
-        try testing.expectEqual(@as(usize, 1), try outcome);
-        // The rows kept keep their order.
-        try testing.expectEqual(@as(usize, 2), results.rows.len);
-        try testing.expect(results.rows[0].cols[0].Node == &public);
-        try testing.expect(results.rows[1].cols[0].Node == &public);
-        break;
-    }
-}
-
 /// `path` from the repository root (the build runs tests there).
 fn readSource(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), path, allocator, .unlimited);
@@ -216,6 +175,4 @@ test "SONNY-2729: both handlers answer a post-filter that cannot run with its er
     const grpc = try readSource(testing.allocator, "src/transport/grpc_server.zig");
     defer testing.allocator.free(grpc);
     try expectEveryCallAnswers(grpc, "catch |err| return postFilterErrorResponse(allocator, err);", 5);
-    // The federation filter's caller, src/distributed/federation.zig, was never
-    // compiled and was removed in SONNY-6279; nothing is left to check there.
 }

@@ -47,7 +47,6 @@
 //           src/eval_extended.zig:766  constructVectorI32 (vectori32([...]))
 //           src/types/evaluator_functions.zig:303  Vector()
 //           src/types/extended_functions.zig:237   VectorF64
-//           src/server/index_optimizer.zig:1617
 //
 //       It is reachable from a READ-ONLY statement with no write privilege and
 //       no stored data — `RETURN size(vectorf32([ ...65536 elements... ]))` —

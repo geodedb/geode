@@ -1,10 +1,5 @@
 const std = @import("std");
 
-test "key_provider: no bare @memset (GAP-0499)" {
-    const src = @embedFile("key_provider.zig");
-    try std.testing.expect(std.mem.indexOf(u8, src, "@memset") == null);
-}
-
 test "kms: no bare @memset (GAP-0499)" {
     const src = @embedFile("kms.zig");
     try std.testing.expect(std.mem.indexOf(u8, src, "@memset") == null);

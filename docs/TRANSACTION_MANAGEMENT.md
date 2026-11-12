@@ -306,5 +306,5 @@ These features implement ISO/IEC 39075:2024 GQL standard:
 
 - [Session Management](SESSION_MANAGEMENT.md)
 - [MERGE Operations](MERGE_AND_LABEL_TESTS.md)
-- [Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md) - Advanced MVCC features
+- [Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md) - Status note: not implemented
 - [GQL Compliance](GQL_COMPLIANCE.md)

@@ -17,7 +17,7 @@ test "GAP-0193: Distributed Query - Federation support" {
     if (has_distributed) {
         const distributed = geode.distributed;
         try testing.expect(@hasDecl(distributed, "QueryCoordinator") or
-            @hasDecl(distributed, "Federation") or true);
+            @hasDecl(distributed, "Federation"));
     }
     var result = try geode.parse(testing.allocator, "MATCH (n) RETURN n LIMIT 10", .{});
     defer result.deinit();
@@ -31,7 +31,7 @@ test "GAP-0193: Distributed Query - Federation support" {
 // CANARY: REQ=REQ-AUDIT-TEST-001; FEATURE="AuditTests"; ASPECT=UnitTests; STATUS=TESTED; OWNER=security; UPDATED=2026-01-16
 test "GAP-0193: Audit - Unit test coverage" {
     const has_audit = @hasDecl(geode, "audit") or @hasDecl(geode, "security");
-    try testing.expect(has_audit or true);
+    try testing.expect(has_audit);
     var result = try geode.parse(testing.allocator, "RETURN 'audit_test' AS test", .{});
     defer result.deinit();
     try testing.expect(result.program.statements.len > 0);

@@ -21,10 +21,10 @@ residuals with honest scoping notes.
   stubs were removed from cluster.zig (zero callers; the live RPC path
   `handleClusterRpcLocal` rejects those message types with ERR).
   `raft.zig handleMessage` now fails loud (`error.WireDeserializationNotWired`).
-- **Dual Raft wrappers:** documented, not consolidated — `raft.zig` is a thin
-  string-node-ID compatibility shim delegating to `raft_consensus.zig` (see its
-  header comment); its sole consumer is `mod.zig`, which is outside the build
-  graph. The production wire path is `raft_consensus.zig`.
+- **Dual Raft wrappers:** resolved by removal — `raft.zig`, the string-node-ID
+  compatibility shim over `raft_consensus.zig`, was never compiled and was
+  removed (SONNY-6298) after its only importer `mod.zig` (SONNY-6279). The
+  production wire path is `raft_consensus.zig`.
 - **Error handling:** raft committed-entry decode failures skip loudly with a
   `decode_errors` counter (no fabricated `.write`); `raft_persistent` load
   failures propagate (`error.CorruptPersistentState`); 2PC commit surfaces

@@ -301,6 +301,91 @@
 - **`EnhancedRLSEngine.rewriteQueryEnhanced` (SONNY-6279).** It had no
   caller and spliced policy text into the query string; it is removed with
   its three private helpers.
+- **Uncompiled probes, scaffolds and utilities (SONNY-6298).** These files
+  were reachable from no executable or test in `build.zig`, and nothing
+  outside `build.zig` ran them: `src/probe_{arraylist,fmt,io}.zig`,
+  `src/dist/{rpc,scaffold}.zig` (a Raft/2PC RPC scaffold; the cluster's Raft
+  traffic goes through `src/distributed/cluster.zig` and
+  `raft_consensus.zig`), `src/util.zig`,
+  `src/util/{yaml,yaml_test,memory_governor,conformance_generator}.zig`,
+  `src/storage/{mod,snapshot_pipeline,queue_depth}.zig`,
+  `src/federation/router.zig` (a stub that always returned `unsupported`) and
+  `src/performance/{async_io,async_io_simple,simple_async_io,collection_optimized}.zig`.
+  They are removed with the uncompiled tests and benchmarks that only
+  exercised them; the cases in uncompiled mixed tests
+  (`tests/priority_implementations.zig`, `tests/test_canary_core.zig`,
+  `tests/test_performance_integration.zig`) that called them are removed and
+  the rest is kept.
+- **Uncompiled index snapshot writers, schema/transaction facades and the old
+  Raft shim (SONNY-6298).** `src/index/{rtree,patricia,domain_trie,jsonb_inverted}_persist.zig`
+  and `src/index/registry.zig` were never compiled (the domain-trie and JSONB
+  writers were exported from `src/lib.zig` but nothing referenced them;
+  compile-error probes in them never fired). The R-tree, Patricia, domain-trie
+  and JSONB indexes therefore have no on-disk snapshot, and
+  `docs/TDE_FILE_LEVEL_ENCRYPTION.md` no longer lists TDE-encrypted snapshot
+  files for them. `src/schema/schema_manager.zig`,
+  `src/transactions/{transaction_manager,two_phase_commit}.zig` (facades no
+  code imported) and `src/distributed/raft.zig` (a string-node-ID shim over
+  `raft_consensus.zig` whose only importer was removed in SONNY-6279) are
+  removed with the uncompiled tests that imported them.
+- **Uncompiled query optimizers and transaction-isolation code; the docs that
+  claimed them (SONNY-6298).** `src/server/index_optimizer.zig`,
+  `src/server/index_statistics.zig`, `src/server/union_advanced.zig`,
+  `src/planner/{adaptive,optimizer,query_optimizer,stats_registry,rescore,cbo_small_n,gpu_cost_model,cost_cardinality_feedback}.zig`
+  and `src/server/txn/{enhanced_isolation,isolation_integration}.zig` were
+  reachable from no executable or test, so the cost-based IndexOptimizer and
+  the "Enhanced Transaction Isolation" system (six isolation levels, SSI,
+  predicate-lock phantom prevention, deadlock detection) never ran. They are
+  removed with the uncompiled tests that exercised them. `CLAUDE.md`,
+  `README.md`, `docs/FEATURES_OVERVIEW.md`, `docs/SERVER_FEATURES.md`,
+  `docs/EXPLAIN_PROFILE.md`, `docs/CURRENT_ARCHITECTURE.md` and the index
+  pages now say what the server does: index use is rule-based (UNIQUE-indexed
+  equality seek, otherwise a label scan) and EXPLAIN shows fixed per-operator
+  costs; writes are serialized per graph, each read sees one snapshot, and
+  explicit transactions roll back through an undo log, with no isolation
+  levels. `docs/ENHANCED_TRANSACTION_ISOLATION.md` and
+  `docs/BM25_INDEX_OPTIMIZER_INTEGRATION.md` are now status notes.
+- **`src/types/network/` (SONNY-6298).** `ipaddr.zig`, `subnet.zig`,
+  `mac.zig` and `mod.zig` were an older copy of the network types that no
+  build artifact compiled; the one consumer, the uncompiled root-level script
+  `validate_current_features.zig`, goes with them. The network types the
+  server uses are `src/types/network.zig` (over the `advanced_types`
+  library), unchanged. The "<1μs parsing" figure is dropped from `CLAUDE.md`
+  and `README.md`: no benchmark in the repository measures it.
+- **Uncompiled security files; TDE-KMS integration documented as not
+  implemented (SONNY-6298).** `src/security/tde_kms_integration.zig` (a
+  `TDEKeyManager` that took the TDE master key from a KMS provider),
+  `key_provider.zig`, `secure_mem.zig` and `backup_key_envelope.zig` were
+  reachable from no executable or test, so none of them ever ran. They are
+  removed with the uncompiled tests and benchmarks that used them, and the
+  `key_provider.zig` case of `src/security/test_secure_zero.zig` (an
+  `@embedFile` source check of the removed file) goes too.
+  `docs/KMS_PROVIDER_SYSTEM.md`, `CLAUDE.md`, `README.md`,
+  `docs/FEATURES_OVERVIEW.md`, `docs/security/README.md` and
+  `docs/SECURITY_PROGRESS.md` now say that the TDE master key comes from
+  `GEODE_TDE_KEY` and is not fetched from or wrapped by any KMS;
+  `GEODE_KMS_URL` only makes startup fail when the endpoint is unreachable;
+  `GEODE_KMS_PROVIDER` / `GEODE_VAULT_KEY_PATH` are read by nothing; and
+  key-registry backup export/import is not implemented. The KMS provider
+  clients in `src/security/kms.zig`, `kms_remote.zig`,
+  `external_kms_client.zig` and `vault_kms_provider.zig` are unchanged.
+- **Unread state in live files (SONNY-6298).** The QUIC handler created a
+  `DistributedQueryPlanner` and `FederationManager` for every stream and
+  stored them in two `ServerState` fields nothing read; they are gone.
+  `rls_filter.applyRLSToFederatedResults` (no caller since the federation
+  code was removed in SONNY-6279) and its tests are removed, as is
+  `EnhancedRLSEngine.policy_optimizer` / `PolicyOptimizer`, which was only
+  initialised and freed.
+- **Uncompiled tests that carried TESTED markers (SONNY-6298).**
+  `tests/test_rls_enhanced.zig` (8 TESTED markers; its subject,
+  `src/security/rls_enhanced.zig`, is never analyzed by any build artifact),
+  `tests/test_enhanced_query_transport.zig` (3 TESTED markers for
+  cross-shard query coordination; it tested local mock structs only) and
+  `tests/canary_raft_partition_simulation.zig` (asserted a boolean it had
+  just set) were in no build step and are removed. The always-true
+  assertions in the uncompiled `tests/test_gap_0193_batch2_testing.zig` now
+  assert what they meant; its distributed-query case would fail, because
+  neither `QueryCoordinator` nor `Federation` exists.
 
 ---
 

@@ -6,6 +6,18 @@ This document contains gaps that have been verified as resolved from previous ga
 **Last Verified**: June 16, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
+> **Status note (2026-11-11, SONNY-6298):** some resolution evidence below
+> cites files that were reachable from no executable or test in `build.zig`,
+> were never compiled, and have since been removed:
+> `src/dist/{rpc,scaffold}.zig`, `src/distributed/raft.zig`,
+> `src/performance/async_io_simple.zig`, `src/planner/stats_registry.zig`,
+> `src/server/index_optimizer.zig`, `src/server/txn/isolation_integration.zig`,
+> `src/transactions/transaction_manager.zig`, `src/util/yaml{,_test}.zig`,
+> `src/security/key_provider.zig` and `src/security/backup_key_envelope.zig`.
+> A fix cited only in those files never ran (for example GAP-0017's key
+> wrapping in `key_provider.zig`, and GAP-0210's RPC transport). The entries
+> are kept as the historical record.
+
 **Current Status**: 7 open/partial actionable gaps (2 Critical — both Blocked; 3 High — GAP-0885 open/partial, GAP-0893 Blocked-vendor, GAP-0900 write-throughput serialization root-caused 2026-06-17; 2 Medium — GAP-0873 deferred, GAP-0897 observability; 0 Low). GAP-0899 (checkpoint-vs-writer crash) closed 2026-06-17. See docs/GAP_ANALYSIS.md.
 
 ## 2026-06-17 — GAP-0899: checkpoint vs concurrent-writer data race → server crash (Closed)
@@ -1026,6 +1038,14 @@ The benchmark now:
 - **Resolution Date:** January 16, 2026
 
 **Summary**: Implemented real network transport for Raft/2PC RPCs using QUIC protocol.
+
+> **Status note (2026-11-11, SONNY-6298):** `src/dist/rpc.zig` and
+> `src/dist/scaffold.zig`, cited below as the evidence for this closure, were
+> reachable from no executable or test in `build.zig`; they were never
+> compiled and were removed. The cluster's Raft traffic is carried by
+> `src/distributed/cluster.zig` (QUIC, `transport/quic`) driving
+> `src/distributed/raft_consensus.zig`. The evidence below is kept as the
+> historical record.
 
 ### Implementation Evidence
 

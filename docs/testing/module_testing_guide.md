@@ -4,6 +4,12 @@
 **Purpose**: Guide for testing modularized components in the Geode codebase
 **Framework**: `tests/module_test_framework.zig`
 
+> **Status note (2026-11-11, SONNY-6298):** the examples below that import
+> `src/schema/schema_manager.zig` or `src/transactions/transaction_manager.zig`
+> never compiled (those files imported outside their module path and no build
+> step compiled them); both files were removed. Test the live modules through
+> named `zig build test-*` steps registered in `build.zig`.
+
 ---
 
 ## Overview

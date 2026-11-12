@@ -349,7 +349,7 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
 ✓ security/*         - High coverage (auth, audit, TDE, RLS)
 ✓ types/*            - High coverage (vector, geographic, network)
 ✓ gql/*              - High coverage (parser, lexer, AST)
-✓ planner/*          - Good coverage (CBO, optimizer, pipeline)
+✓ planner/*          - Good coverage (cost_explain, cost_seed, pipeline)
 ✓ index/*            - Good coverage (B-tree, HNSW, spatial)
 ✓ ml/*               - Good coverage (embeddings, integration)
 ✓ streaming/*        - Good coverage (CDC, real-time)
@@ -431,16 +431,20 @@ CLI/Server → GQL Parser → Planner → Execution Engine → Eval → Storage 
 **Flow**:
 
 ```
-Client → Server → Transaction Manager → MVCC → WAL → Storage
+Client → Server (graph write lock / per-query read snapshot) → Executor (undo log) → WAL → Storage
 ```
 
 **Key Files**:
 
-- `src/txn/manager.zig` (680 LOC)
-- `src/server/txn/mvcc.zig` (708 LOC)
-- `src/server/txn/enhanced_isolation.zig` (539 LOC)
-- `src/wal/wal.zig` (840 LOC)
+- `src/graph_store.zig` (`acquireGraphWriteLock`, `snapshotUnderReadLock`)
+- `src/txn_undo_log.zig`
 - `src/storage/*.zig`
+
+There are no isolation levels, no SSI and no phantom-read prevention in the
+server; see [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md).
+`src/server/txn/enhanced_isolation.zig` was never compiled and was removed
+(SONNY-6298); `src/server/txn/mvcc.zig` and `src/transactions/manager.zig` are
+not called by any server path.
 
 **Risk**:
 
@@ -479,15 +483,18 @@ Request → Authentication → Authorization → RLS Policies → Audit → Resp
 **Flow**:
 
 ```
-Query → Planner → IndexOptimizer → Cost Model → Execution Plan
+Query → rule-based index check (UNIQUE-indexed equality seek, else label scan) → Execution
 ```
 
 **Key Files**:
 
-- `src/server/index_optimizer.zig` (2,444 LOC)
-- `src/planner/cbo.zig` (760 LOC)
+- `src/execution/match_operations.zig` (index seek, `test-multi-pattern-index-seek`)
+- `src/execution/statement_handlers.zig` (EXPLAIN plan with fixed per-operator costs)
+- `src/planner/cbo.zig` (579 LOC; `StatsRegistry`, called by no query path)
 - `src/planner/cost_model.zig` (594 LOC)
-- `src/planner/optimizer.zig` (609 LOC)
+
+The cost-based `src/server/index_optimizer.zig` and `src/planner/optimizer.zig`
+were never compiled and were removed (SONNY-6298).
 
 **Risk**:
 
@@ -737,13 +744,13 @@ Based on this architecture analysis, the modularization phases should proceed as
 | optimizer | Query optimization | ~5 | advanced_types_optimizer.zig (599) |
 | pagination | Pagination utilities | - | - |
 | parser | Generic parsing | - | - |
-| performance | Performance optimizations | ~5 | async_io.zig (739), memory_mapped_io.zig (606), io_optimized.zig (545) |
-| planner | Query planning | ~10 | cbo.zig (760), pipeline.zig (750), adaptive.zig (668), recursive.zig (695), cost_model.zig (594), optimizer.zig (609) |
+| performance | Performance helpers | 3 | memory_mapped_io.zig (850; exported by `src/lib.zig`, no product caller), json_optimized_fixed.zig (408; compiled only by its unit test) |
+| planner | Query planning | 15 | pipeline.zig (854), cost_model.zig (594), cbo.zig (579), wcoj.zig (473), rewrite.zig (360) |
 | query | Query management | ~5 | enhanced_materialized_views.zig (884), materialized_views.zig (650) |
 | runtime | Runtime support | - | - |
 | schema | Schema management | ~5 | catalog.zig (568) |
 | security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), rls_enhanced.zig (972), user_manager.zig (733) |
-| server | Server implementation | ~15 | main.zig (7,039), index_optimizer.zig (2,444), graph/exec.zig (724), txn/mvcc.zig (708), txn/phantom_read_prevention.zig (651), txn/enhanced_isolation.zig (539) |
+| server | Server implementation | ~40 | quic_connection_handler.zig (10,995), main.zig (3,628), query_plan_cache.zig (1,136), graph/exec.zig (756), txn/mvcc.zig (799; no server caller), txn/phantom_read_prevention.zig (706; no server caller) |
 | storage | Storage engine | ~8 | heap.zig (860), user_storage.zig (763), s3_backup.zig (521), backup.zig (498), tde_file_encryption.zig (262) |
 | streaming | CDC and streaming | ~5 | cdc_enhanced.zig (1,390) |
 | temporal | Temporal data types | - | - |

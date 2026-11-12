@@ -1140,9 +1140,8 @@ pub const RLSEngine = struct {
     // for running the compiler before persistence.
     //
     // The legacy interpreter remains available for callers that set the
-    // `allow_rls_raw_interp` build option (default OFF).  This keeps the
-    // existing test_rls_enhanced* coverage intact but gates real servers
-    // from accidentally shipping raw-only policies.
+    // `allow_rls_raw_interp` build option (default OFF), which gates real
+    // servers from accidentally shipping raw-only policies.
     fn evaluateExpression(
         self: *Self,
         expr: Expression,

@@ -5,13 +5,12 @@ const print = std.debug.print;
 // CANARY: REQ=REQ-PERF-INT-001; FEATURE="PerformanceIntegration"; ASPECT=Testing; STATUS=EXEMPT; TEST=TestCANARY_PerformanceIntegration; OWNER=performance; UPDATED=2025-10-04
 
 /// Comprehensive integration tests for Phase 1 and Phase 2 performance optimizations
-/// Tests interaction between buffered I/O, JSON optimization, memory mapping, and async operations
+/// Tests interaction between buffered I/O, JSON optimization and memory mapping
 
 // Import performance modules
 const io_optimized = @import("../tests/io_optimized_test.zig");
 const json_optimized = @import("../src/performance/json_optimized_fixed.zig");
 const memory_mapped_io = @import("../src/performance/memory_mapped_io.zig");
-const async_io_simple = @import("../src/performance/async_io_simple.zig");
 
 test "Integration: Buffered I/O + JSON processing pipeline" {
     print("\n=== INTEGRATION TEST: BUFFERED I/O + JSON PROCESSING ===\n");
@@ -67,18 +66,18 @@ test "Integration: Buffered I/O + JSON processing pipeline" {
     }
 }
 
-test "Integration: Memory-mapped I/O + Async operations" {
-    print("\n=== INTEGRATION TEST: MEMORY-MAPPED I/O + ASYNC OPERATIONS ===\n");
+test "Integration: Memory-mapped I/O" {
+    print("\n=== INTEGRATION TEST: MEMORY-MAPPED I/O ===\n");
 
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const test_file = "integration_mmap_async.dat";
+    const test_file = "integration_mmap.dat";
     defer std.fs.cwd().deleteFile(test_file) catch {};
 
     // Create test data using memory-mapped I/O
-    const test_data = "Memory-mapped and async I/O integration test with performance optimizations";
+    const test_data = "Memory-mapped I/O integration test with performance optimizations";
 
     {
         const file = try std.fs.cwd().createFile(test_file, .{});
@@ -98,22 +97,7 @@ test "Integration: Memory-mapped I/O + Async operations" {
     // Test statistics
     const stats = mapped_file.getMemoryStats();
     print("Memory stats: file_size={}, mapped_size={}, access_pattern={}\n", .{ stats.file_size, stats.mapped_size, stats.access_pattern });
-
-    // Test async operations on the same file
-    var async_io = async_io_simple.SimpleAsyncIO.init(allocator);
-    defer async_io.deinit();
-
-    var async_file = async_io_simple.AsyncFile.init(&async_io, test_file);
-
-    var buffer: [128]u8 = undefined;
-    const result = try async_file.readSync(buffer[0..test_data.len]);
-
-    try testing.expect(result.status == .success);
-    try testing.expectEqual(test_data.len, result.bytes_processed);
-    try testing.expectEqualStrings(test_data, buffer[0..test_data.len]);
-
-    print("Async I/O: Successfully read {} bytes\n", .{result.bytes_processed});
-    print("✅ Memory-mapped + Async: Integration successful\n");
+    print("✅ Memory-mapped: Integration successful\n");
 }
 
 test "Integration: Full performance pipeline simulation" {
@@ -177,22 +161,8 @@ test "Integration: Full performance pipeline simulation" {
     const json_time = timer.read();
     print("Phase 3 - JSON processing: {}μs for {} records\n", .{ json_time / 1000, processed_records });
 
-    // Phase 4: Async operations simulation
-    timer.reset();
-    var async_io = async_io_simple.SimpleAsyncIO.init(allocator);
-    defer async_io.deinit();
-
-    var async_file = async_io_simple.AsyncFile.init(&async_io, test_file);
-
-    var buffer: [1024]u8 = undefined;
-    const result = try async_file.readSync(buffer[0..@min(1024, mapping.len)]);
-
-    const async_time = timer.read();
-    print("Phase 4 - Async operations: {}μs for {} bytes\n", .{ async_time / 1000, result.bytes_processed });
-
     // Validate end-to-end pipeline
     try testing.expectEqual(@as(u32, 100), processed_records);
-    try testing.expect(result.status == .success);
     try testing.expect(mapping.len > 2000); // Reasonable file size
 
     print("✅ Full pipeline: All phases completed successfully\n");
@@ -312,20 +282,9 @@ test "CANARY: REQ=REQ-PERF-INT-001 - Performance integration validation" {
     const parsed = try json_processor.parseJsonValue(test_json);
     defer parsed.deinit();
 
-    // 4. Async I/O
-    var async_io = async_io_simple.SimpleAsyncIO.init(allocator);
-    defer async_io.deinit();
-
-    var async_file = async_io_simple.AsyncFile.init(&async_io, test_file);
-
-    var buffer: [64]u8 = undefined;
-    const result = try async_file.readSync(buffer[0..32]);
-    try testing.expect(result.status == .success);
-
     print("✅ Buffered I/O: Module functional\n");
     print("✅ Memory-mapped I/O: Module functional\n");
     print("✅ JSON processing: Module functional\n");
-    print("✅ Async I/O: Module functional\n");
     print("✅ Performance integration: All modules working together\n");
     print("✅ CANARY REQ=REQ-PERF-INT-001: Validation successful\n");
 }

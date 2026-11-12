@@ -4,6 +4,15 @@
 **Status**: Living Document
 **Purpose**: Document the modularized architecture of the Geode graph database codebase
 
+> **Status note (2026-11-11, SONNY-6298):** `src/schema/schema_manager.zig`,
+> `src/transactions/transaction_manager.zig` and
+> `src/transactions/two_phase_commit.zig`, described below as unified
+> interfaces, were reachable from no executable or test and were removed.
+> The executor uses `src/schema/catalog.zig` and `src/schema/fle_catalog.zig`
+> directly. `src/schema/constraint_manager.zig` and
+> `src/transactions/manager.zig` are compiled only by their tests (and, for
+> `manager.zig`, a fuzz target); no server code path calls them.
+
 ---
 
 ## Executive Summary

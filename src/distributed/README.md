@@ -101,11 +101,9 @@ federation-aware query optimization.
 | `node_registry.zig` | `NodeRegistry` (tested by `test_query_transport_node_registry.zig`) |
 | `federation_flag.zig`, `federation_latency_aggregate.zig` | Mismatch flag and latency aggregates; nothing in the tree sets the flag now |
 
-### Not compiled by any build step
-
-| File | Purpose |
-|------|---------|
-| `raft.zig` | Old compatibility shim over `raft_consensus.zig`; its only importer (`mod.zig`) was removed |
+`raft.zig`, an old string-node-ID compatibility shim over `raft_consensus.zig`
+whose only importer (`mod.zig`) was removed in SONNY-6279, was never compiled
+and was removed in SONNY-6298.
 
 ## Current Status
 

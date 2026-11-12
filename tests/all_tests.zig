@@ -182,9 +182,6 @@ const _test_vector_documentation_integration = @import("test_vector_documentatio
 // Phantom Read Prevention tests (imported from within src/server/txn)
 // const _test_phantom_read_prevention = @import("../src/server/txn/phantom_read_prevention.zig");
 
-// Enhanced Query Transport Integration tests
-// TODO: Fix imports - const _test_enhanced_query_transport = @import("test_enhanced_query_transport.zig");
-
 // Materialized Views tests
 const _test_materialized_views = @import("test_materialized_views.zig");
 const _test_materialized_views_integration = @import("test_materialized_views_integration.zig");
