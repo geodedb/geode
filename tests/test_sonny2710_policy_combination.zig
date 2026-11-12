@@ -65,22 +65,9 @@ fn policyFor(id: u64, graph: []const u8, table: []const u8, def: PolicyDef, role
     };
 }
 
-/// Free the code `createPolicy` compiled; the engine's `deinit` leaves a
-/// policy's expressions to its owner.
+/// SONNY-2773: the engine's deinit frees the code `createPolicy` compiled
+/// (this used to free it by hand, working around the leak).
 fn deinitEngine(engine: *RLSEngine) void {
-    var it = engine.policies.iterator();
-    while (it.next()) |entry| {
-        for (entry.value_ptr.items) |policy| {
-            if (policy.using_expr) |e| {
-                if (e.compiled) |c| {
-                    engine.allocator.free(c.bytecode);
-                    engine.allocator.free(c.constants);
-                    engine.allocator.free(c.jump_table);
-                    engine.allocator.destroy(c);
-                }
-            }
-        }
-    }
     engine.deinit();
 }
 

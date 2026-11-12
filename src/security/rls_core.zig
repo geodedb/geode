@@ -209,6 +209,23 @@ pub const RLSEngine = struct {
         /// compiles. The policy is kept, and denies every row, until an
         /// operator rewrites it; `createPolicy` never installs one.
         invalid: bool = false,
+
+        // CANARY: REQ=REQ-SONNY-2773-RLS-POLICY-FREE; FEATURE="RLSExpressionCompilation"; ASPECT=Ownership; STATUS=TESTED; TEST=tests/test_sonny2773_rls_policy_free.zig; OWNER=security; UPDATED=2026-11-12
+        /// SONNY-2773: the installer hands the policy's strings (`name`,
+        /// `description`, `graph`, `table`, and the USING / CHECK text) to
+        /// the engine: they were allocated with the engine's allocator, and
+        /// `deletePolicy`, `updatePolicy` (for strings the replacement does
+        /// not reuse) and `deinit` free them. False: the caller keeps them
+        /// (UserManager owns its copies, SONNY-2778). `roles` is always the
+        /// caller's.
+        owns_strings: bool = false,
+        /// SONNY-2773: set by the engine when it compiled the USING (CHECK)
+        /// bytecode, which it then frees; a pre-compiled expression the
+        /// caller pins is the caller's. What a caller sets is ignored. Both
+        /// were never freed: every delete, replaced expression and engine
+        /// teardown leaked them.
+        owns_using_compiled: bool = false,
+        owns_check_compiled: bool = false,
     };
 
     pub const Operation = enum {
@@ -410,6 +427,8 @@ pub const RLSEngine = struct {
     pub fn deinit(self: *Self) void {
         var it = self.policies.iterator();
         while (it.next()) |entry| {
+            // SONNY-2773: what each policy left installed owns.
+            for (entry.value_ptr.items) |policy| self.freeOwned(policy, null);
             entry.value_ptr.deinit(self.allocator);
             self.freePolicyKey(entry.key_ptr.*);
         }
@@ -479,6 +498,43 @@ pub const RLSEngine = struct {
         self.allocator.free(c.constants);
         self.allocator.free(c.jump_table);
         self.allocator.destroy(c);
+    }
+
+    /// SONNY-2773: free what the engine owns of `policy` (its compiled
+    /// bytecode, and its strings when `owns_strings`), except what `kept`
+    /// (the policy replacing it, in `updatePolicy`) still points at.
+    fn freeOwned(self: *Self, policy: Policy, kept: ?*const Policy) void {
+        if (policy.owns_using_compiled) {
+            if (exprCompiled(policy.using_expr)) |c| {
+                if (!(if (kept) |k| exprCompiled(k.using_expr) == c else false)) self.freeCompiledExpression(c);
+            }
+        }
+        if (policy.owns_check_compiled) {
+            if (exprCompiled(policy.check_expr)) |c| {
+                if (!(if (kept) |k| exprCompiled(k.check_expr) == c else false)) self.freeCompiledExpression(c);
+            }
+        }
+        if (!policy.owns_strings) return;
+        const k_using: ?[]const u8 = if (kept) |k| (if (k.using_expr) |e| e.raw else null) else null;
+        const k_check: ?[]const u8 = if (kept) |k| (if (k.check_expr) |e| e.raw else null) else null;
+        self.freeUnlessKept(policy.name, if (kept) |k| k.name else null);
+        self.freeUnlessKept(policy.description, if (kept) |k| k.description else null);
+        self.freeUnlessKept(policy.graph, if (kept) |k| k.graph else null);
+        self.freeUnlessKept(policy.table, if (kept) |k| k.table else null);
+        if (policy.using_expr) |e| self.freeUnlessKept(e.raw, k_using);
+        if (policy.check_expr) |e| self.freeUnlessKept(e.raw, k_check);
+    }
+
+    fn exprCompiled(expr: ?Expression) ?*CompiledExpression {
+        const e = expr orelse return null;
+        return e.compiled;
+    }
+
+    fn freeUnlessKept(self: *Self, s: []const u8, kept: ?[]const u8) void {
+        if (kept) |k| {
+            if (k.ptr == s.ptr and k.len == s.len) return;
+        }
+        self.allocator.free(s);
     }
 
     /// Compile every expression of `policy` that has no bytecode yet, per
@@ -557,6 +613,9 @@ pub const RLSEngine = struct {
         var compiled_policy = policy;
         const made = try self.compilePolicyExpressions(&compiled_policy, mode);
         errdefer made.free(self);
+        // SONNY-2773: the engine frees what it compiled.
+        compiled_policy.owns_using_compiled = made.using != null;
+        compiled_policy.owns_check_compiled = made.check != null;
 
         self.lockPoliciesExclusive();
         defer self.unlockPoliciesExclusive();
@@ -640,7 +699,17 @@ pub const RLSEngine = struct {
                 if (!PolicyKey.HashContext.eql(.{}, entry.key_ptr.*, new_key)) return error.PolicyKeyChange;
                 // Invalidate first: after the store nothing may fail.
                 try self.policy_cache.invalidate(entry.key_ptr.*);
+                // SONNY-2773: the replacement owns what the engine compiled
+                // for it, and the old bytecode it still points at (a caller
+                // that copied the installed policy and changed `enabled`);
+                // the rest of what the old policy owned is freed.
+                const old = policy.*;
+                replacement.owns_using_compiled = made.using != null or
+                    (old.owns_using_compiled and exprCompiled(old.using_expr) != null and exprCompiled(old.using_expr) == exprCompiled(replacement.using_expr));
+                replacement.owns_check_compiled = made.check != null or
+                    (old.owns_check_compiled and exprCompiled(old.check_expr) != null and exprCompiled(old.check_expr) == exprCompiled(replacement.check_expr));
                 policy.* = replacement;
+                self.freeOwned(old, &replacement);
                 return;
             }
         }
@@ -658,13 +727,16 @@ pub const RLSEngine = struct {
             for (entry.value_ptr.items, 0..) |policy, i| {
                 if (policy.id == policy_id) {
                     try self.policy_cache.invalidate(entry.key_ptr.*);
-                    _ = entry.value_ptr.swapRemove(i);
+                    const removed = entry.value_ptr.swapRemove(i);
                     if (entry.value_ptr.items.len == 0) {
                         const owned = entry.key_ptr.*;
                         entry.value_ptr.deinit(self.allocator);
                         self.policies.removeByPtr(entry.key_ptr);
                         self.freePolicyKey(owned);
                     }
+                    // SONNY-2773: under the exclusive lock, so no reader is
+                    // evaluating its bytecode.
+                    self.freeOwned(removed, null);
                     return;
                 }
             }
@@ -4147,20 +4219,9 @@ fn sonny2709Engine(allocator: Allocator, expr: []const u8) !RLSEngine {
 
 /// Free the compiled expressions `createPolicy` built (the engine's `deinit`
 /// leaves a policy's expressions to its owner).
+/// SONNY-2773: the engine frees the bytecode it compiled (this helper used
+/// to free it by hand, working around the leak).
 fn sonny2709Deinit(engine: *RLSEngine) void {
-    var it = engine.policies.iterator();
-    while (it.next()) |entry| {
-        for (entry.value_ptr.items) |policy| {
-            if (policy.using_expr) |e| {
-                if (e.compiled) |c| {
-                    engine.allocator.free(c.bytecode);
-                    engine.allocator.free(c.constants);
-                    engine.allocator.free(c.jump_table);
-                    engine.allocator.destroy(c);
-                }
-            }
-        }
-    }
     engine.deinit();
 }
 
@@ -4923,7 +4984,8 @@ test "SONNY-2732: updatePolicy compiles first, then swaps the policy in one stor
     // The new expression takes effect; the stored policy carries its own
     // bytecode (it used to keep the old one, compiled into a copy).
     try engine.updatePolicy(7, sonny2732Policy(7, "T", "row.cls = 'b'"));
-    sonny2730FreeCompiled(allocator, first);
+    // SONNY-2773: updatePolicy freed `first` (the test used to).
+    try std.testing.expect(sonny2732Compiled(&engine, "T") != first);
     try std.testing.expect(try sonny2709Sees(&engine, "u", "cls", .{ .string = "b" }));
     try std.testing.expect(!try sonny2709Sees(&engine, "u", "cls", .{ .string = "a" }));
     try std.testing.expect(sonny2732Compiled(&engine, "T").bytecode.len > 0);

@@ -48,19 +48,8 @@ const Session = struct {
     fn deinit(self: *Session) void {
         if (self.engine) |engine| {
             rls_types.setGlobalExprRLSEngine(null);
-            // `createPolicy` compiled every policy; the engine's deinit
-            // leaves a policy's expressions to their owner.
-            var it = engine.policies.iterator();
-            while (it.next()) |entry| {
-                for (entry.value_ptr.items) |policy| {
-                    const e = policy.using_expr orelse continue;
-                    const c = e.compiled orelse continue;
-                    engine.allocator.free(c.bytecode);
-                    engine.allocator.free(c.constants);
-                    engine.allocator.free(c.jump_table);
-                    engine.allocator.destroy(c);
-                }
-            }
+            // SONNY-2773: the engine's deinit frees the code `createPolicy`
+            // compiled (this used to free it by hand).
             engine.deinit();
             testing.allocator.destroy(engine);
         }

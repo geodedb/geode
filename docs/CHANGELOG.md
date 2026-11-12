@@ -4,6 +4,20 @@
 
 ### Security
 
+- **The expression RLS engine frees what it owns of a policy
+  (SONNY-2773).** `RLSEngine.deletePolicy` and `deinit` freed neither the
+  bytecode the engine compiles for a policy's USING / CHECK expression nor
+  the strings `geode.rls.add_attribute_policy` hands to it, and
+  `updatePolicy` dropped the bytecode it replaced: every
+  `geode.rls.remove_attribute_policy`, every geode-auth policy delete or
+  expression change, and every engine teardown leaked them for the server's
+  life. The engine now records what it owns (`Policy.owns_using_compiled` /
+  `owns_check_compiled`, set when it compiles; `owns_strings`, set by an
+  installer that hands its strings over, as `add_attribute_policy` does)
+  and frees exactly that on delete, on replace (keeping what the
+  replacement still points at) and at deinit. A pre-compiled expression a
+  caller pins, and strings a caller keeps (UserManager's, SONNY-2778), stay
+  the caller's.
 - **EXPLAIN POLICY asks what the gates ask; tenant listings are read-only
   (SONNY-6313).** (1) **Behaviour change:** `EXPLAIN POLICY FOR <statement>`
   derived one action and asked `gps.decide` about it on the resource

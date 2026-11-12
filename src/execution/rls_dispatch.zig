@@ -417,7 +417,8 @@ fn handleAddAttributePolicy(
 // CANARY: REQ=REQ-SONNY-2746-RLS-ATTRIBUTE-POLICY-OOM; FEATURE="RLS deny-policy procedure"; ASPECT=AttributePolicyOomCleanup; STATUS=TESTED; TEST=tests/test_sonny2746_rls_attribute_policy_oom.zig; OWNER=security; UPDATED=2026-09-25
 /// SONNY-2746: copy the attribute policy into the expression engine's
 /// allocator and install it. Once `createPolicy` accepts the policy its
-/// strings are the engine's, for as long as the server runs; until then they
+/// strings are the engine's (`owns_strings`, SONNY-2773: freed when the
+/// policy is removed and at the engine's deinit); until then they
 /// are this function's, and an error (OutOfMemory at any copy or inside
 /// `createPolicy`) frees every one of them. They used to leak. On failure the
 /// engine keeps no pointer to them either (`RLSEngine.installPolicy`).
@@ -470,6 +471,9 @@ fn installAttributePolicy(
         .temporal = null,
         .data_classification = null,
         .audit_level = .denials,
+        // SONNY-2773: the engine frees them on remove_attribute_policy and
+        // at deinit (they leaked for the server's life).
+        .owns_strings = true,
     });
 }
 
