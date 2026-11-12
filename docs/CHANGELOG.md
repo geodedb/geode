@@ -301,6 +301,23 @@
   code imported) and `src/distributed/raft.zig` (a string-node-ID shim over
   `raft_consensus.zig` whose only importer was removed in SONNY-6279) are
   removed with the uncompiled tests that imported them.
+- **Uncompiled query optimizers and transaction-isolation code; the docs that
+  claimed them (SONNY-6298).** `src/server/index_optimizer.zig`,
+  `src/server/index_statistics.zig`, `src/server/union_advanced.zig`,
+  `src/planner/{adaptive,optimizer,query_optimizer,stats_registry,rescore,cbo_small_n,gpu_cost_model,cost_cardinality_feedback}.zig`
+  and `src/server/txn/{enhanced_isolation,isolation_integration}.zig` were
+  reachable from no executable or test, so the cost-based IndexOptimizer and
+  the "Enhanced Transaction Isolation" system (six isolation levels, SSI,
+  predicate-lock phantom prevention, deadlock detection) never ran. They are
+  removed with the uncompiled tests that exercised them. `CLAUDE.md`,
+  `README.md`, `docs/FEATURES_OVERVIEW.md`, `docs/SERVER_FEATURES.md`,
+  `docs/EXPLAIN_PROFILE.md`, `docs/CURRENT_ARCHITECTURE.md` and the index
+  pages now say what the server does: index use is rule-based (UNIQUE-indexed
+  equality seek, otherwise a label scan) and EXPLAIN shows fixed per-operator
+  costs; writes are serialized per graph, each read sees one snapshot, and
+  explicit transactions roll back through an undo log, with no isolation
+  levels. `docs/ENHANCED_TRANSACTION_ISOLATION.md` and
+  `docs/BM25_INDEX_OPTIMIZER_INTEGRATION.md` are now status notes.
 
 ---
 

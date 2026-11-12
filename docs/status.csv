@@ -967,8 +967,6 @@ REQ-DISTRIBUTED-002,DistributedFeatures,Replication,TESTED,,,distributed,2026-01
 REQ-DISTRIBUTED-003,DistributedFeatures,Consensus,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig,616
 REQ-DISTRIBUTED-004,DistributedFeatures,Partitioning,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig,623
 REQ-DISTRIBUTED-005,DistributedFeatures,LoadBalancing,TESTED,,,distributed,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig,630
-REQ-DISTRIBUTED-COST-BREAKDOWN-001,PerShardCostBreakdown,Distributed,IMPL,,,distributed,2026-04-05,src/server/index_optimizer.zig,2052
-REQ-DISTRIBUTED-INDEX-OPTIMIZER-001,Distributed IndexOptimizer,FederationAwareCostEstimation,IMPL,,,distributed,2026-04-05,src/server/index_optimizer.zig,2048
 REQ-DISTRIBUTED-INDEX-OPTIMIZER-001,Distributed IndexOptimizer,FederationAwareCostEstimation,TESTED,,,distributed,2025-10-05,tests/test_index_optimizer_distributed.zig,4
 REQ-DISTRIBUTED-INDEX-OPTIMIZER-002,Distributed IndexOptimizer,CrossShardOperationCosts,TESTED,,,distributed,2025-10-05,tests/test_index_optimizer_distributed.zig,32
 REQ-DISTRIBUTED-INDEX-OPTIMIZER-003,Distributed IndexOptimizer,OptimizationStrategySelection,TESTED,,,distributed,2025-10-05,tests/test_index_optimizer_distributed.zig,73
@@ -1070,13 +1068,12 @@ REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,BulkMergeDimensionGuard,TESTED,,,index
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,BulkMergeDimensionGuard,TESTED,,,index,2026-08-29,src/server/quic_connection_handler.zig,1122
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,PrePassGraphScope,TESTED,,,execution,2026-08-29,src/execution.zig,1584
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,PrePassGraphScope,TESTED,,,index,2026-08-29,src/execution/write_precheck.zig,103
-REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,QueryVectorDimensionCap,TESTED,,,index,2026-08-29,src/server/index_optimizer.zig,1605
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,Regression,TESTED,,,index,2026-08-29,tests/test_eng3922_dim_guard.zig,1
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimAdoptAfterCommit,TESTED,,,index,2026-08-29,src/index/index_manager.zig,1877
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimGraphDrop,TESTED,,,index,2026-08-29,src/execution.zig,2662
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimGraphDrop,TESTED,,,index,2026-08-29,src/index/index_manager.zig,1833
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimLazySeed,TESTED,,,index,2026-08-29,src/index/index_manager.zig,1640
-REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimLifecycleRelease,TESTED,,,index,2026-08-30,tests/test_eng3922_dim_guard.zig,465
+REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimLifecycleRelease,TESTED,,,index,2026-08-30,tests/test_eng3922_dim_guard.zig,464
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimRegistry,TESTED,,,index,2026-08-29,src/index/index_manager.zig,85
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimRegistry,TESTED,,,index,2026-08-29,src/index/index_manager.zig,2754
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimStatementPrePass,TESTED,,,index,2026-08-29,src/execution/write_precheck.zig,172
@@ -1198,7 +1195,6 @@ REQ-EXPR-TYPE-003,ExprTypeCoverage,Types,TESTED,,,exec,2026-01-25,src/server/gra
 REQ-EXTVALUE-BRIDGE-INTERVAL-JSON,ExtendedBuiltins,IntervalAndJsonArgumentBridge,TESTED,,,eval,2026-08-25,src/eval_extended.zig,65
 REQ-EXTVALUE-BRIDGE-INTERVAL-JSON,ExtendedBuiltins,IntervalAndJsonArgumentBridge,TESTED,,,eval,2026-08-25,tests/test_date_part_exact.zig,287
 REQ-FED-001,Federation,QueryFederation,TESTED,,,distributed,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,548
-REQ-FEDERATION-INDEX-REC-001,FederationIndexRecommendations,Index,IMPL,,,distributed,2026-04-05,src/server/index_optimizer.zig,2215
 REQ-FEDERATION-QUERY-001,Federation,FederatedQuery,TESTED,,,federation,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,610
 REQ-FINAL-001,FinalSort,SortExecution,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig,565
 REQ-FIPS-CHACHA-FAILCLOSE-001,FIPSFailClose,FLEEncrypt,IMPL,,,security,2026-06-24,src/fle_integration.zig,486
@@ -2026,12 +2022,6 @@ REQ-GQL-014,AdvancedUnionOperations,ExceptOperation,TESTED,,,engine,2025-10-03,t
 REQ-GQL-015,AdvancedUnionOperations,OptimizationStrategy,TESTED,,,engine,2025-10-03,tests/advanced_union_test.zig,90
 REQ-GQL-015,Set Operations,SetOpDistinctDedupVarianceEnvelope,BENCHED,,,engine,2025-09-21,tests/benchmark_setop_distinct_dedup_variance.zig,3
 REQ-GQL-016,AdvancedUnionOperations,MultiWayOptimization,TESTED,,,engine,2025-10-03,tests/advanced_union_test.zig,115
-REQ-GQL-016,CompositeIndexOptimizer,MultiPropertyOptimization,TESTED,,,engine,2025-10-03,tests/test_composite_index_optimizer.zig,7
-REQ-GQL-016,ExplainOptimizer,QueryPlanVisualization,TESTED,,,engine,2025-10-03,tests/test_explain_optimizer.zig,8
-REQ-GQL-016,IndexOptimizer,CircularDependencyFix,TESTED,,,engine,2025-10-03,tests/index_optimizer_regression_test.zig,5
-REQ-GQL-016,IndexOptimizer,PerformanceBench,TESTED,,,engine,2025-10-03,tests/benchmark_index_optimizer.zig,8
-REQ-GQL-016,IndexStatistics,CostEstimation,TESTED,,,engine,2025-10-03,src/server/index_statistics.zig,42
-REQ-GQL-016,MultiIndexOptimizer,IndexTypeSelection,TESTED,,,engine,2025-10-03,tests/test_multi_index_optimizer.zig,7
 REQ-GQL-016,Path Cycle Determinism,PathTieBreakMultiBranchDeterminism,TESTED,,,planner,2025-09-21,tests/test_path_quantifier_bounded.zig,5
 REQ-GQL-016,Path Cycle Determinism,Planner,TESTED,,,planner,2025-09-21,src/planner.zig,3
 REQ-GQL-016,Path Expand Breadth,BoundedQuantifierDeterminism,TESTED,,,planner,2025-09-21,tests/test_path_bounded_quantifier.zig,4
@@ -2184,7 +2174,6 @@ REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicy,TESTED,,,engine,
 REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicy,TESTED,,,engine,2025-09-21,src/server/flagger_impl_defined.zig,3
 REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicyOutput,TESTED,,,engine,2025-09-21,tests/test_flagger_zero_length_path.zig,4
 REQ-GQL-024,Conformance Profile Ledger,Docs,TESTED,,,docs,2026-02-09,docs/gql/GQL_CONFORMANCE_PROFILE.md,3
-REQ-GQL-024,Cost Based Optimizer,PlanCandidateRescoringIntegration,TESTED,,,planner,2025-09-26,src/planner/rescore.zig,12
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibration,TESTED,,,planner,2025-09-22,src/planner/cost_calibration.zig,6
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationRanking,TESTED,,,planner,2025-09-22,src/planner/pipeline.zig,506
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationVarianceEnvelope,BENCHED,,,planner,2025-09-22,src/planner/cost_calibration.zig,7
@@ -2202,7 +2191,6 @@ REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,,,planner,
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineAdoption,TESTED,,,planner,2025-09-22,tests/canary_planner_pipeline_selection.zig,45
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionPipelineVarianceEnvelope,BENCHED,,,planner,2025-09-22,tests/canary_planner_pipeline_selection.zig,46
 REQ-GQL-024,Cost Based Optimizer,PlanSelectionVarianceEnvelope,BENCHED,,,planner,2025-09-22,tests/canary_planner_plan_selection.zig,45
-REQ-GQL-024,Cost Based Optimizer,PlanStatisticsRegistry,TESTED,,,planner,2025-09-25,src/planner/stats_registry.zig,12
 REQ-GQL-024,DistributedQueryPlanning,InterShardCommunication,TESTED,,,distributed,2025-10-05,tests/distributed_query_planner_test.zig,55
 REQ-GQL-024,FederationLatencyAggregates,Archive,IMPL,,,federation,2026-04-05,src/distributed/federation_latency_aggregate.zig,18
 REQ-GQL-024,FederationLatencyAggregates,Archive,TESTED,,,federation,2025-09-26,tests/test_federation_latency_aggregates.zig,3
@@ -2355,7 +2343,6 @@ REQ-GQL-050,Multi-Tenancy,TenantRegistry,TESTED,,,dist,2025-09-21,src/multitenan
 REQ-GQL-050,Multi-Tenancy,TenantRegistryBasic,TESTED,,,dist,2025-09-21,tests/canary_tenant_registry_basic.zig,4
 REQ-GQL-050,Multi-Tenancy,TenantRegistryVarianceEnvelope,BENCHED,,,dist,2025-09-21,tests/benchmark_tenant_registry_variance.zig,5
 REQ-GQL-051,GPU Acceleration,Benchmarks,EXEMPT,,,engine,2025-10-26,scripts/test/run_gpu_benchmarks.sh,4
-REQ-GQL-051,GPU Acceleration,CostModel,TESTED,,,engine,2025-10-26,src/planner/gpu_cost_model.zig,1
 REQ-GQL-051,GPU Acceleration,CudaDynamicLoader,TESTED,,,engine,2025-10-26,src/gpu/cuda_loader.zig,4
 REQ-GQL-051,GPU Acceleration,DeviceDetection,TESTED,,,engine,2026-06-11,src/gpu/acceleration.zig,114
 REQ-GQL-051,GPU Acceleration,GPUFlagger,TESTED,,,engine,2025-09-21,src/gpu/flagger.zig,3
@@ -2508,7 +2495,6 @@ REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorVarianceAutoCalibration
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorVarianceAutoCalibration,TESTED,,,planner,2025-09-26,tests/canary_cost_model_variance_autocalib.zig,6
 REQ-GQL-075,Cost Model Enumeration Seed,CalibrationEntries,TESTED,,,planner,2025-09-22,src/planner/cost_explain.zig,8
 REQ-GQL-075,Cost Model Enumeration Seed,CalibrationEntries,TESTED,,,planner,2025-09-22,tests/cost_model_calibration_entries.zig,5
-REQ-GQL-075,Cost Model Enumeration Seed,CalibrationFeedback,TESTED,,,planner,2025-09-22,src/planner/cost_cardinality_feedback.zig,11
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,BENCHED,,,planner,2025-09-22,benchmarks/benchmark_cost_model_seed_variance.zig,8
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,BENCHED,,,planner,2025-09-22,src/planner/cost_seed.zig,8
 REQ-GQL-075,Cost Model Enumeration Seed,EstimatorPrimitives,TESTED,,,planner,2025-09-22,tests/cost_model_seed.zig,4
@@ -2713,8 +2699,7 @@ REQ-GQL-CATALOG-004,Error Handling Regression,ErrorTesting,TESTED,,,server,2025-
 REQ-GQL-CATALOG-005,Catalog Regression Test Suite,TestAutomation,EXEMPT,,,testing,2025-10-04,tests/catalog_regression_test.sh,4
 REQ-GQL-CBO,Cost Based Optimizer,CoreEngine,TESTED,,,planner,2026-06-10,src/planner/cbo.zig,21
 REQ-GQL-CBO,Cost Based Optimizer,RealStatistics,TESTED,,,planner,2026-06-10,tests/test_gap0867_cbo_estimates.zig,12
-REQ-GQL-CBO-002,CBO Small-N Calibration,Optimization,TESTED,,,planner,2026-01-17,src/planner/cbo_small_n.zig,42
-REQ-GQL-CBO-STATS-001,CBOStorageProvider,Statistics,EXEMPT,,,planner,2026-01-10,src/planner/cbo.zig,335
+REQ-GQL-CBO-STATS-001,CBOStorageProvider,Statistics,EXEMPT,,,planner,2026-01-10,src/planner/cbo.zig,336
 REQ-GQL-CHAIN,Query Chaining via WITH,AST,TESTED,,,parser,2025-10-10,src/gql/ast.zig,115
 REQ-GQL-CHAIN,Query Chaining via WITH,Execution,TESTED,,,execution,2026-01-17,src/execution/query_execution.zig,1702
 REQ-GQL-CHAIN,Query Chaining via WITH,Parser,TESTED,,,parser,2025-10-10,src/gql/parser.zig,2540
@@ -2802,10 +2787,7 @@ REQ-GQL-FTS-002,Document Indexing,FTS,TESTED,,,index,2026-05-30,src/index/fullte
 REQ-GQL-FTS-002,FTS Tokenizer,Tokenize,TESTED,,,index,2026-05-30,src/index/fts_tokenizer.zig,15
 REQ-GQL-FTS-003,FTS,IndexOptimizer,TESTED,,,search,2026-01-16,tests/test_gap_0193_batch2_testing.zig,266
 REQ-GQL-FTS-003,FTS IndexOptimizer Integration,TESTING,TESTED,,,search,2025-10-04,tests/test_fts_indexoptimizer_integration.zig,190
-REQ-GQL-FTS-003,FTS Statistics,Performance,TESTED,,,fts,2025-10-04,src/server/index_statistics.zig,197
-REQ-GQL-FTS-004,FTS IndexOptimizer,CostEstimation,TESTED,,,fts,2025-10-04,src/server/index_optimizer.zig,589
 REQ-GQL-FTS-004,FTS Performance Optimization,INTEGRATION,TESTED,,,search,2025-10-04,tests/test_fts_performance_optimization.zig,6
-REQ-GQL-FTS-005,FTS Query Optimization,QueryPlanning,TESTED,,,fts,2025-10-04,src/server/index_optimizer.zig,979
 REQ-GQL-FTS-ADV-001,Advanced FTS,Dispatch,TESTED,,,index,2026-06-10,src/execution/fts_dispatch.zig,74
 REQ-GQL-FTS-ADV-001,Advanced FTS,E2E,TESTED,,,index,2026-06-10,tests/e2e_fts_advanced.zig,8
 REQ-GQL-FTS-ADV-001,Advanced FTS,GQL-E2E,TESTED,,,index,2026-06-10,tests/test_gap0869_fts_advanced.zig,15
@@ -3513,7 +3495,6 @@ REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,EXEMPT,,,execution,2026-
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,EXEMPT,,,execution,2026-01-24,src/execution/procedure_registry.zig,15
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,ML,EXEMPT,,,ml,2026-01-24,src/ml/graph_embeddings.zig,58
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Memory,EXEMPT,,,memory,2026-01-24,src/sentinel.zig,3
-REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Planner,EXEMPT,,,planner,2026-01-24,src/planner/adaptive.zig,42
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Schema,EXEMPT,,,schema,2026-01-24,src/schema/catalog.zig,14
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Schema,EXEMPT,,,schema,2026-01-24,src/schema/fle_catalog.zig,14
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Storage,EXEMPT,,,storage,2026-01-24,src/graph_store.zig,45
@@ -3525,7 +3506,6 @@ REQ-LIB-MIGRATION-SLOG-004,Centralized Structured Logging,BuildConfig,EXEMPT,,,c
 REQ-LIB-MIGRATION-SLOG-010,Structured Logging,ServerMain,EXEMPT,,,server,2026-01-24,src/server/main.zig,150
 REQ-LIB-MIGRATION-SLOG-012,Structured Logging,QUICHandler,EXEMPT,,,server,2026-01-24,src/server/quic_connection_handler.zig,125
 REQ-LIB-MIGRATION-SLOG-014,Structured Logging,ServerInit,EXEMPT,,,server,2026-01-24,src/server/server_init.zig,42
-REQ-LIB-MIGRATION-SLOG-017,Structured Logging,IsolationIntegration,EXEMPT,,,server,2026-01-24,src/server/txn/isolation_integration.zig,10
 REQ-LIB-MIGRATION-STRINGS-001,External Library Migration,StringsFuzzySearch,EXEMPT,,,core,2026-01-24,src/client/repl/fuzzy_search.zig,5
 REQ-LIB-MIGRATION-VULKAN-001,External Library Migration,VulkanCompute,EXEMPT,,,core,2026-01-24,src/gpu/vulkan_compute.zig,5
 REQ-LIBRARY-EMBEDDING-001,LibraryModeEmbedding,ML,TESTED,,,library,2026-01-12,src/lib.zig,575
@@ -4428,12 +4408,6 @@ REQ-QEXEC-STREAM-001,QueryExecution,StreamExecution,TESTED,,,engine,2026-01-16,t
 REQ-QOPT-INDEX-001,QueryOptimization,IndexOptimization,TESTED,,,planner,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig,538
 REQ-QOPT-PUSH-001,QueryOptimization,PredicatePushdown,TESTED,,,planner,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig,405
 REQ-QOPT-PUSHDOWN-001,QueryOptimization,PredicatePushdown,TESTED,,,planner,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,498
-REQ-QP-DP-JOIN-001,DPJoinOrdering,Core,EXEMPT,,,planner,2026-01-12,src/planner/query_optimizer.zig,290
-REQ-QP-FILTER-001,QueryPlannerOptimization,FilterMerging,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig,626
-REQ-QP-PARALLEL-001,QueryPlannerOptimization,Parallelization,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig,655
-REQ-QP-PUSH-001,QueryPlannerOptimization,PredicatePushdown,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig,557
-REQ-QP-SORT-001,QueryPlannerOptimization,SortElimination,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig,593
-REQ-QP-STATS-001,QueryPlannerOptimization,StatisticsEstimation,EXEMPT,,,planner,2025-12-30,src/planner/query_optimizer.zig,491
 REQ-QUALITY-401-001,MatchOpsStagedParity,GoldenParity,TESTED,,,execution,2026-02-16,tests/test_match_operations_parity_campaign.zig,18
 REQ-QUALITY-401-002,MatchOpsBenchmarkCampaign,RefactorBenchmark,BENCHED,,,execution,2026-02-16,tests/benchmark_match_operations_campaign.zig,34
 REQ-QUALITY-461-001,CliTransportResponseAbstraction,GoldenParityJson,TESTED,,,cli,2026-02-16,tests/test_cli_transport_response_parity.zig,28
@@ -5821,24 +5795,7 @@ REQ-TS-TDE-001,TimeSeriesTDE,Security,TESTED,,,timeseries,2026-06-10,tests/ts_du
 REQ-TS-TIMEBUCKET-001,TimeSeriesTimeBucketAvg,Aggregation,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig,11
 REQ-TS-VALUEAT-001,TimeSeriesValueAt,Query,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig,12
 REQ-TS-VALUEBEFORE-001,TimeSeriesValueBefore,Query,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig,9
-REQ-TXN-ISOLATION-001,Enhanced Transaction Isolation,IsolationLevels,TESTED,,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig,1
 REQ-TXN-ISOLATION-001,EnhancedTransactionIsolation,IsolationLevels,TESTED,,,txn,2026-01-15,tests/test_gap_analysis_january_2026.zig,136
-REQ-TXN-ISOLATION-002,Advanced Phantom Read Prevention,PhantomReadPrevention,TESTED,,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig,2
-REQ-TXN-ISOLATION-003,Serializable Snapshot Isolation,SerializableSSI,TESTED,,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig,3
-REQ-TXN-ISOLATION-004,Deadlock Detection and Resolution,DeadlockResolution,TESTED,,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig,4
-REQ-TXN-ISOLATION-005,SSI RW Dependency Tracking,ReadDependencies,TESTED,,,txn,2025-12-30,src/server/txn/enhanced_isolation.zig,454
-REQ-TXN-ISOLATION-006,SSI Predicate Lock Checking,PredicateLocks,TESTED,,,txn,2025-12-30,src/server/txn/enhanced_isolation.zig,492
-REQ-TXN-ISOLATION-007,SSI WR Dependency Tracking,WriteDependencies,TESTED,,,txn,2025-12-30,src/server/txn/enhanced_isolation.zig,507
-REQ-TXN-ISOLATION-008,SSI Read Set Validation,CommitValidation,TESTED,,,txn,2025-12-30,src/server/txn/enhanced_isolation.zig,550
-REQ-TXN-ISOLATION-INTEGRATION-001,Enhanced Transaction Isolation Integration,SerializableIsolation,TESTED,,,txn,2025-10-05,tests/test_enhanced_transaction_isolation_integration.zig,1
-REQ-TXN-ISOLATION-INTEGRATION-001,Transaction Isolation Integration,ServerIntegration,TESTED,,,txn,2025-10-05,src/server/txn/isolation_integration.zig,1
-REQ-TXN-ISOLATION-INTEGRATION-002,Phantom Read Prevention Integration,PhantomReadPrevention,TESTED,,,txn,2025-10-05,tests/test_enhanced_transaction_isolation_integration.zig,2
-REQ-TXN-ISOLATION-INTEGRATION-002,Query Engine Integration,QueryEngineIntegration,TESTED,,,txn,2025-10-05,src/server/txn/isolation_integration.zig,2
-REQ-TXN-ISOLATION-INTEGRATION-003,Deadlock Resolution Integration,DeadlockHandling,TESTED,,,txn,2025-10-05,tests/test_enhanced_transaction_isolation_integration.zig,3
-REQ-TXN-ISOLATION-INTEGRATION-004,High Concurrency Isolation,ConcurrencyControl,TESTED,,,txn,2025-10-05,tests/test_enhanced_transaction_isolation_integration.zig,4
-REQ-TXN-ISOLATION-TEST-001,Enhanced Transaction Isolation Tests,IsolationLevels,TESTED,,,txn,2025-10-05,tests/test_enhanced_transaction_isolation.zig,1
-REQ-TXN-ISOLATION-TEST-002,Deadlock Detection Tests,DeadlockResolution,TESTED,,,txn,2025-10-05,tests/test_enhanced_transaction_isolation.zig,2
-REQ-TXN-ISOLATION-TEST-003,Dependency Tracking Tests,SerializableSSI,TESTED,,,txn,2025-10-05,tests/test_enhanced_transaction_isolation.zig,3
 REQ-TXN-PHANTOM-001,Phantom Read Prevention,PhantomReadPrevention,TESTED,,,txn,2025-10-05,src/server/txn/phantom_read_prevention.zig,39
 REQ-TXN-PHANTOM-002,Phantom Read Prevention,PredicateLocks,TESTED,,,txn,2025-10-05,src/server/txn/phantom_read_prevention.zig,40
 REQ-TXN-PHANTOM-003,Phantom Read Prevention,RangeQueryValidation,TESTED,,,txn,2025-10-05,src/server/txn/phantom_read_prevention.zig,41

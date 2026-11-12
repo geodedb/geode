@@ -14,7 +14,6 @@ echo ""
 echo "1. Checking files..."
 FILES=(
     "src/gpu/performance_profiler.zig"
-    "src/planner/gpu_cost_model.zig"
     "docs/GPU_PRODUCTION_DEPLOYMENT.md"
     "docs/PHASE10_COMPLETION_REPORT.md"
     "docs/PHASE10_SUMMARY.md"
@@ -42,18 +41,8 @@ echo "  Dijkstra nodes:"
 grep "NUM_NODES" src/benchmarks/bench_gpu_shortest_path.zig | head -1
 echo ""
 
-# Test cost model
-echo "3. Testing GPU cost model..."
-if zig test src/planner/gpu_cost_model.zig > /dev/null 2>&1; then
-    echo "  ✅ Cost model tests pass"
-else
-    echo "  ❌ Cost model tests FAILED"
-    exit 1
-fi
-echo ""
-
 # Test performance profiler
-echo "4. Testing performance profiler..."
+echo "3. Testing performance profiler..."
 if zig test src/gpu/performance_profiler.zig > /dev/null 2>&1; then
     echo "  ✅ Performance profiler tests pass"
 else
@@ -63,7 +52,7 @@ fi
 echo ""
 
 # Check module exports
-echo "5. Checking module exports..."
+echo "4. Checking module exports..."
 if grep -q "performance_profiler" src/gpu.zig; then
     echo "  ✅ performance_profiler exported from gpu.zig"
 else
@@ -73,7 +62,7 @@ fi
 echo ""
 
 # Build benchmarks
-echo "6. Building GPU benchmarks..."
+echo "5. Building GPU benchmarks..."
 if zig build bench-gpu > /dev/null 2>&1; then
     echo "  ✅ All GPU benchmarks compile"
 else
@@ -83,7 +72,7 @@ fi
 echo ""
 
 # Check documentation
-echo "7. Checking documentation..."
+echo "6. Checking documentation..."
 DOCS_SECTIONS=(
     "Deployment Options"
     "Configuration"
@@ -109,7 +98,6 @@ echo "==================================="
 echo ""
 echo "Deliverables:"
 echo "  • Performance Profiler (238 lines)"
-echo "  • GPU Cost Model (252 lines)"
 echo "  • Production Deployment Guide (375 lines)"
 echo "  • Phase 10 Completion Report (461 lines)"
 echo "  • Scaled Benchmarks (10x larger)"

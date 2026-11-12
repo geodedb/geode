@@ -14,7 +14,7 @@ Geode is a single-tenant graph database server with strong ISO GQL alignment. Th
 ## Table of Contents
 
 1. [Storage Engine Architecture](#storage-engine-architecture)
-2. [Transaction Management (MVCC & SSI)](#transaction-management-mvcc--ssi)
+2. [Transaction Management](#2-transaction-management)
 3. [Index Types & Optimization](#index-types--optimization)
 4. [Query Planning & Cost-Based Optimization](#query-planning--cost-based-optimization)
 5. [CDC & Replication Features](#cdc--replication-features)
@@ -187,142 +187,27 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 
 ---
 
-## 2. Transaction Management (MVCC & SSI)
+## 2. Transaction Management
 
-### 2.1 Multi-Version Concurrency Control (MVCC)
+**Status (2026-11-11, SONNY-6298):** the server has no selectable isolation
+levels, no Serializable Snapshot Isolation, no predicate-lock phantom-read
+prevention and no deadlock detector. This section used to describe them from
+`src/server/txn/enhanced_isolation.zig`, which was never compiled into any
+executable or test and was removed. See
+[ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md) for what
+the server does:
 
-**Implementation**: `/src/txn/manager.zig`
-**CANARY**: `REQ-GQL-013`, `REQ-GQL-023`, `REQ-GQL-025`
+- `START TRANSACTION` takes no isolation clause; explicit transactions roll
+  back through the thread's undo log (`src/txn_undo_log.zig`).
+- Mutating statements run while the connection handler holds the graph's write
+  lock (`graph_store.acquireGraphWriteLock`).
+- Each read statement runs against one snapshot taken under the graph's shared
+  lock (`graph_store.snapshotUnderReadLock`) or on a storage-native path.
 
-**Core Concepts**:
-
-- Every transaction has a unique `TxnId` and `start_ts` timestamp
-- Reads see snapshot at `start_ts`
-- Writes are visible only after commit timestamp
-- No read locks required
-
-**Transaction States**:
-
-- `Active`: Transaction in progress
-- `Committed`: Successfully committed with `commit_ts`
-- `Aborted`: Rolled back (changes undone)
-
-**Lock Modes**:
-
-- `Shared`: Multiple readers allowed
-- `Exclusive`: Single writer, blocks all
-
-**Conflict Detection**:
-
-- Conflict matrix tracks: ReadWrite, WriteWrite, WriteRead
-- Wait-for graph for deadlock detection
-- Lock escalation for large scans
-
-**Phantom Read Prevention**:
-
-- Predicate range tracking per transaction
-- Range locks on scan predicates
-- Validation at commit time against concurrent writes
-
-**Example Flow**:
-
-```zig
-// Begin transaction
-const txn = try manager.beginTxn();
-
-// Read with MVCC snapshot
-const value = try manager.read(txn, key);
-
-// Write with conflict detection
-try manager.write(txn, key, new_value);
-
-// Commit with validation
-try manager.commit(txn); // Checks for conflicts
-```
-
-### 2.2 Serializable Snapshot Isolation (SSI)
-
-**Implementation**: `/src/server/txn/enhanced_isolation.zig`
-**CANARY**: `REQ-TXN-ISOLATION-001` through `REQ-TXN-ISOLATION-004`
-
-**Isolation Levels**:
-
-1. **ReadUncommitted**: No guarantees (rarely used)
-2. **ReadCommitted**: Prevents dirty reads
-3. **RepeatableRead**: Prevents dirty + non-repeatable reads
-4. **SnapshotIsolation**: MVCC-based (default)
-5. **Serializable**: Full serializability with predicate locks
-6. **SerializableSnapshot**: Hybrid SSI (best of both)
-
-**SSI Algorithm**:
-
-SSI detects "dangerous structures" - dependency cycles that violate serializability:
-
-**Dependency Types**:
-
-- **RW Edge** (T1 → T2): T1 reads, T2 writes same object
-- **WR Edge** (T1 → T2): T1 writes, T2 reads same object
-
-**Dangerous Structure**: `T1 -RW-> T2 -WR-> T3 -RW-> T1` (cycle)
-
-**Implementation**:
-
-```zig
-pub const DependencyTracker = struct {
-    read_dependencies: AutoHashMap(TxnId, ArrayList(TxnId)),  // RW edges
-    write_dependencies: AutoHashMap(TxnId, ArrayList(TxnId)), // WR edges
-
-    pub fn checkDangerousStructure(txn_id: TxnId) bool {
-        // DFS to detect RW-WR-RW cycles
-        // Returns true if cycle found → abort transaction
-    }
-};
-```
-
-**Commit-Time Validation**:
-
-1. Check for dangerous structures in dependency graph
-2. Validate read set against concurrent writes
-3. If conflict detected → abort transaction
-4. Otherwise → commit with new `commit_ts`
-
-**Performance**:
-
-- <10μs overhead per transaction for SSI tracking
-- 99.9% of transactions commit without conflicts
-- Automatic victim selection for deadlock resolution
-
-### 2.3 Deadlock Detection
-
-**Implementation**: `/src/server/txn/enhanced_isolation.zig`
-
-**Wait-For Graph**:
-
-- Directed graph: T1 → T2 means T1 waits for T2
-- Cycle detection via DFS
-- Periodic detection (default 1 second interval)
-- Priority-based victim selection
-
-**Resolution Strategies**:
-
-1. **Abort**: Kill current transaction
-2. **Wait**: Wait for lock with timeout (default 30s)
-3. **AbortOther**: Abort conflicting transaction (if lower priority)
-4. **Retry**: Exponential backoff retry
-5. **Escalate**: Upgrade to higher isolation level
-
-**Priority System**:
-
-- User-defined priorities (0-255)
-- Victim selection: abort lowest priority transaction
-- Prevents priority inversion
-
-**Statistics**:
-
-- Total conflicts detected
-- Deadlocks resolved
-- Average resolution time
-- Transactions aborted
+`src/transactions/manager.zig` (MVCC lock manager, phantom range tracker,
+write-skew detection) is compiled only by its tests
+(`zig build test-canary-txn-phantom-anomaly`, `test-canary-txn-phantom-range`,
+`test-canary-txn-write-skew`); no server path calls it.
 
 ---
 
@@ -448,11 +333,10 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 - Boolean query: ~100-500μs
 - Index build: ~1-2ms per 1000 documents
 
-**IndexOptimizer Integration**:
-
-- Automatic corpus statistics tracking
-- Dynamic selectivity estimation
-- Cost-based decision between full-text vs sequential scan
+**Index choice**: full-text search runs only when the query calls
+`geode.fts.*` explicitly; there is no automatic choice between a full-text
+index and a scan (the IndexOptimizer was never compiled and was removed,
+SONNY-6298).
 
 ### 3.5 Specialized Indexes
 
@@ -483,6 +367,14 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 ---
 
 ## 4. Query Planning & Cost-Based Optimization
+
+**Status (2026-11-11, SONNY-6298):** no cost-based plan choice reaches query
+execution. Planning phases 4–6 below (enumerate, cost, select) and the 4.2
+index-selection, join-ordering and adaptive re-planning text describe code no
+server path runs: `src/planner/cbo.zig` and `cost_model.zig` are compiled, but
+their callers are tests (`zig build test-gap0867`), `src/planner/pipeline.zig`
+and `src/distributed/query_planner.zig`, and no query's plan is chosen by them.
+Index use is rule-based (see 4.3).
 
 ### 4.1 Query Planner
 
@@ -575,43 +467,14 @@ PathExpand(min=1, max=3)
 
 ### 4.3 IndexOptimizer
 
-**Implementation**: `/src/server/index_optimizer.zig`
-
-**Capabilities**:
-
-- Automatic index recommendation
-- Query-specific cost estimation
-- Dynamic index selection
-- Statistics-driven decisions
-
-**Cost Models by Index Type**:
-
-| Index Type | Cost Formula | Use Case |
-|-----------|--------------|----------|
-| Sequential Scan | `O(n)` | Small tables, full scans |
-| B-Tree | `O(log n + k)` | Equality, range queries |
-| HNSW | `O(log n)` | KNN vector search |
-| R-Tree | `O(log n + k)` | Spatial queries |
-| Full-Text | `O(t·log n)` | Text search (t=terms) |
-| Hash | `O(1)` | Exact equality only |
-
-**Integration**:
-
-```zig
-// Automatic index selection
-const index_choice = try index_optimizer.selectBestIndex(
-    label,
-    predicate,
-    statistics,
-);
-
-// Cost estimation
-const estimated_cost = try index_optimizer.estimateCost(
-    index_choice,
-    cardinality,
-    selectivity,
-);
-```
+**Status:** not implemented. `src/server/index_optimizer.zig` was never
+compiled into any executable or test and was removed (SONNY-6298). Index use
+is rule-based: a pattern with a UNIQUE-indexed literal-equality property is
+seeked through the merge index (`src/execution/match_operations.zig`,
+`zig build test-multi-pattern-index-seek`), otherwise the label is scanned.
+`EXPLAIN` checks the index catalog for an index on the pattern's label and
+property and reports fixed per-operator costs
+(`src/execution/statement_handlers.zig`).
 
 ### 4.4 Selectivity Estimator
 
@@ -1293,7 +1156,7 @@ Total CANARY markers: 1284 tracking governance compliance
 7. **Authentication** (18 markers): RBAC/ABAC with MFA
 8. **Full-Text Search** (15 markers): BM25 ranking with inverted index
 9. **Storage Constraints** (13 markers): Schema validation engine
-10. **Transaction Management** (12 markers): MVCC with SSI
+10. **Transaction Management** (12 markers): markers on `src/transactions/manager.zig`, which only tests compile (no isolation levels or SSI in the server)
 
 **Status Distribution**:
 
@@ -1399,7 +1262,7 @@ key_name = "geode-master-key"
 **MVCC**: Multi-Version Concurrency Control - transaction isolation
 **QUIC**: Quick UDP Internet Connections - modern transport protocol
 **RLS**: Row-Level Security - fine-grained access control
-**SSI**: Serializable Snapshot Isolation - transaction isolation level
+**SSI**: Serializable Snapshot Isolation - a transaction isolation level Geode does not implement
 **TDE**: Transparent Data Encryption - automatic encryption
 **WAL**: Write-Ahead Logging - durability mechanism
 

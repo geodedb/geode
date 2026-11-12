@@ -214,7 +214,6 @@ pub const MaterializedViewManager = struct {
 
 - **Transaction-Safe Refreshes**: View refresh operations execute within proper transaction boundaries
 - **Isolation Guarantees**: MVCC snapshot isolation ensures consistent view refreshes
-- **Phantom Read Prevention**: Integration with phantom read prevention system for serializable isolation
 - **Distributed Coordination**: Cross-shard transaction coordination for federated view refreshes
 
 ## Enterprise Features

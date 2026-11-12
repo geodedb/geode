@@ -476,11 +476,15 @@ Be precise about provenance when reading any cost or row number Geode reports:
   NodeScan decision IS real — it checks the live index catalog for an index
   matching the pattern's label+property (including WHERE equality predicates) —
   but the cost numbers attached are model constants.
-- **Index selection at runtime is cost-based from live statistics** via
-  `src/server/index_optimizer.zig` (IndexOptimizer) and the per-property
-  `SelectivityEstimator`; `chooseIndexForPredicate`
-  (`src/server/index_catalog.zig`) only considers an index when the predicate
-  actually references the indexed property.
+- **Index selection at runtime is rule-based, not cost-based.** A pattern
+  with a UNIQUE-indexed literal-equality property is seeked through the merge
+  index (`src/execution/match_operations.zig`,
+  `zig build test-multi-pattern-index-seek`); otherwise the label is scanned.
+  `chooseIndexForPredicate` (`src/server/index_catalog.zig`) only considers an
+  index when the predicate references the indexed property, but no query path
+  calls it (only `zig build test-gap0867` does). The cost-based
+  `src/server/index_optimizer.zig` this paragraph used to cite was never
+  compiled and was removed (SONNY-6298).
 - **`StatsRegistry` row statistics are real when collected**:
   `analyzeTable()` counts live rows from the graph store (per-label counts via
   `GraphStore.countNodesByLabel`); `analyzeTableWithProvider()` /

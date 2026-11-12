@@ -48,7 +48,7 @@ docs/
 - **[ML Graph Embeddings](ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
 - **[Real-time Analytics](REAL_TIME_ANALYTICS.md)** - Streaming analytics
 - **[Materialized Views](MATERIALIZED_VIEWS.md)** - View management
-- **[Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md)** - MVCC
+- **[Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md)** - Status note: not implemented (removed 2026-11-11, SONNY-6298)
 - **[Distributed Query Coordination](DISTRIBUTED_QUERY_COORDINATION.md)** - Status note: not implemented (removed 2026-11-11, SONNY-6279)
 
 ### Deployment
@@ -76,7 +76,7 @@ docs/
 3. **Vector Operations** - HNSW indexing with SIMD
 4. **ML Graph Embeddings** - Node2Vec, GraphSAGE, DeepWalk
 5. **Real-time Analytics** - Streaming with pattern detection
-6. **Enhanced Transaction Isolation** - MVCC with SSI
+6. **Enhanced Transaction Isolation** - Not implemented (removed 2026-11-11, SONNY-6298; the code was never compiled)
 7. **Distributed Query Coordination** - Not implemented (removed 2026-11-11, SONNY-6279; the code was never compiled)
 8. **Materialized Views** - Refresh strategies with dependency tracking
 9. **CLI Subprocess Elimination** - Unified binary architecture

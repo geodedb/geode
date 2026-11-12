@@ -59,7 +59,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **[ML Graph Embeddings](docs/ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk (EXPERIMENTAL — simplified implementations; see GAP-0879 framing in that doc)
 - **[Real-time Analytics](docs/REAL_TIME_ANALYTICS.md)** - Streaming analytics with ML integration
 - **[Materialized Views](docs/MATERIALIZED_VIEWS.md)** - Enterprise view management
-- **[Enhanced Transaction Isolation](docs/ENHANCED_TRANSACTION_ISOLATION.md)** - Advanced MVCC
+- **[Enhanced Transaction Isolation](docs/ENHANCED_TRANSACTION_ISOLATION.md)** - Status note: NOT implemented (removed 2026-11-11, SONNY-6298); describes the per-graph write lock, per-query read snapshot and undo-log rollback the server does provide
 - **[Distributed Query Coordination](docs/DISTRIBUTED_QUERY_COORDINATION.md)** - Status note: NOT implemented (removed 2026-11-11, SONNY-6279); describes what the live cluster path provides
 
 ## 🎯 Implementation Status
@@ -72,7 +72,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 1. **Phase 2: Parser Extensions** - Map literals, deep nesting (8+ levels)
 2. **Phase 3: Set Operations** - UNION/INTERSECT/EXCEPT, 22/22 tests passing
-3. **Phase 4: Transaction Isolation** - Phantom read prevention, SSI, 6 isolation levels
+3. **Phase 4: Transaction Isolation** - NOT implemented in the server: no isolation levels, SSI, phantom-read prevention or deadlock detection. `src/server/txn/enhanced_isolation.zig` and `isolation_integration.zig` were never compiled and were removed 2026-11-11 (SONNY-6298). Writes are serialized per graph, each read sees one snapshot, and explicit transactions roll back through an undo log; see [docs/ENHANCED_TRANSACTION_ISOLATION.md](docs/ENHANCED_TRANSACTION_ISOLATION.md)
 4. **Phase 5: Distributed Coordination** - Raft consensus, cluster management and two-phase commit; `src/distributed/` now holds 22,709 lines in 27 files. The phase's federation / scatter-gather query coordination code was never compiled and was removed 2026-11-11 (SONNY-6279)
 5. **Phase 6: Materialized Views** - 3 refresh strategies, query rewriting
 6. **Phase 7: Graph Algorithms** - 20-90% performance improvements
@@ -85,10 +85,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. **REPL QUIC Integration** - Real-time interactive shell with comprehensive features
 3. **Vector Operations** - HNSW indexing with 6 distance metrics and SIMD acceleration
 4. **Performance Optimization** - 13.18x I/O improvement, memory-mapped operations
-5. **IndexOptimizer** - Cost-based query planning with statistics integration
+5. **IndexOptimizer** - NOT implemented: `src/server/index_optimizer.zig` and the planner optimizers beside it were never compiled and were removed 2026-11-11 (SONNY-6298). Index use is rule-based: a pattern with a UNIQUE-indexed literal-equality property is seeked through the merge index (`zig build test-multi-pattern-index-seek`), otherwise the label is scanned; EXPLAIN shows fixed per-operator costs. `cbo.StatsRegistry` statistics collection and the predicate-aware `index_catalog.chooseIndexForPredicate` are tested by `zig build test-gap0867`, but no query path calls them. `GEODE_ENABLE_QUERY_OPTIMIZER` turns on a plan cache (`query_plan_cache.SharedQueryOptimizer`) whose hints are passed in `ExecutionContext.optimizer_hints` and read by no executor
 6. **ML Graph Embeddings** - EXPERIMENTAL Node2Vec (real p/q-biased walks, seeded, real loss reporting), simplified GraphSAGE aggregation, DeepWalk (see docs/ML_GRAPH_EMBEDDINGS.md, GAP-0879)
 7. **Real-time Analytics** - Streaming analytics with pattern detection and anomaly detection
-8. **Enhanced Transaction Isolation** - Advanced MVCC with SSI and phantom read prevention
+8. **Enhanced Transaction Isolation** - NOT implemented (see Phase 4 above)
 9. **Distributed Query Coordination** - NOT implemented: the federation / scatter-gather coordinator code was never wired into a build artifact and was removed 2026-11-11 (SONNY-6279). Cluster mode replicates writes through Raft within the documented slice; queries run on the receiving node
 10. **Materialized View Refresh** - Complete refresh strategies with dependency tracking
 11. **CLI Subprocess Elimination** - Unified binary architecture eliminating subprocess spawning
@@ -100,7 +100,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Core Components**:
 
 - **Parser/Lexer** (`src/gql/`): passes the 96/96 ISO conformance suite (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope, scoped to that suite — see [docs/GQL_COMPLIANCE.md](docs/GQL_COMPLIANCE.md))
-- **Query Planner** (`src/planner/`): Cost-based optimization with statistics
+- **Query Planner** (`src/planner/`): rule-based index use; EXPLAIN reports per-operator seed costs (`cost_explain.zig`, `cost_seed.zig`). No cost-based plan choice reaches execution (see item 5 above)
 - **Storage Engine** (`src/storage/`): MVCC, WAL, TDE with <1% overhead
 - **Index System** (`src/index/`): 6 index types including HNSW and R-tree. Full-text search is backed by the external **`fts-storage`** LSM library (see Full-Text Search below) via `src/storage/fts_storage_adapter.zig`; the `FullTextIndex` facade (`src/index/fulltext.zig`) delegates to it.
 - **Security** (`src/security/`): Enterprise authentication, audit, encryption, enhanced RLS
@@ -147,7 +147,7 @@ See [docs/TIMESERIES.md](docs/TIMESERIES.md) for the full reference.
 - **VectorF32**: Single-precision floating-point vectors with SIMD acceleration
 - **VectorI32**: Integer vectors for discrete data and categorical embeddings
 - **HNSW Index Support**: Production-ready with 6 distance metrics
-- **IndexOptimizer Integration**: Automatic cost-based selection with logarithmic scaling
+- **Index use**: `knn` / `vector_knn` read the registered vector index for the property when there is one, otherwise they scan; there is no cost-based selection
 - **Performance**: <50ns for 8D L2 distance, supports up to 65,535 dimensions
 
 ### **Advanced Types** (Complete)

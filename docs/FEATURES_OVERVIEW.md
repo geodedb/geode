@@ -10,7 +10,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 
 - ✅ **Phase 2**: Parser Extensions (Map literals, deep nesting)
 - ✅ **Phase 3**: Set Operations (UNION/INTERSECT/EXCEPT)
-- ✅ **Phase 4**: Transaction Isolation (Phantom read prevention, SSI)
+- ❌ **Phase 4**: Transaction Isolation — not implemented in the server (no isolation levels, SSI or phantom-read prevention; the code was never compiled and was removed 2026-11-11, SONNY-6298). See [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md)
 - ✅ **Phase 5**: Distributed Coordination (10,451 lines)
 - ✅ **Phase 6**: Materialized Views (3 refresh strategies; query rewrite is exact-match only, API level — GAP-0876)
 - ✅ **Phase 7**: Graph Algorithms (20-90% performance gains)
@@ -138,8 +138,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Query Optimization**
 
-- **Cost-Based Planner**: Statistics-driven query optimization
-- **IndexOptimizer**: Automatic index selection
+- **Planner**: rule-based index use (UNIQUE-indexed literal-equality seek through the merge index, otherwise a label scan); EXPLAIN shows fixed per-operator costs. The cost-based IndexOptimizer was never compiled and was removed 2026-11-11 (SONNY-6298)
 - **Distributed Queries**: not implemented; a query runs on the node that receives it (federation code removed 2026-11-11, SONNY-6279)
 - **Materialized Views**: Auto-refresh strategies; exact-match query rewrite (API level — not yet consulted by the executor; cost-based partial rewrite future, GAP-0876)
 

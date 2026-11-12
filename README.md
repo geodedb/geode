@@ -16,7 +16,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 ### **Standards Compliance**
 
 - **ISO/IEC 39075:2024 GQL Conformance Suite** - 96/96 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
-- **ACID Transactions** - Full MVCC with Serializable Snapshot Isolation (SSI)
+- **Transactions** - `START TRANSACTION` / `COMMIT` / `ROLLBACK` with undo-log rollback; writes are serialized per graph and each read sees one snapshot. There are no isolation levels and no SSI (see [docs/ENHANCED_TRANSACTION_ISOLATION.md](docs/ENHANCED_TRANSACTION_ISOLATION.md))
 - **Enterprise Security** - Enhanced RLS, TDE, audit logging, MFA support
 
 ### **Advanced Capabilities**
@@ -29,7 +29,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 ### **Performance & Scalability**
 
 - **13.18x I/O Performance** - Memory-mapped operations with optimization
-- **Cost-Based Query Planner** - Statistics-driven optimization
+- **Query Planner** - Rule-based index use; EXPLAIN shows per-operator cost estimates (no cost-based plan choice)
 - **Backup/Restore CLI** - `geode backup create` / `geode restore <file> --data-dir <dir>` (engine-backed, full graph data round-trip; the restore is offline, into a new or empty directory, and verified before it reports success). S3 backup target supported; restoring straight from an S3 URI is not (download the file first). GQL `BACKUP`/`RESTORE` *statements* are not implemented (use the CLI). Payload compression: `none` or `gzip` (`--compress`); see [Known Limitations](CLAUDE.md#known-limitations).
 - **Multi-Shard Support** - Up to 32 shards with automatic coordination
 
@@ -184,7 +184,7 @@ COMMIT;
 ### **Core Components**
 
 - **GQL Parser/Lexer** - ISO/IEC 39075:2024 syntax support; passes the 96/96 named conformance suite (parse-only scope) (see [GQL Compliance](docs/GQL_COMPLIANCE.md) for scope)
-- **Query Planner** - Cost-based optimization with real-time statistics integration
+- **Query Planner** - Rule-based index selection; EXPLAIN / PROFILE with per-operator cost estimates
 - **Storage Engine** - MVCC with WAL, TDE encryption, and memory-mapped I/O
 - **Index System** - 6 index types: B-tree, Hash, Full-text, Spatial, Vector (HNSW), Interval
 - **Transport Layer** - QUIC+TLS for secure, modern network communication
@@ -209,7 +209,6 @@ COMMIT;
 
 - **I/O Operations**: 13.18x improvement (5,754μs → 436μs)
 - **Vector Operations**: 8x SIMD speedup for vectors ≥8 dimensions
-- **Transaction Throughput**: SSI with minimal performance overhead
 - **Memory Usage**: <2% overhead for security features
 
 ## 🔐 Security Features
