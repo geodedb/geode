@@ -12805,6 +12805,15 @@ pub fn build(b: *std.Build) void {
     const sonny6274_step = b.step("test-sonny6274-fle-catalog-no-tmp", "Run SONNY-6274 regression (with no data directory the FLE catalog is in memory and never reads or writes /tmp/geode_fle_catalog.dat; with one it lives in the store's data directory, mode 0600, across a restart; a symbolic link at the catalog path is neither read nor written through)");
     sonny6274_step.dependOn(&run_sonny6274_tests.step);
 
+    const sonny6324_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6324_fle_catalog_fail_closed.zig"), .target = target, .optimize = optimize });
+    sonny6324_test_mod.addImport("geode", root_mod);
+    sonny6324_test_mod.link_libc = true; // setenv/unsetenv/chmod
+    const sonny6324_tests = b.addTest(.{ .root_module = sonny6324_test_mod });
+    const run_sonny6324_tests = b.addRunArtifact(sonny6324_tests);
+    shardDep(test_step, &run_sonny6324_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6324_step = b.step("test-sonny6324-fle-catalog-fail-closed", "Run SONNY-6324 regression (a failed FLE catalog save is an error: configureField and grants roll back, a revoke stays applied in memory and is reported; a catalog file that cannot be loaded is an error and never an empty catalog, and string writes and reads are refused until it is resolved; no leaks under allocation failure)");
+    sonny6324_step.dependOn(&run_sonny6324_tests.step);
+
     const sonny6302_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6302_edge_write_and_delete_errors.zig"), .target = target, .optimize = optimize });
     sonny6302_test_mod.addImport("geode", root_mod);
     sonny6302_test_mod.link_libc = true; // setenv/unsetenv
