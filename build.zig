@@ -9755,6 +9755,24 @@ pub fn build(b: *std.Build) void {
     const sonny2726_step = b.step("test-sonny2726-replicated-tenant", "Run SONNY-2726 regression (an in-process 3-node cluster through the gRPC handler: a tenant session's replicated node and edge creates carry its tenant and its MATCH returns them, another tenant's does not; a follower applies a tenant-enveloped entry under its tenant, idempotently, and an entry without the envelope as the default tenant)");
     sonny2726_step.dependOn(&run_sonny2726_tests.step);
 
+    // SONNY-3246: a cluster leader's MATCH ... SET updates only the rows the
+    // session's MATCH sees (RLS), as one node does.
+    const sonny3246_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3246_cluster_set_rls.zig"), .target = target, .optimize = optimize });
+    sonny3246_test_mod.link_libc = true;
+    sonny3246_test_mod.addImport("geode", root_mod);
+    sonny3246_test_mod.addImport("schema", schema_mod);
+    sonny3246_test_mod.addImport("protobuf", protobuf_mod);
+    sonny3246_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny3246_test_mod.addImport("logging", logging_mod);
+    sonny3246_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny3246_test_mod.addImport("rls", rls_mod);
+    sonny3246_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3246_tests = b.addTest(.{ .root_module = sonny3246_test_mod });
+    const run_sonny3246_tests = b.addRunArtifact(sonny3246_tests);
+    shardDep(test_step, &run_sonny3246_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3246_step = b.step("test-sonny3246-cluster-set-rls", "Run SONNY-3246 regression (an in-process 3-node cluster: a leader's MATCH ... SET under an RLS expression policy updates only the rows the session's MATCH sees, the same rows a single node updates; SET clause ordering and WHERE truthiness match the single node)");
+    sonny3246_step.dependOn(&run_sonny3246_tests.step);
+
     // SONNY-3348 (round 19): the undo record's budget (I2) and the round 18
     // review's minors m1-m7. gRPC in process.
     const sonny3348b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3348_round19_undo.zig"), .target = target, .optimize = optimize });
