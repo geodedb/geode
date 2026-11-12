@@ -78,12 +78,6 @@ This checklist provides step-by-step verification procedures for the Geode modul
 
 - [ ] Run module-specific tests
   ```bash
-  # Schema module tests
-  zig test src/schema/schema_manager.zig
-
-  # Transaction module tests
-  zig test src/transactions/transaction_manager.zig
-
   # Module testing framework tests
   zig test tests/module_test_framework.zig
   ```

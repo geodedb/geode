@@ -289,6 +289,18 @@
   (`tests/priority_implementations.zig`, `tests/test_canary_core.zig`,
   `tests/test_performance_integration.zig`) that called them are removed and
   the rest is kept.
+- **Uncompiled index snapshot writers, schema/transaction facades and the old
+  Raft shim (SONNY-6298).** `src/index/{rtree,patricia,domain_trie,jsonb_inverted}_persist.zig`
+  and `src/index/registry.zig` were never compiled (the domain-trie and JSONB
+  writers were exported from `src/lib.zig` but nothing referenced them;
+  compile-error probes in them never fired). The R-tree, Patricia, domain-trie
+  and JSONB indexes therefore have no on-disk snapshot, and
+  `docs/TDE_FILE_LEVEL_ENCRYPTION.md` no longer lists TDE-encrypted snapshot
+  files for them. `src/schema/schema_manager.zig`,
+  `src/transactions/{transaction_manager,two_phase_commit}.zig` (facades no
+  code imported) and `src/distributed/raft.zig` (a string-node-ID shim over
+  `raft_consensus.zig` whose only importer was removed in SONNY-6279) are
+  removed with the uncompiled tests that imported them.
 
 ---
 

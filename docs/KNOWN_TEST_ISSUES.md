@@ -149,8 +149,11 @@ the `std.Io.Dir`/`File` API; stale managed-`ArrayList` calls; the protobuf
    dependency gains union-as-submessage support (or `TwoPhaseOperation` is
    reshaped into a struct-with-oneof). Production never reaches the union-encode
    path: `distributed/txn_coordinator.TxnCoordinator` is held as a
-   `?*TxnCoordinator = null` field on raft_consensus and is never instantiated;
-   the live 2PC path is `src/transactions/two_phase_commit.zig`.
+   `?*TxnCoordinator = null` field on raft_consensus and is never instantiated.
+   No server code path runs a 2PC protocol: `src/distributed/twophase.zig` is
+   compiled only by its tests (`zig build test-gap0889`), and
+   `src/transactions/two_phase_commit.zig`, named here before, was never
+   compiled and was removed (SONNY-6298).
 
 With those two fixes, all four `zig build test` shards
 (`-Dtest-shard-total=4 -Dtest-shard-index=0..3`) COMPILE and pass under the

@@ -38,15 +38,19 @@ export GEODE_TDE_KEY="0123456789abcdef0123456789abcdef0123456789abcdef0123456789
 
 ### Index Persistence Files
 
-All specialized index structures are encrypted when persisted to disk:
+The R-tree, Patricia trie, domain trie and JSONB inverted indexes have no
+on-disk snapshot format: no compiled code writes or reads one, so there is no
+index file for TDE to encrypt. The snapshot writers that used to be listed
+here (`rtree_persist.zig`, `patricia_persist.zig`, `domain_trie_persist.zig`,
+`jsonb_inverted_persist.zig`) were never compiled into any executable or test
+and were removed in SONNY-6298.
 
-| Index Type         | File Extension | Magic Header | Source File                             |
-| ------------------ | -------------- | ------------ | --------------------------------------- |
-| R-tree (Spatial)   | `.gdrt`        | `GDRT`       | `src/index/rtree_persist.zig`           |
-| HNSW (Vector)      | `.gdhw`        | `GDHW`       | `src/index/hnsw_persist.zig`            |
-| Patricia Trie (IP) | `.gdxp`        | `GDXP`       | `src/index/patricia_persist.zig`        |
-| Domain Trie        | `.gddn`        | `GDDN`       | `src/index/domain_trie_persist.zig`     |
-| JSONB Inverted     | `.gdjb`        | `GDJB`       | `src/index/jsonb_inverted_persist.zig`  |
+| Index Type    | File Extension | Magic Header | Source File                  |
+| ------------- | -------------- | ------------ | ---------------------------- |
+| HNSW (Vector) | `.gdhw`        | `GDHW`       | `src/index/hnsw_persist.zig` |
+
+`hnsw_persist.zig` is compiled by the `fuzz/targets/hnsw_snapshot_fuzz.zig`
+fuzz target; no server code path calls it.
 
 ### Schema Catalogs
 
@@ -163,11 +167,7 @@ All TDE-protected files include CANARY markers for requirement traceability:
 
 | File                         | Aspect        |
 | ---------------------------- | ------------- |
-| `rtree_persist.zig`          | RTreeIndex    |
 | `hnsw_persist.zig`           | HNSWIndex     |
-| `patricia_persist.zig`       | PatriciaTrie  |
-| `domain_trie_persist.zig`    | DomainTrie    |
-| `jsonb_inverted_persist.zig` | JSONBIndex    |
 | `raft_persistent.zig`        | RaftState     |
 | `catalog.zig`                | SchemaCatalog |
 | `fle_catalog.zig`            | FLECatalog    |
@@ -184,12 +184,12 @@ Each persistence module includes inline tests that verify:
 
 ### Integration Tests
 
-The geodetestlab spec `tde_filelevel_encryption.yml` verifies:
-
-- All index types encrypt correctly
-- Raft state persistence with TDE
-- Schema catalog encryption
-- CANARY marker presence
+The geodetestlab spec `tde_filelevel_encryption.yml` does not inspect any
+file on disk. Every case (`tde-schema-catalog-encryption`,
+`tde-rtree-index-encryption` and the others) creates a node whose properties
+describe the file (name, extension, `encrypted: true`) and asserts that the
+result contains that text; the cases pass whether or not anything is
+encrypted.
 
 Run tests:
 

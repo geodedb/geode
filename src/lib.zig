@@ -326,9 +326,7 @@ pub const index = struct {
     pub const hnsw = @import("hnsw_lib");
     pub const interval_tree = @import("index/interval_tree.zig");
     pub const jsonb_inverted = @import("index/jsonb_inverted.zig");
-    pub const jsonb_inverted_persist = @import("index/jsonb_inverted_persist.zig");
     pub const domain_trie = @import("index/domain_trie.zig");
-    pub const domain_trie_persist = @import("index/domain_trie_persist.zig");
     pub const fulltext = @import("index/fulltext.zig");
     /// The fts-storage adapter that backs the `fulltext` facade. Re-exported so
     /// callers/tests can construct a `FtsStorageAdapter` + named index and wrap
