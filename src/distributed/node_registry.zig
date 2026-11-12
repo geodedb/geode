@@ -1,7 +1,8 @@
 // CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD; OWNER=distributed; UPDATED=2026-06-11
 
 //! Canonical NodeRegistry — hashmap-based node tracking for the distributed
-//! query transport. Extracted from query_transport.zig (GAP-0889) so the
+//! query transport. Extracted from query_transport.zig (GAP-0889; that
+//! file was never compiled and was removed in SONNY-6279) so the
 //! standalone unit tests (test_query_transport_node_registry.zig) exercise
 //! the REAL type instead of a drift-prone inline copy. stdlib-only: no QUIC
 //! or protobuf dependencies.

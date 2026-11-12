@@ -47,7 +47,8 @@ const ENHANCED_RLS_CACHE_DEFAULT_TTL_MS = 300_000; // Cache TTL: 300 seconds (5 
 
 // Enhanced Row-Level Security Implementation with Real Functionality
 // This module provides production-ready RLS capabilities with comprehensive
-// policy evaluation, query rewriting, and performance optimization
+// policy evaluation and performance optimization. (The string-splicing query
+// rewriter, rewriteQueryEnhanced, had no caller and was removed in SONNY-6279.)
 
 pub const EnhancedRLSEngine = struct {
     allocator: Allocator,
@@ -132,33 +133,6 @@ pub const EnhancedRLSEngine = struct {
         try self.statistics_collector.recordCacheMiss(policy.id);
 
         return result;
-    }
-
-    // Enhanced query rewriting with optimization
-    pub fn rewriteQueryEnhanced(
-        self: *Self,
-        query: []const u8,
-        context: *auth.SecurityContext,
-        graph: []const u8,
-    ) ![]const u8 {
-        // Collect applicable policies
-        const policies = try self.collectApplicablePolicies(graph, context);
-        defer policies.deinit();
-
-        if (policies.items.len == 0) {
-            return try self.allocator.dupe(u8, query);
-        }
-
-        // Optimize policy combinations
-        const optimized_policies = try self.policy_optimizer.optimizePolicies(policies.items);
-        defer optimized_policies.deinit();
-
-        // Generate optimized security predicates
-        const security_predicate = try self.generateSecurityPredicate(optimized_policies.items, context);
-        defer self.allocator.free(security_predicate);
-
-        // Rewrite the query
-        return try self.combineQueryWithPredicate(query, security_predicate);
     }
 
     // Real temporal constraint evaluation
@@ -269,85 +243,6 @@ pub const EnhancedRLSEngine = struct {
                 return @rem(years_since_epoch, rule.interval) == 0;
             },
         }
-    }
-
-    // Collect applicable policies with optimization
-    fn collectApplicablePolicies(
-        self: *Self,
-        graph: []const u8,
-        context: *auth.SecurityContext,
-    ) !std.ArrayList(rls.RLSEngine.Policy) {
-        return try self.base_engine.findApplicablePolicies(graph, context.user.id, context.roles);
-    }
-
-    // Generate optimized security predicate
-    fn generateSecurityPredicate(
-        self: *Self,
-        policies: []const rls.RLSEngine.Policy,
-        context: *auth.SecurityContext,
-    ) ![]const u8 {
-        _ = context;
-
-        var result = std.ArrayList(u8).init(self.allocator);
-        errdefer result.deinit();
-
-        try result.appendSlice("(");
-
-        var first = true;
-        for (policies) |policy| {
-            if (!policy.enabled) continue;
-
-            if (policy.using_expr) |expr| {
-                if (!first) {
-                    if (policy.permissive) {
-                        try result.appendSlice(" OR ");
-                    } else {
-                        try result.appendSlice(" AND ");
-                    }
-                }
-
-                try result.appendSlice("(");
-                try result.appendSlice(expr.raw);
-                try result.appendSlice(")");
-
-                first = false;
-            }
-        }
-
-        if (first) {
-            // No policies found, return TRUE
-            try result.appendSlice("TRUE");
-        }
-
-        try result.appendSlice(")");
-
-        return try result.toOwnedSlice();
-    }
-
-    // Combine query with security predicate
-    fn combineQueryWithPredicate(
-        self: *Self,
-        query: []const u8,
-        predicate: []const u8,
-    ) ![]const u8 {
-        // Simple implementation - in production this would use proper query parsing
-        var result = std.ArrayList(u8).init(self.allocator);
-        errdefer result.deinit();
-
-        // Check if query already has WHERE clause
-        const has_where = std.mem.indexOf(u8, query, "WHERE") != null;
-
-        try result.appendSlice(query);
-
-        if (has_where) {
-            try result.appendSlice(" AND ");
-        } else {
-            try result.appendSlice(" WHERE ");
-        }
-
-        try result.appendSlice(predicate);
-
-        return try result.toOwnedSlice();
     }
 };
 

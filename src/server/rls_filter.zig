@@ -522,13 +522,14 @@ fn valueContainsDeniedLabelAt(denied_labels: *const std.StringHashMap(void), val
 
 /// Apply label-based RLS filtering to any result set that exposes `.rows` containing
 /// BindingRow-compatible elements (each having `.cols: []const Value`).
-/// Designed for federation QueryResults but works generically.
+/// Written for federation QueryResults (src/distributed/federation.zig, never
+/// compiled and removed in SONNY-6279); it has no product caller now.
 /// Returns the number of rows removed. The rows kept keep their order.
 /// SONNY-2729: when it cannot run, it returns
 /// `error.RowSecurityFilterUnavailable` and leaves the rows as they are: they
 /// are the caller's to free (this function cannot free a caller's row type),
-/// and the caller must withhold them all (federation.zig frees the merged
-/// result and returns the error).
+/// and the caller must withhold them all (free the result and return the
+/// error).
 pub fn applyRLSToFederatedResults(
     allocator: std.mem.Allocator,
     results: anytype,

@@ -257,6 +257,24 @@
   the part before it. `MATCH (n) FOR x IN n.list RETURN ...` and nested
   `FOR x IN a FOR y IN x RETURN ...`, which were syntax errors, are accepted.
 
+### Removed
+
+- **Federated / scatter-gather query coordination code (SONNY-6279).**
+  `src/distributed/federation.zig`, `federation_merge.zig`,
+  `merge_strategies.zig`, `query_coordinator.zig`,
+  `enhanced_query_coordinator.zig`, `query_transport.zig`, `result_utils.zig`
+  and `mod.zig` were reachable from no executable or test in `build.zig`, so
+  they were never compiled and nothing ran them. They are removed, with the
+  tests and benchmarks that only exercised them. The docs that described
+  distributed query coordination, federation-aware optimization and load
+  balancing as working now say it is not implemented: a query runs on the
+  node that receives it. The cluster path (Raft, `ClusterCoordinator`,
+  replicated writes within the documented slice, fail-closed unreplicated
+  surfaces) is unchanged.
+- **`EnhancedRLSEngine.rewriteQueryEnhanced` (SONNY-6279).** It had no
+  caller and spliced policy text into the query string; it is removed with
+  its three private helpers.
+
 ---
 
 ## [v0.8.23] - October 9, 2026

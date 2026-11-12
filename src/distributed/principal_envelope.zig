@@ -33,8 +33,9 @@
 //   u64     policy_version
 //   u8      source_tag_ordinal  (PrincipalSource enum ordinal)
 //
-// Phase 7 note: when the wire-level shard RPC (query_transport.zig /
-// enhanced_query_transport.zig) is extended to carry opaque metadata blobs,
+// Phase 7 note: when the wire-level shard RPC (enhanced_query_transport.zig;
+// query_transport.zig was never compiled and was removed in SONNY-6279) is
+// extended to carry opaque metadata blobs,
 // the coordinator should call serialize() and attach the result to the
 // outbound NodeQuery; the worker should call deserialize() and construct its
 // ExecutionContext. That integration is deferred to Phase 7 because the

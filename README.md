@@ -24,7 +24,7 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 - **Vector Search** - HNSW indexing with 6 distance metrics and SIMD acceleration
 - **Machine Learning** - Node2Vec, GraphSAGE, DeepWalk graph embeddings
 - **Real-time Analytics** - Streaming pattern detection and anomaly analysis
-- **Distributed Queries** - Federation-aware optimization with load balancing
+- **Cluster mode** - Raft-replicated writes within a documented slice; unreplicated write surfaces fail closed. Federated / scatter-gather query coordination is not implemented
 
 ### **Performance & Scalability**
 

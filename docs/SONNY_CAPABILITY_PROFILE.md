@@ -181,7 +181,7 @@ retrieval remains disabled while any of these gates is false.
 
 `explain`, `profile`, and `explain_policy` are required and currently true.
 They are node-local surfaces; distributed execution does not imply distributed
-EXPLAIN/PROFILE support (`docs/DISTRIBUTED_QUERY_COORDINATION.md:7`).
+EXPLAIN/PROFILE support (`docs/DISTRIBUTED_QUERY_COORDINATION.md:10`).
 
 ### Metric and dimension pinning
 

@@ -172,8 +172,8 @@ test "SONNY-2729: applyRLSToFederatedResults errs, and passes no row, when it ca
         var failing = FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
         const outcome = federationFilter(failing.allocator(), &results, &engine);
         if (failing.has_induced_failure) {
-            // The caller withholds the rows (federation.zig frees the merged
-            // result and fails the query); the filter must say it did not run.
+            // The caller must withhold the rows (free the result and fail the
+            // query); the filter must say it did not run.
             try testing.expectError(error.RowSecurityFilterUnavailable, outcome);
             continue;
         }
@@ -216,10 +216,6 @@ test "SONNY-2729: both handlers answer a post-filter that cannot run with its er
     const grpc = try readSource(testing.allocator, "src/transport/grpc_server.zig");
     defer testing.allocator.free(grpc);
     try expectEveryCallAnswers(grpc, "catch |err| return postFilterErrorResponse(allocator, err);", 5);
-
-    // The federation filter, and its callback, fail the query too.
-    const fed = try readSource(testing.allocator, "src/distributed/federation.zig");
-    defer testing.allocator.free(fed);
-    try testing.expect(std.mem.indexOf(u8, fed, "break :blk merged_results.rows") == null);
-    try expectEveryCallAnswers(fed, "catch |err| {", 1);
+    // The federation filter's caller, src/distributed/federation.zig, was never
+    // compiled and was removed in SONNY-6279; nothing is left to check there.
 }

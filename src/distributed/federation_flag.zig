@@ -3,7 +3,8 @@ const std = @import("std");
 // Provides a single global flag toggled by federation merge logic when an ordering
 // metadata mismatch (key count, direction, null ordering) forces a fallback strategy.
 // The server imports this lightweight module only (decoupled from full federation implementation)
-// to avoid making federation.zig a second root module and triggering Zig duplicate root errors.
+// (that federation implementation, federation.zig / federation_merge.zig, was never compiled
+// and was removed in SONNY-6279; nothing in the tree sets this flag now).
 //
 // Semantics: When a mismatch occurs the federation engine sets the atomic flag to true.
 // The protocol flag assembly calls consumeMismatchFlag(), which returns true exactly once

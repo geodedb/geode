@@ -140,7 +140,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 - **Cost-Based Planner**: Statistics-driven query optimization
 - **IndexOptimizer**: Automatic index selection
-- **Distributed Queries**: Federation-aware optimization
+- **Distributed Queries**: not implemented; a query runs on the node that receives it (federation code removed 2026-11-11, SONNY-6279)
 - **Materialized Views**: Auto-refresh strategies; exact-match query rewrite (API level — not yet consulted by the executor; cost-based partial rewrite future, GAP-0876)
 
 ### **Storage Engine**
@@ -152,9 +152,8 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Distributed Architecture**
 
-- **Multi-Shard Support**: Up to 32 shards with load balancing
-- **Query Coordination**: Cross-shard join optimization
-- **Fault Tolerance**: Automatic failover and recovery
+- **Raft Cluster Mode**: Raft consensus with leader election and failover; writes replicated within the documented slice, unreplicated write surfaces fail closed (`GEODE_CLUSTER_TOKEN`)
+- **Query Coordination**: not implemented; no cross-shard or federated query execution (see [DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md))
 
 ## 🌐 Integration & Connectivity
 
