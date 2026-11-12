@@ -1632,6 +1632,16 @@
 
 ### Fixed
 
+- **`geode backup create --server` bounds the whole transfer by `--timeout`
+  (SONNY-6430 item 1, partial).** Each 64 KiB chunk of a remote backup had
+  a fixed 30 s wait of its own, whatever `--timeout` said, so a backup that
+  stalled failed after 30 s and one that only progressed slowly had no
+  overall bound. `--timeout` (default 300 s) now bounds the server's answer
+  and every byte of the file, and a timeout reports how many of the
+  announced bytes arrived. The stall itself is not fixed: a backup of about
+  24 MB still stops after 11-14 MB, in the vendored QUIC library's ACK
+  processing (`docs/KNOWN_TEST_ISSUES.md`,
+  `test-sonny6430-remote-backup-large`, intentionally red).
 - **Docs no longer present S3 / DigitalOcean Spaces as a backup target or
   the removed TDE-KMS integration as current code (SONNY-6422 item 9).**
   No command reaches object storage (SONNY-6290; real support is story

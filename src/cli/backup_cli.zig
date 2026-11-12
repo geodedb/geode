@@ -13,6 +13,16 @@ fn compat_milliTimestamp() i64 {
     }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
+/// Monotonic milliseconds, for deadlines.
+fn monoMs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        if (std.os.linux.clock_gettime(.MONOTONIC, &ts) != 0) return 0;
+    } else {
+        if (std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts) != 0) return 0;
+    }
+    return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / 1_000_000;
+}
 fn compat_microTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
@@ -299,7 +309,8 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
                 "  --local                Back up a local data directory instead of a server\n" ++
                 "                         (no server is contacted)\n" ++
                 "  --data-dir <path>      Data directory for --local (default: $GEODE_DATA_DIR)\n" ++
-                "  --timeout <seconds>    How long to wait for the server's answer (default: 300)\n" ++
+                "  --timeout <seconds>    How long the whole remote backup may take: the server's\n" ++
+                "                         answer and every byte of the file (default: 300)\n" ++
                 "  --insecure-tls-skip-verify  Skip TLS certificate verification\n" ++
                 "  --insecure             (deprecated) Alias for --insecure-tls-skip-verify\n" ++
                 "  --ca-cert <path>       CA certificate path for server verification\n" ++
@@ -2165,8 +2176,12 @@ fn executeRemoteBackup(
         std.debug.print("Error: Failed to send BACKUP request: {}\n", .{err});
         return err;
     };
+    // SONNY-6430: --timeout bounds the whole backup, the server's answer and
+    // every byte of the file. Each 64 KiB chunk had a fixed 30 s of its own,
+    // whatever --timeout said.
+    const deadline_ms = monoMs() + @as(u64, timeout_s) * 1000;
 
-    const backup_resp_msg = readProtoMessage(arena.allocator(), &client, @as(u64, timeout_s) * 1000) catch |err| {
+    const backup_resp_msg = readProtoMessage(arena.allocator(), &client, @max(deadline_ms -| monoMs(), 1)) catch |err| {
         std.debug.print("Error: Failed to receive backup response: {}\n", .{err});
         return err;
     };
@@ -2229,8 +2244,13 @@ fn executeRemoteBackup(
         const remaining = backup_size - bytes_received;
         const chunk_size = @min(remaining, chunk_buf.len);
 
-        const bytes_read = client.receiveRawBytes(chunk_buf[0..chunk_size], 30000) catch |err| {
-            std.debug.print("Error: Failed to receive backup data: {}\n", .{err});
+        const left_ms = deadline_ms -| monoMs();
+        const bytes_read = (if (left_ms == 0) error.ReceiveTimeout else client.receiveRawBytes(chunk_buf[0..chunk_size], left_ms)) catch |err| {
+            if (err == error.ReceiveTimeout) {
+                std.debug.print("Error: the backup did not arrive within --timeout {d} s ({d} of {d} bytes received); raise --timeout for a large store\n", .{ timeout_s, bytes_received, backup_size });
+            } else {
+                std.debug.print("Error: Failed to receive backup data: {}\n", .{err});
+            }
             return err;
         };
 
