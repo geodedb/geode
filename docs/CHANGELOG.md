@@ -2598,6 +2598,12 @@
 
 ### Removed
 
+- **The uninstalled mutation-notify callback in `src/graph_store.zig`
+  (SONNY-6430 item 3).** `setMutationNotify` / `setMutationNotifyInhibit`
+  had no caller since the WAL wrapper was removed (SONNY-6422), so the 15
+  `notifyMutation` calls in the store's write paths never did anything; they,
+  the callback type, `MutationOp` and the IMPL marker `REQ-PERF-WAL-002` are
+  gone, with the graph-name copy `deleteEdge` made only for the notification.
 - **The logical CDC `WriteAheadLog` wrapper in `src/wal.zig`, an unbuilt
   duplicate test, and false TESTED markers (SONNY-6422 items 3-5).** The
   wrapper (record types and serialization, the global instance, the
