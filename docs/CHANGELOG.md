@@ -420,6 +420,18 @@
   `test_gap_0193_impl_verification.zig` the CDC, metrics and CLI cases
   would now fail (the geode module exports no `cdc`, `metrics`/`telemetry`
   or `cli`). The mock-only `tests/e2e_cbo_small_n.zig` is removed.
+- **CANARY markers that cited a never-compiled test (SONNY-6298).** 45
+  markers cited `TEST=tests/test_tde_kms_integration.zig`, which was in no
+  build step and was removed. 42 are now `STATUS=IMPL`: the 34 TDE
+  procedure handlers in `src/execution/storage_dispatch.zig` and 8 FLE
+  markers (`ast.zig`, `parser.zig`, `graph_store.zig`, `blind_index.zig`,
+  `schema/annotations.zig`, `fle_hooks.zig`, `admin/fle_commands.zig`,
+  `cli/fle_cli.zig`); no compiled test drives them. Three point at compiled
+  aggregate tests that exercise them: `fle_catalog.zig` →
+  `test-fle-online-grant`, `fle_integration.zig` → `test-gap0852`,
+  `keys/types.zig` → `test-fle-lifecycle`. `docs/status.csv`: TESTED
+  5,272 → 5,230, IMPL 216 → 258 of 5,940, above GAP-0514's ≤250 target;
+  `CLAUDE.md`, `README.md` and the docs that state the counts say so.
 
 ---
 
