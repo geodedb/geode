@@ -268,6 +268,18 @@
   chain, UNION, OPTIONAL MATCH, write RETURN, planned and legacy reads) was
   already applying `$p` once; the batch test pins them. Regression:
   `zig build test-sonny2672-read-semantics-batch`.
+- **ORDER BY by a variable the RETURN does not project, and ORDER BY key
+  errors (SONNY-2811):** `MATCH (n) RETURN n.k AS k ORDER BY n.x` came back
+  unsorted on every session (the key was evaluated against the projected
+  row, where `n` is unbound, and was NULL), and `RETURN n.k AS x ORDER BY
+  n.x` sorted by the column `x`. Such a key is now computed with the
+  projection as a hidden column, sorted on, and dropped after the window
+  (a RETURN that is DISTINCT or aggregates is unchanged). **Behaviour
+  change:** an error evaluating an ORDER BY key (for example 22003 integer
+  overflow in `ORDER BY n.k + 9223372036854775807`) now fails the statement;
+  it was sorted as NULL. Not covered: a WITH's ORDER BY key error on some
+  paths (`MATCH (z) WITH z ORDER BY <overflow> RETURN ...` still answers).
+  Regression: `zig build test-sonny2672-read-semantics-batch`.
 
 ---
 

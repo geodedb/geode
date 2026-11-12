@@ -204,6 +204,9 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
         order: ast.OrderBy,
         columns: []const []const u8,
         return_items: ?[]const ast.ReturnItem,
+        /// SONNY-2811: the first error evaluating a key. The comparator
+        /// cannot return it; the sort is failed with it afterwards.
+        key_error: *?anyerror,
 
         fn compare(ctx: @This(), row_a: []Value, row_b: []Value) bool {
             for (ctx.order.keys) |key| {
@@ -233,6 +236,16 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
                 }
             }
             return false; // Equal by all keys
+        }
+
+        /// SONNY-2811: a key that fails to evaluate (a 22003 overflow, a
+        /// type error) fails the statement; it was sorted as NULL, so the
+        /// error was hidden and the rows came back in no order.
+        fn evalKey(ctx: @This(), expr: ast.Expr, env: Env) Value {
+            return evalOrderByExpr(ctx.allocator, expr, env) catch |err| {
+                if (ctx.key_error.* == null) ctx.key_error.* = err;
+                return .{ .Null = {} };
+            };
         }
 
         fn getValueForKey(ctx: @This(), key: ast.OrderBy.OrderKey, row: []Value) Value {
@@ -288,7 +301,7 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
                     .values = row,
                     .allocator = ctx.allocator,
                 };
-                return evalOrderByExpr(ctx.allocator, key.expr, env) catch .{ .Null = {} };
+                return ctx.evalKey(key.expr, env);
             } else {
                 if (ctx.return_items) |items| {
                     if (findColumnIndexByExpression(key.expr, items)) |idx| {
@@ -300,19 +313,22 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
                     .values = row,
                     .allocator = ctx.allocator,
                 };
-                return evalOrderByExpr(ctx.allocator, key.expr, env) catch .{ .Null = {} };
+                return ctx.evalKey(key.expr, env);
             }
         }
     };
 
+    var key_error: ?anyerror = null;
     const ctx = SortContext{
         .allocator = allocator,
         .order = order,
         .columns = result.columns,
         .return_items = return_items,
+        .key_error = &key_error,
     };
 
     std.sort.heap([]Value, result.rows, ctx, SortContext.compare);
+    if (key_error) |err| return err;
 }
 
 // CANARY: REQ=REQ-GQL-ORDERBY-WRAPPER-001; FEATURE="OrderBySortRowsWrapper"; ASPECT=BackwardsCompatibility; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28

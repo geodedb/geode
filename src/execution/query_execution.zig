@@ -776,7 +776,11 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         final_query = next.*;
     }
     if (final_query.order_by) |order| {
-        try sortRows(allocator, &result, order);
+        sortRows(allocator, &result, order) catch |err| {
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            result.deinit(allocator);
+            return err;
+        };
     }
 
     // CANARY: REQ=REQ-GQL-CHAIN-LIMIT-001; FEATURE="ChainLimit"; ASPECT=FinalPagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2026-10-10
@@ -2386,7 +2390,11 @@ pub fn executeLegacyQueryWithResolvedParams(
 
             // Apply ORDER BY if present
             if (q.order_by) |order| {
-                try sortRows(allocator, &result, order);
+                sortRows(allocator, &result, order) catch |err| {
+                    // SONNY-2811: a key that fails to evaluate fails the sort.
+                    result.deinit(allocator);
+                    return err;
+                };
             }
 
             return result;
@@ -2484,7 +2492,11 @@ pub fn executeLegacyQueryWithResolvedParams(
 
             // Apply ORDER BY if present
             if (q.order_by) |order| {
-                try sortRows(allocator, &result, order);
+                sortRows(allocator, &result, order) catch |err| {
+                    // SONNY-2811: a key that fails to evaluate fails the sort.
+                    result.deinit(allocator);
+                    return err;
+                };
             }
 
             // Apply LIMIT if present (supports both literal and $param)
@@ -2504,7 +2516,11 @@ pub fn executeLegacyQueryWithResolvedParams(
 
             // Apply ORDER BY if present
             if (q.order_by) |order| {
-                try sortRows(allocator, &result, order);
+                sortRows(allocator, &result, order) catch |err| {
+                    // SONNY-2811: a key that fails to evaluate fails the sort.
+                    result.deinit(allocator);
+                    return err;
+                };
             }
 
             return result;

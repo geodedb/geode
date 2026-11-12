@@ -70,6 +70,7 @@ const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 // through geode.execution.fts_index_ops.
 pub const fts_index_ops = @import("execution/fts_index_ops.zig");
 const query_execution = @import("execution/query_execution.zig");
+const order_key_columns = @import("execution/order_key_columns.zig");
 // SONNY-3139: the pre-dispatch write-shape validator and its executor table.
 pub const write_shape = @import("execution/write_shape.zig");
 pub const write_walk = @import("execution/write_walk.zig");
@@ -1808,10 +1809,18 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // SONNY-3248: the window is resolved (and a bad value refused)
             // before the statement runs, so a refused one writes nothing.
             const window = try queryWindow(q, ctx);
+            // SONNY-2811: an ORDER BY key reading a variable the RETURN does
+            // not project is computed by a hidden RETURN item, dropped after
+            // the sort and the window (`order_key_columns`).
+            var hidden = try order_key_columns.hide(allocator, q);
+            defer if (hidden) |*h| h.deinit();
+            if (hidden) |h| q = h.query;
             var result = try executeQueryWithContext(allocator, q, ctx);
+            errdefer result.deinit(allocator);
 
             try applyMatchGuard(allocator, &result, context, q.match.chains.len > 0);
             try applyQueryWindow(allocator, &result, window);
+            if (hidden) |h| try order_key_columns.drop(allocator, &result, h.count);
 
             rows_returned = @intCast(result.rows.len);
             return result;

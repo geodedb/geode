@@ -4493,7 +4493,11 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
 
         // Apply ORDER BY if present
         if (q.order_by) |order| {
-            try sortRows(allocator, &result, order);
+            sortRows(allocator, &result, order) catch |err| {
+                // SONNY-2811: a key that fails to evaluate fails the sort.
+                result.deinit(allocator);
+                return err;
+            };
         }
 
         // Apply OFFSET if present
@@ -5238,7 +5242,11 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     };
 
     if (q.order_by) |order| {
-        try sortRows(allocator, &result, order);
+        sortRows(allocator, &result, order) catch |err| {
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            result.deinit(allocator);
+            return err;
+        };
     }
 
     if (q.ret.distinct) {
@@ -7092,7 +7100,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
     // Apply ORDER BY AFTER collecting relationship match results to sort final projected results
 
     if (q.order_by) |order| {
-        try sortRows(allocator, &result, order);
+        sortRows(allocator, &result, order) catch |err| {
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            result.deinit(allocator);
+            return err;
+        };
     }
 
     if (q.ret.distinct) {
@@ -8646,7 +8658,11 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     // D04 Fix: Apply ORDER BY for optional match results - was missing, causing unsorted output
     // D05 Fix: Use sortRowsEx with RETURN items to enable expression matching for aliased columns
     if (q.order_by) |order| {
-        try sortRowsEx(allocator, &final_result, order, q.ret.items);
+        sortRowsEx(allocator, &final_result, order, q.ret.items) catch |err| {
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            final_result.deinit(allocator);
+            return err;
+        };
     }
 
     // CANARY: REQ=REQ-GQL-OFFSET-OPTIONAL-001; FEATURE="OffsetOptionalMatch"; ASPECT=Pagination; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
@@ -11396,7 +11412,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 if (q.order_by) |order| {
-                    try sortRows(allocator, &result, order);
+                    sortRows(allocator, &result, order) catch |err| {
+                        // SONNY-2811: a key that fails to evaluate fails the sort.
+                        result.deinit(allocator);
+                        return err;
+                    };
                 }
 
                 // Apply DISTINCT if requested
@@ -11615,7 +11635,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             };
 
             if (q.order_by) |order| {
-                try sortRows(allocator, &result, order);
+                sortRows(allocator, &result, order) catch |err| {
+                    // SONNY-2811: a key that fails to evaluate fails the sort.
+                    result.deinit(allocator);
+                    return err;
+                };
             }
 
             // Apply DISTINCT deduplication if requested
@@ -12528,7 +12552,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-002; FEATURE="OrderByPostWithAgg"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
             // Apply ORDER BY AFTER WITH clause transformation to sort final projected results (aggregation path)
             if (q.order_by) |order| {
-                try sortRows(allocator, &result, order);
+                sortRows(allocator, &result, order) catch |err| {
+                    // SONNY-2811: a key that fails to evaluate fails the sort.
+                    result.deinit(allocator);
+                    return err;
+                };
             }
 
             // Apply DISTINCT deduplication if requested
@@ -13249,7 +13277,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
         }
 
-        try applyFinalOrderAndDistinct(allocator, &result, q.order_by, q.ret.items, q.ret.distinct);
+        applyFinalOrderAndDistinct(allocator, &result, q.order_by, q.ret.items, q.ret.distinct) catch |err| {
+            // SONNY-2811: a key that fails to evaluate fails the sort.
+            result.deinit(allocator);
+            return err;
+        };
 
         return result;
     }
