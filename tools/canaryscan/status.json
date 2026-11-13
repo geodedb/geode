@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:48:57.656163876Z",
+  "generated_at": "2026-11-13T00:54:45.303923453Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84518,6 +84518,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6442-SERVE-UNKNOWN-OPTION",
+      "features": [
+        {
+          "feature": "ServerCli",
+          "aspect": "UnknownOptionRefused",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6442_serve_unknown_options.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_serve_unknown_options.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92205,7 +92224,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4795
+      "TESTED": 4796
     },
     "by_aspect": {
       "2PC": 3,
@@ -96109,6 +96128,7 @@
       "UnknownFunctionEscapes": 1,
       "UnknownLabel": 1,
       "UnknownMeansEncrypted": 1,
+      "UnknownOptionRefused": 1,
       "UnknownPropertyDiagnostic": 1,
       "UnloadableRegistryRefuses": 1,
       "UnrelatedIndexMustNotShadowScan": 2,
