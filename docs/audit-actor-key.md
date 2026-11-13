@@ -124,11 +124,10 @@ A regression test was added in `tests/test_audit_actor_key.zig` (CANARY
 Run with: `zig build test-audit-actor-key`.
 
 The auxiliary platform formatters in `src/security/audit_formatter.zig`
-(`formatJson`, `formatSyslog`, `formatWindowsEventLog`) and the parallel
-`src/security/audit_sink.zig` are transitively imported but their
-production entry points (`audit.AuditLogger.writeToWindowsEventLog`,
-`audit.AuditLogger.writeToSyslog` at `src/security/audit.zig:807-817`)
-return 0 — they are stubs. The real audit path is the canonical writer.
+(`formatJson`, `formatSyslog`, `formatWindowsEventLog`) are exported from
+`src/lib.zig` (`security.audit_formatter`) but no audit write path calls
+them; the parallel `audit_sink.zig` was removed as dead code (SONNY-6463).
+The real audit path is the canonical writer.
 
 This bug therefore needs to be filed against the appropriate Go server
 repository; the Zig server is not affected and a regression test prevents
