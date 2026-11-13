@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:47:58.031941917Z",
+  "generated_at": "2026-11-13T10:53:51.545060869Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79717,6 +79717,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6265-END-NODE-PROPERTY-MAP",
+      "features": [
+        {
+          "feature": "PatternMatching",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6265_end_node_property_map.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6265_end_node_property_map.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6268-EDGE-CREATE-ATOMIC",
       "features": [
         {
@@ -93534,7 +93553,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4876
+      "TESTED": 4877
     },
     "by_aspect": {
       "2PC": 3,
@@ -96662,7 +96681,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 302,
+      "Regression": 303,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

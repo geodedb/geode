@@ -475,12 +475,12 @@ const unbound_relationship_cases = [_]Case{
     .{ .q = "RETURN COUNT { (a:A)-[:S]-(b) } AS c", .oracle = "MATCH (a:A)-[:S]-(b) RETURN count(*) AS c", .walk = .{ .dir = .both, .rel = "S", .start_label = "A" } },
     .{ .q = "RETURN COUNT { (a)-[:R]-(b:A) } AS c", .oracle = "MATCH (a)-[:R]-(b:A) RETURN count(*) AS c", .walk = .{ .dir = .both, .rel = "R", .end_label = "A" } },
     // A property map on the relationship, and on the end node. MATCH is
-    // wrong for two: the persisted planned read answers 0 for an untyped
-    // relationship with a property map, and the legacy executor ignores the
-    // end node's property map behind an unlabelled start.
+    // wrong for one: the persisted planned read answers 0 for an untyped
+    // relationship with a property map. (The legacy executor ignored the end
+    // node's property map behind an unlabelled start: SONNY-6265, fixed.)
     .{ .q = "RETURN COUNT { (a)-[r:R {w: 1}]->(b) } AS c", .oracle = "MATCH (a)-[r:R {w: 1}]->(b) RETURN count(*) AS c", .walk = .{ .dir = .out, .rel = "R", .w = 1 } },
     .{ .q = "RETURN COUNT { (a)<-[{w: 2}]-(b) } AS c", .oracle = "MATCH (a)<-[{w: 2}]-(b) RETURN count(*) AS c", .walk = .{ .dir = .in, .w = 2 }, .match_wrong = true },
-    .{ .q = "RETURN COUNT { (a)<-[:R]-(b:V {k: 4}) } AS c", .oracle = "MATCH (a)<-[:R]-(b:V {k: 4}) RETURN count(*) AS c", .walk = .{ .dir = .in, .rel = "R", .end_k = 4 }, .match_wrong = true },
+    .{ .q = "RETURN COUNT { (a)<-[:R]-(b:V {k: 4}) } AS c", .oracle = "MATCH (a)<-[:R]-(b:V {k: 4}) RETURN count(*) AS c", .walk = .{ .dir = .in, .rel = "R", .end_k = 4 } },
     // A WHERE inside the subquery, on the relationship and on both ends.
     // The persisted planned read misses matches of an undirected pattern
     // with a WHERE or a property map on the relationship.
