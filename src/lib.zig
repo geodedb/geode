@@ -273,8 +273,6 @@ pub const query_arena = @import("server/query_arena.zig");
 pub const server_flags = @import("server/server_flags.zig");
 // Re-export backup_manager for unified binary
 pub const backup_manager = @import("server/backup_manager.zig");
-// Re-export impl_flagger for unified binary
-pub const impl_flagger = @import("server/flagger_impl_defined.zig");
 // Re-export proto_util for unified binary
 pub const proto_util = @import("server/proto_util.zig");
 // Re-export fd_limit helper so tests can exercise the startup hook directly.

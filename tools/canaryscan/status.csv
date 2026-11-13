@@ -23,7 +23,6 @@ GAP-ENT-0055,AliasGroupedAndFilteredIndexCount,Regression,TESTED,tests/test_gap0
 GQL-39075-RQ-0001,Conformance/ExecuteConformingPrograms,Profile,TESTED,tests/test_gql_conformance_rq.zig,TestCANARY_GQL39075_RQ_0001_ExecuteConformingPrograms,,conformance,2026-02-23
 GQL-39075-RQ-0002,Conformance/RequiredErrors,SQLSTATE,TESTED,tests/test_gql_conformance_rq.zig,TestCANARY_GQL39075_RQ_0002_RequiredErrors,,conformance,2026-02-23
 GQL-39075-RQ-0003,Conformance/GQLFlaggerImplDefined,AnnexB,TESTED,tests/test_gql_conformance_rq.zig,TestCANARY_GQL39075_RQ_0003_GqlFlaggerImplDefined,,conformance,2026-02-23
-GQL-39075-RQ-0003,GQL Flagger/ImplDefined,AnnexBCompleteness,TESTED,src/server/flagger_impl_defined.zig,TestCANARY_GQL39075_RQ_0003_AnnexBComplete,,conformance,2026-02-23
 GQL-39075-RQ-0004,Conformance/ISOFeatureIDs,ClaimGG01GG20,TESTED,tests/test_gql_conformance_rq.zig,TestCANARY_GQL39075_RQ_0004_ConformanceClaimISO,,conformance,2026-02-23
 GQL-39075-RQ-0004,ConformanceProfile/ISOFeatureIDs,IsoFeatures,TESTED,src/conformance.zig,TestCANARY_GQL39075_RQ_0004_IsoFeaturesInProfile,,conformance,2026-02-23
 GQL-39075-RQ-0004,ConformanceProfile/ISOFeatureIDs,IsoFeatures,TESTED,,TestCANARY_GQL39075_RQ_0005_MinimumConformanceGating,,conformance,2026-02-23
@@ -1965,9 +1964,6 @@ REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,src/transactions/manage
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,src/transactions/range_tracker.zig,,,txn,2025-09-26
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,BENCHED,tests/canary_txn_phantom_range.zig,,BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope,txn,2026-11-12
 REQ-GQL-023,MVCC Phantom Prevention,RangeTracker,TESTED,tests/canary_txn_phantom_range.zig,TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection,,txn,2025-09-22
-REQ-GQL-024,Conformance Flagger,ImplDefinedCollationAndNullOrdering,TESTED,src/server/flagger_impl_defined.zig,TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering,,engine,2025-09-21
-REQ-GQL-024,Conformance Flagger,ImplDefinedFlagsProtocolIntegration,TESTED,tests/test_protocol_impl_defined_flags.zig,TestCANARY_REQ_GQL_024_ImplDefinedFlagsProtocolIntegration,,wire,2025-09-21
-REQ-GQL-024,Conformance Flagger,ImplDefinedZeroLengthPathPolicy,TESTED,src/server/flagger_impl_defined.zig,TestCANARY_REQ_GQL_024_ImplDefinedZeroLengthPathPolicy,,engine,2025-09-21
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibration,TESTED,src/planner/cost_calibration.zig,TestCANARY_REQ_GQL_024_PlanCostModelCalibration,,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationRanking,TESTED,src/planner/pipeline.zig,TestCANARY_REQ_GQL_024_PlanCostModelCalibrationRanking,,planner,2025-09-22
 REQ-GQL-024,Cost Based Optimizer,PlanCostModelCalibrationVarianceEnvelope,BENCHED,src/planner/cost_calibration.zig,,BenchmarkCANARY_REQ_GQL_024_PlanCostModelCalibrationVarianceEnvelope,planner,2025-09-22

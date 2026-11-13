@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:33:48.622263303Z",
+  "generated_at": "2026-11-13T18:35:41.487777028Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -408,20 +408,6 @@
           ],
           "tests": [
             "TestCANARY_GQL39075_RQ_0003_GqlFlaggerImplDefined"
-          ],
-          "benches": [],
-          "owner": "conformance",
-          "updated": "2026-02-23"
-        },
-        {
-          "feature": "GQL Flagger/ImplDefined",
-          "aspect": "AnnexBCompleteness",
-          "status": "TESTED",
-          "files": [
-            "src/server/flagger_impl_defined.zig"
-          ],
-          "tests": [
-            "TestCANARY_GQL39075_RQ_0003_AnnexBComplete"
           ],
           "benches": [],
           "owner": "conformance",
@@ -29879,48 +29865,6 @@
     {
       "id": "REQ-GQL-024",
       "features": [
-        {
-          "feature": "Conformance Flagger",
-          "aspect": "ImplDefinedCollationAndNullOrdering",
-          "status": "TESTED",
-          "files": [
-            "src/server/flagger_impl_defined.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Conformance Flagger",
-          "aspect": "ImplDefinedFlagsProtocolIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_protocol_impl_defined_flags.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_ImplDefinedFlagsProtocolIntegration"
-          ],
-          "benches": [],
-          "owner": "wire",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Conformance Flagger",
-          "aspect": "ImplDefinedZeroLengthPathPolicy",
-          "status": "TESTED",
-          "files": [
-            "src/server/flagger_impl_defined.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_024_ImplDefinedZeroLengthPathPolicy"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
         {
           "feature": "Cost Based Optimizer",
           "aspect": "PlanCostModelCalibration",
@@ -93626,7 +93570,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4925
+      "TESTED": 4921
     },
     "by_aspect": {
       "2PC": 3,
@@ -93758,7 +93702,6 @@
       "AndPredicate": 1,
       "AndWithAttrPredicate": 1,
       "AnnexB": 2,
-      "AnnexBCompleteness": 1,
       "AnnotationsBlindIndexEvidence": 1,
       "ApiKeysNotSupported": 1,
       "AppendOrderedLabelPosting": 1,
@@ -95339,9 +95282,6 @@
       "IdleReapDeadline": 1,
       "IllegalOrderKeyPolicy": 1,
       "ImplDefined": 11,
-      "ImplDefinedCollationAndNullOrdering": 1,
-      "ImplDefinedFlagsProtocolIntegration": 1,
-      "ImplDefinedZeroLengthPathPolicy": 1,
       "Implementation": 12,
       "ImplementationVerification": 1,
       "ImplicitAckStampsProof": 1,

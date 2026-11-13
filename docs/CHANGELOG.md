@@ -5348,6 +5348,17 @@
 
 ### Removed
 
+- **Dead code: `src/server/flagger_impl_defined.zig` and the server's
+  implementation-defined flag cache (SONNY-6511 item 1).** A second list of
+  the ISO/IEC 39075 Annex B implementation-defined items whose `collect`
+  did not compile on Zig 0.16 (`ArrayList.deinit()` without the
+  allocator). `server_flags.initImplDefinedFlags`, its only product caller,
+  was itself called by nothing (`src/server/main.zig` only aliased it), so
+  the cache `getImplDefinedCodes` read stayed empty and nothing read that
+  either. They go, with the uncompiled `tests/test_protocol_impl_defined_flags.zig`.
+  The items remain listed by `conformance.collectImplDefinedFlags`
+  (`zig build test-sonny6494-inline`); the server does not send that list to
+  clients, which `docs/BINARY_PROTOCOL.md` now says.
 - **Dead code: `src/server/txn/mvcc.zig` and
   `src/server/txn/phantom_read_prevention.zig` (SONNY-6511 item 1).** An
   MVCC manager and predicate-lock phantom prevention the server never ran
