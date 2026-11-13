@@ -37,9 +37,26 @@
   given (the gRPC transport does not verify client certificates). Known
   limit (dependency): the TLS library checks the client chain as sent, so a
   client must send its chain up to a CA in the bundle (or present a pinned
-  self-signed CA certificate from the bundle); Zig `tls`-based clients,
-  including `geode query --client-cert`, send only the leaf and are
-  rejected. Regression: `zig build test-sonny6453-mtls-client-ca`.
+  self-signed CA certificate from the bundle); Zig `tls`-based clients
+  send only the leaf, so a leaf signed by a bundle CA is rejected (geode's
+  own clients could not present a certificate at all: SONNY-6457).
+  Regression: `zig build test-sonny6453-mtls-client-ca`.
+- **geode's internal QUIC client presents the client certificate it is
+  given (SONNY-6457 item 1).** `QuicClient.connectEx` put a client
+  certificate path in the vendor config's `cert_path`, which makes the
+  vendored quic endpoint a server, and never loaded the certificate, so
+  no geode-side dial could present one. It now loads the PEM certificate
+  and key into the client TLS fields (`inline_client_cert_der` /
+  `inline_client_priv_key`), and refuses before dialling when only one of
+  the two is given (`ClientCertificateKeyMismatch`) or a file cannot be
+  read or parsed. Cluster peer dials (`cluster_auth.dialClusterPeer`)
+  still present no certificate: peer listeners do not request one and
+  peers authenticate with `GEODE_CLUSTER_TOKEN`. `geode query` / `shell`
+  / `backup` / `mcp` dial through geode-client-zig, which has the same
+  defect; until the fixed library is pinned, `--client-cert` against an
+  mTLS-required server still times out (`zig build
+  test-sonny6457-cli-client-cert`, intentionally red). Regression: `zig
+  build test-sonny6457-connectex-client-cert`.
 - **BREAKING (operator): `geode query`, `geode shell` and the REPL refuse
   an implicit unverified connection under production posture, like
   `geode auth` (SONNY-6453 item 4).** With no `--ca-cert`, no client

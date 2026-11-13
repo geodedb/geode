@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:02:29.197753056Z",
+  "generated_at": "2026-11-13T08:47:12.608508291Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -4893,6 +4893,25 @@
           ],
           "tests": [
             "tests/test_sonny6453_mtls_client_ca.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-AUTH-MTLS-QUIC-007",
+      "features": [
+        {
+          "feature": "mTLS over QUIC",
+          "aspect": "ClientCertPresentation",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6457_connectex_client_cert.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -93199,7 +93218,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4855
+      "TESTED": 4856
     },
     "by_aspect": {
       "2PC": 3,
@@ -93715,6 +93734,7 @@
       "CliRlsPolicyCreate": 1,
       "CliUtf16HexInputFlag": 1,
       "ClientCaTrust": 1,
+      "ClientCertPresentation": 1,
       "ClientConnect": 1,
       "ClientConnectEx": 1,
       "ClientExecTimeout": 1,

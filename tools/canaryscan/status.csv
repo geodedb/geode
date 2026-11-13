@@ -291,6 +291,7 @@ REQ-AUTH-MTLS-QUIC-004,mTLS over QUIC,GlobalProvider,TESTED,src/server/quic_conn
 REQ-AUTH-MTLS-QUIC-005,mTLS over QUIC,ServerInit,TESTED,src/server/main.zig,geodetestlab/specs/authn_mtls_rejection_matrix.yml,,security,2026-06-11
 REQ-AUTH-MTLS-QUIC-006,mTLS over QUIC,ClientCaTrust,TESTED,src/server/main.zig,tests/test_sonny6453_mtls_client_ca.zig,,security,2026-11-13
 REQ-AUTH-MTLS-QUIC-006,mTLS over QUIC,ClientCaTrust,TESTED,tests/test_sonny6453_mtls_client_ca.zig,,,security,2026-11-13
+REQ-AUTH-MTLS-QUIC-007,mTLS over QUIC,ClientCertPresentation,TESTED,src/transport/quic.zig,tests/test_sonny6457_connectex_client_cert.zig,,security,2026-11-13
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,tests/test_auth_persistence.zig,persistent_writer_all_callbacks,,security,2026-05-11
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,,self,,security,2026-05-11
 REQ-AUTH-POLICY-001,AuthPolicy,PasswordReset,IMPL,tests/test_gap_0193_batch2_security.zig,,,security,2026-11-12

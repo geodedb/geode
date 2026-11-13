@@ -534,7 +534,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6457-connectex-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 1, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
@@ -5837,8 +5836,6 @@ pub fn build(b: *std.Build) void {
     // SONNY-6457 (1): QuicClient.connectEx presents its client certificate
     // (it used to turn the endpoint into a server); spawns the built geode
     // with GEODE_MTLS_REQUIRED and dials it over real QUIC.
-    // Intentionally red (docs/KNOWN_TEST_ISSUES.md) until the fix commit
-    // registers it in shardDep; compiled by test-compile.
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6457_connectex_client_cert.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
@@ -5849,7 +5846,7 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6457-connectex-client-cert", "Run SONNY-6457 item 1 regression (QuicClient.connectEx presents a client certificate in GEODE_MTLS_CLIENT_CA and is accepted by an mTLS-required geode, one not in the bundle or none is rejected, and a certificate without its key, a key without its certificate or an unreadable file is refused before dialling; spawns the built geode over real QUIC)").dependOn(&run_tests.step);
     }
 
