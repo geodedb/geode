@@ -165,9 +165,9 @@ this host (an operation is three commits, about 18 ms per fsync). Without
 it, encrypting the WAL records costs about a fifth of the commit path's CPU
 time. Storage with a faster fsync lands between the two figures, so neither
 "<1%" nor "<5%" holds in general. The step asserts that the encrypted arm
-writes no plaintext, and checks (reported, enforced with
-`GEODE_PERF_GATES=enforce`) the durable overhead below 5% and the commit
-path's below 35%.
+writes no plaintext, and checks the durable overhead below 5% and the
+commit path's below 35% through `tests/perf_gate.zig` (reported by default,
+enforced in the scheduled perf-gates CI job).
 
 Not measured: reads that miss the buffer pool. With a pool smaller than the
 store, the encrypting engine loses committed node records (graph_storage
