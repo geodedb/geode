@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:49:06.233369384Z",
+  "generated_at": "2026-11-13T09:08:38.329886561Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82170,6 +82170,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6347-FLE-AUTHENTIC-ENVELOPE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "StoreEnvelopeAuthenticated",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6347-FLE-ENVELOPE-IDENTITY",
       "features": [
         {
@@ -82178,6 +82197,25 @@
           "status": "TESTED",
           "files": [
             "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6347_fle_envelope_identity.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6347-FLE-RECORD-TENANT",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "RecordTenantIdentity",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
           ],
           "tests": [
             "tests/test_sonny6347_fle_envelope_identity.zig"
@@ -93256,7 +93294,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4858
+      "TESTED": 4860
     },
     "by_aspect": {
       "2PC": 3,
@@ -96349,6 +96387,7 @@
       "RecordFallback": 1,
       "RecordKind": 1,
       "RecordKinds": 1,
+      "RecordTenantIdentity": 1,
       "Recovery": 1,
       "RecoveryReplay": 1,
       "RecursiveCheck": 1,
@@ -96918,6 +96957,7 @@
       "StoreAliasNotDoubleFreed": 1,
       "StoreConfig": 1,
       "StoreCount": 1,
+      "StoreEnvelopeAuthenticated": 1,
       "StoreLockReentrancy": 1,
       "StoreStats": 1,
       "StoreUndoCapture": 1,

@@ -465,20 +465,31 @@ SET` / `SET`. Matching on an encrypted value needs deterministic or
 blind-index encryption (SONNY-6350). The internal `__geode_security` graph
 is never encrypted and is exempt.
 
-#### Encryption identity (SONNY-6335)
+#### Encryption identity (SONNY-6335, SONNY-6347)
 
 Every encrypted string property is encrypted, and decrypted, under one
-identity (`fle_integration.recordIdentity`): the request tenant (else
-`default`), the node's first label or the edge's type, the field, and the
-record id `<id>` (node) or `edge_<id>` (edge). The executor's FLE hook and the
-graph-store write primitives (which encrypt a plaintext value that reaches
-them without the hook: raft apply, internal callers) both use it; a value
-that is already an envelope is stored as it is, never encrypted twice. Values
-the graph-store primitives wrote before SONNY-6335 (tenant and schema
-`default`, record id `node_<id>` / `edge_<id>`) are still read: a reader tries
-that identity after the current one. The tenant is the writer's request
-tenant: a reader in another tenant (a parent tenant reading a child's row
-included) does not decrypt it (58030).
+identity (`fle_integration.recordIdentity`): the record's stored tenant, the
+node's first label or the edge's type, the field, and the record id `<id>`
+(node) or `edge_<id>` (edge). The executor's FLE hook and the graph-store
+write primitives (which encrypt a plaintext value that reaches them without
+the hook: raft apply, internal callers) both use it. Because the tenant is
+the record's, a parent tenant that the tenant hierarchy lets read a child
+tenant's row (GAP-0846) decrypts it like the child does (SONNY-6347).
+
+A graph-store write primitive keeps a value as it is only when it
+authenticates as this record's envelope for the field (AEAD under the field
+key and one of the identities below), which is how the executor's
+already-encrypted value, an undo, or a replay of stored bytes are not
+encrypted twice. Any other value, including a plaintext that merely has the
+shape of an envelope, is encrypted (SONNY-6347; the primitives used a shape
+test, so a crafted string of that shape was stored in the clear).
+
+Readers try, in order: the current identity; the writer's request tenant in
+place of the record's (values written before SONNY-6347, when the identity
+used the request tenant: such a value written by a parent tenant into a
+child's row still decrypts only for the parent); and the identity the
+graph-store primitives wrote before SONNY-6335 (tenant and schema `default`,
+record id `node_<id>` / `edge_<id>`).
 
 #### No index over an encrypted field (SONNY-6335)
 

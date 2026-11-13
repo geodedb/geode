@@ -655,7 +655,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                             // an error, never the stored bytes; the value is
                             // JSON-escaped (decrypted text was written raw).
                             const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                            const shown = try fle_integration.readStoredStringForEntity(allocator, .node, type_name, entry.key_ptr.*, s, node.id);
+                            const shown = try fle_integration.readStoredStringForEntity(allocator, .node, type_name, entry.key_ptr.*, s, node.id, node.tenant_id);
                             defer allocator.free(shown);
                             try writer.writeByte('"');
                             try writeJsonEscapedString(writer, shown);
@@ -699,7 +699,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                         .String => |s| {
                             // CANARY: REQ=REQ-PERF-FLE-SKIP-004; FEATURE="FLESkipOptimization"; ASPECT=EdgePropertyWrite; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
                             // SONNY-6327: the same policy as a node's property.
-                            const shown = try fle_integration.readStoredStringForEntity(allocator, .edge, edge.label, entry.key_ptr.*, s, edge.id);
+                            const shown = try fle_integration.readStoredStringForEntity(allocator, .edge, edge.label, entry.key_ptr.*, s, edge.id, edge.tenant_id);
                             defer allocator.free(shown);
                             try writer.writeByte('"');
                             try writeJsonEscapedString(writer, shown);

@@ -1815,16 +1815,6 @@ fn fleWriteRefused(err: anyerror) FleWriteError {
     return if (err == error.FleCatalogUnavailable) error.FleCatalogUnavailable else error.EncryptionRequired;
 }
 
-fn isLikelyFleEnvelope(data: []const u8) bool {
-    if (data.len < 35) return false;
-    // Valid algorithm IDs: 1 (AES-256-GCM), 2 (ChaCha20-Poly1305), 3 (XChaCha20-Poly1305)
-    const alg_id = data[0];
-    if (alg_id < 1 or alg_id > 3) return false;
-    // Check that the ciphertext length field matches remaining data
-    const ciphertext_len = std.mem.readInt(u32, data[31..35], .little);
-    return data.len == 35 + ciphertext_len;
-}
-
 fn copyPropertyValue(self: *GraphStore, value: PropertyValue) !PropertyValue {
     return switch (value) {
         .String => |s| PropertyValue{ .String = try self.allocator.dupe(u8, s) },
@@ -8087,7 +8077,8 @@ pub const GraphStore = struct {
         if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         try self.undoRecordNodeProperty(node_id, key, false); // SONNY-3348 (round 18)
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
-        // Some callers already encrypt; isLikelyFleEnvelope() prevents double-encryption.
+        // Some callers already encrypt; sealStoredString keeps a value that
+        // authenticates as this record's envelope (SONNY-6347).
         // `owned_encrypted` tracks the freshly-allocated FLE envelope (if any) so
         // it can be released after the adapter write / in-memory copy / WAL
         // notification have all consumed it — otherwise the envelope leaks on
@@ -8096,7 +8087,7 @@ pub const GraphStore = struct {
         defer if (owned_encrypted) |buf| self.allocator.free(buf);
         const effective_value = switch (value) {
             .String => |s| blk: {
-                if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
+                if (fle_integration.hasEncryptedFields()) {
                     const maybe_node = self.nodes.get(node_id);
                     const node_type: []const u8 = if (maybe_node) |n|
                         (if (n.labels.len > 0) n.labels[0] else "Unknown")
@@ -8105,17 +8096,19 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_node) |n| isSecurityGraphName(n.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(node_type, key)) {
-                        // SONNY-6335: the one encryption identity (label/type, request
-                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
-                        // the executor hook's and the readers'. It used the store's
-                        // tenant/schema and "node_<id>", which no reader used.
-                        const encrypted = fle_integration.encryptStoredString(
+                        // SONNY-6335: the one encryption identity (fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. SONNY-6347: the record's
+                        // stored tenant, and a value is kept as stored only when it
+                        // authenticates as this record's envelope (the shape test
+                        // isLikelyFleEnvelope let a crafted plaintext through unencrypted).
+                        const encrypted = fle_integration.sealStoredString(
                             self.allocator,
                             .node,
                             node_type,
                             key,
                             s,
                             node_id,
+                            if (maybe_node) |r| r.tenant_id else fle_integration.tenantPreferringActiveContext(),
                         ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             owned_encrypted = encrypted;
@@ -8421,7 +8414,7 @@ pub const GraphStore = struct {
     fn applyFleEncryption(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) FleWriteError!FleApplyResult {
         switch (value) {
             .String => |s| {
-                if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
+                if (fle_integration.hasEncryptedFields()) {
                     const maybe_node = self.nodes.get(node_id);
                     const node_type: []const u8 = if (maybe_node) |n|
                         (if (n.labels.len > 0) n.labels[0] else "Unknown")
@@ -8430,17 +8423,19 @@ pub const GraphStore = struct {
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_node) |n| isSecurityGraphName(n.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(node_type, key)) {
-                        // SONNY-6335: the one encryption identity (label/type, request
-                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
-                        // the executor hook's and the readers'. It used the store's
-                        // tenant/schema and "node_<id>", which no reader used.
-                        const encrypted = fle_integration.encryptStoredString(
+                        // SONNY-6335: the one encryption identity (fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. SONNY-6347: the record's
+                        // stored tenant, and a value is kept as stored only when it
+                        // authenticates as this record's envelope (the shape test
+                        // isLikelyFleEnvelope let a crafted plaintext through unencrypted).
+                        const encrypted = fle_integration.sealStoredString(
                             self.allocator,
                             .node,
                             node_type,
                             key,
                             s,
                             node_id,
+                            if (maybe_node) |r| r.tenant_id else fle_integration.tenantPreferringActiveContext(),
                         ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             return .{ .value = PropertyValue{ .String = encrypted }, .owned = encrypted };
@@ -8495,7 +8490,7 @@ pub const GraphStore = struct {
         // GAP-0854: the internal security graph is never FLE-encrypted.
         if (isSecurityGraphName(node.graph_name)) return value;
         const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-        return PropertyValue{ .String = try fle_integration.readStoredString(allocator, .node, type_name, key, value.String, node_id) };
+        return PropertyValue{ .String = try fle_integration.readStoredString(allocator, .node, type_name, key, value.String, node_id, node.tenant_id) };
     }
 
     /// SONNY-6327: the edge's property as the requesting principal may see
@@ -8505,7 +8500,7 @@ pub const GraphStore = struct {
         const value = edge.properties.get(key) orelse return null;
         if (value != .String) return value;
         if (isSecurityGraphName(edge.graph_name)) return value;
-        return PropertyValue{ .String = try fle_integration.readStoredString(allocator, .edge, edge.label, key, value.String, edge_id) };
+        return PropertyValue{ .String = try fle_integration.readStoredString(allocator, .edge, edge.label, key, value.String, edge_id, edge.tenant_id) };
     }
 
     /// Get a node property value (simplified version without FLE decryption).
@@ -10992,23 +10987,25 @@ pub const GraphStore = struct {
         defer if (owned_encrypted) |buf| self.allocator.free(buf);
         const effective_value = switch (value) {
             .String => |s| blk: {
-                if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
+                if (fle_integration.hasEncryptedFields()) {
                     const maybe_edge = self.getEdgeHydrated(edge_id);
                     const edge_type: []const u8 = if (maybe_edge) |e| e.label else "Unknown";
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(edge_type, key)) {
-                        // SONNY-6335: the one encryption identity (label/type, request
-                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
-                        // the executor hook's and the readers'. It used the store's
-                        // tenant/schema and "edge_<id>", which no reader used.
-                        const encrypted = fle_integration.encryptStoredString(
+                        // SONNY-6335: the one encryption identity (fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. SONNY-6347: the record's
+                        // stored tenant, and a value is kept as stored only when it
+                        // authenticates as this record's envelope (the shape test
+                        // isLikelyFleEnvelope let a crafted plaintext through unencrypted).
+                        const encrypted = fle_integration.sealStoredString(
                             self.allocator,
                             .edge,
                             edge_type,
                             key,
                             s,
                             edge_id,
+                            if (maybe_edge) |r| r.tenant_id else fle_integration.tenantPreferringActiveContext(),
                         ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             owned_encrypted = encrypted;
@@ -11173,23 +11170,25 @@ pub const GraphStore = struct {
     fn applyFleEncryptionForEdge(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) FleWriteError!FleApplyResult {
         switch (value) {
             .String => |s| {
-                if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
+                if (fle_integration.hasEncryptedFields()) {
                     const maybe_edge = self.getEdgeHydrated(edge_id);
                     const edge_type: []const u8 = if (maybe_edge) |e| e.label else "Unknown";
                     // GAP-0854: never FLE-encrypt the internal security graph.
                     const in_security_graph = if (maybe_edge) |e| isSecurityGraphName(e.graph_name) else false;
                     if (!in_security_graph and fle_integration.fieldRequiresEncryption(edge_type, key)) {
-                        // SONNY-6335: the one encryption identity (label/type, request
-                        // tenant, "<id>" / "edge_<id>": fle_integration.recordIdentity),
-                        // the executor hook's and the readers'. It used the store's
-                        // tenant/schema and "edge_<id>", which no reader used.
-                        const encrypted = fle_integration.encryptStoredString(
+                        // SONNY-6335: the one encryption identity (fle_integration.recordIdentity),
+                        // the executor hook's and the readers'. SONNY-6347: the record's
+                        // stored tenant, and a value is kept as stored only when it
+                        // authenticates as this record's envelope (the shape test
+                        // isLikelyFleEnvelope let a crafted plaintext through unencrypted).
+                        const encrypted = fle_integration.sealStoredString(
                             self.allocator,
                             .edge,
                             edge_type,
                             key,
                             s,
                             edge_id,
+                            if (maybe_edge) |r| r.tenant_id else fle_integration.tenantPreferringActiveContext(),
                         ) catch |err| return fleWriteRefused(err);
                         if (!std.mem.eql(u8, encrypted, s)) {
                             return .{ .value = PropertyValue{ .String = encrypted }, .owned = encrypted };

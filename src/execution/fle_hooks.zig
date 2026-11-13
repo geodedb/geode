@@ -20,8 +20,8 @@ const Attr = logging.Attr;
 /// application schema, so a user-configured FLE field such as `('User','email')`
 /// would otherwise be encrypted by this execution-layer hook BEFORE the value
 /// reaches graph_store — and because the stored bytes are already an FLE
-/// envelope, graph_store's own `isSecurityGraphName` guard (which only fires on
-/// plaintext input via `isLikelyFleEnvelope`) can no longer undo it. The auth
+/// envelope, graph_store's own `isSecurityGraphName` guard (which only keeps
+/// a value from being encrypted there) can no longer undo it. The auth
 /// HMAC chain is computed over plaintext, so the rewritten property would brick
 /// the next restart. Mirror the graph_store guard at this layer using the
 /// single source-of-truth constant. Lazy import avoids a top-level cycle.
@@ -52,6 +52,7 @@ pub fn encryptPropertyIfNeeded(
     field_name: []const u8,
     plaintext_value: []const u8,
     node_id: u64,
+    record_tenant: []const u8,
 ) (FLEHookError || std.mem.Allocator.Error)![]const u8 {
     // GAP-0854 follow-up: never FLE-encrypt the internal security graph (see
     // isSecurityGraph). Returning the plaintext here keeps the auth HMAC chain
@@ -81,6 +82,7 @@ pub fn encryptPropertyIfNeeded(
         field_name,
         plaintext_value,
         node_id,
+        record_tenant,
     ) catch |err| {
         // SECURITY FIX: If encryption is REQUIRED for this field but fails,
         // we MUST NOT write plaintext to disk. Return an error instead.
@@ -113,6 +115,7 @@ pub fn encryptEdgePropertyIfNeeded(
     field_name: []const u8,
     plaintext_value: []const u8,
     edge_id: u64,
+    record_tenant: []const u8,
 ) (FLEHookError || std.mem.Allocator.Error)![]const u8 {
     // GAP-0854 follow-up: never FLE-encrypt the internal security graph (see
     // isSecurityGraph) — security-graph edges such as HAS_ROLE feed the auth
@@ -135,6 +138,7 @@ pub fn encryptEdgePropertyIfNeeded(
         field_name,
         plaintext_value,
         edge_id,
+        record_tenant,
     ) catch |err| {
         // SECURITY FIX: If encryption is REQUIRED for this field but fails,
         // we MUST NOT write plaintext to disk. Return an error instead.

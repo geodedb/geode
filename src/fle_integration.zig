@@ -807,30 +807,43 @@ pub const FleReadError = error{ SearchNotPermitted, FleCatalogUnavailable, FleDe
 pub const EntityKind = enum { node, edge };
 
 // CANARY: REQ=REQ-SONNY-6335-FLE-ONE-IDENTITY; FEATURE="FieldLevelEncryption"; ASPECT=OneEncryptionIdentity; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+// CANARY: REQ=REQ-SONNY-6347-FLE-RECORD-TENANT; FEATURE="FieldLevelEncryption"; ASPECT=RecordTenantIdentity; STATUS=TESTED; TEST=tests/test_sonny6347_fle_envelope_identity.zig; OWNER=security; UPDATED=2026-11-13
 /// SONNY-6335: the ONE encryption identity of a stored string property (what
-/// goes into the key ids and the AAD): the request tenant (the active
-/// context's, else the thread's, else "default": GAP-0852), the node's
-/// first label or the edge's type as the schema, and the record id "<id>"
-/// for a node, "edge_<id>" for an edge. Every writer (the executor hook and
-/// the graph-store primitives, which encrypt a value that reaches them in
-/// plaintext: raft apply, internal callers) and every reader uses it. The
-/// graph-store writers used tenant/schema "default"/"default" and
-/// "node_<id>", which no reader used: see `legacyStoreIdentity`.
+/// goes into the key ids and the AAD): the record's stored tenant
+/// (SONNY-6347), the node's first label or the edge's type as the schema,
+/// and the record id "<id>" for a node, "edge_<id>" for an edge. Every
+/// writer (the executor hook and the graph-store primitives, which encrypt a
+/// value that reaches them in plaintext: raft apply, internal callers) and
+/// every reader uses it. SONNY-6347: the tenant was the request's (the
+/// active context's, else the thread's), so a parent tenant reading its
+/// child tenant's row (GAP-0846) could not decrypt it; readers still try
+/// the request tenant (`requestTenantIdentity`) for values written that
+/// way. The graph-store writers used tenant/schema "default"/"default" and
+/// "node_<id>" before SONNY-6335: see `legacyStoreIdentity`.
 pub const Identity = struct {
     tenant_id: []const u8,
     schema_name: []const u8,
     record_id: []const u8,
 };
 
-pub fn recordIdentity(buf: *[32]u8, kind: EntityKind, type_name: []const u8, id: u64) Identity {
+pub fn recordIdentity(buf: *[32]u8, kind: EntityKind, type_name: []const u8, id: u64, record_tenant: []const u8) Identity {
     return .{
-        .tenant_id = tenantPreferringActiveContext(),
+        .tenant_id = record_tenant,
         .schema_name = type_name,
         .record_id = switch (kind) {
             .node => std.fmt.bufPrint(buf, "{d}", .{id}),
             .edge => std.fmt.bufPrint(buf, "edge_{d}", .{id}),
         } catch unreachable, // error-policy: D — "edge_" + a u64 fits 32 bytes.
     };
+}
+
+/// SONNY-6347: the identity values were written under before SONNY-6347
+/// (`recordIdentity` with the writer's request tenant: GAP-0852's active
+/// context, else the thread's). Null when it is `recordIdentity` itself.
+pub fn requestTenantIdentity(buf: *[32]u8, kind: EntityKind, type_name: []const u8, id: u64, record_tenant: []const u8) ?Identity {
+    const request_tenant = tenantPreferringActiveContext();
+    if (std.mem.eql(u8, request_tenant, record_tenant)) return null;
+    return recordIdentity(buf, kind, type_name, id, request_tenant);
 }
 
 /// SONNY-6335: the identity the graph-store write sites used before
@@ -858,14 +871,78 @@ pub fn encryptStoredString(
     field_name: []const u8,
     plaintext: []const u8,
     id: u64,
+    record_tenant: []const u8,
 ) ![]const u8 {
     var buf: [32]u8 = undefined;
-    const ident = recordIdentity(&buf, kind, type_name, id);
+    const ident = recordIdentity(&buf, kind, type_name, id, record_tenant);
     return encryptFieldIfNeeded(.{
         .tenant_id = ident.tenant_id,
         .schema_name = ident.schema_name,
         .allocator = allocator,
     }, type_name, field_name, plaintext, ident.record_id);
+}
+
+// CANARY: REQ=REQ-SONNY-6347-FLE-AUTHENTIC-ENVELOPE; FEATURE="FieldLevelEncryption"; ASPECT=StoreEnvelopeAuthenticated; STATUS=TESTED; TEST=tests/test_sonny6347_fle_envelope_identity.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6347: the bytes a graph-store write primitive stores for a string
+/// property of an FLE-encrypted field: `value` itself when it is this
+/// record's field envelope already (the executor hook encrypted it, or an
+/// undo or replay writes stored bytes back), proved by authenticating it
+/// (AEAD under the field key and an identity a reader tries); otherwise
+/// `value` encrypted under `recordIdentity`. The primitives used a shape
+/// test (algorithm byte, length field), so a crafted plaintext of that
+/// shape reaching one outside the executor (a raft payload, an internal
+/// caller) was stored in the clear. Memory from `allocator` when the result
+/// differs from `value`.
+pub fn sealStoredString(
+    allocator: std.mem.Allocator,
+    kind: EntityKind,
+    type_name: []const u8,
+    field_name: []const u8,
+    value: []const u8,
+    id: u64,
+    record_tenant: []const u8,
+) ![]const u8 {
+    if (try isStoredEnvelopeOf(allocator, kind, type_name, field_name, value, id, record_tenant)) return value;
+    return encryptStoredString(allocator, kind, type_name, field_name, value, id, record_tenant);
+}
+
+/// SONNY-6347: does `data` decrypt as this record's `field_name` envelope
+/// under an identity a reader tries (`recordIdentity`, the request tenant's,
+/// `legacyStoreIdentity`)? No role check: this is the writer's question, and
+/// the plaintext is wiped and freed at once.
+fn isStoredEnvelopeOf(
+    allocator: std.mem.Allocator,
+    kind: EntityKind,
+    type_name: []const u8,
+    field_name: []const u8,
+    data: []const u8,
+    id: u64,
+    record_tenant: []const u8,
+) error{OutOfMemory}!bool {
+    var bufs: [3][32]u8 = undefined;
+    var idents: [3]Identity = undefined;
+    var n: usize = 0;
+    idents[n] = recordIdentity(&bufs[n], kind, type_name, id, record_tenant);
+    n += 1;
+    if (requestTenantIdentity(&bufs[n], kind, type_name, id, record_tenant)) |ident| {
+        idents[n] = ident;
+        n += 1;
+    }
+    idents[n] = legacyStoreIdentity(&bufs[n], kind, id);
+    n += 1;
+    for (idents[0..n]) |ident| {
+        const ctx = EncryptionContext{ .tenant_id = ident.tenant_id, .schema_name = ident.schema_name, .allocator = allocator };
+        const plain = decryptFieldIfNeeded(ctx, type_name, field_name, data, ident.record_id, false) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+        // Not an envelope at all (too short, or not one by its encoding).
+        if (plain.ptr == data.ptr and plain.len == data.len) return false;
+        std.crypto.secureZero(u8, @constCast(plain));
+        allocator.free(plain);
+        return true;
+    }
+    return false;
 }
 
 // CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=OneReadPolicyForNodesAndEdges; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
@@ -881,8 +958,9 @@ pub fn encryptStoredString(
 ///   * encrypted, and it may not: "[REDACTED]" for a field without a blind
 ///     index, `error.SearchNotPermitted` (42501) for a searchable one;
 ///   * the FLE catalog cannot be loaded: `error.FleCatalogUnavailable`.
-/// The role and tenant are the active request context's, else the
-/// thread's (GAP-0852). Returns `stored` itself or memory from `allocator`.
+/// The role is the active request context's, else the thread's (GAP-0852);
+/// `record_tenant` is the record's stored tenant (SONNY-6347). Returns
+/// `stored` itself or memory from `allocator`.
 pub fn readStoredString(
     allocator: std.mem.Allocator,
     kind: EntityKind,
@@ -890,15 +968,14 @@ pub fn readStoredString(
     field_name: []const u8,
     stored: []const u8,
     id: u64,
+    record_tenant: []const u8,
 ) FleReadError![]const u8 {
     if (!hasEncryptedFields()) return stored;
 
-    // GAP-0281 / GAP-0852: the request-scoped tenant and role; the execution
-    // import is lazy (function-body) to avoid a top-level cycle.
-    // SONNY-6335: the one identity (`recordIdentity`), then the legacy
-    // graph-store one.
+    // SONNY-6335: the one identity (`recordIdentity`), then (SONNY-6347) the
+    // writer's request tenant's, then the legacy graph-store one.
     var id_buf: [32]u8 = undefined;
-    const ident = recordIdentity(&id_buf, kind, type_name, id);
+    const ident = recordIdentity(&id_buf, kind, type_name, id, record_tenant);
     const ctx = EncryptionContext{
         .tenant_id = ident.tenant_id,
         .schema_name = ident.schema_name,
@@ -913,7 +990,13 @@ pub fn readStoredString(
         error.OutOfMemory => error.OutOfMemory,
         else => {
             // The principal may read it (the RBAC check passed before any
-            // decrypt): try the identity the graph-store writers used.
+            // decrypt): try the identities values were written under before.
+            var request_buf: [32]u8 = undefined;
+            if (requestTenantIdentity(&request_buf, kind, type_name, id, record_tenant)) |request| {
+                var request_ctx = ctx;
+                request_ctx.tenant_id = request.tenant_id;
+                if (decryptFieldIfNeeded(request_ctx, type_name, field_name, stored, request.record_id, true)) |v| return v else |_| {}
+            }
             var legacy_buf: [32]u8 = undefined;
             const legacy = legacyStoreIdentity(&legacy_buf, kind, id);
             var legacy_ctx = ctx;
@@ -934,8 +1017,9 @@ pub fn readStoredStringOwned(
     field_name: []const u8,
     stored: []const u8,
     id: u64,
+    record_tenant: []const u8,
 ) FleReadError![]u8 {
-    const v = try readStoredString(allocator, kind, type_name, field_name, stored, id);
+    const v = try readStoredString(allocator, kind, type_name, field_name, stored, id, record_tenant);
     if (v.ptr == stored.ptr and v.len == stored.len) return allocator.dupe(u8, stored);
     return @constCast(v);
 }
@@ -951,8 +1035,9 @@ pub fn readStoredStringForEntity(
     field_name: []const u8,
     stored: []const u8,
     id: u64,
+    record_tenant: []const u8,
 ) FleReadError![]u8 {
-    return readStoredStringOwned(allocator, kind, type_name, field_name, stored, id) catch |err| switch (err) {
+    return readStoredStringOwned(allocator, kind, type_name, field_name, stored, id, record_tenant) catch |err| switch (err) {
         error.SearchNotPermitted => allocator.dupe(u8, "[REDACTED]"),
         else => err,
     };
@@ -963,7 +1048,8 @@ pub fn readStoredStringForEntity(
 /// For searchable encrypted fields, it enforces RBAC by throwing SearchNotPermitted
 /// Returns the value (decrypted if necessary and permitted)
 /// SONNY-6327: a node's property through `readStoredString` (a decrypt
-/// failure is an error, and no FLE field means no lock).
+/// failure is an error, and no FLE field means no lock). Without the node
+/// this has no stored tenant: it reads as the request tenant's record.
 pub fn checkPropertyAccess(
     allocator: std.mem.Allocator,
     type_name: []const u8,
@@ -971,7 +1057,7 @@ pub fn checkPropertyAccess(
     value_str: []const u8,
     node_id: u64,
 ) FleReadError![]const u8 {
-    return readStoredString(allocator, .node, type_name, field_name, value_str, node_id);
+    return readStoredString(allocator, .node, type_name, field_name, value_str, node_id, tenantPreferringActiveContext());
 }
 
 /// SONNY-6327: an edge's property through the same policy as a node's.
@@ -982,7 +1068,7 @@ pub fn checkEdgePropertyAccess(
     value_str: []const u8,
     edge_id: u64,
 ) FleReadError![]const u8 {
-    return readStoredString(allocator, .edge, edge_type, field_name, value_str, edge_id);
+    return readStoredString(allocator, .edge, edge_type, field_name, value_str, edge_id, tenantPreferringActiveContext());
 }
 
 // CANARY: REQ=REQ-FLE-PREDICATE-HELPERS-001; FEATURE="FLE Predicate Rewriting"; ASPECT=Helpers; STATUS=TESTED; TEST=geodetestlab/specs/fle_comprehensive_security.yml; OWNER=security; UPDATED=2026-01-09

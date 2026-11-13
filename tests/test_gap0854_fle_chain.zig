@@ -89,7 +89,8 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
 }
 
-// Local mirror of graph_store.isLikelyFleEnvelope (private). Used only to
+// The FLE envelope shape (the store's old isLikelyFleEnvelope, removed by
+// SONNY-6347: a shape is not proof; the store now authenticates). Used only to
 // assert — positively — that a value stored in a NORMAL graph really did get
 // turned into an FLE envelope (alg id 1-3 + matching length-prefix), so the
 // GAP-0854 security-graph guard cannot regress into disabling FLE everywhere.

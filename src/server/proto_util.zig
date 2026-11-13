@@ -859,7 +859,7 @@ fn nodeToProto(allocator: std.mem.Allocator, node: graph_store.Node) !schema.Nod
         const key = try allocator.dupe(u8, entry.key_ptr.*);
         // SONNY-6327: a string through the FLE read policy (RETURN n sent
         // the stored bytes: ciphertext, to every principal).
-        const val = try entityPropertyToProto(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", node.id, entry.key_ptr.*, entry.value_ptr.*);
+        const val = try entityPropertyToProto(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", node.id, node.tenant_id, entry.key_ptr.*, entry.value_ptr.*);
         try props.append(allocator, .{ .key = key, .value = val });
     }
     return .{
@@ -874,7 +874,7 @@ fn edgeToProto(allocator: std.mem.Allocator, edge: graph_store.Edge) !schema.Edg
     var it = edge.properties.iterator();
     while (it.next()) |entry| {
         const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const val = try entityPropertyToProto(allocator, .edge, edge.label, edge.id, entry.key_ptr.*, entry.value_ptr.*);
+        const val = try entityPropertyToProto(allocator, .edge, edge.label, edge.id, edge.tenant_id, entry.key_ptr.*, entry.value_ptr.*);
         try props.append(allocator, .{ .key = key, .value = val });
     }
     return .{
@@ -895,11 +895,12 @@ fn entityPropertyToProto(
     kind: fle_integration.EntityKind,
     type_name: []const u8,
     id: u64,
+    record_tenant: []const u8,
     key: []const u8,
     value: graph_store.PropertyValue,
 ) !schema.Value {
     if (value == .String) {
-        const shown = try fle_integration.readStoredStringForEntity(allocator, kind, type_name, key, value.String, id);
+        const shown = try fle_integration.readStoredStringForEntity(allocator, kind, type_name, key, value.String, id, record_tenant);
         return .{ .kind = .{ .string_val = .{ .value = shown, .kind = .STRING } } };
     }
     return propertyValueToProto(allocator, value);

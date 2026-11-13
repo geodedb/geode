@@ -801,6 +801,18 @@
   auth state, timeseries, tenants and audit log in the resolved directory
   from now on (none of it had been kept). Regression:
   `zig build test-sonny6339-resolved-data-dir`.
+- **FLE: a string shaped like an envelope is encrypted; the record's tenant
+  is the encryption identity (SONNY-6347).** (2) The graph-store write
+  primitives skipped encryption for any string with the shape of an FLE
+  envelope (algorithm byte 1-3 and a matching length field), so a crafted
+  plaintext of that shape reaching one outside the executor (a raft
+  payload, an internal caller) was stored in the clear. A value is now kept
+  as stored only when it authenticates as this record's envelope for the
+  field; anything else is encrypted. (5) The identity used the writer's
+  request tenant, so a parent tenant reading its child tenant's encrypted
+  row failed with 58030. It now uses the record's stored tenant; readers
+  still try the request tenant, so values written before decrypt as they
+  did. Regression: `zig build test-sonny6347-fle-envelope-identity`.
 - **BEHAVIOUR CHANGE: one FLE encryption identity; no index over an
   encrypted field (SONNY-6335).** (1) The graph-store write primitives
   encrypted a plaintext value that reached them (raft apply, internal
