@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:41:53.476843699Z",
+  "generated_at": "2026-11-13T00:48:57.656163876Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -44240,7 +44240,7 @@
             "src/security/kms_remote.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect|tests/test_sonny6435_kms_attestation.zig"
+            "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect|tests/test_sonny6435_kms_attestation.zig|tests/test_sonny6442_kms_channel.zig"
           ],
           "benches": [],
           "owner": "security",
@@ -44388,6 +44388,20 @@
     {
       "id": "REQ-GQL-TDE-EXT-KMS-REMOTE-002",
       "features": [
+        {
+          "feature": "RemoteKMSVerifiedChannel",
+          "aspect": "SECURITY",
+          "status": "TESTED",
+          "files": [
+            "src/security/kms_remote.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_kms_channel.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
         {
           "feature": "RemoteKMSVerifiedChannel",
           "aspect": "VerifiedChannelBoundAttestation",
@@ -92191,7 +92205,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4794
+      "TESTED": 4795
     },
     "by_aspect": {
       "2PC": 3,
@@ -95442,7 +95456,7 @@
       "SCC_WRAPPER": 1,
       "SCHEMA": 2,
       "SEARCH": 2,
-      "SECURITY": 37,
+      "SECURITY": 38,
       "SERVER_INIT": 1,
       "SERVER_STATE": 1,
       "SERVER_STATE_STRUCT": 1,

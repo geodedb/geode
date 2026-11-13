@@ -40,6 +40,7 @@ fn withServer(auth: []const u8, body: fn (*kms.RemoteKmsServer, u16) anyerror!vo
     var server = try kms.RemoteKmsServer.init(std.testing.allocator, 0xdeadbeefcafebabe);
     defer server.deinit();
     try server.startWithOptions(0, tls.startOptions());
+    server_ca = tls.caPath();
     try server.server.setAuthToken(auth);
     const port = server.port;
     try std.testing.expect(port != 0);
@@ -53,11 +54,15 @@ fn withServer(auth: []const u8, body: fn (*kms.RemoteKmsServer, u16) anyerror!vo
     try body(&server, port);
 }
 
+/// The CA bundle of the server `withServer` is running (SONNY-6442).
+var server_ca: []const u8 = "";
+
 // Clients stay on page_allocator (see the GAP-0514 P3 note in
 // tests/canary_remote_kms.zig: the pinned vendor TLS stack leaks client
 // handshake allocations); the server side runs under std.testing.allocator.
 fn connectClient(port: u16, auth: ?[]const u8) !kms.RemoteKmsClient {
-    var client = kms.RemoteKmsClient.init(std.heap.page_allocator);
+    // SONNY-6442: the client verifies the server against its CA bundle.
+    var client = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .ca_cert_path = server_ca });
     errdefer client.deinit();
     try client.connect("127.0.0.1", port);
     if (auth) |a| client.setAuthToken(a);
@@ -110,7 +115,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation" {
             var pub_key: [32]u8 = undefined;
             @memset(&pub_key, 0);
             const nonce = [_]u8{0x42} ** 32;
-            const ok = kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, bogus_sig);
+            const ok = kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, [_]u8{0} ** 32, bogus_sig);
             try std.testing.expect(!ok);
             // A fresh attestation now reports the changed hash.
             const rotated = try c.attest();
@@ -123,9 +128,10 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation" {
 // SONNY-6430 (4): ported from tests/test_remote_kms_attestation.zig, which
 // no build step compiled (it cited fixed ports and a removed API). The
 // server's Attest answer carries an Ed25519 signature over
-// "GEODE-KMS-ATTEST-V2" || nonce || hash (SONNY-6435: the client's nonce):
+// "GEODE-KMS-ATTEST-V3" || nonce || hash || channel binding (SONNY-6435:
+// the client's nonce; SONNY-6442: the TLS exporter value of the channel):
 // it verifies under the server's public key, and a flipped signature byte,
-// another hash or another nonce do not.
+// another hash, another nonce or another channel binding do not.
 // CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SignatureVerifyTamperDetect; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect; OWNER=security; UPDATED=2026-11-12
 test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect" {
     try withServer("tok-attest", struct {
@@ -151,6 +157,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect" {
                     continue;
                 };
             };
+            const binding = try c.channelBinding();
             var hash: [32]u8 = undefined;
             var pub_key: [32]u8 = undefined;
             var sig: [64]u8 = undefined;
@@ -159,17 +166,21 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect" {
             try hexField(resp, "\"sig\":\"", &sig);
             try std.testing.expect(!std.mem.allEqual(u8, &hash, 0));
             try std.testing.expectEqualSlices(u8, &(try s.server.attestationPublicKey()), &pub_key);
-            try std.testing.expect(kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, sig));
+            try std.testing.expect(kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, binding, sig));
             var bad_sig = sig;
             bad_sig[10] ^= 0xAA;
-            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, bad_sig));
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, binding, bad_sig));
             var bad_hash = hash;
             bad_hash[0] ^= 0x01;
-            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, bad_hash, sig));
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, bad_hash, binding, sig));
             // Nonce binding: the signature does not verify for another nonce.
             var other_nonce = nonce;
             other_nonce[0] ^= 0x01;
-            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, other_nonce, hash, sig));
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, other_nonce, hash, binding, sig));
+            // Channel binding (SONNY-6442): not for another channel.
+            var other_binding = binding;
+            other_binding[0] ^= 0x01;
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, other_binding, sig));
         }
     }.f);
 }

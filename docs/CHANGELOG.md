@@ -4,6 +4,31 @@
 
 ### Security
 
+- **BREAKING (remote KMS client): the remote KMS client verifies the
+  server, binds attestations to the TLS channel and has no local fallback
+  (SONNY-6442 items 1-3).** `RemoteKmsClient.connect` dialed with
+  `connectInsecure` (no certificate verification), so a man in the middle
+  could relay the `Attest` exchange to the real server; unconnected,
+  `generate` / `unwrap` / `privUnwrap` ran locally under a KEK derived from
+  the public seed `0x12345678`; and the attested hash was
+  SHA-256(token || kek[0..16]). The client now verifies the server's
+  certificate chain against a CA bundle (`Options.ca_cert_path`, through the
+  new `QuicClient.connectWithCa`, which fails if the bundle cannot be
+  loaded) and its name against the dialed host, and refuses to connect
+  without one (`KmsTrustAnchorMissing`); there is no unverified mode. The
+  server signs `GEODE-KMS-ATTEST-V3 || nonce || hash || channel_binding`,
+  where the binding is the RFC 8446 §7.5 exporter value
+  (`EXPORTER-geode-kms-attest-v3`) of the connection the request arrived on
+  (`QuicConnection` / `QuicClient.exportKeyingMaterial`), so a reply
+  obtained on another channel is rejected; `verifyAttestResponse` and
+  `verifyAttestation` take the caller's own binding. Generate / unwrap
+  replies are protected by the verified TLS channel. Unconnected, every
+  operation returns `NotConnected`. The attested hash is the KEK identifier
+  HKDF-SHA256(ikm = KEK, salt = `GEODE-KMS-KEK-ID-V1`) (`kekIdentifier`),
+  independent of the auth token. The seeded `external_kms_client.Client`
+  (LocalSimulated) and the factory's `LocalSimulated` branch compile into
+  test builds only; the `GEODE_ALLOW_LOCAL_KMS` override is gone.
+  Regression: `zig build test-sonny6442-kms-channel` (real server over QUIC).
 - **BREAKING (remote KMS protocol): the remote KMS client accepts only a
   fresh attestation signed by a pinned key (SONNY-6435 item 1).**
   `RemoteKmsClient.attest` returned whatever hash the server sent. It

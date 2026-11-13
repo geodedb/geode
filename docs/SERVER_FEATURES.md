@@ -829,13 +829,17 @@ Implemented").
 **Providers** (`KMSProvider`, corrected SONNY-6435):
 
 1. **Local development** (`local_dev`): wraps and unwraps data keys; development only
-2. **External** (`external_kms`): an in-process deterministic stand-in, not production-safe
+2. **External** (`external_kms`): an in-process deterministic stand-in, compiled into test builds only (SONNY-6442)
 3. HashiCorp Vault, AWS KMS and Azure Key Vault configurations are refused (`error.UnsupportedProvider`); there is no GCP provider
 
 **Remote KMS prototype** (`kms_remote.zig`): `Generate`, `Unwrap` and
 `PrivUnwrap` of AES-256-GCM envelopes, and an Ed25519 attestation the client
-verifies under a pinned key over its own nonce (SONNY-6435). No server path
-uses it. There is no key rotation with re-encryption and no audit
+verifies under a pinned key over its own nonce (SONNY-6435) and the TLS
+channel's RFC 8446 exporter value (SONNY-6442). The client verifies the
+server's certificate against a CA bundle (`Options.ca_cert_path`) and
+refuses to connect without one; unconnected, it refuses every operation. The
+attested hash is the KEK identifier HKDF-SHA256(KEK, salt
+`GEODE-KMS-KEK-ID-V1`). No server path uses it. There is no key rotation with re-encryption and no audit
 integration.
 
 ### 7.3 Row-Level Security (RLS)

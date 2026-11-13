@@ -44,6 +44,7 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate" {
     defer t.join();
 
     var client = kms.RemoteKmsClient.init(gpa.allocator());
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
     try client.connect("127.0.0.1", server.port);
     client.setAuthToken("TOKEN123");
     const env = try client.generate();
@@ -71,6 +72,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub" {
     }.run, .{&server});
     defer t.join();
     var client = kms.RemoteKmsClient.init(gpa.allocator());
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
     try client.connect("127.0.0.1", server.port);
     client.setAuthToken("TOKEN123");
     // SONNY-6435: the client trusts only a pinned attestation key.
@@ -100,6 +102,7 @@ test "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap" {
     }.run, .{&server});
     defer t.join();
     var client = kms.RemoteKmsClient.init(gpa.allocator());
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
     try client.connect("127.0.0.1", server.port);
     client.setAuthToken("TOKEN123");
     const env = try client.generate();
@@ -133,6 +136,7 @@ test "QuicClient.connect normalizes localhost to 127.0.0.1 (GAP-0514 P3)" {
     defer t.join();
 
     var client = kms.RemoteKmsClient.init(gpa.allocator());
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
     // Connect via the DNS name: only works if normalization rewrites it.
     try client.connect("localhost", server.port);
     client.setAuthToken("TOKEN123");
@@ -164,6 +168,7 @@ test "QuicClientStream.readLine: WouldBlock on quiet stream, Interrupted with ar
     defer t.join();
 
     var client = kms.RemoteKmsClient.init(gpa.allocator());
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
     try client.connect("127.0.0.1", server.port);
 
     var stream = try client.quic_client.?.getStream();

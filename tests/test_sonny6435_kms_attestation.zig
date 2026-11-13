@@ -42,6 +42,7 @@ fn withServer(auth: []const u8, seed: [32]u8, body: fn (*kms.RemoteKmsServer, u1
     defer server.deinit();
     try server.startWithOptions(0, tls.startOptions());
     try server.server.setAttestationKeySeed(seed);
+    server_ca = tls.caPath();
     try server.server.setAuthToken(auth);
     var stop = std.atomic.Value(bool).init(false);
     const serving = try std.Thread.spawn(.{}, kms.RemoteKmsServer.serveUntilStopped, .{ &server, &stop });
@@ -52,10 +53,14 @@ fn withServer(auth: []const u8, seed: [32]u8, body: fn (*kms.RemoteKmsServer, u1
     try body(&server, server.port);
 }
 
+/// The CA bundle of the server `withServer` is running (SONNY-6442).
+var server_ca: []const u8 = "";
+
 // Clients stay on page_allocator: the pinned vendor TLS stack leaks client
 // handshake allocations (see tests/canary_remote_kms.zig).
 fn connectClient(port: u16, auth: []const u8) !kms.RemoteKmsClient {
-    var client = kms.RemoteKmsClient.init(std.heap.page_allocator);
+    // SONNY-6442: the client verifies the server against its CA bundle.
+    var client = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .ca_cert_path = server_ca });
     errdefer client.deinit();
     try client.connect("127.0.0.1", port);
     client.setAuthToken(auth);
@@ -158,21 +163,22 @@ test "SONNY-6435 (1) a tampered attestation is rejected" {
             defer c.deinit();
             const pinned = try publicKeyOf(seed_a);
             const nonce = [_]u8{0x5A} ** 32;
+            const binding = try c.channelBinding(); // SONNY-6442
             const genuine = try captureAttest(&c, "tok-6435", nonce);
             defer std.heap.page_allocator.free(genuine);
 
             // Control: the untouched reply verifies.
-            _ = try kms.RemoteKmsClient.verifyAttestResponse(genuine, pinned, nonce);
+            _ = try kms.RemoteKmsClient.verifyAttestResponse(genuine, pinned, nonce, binding);
 
             const sig_tampered = try std.heap.page_allocator.dupe(u8, genuine);
             defer std.heap.page_allocator.free(sig_tampered);
             try flipHexDigit(sig_tampered, "\"sig\":\"", 20);
-            try testing.expectError(error.AttestationSignatureInvalid, kms.RemoteKmsClient.verifyAttestResponse(sig_tampered, pinned, nonce));
+            try testing.expectError(error.AttestationSignatureInvalid, kms.RemoteKmsClient.verifyAttestResponse(sig_tampered, pinned, nonce, binding));
 
             const hash_tampered = try std.heap.page_allocator.dupe(u8, genuine);
             defer std.heap.page_allocator.free(hash_tampered);
             try flipHexDigit(hash_tampered, "\"hash\":\"", 3);
-            try testing.expectError(error.AttestationSignatureInvalid, kms.RemoteKmsClient.verifyAttestResponse(hash_tampered, pinned, nonce));
+            try testing.expectError(error.AttestationSignatureInvalid, kms.RemoteKmsClient.verifyAttestResponse(hash_tampered, pinned, nonce, binding));
         }
     }.f);
 }
@@ -185,11 +191,12 @@ test "SONNY-6435 (1) a wrong-key server presenting the pinned key is rejected" {
             defer c.deinit();
             const pinned = try publicKeyOf(seed_a);
             const nonce = [_]u8{0x3C} ** 32;
+            const binding = try c.channelBinding(); // SONNY-6442
             const resp = try captureAttest(&c, "tok-6435", nonce);
             defer std.heap.page_allocator.free(resp);
             // The reply claims the pinned key, but was signed with key B.
             try rewriteField(resp, "\"pub\":\"", &pinned);
-            try testing.expectError(error.AttestationSignatureInvalid, kms.RemoteKmsClient.verifyAttestResponse(resp, pinned, nonce));
+            try testing.expectError(error.AttestationSignatureInvalid, kms.RemoteKmsClient.verifyAttestResponse(resp, pinned, nonce, binding));
         }
     }.f);
 }
@@ -202,17 +209,18 @@ test "SONNY-6435 (1) an attestation replayed for another nonce is rejected" {
             defer c.deinit();
             const pinned = try publicKeyOf(seed_a);
             const recorded_nonce = [_]u8{0x11} ** 32;
+            const binding = try c.channelBinding(); // SONNY-6442
             const fresh_nonce = [_]u8{0x22} ** 32;
             const recorded = try captureAttest(&c, "tok-6435", recorded_nonce);
             defer std.heap.page_allocator.free(recorded);
-            _ = try kms.RemoteKmsClient.verifyAttestResponse(recorded, pinned, recorded_nonce);
+            _ = try kms.RemoteKmsClient.verifyAttestResponse(recorded, pinned, recorded_nonce, binding);
             // Replayed as-is to a client that asked with a fresh nonce.
-            try testing.expectError(error.AttestationNonceMismatch, kms.RemoteKmsClient.verifyAttestResponse(recorded, pinned, fresh_nonce));
+            try testing.expectError(error.AttestationNonceMismatch, kms.RemoteKmsClient.verifyAttestResponse(recorded, pinned, fresh_nonce, binding));
             // Replayed with its echoed nonce rewritten to the fresh one.
             const rewritten = try std.heap.page_allocator.dupe(u8, recorded);
             defer std.heap.page_allocator.free(rewritten);
             try rewriteField(rewritten, "\"nonce\":\"", &fresh_nonce);
-            try testing.expectError(error.AttestationSignatureInvalid, kms.RemoteKmsClient.verifyAttestResponse(rewritten, pinned, fresh_nonce));
+            try testing.expectError(error.AttestationSignatureInvalid, kms.RemoteKmsClient.verifyAttestResponse(rewritten, pinned, fresh_nonce, binding));
         }
     }.f);
 }

@@ -21,6 +21,10 @@ Geode provides enterprise-grade Key Management Service (KMS) integration for Tra
 > on top of it was never used by any executable and was removed (SONNY-6298);
 > wiring a KMS into server TDE is tracked as SONNY-6380. The remote KMS client itself
 > (`src/security/kms_remote.zig`) is covered by `zig build test-remote-kms`.
+> It verifies the server's certificate against a CA bundle and refuses to
+> connect without one, binds attestations to the TLS channel, and has no
+> local fallback (`zig build test-sonny6442-kms-channel`). The `external_kms`
+> provider's seeded stand-in compiles into test builds only (SONNY-6442).
 > `KeyRegistry` (`src/security/key_rotation.zig`) has no remote-KMS rotation:
 > `rotateWithRemoteKms` never compiled and was removed (SONNY-6378).
 
@@ -149,9 +153,9 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 
 ### Test Suites
 
-- `zig build test-remote-kms`, `test-remote-kms-hardening` and
-  `test-sonny2394-kms-client-deadline`: the remote KMS server and client over
-  real QUIC (`src/security/kms_remote.zig`).
+- `zig build test-remote-kms`, `test-remote-kms-hardening`,
+  `test-sonny2394-kms-client-deadline` and `test-sonny6442-kms-channel`: the
+  remote KMS server and client over real QUIC (`src/security/kms_remote.zig`).
 - `zig build test-gap0890`: key rotation policy and lazy re-wrap.
 - `zig build test-kms-provider` and `test-sonny2441-kms-provider-paths`:
   `KMSProvider` wrap/unwrap for the `local_dev` and `external_kms` providers,

@@ -18,10 +18,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
-fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
-    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
-}
 const builtin = @import("builtin");
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -775,6 +771,8 @@ pub const AwsKmsClient = struct {
 pub fn createKmsProvider(allocator: std.mem.Allocator, config: KmsConfig) !KmsProvider {
     switch (config.backend) {
         .LocalSimulated => {
+            // SONNY-6442: a simulated KMS exists in test builds only.
+            if (comptime !builtin.is_test) return error.SimulatedKmsUnavailable;
             const seed = blk: {
                 // Route through FIPS seam (cb.Hash.Stream) for incremental hash
                 var h = try cb.Hash.Stream.init(.sha256);
@@ -848,36 +846,24 @@ pub const Envelope = struct {
     ct: [32]u8, // wrapped 32-byte data key (or hash reference for external KMS)
 };
 
-/// LocalSimulated KMS Client - FOR DEVELOPMENT/TESTING ONLY
+const simulated_kms_test_only = "the LocalSimulated KMS client exists in test builds only (SONNY-6442): use VaultTransit or AwsKms";
+
+/// LocalSimulated KMS Client - TEST BUILDS ONLY
 /// Uses local AES-256-GCM with deterministic key derived from seed
 /// WARNING: This is NOT a real KMS integration. Production must use VaultTransit or AwsKms.
 /// CANARY: REQ=REQ-GQL-KMS-LOCALSIM-001; FEATURE="LocalSimulated KMS Client"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_external_kms_provider.zig; OWNER=security; UPDATED=2026-11-12
-/// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-001; FEATURE="LocalSimulated KMS Production Block"; ASPECT=SECURITY; STATUS=TESTED; TEST=test_gap_0216_localsim_production_block; OWNER=security; UPDATED=2026-01-16
-/// GAP-0216 SECURITY FIX: Block LocalSimulated KMS in production unless GEODE_ALLOW_LOCAL_KMS env var is set
+/// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-001; FEATURE="LocalSimulated KMS Production Block"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_sonny6442_kms_channel.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6442: its constructors do not compile outside a test build, so no
+/// product binary -- release or debug -- can construct it. (GAP-0216 refused
+/// it in release builds only, behind an environment-variable override.)
 pub const Client = struct {
     allocator: std.mem.Allocator,
     kek: [32]u8, // simulated Key Encryption Key (would be remote / HSM-controlled)
     prng: std.Random.DefaultPrng,
 
-    /// Initialize LocalSimulated client
-    /// GAP-0216 SECURITY FIX: Block LocalSimulated in production builds unless GEODE_ALLOW_LOCAL_KMS is set
+    /// Initialize LocalSimulated client (test builds only).
     pub fn init(allocator: std.mem.Allocator, seed: u64) !Client {
-        // GAP-0216: Production safety check - block unless explicitly allowed
-        if (is_production_build) {
-            // Check for explicit override via environment variable
-            const allow_local_kms = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_ALLOW_LOCAL_KMS") else null;
-            if (allow_local_kms) |_| {
-                log.warn("LocalSimulated KMS allowed in production via GEODE_ALLOW_LOCAL_KMS - NOT secure", &.{
-                    Attr.string("recommendation", "Configure VaultTransit or AwsKms for production"),
-                });
-            } else {
-                log.err("LocalSimulated KMS cannot be used in production builds", &.{
-                    Attr.string("action", "Set GEODE_ALLOW_LOCAL_KMS=1 to override (NOT RECOMMENDED) or configure VaultTransit/AwsKms"),
-                });
-                return error.InsecureKmsInProduction;
-            }
-        }
-
+        if (comptime !builtin.is_test) @compileError(simulated_kms_test_only);
         var prng = std.Random.DefaultPrng.init(seed);
         var kek: [32]u8 = undefined;
         prng.random().bytes(&kek);
@@ -886,14 +872,9 @@ pub const Client = struct {
 
     /// Create a client with cryptographically secure key (for testing without deterministic seed)
     /// GAP-0107 SECURITY FIX: Use cryptographic random for all operations
-    /// GAP-0116 SECURITY FIX: Block LocalSimulated KMS in production builds
+    /// Test builds only (SONNY-6442).
     pub fn initSecure(allocator: std.mem.Allocator) !Client {
-        if (is_production_build) {
-            log.err("LocalSimulated KMS cannot be used in production builds", &.{
-                Attr.string("recommendation", "Configure VaultTransit or AwsKms for production"),
-            });
-            return error.InsecureKmsInProduction;
-        }
+        if (comptime !builtin.is_test) @compileError(simulated_kms_test_only);
 
         var kek: [32]u8 = undefined;
         try cb.Csprng.bytes(&kek);

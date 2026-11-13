@@ -108,8 +108,9 @@ fn unpauseAfter(ps: *PausableServer, ms: u64) void {
 // Clients stay on page_allocator (see the GAP-0514 P3 note in
 // tests/canary_remote_kms.zig: the pinned vendor TLS stack leaks client
 // handshake allocations); the server side runs under std.testing.allocator.
-fn connectClient(port: u16, auth: []const u8) !kms.RemoteKmsClient {
-    var client = kms.RemoteKmsClient.init(std.heap.page_allocator);
+fn connectClient(port: u16, ca: []const u8, auth: []const u8) !kms.RemoteKmsClient {
+    // SONNY-6442: the client verifies the server against its CA bundle.
+    var client = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .ca_cert_path = ca });
     errdefer client.deinit();
     try client.connect("127.0.0.1", port);
     client.setAuthToken(auth);
@@ -130,7 +131,7 @@ test "TestSONNY2394_KmsClientHandshakeWaitsOutBusyServer" {
     const t0 = monoMs();
     const resumer = try std.Thread.spawn(.{}, unpauseAfter, .{ &ps, busy_ms });
     defer resumer.join();
-    var client = try connectClient(port, "handshake-token");
+    var client = try connectClient(port, ps.tls.caPath(), "handshake-token");
     defer client.deinit();
     try std.testing.expect(monoMs() - t0 >= busy_ms);
     const env = try client.generate();
@@ -146,7 +147,7 @@ test "TestSONNY2394_KmsClientHandshakeDeadlineIsBounded" {
     defer ps.deinit();
     ps.pause();
 
-    var client = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .handshake_timeout_secs = 1 });
+    var client = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .handshake_timeout_secs = 1, .ca_cert_path = ps.tls.caPath() });
     defer client.deinit();
     const t0 = monoMs();
     try std.testing.expectError(error.HandshakeError, client.connect("127.0.0.1", port));
@@ -166,7 +167,7 @@ test "TestSONNY2394_KmsClientWaitsOutBusyServer" {
     try ps.start(port, "deadline-token");
     defer ps.deinit();
 
-    var client = try connectClient(port, "deadline-token");
+    var client = try connectClient(port, ps.tls.caPath(), "deadline-token");
     defer client.deinit();
     const env = try client.generate();
     const expected = try client.unwrap(env);
@@ -194,7 +195,7 @@ test "TestSONNY2394_KmsClientDeadlineIsWallClock" {
     try ps.start(port, "deadline-token");
     defer ps.deinit();
 
-    var client = try connectClient(port, "deadline-token");
+    var client = try connectClient(port, ps.tls.caPath(), "deadline-token");
     defer client.deinit();
     const env = try client.generate();
 
@@ -231,7 +232,7 @@ test "TestSONNY2394_KmsClientFailsFastOnClosedConnection" {
     var server_alive = true;
     defer if (server_alive) ps.deinit();
 
-    var client = try connectClient(port, "deadline-token");
+    var client = try connectClient(port, ps.tls.caPath(), "deadline-token");
     defer client.deinit();
     const env = try client.generate();
 
@@ -284,7 +285,7 @@ test "TestSONNY2394_KmsServerAnswersSplitRequestOnce" {
     try ps.start(port, "stale-token");
     defer ps.deinit();
 
-    var client = try connectClient(port, "stale-token");
+    var client = try connectClient(port, ps.tls.caPath(), "stale-token");
     defer client.deinit();
 
     // Both halves of one request line arrive while the server is not polling.
@@ -327,9 +328,9 @@ test "TestSONNY2394_KmsServerAssemblesPartialRequestPerConnection" {
     try ps.start(port, "partial-token");
     defer ps.deinit();
 
-    var slow = try connectClient(port, "partial-token");
+    var slow = try connectClient(port, ps.tls.caPath(), "partial-token");
     defer slow.deinit();
-    var fast = try connectClient(port, "partial-token");
+    var fast = try connectClient(port, ps.tls.caPath(), "partial-token");
     defer fast.deinit();
 
     var stream = try slow.quic_client.?.getStream();

@@ -2901,7 +2901,7 @@ REQ-GQL-TDE-001,TDE baseline,SECURITY,TESTED,src/security/tde.zig,tests/e2e_secu
 REQ-GQL-TDE-002,Snapshot encryption,TEST,TESTED,tests/unit_graphstore_encryption_round_trip.zig,,,security,2026-02-04
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ClientVerifiesPinnedFreshAttestation,TESTED,tests/test_sonny6435_kms_attestation.zig,tests/test_sonny6435_kms_attestation.zig,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,ExpiredAttestation,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation,,security,2025-09-26
-REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect|tests/test_sonny6435_kms_attestation.zig,,security,2026-11-12
+REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub|TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect|tests/test_sonny6435_kms_attestation.zig|tests/test_sonny6442_kms_channel.zig,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,SignatureVerifyTamperDetect,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect,,security,2026-11-12
 REQ-GQL-TDE-ATTEST-001,RemoteKmsAttestation,TEST,TESTED,tests/canary_remote_kms.zig,TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub,,security,2025-09-26
 REQ-GQL-TDE-EXT-KMS-001,ExternalKMSIntegration,SECURITY,TESTED,src/security/external_kms_client.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_001,,security,2026-01-15
@@ -2912,6 +2912,7 @@ REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,TEST
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,NegativeAuthMatrix,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth,,security,2025-09-26
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth,,security,2026-11-12
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,tests/canary_remote_kms.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26
+REQ-GQL-TDE-EXT-KMS-REMOTE-002,RemoteKMSVerifiedChannel,SECURITY,TESTED,src/security/kms_remote.zig,tests/test_sonny6442_kms_channel.zig,,security,2026-11-12
 REQ-GQL-TDE-EXT-KMS-REMOTE-002,RemoteKMSVerifiedChannel,VerifiedChannelBoundAttestation,TESTED,tests/test_sonny6442_kms_channel.zig,tests/test_sonny6442_kms_channel.zig,,security,2026-11-12
 REQ-GQL-TDE-KEYID-001,SecureKeyIdDerivation,Security,EXEMPT,src/security/tde_key_manager.zig,,,security,2026-01-10
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,tests/canary_tde_published_overhead_sync.zig,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_PublishedOverheadClaimPresent,,perf,2026-11-12

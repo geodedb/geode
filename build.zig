@@ -1229,6 +1229,7 @@ pub fn build(b: *std.Build) void {
     });
     crypto_backend_mod.addImport("build_options", build_options_mod);
     crypto_backend_mod.addImport("std_shim", std_shim_mod);
+    transport_quic_mod.addImport("crypto_backend", crypto_backend_mod); // SONNY-6442: TLS exporter
     // Task 8: FIPS fail-close for ChaCha20 header protection in the QUIC parallel module.
     quic_parallel_serial_mod.addImport("build_options", build_options_mod);
 
@@ -2370,11 +2371,11 @@ pub fn build(b: *std.Build) void {
         .root_module = transport_quic_mod,
         // SONNY-1219c: "server-initiated close" adds the M-2a close-code tests.
         // Filters only — the step ROOT is untouched (that is ticket T-2).
-        .filters = &.{ "finalizeStreamSend", "tracked streams", "server-initiated close" },
+        .filters = &.{ "finalizeStreamSend", "tracked streams", "server-initiated close", "tls13Exporter" },
     });
     transport_quic_tests.root_module.link_libc = true;
     const run_transport_quic_tests = b.addRunArtifact(transport_quic_tests);
-    const transport_quic_step = b.step("test-quic-transport", "Run src/transport/quic.zig finalizeStreamSend + tracked-stream-wrapper unit tests");
+    const transport_quic_step = b.step("test-quic-transport", "Run src/transport/quic.zig finalizeStreamSend + tracked-stream-wrapper + TLS exporter unit tests");
     transport_quic_step.dependOn(&run_transport_quic_tests.step);
 
     // Out-of-band /health liveness breadcrumb regression for

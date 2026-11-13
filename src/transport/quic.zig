@@ -49,6 +49,8 @@ const builtin = @import("builtin");
 // SONNY-6325: the self-signed certificate fallback (shared with
 // tools/cert_gen.zig); it spawns openssl through spawn_io (SONNY-2394).
 const tls_material = @import("tls_material");
+// SONNY-6442: the TLS exporter (HKDF-Expand-Label) through the FIPS seam.
+const cb = @import("crypto_backend");
 
 /// Allocation-free, Io-independent readability check for a cert/key file.
 /// Mirrors `cert_gen.certFileReadable`: it attempts a raw `openat` and lets the
@@ -1505,6 +1507,13 @@ pub const QuicConnection = struct {
         return chain[0];
     }
 
+    /// Keying material exported from this connection's TLS handshake under
+    /// `label` (see `exportTlsKeyingMaterial`).
+    pub fn exportKeyingMaterial(self: *QuicConnection, label: []const u8, out: []u8) !void {
+        const qc = self.quic_connection orelse return error.NoTlsContext;
+        return exportTlsKeyingMaterial(qc, label, out);
+    }
+
     /// Return a human-readable IP string for the peer (e.g. "192.168.1.1").
     /// Falls back to "unknown" when the underlying connection is closed or the
     /// address family is unrecognised.
@@ -2097,6 +2106,99 @@ test "parsePemCertChain: single + multi-cert PEM bundle -> DER chain (GAP-0838)"
     try std.testing.expectEqual(@as(usize, 2), pair.len);
 }
 
+/// RFC 8446 §7.5 exporter value of `conn`'s completed TLS handshake under
+/// `label`, with an empty context (SONNY-6442). Both ends of one TLS session
+/// derive the same value and no other session does, so an application
+/// message that covers it is bound to this channel. Fails with
+/// error.NoTlsContext or error.HandshakeIncomplete before the handshake has
+/// produced the exporter master secret.
+///
+/// Computed here from the exporter master secret rather than through the
+/// vendor `Context.exportSecret`, which is not RFC 8446 §7.5 and hashes a
+/// different transcript on each side (client: through CertificateVerify,
+/// server: through server Finished), so the two ends disagree.
+fn exportTlsKeyingMaterial(conn: *Connection, label: []const u8, out: []u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    conn.tls_context_mu.lockUncancelable(io);
+    defer conn.tls_context_mu.unlock(io);
+    const ctx = conn.tls_context orelse return error.NoTlsContext;
+    const slot = &ctx.secrets.exporter_master;
+    if (!slot.valid) return error.HandshakeIncomplete;
+    // geode negotiates TLS_AES_128_GCM_SHA256 only (vendor handshake
+    // integration); another hash would need its own digest length here.
+    if (slot.hash != .sha256) return error.UnsupportedCipherSuite;
+    return tls13Exporter(slot.slice(), label, out);
+}
+
+/// TLS-Exporter(label, "", out.len) over an SHA-256 exporter master secret
+/// (RFC 8446 §7.5):
+///   HKDF-Expand-Label(Derive-Secret(secret, label, ""), "exporter",
+///                     Hash(""), out.len)
+fn tls13Exporter(exporter_master: []const u8, label: []const u8, out: []u8) !void {
+    var empty_hash: [32]u8 = undefined;
+    _ = try cb.Hash.digest(.sha256, "", &empty_hash);
+    var derived: [32]u8 = undefined;
+    defer std.crypto.secureZero(u8, &derived);
+    try hkdfExpandLabel(exporter_master, label, &empty_hash, &derived);
+    try hkdfExpandLabel(&derived, "exporter", &empty_hash, out);
+}
+
+/// RFC 8446 §7.1 HKDF-Expand-Label with SHA-256.
+fn hkdfExpandLabel(secret: []const u8, label: []const u8, context: []const u8, out: []u8) !void {
+    const prefix = "tls13 ";
+    if (out.len > std.math.maxInt(u16) or prefix.len + label.len > 255 or context.len > 255) return error.InvalidLength;
+    var info_buf: [2 + 1 + 255 + 1 + 255]u8 = undefined;
+    var n: usize = 0;
+    std.mem.writeInt(u16, info_buf[0..2], @intCast(out.len), .big);
+    n += 2;
+    info_buf[n] = @intCast(prefix.len + label.len);
+    n += 1;
+    @memcpy(info_buf[n..][0..prefix.len], prefix);
+    n += prefix.len;
+    @memcpy(info_buf[n..][0..label.len], label);
+    n += label.len;
+    info_buf[n] = @intCast(context.len);
+    n += 1;
+    @memcpy(info_buf[n..][0..context.len], context);
+    n += context.len;
+    try cb.Kdf.hkdfExpand(.sha256, secret, info_buf[0..n], out);
+}
+
+test "tls13Exporter matches RFC 8448-style HKDF-Expand-Label construction (SONNY-6442)" {
+    // Independent computation with std.crypto of the same construction.
+    const Hkdf = std.crypto.kdf.hkdf.HkdfSha256;
+    const secret = [_]u8{0x11} ** 32;
+    var out: [32]u8 = undefined;
+    try tls13Exporter(&secret, "EXPORTER-test", &out);
+
+    var empty: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("", &empty, .{});
+    const label1 = "tls13 EXPORTER-test";
+    var info1: [2 + 1 + label1.len + 1 + 32]u8 = undefined;
+    std.mem.writeInt(u16, info1[0..2], 32, .big);
+    info1[2] = label1.len;
+    @memcpy(info1[3..][0..label1.len], label1);
+    info1[3 + label1.len] = 32;
+    @memcpy(info1[4 + label1.len ..], &empty);
+    var derived: [32]u8 = undefined;
+    Hkdf.expand(&derived, &info1, secret);
+    const label2 = "tls13 exporter";
+    var info2: [2 + 1 + label2.len + 1 + 32]u8 = undefined;
+    std.mem.writeInt(u16, info2[0..2], 32, .big);
+    info2[2] = label2.len;
+    @memcpy(info2[3..][0..label2.len], label2);
+    info2[3 + label2.len] = 32;
+    @memcpy(info2[4 + label2.len ..], &empty);
+    var want: [32]u8 = undefined;
+    Hkdf.expand(&want, &info2, derived);
+    try std.testing.expectEqualSlices(u8, &want, &out);
+
+    // Another label, another value.
+    var other: [32]u8 = undefined;
+    try tls13Exporter(&secret, "EXPORTER-other", &other);
+    try std.testing.expect(!std.mem.eql(u8, &out, &other));
+}
+
 pub const QuicClient = struct {
     allocator: std.mem.Allocator,
     /// Heap-allocated endpoint (via api.endpointInit / api.endpointDeinit).
@@ -2315,6 +2417,22 @@ pub const QuicClient = struct {
 
         // Connect to server using public API. SNI uses original hostname for TLS.
         self.connection = try api.connect(self.endpoint.?, server_addr, normalized_address);
+    }
+
+    /// Connect and verify the server's certificate chain against the CA
+    /// bundle at `ca_cert_path` and its name against `address` (SONNY-6442).
+    /// Unlike `connectEx`, a CA bundle that cannot be loaded is an error,
+    /// never a connection without a trust anchor.
+    pub fn connectWithCa(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: []const u8) !void {
+        self.ca_chain_der = try loadCaChainDer(self.allocator, ca_cert_path);
+        return self.connectEx(address, port, null, null, null);
+    }
+
+    /// Keying material exported from this client's TLS handshake under
+    /// `label` (see `exportTlsKeyingMaterial`).
+    pub fn exportKeyingMaterial(self: *QuicClient, label: []const u8, out: []u8) !void {
+        const conn = self.connection orelse return error.NoTlsContext;
+        return exportTlsKeyingMaterial(conn, label, out);
     }
 
     pub fn waitForHandshake(self: *QuicClient, timeout_secs: u32) !void {

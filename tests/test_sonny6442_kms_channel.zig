@@ -205,7 +205,7 @@ test "SONNY-6442 (3) the attested hash is the KEK identifier, independent of the
     const before_token = a.attestation_hash;
     try testing.expect(!std.mem.allEqual(u8, &before_token, 0));
     try testing.expectEqualSlices(u8, &expectedKekId(a.kek), &before_token);
-    try testing.expectEqualSlices(u8, &expectedKekId(a.kek), &kms.kekIdentifier(a.kek));
+    try testing.expectEqualSlices(u8, &expectedKekId(a.kek), &(try kms.kekIdentifier(a.kek)));
 
     // Not the old SHA-256(token || kek[0..16]).
     try a.setAuthToken("token-one");
