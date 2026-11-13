@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:29:05.876529692Z",
+  "generated_at": "2026-11-13T10:31:35.060214967Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79500,6 +79500,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3377-EDGE-SCAN-RELOAD",
+      "features": [
+        {
+          "feature": "StorageNativeReads",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3377_unlabeled_edge_scan_reload.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3377_unlabeled_edge_scan_reload.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3379-GRPC-VECTOR-TEARDOWN",
       "features": [
         {
@@ -93364,7 +93383,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4866
+      "TESTED": 4867
     },
     "by_aspect": {
       "2PC": 3,
@@ -96484,7 +96503,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 299,
+      "Regression": 300,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

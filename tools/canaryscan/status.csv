@@ -5097,6 +5097,7 @@ REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,MemoryOverQuic,TESTED,te
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,NodeCache,TESTED,src/execution/match_operations.zig,tests/test_sonny_write_allowlist_r4b.zig,,engine,2026-09-29
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,ReadBudgetOverGrpc,TESTED,tests/test_sonny_write_allowlist_r4_transport.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,engine,2026-09-28
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,StreamingJoin,TESTED,src/execution/match_operations.zig,tests/test_sonny_write_allowlist_r4b.zig,,engine,2026-09-29
+REQ-SONNY-3377-EDGE-SCAN-RELOAD,StorageNativeReads,Regression,TESTED,tests/test_sonny3377_unlabeled_edge_scan_reload.zig,tests/test_sonny3377_unlabeled_edge_scan_reload.zig,,storage,2026-11-13
 REQ-SONNY-3379-GRPC-VECTOR-TEARDOWN,Test Fixtures,GrpcFixtureIndexManagerTeardown,TESTED,tests/test_sonny3379_grpc_vector_index_teardown.zig,tests/test_sonny3379_grpc_vector_index_teardown.zig,,index,2026-11-12
 REQ-SONNY-3380-MERGE-ALIAS-SET,Execution,DuplicateSetUndo,TESTED,tests/test_sonny3380_merge_alias_duplicate_set.zig,tests/test_sonny3380_merge_alias_duplicate_set.zig,,execution,2026-11-12
 REQ-SONNY-3381-UNDO-INDEX-REPAIR,Execution,UndoIndexRegression,TESTED,tests/test_sonny3381_undo_index_entries.zig,tests/test_sonny3381_undo_index_entries.zig,,execution,2026-11-12
