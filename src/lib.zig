@@ -953,6 +953,24 @@ test "repl_dispatch: inline test root" {
 // lib-module steps filter to other names). Named with the "sonny6494-lib:"
 // filter of `zig build test-sonny6494-lib-inline`, which also names each
 // file's tests by their fully qualified prefix (`<path>.test.`).
+// SONNY-6511: the inline tests of geode-module files that did not compile
+// on Zig 0.16 (or ran in no step) and whose code is live or reached by a
+// running test. Named with the "sonny6511-lib:" filter of
+// `zig build test-sonny6511-lib-inline`, which also names each file's tests
+// by their fully qualified prefix (`<path>.test.`).
+test "sonny6511-lib: inline test roots" {
+    _ = @import("security/multi_graph_security.zig");
+    _ = @import("client/quic_query_runner.zig");
+    _ = @import("client/repl/spinner.zig");
+    _ = @import("performance/memory_mapped_io.zig");
+    _ = @import("ml/graph_embeddings.zig");
+    _ = @import("planner/cost_calibration.zig");
+    _ = @import("planner/pipeline.zig");
+    _ = @import("graph/community_louvain.zig");
+    _ = @import("graph/community_label_propagation.zig");
+    _ = @import("graph/containers/lfu.zig");
+}
+
 test "sonny6494-lib: inline test roots" {
     _ = @import("client/repl/repl_errors.zig");
     _ = @import("client/repl/repl_history.zig");
