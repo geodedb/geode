@@ -1669,8 +1669,14 @@ pub fn bindLetParams(allocator: std.mem.Allocator, lets: []const ast.LetBinding,
     }
 }
 
-pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
+pub fn executeQueryWithContext(allocator: std.mem.Allocator, q_in: ast.Query, context: ExecutionContext) !ExecutionResult {
     const exec_ctx: *ExecutionContext = @constCast(&context);
+    // SONNY-6496: a `WITH *` followed by the part's RETURN passes on every
+    // variable, as in a chain (`executeQueryChain`, SONNY-3388); it passed
+    // none, so `MATCH (n) WITH * RETURN n.t` answered NULL.
+    var star_arena = std.heap.ArenaAllocator.init(allocator);
+    defer star_arena.deinit();
+    const q = if (q_in.next_query == null and !q_in.is_initial_with) try expandWithStar(star_arena.allocator(), q_in, &.{}) else q_in;
     const prev_ctx = execution.pushActiveContext(&context);
     defer execution.popActiveContext(prev_ctx);
 

@@ -673,7 +673,9 @@ const refused_cases = [_]Case{
     .{ .write = "WITH nosuch AS k MATCH (n:G) WHERE n.i = k SET n.x = 1", .refused = refused },
     .{ .write = "WITH nosuch AS l UNWIND l AS u CREATE (:U {u: u})", .refused = refused },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.y = nosuch", .refused = refused },
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 WITH n AS m SET m.y = n.i", .refused = refused },
+    // SONNY-6496: n is not in scope after `WITH n AS m` (ISO/IEC 39075
+    // 20.12 SR 8): refused with 42000 before the write shape is checked.
+    .{ .write = "MATCH (n:G) WHERE n.i = 5 WITH n AS m SET m.y = n.i", .refused = error.VariableNotInScope },
     // SONNY-3367 (round 4b-1c): a value (a WITH expression's alias, a FOR
     // variable) named as a node pattern is refused as a variable-kind
     // conflict (42000), before the write shape is checked.

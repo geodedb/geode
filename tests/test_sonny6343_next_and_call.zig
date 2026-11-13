@@ -41,9 +41,8 @@ const cases = [_]Case{
     .{ .q = "MATCH (n:N6343) RETURN DISTINCT n.k > 1 AS big NEXT RETURN count(*) AS c", .want = &.{"2"} },
     .{ .q = "RETURN 1 AS a NEXT RETURN a + 1 AS b NEXT RETURN b * 10 AS c", .want = &.{"20"} },
     // Only the result table's columns continue (9.2 SR). A name the RETURN
-    // before NEXT does not project is not refused but reads NULL, as after a
-    // WITH (`MATCH (n) WITH n.k AS k RETURN n.t`): a WITH-chain scoping
-    // defect listed in the SONNY-738 report, not pinned here.
+    // before NEXT does not project is refused with 42000, as after a WITH
+    // (SONNY-6496, pinned in tests/test_sonny6496_with_scope.zig).
     // NEXT YIELD: select and rename columns of the result table (16.14).
     .{ .q = "MATCH (n:N6343) RETURN n.k AS k, n.t AS t NEXT YIELD k AS j RETURN j", .want = &.{ "1", "2", "3" } },
     .{ .q = "MATCH (n:N6343) RETURN n.k AS k, n.t AS t NEXT YIELD t RETURN t ORDER BY t", .want = &.{ "'a'", "'b'", "'c'" }, .ordered = true },

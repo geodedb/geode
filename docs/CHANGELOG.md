@@ -2235,6 +2235,29 @@
 
 ### Fixed
 
+- **After WITH or NEXT only the projected variables are in scope
+  (SONNY-6496 item 1, BREAKING).** A reference to a variable the WITH (or
+  the RETURN before a NEXT) does not project read NULL on every executor:
+  `MATCH (n) WITH n.k AS k RETURN n.t` answered NULL rows, `... WITH n.k AS
+  k WHERE n.t = 'a'` no rows, `count(n)` 0, and a later `MATCH (m) WHERE
+  m.k = n.k` nothing. ISO/IEC 39075:2024 20.12 SR 8 requires the incoming
+  working record to have a field of the referenced name, and 4.7.3 4) e)
+  answers the violation with 42000; Geode now refuses such a statement with
+  `VariableNotInScope` (42000) before anything runs, in every clause after
+  the projection (WHERE, RETURN, ORDER BY, aggregates, GROUP BY, HAVING, a
+  later MATCH's property map or WHERE, SET / REMOVE / DELETE / CREATE /
+  MERGE, FOR, CALL ... YIELD, IN subqueries and comprehensions). The check
+  is one pass of the statement walk every transport and entry point runs
+  (`param_check` -> `scope_check.zig`), so the in-memory, persisted,
+  tenant-scoped and RLS-policy sessions refuse the same statements. In
+  scope stay the projected names, `WITH *`, variables a later MATCH, FOR,
+  UNWIND, CALL ... YIELD, CALL { } or inline LET binds, parameters, and
+  comprehension / quantifier / pattern-comprehension locals; ORDER BY after
+  RETURN reads the RETURN's aliases and the variables before it (14.10 SR
+  4 c) i) 2) A) III) 1)). Also: `WITH *` followed by its part's RETURN
+  passes every variable on (it passed none, so `MATCH (n) WITH * RETURN
+  n.t` was NULL). Before the first projection of a statement nothing new is
+  checked. Regression: `zig build test-sonny6496-with-scope`.
 - **MCP hover: function and procedure signatures are no longer built in
   fixed stack buffers (SONNY-6487 item 1).** `src/mcp/lsp.zig` `getHover`
   wrote a function's parameter list into a 1024-byte stack array and a
