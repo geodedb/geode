@@ -10906,6 +10906,19 @@ pub fn build(b: *std.Build) void {
     const sonny3245_step = b.step("test-sonny3245-create-merge-forms", "Run SONNY-3245 regression (invalid CREATE forms refused per ISO/IEC 39075 16.5; null and list property semantics for CREATE, SET and MERGE; RETURN after UNWIND CREATE and chained MERGE; gRPC in process)");
     sonny3245_step.dependOn(&run_sonny3245_tests.step);
 
+    const sonny6433_fts_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6433_follower_fts_rebuild.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    sonny6433_fts_mod.addImport("geode", root_mod);
+    const sonny6433_fts_tests = b.addTest(.{ .root_module = sonny6433_fts_mod });
+    const run_sonny6433_fts_tests = b.addRunArtifact(sonny6433_fts_tests);
+    shardDep(test_step, &run_sonny6433_fts_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6433_fts_step = b.step("test-sonny6433-follower-fts-rebuild", "Run SONNY-6433 regression (a follower applying a replicated SET, REMOVE, label removal or MERGE ON MATCH SET drops the old text from its fulltext indexes, as the leader does)");
+    sonny6433_fts_step.dependOn(&run_sonny6433_fts_tests.step);
+
     const sonny6433_merge_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6433_merge_keys.zig"), .target = target, .optimize = optimize });
     sonny6433_merge_test_mod.link_libc = true;
     sonny6433_merge_test_mod.addImport("geode", root_mod);

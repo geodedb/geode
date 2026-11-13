@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:26:05.746889651Z",
+  "generated_at": "2026-11-13T00:27:02.42905575Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84310,6 +84310,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6433-FOLLOWER-FTS-REBUILD",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "FollowerRemovedTextRebuild",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6433_follower_fts_rebuild.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_follower_fts_rebuild.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6433-KEYS-AFTER-REMOVE",
       "features": [
         {
@@ -92091,7 +92110,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4787
+      "TESTED": 4788
     },
     "by_aspect": {
       "2PC": 3,
@@ -93467,6 +93486,7 @@
       "FloatTypes": 1,
       "FlowControl": 2,
       "FlushStorage": 1,
+      "FollowerRemovedTextRebuild": 1,
       "ForceReset": 1,
       "ForeachIsolation": 1,
       "ForkJoin": 1,
