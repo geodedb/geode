@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:01:55.83477358Z",
+  "generated_at": "2026-11-13T13:03:43.441590961Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -76532,6 +76532,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3055-NFC-STRING-IDENTITY",
+      "features": [
+        {
+          "feature": "UnicodeEval",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3055_nfc_string_identity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3055_nfc_string_identity.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3056-LEAN-MERGE-BACKFILL",
       "features": [
         {
@@ -94161,7 +94180,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4910
+      "TESTED": 4911
     },
     "by_aspect": {
       "2PC": 3,
@@ -97302,7 +97321,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 312,
+      "Regression": 313,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

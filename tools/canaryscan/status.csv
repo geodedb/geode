@@ -4908,6 +4908,7 @@ REQ-SONNY-3046-WITH-BOUND-JOIN,ChainedMatchJoin,FinalAggregate,TESTED,src/execut
 REQ-SONNY-3046-WITH-BOUND-JOIN,ChainedMatchJoin,Regression,TESTED,tests/test_sonny3046_with_bound_variable_join.zig,tests/test_sonny3046_with_bound_variable_join.zig,,engine,2026-11-11
 REQ-SONNY-3046-WITH-BOUND-JOIN,ChainedMatchJoin,SeededJoin,TESTED,src/execution/match_operations.zig,tests/test_sonny3046_with_bound_variable_join.zig,,engine,2026-11-11
 REQ-SONNY-3046-WITH-BOUND-JOIN,ChainedMatchJoin,WithStar,TESTED,src/execution/query_execution.zig,tests/test_sonny3046_with_bound_variable_join.zig,,engine,2026-11-11
+REQ-SONNY-3055-NFC-STRING-IDENTITY,UnicodeEval,Regression,TESTED,tests/test_sonny3055_nfc_string_identity.zig,tests/test_sonny3055_nfc_string_identity.zig,,unicode,2026-11-13
 REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,LateKeyRegistry,TESTED,src/graph_store.zig,tests/test_sonny3056_lean_merge_evicted_holder.zig,,storage,2026-11-12
 REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,PerLabelBackfillFromPostings,TESTED,src/graph_store.zig,tests/test_sonny3056_lean_merge_evicted_holder.zig,,storage,2026-11-12
 REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,Regression,TESTED,tests/test_sonny3056_lean_merge_evicted_holder.zig,tests/test_sonny3056_lean_merge_evicted_holder.zig,,storage,2026-11-12

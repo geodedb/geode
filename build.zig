@@ -12215,6 +12215,17 @@ pub fn build(b: *std.Build) void {
     const sonny2807_step = b.step("test-sonny2807-exact-numeric-equality", "Run SONNY-2807 regression (one numeric equality rule: = and the order operators compare a DOUBLE and an exact number by exact value, agreeing with WHERE, IN, joins, GROUP BY, DISTINCT, ORDER BY, inline maps, MERGE and the WHERE seek)");
     sonny2807_step.dependOn(&run_sonny2807_tests.step);
 
+    // SONNY-3055: one string identity, NFC, on every path: `=`, inline maps,
+    // MERGE, the exact index seeks, GROUP BY, DISTINCT, joins and UNIQUE.
+    const sonny3055_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3055_nfc_string_identity.zig"), .target = target, .optimize = optimize });
+    sonny3055_test_mod.addImport("geode", root_mod);
+    sonny3055_test_mod.addImport("logging", logging_mod);
+    const sonny3055_tests = b.addTest(.{ .root_module = sonny3055_test_mod });
+    const run_sonny3055_tests = b.addRunArtifact(sonny3055_tests);
+    shardDep(test_step, &run_sonny3055_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3055_step = b.step("test-sonny3055-nfc-string-identity", "Run SONNY-3055 regression (strings compare, key, hash and seek by their NFC form on every path: =, WHERE and inline-map seeks, IN, MERGE, GROUP BY, DISTINCT, joins, UNIQUE; a store whose indexes were written with raw-byte keys is rebuilt on open)");
+    sonny3055_step.dependOn(&run_sonny3055_tests.step);
+
     // SONNY-2806 (round 7): MERGE matches the lowest node id among the nodes
     // holding a merge key, after a delete or a SET, on the server's bulk MERGE
     // and on a reopened store; MERGE's index keeps no number that is not an
