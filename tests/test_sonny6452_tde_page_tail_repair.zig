@@ -8,7 +8,12 @@
 //     reappears); a node with nothing else in its record (no labels,
 //     properties or edges) reads back as an empty slot, i.e. it is gone;
 //   - the last two heads of every `adj_in_dir` page read as "no head": the
-//     incoming edges of those destination nodes are invisible.
+//     incoming edges of those destination nodes are invisible;
+//   - the last entry of every full v1 chain block (339 entries of 24 bytes:
+//     entry 338 ends 8 bytes past the tail start) lost its rel_type and its
+//     prop_head: the edge reads with the wrong type and no properties, so a
+//     typed MATCH misses it and its properties (including the persisted
+//     public id of a pre-inline-id edge) are unreachable (SONNY-6461).
 //
 // The contract (operator surface, the built geode binary):
 //   - `geode storage verify --check tde-page-tail` reads the store files
@@ -18,10 +23,13 @@
 //   - `geode storage repair --tde-page-tail` refuses without
 //     `--i-have-a-backup` and without the key; with them it restores what
 //     is derivable (label_count from the node's label block, txn_stamp,
-//     the incoming-edge directory rebuilt from the outgoing edges), names
-//     what is not (liveness of slot-169 nodes, nodes whose whole record was
-//     the lost tail), rewrites the pages in the current envelope, and a
-//     verify afterwards is clean.
+//     the incoming-edge directory rebuilt from the outgoing edges, and the
+//     lost fields of adjacency entries copied back from the same edge's
+//     entry in the other direction's chain), names what is not (liveness of
+//     slot-169 nodes, nodes whose whole record was the lost tail, an
+//     adjacency entry whose mirror lost the same bytes), rewrites the pages
+//     in the current envelope, and a verify afterwards is clean; a second
+//     repair changes nothing.
 //
 // The old on-disk format is produced exactly as graph_storage's own
 // regression (tests/tde_page_tail.zig at v0.4.12) does: each page is read
@@ -38,6 +46,9 @@ const geode_test_bin = @import("geode_test_bin");
 const test_scratch = @import("test_scratch.zig");
 
 const StorageAdapter = geode.graph_storage_adapter.StorageAdapter;
+const execution = geode.execution;
+const graph_store = geode.graph_store;
+const Value = geode.value_types.Value;
 const geode_binary = geode_test_bin.geode_exe;
 
 const tde_key = [_]u8{0x52} ** 32;
@@ -48,6 +59,15 @@ const page_size: u32 = 8192;
 const nodes_per_page: u64 = 170;
 /// Incoming-edge directory heads per 8 KiB page; heads 1018 and 1019 end at the page end.
 const heads_per_page: u64 = 1020;
+/// Entries of a full v1 chain block at 8 KiB; entry 338 reaches the tail.
+const v1_cap: usize = 339;
+/// The edge type of the v1-block edges.
+const v1_type = "V";
+
+// libc setenv/unsetenv: std.c has no binding for them in this Zig; the
+// executor reads GEODE_TDE_KEY through std.c.getenv. The module links libc.
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
 fn fsIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
@@ -99,12 +119,19 @@ fn runGeode(argv: []const []const u8, cwd: []const u8, extra: []const Env) !Run 
     return .{ .code = code, .stdout = result.stdout, .stderr = result.stderr };
 }
 
+/// One edge of the full v1 block.
+const V1Edge = struct { edge_id: u64, dst: u64, w: i64 };
+
 /// What the seeded store holds.
 const Seed = struct {
     /// Every node id created (sorted).
     ids: []u64,
     /// The source of the three edges (to 1017, 1018 and 1019).
     src: u64,
+    /// The source whose outgoing chain is one full v1 block (same shard as `src`).
+    v1_src: u64 = 0,
+    /// Its edges in append order; the last one is in the tail slot.
+    v1_edges: []V1Edge = &.{},
     /// A slot-169 node with labels N and B and a property.
     labelled: u64 = 169,
     /// A slot-169 node that was labelled and then deleted.
@@ -114,6 +141,7 @@ const Seed = struct {
 
     fn deinit(self: Seed) void {
         testing.allocator.free(self.ids);
+        testing.allocator.free(self.v1_edges);
     }
 
     fn has(self: Seed, id: u64) bool {
@@ -133,10 +161,90 @@ fn openAdapter(data_dir: []const u8, key: ?[32]u8) !*StorageAdapter {
     });
 }
 
+/// An empty v1 chain block in `file` of `shard`, as a store written before
+/// graph_storage 0.2.24 (GAP-ENT-0024, inline public ids) left a chain head.
+fn installEmptyV1Block(shard: *gs.GraphEngine, file: gs.FileId) !u64 {
+    const fsm = switch (file) {
+        .adj_out => &shard.free_space_adj_out,
+        .in_idx => &shard.free_space_in_idx,
+        else => unreachable,
+    };
+    const page = try fsm.allocPage();
+    const frame = try shard.buffer_pool.pinNew(file, page);
+    const bh = gs.edge.EdgeBlockHeader{ .next_block = 0, .count = 0, .kind = 0, .entry_format = gs.edge.ENTRY_FORMAT_V1, .payload_size = 0, .checksum = 0 };
+    @memcpy(frame.dataSlice()[gs.page.PAGE_HEADER_SIZE..][0..@sizeOf(gs.edge.EdgeBlockHeader)], std.mem.asBytes(&bh));
+    shard.buffer_pool.unpin(shard.buffer_pool.frameIndex(frame), true);
+    return page;
+}
+
+/// Make an empty v1 block the outgoing chain of `src`.
+fn installV1OutHead(shard: *gs.GraphEngine, src: u64) !void {
+    const page = try installEmptyV1Block(shard, .adj_out);
+    const txn = try shard.beginTxn();
+    errdefer shard.abortTxn(txn) catch {};
+    var rec = (try shard.getNode(src)) orelse return error.NodeNotFound;
+    if (rec.out_head != 0) return error.SourceAlreadyHasEdges;
+    rec.out_head = page;
+    try shard.putNodeTxn(src, rec, txn);
+    try shard.logPagePublic(txn, .adj_out, page);
+    try shard.commitTxn(txn);
+}
+
+/// Make an empty v1 block the co-located incoming chain of `dst` on `shard`.
+fn installV1InHead(shard: *gs.GraphEngine, dst: u64) !void {
+    if (try shard.in_head_dir.getHead(dst) != 0) return error.DestinationAlreadyHasEdges;
+    const page = try installEmptyV1Block(shard, .in_idx);
+    const txn = try shard.beginTxn();
+    errdefer shard.abortTxn(txn) catch {};
+    const dir_page = try shard.in_head_dir.setHead(dst, page);
+    try shard.logPagePublic(txn, .in_dir, dir_page);
+    try shard.logPagePublic(txn, .in_idx, page);
+    try shard.commitTxn(txn);
+}
+
+/// The block header of the first block of `head`'s chain in `file`.
+fn chainHeader(shard: *gs.GraphEngine, file: gs.FileId, head: u64) !gs.edge.EdgeBlockHeader {
+    const frame = try shard.buffer_pool.pin(file, head);
+    defer shard.buffer_pool.unpin(shard.buffer_pool.frameIndex(frame), false);
+    return std.mem.bytesToValue(gs.edge.EdgeBlockHeader, frame.dataSlice()[gs.page.PAGE_HEADER_SIZE..][0..@sizeOf(gs.edge.EdgeBlockHeader)]);
+}
+
+/// A public id no node or edge of the fixture has (bit 63 clear).
+fn legacyPublicId(k: usize) u64 {
+    return (@as(u64, 0x5A) << 40) + k;
+}
+
+/// Persist a node's public id the way geode does (`persistNodePublicId`),
+/// so the executor can return it.
+fn persistNodePublicId(adapter: *StorageAdapter, id: u64) !void {
+    var buf: [16]u8 = undefined;
+    const text = try std.fmt.bufPrint(&buf, "{x:0>16}", .{(@as(u64, 0x4E) << 40) + id});
+    try adapter.setNodeProperty(graph, id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, .{ .String = text });
+}
+
+/// An edge as geode wrote it before inline public ids (GAP-ENT-0024): an
+/// id-less engine edge, its public id persisted as the
+/// `__geode_internal_edge_id` property, then the user's property `w`. The
+/// caller has turned edge-property slab packing off on the source's shard,
+/// as it was before graph_storage 0.2.35 (GAP-0060): a v1 entry holds only a
+/// 32-bit property head.
+fn createLegacyEdge(adapter: *StorageAdapter, from: u64, to: u64, w: i64, public_id: u64) !u64 {
+    const eid = try adapter.createEdge(graph, from, to, v1_type);
+    var buf: [16]u8 = undefined;
+    const text = try std.fmt.bufPrint(&buf, "{x:0>16}", .{public_id});
+    try adapter.setEdgeProperty(graph, from, to, eid, graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY, .{ .String = text });
+    try adapter.setEdgeProperty(graph, from, to, eid, "w", .{ .Int = w });
+    return eid;
+}
+
 /// Seed a store through geode's StorageAdapter (the engine the server
-/// opens): bare nodes until ids 169, 339, 509, 1017, 1018 and 1019 exist,
-/// then label every node N except the bare one, give 169 a second label and
+/// opens): nodes until ids 169, 339, 509, 1017, 1018 and 1019 exist, then
+/// give every node but the bare one its persisted public id and label N
+/// (the bare one keeps nothing but its tail), give 169 a second label and
 /// a property, delete 339, and connect one source to 1017, 1018 and 1019.
+/// Then a second source on the same shard gets an outgoing chain that is one
+/// full v1 block: 339 pre-inline-id edges of type V, each with a property
+/// `w` = its append index, to 339 new nodes labelled N.
 fn seedStore(data_dir: []const u8, key: ?[32]u8) !Seed {
     const allocator = testing.allocator;
     const adapter = try openAdapter(data_dir, key);
@@ -155,20 +263,62 @@ fn seedStore(data_dir: []const u8, key: ?[32]u8) !Seed {
         try ids.append(allocator, try adapter.createNode(graph, &.{}));
     }
     std.mem.sort(u64, ids.items, {}, std.sort.asc(u64));
-    var seed: Seed = .{ .ids = try ids.toOwnedSlice(allocator), .src = 0 };
-    errdefer seed.deinit();
-    for (seed.ids) |id| {
+    var seed: Seed = .{ .ids = &.{}, .src = 0 };
+    for (ids.items) |id| {
         if (id == seed.bare) continue;
+        try persistNodePublicId(adapter, id);
         try adapter.addNodeLabel(graph, id, "N");
     }
     try adapter.addNodeLabel(graph, seed.labelled, "B");
     try adapter.setNodeProperty(graph, seed.labelled, "name", .{ .String = "slot-169" });
     try adapter.deleteNode(graph, seed.deleted);
     // A source that is none of the interesting nodes.
-    seed.src = for (seed.ids) |id| {
+    seed.src = for (ids.items) |id| {
         if (id % nodes_per_page != nodes_per_page - 1 and id != 1017 and id != 1018 and id != 1019) break id;
     } else return error.NoSource;
     for ([_]u64{ 1017, 1018, 1019 }) |dst| _ = try adapter.createEdge(graph, seed.src, dst, "E");
+
+    // The full v1 block. Its source is on src's shard, so the incoming
+    // directory pages it writes are the ones already in the report.
+    const src_shard = gs.shard_count.shardOfNode(seed.src);
+    seed.v1_src = for (ids.items) |id| {
+        if (id != seed.src and gs.shard_count.shardOfNode(id) == src_shard and id % nodes_per_page != nodes_per_page - 1 and
+            id != seed.deleted and id < 1017) break id;
+    } else return error.NoV1Source;
+    const mg = try adapter.getOrCreateGraph(graph);
+    const shard = mg.shardEngineForNode(seed.v1_src);
+    try installV1OutHead(shard, seed.v1_src);
+    const slab_packing = shard.config.edge_prop_slab_packing;
+    shard.config.edge_prop_slab_packing = false;
+    defer shard.config.edge_prop_slab_packing = slab_packing;
+    var v1: std.ArrayList(V1Edge) = .empty;
+    errdefer v1.deinit(allocator);
+    for (0..v1_cap) |k| {
+        const d = try adapter.createNode(graph, &.{});
+        try persistNodePublicId(adapter, d);
+        try adapter.addNodeLabel(graph, d, "N");
+        try ids.append(allocator, d);
+        const eid = try createLegacyEdge(adapter, seed.v1_src, d, @intCast(k), legacyPublicId(k));
+        try v1.append(allocator, .{ .edge_id = eid, .dst = d, .w = @intCast(k) });
+    }
+    {
+        const rec = (try shard.getNode(seed.v1_src)) orelse return error.NodeNotFound;
+        const bh = try chainHeader(shard, .adj_out, rec.out_head);
+        try testing.expectEqual(gs.edge.ENTRY_FORMAT_V1, bh.entry_format);
+        try testing.expectEqual(@as(u16, v1_cap), bh.count);
+        try testing.expectEqual(@as(u64, 0), bh.next_block);
+        // What each copy of the tail edge holds before the old envelope
+        // drops the outgoing one's rel_type and prop_head.
+        const last = v1.items[v1.items.len - 1];
+        const ix = (try shard.edge_index.get(last.edge_id)) orelse return error.EdgeIndexMissing;
+        const in_head = try shard.in_head_dir.getHead(last.dst);
+        const mirror = (try shard.adj_in_remote.locateEntry(in_head, last.edge_id)) orelse return error.MirrorMissing;
+        std.debug.print("SONNY-6452 fixture: v1 source {d} (shard {d}), tail edge {d} -> {d}: edge index rel_type {d} prop_head {x}; in_idx mirror rel_type {d} prop_head {x}\n", .{ seed.v1_src, src_shard, last.edge_id, last.dst, ix.rel_type, ix.prop_head, mirror.entry.rel_type, mirror.entry.prop_head });
+    }
+    std.mem.sort(u64, ids.items, {}, std.sort.asc(u64));
+    seed.ids = try ids.toOwnedSlice(allocator);
+    seed.v1_edges = try v1.toOwnedSlice(allocator);
+    errdefer seed.deinit();
     try adapter.checkpointAll();
     return seed;
 }
@@ -286,6 +436,18 @@ fn reportCount(report: std.json.Value, field: []const u8) !u64 {
     return total;
 }
 
+/// The one adjacency entry a report names.
+fn onlyAdjacencyEntry(report: std.json.Value) !std.json.Value {
+    const graphs = report.object.get("graphs") orelse return error.ReportHasNoGraphs;
+    for (graphs.array.items) |g| {
+        for ((g.object.get("shards") orelse return error.ReportHasNoShards).array.items) |s| {
+            const list = (s.object.get("adjacency_entries") orelse return error.ReportFieldMissing).array.items;
+            if (list.len != 0) return list[0];
+        }
+    }
+    return error.NoAdjacencyEntry;
+}
+
 /// Old-envelope pages of file `name` summed over every shard of every graph.
 fn reportOldPages(report: std.json.Value, name: []const u8) !u64 {
     var total: u64 = 0;
@@ -316,6 +478,131 @@ fn parseStdout(r: Run, what: []const u8) !std.json.Parsed(std.json.Value) {
         r.dump(what);
         return e;
     };
+}
+
+/// geode's executor over `data_dir`, opened as the server opens it (the
+/// key from GEODE_TDE_KEY), on the fixture's graph.
+const Gql = struct {
+    arena: std.heap.ArenaAllocator,
+    session: execution.SessionState,
+    ctx: execution.ExecutionContext,
+
+    /// `live_count_check = false` sets the operator escape hatch
+    /// GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK=1: the only way geode loads a
+    /// graph with a lost node record (REQ-GQL-028 otherwise refuses it).
+    fn open(data_dir: []const u8, live_count_check: bool) !Gql {
+        if (setenv("GEODE_TDE_KEY", tde_key_hex, 1) != 0) return error.SetenvFailed;
+        errdefer _ = unsetenv("GEODE_TDE_KEY");
+        if (!live_count_check and setenv("GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK", "1", 1) != 0) return error.SetenvFailed;
+        errdefer _ = unsetenv("GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK");
+        execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(testing.allocator, data_dir);
+        errdefer {
+            execution.cleanupCatalogInstance();
+            graph_store.deinitGlobalStore();
+            graph_store.setDataDirOverride(testing.allocator, null);
+        }
+        _ = graph_store.getGlobalStore(testing.allocator);
+        if (graph_store.getGlobalAdapter() == null) return error.NoStorageAdapter;
+        const catalog = try execution.ensureCatalogInstance(testing.allocator);
+        return .{
+            .arena = std.heap.ArenaAllocator.init(testing.allocator),
+            .session = execution.SessionState.init(testing.allocator),
+            .ctx = .{ .catalog = catalog },
+        };
+    }
+
+    fn close(self: *Gql) void {
+        self.session.deinit();
+        execution.cleanupCatalogInstance();
+        graph_store.deinitGlobalStore();
+        graph_store.setDataDirOverride(testing.allocator, null);
+        _ = unsetenv("GEODE_TDE_KEY");
+        _ = unsetenv("GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK");
+        self.arena.deinit();
+    }
+
+    /// The rows of `query` (run after `USE GRAPH`), each `a|b`, sorted.
+    fn rows(self: *Gql, query: []const u8) ![]const []const u8 {
+        const aa = self.arena.allocator();
+        self.ctx.session_state = &self.session;
+        for ([_][]const u8{ "USE GRAPH " ++ graph, query }, 0..) |q, qi| {
+            var parsed = try geode.parseGqlOptions(q, aa, .{});
+            defer parsed.deinit();
+            const result = try execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
+            if (qi == 0) continue;
+            const out = try aa.alloc([]const u8, result.rows.len);
+            for (result.rows, out) |row, *o| {
+                const cells = try aa.alloc([]const u8, row.len);
+                for (row, cells) |cell, *c| c.* = try render(aa, cell);
+                o.* = try std.mem.join(aa, "|", cells);
+            }
+            std.mem.sort([]const u8, out, {}, struct {
+                fn lt(_: void, a: []const u8, b: []const u8) bool {
+                    return std.mem.lessThan(u8, a, b);
+                }
+            }.lt);
+            return out;
+        }
+        unreachable;
+    }
+};
+
+fn render(aa: std.mem.Allocator, v: Value) ![]const u8 {
+    return switch (v) {
+        .Str, .Text => |t| try aa.dupe(u8, t),
+        .Int => |n| try std.fmt.allocPrint(aa, "{d}", .{n}),
+        .Null => "null",
+        else => try std.fmt.allocPrint(aa, "<{s}>", .{@tagName(v)}),
+    };
+}
+
+/// What MATCH shows of the v1 block's edges, in both directions.
+const V1View = struct {
+    out_typed: []const []const u8,
+    in_typed: []const []const u8,
+    out_sum: []const []const u8,
+    in_sum: []const []const u8,
+    tail_out: []const []const u8,
+    tail_in: []const []const u8,
+};
+
+fn viewV1(g: *Gql) !V1View {
+    return .{
+        .out_typed = try g.rows("MATCH (a)-[r:" ++ v1_type ++ "]->(b) RETURN count(r)"),
+        .in_typed = try g.rows("MATCH (b)<-[r:" ++ v1_type ++ "]-(a) RETURN count(r)"),
+        .out_sum = try g.rows("MATCH (a)-[r]->(b:N) WHERE r.w >= 0 RETURN count(r), sum(r.w)"),
+        .in_sum = try g.rows("MATCH (b:N)<-[r]-(a) WHERE r.w >= 0 RETURN count(r), sum(r.w)"),
+        .tail_out = try g.rows("MATCH (a)-[r]->(b) WHERE r.w = 338 RETURN type(r), r.w"),
+        .tail_in = try g.rows("MATCH (b)<-[r]-(a) WHERE r.w = 338 RETURN type(r), r.w"),
+    };
+}
+
+fn printView(what: []const u8, v: V1View) void {
+    std.debug.print("SONNY-6452 MATCH {s}: typed out {s} in {s}; count,sum(w) out {s} in {s}; edge w=338 out {s} in {s}\n", .{
+        what,
+        if (v.out_typed.len == 1) v.out_typed[0] else "?",
+        if (v.in_typed.len == 1) v.in_typed[0] else "?",
+        if (v.out_sum.len == 1) v.out_sum[0] else "?",
+        if (v.in_sum.len == 1) v.in_sum[0] else "?",
+        if (v.tail_out.len == 1) v.tail_out[0] else "(none)",
+        if (v.tail_in.len == 1) v.tail_in[0] else "(none)",
+    });
+}
+
+fn expectRows(what: []const u8, got: []const []const u8, want: []const []const u8) !void {
+    var same = got.len == want.len;
+    if (same) for (got, want) |g, w| {
+        same = same and std.mem.eql(u8, g, w);
+    };
+    if (!same) {
+        std.debug.print("SONNY-6452 {s}: got {d} rows:\n", .{ what, got.len });
+        for (got) |g| std.debug.print("  {s}\n", .{g});
+        std.debug.print("want:\n", .{});
+        for (want) |w| std.debug.print("  {s}\n", .{w});
+        return error.TestExpectedEqual;
+    }
 }
 
 fn verify(root: []const u8, data_dir: []const u8, key: bool) !Run {
@@ -361,6 +648,36 @@ test "SONNY-6452 (1) geode storage verify --check tde-page-tail finds the record
             for (in) |e| found = found or e.neighbor == seed.src;
             try testing.expectEqual(visible, found);
         }
+        // The v1 block's tail entry lost its rel_type and prop_head.
+        const out = try adapter.getOutgoingEdges(graph, seed.v1_src, allocator);
+        defer allocator.free(out);
+        try testing.expectEqual(v1_cap, out.len);
+        const last = seed.v1_edges[seed.v1_edges.len - 1];
+        for (out) |e| {
+            if (e.edge_id != last.edge_id) continue;
+            try testing.expectEqual(@as(u32, 0), e.rel_type);
+            try testing.expectEqual(@as(u64, 0), e.prop_head);
+        }
+    }
+    // ... and geode shows it. The lost node keeps the graph from loading at
+    // all (its shard counts one more live node than it holds) ...
+    {
+        var g = try Gql.open(control_dir, true);
+        defer g.close();
+        try testing.expectError(error.DataCorruption, g.rows("MATCH (n:N) RETURN count(n)"));
+    }
+    // ... and with that check off, the edge is missing from a typed expand in
+    // both directions and its type is wrong.
+    {
+        var g = try Gql.open(control_dir, false);
+        defer g.close();
+        const v = try viewV1(&g);
+        printView("before repair", v);
+        try expectRows("before repair: typed outgoing count", v.out_typed, &.{"338"});
+        try expectRows("before repair: typed incoming count", v.in_typed, &.{"338"});
+        for ([_][]const []const u8{ v.tail_out, v.tail_in }) |tail| {
+            try testing.expect(!(tail.len == 1 and std.mem.eql(u8, tail[0], v1_type ++ "|338")));
+        }
     }
 
     // Expected damage: every created slot-169 node but the bare one has an
@@ -396,8 +713,17 @@ test "SONNY-6452 (1) geode storage verify --check tde-page-tail finds the record
         const heads = try reportIds(allocator, rep, "in_dir_lost_heads");
         defer allocator.free(heads);
         try expectIds("verify: lost incoming-edge directory heads", heads, &heads_want);
-        // geode's 8 KiB v2/v3 chain blocks end before the tail.
-        try testing.expectEqual(@as(u64, 0), try reportCount(rep, "adjacency_entries"));
+        // geode's 8 KiB v2/v3 chain blocks end before the tail; the full v1
+        // block's last entry does not.
+        {
+            const last = seed.v1_edges[seed.v1_edges.len - 1];
+            try testing.expectEqual(@as(u64, 1), try reportCount(rep, "adjacency_entries"));
+            const e = try onlyAdjacencyEntry(rep);
+            try testing.expectEqualStrings("adj_out", e.object.get("file").?.string);
+            try testing.expectEqual(@as(i64, v1_cap - 1), e.object.get("slot").?.integer);
+            try testing.expectEqual(@as(i64, @intCast(last.edge_id)), e.object.get("edge_id").?.integer);
+            try testing.expectEqual(@as(i64, @intCast(last.dst)), e.object.get("neighbor").?.integer);
+        }
         if (round == 0) {
             std.debug.print("SONNY-6452 verify (old envelope): exit {?d}, {d} pages rewritten by the fixture, old_format_pages {d} (nodes {d}, in_dir {d}), liveness unknown {any}, lost {any}, lost heads {any}\n", .{
                 r.code,                                                                              rewritten,
@@ -464,6 +790,8 @@ test "SONNY-6452 (1) geode storage verify --check tde-page-tail finds the record
             .{ .field = "lost_pages_left", .value = 0 },
             .{ .field = "in_dir_rebuilt_shards", .value = 1, .at_least = true },
             .{ .field = "in_dir_blocked_shards", .value = 0 },
+            .{ .field = "adjacency_entries_repaired", .value = 1 },
+            .{ .field = "node_count_corrected", .value = 1 },
             .{ .field = "adjacency_entries_unrepaired", .value = 0 },
             .{ .field = "graphs_skipped", .value = 0 },
         }) |want| {
@@ -491,6 +819,29 @@ test "SONNY-6452 (1) geode storage verify --check tde-page-tail finds the record
         defer parsed.deinit();
         try testing.expect(try reportOk(parsed.value));
         try testing.expectEqual(@as(u64, 0), try reportOldPages(parsed.value, "in_dir"));
+        try testing.expectEqual(@as(u64, 0), try reportCount(parsed.value, "adjacency_entries"));
+    }
+
+    // A second repair finds nothing to do and changes nothing.
+    {
+        const env = [_]Env{.{ .name = "GEODE_TDE_KEY", .value = tde_key_hex }};
+        const r = try runGeode(&.{ geode_binary, "storage", "repair", "--tde-page-tail", "--i-have-a-backup", "--data-dir", data_dir }, root.path(), &env);
+        defer r.deinit();
+        if (r.code != @as(?u8, 0)) r.dump("second repair");
+        try testing.expectEqual(@as(?u8, 0), r.code);
+        const parsed = try parseStdout(r, "second repair");
+        defer parsed.deinit();
+        const repaired = parsed.value.object.get("repaired") orelse return error.RepairReportMissing;
+        var it = repaired.object.iterator();
+        while (it.next()) |kv| {
+            const zero = switch (kv.value_ptr.*) {
+                .integer => |n| n == 0,
+                .array => |a| a.items.len == 0,
+                else => false,
+            };
+            if (!zero) std.debug.print("SONNY-6452 second repair: {s} is not zero\n", .{kv.key_ptr.*});
+            try testing.expect(zero);
+        }
     }
 
     // The repaired store, opened by the engine.
@@ -526,6 +877,122 @@ test "SONNY-6452 (1) geode storage verify --check tde-page-tail finds the record
             if (!has_n) std.debug.print("SONNY-6452: node {d} lost label N\n", .{id});
             try testing.expect(has_n);
         }
+        // The v1 tail entry is whole again.
+        const shard = mg.shardEngineForNode(seed.v1_src);
+        const last = seed.v1_edges[seed.v1_edges.len - 1];
+        try shard.ensureDerivedHydrated();
+        const ix = (try shard.edge_index.get(last.edge_id)) orelse return error.EdgeIndexMissing;
+        try testing.expectEqual(mg.label_dict.getId(v1_type).?, ix.rel_type);
+        const out = try adapter.getOutgoingEdges(graph, seed.v1_src, allocator);
+        defer allocator.free(out);
+        try testing.expectEqual(v1_cap, out.len);
+        for (out) |e| {
+            if (e.edge_id != last.edge_id) continue;
+            try testing.expectEqual(ix.rel_type, e.rel_type);
+            try testing.expectEqual(ix.prop_head, e.prop_head);
+            try testing.expect(e.prop_head != 0);
+        }
+    }
+    // Through MATCH, in both directions: every edge of the block, its type
+    // and its property.
+    {
+        var g = try Gql.open(data_dir, true);
+        defer g.close();
+        const v = try viewV1(&g);
+        printView("after repair", v);
+        const sum = std.fmt.comptimePrint("{d}|{d}", .{ v1_cap, (v1_cap - 1) * v1_cap / 2 });
+        try expectRows("after repair: typed outgoing count", v.out_typed, &.{std.fmt.comptimePrint("{d}", .{v1_cap})});
+        try expectRows("after repair: typed incoming count", v.in_typed, &.{std.fmt.comptimePrint("{d}", .{v1_cap})});
+        try expectRows("after repair: outgoing count, sum(w)", v.out_sum, &.{sum});
+        try expectRows("after repair: incoming count, sum(w)", v.in_sum, &.{sum});
+        try expectRows("after repair: the tail edge, outgoing", v.tail_out, &.{v1_type ++ "|338"});
+        try expectRows("after repair: the tail edge, incoming", v.tail_in, &.{v1_type ++ "|338"});
+    }
+}
+
+test "SONNY-6452 (1) an adjacency entry whose mirror lost the same bytes is reported unrepaired with its reason, and left as it is" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const allocator = testing.allocator;
+    logging.init(.{ .level = .fatal });
+    logging.setLevel(.fatal);
+    var root = try test_scratch.ScratchDir.create("sonny6452-mirror-tail");
+    defer root.remove();
+    const data_dir = try std.fmt.allocPrint(allocator, "{s}/data", .{root.path()});
+    defer allocator.free(data_dir);
+
+    // 339 parallel pre-inline-id edges a -> b, both of whose chains are one
+    // v1 block: the outgoing and the incoming chain receive the same
+    // appends, so the last edge is in the tail slot of both full blocks.
+    var a: u64 = 0;
+    var last_edge: u64 = 0;
+    {
+        const adapter = try openAdapter(data_dir, tde_key);
+        defer adapter.deinit();
+        a = try adapter.createNode(graph, &.{});
+        const b = try adapter.createNode(graph, &.{});
+        for ([_]u64{ a, b }) |id| {
+            try persistNodePublicId(adapter, id);
+            try adapter.addNodeLabel(graph, id, "N");
+        }
+        const mg = try adapter.getOrCreateGraph(graph);
+        const shard = mg.shardEngineForNode(a);
+        try installV1OutHead(shard, a);
+        try installV1InHead(shard, b);
+        const slab_packing = shard.config.edge_prop_slab_packing;
+        shard.config.edge_prop_slab_packing = false;
+        defer shard.config.edge_prop_slab_packing = slab_packing;
+        for (0..v1_cap) |k| last_edge = try createLegacyEdge(adapter, a, b, @intCast(k), legacyPublicId(k));
+        const out_bh = try chainHeader(shard, .adj_out, ((try shard.getNode(a)) orelse return error.NodeNotFound).out_head);
+        const in_bh = try chainHeader(shard, .in_idx, try shard.in_head_dir.getHead(b));
+        for ([_]gs.edge.EdgeBlockHeader{ out_bh, in_bh }) |bh| {
+            try testing.expectEqual(gs.edge.ENTRY_FORMAT_V1, bh.entry_format);
+            try testing.expectEqual(@as(u16, v1_cap), bh.count);
+        }
+        try adapter.checkpointAll();
+    }
+    try testing.expect(try rewriteInLegacyEnvelope(data_dir, tde_key) > 0);
+
+    // Twice: the same answer, nothing written to the entries.
+    const env = [_]Env{.{ .name = "GEODE_TDE_KEY", .value = tde_key_hex }};
+    for (0..2) |round| {
+        const r = try runGeode(&.{ geode_binary, "storage", "repair", "--tde-page-tail", "--i-have-a-backup", "--data-dir", data_dir }, root.path(), &env);
+        defer r.deinit();
+        const parsed = try parseStdout(r, "repair (mirror in the tail)");
+        defer parsed.deinit();
+        if (round == 0) std.debug.print("SONNY-6452 repair (mirror in the tail): exit {?d}\n{s}\n", .{ r.code, r.stdout });
+        const ok = r.code == @as(?u8, 1) and r.says("not repairable");
+        if (!ok) r.dump("repair (mirror in the tail)");
+        try testing.expect(ok);
+        const repaired = parsed.value.object.get("repaired") orelse return error.RepairReportMissing;
+        try testing.expectEqual(@as(i64, 0), (repaired.object.get("adjacency_entries_repaired") orelse return error.RepairReportMissing).integer);
+        try testing.expectEqual(@as(i64, 2), (repaired.object.get("adjacency_entries_unrepaired") orelse return error.RepairReportMissing).integer);
+        const issues = (repaired.object.get("adjacency_unrepaired") orelse return error.RepairReportMissing).array.items;
+        try testing.expectEqual(@as(usize, 2), issues.len);
+        var files = [_]bool{ false, false };
+        for (issues) |is| {
+            try testing.expectEqualStrings("mirror_in_tail", is.object.get("reason").?.string);
+            try testing.expectEqual(@as(i64, @intCast(last_edge)), is.object.get("edge_id").?.integer);
+            try testing.expectEqual(@as(i64, v1_cap - 1), is.object.get("slot").?.integer);
+            const file = is.object.get("file").?.string;
+            if (std.mem.eql(u8, file, "adj_out")) files[0] = true;
+            if (std.mem.eql(u8, file, "in_idx")) files[1] = true;
+        }
+        try testing.expect(files[0] and files[1]);
+        // The shard's incoming directory is not rebuilt over a damaged outgoing entry.
+        try testing.expectEqual(@as(i64, 1), (repaired.object.get("in_dir_blocked_shards") orelse return error.RepairReportMissing).integer);
+        const after = parsed.value.object.get("after") orelse return error.RepairReportMissing;
+        try testing.expect(!(try reportOk(after)));
+        try testing.expectEqual(@as(u64, 2), try reportCount(after, "adjacency_entries"));
+    }
+    const adapter = try openAdapter(data_dir, tde_key);
+    defer adapter.deinit();
+    const out = try adapter.getOutgoingEdges(graph, a, allocator);
+    defer allocator.free(out);
+    try testing.expectEqual(v1_cap, out.len);
+    for (out) |e| {
+        if (e.edge_id != last_edge) continue;
+        try testing.expectEqual(@as(u32, 0), e.rel_type);
+        try testing.expectEqual(@as(u64, 0), e.prop_head);
     }
 }
 
