@@ -5456,7 +5456,11 @@ REQ-SONNY-6436-QUIC-RETRY-STOPS,ChunkedExecution,QuicRetryStopsWithSummary,TESTE
 REQ-SONNY-6436-QUIC-RETRY-STOPS,ChunkedExecution,Regression,TESTED,tests/test_sonny6436_quic_retry_stops.zig,tests/test_sonny6436_quic_retry_stops.zig,,cli,2026-11-12
 REQ-SONNY-6436-RLS-RAW-TRUTHINESS,RLSExpressionEvaluation,OnlyTrueAdmits,TESTED,src/security/rls_core.zig,tests/test_sonny6436_rls_raw_truthiness.zig,,security,2026-11-12
 REQ-SONNY-6436-RLS-RAW-TRUTHINESS,RLSExpressionEvaluation,Regression,TESTED,tests/test_sonny6436_rls_raw_truthiness.zig,tests/test_sonny6436_rls_raw_truthiness.zig,,security,2026-11-12
+REQ-SONNY-6437-GQL-GROUP-KEYS,GqlEngineAggregation,GroupKeyOwnership,TESTED,src/exec.zig,tests/test_sonny6437_query_residuals.zig,,engine,2026-11-12
+REQ-SONNY-6437-META-RLS,GPS Metadata Isolation,DbPropertyKeysRLSDeny,TESTED,src/execution/meta_dispatch.zig,tests/test_sonny6437_query_residuals.zig,,security,2026-11-12
+REQ-SONNY-6437-META-RLS,GPS Metadata Isolation,DbRelationshipTypesRLSDeny,TESTED,src/execution/meta_dispatch.zig,tests/test_sonny6437_query_residuals.zig,,security,2026-11-12
 REQ-SONNY-6437-QUERY-RESIDUALS,GPS Metadata Isolation,Regression,TESTED,tests/test_sonny6437_query_residuals.zig,tests/test_sonny6437_query_residuals.zig,,engine,2026-11-12
+REQ-SONNY-6437-WHERE-AFTER-YIELD,ProcedureCall,YieldWhereRefusal,TESTED,src/gql/parser.zig,tests/test_sonny6437_query_residuals.zig,,parser,2026-11-12
 REQ-SONNY-6442-MASTER-KEY-CHECK-PATHS,Key configuration,EveryFleKeyPathChecksKcv,TESTED,tests/test_sonny6442_master_key_check_paths.zig,tests/test_sonny6442_master_key_check_paths.zig,,security,2026-11-12
 REQ-SONNY-6442-MASTER-KEY-CHECK-PATHS,Key configuration,SharedVerifyOrRecord,TESTED,src/keys/master_key_check.zig,tests/test_sonny6442_master_key_check_paths.zig,,security,2026-11-12
 REQ-SONNY-6442-SERVE-UNKNOWN-OPTION,ServerCli,UnknownOptionRefused,TESTED,tests/test_sonny6442_serve_unknown_options.zig,tests/test_sonny6442_serve_unknown_options.zig,,cli,2026-11-12

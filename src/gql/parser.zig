@@ -568,6 +568,18 @@ pub const Parser = struct {
         return error.UndirectedEdgeNotSupported;
     }
 
+    // CANARY: REQ=REQ-SONNY-6437-WHERE-AFTER-YIELD; FEATURE="ProcedureCall"; ASPECT=YieldWhereRefusal; STATUS=TESTED; TEST=tests/test_sonny6437_query_residuals.zig; OWNER=parser; UPDATED=2026-11-12
+    /// SONNY-6437 item 7: a WHERE right after a YIELD list (`CALL db.labels()
+    /// YIELD label WHERE ...`, a Cypher form) is not ISO/IEC 39075:2024 GQL:
+    /// 16.14 <yield clause> is `YIELD <yield item list>` only, and in a linear
+    /// query (14.3) a call query statement (14.5) is filtered by a following
+    /// filter statement (14.6, `FILTER [WHERE] <search condition>`). Refused
+    /// with a message that says so (42000); it was a bare syntax error.
+    fn refuseWhereAfterYield(self: *Parser) ParserError!void {
+        if (self.cur.kind != .WHERE) return;
+        return self.unexpected("a WHERE after YIELD is not ISO/IEC 39075 GQL: a <yield clause> (16.14) is YIELD <yield item list> only, and the standard filters a procedure call's rows with a FILTER statement (14.6) after the CALL, which Geode does not yet accept after CALL ... YIELD");
+    }
+
     fn unexpected(self: *Parser, what: []const u8) ParserError {
         // For now, we just return UnexpectedToken; callers like CLI can add context using 'what'.
         self.last_error = what;
@@ -1762,6 +1774,7 @@ pub const Parser = struct {
                         var items = std.ArrayList(ast.ReturnItem).empty;
                         try self.parseProjectionItems(&items);
                         yield_items = try items.toOwnedSlice(self.arena.allocator());
+                        try self.refuseWhereAfterYield();
                     }
 
                     // Optional RETURN clause
@@ -2963,6 +2976,7 @@ pub const Parser = struct {
                 var items = std.ArrayList(ast.ReturnItem).empty;
                 try self.parseProjectionItems(&items);
                 yield_items = try items.toOwnedSlice(self.arena.allocator());
+                try self.refuseWhereAfterYield();
             }
 
             call_clause = .{

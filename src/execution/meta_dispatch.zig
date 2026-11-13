@@ -28,6 +28,7 @@ const tenancy = @import("tenancy.zig");
 const session_graph = @import("session_graph.zig");
 const catalog_mod = @import("../schema/catalog.zig");
 const tenant_visibility = @import("tenant_visibility.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 // SONNY-6351 item 2: the session's RLS label policies.
 const rls_types = @import("rls_types");
 
@@ -185,6 +186,7 @@ pub fn executeDbRelationshipTypesForTest(allocator: std.mem.Allocator, store: *g
     return executeDbRelationshipTypes(allocator, store, ctx);
 }
 
+// CANARY: REQ=REQ-SONNY-6437-META-RLS; FEATURE="GPS Metadata Isolation"; ASPECT=DbRelationshipTypesRLSDeny; STATUS=TESTED; TEST=tests/test_sonny6437_query_residuals.zig; OWNER=security; UPDATED=2026-11-12
 fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
     // GAP-0840: route through the shared strict-tenancy decision (see executeDbLabels).
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
@@ -196,10 +198,19 @@ fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.
         allocator.free(types);
     }
 
+    // SONNY-6437 item 5: an edge type the session's RLS policy denies is
+    // omitted, as `executeDbLabels` omits a denied label: a type is a table as
+    // a label is (SONNY-2710), and a deny on it hides every edge of it.
+    var policies = try sessionLabelPolicies(allocator, ctx);
+    defer if (policies) |*p| p.deinit();
+
     // listEdgeTypes returns types in hash-iteration order; sort for stability.
     var sorted = try std.ArrayList([]const u8).initCapacity(allocator, types.len);
     defer sorted.deinit(allocator);
-    for (types) |t| try sorted.append(allocator, t);
+    for (types) |t| {
+        if (policies) |*p| if (p.entries(t).denied) continue;
+        try sorted.append(allocator, t);
+    }
     std.mem.sort([]const u8, sorted.items, {}, lessThanString);
 
     const columns = try allocator.alloc([]const u8, 1);
@@ -234,6 +245,7 @@ pub fn executeDbPropertyKeysForTest(allocator: std.mem.Allocator, store: *graph_
     return executeDbPropertyKeys(allocator, store, ctx);
 }
 
+// CANARY: REQ=REQ-SONNY-6437-META-RLS; FEATURE="GPS Metadata Isolation"; ASPECT=DbPropertyKeysRLSDeny; STATUS=TESTED; TEST=tests/test_sonny6437_query_residuals.zig; OWNER=security; UPDATED=2026-11-12
 fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
     // Use a StringHashMap to deduplicate. The map OWNS each key string so that
     // freeing the intermediate label/prop-key slices returned by the store
@@ -254,6 +266,37 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     // rather than serving the all-tenants property-key view.
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
 
+    // SONNY-6437 item 5: the keys of rows the session's RLS label policies
+    // hide are omitted, as `executeDbLabels` omits a denied label. A deny on
+    // any of a node's labels hides the node (SONNY-2690), so the per-label
+    // key index, which lists a `:Pub:Sec` node's keys under `:Pub` too,
+    // cannot answer under a deny: the visible nodes are read instead.
+    var policies = try sessionLabelPolicies(allocator, ctx);
+    defer if (policies) |*p| p.deinit();
+    const denies = if (policies) |p| p.denied.count() > 0 else false;
+
+    if (denies) {
+        // Every graph's nodes, then the MATCH tenant rule (a parent sees
+        // its descendants' rows, SONNY-6344).
+        const node_ids = try store.getAllNodesForTenant(allocator, null);
+        defer allocator.free(node_ids);
+        for (node_ids) |node_id| {
+            const node = store.getNodePtrHydrated(node_id) orelse continue;
+            if (!tenant_visibility.passesTenantFilterSlice(node.tenant_id, filter_tenant)) continue;
+            if (nodeDenied(&policies.?, node.labels)) continue;
+            var prop_iter = node.properties.iterator();
+            while (prop_iter.next()) |p| {
+                const key = p.key_ptr.*;
+                if (!graph_storage_adapter.shouldExposePropertyKey(key)) continue;
+                if (seen.contains(key)) continue;
+                const owned = try allocator.dupe(u8, key);
+                errdefer allocator.free(owned);
+                try seen.put(owned, {});
+                try ordered.append(allocator, owned);
+            }
+        }
+    }
+
     // --- Node property keys via the tenant-indexed PERF-C structures ---
     // 1. Get the labels visible to this tenant (or all if admin).
     // SONNY-6344: hierarchy-aware (a parent also sees its descendants' rows).
@@ -265,6 +308,7 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
 
     // 2. For each label, collect the property keys indexed under that label+tenant.
     for (labels) |label| {
+        if (denies) break;
         const keys = try tenant_visibility.listPropertiesForLabelVisible(allocator, store, filter_tenant, label);
         defer {
             for (keys) |k| allocator.free(k);
@@ -294,6 +338,8 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
         // the edge's own tag by the MATCH rule (a parent sees its
         // descendants' edges), not the exact tag.
         if (!tenant_visibility.passesTenantFilterSlice(edge.tenant_id, filter_tenant)) continue;
+        // SONNY-6437 item 5: an edge of a denied type is hidden.
+        if (policies) |*p| if (p.entries(edge.label).denied) continue;
         var prop_iter = edge.properties.iterator();
         while (prop_iter.next()) |p| {
             const key = p.key_ptr.*;
@@ -325,6 +371,15 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         .owns_value_memory = true,
     };
+}
+
+/// SONNY-6437 item 5: whether a label policy hides a node with `labels`: a
+/// deny on any of them (SONNY-2690). A node with no label is the table
+/// "default", as `passesRLSFilter` looks it up.
+fn nodeDenied(policies: *const rls_types.RLSFilterEngine.LabelPolicySnapshot, labels: []const []const u8) bool {
+    if (labels.len == 0) return policies.entries("default").denied;
+    for (labels) |label| if (policies.entries(label).denied) return true;
+    return false;
 }
 
 // ===========================================================================

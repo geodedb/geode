@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T04:46:44.581244583Z",
+  "generated_at": "2026-11-13T04:55:00.150081614Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85479,6 +85479,58 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6437-GQL-GROUP-KEYS",
+      "features": [
+        {
+          "feature": "GqlEngineAggregation",
+          "aspect": "GroupKeyOwnership",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6437-META-RLS",
+      "features": [
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "DbPropertyKeysRLSDeny",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "DbRelationshipTypesRLSDeny",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6437-QUERY-RESIDUALS",
       "features": [
         {
@@ -85493,6 +85545,25 @@
           ],
           "benches": [],
           "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6437-WHERE-AFTER-YIELD",
+      "features": [
+        {
+          "feature": "ProcedureCall",
+          "aspect": "YieldWhereRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
           "updated": "2026-11-12"
         }
       ]
@@ -93459,7 +93530,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4870
+      "TESTED": 4874
     },
     "by_aspect": {
       "2PC": 3,
@@ -94291,9 +94362,11 @@
       "DbLabelsTenantFilter": 1,
       "DbPropertyKeys": 1,
       "DbPropertyKeysFilter": 1,
+      "DbPropertyKeysRLSDeny": 1,
       "DbPropertyKeysTenantFilter": 1,
       "DbRelTypes": 1,
       "DbRelationshipTypesFilter": 1,
+      "DbRelationshipTypesRLSDeny": 1,
       "DbRelationshipTypesTenantFilter": 1,
       "DeadlineConfigRoute": 1,
       "DebugLogControl": 1,
@@ -95041,6 +95114,7 @@
       "GroupByPatterns": 1,
       "GroupByVerification": 1,
       "GroupCommitPin": 1,
+      "GroupKeyOwnership": 1,
       "GroupKeyResolution": 1,
       "GroupValidationHookImplementation": 1,
       "GroupValidationHookPipelineIntegration": 1,
@@ -97589,6 +97663,7 @@
       "XSSPrevention": 2,
       "YearMonthVsDayTime": 1,
       "YieldAndReturn": 1,
+      "YieldWhereRefusal": 1,
       "ZeroCopy": 1,
       "ZeroLength": 1,
       "ZeroLengthFilter": 1,

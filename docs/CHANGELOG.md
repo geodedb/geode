@@ -1844,6 +1844,31 @@
 
 ### Fixed
 
+- **`CALL db.relationshipTypes()` and `CALL db.propertyKeys()` omit what
+  the session's RLS label policies hide (SONNY-6437 item 5).** `CALL
+  db.labels()` omitted a denied label (SONNY-6351); the other two listed
+  every type and key. A type is a table as a label is (SONNY-2710), so a
+  denied edge type is omitted, and the keys of its edges; a node is hidden
+  by a deny on any of its labels (SONNY-2690), so under a deny the keys are
+  read from the visible nodes (the per-label key index lists a `:Pub:Sec`
+  node's keys under `:Pub`). Regression: `zig build
+  test-sonny6437-query-residuals`.
+- **A WHERE after YIELD is refused with a message that names the ISO form
+  (SONNY-6437 item 7).** `CALL db.labels() YIELD label WHERE ...` (a
+  Cypher form) is not ISO/IEC 39075:2024 GQL: 16.14 `<yield clause>` is
+  `YIELD <yield item list>` only, and a linear query (14.3) filters a call
+  query statement (14.5) with a following filter statement (14.6, `FILTER
+  [WHERE] <search condition>`). Both the statement-level `CALL` and `MATCH
+  ... CALL` answer 42000 with that explanation; they answered 42000 "a
+  statement ends at ';'..." and "expected token 'RETURN', got 'WHERE'".
+  Geode does not yet accept a FILTER statement after `CALL ... YIELD`.
+- **The `gql` executable's GROUP BY grouped every row on its own
+  (SONNY-6437 item 3).** `exec.groupAndAggregate` freed each group's
+  encoded key right after putting it in its group map, so the next row's
+  lookup compared against freed bytes and missed. The map now owns the key
+  (freed with the map); a row of an existing group frees its copy. Its sums
+  were already checked (the unchecked `+=` was in `HashAggregator`, removed
+  in SONNY-6436): a SUM or AVG past i64 range is NULL.
 - **The 3-node cluster tests take their client and cluster ports from
   `tests/test_ports.zig` (SONNY-6450 item 2).**
   `test-cluster-replicable-mutations` and `test-cluster-steady-state`
