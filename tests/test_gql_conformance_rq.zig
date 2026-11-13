@@ -32,12 +32,11 @@ const geode = @import("geode");
 
 // Imports from the conformance infrastructure.
 // lib.zig exports: geode.conformance, geode.gql.status, geode.server_flags,
-//                  geode.confusables, geode.impl_flagger
+//                  geode.confusables
 const conformance = geode.conformance;
 const status = geode.gql.status;
 const server_flags = geode.server_flags;
 const confusables = geode.confusables;
-const impl_flagger = geode.impl_flagger;
 
 // RQ-0001: Execute conforming GQL programs.
 // The implementation can execute the minimal conforming program set.
@@ -62,8 +61,8 @@ test "TestCANARY_GQL39075_RQ_0003_GqlFlaggerImplDefined" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
-    const findings = try impl_flagger.collect(alloc, .{ .zero_length_paths_excluded = false });
-    defer impl_flagger.freeFindings(alloc, findings);
+    const findings = try conformance.collectImplDefinedFlags(alloc);
+    defer alloc.free(findings);
     // Must enumerate at least all 15 Annex B items.
     try std.testing.expect(findings.len >= 15);
 }

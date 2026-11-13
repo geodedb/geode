@@ -168,7 +168,12 @@ test "SONNY-6342 the dead blind-index predicate rewrite is removed" {
         .{ .path = "src/planner/rewrite.zig", .decl = "fn performFLERewrite(" },
         .{ .path = "src/planner/rewrite.zig", .decl = "fn walkExprForFLE(" },
     }) |c| {
-        const src = try readFileAlloc(allocator, c.path);
+        // SONNY-6511 deleted src/planner/rewrite.zig entirely: a missing
+        // file defines nothing.
+        const src = readFileAlloc(allocator, c.path) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
         defer allocator.free(src);
         if (std.mem.indexOf(u8, src, c.decl) != null) {
             std.debug.print("SONNY-6342: {s} still defines `{s}` (dead: nothing calls it and it does not compile)\n", .{ c.path, c.decl });

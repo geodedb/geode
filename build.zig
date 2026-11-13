@@ -536,6 +536,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
+    .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6297-allocation-failure-sweep", .reason = "intentionally red reproduction (SONNY-6297, KNOWN_TEST_ISSUES): statement shapes still leak on allocation-failure paths; compiled by test-compile; register it through shardDep in the commit that makes every shape clean" },
 };
 
@@ -8023,6 +8024,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6494_mcp_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6494_mcp_step = b.step("test-sonny6494-mcp-validate-recommendations", "Run SONNY-6494 item 1 regression (MCP validate, through the real tools/call dispatch, shows the index, fulltext-index, coalesce, encrypted, searchable, vector-index, path-mode and degree recommendations on the query shapes that trigger them)");
     sonny6494_mcp_step.dependOn(&run_sonny6494_mcp_tests.step);
+    // SONNY-6511 (4): MCP validate places each recommendation on its token.
+    const sonny6511_rec_pos_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_recommendation_positions.zig"), .target = target, .optimize = optimize });
+    sonny6511_rec_pos_mod.addImport("mcp_server", gap0516_server_mod);
+    sonny6511_rec_pos_mod.link_libc = true;
+    const sonny6511_rec_pos_tests = b.addTest(.{ .root_module = sonny6511_rec_pos_mod });
+    const run_sonny6511_rec_pos_tests = b.addRunArtifact(sonny6511_rec_pos_tests);
+    shardDep(test_step, &run_sonny6511_rec_pos_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6511-recommendation-positions", "Run SONNY-6511 item 4 regression (MCP validate, through the real tools/call dispatch, reports each recommendation at the line and columns of the property, field, count or * it is about, skipping string literals; the LSP side runs in test-lsp)").dependOn(&run_sonny6511_rec_pos_tests.step);
 
     // Task 6 (hybrid-RAG audit spec): MCP server read-only mode. Roots the
     // regression file through src/mcp/server.zig exposed as `mcp_server`,
@@ -8223,6 +8232,23 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6494-repl-long-input", "Run SONNY-6494 item 3 regression (geode shell: \\echo, \\set, an unknown command, \\use and \\graph answer long text; \\source runs a path over 500 bytes and names one it cannot open; a statement over 4 KiB typed across lines runs once, whole; \\history prints it; ESC before a UTF-8 character is not Alt; real shell, plain mode and a PTY)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6511 (5): the shell keeps the character after ESC when it is a
+    // digit or punctuation; GEODE_AUDIT_*_ENABLED takes 1/0, true/false,
+    // yes/no in any case and refuses anything else.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_repl_audit.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6511-repl-audit", "Run SONNY-6511 item 5 regression (geode shell through a PTY reads ESC followed by a digit or punctuation in one read as ESC and the character; geode serve refuses a GEODE_AUDIT_*_ENABLED value that is not 1/0/true/false/yes/no and honours TRUE / Yes / no; real shell, built binary)").dependOn(&run_tests.step);
     }
 
     // SEC-002 (#849): Unauthenticated CDC arm access — per-arm guard regression.
@@ -12831,6 +12857,15 @@ pub fn build(b: *std.Build) void {
     // SONNY-2848: intentionally RED TDD reproduction (docs/KNOWN_TEST_ISSUES.md):
     // kept out of `shardDep` until the commit that fixes it; compiled by
     // `test-compile` meanwhile.
+    // SONNY-6511 item 6: intentionally red reproduction, out of the aggregate
+    // (see not_in_aggregate_steps); register through shardDep with the fix.
+    const sonny6511_gt_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_graph_type_string_field.zig"), .target = target, .optimize = optimize });
+    sonny6511_gt_mod.addImport("geode", root_mod);
+    const sonny6511_gt_tests = b.addTest(.{ .root_module = sonny6511_gt_mod });
+    const run_sonny6511_gt_tests = b.addRunArtifact(sonny6511_gt_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6511_gt_tests.step);
+    b.step("test-sonny6511-graph-type-string-field", "Run SONNY-6511 item 6 red reproduction (CREATE GRAPH TYPE T AS { x STRING } is refused: the parser takes only an identifier as a field type, and STRING, INTEGER, BOOLEAN, FLOAT, DATE are keywords)").dependOn(&run_sonny6511_gt_tests.step);
+
     const sonny2848_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2848_tenant_subquery_aggregation.zig"), .target = target, .optimize = optimize });
     sonny2848_mod.addImport("geode", root_mod);
     sonny2848_mod.addImport("rls", rls_mod);
@@ -15555,6 +15590,29 @@ pub fn build(b: *std.Build) void {
     gap0927_step.dependOn(&run_conn_pool_diag_tests.step);
     shardDep(test_step, &run_conn_pool_diag_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // SONNY-6511 (3): the inline tests of server files no step's filter named,
+    // through the same executable-import module: the global stream throttle
+    // (active_stream_registry.zig), the buffered proto reader's activity
+    // metrics and the metrics server. (proto_reader_registry.zig,
+    // leaked_conn_reaper.zig and ActiveStreamRegistry run in
+    // test-sonny-quic-stream-semantics; server/main.zig's in test-gap0927;
+    // grpc_server.zig's in its shim step.)
+    const sonny6511_server_inline_tests = b.addTest(.{
+        .name = "sonny6511-server-inline",
+        .root_module = conn_pool_diag_mod,
+        .filters = &.{
+            "GlobalStreamThrottle ",
+            "recordActivity advances last_activity_ns",
+            "getIdleNs grows when no activity is recorded",
+            "getIdleNs returns 0 when no activity has ever been recorded",
+            "appendCompactSummary formats a single compact line",
+            "MetricsServer initialization",
+        },
+    });
+    const run_sonny6511_server_inline_tests = b.addRunArtifact(sonny6511_server_inline_tests);
+    shardDep(test_step, &run_sonny6511_server_inline_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6511-server-inline", "Run SONNY-6511 item 3: the inline tests of src/server/active_stream_registry.zig (GlobalStreamThrottle), buffered_proto_reader_metrics.zig and src/monitoring/metrics_server.zig, which no step's filter named, rooted with the geode executable's imports").dependOn(&run_sonny6511_server_inline_tests.step);
+
     // SONNY-1835 / SONNY-1837 / SONNY-1841: QUIC stream-semantics batch. The
     // proof predicates are inline tests in server/quic_connection_handler.zig
     // and server/proto_reader_registry.zig, collected via a thin src/-rooted
@@ -16362,6 +16420,27 @@ pub fn build(b: *std.Build) void {
     const run_sonny6494_lib_inline_tests = b.addRunArtifact(sonny6494_lib_inline_tests);
     shardDep(test_step, &run_sonny6494_lib_inline_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6494-lib-inline", "Run SONNY-6494 item 2: the inline tests of 28 geode-module files no step ran (query scope, connection manager, confusables, numeric promotion, transport algorithms, REPL line text, errors, history and renderer, distributed explain, protocol, server flags, bulk ingest, planner calibration, ...)").dependOn(&run_sonny6494_lib_inline_tests.step);
+    // SONNY-6511 (1): the inline tests of the geode-module files the
+    // SONNY-6494 sweep found uncompilable or unrun whose code is live or
+    // reached by a running test, filtered by their fully qualified names
+    // (src/lib.zig test "sonny6511-lib: inline test roots" keeps the files in
+    // discovery).
+    const sonny6511_lib_inline_tests = b.addTest(.{ .name = "sonny6511-lib-inline", .root_module = root_mod, .filters = &.{
+        "sonny6511-lib:",
+        "security.multi_graph_security.test.",
+        "client.quic_query_runner.test.",
+        "client.repl.spinner.test.",
+        "performance.memory_mapped_io.test.",
+        "ml.graph_embeddings.test.",
+        "planner.cost_calibration.test.",
+        "planner.pipeline.test.",
+        "graph.community_louvain.test.",
+        "graph.community_label_propagation.test.",
+        "graph.containers.lfu.test.",
+    } });
+    const run_sonny6511_lib_inline_tests = b.addRunArtifact(sonny6511_lib_inline_tests);
+    shardDep(test_step, &run_sonny6511_lib_inline_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6511-lib-inline", "Run SONNY-6511 item 1: the inline tests of multi-graph security, the shared query runner, the shell spinner, memory-mapped I/O, graph embeddings, planner cost calibration and plan selection, and the community-detection and LFU modules tests use").dependOn(&run_sonny6511_lib_inline_tests.step);
     // SONNY-6494 (1): src/gql/recommendations.zig's inline tests (the MCP
     // `validate` / LSP diagnostics recommendation engine), filtered from the
     // geode lib module as test-sonny6460-exec-inline does.

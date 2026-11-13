@@ -19,4 +19,6 @@ test {
     _ = @import("server_debounce_test.zig");
     // Task 12: per-session auth + schema bind gate tests.
     _ = @import("server_auth_test.zig");
+    // SONNY-6511: recommendation diagnostics carry their token's range.
+    _ = @import("recommendation_positions_test.zig");
 }

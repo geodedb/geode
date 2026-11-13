@@ -1182,7 +1182,23 @@ pub const AuditEnvError = error{
     /// address or localhost (optionally with :port), or names a port as
     /// well as GEODE_AUDIT_SYSLOG_PORT.
     InvalidAuditSyslogHost,
+    /// A GEODE_AUDIT_*_ENABLED switch is not 1/0, true/false or yes/no.
+    InvalidAuditSwitch,
 };
+
+/// SONNY-6511: a GEODE_AUDIT_*_ENABLED switch is 1/0, true/false or yes/no,
+/// in any case. Anything else is refused (it used to read as false, turning
+/// audit off without a word), as every other audit setting is (SONNY-6494).
+pub fn parseAuditSwitch(name: []const u8, value: []const u8) AuditEnvError!bool {
+    inline for (.{ "1", "true", "yes" }) |on| {
+        if (std.ascii.eqlIgnoreCase(value, on)) return true;
+    }
+    inline for (.{ "0", "false", "no" }) |off| {
+        if (std.ascii.eqlIgnoreCase(value, off)) return false;
+    }
+    std.debug.print("Error: {s} '{s}' is not a switch (1/0, true/false or yes/no)\n", .{ name, value });
+    return error.InvalidAuditSwitch;
+}
 
 // CANARY: REQ=REQ-AUDIT-CLI-001; FEATURE="CLI Audit Configuration"; ASPECT=Configuration; STATUS=TESTED; TEST=TestCANARY_REQ_AUDIT_CLI_001_Configuration; OWNER=audit; UPDATED=2025-09-30
 pub fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
@@ -1194,13 +1210,13 @@ pub fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
     // Check if audit is enabled
     if (getEnvVar(allocator, "GEODE_AUDIT_ENABLED")) |value| {
         defer allocator.free(value);
-        cli_config.enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
+        cli_config.enabled = try parseAuditSwitch("GEODE_AUDIT_ENABLED", value);
     }
 
     // Syslog configuration
     if (getEnvVar(allocator, "GEODE_AUDIT_SYSLOG_ENABLED")) |value| {
         defer allocator.free(value);
-        cli_config.syslog_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
+        cli_config.syslog_enabled = try parseAuditSwitch("GEODE_AUDIT_SYSLOG_ENABLED", value);
     }
 
     // SONNY-6494: the --audit-syslog grammar (SONNY-6487, geode.host_port);
@@ -1239,7 +1255,7 @@ pub fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
     // File configuration
     if (getEnvVar(allocator, "GEODE_AUDIT_FILE_ENABLED")) |value| {
         defer allocator.free(value);
-        cli_config.file_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
+        cli_config.file_enabled = try parseAuditSwitch("GEODE_AUDIT_FILE_ENABLED", value);
     }
 
     if (getEnvVar(allocator, "GEODE_AUDIT_FILE_PATH")) |value| {
@@ -1249,7 +1265,7 @@ pub fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
     // Windows Event Log configuration
     if (getEnvVar(allocator, "GEODE_AUDIT_WINDOWS_EVENTLOG_ENABLED")) |value| {
         defer allocator.free(value);
-        cli_config.windows_eventlog_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
+        cli_config.windows_eventlog_enabled = try parseAuditSwitch("GEODE_AUDIT_WINDOWS_EVENTLOG_ENABLED", value);
     }
 
     if (getEnvVar(allocator, "GEODE_AUDIT_WINDOWS_EVENTLOG_SOURCE")) |value| {

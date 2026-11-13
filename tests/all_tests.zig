@@ -39,17 +39,6 @@ const _e2e_protocol_cdc_control = @import("e2e_protocol_cdc_control.zig");
 const _e2e_protocol_cdc_control_unsupported = @import("e2e_protocol_cdc_control_unsupported.zig");
 const _e2e_protocol_cdc_control_no_engine = @import("e2e_protocol_cdc_control_no_engine.zig");
 const _unit_cdc_backpressure = @import("unit_cdc_backpressure.zig");
-// Centrality algorithm tests
-const _canary_pagerank = @import("canary_pagerank.zig");
-const _benchmark_pagerank = @import("benchmark_pagerank.zig");
-const _canary_eigenvector = @import("canary_eigenvector.zig");
-const _benchmark_eigenvector = @import("benchmark_eigenvector.zig");
-const _canary_betweenness = @import("canary_betweenness.zig");
-const _benchmark_betweenness = @import("benchmark_betweenness.zig");
-const _canary_closeness = @import("canary_closeness.zig");
-const _benchmark_closeness = @import("benchmark_closeness.zig");
-const _benchmark_grey_cardinal = @import("benchmark_grey_cardinal.zig");
-const _benchmark_grey_cardinal_variance = @import("benchmark_grey_cardinal_variance.zig");
 
 // GQL Regression Tests
 const _gql_keyword_regression = @import("gql_keyword_regression_test.zig");
@@ -84,11 +73,8 @@ const _e2e_federation_global_order = @import("e2e_federation_global_order.zig");
 const _e2e_cdc_webhook_reliability = @import("e2e_cdc_webhook_reliability.zig");
 const _canary_cdc_backpressure_adaptive = @import("canary_cdc_backpressure_adaptive.zig");
 const _benchmark_txn_conflict_variance = @import("benchmark_txn_conflict_matrix_variance.zig");
-const _benchmark_betweenness_variance = @import("benchmark_betweenness_variance.zig");
 const _benchmark_property_access_hotpath_variance = @import("benchmark_property_access_hotpath_variance.zig");
 const _benchmark_path_expand_breadth_variance = @import("benchmark_path_expand_breadth_variance.zig");
-const _benchmark_closeness_variance = @import("benchmark_closeness_variance.zig");
-const _benchmark_eigenvector_variance = @import("benchmark_eigenvector_variance.zig");
 const _benchmark_cdc_apply_batch_variance = @import("benchmark_cdc_apply_batch_variance.zig");
 const _canary_txn_snapshot_readview = @import("canary_txn_snapshot_readview.zig");
 const _benchmark_snapshot_adaptive_policy_latency_variance = @import("benchmark_snapshot_adaptive_policy_latency_variance.zig");
@@ -135,7 +121,7 @@ const _test_gql_hash_parsing = @import("test_gql_hash_parsing.zig");
 const _test_hash_evaluator = @import("test_hash_evaluator.zig");
 const _e2e_hash_functions = @import("e2e_hash_functions.zig");
 
-// Distributed systems tests - Raft persistence, 2PC, BM25, Leiden, WCOJ
+// Distributed systems tests - Raft persistence, 2PC, BM25
 const _e2e_raft_persist = @import("e2e_raft_persist_snapshot_membership.zig");
 const _test_raft_persistent_storage = @import("test_raft_persistent_storage.zig");
 const _test_twophase_unit = @import("test_twophase_unit.zig");
@@ -151,8 +137,6 @@ const _test_fts_maintenance = @import("test_fts_maintenance.zig");
 // multi-property CREATE INDEX, store-restart reopen durability,
 // drop-then-recreate, multi-index-multi-label isolation, edge cases).
 const _test_fts_coverage = @import("test_fts_coverage.zig");
-const _test_leiden_community = @import("test_leiden_community.zig");
-const _test_wcoj = @import("test_wcoj.zig");
 
 // REPL QUIC Integration tests
 const _test_quic_transport = @import("test_quic_transport.zig");
@@ -169,9 +153,6 @@ const _test_vector_index_population_integration = @import("test_vector_index_pop
 // Vector Documentation Validation tests
 const _test_vector_documentation_validation = @import("test_vector_documentation_validation.zig");
 const _test_vector_documentation_integration = @import("test_vector_documentation_integration.zig");
-
-// Phantom Read Prevention tests (imported from within src/server/txn)
-// const _test_phantom_read_prevention = @import("../src/server/txn/phantom_read_prevention.zig");
 
 // Materialized Views tests
 const _test_materialized_views = @import("test_materialized_views.zig");

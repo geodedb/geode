@@ -2235,6 +2235,63 @@
 
 ### Fixed
 
+- **The Prometheus exporter frees its metric names; three server files'
+  inline tests run (SONNY-6511 item 3).** `PrometheusExporter.registerMetric`
+  copied each metric's name and help text and nothing freed them (20
+  allocations for the standard metric set, and the old copies when a name
+  was registered again). `zig build test-sonny6511-server-inline` (in the
+  aggregate) runs the inline tests of `active_stream_registry.zig`'s
+  `GlobalStreamThrottle` (one used the removed `std.Thread.sleep`),
+  `buffered_proto_reader_metrics.zig` and `monitoring/metrics_server.zig`,
+  whose test found the leak.
+- **LSP and MCP recommendations point at their token, and their errors
+  are no longer dropped (SONNY-6511 item 4).** Every recommendation of
+  `src/gql/recommendations.zig` was reported at line 0, column 0, and an
+  error of the engine (out of memory included) was turned into "no
+  recommendations" by both `src/mcp/lsp.zig` `validateQuery` and
+  `src/cli/lsp/features/diagnostics.zig`. The AST carries no positions, so
+  `RecommendationEngine.analyzeSource` finds each recommendation's token
+  (property or field name, `count`, the `*` of a variable-length path) in
+  the source, outside strings and comments; the LSP range covers it
+  (0-based) and MCP reports 1-based line/column with an exclusive end
+  column. Errors now fail the request. The LSP diagnostics also dropped a
+  semantic-analysis allocation failure the same way, leaked diagnostic
+  messages, a scope key and a document when an allocation failed, and
+  `Document.update` left the text pointing at freed memory when its copy
+  failed; all fixed. `zig build test-sonny6511-recommendation-positions`
+  and `test-lsp` (`src/cli/lsp/recommendation_positions_test.zig`).
+- **`geode shell` keeps the character typed after ESC; audit switches take
+  any-case booleans and refuse anything else (SONNY-6511 item 5).** The
+  line editor consumed ESC and the following byte as one key whenever that
+  byte was ASCII, but read the pair as Alt+<key> only for a letter, so ESC
+  followed in one read by a digit, punctuation or a second ESC lost the
+  character (`RETURN 'x<ESC>1y' AS v` returned `xy`). Only Alt+letter is
+  consumed as a pair now. `GEODE_AUDIT_ENABLED`, `_SYSLOG_ENABLED`,
+  `_FILE_ENABLED` and `_WINDOWS_EVENTLOG_ENABLED` were on only for exactly
+  `1` or `true`; `TRUE`, `yes` or a typo turned audit off silently. They take
+  `1`/`0`, `true`/`false`, `yes`/`no` in any case, and any other value
+  refuses the command like the other audit settings (SONNY-6494). The
+  REPL's `containsTransactionCommands`, which the ticket also named, had no
+  caller since `\source` stopped wrapping files in a transaction
+  (882bccfc8, 2026-01-30); it was removed with its tests and markers
+  (REQ-SOURCE-PERF-011, -012). `zig build test-sonny6511-repl-audit`.
+- **The inline tests of ten live files run again (SONNY-6511 item 1).**
+  `zig build test-sonny6511-lib-inline` (in the aggregate) runs the inline
+  tests of `security/multi_graph_security`, `client/quic_query_runner`,
+  `client/repl/spinner`, `performance/memory_mapped_io`,
+  `ml/graph_embeddings`, `planner/cost_calibration`, `planner/pipeline`,
+  `graph/community_louvain`, `graph/community_label_propagation` and
+  `graph/containers/lfu` (55 tests). None compiled on Zig 0.16 and no step
+  ran them. The shell spinner writes through a `Spinner.out` writer when one
+  is set (the process's stdout otherwise), so its tests no longer write
+  frames into the test runner's control channel. Two query-runner tests
+  still expected a PULL after an inline page; since the server sends every
+  page inline (2026-04, "send all result pages inline") the client sends
+  none, which they now assert. The plan-calibration variance envelope
+  follows the shared perf-gate policy (reported, enforced under
+  `GEODE_PERF_GATES=enforce`), and the duplicate degree-bucket envelope in
+  `pipeline.zig` was dropped (the `bench_pathcache_degree_util` benchmark
+  measures it).
 - **`geode shell` handles long input (SONNY-6494 item 3).** The
   meta-commands formatted replies that echo user text into fixed stack
   buffers, so `\echo`, `\set <option>`, `\use`, `\graph`, `\connect`,
@@ -5347,6 +5404,92 @@
   `zig build test-sonny2672-read-semantics-batch`.
 
 ### Removed
+
+- **Dead code: `ChunkedMemoryMap`, the graph-scoped audit log and
+  `GraphRBACPolicy.getRolesForGraph` (SONNY-6511 item 1).**
+  `ChunkedMemoryMap` and its `CacheStats` (`src/performance/memory_mapped_io.zig`)
+  did not compile on Zig 0.16 (`getEndPos`, `seekTo`, `writeAll`,
+  `sync()` on `std.Io.File`); only their own tests and an unbuilt test file
+  named them. `GraphAuditEvent` / `GraphAuditLog` and
+  `GraphRBACPolicy.getRolesForGraph` (`src/security/multi_graph_security.zig`)
+  did not compile either and nothing called them; graph-scoped audit
+  events go through `src/security/audit.zig` (`resource_graph`). The
+  per-graph grant model the server uses (`grantGraphPermission`,
+  `hasGraphGrant`, `loadGraphGrants`, the global policy) is unchanged and
+  its inline tests now run.
+- **Dead code: the synthetic planner pipeline and the modules only it drove
+  (SONNY-6511 item 1).** `src/planner/{wcoj,adaptive_replan,phase_timing,rewrite,path_cache}.zig`,
+  `pipeline.runPipeline` / `planQueryWithPipeline` / `plannerPathCacheLookup`
+  / `plannerPathCacheInsert` / `planQueryRealTimed`, `planner.planQueryPhasedTimed`
+  and 15 test files that only tested them. `runPipeline` described itself
+  as "a deterministic synthetic pipeline used for integration tests &
+  variance bench"; none of it ran in a query. None of it compiled on Zig 0.16
+  (`std.math.fabs`, `std.time.nanoTimestamp`, array literals for mutable
+  slices, string literals for `IdentRepr`), and no executable or running
+  test reached it: the WCOJ executor was named only by `geode.planner_wcoj`
+  and `tests/test_wcoj.zig` (an unreferenced `tests/all_tests.zig`
+  constant); the rest only by `pipeline.zig` and test files no build step
+  roots. `pipeline.planQuerySelectBest` (`zig build
+  test-canary-planner-pipeline-selection`), the cost calibration it uses and
+  `structural_key.zig` (the `bench_pathcache_degree_util` benchmark) stay.
+  `docs/SERVER_FEATURES.md` (adaptive re-planning, PathCache) and the
+  variance-envelope and crosswalk notes described the removed code.
+- **Dead code: `src/server/flagger_impl_defined.zig` and the server's
+  implementation-defined flag cache (SONNY-6511 item 1).** A second list of
+  the ISO/IEC 39075 Annex B implementation-defined items whose `collect`
+  did not compile on Zig 0.16 (`ArrayList.deinit()` without the
+  allocator). `server_flags.initImplDefinedFlags`, its only product caller,
+  was itself called by nothing (`src/server/main.zig` only aliased it), so
+  the cache `getImplDefinedCodes` read stayed empty and nothing read that
+  either. They go, with the uncompiled `tests/test_protocol_impl_defined_flags.zig`.
+  The items remain listed by `conformance.collectImplDefinedFlags`
+  (`zig build test-sonny6494-inline`); the server does not send that list to
+  clients, which `docs/BINARY_PROTOCOL.md` now says.
+- **Dead code: `src/server/txn/mvcc.zig` and
+  `src/server/txn/phantom_read_prevention.zig` (SONNY-6511 item 1).** An
+  MVCC manager and predicate-lock phantom prevention the server never ran
+  (see `docs/ENHANCED_TRANSACTION_ISOLATION.md`). Neither compiled on Zig
+  0.16 (`ArrayList.deinit()` with no allocator in the transaction, lock
+  and manager `deinit`, `ArrayList.init` in `PhantomReadPrevention.init`),
+  and nothing used them: a whole-repo search finds only the
+  `geode.server_mvcc` re-export, which nothing named, and two test files
+  no build step rooted (`tests/test_phantom_read_mvcc_integration.zig`,
+  `tests/test_distributed_query_mvcc_integration.zig`), which go too.
+  Their TESTED markers (REQ-TXN-PHANTOM-*, REQ-DISTRIBUTED-QUERY-007..009)
+  described only this code.
+- **Dead benchmarks: `src/benchmarks/pagination_variance.zig`,
+  `src/benchmarks/pagination_execution_variance.zig` and
+  `benchmarks/benchmark_pagination_order_variance.zig` (SONNY-6511
+  item 1).** Variance envelopes of the planner phase timer on one
+  `ORDER BY ... LIMIT` query and of a synthetic per-page workload ("simulates
+  execution-phase latency"), not of geode's paging. Neither `src/benchmarks/` file
+  compiled on Zig 0.16 (`std.time.nanoTimestamp`, `std.io.fixedBufferStream`)
+  and nothing ran them: their only references were the
+  `geode.benchmarks.pagination*` re-exports, which nothing named; the
+  `benchmarks/` copy was rooted by no build step. Their BENCHED markers
+  (REQ-GQL-004 PaginationOrderedVarianceEnvelope,
+  PaginationExecutionVarianceEnvelope) described only these files.
+- **Dead code: `src/types/i256.zig` (SONNY-6511 item 1).** An `Int256`
+  stub (`add` with a `comptime_int` carry that cannot compile, `toString`
+  allocating from `std.testing.allocator` in product code) that nothing
+  used: its only reference was the `geode.types.int256` re-export, which
+  nothing named. Geode has no 256-bit integer type.
+- **Dead code: 37 of the 40 files under `src/graph/` and the 64 test files that only tested them
+  (SONNY-6511 item 1 and 2).** A second set of graph algorithms and
+  containers (builders, centrality incl. the "optimized" PageRank and
+  closeness, traversal, topological sort, cycle detection, shortest paths,
+  flow, connectivity, spanning trees, Leiden, bloom filter, count-min
+  sketch, skip list, trie, KMP) that no executable called: the server's
+  `CALL algo.*` procedures run `src/execution/centrality_algorithms.zig`.
+  `src/graph/builders.zig`, which most of them build on, did not compile on
+  Zig 0.16, nor did 14 others; the tests that used them were rooted by no
+  build step or were unreferenced `tests/all_tests.zig` constants, which
+  the compiler never analyses. `community_louvain.zig`,
+  `community_label_propagation.zig` (`zig build test-e2e`,
+  `tests/e2e_graph_algos_new.zig`) and `containers/lfu.zig`
+  (`fuzz/targets/lfu_cache_fuzz.zig`) stay: a running test uses them.
+  `docs/GRAPH_ALGORITHM_PERFORMANCE_ENHANCEMENTS.md` and the "20-90%
+  performance gains" of Phase 7 described the removed modules.
 
 - **Dead benchmark: `tests/benchmark_hashagg_distinct_variance.zig`
   (SONNY-6456 item 5).** No build step compiled it and it could not

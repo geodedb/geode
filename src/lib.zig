@@ -214,7 +214,6 @@ pub const types = struct {
     pub const extended = @import("types/extended.zig");
     pub const extended_functions = @import("types/extended_functions.zig");
     pub const numeric_promotion = @import("types/numeric_promotion.zig");
-    pub const int256 = @import("types/i256.zig");
     pub const hash = @import("types/hash.zig");
     pub const vector = @import("types/vector.zig");
     pub const geographic = @import("types/geographic.zig");
@@ -264,8 +263,6 @@ pub const streaming = struct {
 pub const server_state = @import("server/server_state.zig");
 pub const capability_gate = @import("server/capability_gate.zig");
 pub const node_scan_stream = @import("server/node_scan_stream.zig");
-// Re-export server txn/mvcc for unified binary
-pub const server_mvcc = @import("server/txn/mvcc.zig");
 // Note: query_ast_cache is imported directly by server files to avoid circular dependency
 // (it needs ParseOptions/ParseResult which are defined in this file)
 // Re-export query_plan_cache for unified binary
@@ -276,8 +273,6 @@ pub const query_arena = @import("server/query_arena.zig");
 pub const server_flags = @import("server/server_flags.zig");
 // Re-export backup_manager for unified binary
 pub const backup_manager = @import("server/backup_manager.zig");
-// Re-export impl_flagger for unified binary
-pub const impl_flagger = @import("server/flagger_impl_defined.zig");
 // Re-export proto_util for unified binary
 pub const proto_util = @import("server/proto_util.zig");
 // Re-export fd_limit helper so tests can exercise the startup hook directly.
@@ -310,10 +305,6 @@ pub const tde_page_tail = @import("storage/tde_page_tail.zig");
 
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
-    // Pagination ordered variance benchmark (exposed for variance runner)
-    pub const pagination = @import("benchmarks/pagination_variance.zig");
-    // Pagination execution (streaming page) variance benchmark
-    pub const pagination_execution = @import("benchmarks/pagination_execution_variance.zig");
     // Shared variance configuration helper
     pub const variance_config = @import("benchmarks/variance_config.zig");
 };
@@ -408,58 +399,17 @@ pub const grpc_query_transport = @import("client/grpc_query_transport.zig");
 // CLI login ownership contract is reachable from a test binary.
 pub const hello_decode = @import("client/hello_decode.zig");
 
-// Extend planner module
-pub const planner_wcoj = @import("planner/wcoj.zig");
-
-// Graph analytics (lightweight builders and centrality algorithms)
+// Standalone community-detection routines over an in-memory adjacency list
+// and an LFU cache. Only tests use them (tests/e2e_graph_algos_new.zig and
+// fuzz/targets/lfu_cache_fuzz.zig); the server's algo.louvain and
+// algo.labelPropagation procedures run src/execution/centrality_algorithms.zig.
+// SONNY-6511 removed the rest of src/graph/ (37 files no build compiled or ran).
 pub const graph = struct {
-    pub const builders = @import("graph/builders.zig");
-    pub const pagerank = @import("graph/centrality_pagerank.zig");
-    pub const eigenvector = @import("graph/centrality_eigenvector.zig");
-    pub const betweenness = @import("graph/centrality_betweenness.zig");
-    pub const closeness = @import("graph/centrality_closeness.zig");
-    pub const bridge_leverage = @import("graph/centrality_bridge_leverage.zig");
-    pub const grey_cardinal = @import("graph/centrality_grey_cardinal.zig");
-    // Performance-optimized algorithms
-    pub const optimized = @import("graph/centrality_optimized.zig");
-    pub const dfs_iterative = @import("graph/traversal_dfs_iterative.zig");
-    pub const iddfs = @import("graph/traversal_iddfs.zig");
-    pub const topo_kahn = @import("graph/topological_sort_kahn.zig");
-    pub const topo_dfs = @import("graph/topological_sort_dfs.zig");
-    pub const cycle_directed = @import("graph/cycle_detect_directed.zig");
-    pub const cycle_undirected = @import("graph/cycle_detect_undirected.zig");
-    pub const dag_shortest = @import("graph/shortest_dag_path.zig");
-    pub const shortest_dijkstra = @import("graph/shortest_dijkstra.zig");
-    pub const shortest_astar = @import("graph/shortest_astar.zig");
-    pub const shortest_unweighted = @import("graph/shortest_unweighted_bfs_paths.zig");
-    pub const union_find = @import("graph/union_find.zig");
-    pub const strongly_connected_components = @import("graph/strongly_connected_components.zig");
     pub const community_louvain = @import("graph/community_louvain.zig");
     pub const community_label_propagation = @import("graph/community_label_propagation.zig");
-    pub const traversal_bfs = @import("graph/traversal_bfs.zig");
-    pub const leiden = @import("graph/leiden.zig");
-    pub const flow = struct {
-        pub const edmonds_karp = @import("graph/flow_edmonds_karp.zig");
-        pub const dinic = @import("graph/flow_dinic.zig");
-        pub const hopcroft_karp = @import("graph/flow_hopcroft_karp.zig");
-    };
     pub const containers = struct {
-        pub const lru = @import("graph/containers/lru.zig");
         pub const lfu = @import("graph/containers/lfu.zig");
-        pub const bloom_filter = @import("graph/containers/bloom_filter.zig");
-        pub const count_min_sketch = @import("graph/containers/count_min_sketch.zig");
-        pub const skiplist = @import("graph/container_skiplist.zig");
-        pub const trie = @import("graph/container_trie.zig");
     };
-    pub const string_search = struct {
-        pub const kmp = @import("graph/string_search_kmp.zig");
-    };
-    // Connectivity and spanning tree algorithms
-    pub const connectivity_kosaraju = @import("graph/connectivity_kosaraju.zig");
-    pub const connectivity_biconnected = @import("graph/connectivity_biconnected.zig");
-    pub const connectivity_bridges_articulation = @import("graph/connectivity_bridges_articulation.zig");
-    pub const spanning_prim = @import("graph/spanning_prim.zig");
-    pub const spanning_kruskal = @import("graph/spanning_kruskal.zig");
 };
 
 // Multitenancy and GPU feature flagger re-exports so tests/benchmarks can import via the geode package
@@ -1003,6 +953,24 @@ test "repl_dispatch: inline test root" {
 // lib-module steps filter to other names). Named with the "sonny6494-lib:"
 // filter of `zig build test-sonny6494-lib-inline`, which also names each
 // file's tests by their fully qualified prefix (`<path>.test.`).
+// SONNY-6511: the inline tests of geode-module files that did not compile
+// on Zig 0.16 (or ran in no step) and whose code is live or reached by a
+// running test. Named with the "sonny6511-lib:" filter of
+// `zig build test-sonny6511-lib-inline`, which also names each file's tests
+// by their fully qualified prefix (`<path>.test.`).
+test "sonny6511-lib: inline test roots" {
+    _ = @import("security/multi_graph_security.zig");
+    _ = @import("client/quic_query_runner.zig");
+    _ = @import("client/repl/spinner.zig");
+    _ = @import("performance/memory_mapped_io.zig");
+    _ = @import("ml/graph_embeddings.zig");
+    _ = @import("planner/cost_calibration.zig");
+    _ = @import("planner/pipeline.zig");
+    _ = @import("graph/community_louvain.zig");
+    _ = @import("graph/community_label_propagation.zig");
+    _ = @import("graph/containers/lfu.zig");
+}
+
 test "sonny6494-lib: inline test roots" {
     _ = @import("client/repl/repl_errors.zig");
     _ = @import("client/repl/repl_history.zig");

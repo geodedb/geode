@@ -127,7 +127,6 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const posix = std.posix;
 const geode = @import("geode");
-const impl_flagger = geode.impl_flagger;
 const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
 const eval_extended = geode.eval_ext;
@@ -138,7 +137,6 @@ const thread_pool = @import("transport/thread_pool");
 const cert_gen = @import("../tools/cert_gen.zig");
 const query_ast_cache = @import("query_ast_cache");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
-// const mvcc = @import("server/txn/mvcc.zig");
 // const logger = @import("log/logger.zig");
 const query_plan_cache = geode.query_plan_cache;
 
@@ -893,7 +891,6 @@ const F_UNION_PHASES = server_flags.F_UNION_PHASES;
 const F_ADAPT_EST = server_flags.F_ADAPT_EST;
 const F_HEUR_INDEX = server_flags.F_HEUR_INDEX;
 const nullsFlag = server_flags.nullsFlag;
-const initImplDefinedFlags = server_flags.initImplDefinedFlags;
 const computeBaseFlags = server_flags.computeBaseFlags;
 // Import graph storage management (M3.1 Phase 3 graph persistence extraction)
 // CANARY: REQ=REQ-BINARY-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=MainImports; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=server; UPDATED=2026-06-11

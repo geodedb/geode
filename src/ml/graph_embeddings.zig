@@ -1032,11 +1032,18 @@ test "Random walk generation" {
     _ = try graph.createEdge(n3, n1, "CONNECTS");
 
     // Test random walk generation
-    var walk = RandomWalk.init(allocator, n1, 1.0, 1.0);
+    var walk = try RandomWalk.init(allocator, n1, 1.0, 1.0);
     defer walk.deinit();
 
-    try generateRandomWalk(&walk, &graph, 10);
+    var prng = std.Random.DefaultPrng.init(0x6511);
+    try generateRandomWalk(&walk, &graph, 10, prng.random());
 
-    try expect(walk.path.items.len <= 10);
+    // Every node has an out-edge, so the walk runs its full length along
+    // the directed triangle n1 -> n2 -> n3 -> n1.
+    try expect(walk.path.items.len == 10);
     try expect(walk.path.items[0] == n1); // Should start with node 1
+    for (walk.path.items[1..], walk.path.items[0 .. walk.path.items.len - 1]) |next, prev| {
+        const expected: u64 = if (prev == n1) n2 else if (prev == n2) n3 else n1;
+        try expect(next == expected);
+    }
 }

@@ -47,14 +47,13 @@ Geode uses a slotted page architecture optimized for graph storage:
 
 **Key Features**:
 
-- **Memory-Mapped I/O**: Zero-copy data access with 13.18x performance improvement
+- **Memory-Mapped I/O**: the id map and hydration snapshot are memory-mapped (`src/storage/id_map.zig`, `hydration_snapshot.zig`). The "13.18x improvement" is unmeasured: the figure came from `src/performance/memory_mapped_io.zig`, which no server path uses (despite its name it reads a file into a heap buffer; only a benchmark test runs it), and no measurement backs it for the server (SONNY-6511)
 - **Checksumming**: Adler32 over entire page for corruption detection
 - **Slot-Based Storage**: Each slot tracks offset and size for variable-length records
 - **LSN Tracking**: Every page tracks last modification for WAL recovery
 
 **Performance**:
 
-- I/O operations improved from 5,754μs to 436μs (13.18x)
 - <1% overhead for checksumming
 - Efficient space reclamation with slot compaction
 
@@ -449,11 +448,10 @@ PathExpand(min=1, max=3)
 - Greedy heuristic for large queries
 - Bushy trees for complex joins
 
-**Adaptive Re-planning**:
-
-- Runtime statistics collection
-- Re-plan threshold: actual_rows > 2× estimated_rows
-- Hot-path caching
+**Adaptive Re-planning**: not implemented. `src/planner/adaptive_replan.zig`
+(a threshold counter driven only by the synthetic `pipeline.runPipeline`) did
+not compile on Zig 0.16, no build reached it, and it was removed
+(SONNY-6511).
 
 ### 4.3 IndexOptimizer
 
@@ -502,8 +500,14 @@ pub const AdaptiveEstimator = struct {
 
 ### 4.5 PathCache
 
-**Implementation**: `/src/planner/path_cache.zig`
-**CANARY**: 23 PathCache markers
+**Status (2026-11-13, SONNY-6511): not implemented.** `src/planner/path_cache.zig`
+(an LRU of strings keyed by a structural hash) was driven only by the
+synthetic `pipeline.runPipeline` and `plannerPathCacheLookup`, which did not
+compile on Zig 0.16; no executable or running test reached it, and it was
+removed. No path query result is cached. What remains is the structural key
+derivation (`src/planner/structural_key.zig`), exercised by tests and the
+`bench_pathcache_degree_util` benchmark only. The design below was never
+built.
 
 **Cache Key**: Structural hash of path pattern
 
@@ -1112,7 +1116,7 @@ Total CANARY markers: 1284 tracking governance compliance
 2. **Network Transport** (35 markers): QUIC protocol implementation
 3. **Query Planner** (27 markers): Cost-based query optimization
 4. **Governance** (25 markers): CANARY system itself
-5. **PathCache** (23 markers): Path query result caching
+5. **PathCache**: not implemented (structural key only; see 4.5)
 6. **Cost-Based Optimizer** (20 markers): Query plan cost estimation
 7. **Authentication** (18 markers): RBAC/ABAC with MFA
 8. **Full-Text Search** (15 markers): BM25 ranking with inverted index

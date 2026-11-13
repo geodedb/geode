@@ -9,7 +9,6 @@ pub const ast = @import("gql/ast.zig");
 const mem = std.mem;
 const temporal = @import("temporal.zig");
 const printer = @import("gql/print.zig");
-const phase_timing = @import("planner/phase_timing.zig");
 
 pub const PlannerOptions = struct {
     attempt_pushdown: bool = true,
@@ -231,38 +230,6 @@ pub fn planQuery(allocator: std.mem.Allocator, q: ast.Query, opts: PlannerOption
     return .{ .ordered = ordered, .note = note };
 }
 
-// Sub-phase orchestrated planner with timing segmentation for rewrite, group validation, cost heuristic.
-// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerSubPhaseHooks; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks; OWNER=planner; UPDATED=2025-09-21
-/// P2-3: Now accepts allocator for temporary validation allocations
-pub fn planQueryPhasedTimed(allocator: std.mem.Allocator, q_in: ast.Query, opts: PlannerOptions) PlanError!struct { plan: Plan, timings: phase_timing.PhaseTimings } {
-    // Local reference (placeholder for future in-place rewrites)
-    const q = q_in;
-    var timings: phase_timing.PhaseTimings = .{};
-    var pt = phase_timing.PhaseTimer.init(&timings);
-
-    // Rewrite phase (placeholder for future normalization / predicate pushdown)
-    pt.begin(.rewrite);
-    const ordered = q.order_by != null;
-    if (opts.attempt_pushdown and q.offset != null and !ordered) {
-        pt.end();
-        return PlanError.OffsetPushdownRequiresOrder;
-    }
-    pt.end();
-
-    // Group validation phase mapped onto 'cardinality' timing bucket (reusing enum to avoid breaking benches)
-    pt.begin(.cardinality);
-    try validateGroupBy(allocator, q);
-    pt.end();
-
-    // Cost heuristic phase
-    pt.begin(.cost_eval);
-    const use_index = if (q.where_clause) |wc| hasEqPred(wc) else false;
-    const note = if (use_index) "INDEX" else "";
-    const plan = Plan{ .ordered = ordered, .note = note };
-    pt.end();
-    return .{ .plan = plan, .timings = pt.snapshot() };
-}
-
 // Session context used for temporal comparison policies (e.g., how to interpret local datetimes)
 pub const SessionContext = struct {
     // Offset applied when attaching to local datetimes for comparisons against zoned values.
@@ -459,26 +426,6 @@ test "planner: heuristic index on equality predicate" {
     q.offset = null;
     const plan = try planQuery(q, .{});
     try std.testing.expect(std.mem.eql(u8, plan.note, "INDEX"));
-}
-
-test "TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks" {
-    var left_expr = ast.Expr{ .Ident = "a" };
-    var right_expr = ast.Expr{ .Int = 42 };
-    var q: ast.Query = undefined;
-    q.optional_match = false;
-    q.match = .{ .chains = &.{} };
-    q.where_clause = ast.Expr{ .Binary = .{ .op = .Eq, .left = &left_expr, .right = &right_expr } };
-    q.with_clause = null;
-    q.group_by = null;
-    q.ret = .{ .items = &.{}, .distinct = false };
-    q.order_by = null;
-    q.limit = null;
-    q.offset = null;
-    const phased = try planQueryPhasedTimed(q, .{});
-    try std.testing.expect(phased.timings.rewrite_ns >= 0);
-    try std.testing.expect(phased.timings.cardinality_ns >= 0);
-    try std.testing.expect(phased.timings.cost_eval_ns >= 0);
-    try std.testing.expect(phased.plan.ordered == false);
 }
 
 test "planner: no index without equality predicate" {

@@ -382,7 +382,7 @@ the environment:
 
 | Variable | Meaning |
 | -------- | ------- |
-| `GEODE_AUDIT_ENABLED` | `1` / `true` turns command audit on |
+| `GEODE_AUDIT_ENABLED` | turns command audit on. Every `GEODE_AUDIT_*_ENABLED` switch takes `1`/`0`, `true`/`false` or `yes`/`no` in any case; any other value is refused (SONNY-6511) |
 | `GEODE_AUDIT_FILE_ENABLED`, `GEODE_AUDIT_FILE_PATH` | append JSON lines to the file (default `/var/log/geode/cli-audit.log`) |
 | `GEODE_AUDIT_SYSLOG_ENABLED`, `GEODE_AUDIT_SYSLOG_HOST`, `GEODE_AUDIT_SYSLOG_PORT` | send RFC 5424 datagrams over UDP; the host is an IPv4 address, a bracketed IPv6 address (`[::1]`) or `localhost`, optionally with `:<port>`; the port defaults to 514 |
 | `GEODE_AUDIT_WINDOWS_EVENTLOG_ENABLED`, `..._SOURCE`, `..._LOG` | Windows Event Log (Windows only) |

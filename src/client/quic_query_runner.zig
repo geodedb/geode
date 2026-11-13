@@ -438,8 +438,8 @@ const FakeProtocol = struct {
                 .success = false,
                 .session_id = "",
                 .error_message = try allocator.dupe(u8, failure.message),
+                .capabilities = .empty,
                 .graph = "",
-                .server_caps = "",
             } },
             .explain => .{ .execute = try buildExplainMessage(allocator) },
         };
@@ -501,7 +501,10 @@ fn buildExplainMessage(allocator: std.mem.Allocator) !schema.ExecutionResponse {
     };
 }
 
-test "collectQuery merges inline execute page with pulled pages" {
+// Since 1d22c1de5 the server sends every result page inline as an EXECUTE
+// response and the client sends no PULL (a PULL could reach another handler
+// after the stream FIN). A PULL-shaped response is still accepted.
+test "collectQuery reads every inline page without sending a PULL" {
     const allocator = std.testing.allocator;
 
     const scripted = [_]FakeMessage{
@@ -519,7 +522,7 @@ test "collectQuery merges inline execute page with pulled pages" {
         .readServerMessageFn = FakeProtocol.readServerMessage,
     };
 
-    const empty_params = std.ArrayList(schema.Param){};
+    const empty_params = std.ArrayList(schema.Param).empty;
     var result = try collectQuery(allocator, &client, .{
         .session_id = "session-1",
         .query_text = "RETURN 1",
@@ -530,8 +533,8 @@ test "collectQuery merges inline execute page with pulled pages" {
     defer result.deinit();
 
     try std.testing.expectEqual(@as(usize, 4), result.rowCount());
-    try std.testing.expectEqual(@as(usize, 1), fake.pull_page_sizes.items.len);
-    try std.testing.expectEqual(@as(u32, 7), fake.pull_page_sizes.items[0]);
+    try std.testing.expectEqual(@as(usize, 0), fake.pull_page_sizes.items.len);
+    try std.testing.expectEqual(@as(usize, 1), fake.execute_queries.items.len);
     try std.testing.expectEqualStrings("RETURN 1", fake.execute_queries.items[0]);
 }
 
@@ -552,7 +555,7 @@ test "collectQuery skips pull when inline page is already final" {
         .readServerMessageFn = FakeProtocol.readServerMessage,
     };
 
-    const empty_params = std.ArrayList(schema.Param){};
+    const empty_params = std.ArrayList(schema.Param).empty;
     var result = try collectQuery(allocator, &client, .{
         .session_id = "session-2",
         .query_text = "RETURN 42",
@@ -581,7 +584,7 @@ test "collectQuery captures hello auth failure as query error" {
         .readServerMessageFn = FakeProtocol.readServerMessage,
     };
 
-    const empty_params = std.ArrayList(schema.Param){};
+    const empty_params = std.ArrayList(schema.Param).empty;
     var result = try collectQuery(allocator, &client, .{
         .session_id = "",
         .query_text = "RETURN 1",
@@ -611,7 +614,7 @@ test "collectQuery captures explain payload without pulling rows" {
         .readServerMessageFn = FakeProtocol.readServerMessage,
     };
 
-    const empty_params = std.ArrayList(schema.Param){};
+    const empty_params = std.ArrayList(schema.Param).empty;
     var result = try collectQuery(allocator, &client, .{
         .session_id = "session-3",
         .query_text = "EXPLAIN RETURN 1",
@@ -665,7 +668,7 @@ test "collectQuery drains streaming transport without pull support" {
         .nextEventFn = FakeStreamingTransport.nextEvent,
     };
 
-    const empty_params = std.ArrayList(schema.Param){};
+    const empty_params = std.ArrayList(schema.Param).empty;
     var result = try collectQueryWithTransport(allocator, &transport, .{
         .session_id = "stream-session",
         .query_text = "MATCH (n) RETURN n",
@@ -677,7 +680,7 @@ test "collectQuery drains streaming transport without pull support" {
     try std.testing.expectEqual(@as(usize, 4), result.rowCount());
 }
 
-test "consumeQueryWithTransport forwards pull request ids to consumers" {
+test "consumeQueryWithTransport hands every inline page to the consumer, request id 0, without a PULL" {
     const allocator = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -686,6 +689,7 @@ test "consumeQueryWithTransport forwards pull request ids to consumers" {
     const FakeStreamingTransport = struct {
         scripted: []const QueryEvent,
         next_message: usize = 0,
+        pulls_requested: usize = 0,
 
         fn beginQuery(transport: *QueryTransport, allocator_: std.mem.Allocator, opts: QueryOptions) !void {
             _ = transport;
@@ -710,11 +714,14 @@ test "consumeQueryWithTransport forwards pull request ids to consumers" {
             timeout_secs: u32,
         ) !?QueryEvent {
             _ = req;
+            const self: *@This() = @ptrCast(@alignCast(transport.context));
+            self.pulls_requested += 1;
             return try nextEvent(transport, allocator_, timeout_secs);
         }
     };
 
     const RequestIdConsumer = struct {
+        gpa: std.mem.Allocator,
         seen_request_ids: *std.ArrayList(u64),
 
         fn handleEvent(
@@ -731,7 +738,7 @@ test "consumeQueryWithTransport forwards pull request ids to consumers" {
                     if (exec_resp.payload) |payload| switch (payload) {
                         .schema => break :blk .{ .schema_received = true },
                         .page => |page| {
-                            try self.seen_request_ids.append(self.seen_request_ids.allocator, request_id);
+                            try self.seen_request_ids.append(self.gpa, request_id);
                             break :blk .{
                                 .saw_page = true,
                                 .page_final = page.final,
@@ -764,13 +771,13 @@ test "consumeQueryWithTransport forwards pull request ids to consumers" {
 
     var seen_request_ids = std.ArrayList(u64).empty;
     defer seen_request_ids.deinit(allocator);
-    var consumer_state = RequestIdConsumer{ .seen_request_ids = &seen_request_ids };
+    var consumer_state = RequestIdConsumer{ .gpa = allocator, .seen_request_ids = &seen_request_ids };
     var consumer = QueryEventConsumer{
         .context = &consumer_state,
         .handleEventFn = RequestIdConsumer.handleEvent,
     };
 
-    const empty_params = std.ArrayList(schema.Param){};
+    const empty_params = std.ArrayList(schema.Param).empty;
     try consumeQueryWithTransport(allocator, &transport, .{
         .session_id = "stream-session",
         .query_text = "MATCH (n) RETURN n",
@@ -779,8 +786,9 @@ test "consumeQueryWithTransport forwards pull request ids to consumers" {
         .params = empty_params,
     }, &consumer);
 
+    // All three pages arrive inline (no requestNextPage round trip), so
+    // each carries the request id of the EXECUTE, 0.
     try std.testing.expectEqual(@as(usize, 3), seen_request_ids.items.len);
-    try std.testing.expectEqual(@as(u64, 0), seen_request_ids.items[0]);
-    try std.testing.expectEqual(@as(u64, 1), seen_request_ids.items[1]);
-    try std.testing.expectEqual(@as(u64, 2), seen_request_ids.items[2]);
+    for (seen_request_ids.items) |id| try std.testing.expectEqual(@as(u64, 0), id);
+    try std.testing.expectEqual(@as(usize, 0), fake.pulls_requested);
 }

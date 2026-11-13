@@ -13,7 +13,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 - ❌ **Phase 4**: Transaction Isolation — not implemented in the server (no isolation levels, SSI or phantom-read prevention; the code was never compiled and was removed 2026-11-11, SONNY-6298). See [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md)
 - ✅ **Phase 5**: Distributed Coordination — Raft consensus, cluster management and two-phase commit (`src/distributed/`: 22,458 lines in 26 files). Federated / scatter-gather query coordination is not implemented (that code was never compiled and was removed 2026-11-11, SONNY-6279)
 - ✅ **Phase 6**: Materialized Views (3 refresh strategies; query rewrite is exact-match only, API level — GAP-0876)
-- ✅ **Phase 7**: Graph Algorithms (20-90% performance gains)
+- ✅ **Phase 7**: Graph Algorithms — the `CALL algo.*` procedures (`src/execution/centrality_algorithms.zig`). The "20-90% performance gains" came from `src/graph/centrality_optimized.zig` and its sibling `src/graph/` modules, which no build compiled or ran; they were removed 2026-11-13 (SONNY-6511) and no gain was ever measured on the server path
 
 **Total**: ~13,554+ lines of production code | See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test status
 **Details**: See [completion_reports/](./completion_reports/) for comprehensive phase documentation
@@ -158,7 +158,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 ### **Storage Engine**
 
 - **MVCC**: Multi-version concurrency control
-- **Memory-Mapped I/O**: 13.18x I/O performance improvement
+- **Memory-Mapped I/O**: the id map and hydration snapshot are memory-mapped (`src/storage/id_map.zig`, `hydration_snapshot.zig`); the "13.18x" figure came from `src/performance/memory_mapped_io.zig`, which no server path uses (despite its name it reads a file into a heap buffer; only a benchmark test runs it), and no measurement backs it for the server (SONNY-6511)
 - **Backup files**: `geode backup create` / `geode restore` write and read local files (`none` or `gzip` payloads); there is no S3-compatible object-storage path: copy backup files with your own tool (SONNY-6290)
 - **WAL Optimization**: Write-ahead logging
 

@@ -1,6 +1,4 @@
 const std = @import("std");
-const geode = @import("geode");
-const impl_flagger = geode.impl_flagger;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-004; FEATURE="ServerRefactoring"; ASPECT=FLAG_UTILITIES; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-12
 // Phase 3 M3.1 - Server Flags Module (Incremental Extraction)
@@ -28,10 +26,6 @@ var g_order_keys_expr: bool = true; // default allows property paths per ISO/GQL
 var g_adapt_estimates: bool = false; // env or future CLI toggled
 var g_estimate_adjust_factor: f64 = 1.0; // groundwork; stays 1.0 until adaptive algorithm enabled
 
-/// Implementation-defined flag cache (codes only). Allocated once on first use.
-var g_impl_defined_codes: [][]const u8 = &.{};
-var g_impl_defined_inited: bool = false;
-
 /// Helper returns correct null policy flag pointer
 pub inline fn nullsFlag() []const u8 {
     return if (g_nulls_last) F_NULLS_LAST else F_NULLS_FIRST;
@@ -44,20 +38,11 @@ pub inline fn nullsFlag() []const u8 {
 // streaming remains NOT implemented — the server writes full results; any
 // future incremental-page emission must land with real tests.
 
-/// Initialize implementation-defined flags from the flagger module
-pub fn initImplDefinedFlags(allocator: std.mem.Allocator) void {
-    if (g_impl_defined_inited) return;
-    if (impl_flagger.collect(allocator, .{ .zero_length_paths_excluded = true, .collation_binary_default = true, .null_order_policy_default = true })) |findings| {
-        // Extract codes slice
-        const codes = allocator.alloc([]const u8, findings.len) catch return;
-        var i: usize = 0;
-        while (i < findings.len) : (i += 1) codes[i] = findings[i].code;
-        g_impl_defined_codes = codes;
-        g_impl_defined_inited = true;
-    } else |_| {
-        return; // leave empty on failure
-    }
-}
+// SONNY-6511: initImplDefinedFlags, getImplDefinedCodes and
+// isImplDefinedInited deleted with src/server/flagger_impl_defined.zig. No
+// server path called them (the cache stayed empty) and the flagger's
+// collect did not compile. The implementation-defined items are listed by
+// conformance.collectImplDefinedFlags; the server does not report them.
 
 /// Thread-safe buffer type for base flags (caller-owned).
 pub const BaseFlagsBuf = [12][]const u8;
@@ -102,16 +87,6 @@ pub fn computeFlagsExtended(buf: *ExtFlagsBuf, ordered: bool, distinct: bool, un
         end += 1;
     }
     return buf[0..end];
-}
-
-/// Get implementation-defined flag codes
-pub fn getImplDefinedCodes() []const []const u8 {
-    return g_impl_defined_codes;
-}
-
-/// Check if implementation-defined flags are initialized
-pub fn isImplDefinedInited() bool {
-    return g_impl_defined_inited;
 }
 
 /// Set nulls last policy (for testing/configuration)

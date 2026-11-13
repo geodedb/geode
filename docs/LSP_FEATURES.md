@@ -157,8 +157,17 @@ After a document parses, the recommendation engine
 (`src/gql/recommendations.zig`) adds `Information` and `Hint` diagnostics
 (`source: "geode"`) suggesting Geode features. The MCP `validate` and
 `diagnostics` tools return the same suggestions. They are static: the
-engine reads the query only, not the schema or the indexes that exist, and
-reports every suggestion at line 0, column 0.
+engine reads the query only, not the schema or the indexes that exist.
+
+Each suggestion's range covers the token it is about (SONNY-6511): the
+property or field name, `count`, or the `*` of a variable-length path. The
+AST carries no source positions, so the engine finds the token in the
+document text: the n-th suggestion naming a token goes to its n-th whole-word
+occurrence outside string literals and comments, and one whose token is not
+found goes to the start of the first statement. LSP ranges are 0-based; the
+MCP `validate` tool reports 1-based lines and columns, like its parse
+errors, with an exclusive end column. An error of the engine (out of memory)
+fails the request instead of answering without suggestions.
 
 | Code | Severity | Fires on |
 | ---- | -------- | -------- |

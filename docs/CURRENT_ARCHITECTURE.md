@@ -85,7 +85,7 @@ src/storage/        - Storage engine, page management, backup
 src/wal/            - Write-ahead logging
 src/index/          - Index implementations (B-tree, HNSW, R-tree, etc.)
 src/txn/            - Transaction management
-src/graph/          - Graph-specific data structures
+src/graph/          - Test-only community detection and LFU cache (the algo.* procedures live in src/execution/)
 ```
 
 **Security**:
@@ -440,7 +440,8 @@ Client → Server (graph write lock / per-query read snapshot) → Executor (und
 There are no isolation levels, no SSI and no phantom-read prevention in the
 server; see [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md).
 `src/server/txn/enhanced_isolation.zig` was never compiled and was removed
-(SONNY-6298); `src/server/txn/mvcc.zig` and `src/transactions/manager.zig` are
+(SONNY-6298), and so were `src/server/txn/mvcc.zig` and
+`phantom_read_prevention.zig` (SONNY-6511); `src/transactions/manager.zig` is
 not called by any server path.
 
 **Risk**:
@@ -756,7 +757,7 @@ Based on this architecture analysis, the modularization phases should proceed as
 | optimizer | Query optimization | ~5 | advanced_types_optimizer.zig (599) |
 | pagination | Pagination utilities | - | - |
 | performance | Performance helpers | 3 | memory_mapped_io.zig (850; exported by `src/lib.zig`, no product caller), json_optimized_fixed.zig (408; compiled only by its unit test) |
-| planner | Query planning | 15 | pipeline.zig (854), cost_model.zig (594), cbo.zig (579), wcoj.zig (473), rewrite.zig (360) |
+| planner | Query planning | 10 | cost_model.zig (594), cbo.zig (579), pipeline.zig (420); wcoj, rewrite, path_cache, phase_timing and adaptive_replan were removed (SONNY-6511) |
 | query | Query management | ~5 | enhanced_materialized_views.zig (884), materialized_views.zig (650) |
 | schema | Schema management | ~5 | catalog.zig (568) |
 | security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), user_manager.zig (733) |

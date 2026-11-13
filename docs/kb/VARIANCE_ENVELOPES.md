@@ -60,12 +60,12 @@ Generated catalog of all BENCHED variance / jitter / performance guard aspects (
 
 ### PathCache
 
-- PathCacheEntropyVarianceEnvelope
-- PathCacheHitMissVarianceEnvelope
-- PathCacheLookupVarianceEnvelope
-- PathCacheDegreeBucketUtilizationVarianceEnvelope
-- PathCachePlannerPipelineVarianceEnvelope (alias: PlannerPipelineVarianceEnvelope) _if present in scan_
+- PathCacheDegreeBucketUtilizationVarianceEnvelope (structural key derivation)
 - PathCacheStructuralKeyCollisionVarianceEnvelope (legacy, if still present)
+
+The entropy, hit/miss, lookup and planner-pipeline envelopes measured
+`src/planner/path_cache.zig` and the synthetic `pipeline.runPipeline`, which
+no build compiled; they were removed with that code (SONNY-6511).
 
 ### Query Planner (Cost Model & Enumeration)
 

@@ -63,6 +63,7 @@ pub const Scope = struct {
 
     fn canonicalize(self: *Scope, name: []const u8) ![]const u8 {
         const upper = try self.allocator.alloc(u8, name.len);
+        errdefer self.allocator.free(upper);
         for (name, 0..) |c, i| {
             upper[i] = std.ascii.toUpper(c);
         }

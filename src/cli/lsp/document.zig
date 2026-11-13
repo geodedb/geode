@@ -124,9 +124,13 @@ pub const Document = struct {
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, uri: []const u8, text: []const u8, version: i32) !*Document {
+        // SONNY-6511: nothing leaks when an allocation fails.
         const doc = try allocator.create(Document);
+        errdefer allocator.destroy(doc);
+        const owned_uri = try allocator.dupe(u8, uri);
+        errdefer allocator.free(owned_uri);
         doc.* = .{
-            .uri = try allocator.dupe(u8, uri),
+            .uri = owned_uri,
             .text = try allocator.dupe(u8, text),
             .version = version,
             .allocator = allocator,
@@ -141,8 +145,11 @@ pub const Document = struct {
     }
 
     pub fn update(self: *Document, new_text: []const u8, new_version: i32) !void {
+        // SONNY-6511: copy first, so a failed copy keeps the old text instead
+        // of leaving `text` pointing at freed memory.
+        const copy = try self.allocator.dupe(u8, new_text);
         self.allocator.free(self.text);
-        self.text = try self.allocator.dupe(u8, new_text);
+        self.text = copy;
         self.version = new_version;
     }
 
@@ -367,6 +374,7 @@ pub const DocumentStore = struct {
         }
 
         const doc = try Document.init(self.allocator, uri, text, version);
+        errdefer doc.deinit();
         try self.documents.put(doc.uri, doc);
     }
 
