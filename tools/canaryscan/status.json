@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:23:56.666171497Z",
+  "generated_at": "2026-11-13T14:24:29.639749239Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -1483,23 +1483,6 @@
       ]
     },
     {
-      "id": "REQ-2PC-ABORT-001",
-      "features": [
-        {
-          "feature": "2PC Abort Handler",
-          "aspect": "UndoApplication",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase_participant.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
       "id": "REQ-2PC-COMMIT-001",
       "features": [
         {
@@ -1513,18 +1496,6 @@
           "benches": [],
           "owner": "txn",
           "updated": "2026-01-16"
-        },
-        {
-          "feature": "2PC Commit Handler",
-          "aspect": "StorageApplication",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase_participant.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
         }
       ]
     },
@@ -1559,35 +1530,6 @@
           "benches": [],
           "owner": "txn",
           "updated": "2026-01-16"
-        },
-        {
-          "feature": "2PC Participant Node",
-          "aspect": "StorageOps",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/twophase_participant.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-2PC-PARTICIPANT-TEST-001",
-      "features": [
-        {
-          "feature": "2PC Participant Unit Tests",
-          "aspect": "TestCoverage",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/twophase_participant.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-06"
         }
       ]
     },
@@ -29399,7 +29341,7 @@
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-24"
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -33488,20 +33430,6 @@
       "features": [
         {
           "feature": "Raft Replication",
-          "aspect": "AppendEntriesCommitAdvance",
-          "status": "TESTED",
-          "files": [
-            "tests/test_raft_commit_advancement.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_070_AppendEntriesCommitAdvance"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Raft Replication",
           "aspect": "CommitAdvancementVarianceEnvelope",
           "status": "BENCHED",
           "files": [
@@ -34085,20 +34013,6 @@
           "benches": [],
           "owner": "transport",
           "updated": "2026-05-25"
-        },
-        {
-          "feature": "RaftFrame/TransportEnvelope",
-          "aspect": "NetworkTransport",
-          "status": "TESTED",
-          "files": [
-            "tests/test_quic_raft_smoke.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_074_RaftFrameSmoke"
-          ],
-          "benches": [],
-          "owner": "cluster",
-          "updated": "2025-09-23"
         }
       ]
     },
@@ -35242,90 +35156,6 @@
       "id": "REQ-GQL-086",
       "features": [
         {
-          "feature": "InteractiveRepl",
-          "aspect": "CtrlCCancelBuffer",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_CtrlCCancelBuffer"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "HistoryPersistence",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_HistoryPersistence"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "MetaCommandsBasic",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_MetaCommandsBasic"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "MultilineBuffering",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_MultilineBuffering"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "ReplLaunchPrompt",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_ReplLaunchPrompt"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
-          "feature": "InteractiveRepl",
-          "aspect": "TxnPromptIndicator",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_TxnPromptIndicator"
-          ],
-          "benches": [],
-          "owner": "client",
-          "updated": "2025-09-23"
-        },
-        {
           "feature": "Temporal Types",
           "aspect": "DateParsing",
           "status": "TESTED",
@@ -36125,23 +35955,6 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-2PC-005",
-      "features": [
-        {
-          "feature": "Distributed Query Processing",
-          "aspect": "Distributed",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/cluster.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-05"
         }
       ]
     },
@@ -79950,6 +79763,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3383-COMMIT-REFUSED-WIRE",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "RefusedCommitOnQuicWire",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3383_commit_refused_wire.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3383_commit_refused_wire.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3384-SET-DELETE-RETURN",
       "features": [
         {
@@ -86644,6 +86476,101 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6466-CONN-STALL-CANCEL",
+      "features": [
+        {
+          "feature": "QUIC Abandoned Read Cancellation",
+          "aspect": "ConfigurableConnectionStallThreshold",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6466-FOR-ATOMICITY",
+      "features": [
+        {
+          "feature": "ForStatement",
+          "aspect": "StatementAtomicityOnElementFailure",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6466_for_statement_atomicity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6466_for_statement_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6466-RANGE-CONTRACT",
+      "features": [
+        {
+          "feature": "range() function",
+          "aspect": "ExclusiveEndGeodeExtension",
+          "status": "TESTED",
+          "files": [
+            "tests/test_for_write_body.zig"
+          ],
+          "tests": [
+            "tests/test_for_write_body.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6466-SIBLING-READ-CANCEL-ON-CLOSE",
+      "features": [
+        {
+          "feature": "QUIC Abandoned Read Cancellation",
+          "aspect": "DrainedConnectionCancelsEveryStream",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6466-VANISHED-CLIENT-READ-CANCEL",
+      "features": [
+        {
+          "feature": "QUIC Abandoned Read Cancellation",
+          "aspect": "ConnectionKeyedStallWatchdog",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6466_abandoned_read_cancel.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6467-CALL-IN-TXN-BODY",
       "features": [
         {
@@ -86753,6 +86680,45 @@
           ],
           "benches": [],
           "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6476-FINGERPRINT-UID",
+      "features": [
+        {
+          "feature": "CliSessionStorage",
+          "aspect": "PortableUid",
+          "status": "TESTED",
+          "files": [
+            "src/cli/security/session_storage.zig"
+          ],
+          "tests": [
+            "src/cli/security/session_storage.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6476-SHELL-LONG-LINE",
+      "features": [
+        {
+          "feature": "ShellPlainMode",
+          "aspect": "LineLongerThan4095Bytes",
+          "status": "TESTED",
+          "files": [
+            "src/client/repl/repl_loop.zig",
+            "tests/test_sonny6476_shell_long_line.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6476_shell_long_line.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
           "updated": "2026-11-13"
         }
       ]
@@ -94408,18 +94374,6 @@
         },
         {
           "feature": "Raft RPC TLS",
-          "aspect": "RpcClientConnect",
-          "status": "TESTED",
-          "files": [
-            "src/distributed/raft_consensus.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "security",
-          "updated": "2026-04-10"
-        },
-        {
-          "feature": "Raft RPC TLS",
           "aspect": "TransportSend",
           "status": "TESTED",
           "files": [
@@ -94457,8 +94411,8 @@
       "BENCHED": 208,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 333,
-      "TESTED": 4927
+      "IMPL": 329,
+      "TESTED": 4925
     },
     "by_aspect": {
       "2PC": 3,
@@ -94594,7 +94548,6 @@
       "AnnexBCompleteness": 1,
       "AnnotationsBlindIndexEvidence": 1,
       "ApiKeysNotSupported": 1,
-      "AppendEntriesCommitAdvance": 1,
       "AppendOrderedLabelPosting": 1,
       "ApplicationErrorSpace": 1,
       "ApplyAbsoluteIdEdge": 1,
@@ -95083,6 +95036,7 @@
       "ConfigManagement": 2,
       "ConfigResolution": 1,
       "ConfigTesting": 1,
+      "ConfigurableConnectionStallThreshold": 1,
       "ConfigurableCoordinatorCoalescing": 1,
       "ConfigurableHelloReadTimeout": 1,
       "ConfigurableInitialCwnd": 1,
@@ -95108,6 +95062,7 @@
       "ConnectionAuth": 1,
       "ConnectionHandler": 1,
       "ConnectionHandling": 2,
+      "ConnectionKeyedStallWatchdog": 1,
       "ConnectionList": 1,
       "ConnectionManagement": 1,
       "ConnectionOutlivesFirstStream": 1,
@@ -95255,7 +95210,6 @@
       "Crypto": 1,
       "CryptoIndep": 1,
       "Cryptography": 1,
-      "CtrlCCancelBuffer": 1,
       "CudaDynamicLoader": 1,
       "CurrentGraphEquality": 1,
       "CurrentTenantEquality": 1,
@@ -95437,7 +95391,7 @@
       "DistinctExitCode": 1,
       "DistinctOptional": 1,
       "DistinctYieldNames": 1,
-      "Distributed": 3,
+      "Distributed": 2,
       "DistributedCluster": 1,
       "DistributedIndep": 1,
       "DistributedIsolation": 1,
@@ -95457,6 +95411,7 @@
       "DoubleFreeFix": 3,
       "DownReversalSafety": 1,
       "DrainReadyMessages": 1,
+      "DrainedConnectionCancelsEveryStream": 1,
       "DriftPolicyOutcomeStrict": 1,
       "DropAllRowsOfTheName": 1,
       "DropClearsDimPin": 1,
@@ -95686,6 +95641,7 @@
       "ExcludeKeyMaterialAndLock": 1,
       "ExcludedShapes": 1,
       "ExclusiveAcquireUnderLoad": 1,
+      "ExclusiveEndGeodeExtension": 1,
       "ExclusiveNoFollow0600": 1,
       "ExecContextWiring": 1,
       "ExecuteCreate": 1,
@@ -96155,7 +96111,6 @@
       "HintExtraction": 1,
       "HistogramMaintenance": 1,
       "HistogramStats": 1,
-      "HistoryPersistence": 1,
       "HitCounter": 1,
       "HmacKeyFileVsTdeKeyExplained": 1,
       "HomogeneousDetection": 1,
@@ -96441,6 +96396,7 @@
       "LimitErrorRelay": 1,
       "LimitInChain": 1,
       "Limiter": 1,
+      "LineLongerThan4095Bytes": 1,
       "LintCompliance": 1,
       "List": 1,
       "ListAccess": 2,
@@ -96631,7 +96587,6 @@
       "Messaging": 1,
       "MetaCommand": 1,
       "MetaCommandDispatch": 1,
-      "MetaCommandsBasic": 1,
       "MetadataDerived": 3,
       "MetadataOwnership": 1,
       "MetadataReadOnly": 1,
@@ -96698,7 +96653,6 @@
       "MultiPropertyMergeIndexedProbe": 1,
       "MultiTenantSignal": 1,
       "MultiWayOptimization": 1,
-      "MultilineBuffering": 1,
       "MultipleNodeBinding": 1,
       "MultipleOptional": 1,
       "MultipleRoles": 1,
@@ -96736,7 +96690,7 @@
       "NetworkCallback": 1,
       "NetworkSecurity": 1,
       "NetworkTests": 1,
-      "NetworkTransport": 2,
+      "NetworkTransport": 1,
       "NetworkTransportTests": 1,
       "NeverEqual": 1,
       "NewlineOnEmptyInput": 1,
@@ -97274,6 +97228,7 @@
       "PollWorkerContentionCap": 1,
       "PopulationSystem": 1,
       "PortEnvVar": 1,
+      "PortableUid": 1,
       "PositionalSearch": 1,
       "PostAuthCheck": 1,
       "PostFilter": 1,
@@ -97602,6 +97557,7 @@
       "RefuseFabricated": 2,
       "RefuseInternal": 1,
       "RefuseReserved": 1,
+      "RefusedCommitOnQuicWire": 1,
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
@@ -97653,7 +97609,6 @@
       "RepeatedTarget": 1,
       "ReplConfigXdg": 1,
       "ReplDispatchRegression": 1,
-      "ReplLaunchPrompt": 1,
       "ReplLoopError": 1,
       "ReplParseDelegation": 1,
       "ReplaceDefaultRefused": 1,
@@ -97765,7 +97720,6 @@
       "RowScopeInterface": 1,
       "RowValueOwnership": 1,
       "RowVisibilityCombinator": 1,
-      "RpcClientConnect": 1,
       "RunGqlError": 1,
       "RuntimeCounterBridge": 1,
       "RuntimeEngine": 1,
@@ -98106,6 +98060,7 @@
       "StateField": 1,
       "StatePropagation": 1,
       "StatementAtomicity": 1,
+      "StatementAtomicityOnElementFailure": 1,
       "StatementBatchCodec": 1,
       "StatementBatchRegression": 1,
       "StatementDispatch": 1,
@@ -98143,14 +98098,12 @@
       "Stop": 1,
       "StorableValues": 1,
       "Storage": 20,
-      "StorageApplication": 1,
       "StorageBench": 1,
       "StorageFilterAndDescendants": 1,
       "StorageIndep": 1,
       "StorageIntegration": 1,
       "StorageIsolation": 1,
       "StorageLookupResidual": 1,
-      "StorageOps": 1,
       "StorageProcedures": 1,
       "StorageTests": 3,
       "StorageUnit": 1,
@@ -98265,7 +98218,7 @@
       "TestAssertions": 1,
       "TestAutomation": 1,
       "TestCleanup": 1,
-      "TestCoverage": 5,
+      "TestCoverage": 4,
       "TestEnforcement": 1,
       "TestExecution": 1,
       "TestExposure": 1,
@@ -98359,7 +98312,6 @@
       "TxnGate": 1,
       "TxnGraph": 1,
       "TxnGraphHolds": 1,
-      "TxnPromptIndicator": 1,
       "TxnStatementCount": 1,
       "TypeAliases": 1,
       "TypeCastFunctions": 1,
@@ -98389,7 +98341,6 @@
       "UndeclaredSecretIsAnError": 1,
       "UndirectedEdgeRefusal": 1,
       "UndirectedOptional": 1,
-      "UndoApplication": 1,
       "UndoCheckpoint": 1,
       "UndoEntry": 1,
       "UndoEntryCompaction": 1,

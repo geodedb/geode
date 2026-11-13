@@ -87,9 +87,7 @@ test "drainReady-and-bridge: wrapper transport receives RequestVoteResponse from
         .id = 2,
         .endpoint = "127.0.0.1",
         .port = 21001,
-        .alive = true,
         .last_contact = 0,
-        .rpc_client = null,
     };
 
     var node = try RaftNode.init(a, 1, peers, 200);
@@ -163,9 +161,7 @@ test "raft outbox dispatch drops queued sends after shutdown is requested" {
         .id = 2,
         .endpoint = "127.0.0.1",
         .port = 21001,
-        .alive = true,
         .last_contact = 0,
-        .rpc_client = null,
     };
     const msg = Message{ .request_vote_response = .{
         .term = 7,

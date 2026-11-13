@@ -630,7 +630,8 @@ const CartJob = struct {
     fn run(self: *CartJob) void {
         const cart = "MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d)";
         var ok = true;
-        // `range(1, 1500)`'s pairs, as the store counts them.
+        // `range(1, 1500)`'s pairs, as the store counts them: 1,499, the end
+        // is exclusive (SONNY-6466).
         var counted = runProgram(self.s, allocator, "MATCH (p:P) RETURN count(*) AS n") catch return;
         const pairs = (h.renderRows(self.s.arena.allocator(), counted) catch return)[0];
         counted.deinit(allocator);
@@ -640,7 +641,7 @@ const CartJob = struct {
         defer geode.read_budget.setBudgetBytesForTest(0);
         ok = self.check(cart ++ " RETURN 1 AS one LIMIT 1", &.{"1"}, null, 10_000) and ok;
         // The WHERE is applied to each binding as the join completes it (2.25
-        // million evaluated, 1,500 kept).
+        // million evaluated, 1,499 kept).
         ok = self.check(cart ++ " WHERE c.i = a.i RETURN count(*) AS n", &.{pairs}, null, 300_000) and ok;
         // The whole product is past the budget: 53200, not an OOM.
         ok = self.check(cart ++ " RETURN a.i, c.i", null, error.ReadQueryBudgetExceeded, 120_000) and ok;
@@ -648,7 +649,7 @@ const CartJob = struct {
     }
 };
 
-test "SONNY-3368 (I-1): LIMIT 1 over two 1,500-pair chains is bounded, a WHERE streams, and the whole product answers the read budget's error" {
+test "SONNY-3368 (I-1): LIMIT 1 over two 1,499-pair chains is bounded, a WHERE streams, and the whole product answers the read budget's error" {
     var s = try openSession(.in_memory);
     defer s.deinit();
     var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 1500) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");

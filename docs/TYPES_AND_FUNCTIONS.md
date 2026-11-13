@@ -514,6 +514,27 @@
 - `date_part(part, date|timestamp)` - Extract year/month/day/hour/etc.
 - `time_part(part, time)` - Extract hour/minute/second
 
+## List Functions
+
+### `range(start, end[, step])`
+
+A Geode extension (ISO/IEC 39075:2024 has no `range` function): the list of
+integers from `start` up to, **not including**, `end`, stepping by `step`
+(default 1). The end is exclusive, as in Python's `range`; openCypher's
+`range()` includes its end, so a query ported from Cypher must move the end
+by one step.
+
+| Call | Result |
+|---|---|
+| `range(1, 4)` | `[1, 2, 3]` |
+| `range(1, 7, 2)` | `[1, 3, 5]` |
+| `range(5, 1, -2)` | `[5, 3]` |
+| `range(3, 3)` | `[]` |
+| `range(1, 4, 0)` | `NULL` (a zero step) |
+
+A non-integer argument returns `NULL`; more than 10,000,000 elements is
+refused (`RangeTooLarge`). `FOR i IN range(1, 1500)` runs 1,499 times.
+
 ## Distance and Spatial Functions
 
 ### Haversine Distance

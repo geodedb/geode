@@ -775,7 +775,22 @@ pub const QuicProtoClient = struct {
         return if (test_ports.isLoopback(ip)) ip else null;
     }
 
+    /// Close the way a real client does (SONNY-6475 item 2): CONNECTION_CLOSE
+    /// on the wire, then free the endpoint. `QuicClient.deinit` alone frees
+    /// it silently, so the server held every test client's connection — and
+    /// any read it left running — until its own timeouts.
     pub fn deinit(self: *QuicProtoClient) void {
+        self.stream.deinit();
+        self.client.closeGraceful(quic.app_error.no_error);
+        if (self.session_id.len > 0) {
+            self.allocator.free(self.session_id);
+        }
+    }
+
+    /// Vanish WITHOUT a CONNECTION_CLOSE, as a crashed client or a dropped
+    /// network does (SONNY-6466): the endpoint is freed locally and the
+    /// server hears nothing more.
+    pub fn abandon(self: *QuicProtoClient) void {
         self.stream.deinit();
         self.client.deinit();
         if (self.session_id.len > 0) {

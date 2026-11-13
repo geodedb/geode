@@ -508,7 +508,7 @@ RETURN reverse([1, 2, 3])
 
 #### `range(start: INTEGER, end: INTEGER, step: INTEGER)` -> `LIST`
 
-Create a list of integers
+Geode extension (ISO GQL has no range function): integers from start up to, not including, end, by step (default 1); openCypher's range() includes end
 
 ```gql
 RETURN range(1, 10)

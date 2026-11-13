@@ -74,7 +74,7 @@ const SendResult = struct { delivered: bool, closed_seen: usize, sends: usize };
 /// 100 ms until the receiver adopts `term` or the budget runs out.
 fn deliver(a: std.mem.Allocator, t: *raft.Transport, coord: *ClusterCoordinator, port: u16, term: u64) SendResult {
     _ = a;
-    const peer: raft.Peer = .{ .id = 1, .endpoint = receiver_ip, .port = port, .alive = true, .last_contact = 0, .rpc_client = null };
+    const peer: raft.Peer = .{ .id = 1, .endpoint = receiver_ip, .port = port, .last_contact = 0 };
     var no_entries = [_]raft.LogEntry{};
     const msg: raft.Message = .{ .append_entries = .{
         .term = term,

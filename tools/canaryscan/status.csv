@@ -90,13 +90,9 @@ REQ-0009,Performance Budget Enforcement,CI,TESTED,.gitlab-ci.yml,test-performanc
 REQ-0009,Performance Targets,Benchmark,BENCHED,benchmarks/benchmark_monitoring_metrics_variance_unified.zig,,BenchmarkCANARY_REQ_GQL_081_MetricsRegistryVarianceUnified_Run,ops-team,2026-01-15
 REQ-2PC-001,2PC,PreparePhase,TESTED,tests/test_gap_0193_final_batch.zig,,,distributed,2026-01-15
 REQ-2PC-002,2PC,CommitPhase,TESTED,tests/test_gap_0193_final_batch.zig,,,distributed,2026-01-15
-REQ-2PC-ABORT-001,2PC Abort Handler,UndoApplication,IMPL,src/distributed/twophase_participant.zig,,,distributed,2026-04-10
 REQ-2PC-COMMIT-001,2PC,Commit,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,txn,2026-01-16
-REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,IMPL,src/distributed/twophase_participant.zig,,,distributed,2026-04-10
 REQ-2PC-COORD-001,2PC,Coordinator,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,txn,2026-01-16
 REQ-2PC-PARTICIPANT-001,2PC,Participant,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,txn,2026-01-16
-REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,IMPL,src/distributed/twophase_participant.zig,,,distributed,2026-04-10
-REQ-2PC-PARTICIPANT-TEST-001,2PC Participant Unit Tests,TestCoverage,TESTED,src/distributed/twophase_participant.zig,,,distributed,2026-04-06
 REQ-2PC-PREPARE-001,2PC,Prepare,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,txn,2026-01-16
 REQ-2PC-ROLLBACK-001,2PC,Rollback,TESTED,tests/test_gap_0193_batch5_comprehensive.zig,,,txn,2026-01-16
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
@@ -1923,7 +1919,7 @@ REQ-GQL-017-TUTORIAL,Docs,Tutorial,IMPL,tests/test_gap_0193_batch2_misc.zig,,,do
 REQ-GQL-018,QueryPlanCaching,CacheEviction,TESTED,tests/query_plan_cache_test.zig,TestCANARY_REQ_GQL_018_CacheEviction,,engine,2025-10-03
 REQ-GQL-018,Transport Parity Summary Diff Guard,GovernanceTest,TESTED,tests/e2e_parity_summary_diff_guard.zig,TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard,,tooling,2025-09-24
 REQ-GQL-018,Transport Parity Summary Guard,GovernanceTest,TESTED,tests/e2e_parity_summary_guard.zig,TestCANARY_REQ_GQL_018_ParitySummaryGuard,,tooling,2025-09-24
-REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig,TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows,,engine,2025-09-24
+REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig,TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows,,engine,2026-11-13
 REQ-GQL-019,QueryOptimization,CostBasedOptimization,TESTED,tests/query_plan_cache_test.zig,TestCANARY_REQ_GQL_019_CostBasedOptimization,,engine,2025-10-03
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-05
 REQ-GQL-020,QueryOptimization,MemoryEstimation,TESTED,tests/query_plan_cache_test.zig,TestCANARY_REQ_GQL_020_MemoryEstimation,,engine,2025-10-03
@@ -2218,7 +2214,6 @@ REQ-GQL-068,ExposedAlgorithms,Centrality,TESTED,src/execution/algo_dispatch.zig,
 REQ-GQL-068,ExposedAlgorithms,ReExport,TESTED,src/execution.zig,geodetestlab/specs/geode_graph_algorithms.yml,,execution,2026-01-03
 REQ-GQL-069,Probabilistic,CountMinSketch,BENCHED,src/graph/containers/count_min_sketch.zig,TestCANARY_REQ_GQL_069_CountMinSketch,BenchmarkCANARY_REQ_GQL_069_CountMinSketch,graph,2025-09-21
 REQ-GQL-069,Probabilistic,CountMinSketch,BENCHED,tests/benchmark_count_min_sketch_container.zig,TestCANARY_REQ_GQL_069_CountMinSketch,BenchmarkCANARY_REQ_GQL_069_CountMinSketch,graph,2025-09-21
-REQ-GQL-070,Raft Replication,AppendEntriesCommitAdvance,TESTED,tests/test_raft_commit_advancement.zig,TestCANARY_REQ_GQL_070_AppendEntriesCommitAdvance,,distributed,2025-09-21
 REQ-GQL-070,Raft Replication,CommitAdvancementVarianceEnvelope,BENCHED,tests/benchmark_raft_commit_advancement_variance.zig,,BenchmarkCANARY_REQ_GQL_070_CommitAdvancementVarianceEnvelope,distributed,2025-09-21
 REQ-GQL-070,String Search,KMP,BENCHED,src/graph/string_search_kmp.zig,TestCANARY_REQ_GQL_070_KMP,BenchmarkCANARY_REQ_GQL_070_KMP,graph,2025-09-21
 REQ-GQL-073,MvccAdvanced,ConflictRepairHeuristics,BENCHED,src/transactions/mvcc_adv/conflict_repair_heuristics.zig,TestCANARY_REQ_GQL_073_ConflictRepairHeuristics,BenchmarkCANARY_REQ_GQL_073_ConflictRepairHeuristics,txn,2025-09-20
@@ -2262,7 +2257,6 @@ REQ-GQL-074,Network Transport,QuicFrameLatencyVarianceEnvelope,BENCHED,tests/ben
 REQ-GQL-074,Network Transport,SlowPollWarning,TESTED,tests/test_quic_slow_poll_warning.zig,slow_poll_warning_fires_only_past_threshold_and_rate_limited,,wire,2026-06-07
 REQ-GQL-074,QUIC Transport,ClientHandshakeStallRegression,TESTED,tests/test_quic_handshake_stall_regression.sh,test_quic_handshake_stall_regression,,transport,2026-04-16
 REQ-GQL-074,QUIC Transport,ConditionTimedWaitCadence,TESTED,tests/test_quic_condition_timedwait_cadence.zig,test_quic_condition_timedwait_cadence,,transport,2026-05-25
-REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,tests/test_quic_raft_smoke.zig,TestCANARY_REQ_GQL_074_RaftFrameSmoke,,cluster,2025-09-23
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,tests/debug/test_cost_model_adaptive_bias.zig,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBias,,planner,2025-09-22
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,src/planner/cost_seed.zig,TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasImplementationParity,,planner,2025-09-26
 REQ-GQL-075,Cost Model Enumeration Seed,AdaptiveEstimatorBias,TESTED,tests/debug/test_cost_model_adaptive_bias_parity.zig,,,planner,2025-09-26
@@ -2355,12 +2349,6 @@ REQ-GQL-084,SelectivityEstimator,FrequencySampler,TESTED,src/optimizer/selectivi
 REQ-GQL-084,String Types,CharPadComparison,TESTED,src/canary.zig,TestCANARY_REQ_GQL_084_CharPadComparison,,types,2025-09-27
 REQ-GQL-085,ParenthesizedSetOperations,ParserSupport,TESTED,src/gql/parser.zig,,,parser,2025-10-14
 REQ-GQL-085,String Types,VarcharBounds,TESTED,src/canary.zig,TestCANARY_REQ_GQL_085_VarcharBounds,,types,2025-09-27
-REQ-GQL-086,InteractiveRepl,CtrlCCancelBuffer,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_CtrlCCancelBuffer,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,HistoryPersistence,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_HistoryPersistence,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,MetaCommandsBasic,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_MetaCommandsBasic,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,MultilineBuffering,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_MultilineBuffering,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,ReplLaunchPrompt,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_ReplLaunchPrompt,,client,2025-09-23
-REQ-GQL-086,InteractiveRepl,TxnPromptIndicator,TESTED,src/client/repl.zig,TestCANARY_REQ_GQL_086_TxnPromptIndicator,,client,2025-09-23
 REQ-GQL-086,Temporal Types,DateParsing,TESTED,src/canary.zig,TestCANARY_REQ_GQL_086_DateParsing,,types,2025-09-27
 REQ-GQL-086,TypeConversionFunctions,Evaluation,TESTED,src/eval.zig,,,eval,2025-10-14
 REQ-GQL-086,TypeConversionFunctions,Evaluation,TESTED,src/eval/call_handlers.zig,,,eval,2025-10-14
@@ -2412,7 +2400,6 @@ REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,src/distributed/t
 REQ-GQL-2PC-003,2PC,Idempotence,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-003,2PC Idempotence,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Idempotent,,distributed,2026-06-10
 REQ-GQL-2PC-004,2PC,RaftIntegration,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
-REQ-GQL-2PC-005,Distributed Query Processing,Distributed,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-05
 REQ-GQL-2PC-APPLY-001,2PC,WriteSetApplication,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-APPLY-002,2PC,WriteSetParser,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-TEST,2PC Test Suite,Testing,TESTED,tests/test_2pc_distributed.zig,TestCANARY_2PC_Suite,,test,2025-09-29
@@ -5122,6 +5109,7 @@ REQ-SONNY-3380-MERGE-ALIAS-SET,Execution,DuplicateSetUndo,TESTED,tests/test_sonn
 REQ-SONNY-3381-UNDO-INDEX-REPAIR,Execution,UndoIndexRegression,TESTED,tests/test_sonny3381_undo_index_entries.zig,tests/test_sonny3381_undo_index_entries.zig,,execution,2026-11-12
 REQ-SONNY-3381-UNDO-INDEX-REPAIR,Execution,UndoIndexRepairHook,TESTED,src/execution/undo_index_repair.zig,tests/test_sonny3381_undo_index_entries.zig,,execution,2026-11-12
 REQ-SONNY-3381-UNDO-INDEX-REPAIR,TransactionUndoLog,IndexRepairCollector,TESTED,src/txn_undo_log.zig,tests/test_sonny3381_undo_index_entries.zig,,engine,2026-11-12
+REQ-SONNY-3383-COMMIT-REFUSED-WIRE,TransactionManagement,RefusedCommitOnQuicWire,TESTED,tests/test_sonny3383_commit_refused_wire.zig,tests/test_sonny3383_commit_refused_wire.zig,,transport,2026-11-13
 REQ-SONNY-3384-SET-DELETE-RETURN,DELETE in Query,Regression,TESTED,tests/test_sonny3384_set_detach_delete.zig,tests/test_sonny3384_set_detach_delete.zig,,engine,2026-09-29
 REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,OwnedGraphEntities,TESTED,src/execution/value_utilities.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,transport,2026-09-29
 REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,RealServer,TESTED,tests/test_sonny_write_allowlist_r4_transport.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,transport,2026-09-29
@@ -5519,12 +5507,20 @@ REQ-SONNY-6460-QUERY-RESIDUALS,GqlEngineAggregation,Regression,TESTED,tests/test
 REQ-SONNY-6465-AWS-SIGV4,ExternalKmsClients,AwsKmsSigV4,TESTED,src/security/external_kms_client.zig,tests/test_sonny6465_external_kms.zig,,security,2026-11-13
 REQ-SONNY-6465-ENVELOPE-CIPHERTEXT,ExternalKmsClients,UnwrapFromEnvelope,TESTED,src/security/external_kms_client.zig,tests/test_sonny6465_external_kms.zig,,security,2026-11-13
 REQ-SONNY-6465-KMS-TLS,ExternalKmsClients,TlsOptionsHonoured,TESTED,src/security/external_kms_client.zig,tests/test_sonny6465_external_kms.zig,,security,2026-11-13
+REQ-SONNY-6466-CONN-STALL-CANCEL,QUIC Abandoned Read Cancellation,ConfigurableConnectionStallThreshold,TESTED,src/server/main.zig,tests/test_sonny6466_abandoned_read_cancel.zig,,transport,2026-11-13
+REQ-SONNY-6466-FOR-ATOMICITY,ForStatement,StatementAtomicityOnElementFailure,TESTED,tests/test_sonny6466_for_statement_atomicity.zig,tests/test_sonny6466_for_statement_atomicity.zig,,engine,2026-11-13
+REQ-SONNY-6466-RANGE-CONTRACT,range() function,ExclusiveEndGeodeExtension,TESTED,tests/test_for_write_body.zig,tests/test_for_write_body.zig,,eval,2026-11-13
+REQ-SONNY-6466-SIBLING-READ-CANCEL-ON-CLOSE,QUIC Abandoned Read Cancellation,DrainedConnectionCancelsEveryStream,TESTED,tests/test_sonny6466_abandoned_read_cancel.zig,tests/test_sonny6466_abandoned_read_cancel.zig,,transport,2026-11-13
+REQ-SONNY-6466-VANISHED-CLIENT-READ-CANCEL,QUIC Abandoned Read Cancellation,ConnectionKeyedStallWatchdog,TESTED,tests/test_sonny6466_abandoned_read_cancel.zig,tests/test_sonny6466_abandoned_read_cancel.zig,,transport,2026-11-13
 REQ-SONNY-6467-CALL-IN-TXN-BODY,ProcedureCall,TransactionBodyProjection,TESTED,src/execution.zig,tests/test_sonny6467_query_residuals.zig,,execution,2026-11-13
 REQ-SONNY-6467-FILTER-AFTER-LET,FilterStatement,AfterInlineLet,TESTED,src/gql/parser.zig,tests/test_sonny6467_query_residuals.zig,,parser,2026-11-13
 REQ-SONNY-6467-QUERY-RESIDUALS,BooleanExpressions,Regression,TESTED,tests/test_sonny6467_query_residuals.zig,tests/test_sonny6467_query_residuals.zig,,parser,2026-11-13
 REQ-SONNY-6468-BATCH-FLE-SEAL-ONCE,FieldLevelEncryption,BatchSealOnce,TESTED,src/graph_store.zig,tests/test_sonny6468_catalog_and_batch_fle.zig,,security,2026-11-13
 REQ-SONNY-6468-CATALOG-AND-BATCH-FLE,SchemaCatalog,Regression,TESTED,tests/test_sonny6468_catalog_and_batch_fle.zig,tests/test_sonny6468_catalog_and_batch_fle.zig,,security,2026-11-13
 REQ-SONNY-6468-CATALOG-PROCESS-ALLOCATOR,SchemaCatalog,SingletonOnProcessAllocator,TESTED,src/execution.zig,tests/test_sonny6468_catalog_and_batch_fle.zig,,execution,2026-11-13
+REQ-SONNY-6476-FINGERPRINT-UID,CliSessionStorage,PortableUid,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,cli,2026-11-13
+REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6476_shell_long_line.zig,,cli,2026-11-13
+REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,tests/test_sonny6476_shell_long_line.zig,,,cli,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,tests/test_sonny738_equality_consistency.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
@@ -5995,6 +5991,5 @@ REQ-ZERO-LEN-PATH-002,ZeroLengthPaths,Basic,TESTED,tests/test_gap_0193_impl_veri
 REQ-ZERO-LEN-PATH-003,ZeroLengthPaths,SelfLoop,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,engine,2026-01-15
 SEC-D011,Raft RPC TLS,ConnectCompile,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
 SEC-D011,Raft RPC TLS,ConnectHelper,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
-SEC-D011,Raft RPC TLS,RpcClientConnect,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
 SEC-D011,Raft RPC TLS,TransportSend,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
 SONNY-1841,WriteCancelReleasesLock,Regression,TESTED,tests/test_sonny1841_write_lock_cancel.zig,tests/test_sonny1841_write_lock_cancel.zig,,execution,2026-09-18

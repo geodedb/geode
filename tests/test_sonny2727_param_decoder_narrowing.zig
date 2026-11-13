@@ -238,8 +238,8 @@ test "SONNY-2727: the response encoder writes a decimal of any coefficient and s
 
 // ---- The distributed path ------------------------------------------------
 //
-// A 2PC participant applies the property values a peer node sends
-// (twophase_participant.applyOperation -> value_convert.applyMapEntriesToNode)
+// The 2PC undo applies the property values a peer node sent
+// (twophase.applyUndoOperation -> value_convert.applyMapEntriesToNode)
 // through value_convert.protoValueToPropertyValue, which narrowed a decimal's
 // wire u32 scale to u8 with `@intCast`: a peer's scale past 255 aborted the
 // node. A malformed peer decimal is refused with the converter's own

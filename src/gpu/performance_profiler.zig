@@ -1,6 +1,12 @@
 // CANARY: REQ=REQ-GQL-051; FEATURE="GPU Acceleration"; ASPECT=PerformanceProfiler; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_051_GPUPerformanceProfiler; OWNER=engine; UPDATED=2025-10-26
 
 const std = @import("std");
+
+/// SONNY-6463: the monotonic clock in nanoseconds (Zig 0.16 removed
+/// `std.time.nanoTimestamp`, so the profiler and its test did not compile).
+fn monoNowNs() i64 {
+    return @intCast(std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds());
+}
 const cuda_loader = @import("cuda_loader.zig");
 
 /// Detailed performance profile for GPU operations
@@ -130,7 +136,7 @@ pub const ProfileTimer = struct {
 
     pub fn start(operation: []const u8) ProfileTimer {
         return .{
-            .start_time = @intCast(std.time.nanoTimestamp()),
+            .start_time = monoNowNs(),
             .profile = PerformanceProfile.init(operation),
         };
     }
@@ -141,7 +147,7 @@ pub const ProfileTimer = struct {
     }
 
     pub fn markHostToDeviceEnd(self: *ProfileTimer, bytes: usize) void {
-        const now: i64 = @intCast(std.time.nanoTimestamp());
+        const now: i64 = monoNowNs();
         const elapsed_ns = now - self.start_time;
         self.profile.host_to_device_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
         self.profile.input_bytes = bytes;
@@ -161,7 +167,7 @@ pub const ProfileTimer = struct {
     }
 
     pub fn markDeviceToHostEnd(self: *ProfileTimer, bytes: usize) void {
-        const now: i64 = @intCast(std.time.nanoTimestamp());
+        const now: i64 = monoNowNs();
         // Approximate - should use precise event timing
         self.profile.device_to_host_ms = @as(f64, @floatFromInt(now - self.start_time)) / 1_000_000.0 -
             self.profile.host_to_device_ms -
@@ -170,7 +176,7 @@ pub const ProfileTimer = struct {
     }
 
     pub fn finish(self: *ProfileTimer) PerformanceProfile {
-        const end: i64 = @intCast(std.time.nanoTimestamp());
+        const end: i64 = monoNowNs();
         const total_ns = end - self.start_time;
         self.profile.total_ms = @as(f64, @floatFromInt(total_ns)) / 1_000_000.0;
         self.profile.finalize();
@@ -182,16 +188,16 @@ test "ProfileTimer basic" {
     var timer = ProfileTimer.start("test_operation");
 
     // Simulate operations with busy wait instead of sleep
-    const start: i64 = @intCast(std.time.nanoTimestamp());
-    while (@as(i64, @intCast(std.time.nanoTimestamp())) - start < 1_000_000) {} // 1ms
+    const start: i64 = monoNowNs();
+    while (@as(i64, monoNowNs()) - start < 1_000_000) {} // 1ms
     timer.markHostToDeviceEnd(1024 * 1024); // 1 MB
 
-    const kernel_start: i64 = @intCast(std.time.nanoTimestamp());
-    while (@as(i64, @intCast(std.time.nanoTimestamp())) - kernel_start < 5_000_000) {} // 5ms
+    const kernel_start: i64 = monoNowNs();
+    while (@as(i64, monoNowNs()) - kernel_start < 5_000_000) {} // 5ms
     timer.markKernelEnd(5.0);
 
-    const dth_start: i64 = @intCast(std.time.nanoTimestamp());
-    while (@as(i64, @intCast(std.time.nanoTimestamp())) - dth_start < 1_000_000) {} // 1ms
+    const dth_start: i64 = monoNowNs();
+    while (@as(i64, monoNowNs()) - dth_start < 1_000_000) {} // 1ms
     timer.markDeviceToHostEnd(512 * 1024); // 512 KB
 
     const profile = timer.finish();

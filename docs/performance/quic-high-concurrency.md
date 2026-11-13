@@ -416,6 +416,16 @@ smoke proving the restart/recovery and graph-isolation gates work.
 - `GEODE_QUIC_CONNECTION_ADMISSION_THREADS`: defaults to `4096` in optimized
   builds so high-fanout HELLO admission does not collapse under rapid setup.
 - `GEODE_QUIC_STREAM_QUEUE_CAPACITY`: defaults to `8192`.
+- `GEODE_QUIC_STALL_CANCEL_MS` (SONNY-6466): the per-connection stall
+  watchdog's threshold, default `60000`, clamped to `1000`-`3600000`, checked
+  every 5 s. When no stream of a connection has read a message for this long,
+  the connection's in-flight reads are cancelled (SQLSTATE 57014). This is the
+  only bound on a read whose client vanished without a CONNECTION_CLOSE (the
+  vendored quic sends no PINGs and does not enforce its advertised idle
+  timeout), and it equally caps a single read running that long on a
+  connection with no other stream reading, so keep it above your longest read.
+  Connections are told apart by identity, not by peer address. A client that
+  does send CONNECTION_CLOSE has its reads cancelled at once, on every stream.
 - `GEODE_QUIC_MUTATION_ADMISSION_CAP`: cooperative first-stream mutation window.
   Leave unset in normal operation. General writer-lock mutations keep an
   internal serial cap of `4`; the runtime cap now controls only the
