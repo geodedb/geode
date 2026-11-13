@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T17:01:43.394771614Z",
+  "generated_at": "2026-11-13T17:02:35.10834608Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86987,6 +86987,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6492-HYDRATION-LIVE-COUNT-RACE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6492_hydration_live_count_race.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6492_hydration_live_count_race.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6492-STALE-FREE-STORE",
       "features": [
         {
@@ -94675,7 +94694,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4939
+      "TESTED": 4940
     },
     "by_aspect": {
       "2PC": 3,
@@ -97830,7 +97849,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 324,
+      "Regression": 325,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

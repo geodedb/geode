@@ -10033,6 +10033,16 @@ pub fn build(b: *std.Build) void {
     const sonny6472_scan_step = b.step("test-sonny6472-scan-live-count-race", "Run SONNY-6472 item 4 regression (an unlabeled node scan racing shard-locked deletes and creates never reports DataCorruption; the zeroed-page detection stays, test-sonny2409-zeroed-page-header)");
     sonny6472_scan_step.dependOn(&run_sonny6472_scan_tests.step);
 
+    // SONNY-6492 (2): the hydration scan's live-count check (REQ-GQL-028)
+    // never reports DataCorruption for a create in flight.
+    const sonny6492_hyd_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_hydration_live_count_race.zig"), .target = target, .optimize = optimize });
+    sonny6492_hyd_test_mod.addImport("geode", root_mod);
+    const sonny6492_hyd_tests = b.addTest(.{ .root_module = sonny6492_hyd_test_mod });
+    const run_sonny6492_hyd_tests = b.addRunArtifact(sonny6492_hyd_tests);
+    shardDep(test_step, &run_sonny6492_hyd_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6492_hyd_step = b.step("test-sonny6492-hydration-live-count-race", "Run SONNY-6492 item 2 regression (a hydration scan between a node create's count and its record never reports DataCorruption; with nothing in flight it finds every node; the zeroed-page detection stays, test-sonny2409-zeroed-page-header)");
+    sonny6492_hyd_step.dependOn(&run_sonny6492_hyd_tests.step);
+
     const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
     sonny2979_test_mod.link_libc = true;
     sonny2979_test_mod.addImport("geode", root_mod);
