@@ -3327,8 +3327,9 @@ pub fn noteSessionCommitFailure(err: anyerror) void {
 pub var bulk_graph_resolved_hook: ?*const fn (mg: *ManagedGraph) void = null;
 
 /// SONNY-6472 (4) test hook: runs in `bulkInsertNodeWithReservedIdGraphLocked`
-/// right after the engine counted the new node and before its record is
-/// written. A test scans the graph there.
+/// and (SONNY-6492 (3)) `createNode` right after the engine counted the new
+/// node and before its record is written. A test scans the graph there, or
+/// drops it.
 pub var node_slot_allocated_hook: ?*const fn (mg: *ManagedGraph) void = null;
 
 /// SONNY-3031 fault injection for tests: the next N commits of a session
@@ -4365,6 +4366,7 @@ pub const StorageAdapter = struct {
             try mg.engine.shards[shardedTxnShard(s.txn_id)].allocNode()
         else
             try mg.engine.allocNode();
+        if (node_slot_allocated_hook) |hook| hook(mg);
         const node_shard = mg.shardEngineForNode(node_id);
 
         // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard

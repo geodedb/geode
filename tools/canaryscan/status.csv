@@ -5543,6 +5543,7 @@ REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,Watc
 REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,tests/test_sonny6480_acceptor_watchdog.zig,,,transport,2026-11-13
 REQ-SONNY-6484-SHELL-UTF8,ShellPlainMode,Utf8PassThrough,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6484_shell_utf8.zig,,cli,2026-11-13
 REQ-SONNY-6492-HYDRATION-LIVE-COUNT-RACE,StorageIntegrity,Regression,TESTED,tests/test_sonny6492_hydration_live_count_race.zig,tests/test_sonny6492_hydration_live_count_race.zig,,storage,2026-11-13
+REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT,DistributedCluster,Regression,TESTED,tests/test_sonny6492_replicated_write_dropped_graph.zig,tests/test_sonny6492_replicated_write_dropped_graph.zig,,storage,2026-11-13
 REQ-SONNY-6492-STALE-FREE-STORE,CrashRecovery,Regression,TESTED,tests/test_sonny6492_checkpoint_free_store_crash.zig,tests/test_sonny6492_checkpoint_free_store_crash.zig,,storage,2026-11-13
 REQ-SONNY-6492-STALE-FREE-STORE,CrashRecovery,StaleFreeStoreRebuild,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6492_checkpoint_free_store_crash.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13

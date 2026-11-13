@@ -10043,6 +10043,16 @@ pub fn build(b: *std.Build) void {
     const sonny6492_hyd_step = b.step("test-sonny6492-hydration-live-count-race", "Run SONNY-6492 item 2 regression (a hydration scan between a node create's count and its record never reports DataCorruption; with nothing in flight it finds every node; the zeroed-page detection stays, test-sonny2409-zeroed-page-header)");
     sonny6492_hyd_step.dependOn(&run_sonny6492_hyd_tests.step);
 
+    // SONNY-6492 (3): a replicated data write never creates a dropped graph
+    // again; an unlocked createNode never writes into a graph dropped under it.
+    const sonny6492_repl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_replicated_write_dropped_graph.zig"), .target = target, .optimize = optimize });
+    sonny6492_repl_test_mod.addImport("geode", root_mod);
+    const sonny6492_repl_tests = b.addTest(.{ .root_module = sonny6492_repl_test_mod });
+    const run_sonny6492_repl_tests = b.addRunArtifact(sonny6492_repl_tests);
+    shardDep(test_step, &run_sonny6492_repl_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6492_repl_step = b.step("test-sonny6492-replicated-write-dropped-graph", "Run SONNY-6492 item 3 regression (a Raft-applied data write after a replicated DROP GRAPH answers GraphNotFound and does not create the graph again; a replicated CREATE GRAPH does; createNode with no graph lock fails with GraphNotFound when the graph is dropped under it)");
+    sonny6492_repl_step.dependOn(&run_sonny6492_repl_tests.step);
+
     const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
     sonny2979_test_mod.link_libc = true;
     sonny2979_test_mod.addImport("geode", root_mod);

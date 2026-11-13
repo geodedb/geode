@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T17:20:30.215553635Z",
+  "generated_at": "2026-11-13T17:21:36.080659752Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87006,6 +87006,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6492_replicated_write_dropped_graph.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6492_replicated_write_dropped_graph.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6492-STALE-FREE-STORE",
       "features": [
         {
@@ -94694,7 +94713,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4940
+      "TESTED": 4941
     },
     "by_aspect": {
       "2PC": 3,
@@ -97849,7 +97868,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 325,
+      "Regression": 326,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
