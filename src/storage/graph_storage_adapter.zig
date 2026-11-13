@@ -4842,8 +4842,11 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !u64 {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
-        const mg = try self.getOrCreateGraph(graph_name);
+        // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
+        const mg = try self.pinOrCreateGraph(graph_name);
+        defer self.unpinGraph(mg);
         if (bulk_graph_resolved_hook) |hook| hook(mg);
+        if (mg.isDropped()) return error.GraphNotFound;
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4862,6 +4865,8 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        // SONNY-3121: a DROP GRAPH that ran while this op waited for the lock.
+        if (mg.isDropped()) return error.GraphNotFound;
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -5391,8 +5396,11 @@ pub const StorageAdapter = struct {
             }
         }
 
-        const mg = try self.getOrCreateGraph(graph_name);
+        // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
+        const mg = try self.pinOrCreateGraph(graph_name);
+        defer self.unpinGraph(mg);
         if (bulk_graph_resolved_hook) |hook| hook(mg);
+        if (mg.isDropped()) return error.GraphNotFound;
         // ENG-3914 (RC-2): see the single-property path — the delegated insert
         // now runs inside this function's SHARED hold, so the deferred
         // exact-index build must happen before that hold is taken.
@@ -5427,6 +5435,8 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        // SONNY-3121: a DROP GRAPH that ran while this op waited for the lock.
+        if (mg.isDropped()) return error.GraphNotFound;
         try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
@@ -11988,6 +11998,24 @@ pub const StorageAdapter = struct {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.requireExistingGraphLocked(graph_name);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3121-DIRECT-BULK-PIN; FEATURE="MultiGraphIsolation"; ASPECT=PinnedBulkLookup; STATUS=TESTED; TEST=tests/test_sonny3121_direct_bulk_pin.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-3121: `getOrCreateGraph`, with a pin taken under the same hold of
+    /// the adapter's mutex, for the self-locking bulk helpers. With group
+    /// commit off the QUIC handler calls them with no graph lock (which pins)
+    /// and no coordinator pin, and a DROP GRAPH between their lookup and their
+    /// locks freed the graph under them. The caller unpins it (`unpinGraph`)
+    /// and treats a graph found dropped (`isDropped`) as GraphNotFound.
+    pub fn pinOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(name) orelse if (self.findRegistryEntryLocked(name)) |entry|
+            try self.openGraphLocked(name, entry.uuid)
+        else
+            try self.createGraphLocked(name);
+        _ = mg.pins.fetchAdd(1, .acq_rel);
+        return mg;
     }
 
     /// SONNY-3028: pin `graph_name`'s graph (`ManagedGraph.pins`) for a caller

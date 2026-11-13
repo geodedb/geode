@@ -2018,6 +2018,15 @@
 
 ### Fixed
 
+- **Memory safety: with group commit off, a DROP GRAPH no longer frees a
+  graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
+  QUIC fast paths for a relationship MERGE and a multi-property node MERGE
+  call their storage helpers with no graph lock held, and the helpers took
+  no pin on the graph: a DROP GRAPH between their lookup and their locks
+  freed it under them (a use-after-free). They now pin it for the whole
+  operation (`StorageAdapter.pinOrCreateGraph`) and answer `GraphNotFound`
+  for a graph dropped meanwhile. Regression: `zig build
+  test-sonny3121-direct-bulk-pin`.
 - **Cluster: a raft snapshot no longer crashes on a large or tiny DOUBLE
   property, and keeps every Float a Float (SONNY-2810).** The snapshot
   serializer printed a Float in positional notation into a 32-byte buffer

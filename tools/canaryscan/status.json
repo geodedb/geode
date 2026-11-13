@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:45:53.560721057Z",
+  "generated_at": "2026-11-13T11:05:00.753792301Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -76359,6 +76359,20 @@
       "features": [
         {
           "feature": "MultiGraphIsolation",
+          "aspect": "PinnedBulkLookup",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3121_direct_bulk_pin.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "MultiGraphIsolation",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93435,7 +93449,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4870
+      "TESTED": 4871
     },
     "by_aspect": {
       "2PC": 3,
@@ -96118,6 +96132,7 @@
       "PhraseSearch": 1,
       "PhysicalOperator": 1,
       "PiAndE": 1,
+      "PinnedBulkLookup": 1,
       "PinnedReaderLookups": 1,
       "Pins": 1,
       "Pipeline": 2,
