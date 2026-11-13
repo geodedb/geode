@@ -303,6 +303,8 @@ pub const heap = @import("storage/heap.zig");
 pub const catalog = @import("schema/catalog.zig");
 // Re-export tde_file_encryption for tests
 pub const tde_file_encryption = @import("storage/tde_file_encryption.zig");
+// SONNY-6452: detect/repair stores written in the pre-0.4.12 TDE page envelope.
+pub const tde_page_tail = @import("storage/tde_page_tail.zig");
 
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {

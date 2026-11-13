@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:17:24.552135018Z",
+  "generated_at": "2026-11-13T08:25:34.312765822Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85795,6 +85795,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6452-TDE-PAGE-TAIL-REPAIR",
+      "features": [
+        {
+          "feature": "Storage CLI",
+          "aspect": "RepairsDerivableOldEnvelopeDamage",
+          "status": "TESTED",
+          "files": [
+            "src/cli/storage_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6452_tde_page_tail_repair.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6452-TDE-PAGE-TAIL-VERIFY",
+      "features": [
+        {
+          "feature": "Storage CLI",
+          "aspect": "ReportsOldEnvelopePageDamage",
+          "status": "TESTED",
+          "files": [
+            "src/cli/storage_cli.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6452_tde_page_tail_repair.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6453-HYGIENE",
       "features": [
         {
@@ -93524,7 +93562,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4875
+      "TESTED": 4877
     },
     "by_aspect": {
       "2PC": 3,
@@ -96695,6 +96733,7 @@
       "ReopenSeekCompleteness": 1,
       "ReownArmResults": 1,
       "RepairThroughputBench": 1,
+      "RepairsDerivableOldEnvelopeDamage": 1,
       "RepeatedTarget": 1,
       "ReplConfigXdg": 1,
       "ReplDispatchRegression": 1,
@@ -96710,6 +96749,7 @@
       "ReplicateMerge": 1,
       "Replication": 2,
       "ReplicationLag": 1,
+      "ReportsOldEnvelopePageDamage": 1,
       "RequestBurstShaping": 1,
       "RequestFrameSplitting": 1,
       "RequestGate": 1,

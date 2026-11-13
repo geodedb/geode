@@ -18,6 +18,33 @@ Before this, every backup was written unencrypted, whatever the key.
 - The key must be a 64-character hexadecimal string.
 - Example: `export GEODE_TDE_KEY=000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f`
 
+### Encrypted Stores Written by graph_storage 0.4.11 or Older
+
+**Breaking Change (SONNY-6441, SONNY-6452):** with `GEODE_TDE_KEY` set,
+builds pinning graph_storage 0.4.11 or older lost the last 16 bytes of every
+encrypted store page (the AES-GCM tag overwrote them): at 8 KiB pages the
+node in slot 169 of each node page lost its label count and deleted flag,
+and the last two incoming-edge heads of each directory page were lost.
+graph_storage 0.4.12 stops the loss and reads the old pages, but cannot
+bring the bytes back, and a store it has written cannot be opened by an
+older build (`DecryptionFailed`).
+
+**Action Required:**
+
+- Stop the old server cleanly and back up the data directory.
+- Before the first start of the new build, run
+  `geode storage verify --check tde-page-tail --data-dir <dir>` with
+  `GEODE_TDE_KEY` set.
+- If it reports damage, run
+  `geode storage repair --tde-page-tail --i-have-a-backup --data-dir <dir>`,
+  keep its output, and review the nodes it lists as `nodes_liveness_unknown`
+  (deleted or not cannot be derived) and `nodes_lost`.
+- To roll back, restore the backup; do not start an older build on the
+  upgraded directory.
+
+See [TDE File-Level Encryption](TDE_FILE_LEVEL_ENCRYPTION.md), "Upgrading
+stores written before graph_storage 0.4.12".
+
 ### Cluster Data Written Before SONNY-2726 Stays Tagged `default`
 
 **Known limitation (SONNY-6425 item 9):** before SONNY-2726 a cluster applied

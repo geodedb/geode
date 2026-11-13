@@ -534,7 +534,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6452-tde-page-tail-repair", .reason = "intentionally red TDD reproduction (SONNY-6452 item 1, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
@@ -10331,7 +10330,7 @@ pub fn build(b: *std.Build) void {
     const sonny6452_ptr_tests = b.addTest(.{ .root_module = sonny6452_ptr_test_mod });
     const run_sonny6452_ptr_tests = b.addRunArtifact(sonny6452_ptr_tests);
     spawnsBuiltGeode(sonny6452_ptr_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6452_ptr_tests.step);
+    shardDep(test_step, &run_sonny6452_ptr_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6452_ptr_step = b.step("test-sonny6452-tde-page-tail-repair", "Run SONNY-6452 item 1 regression (a store rewritten in the graph_storage <= 0.4.11 page envelope: geode storage verify --check tde-page-tail reports the old-envelope pages, the slot-169 nodes and lost incoming-edge directory heads without changing the store; geode storage repair --tde-page-tail refuses without --i-have-a-backup or the key, restores label counts and the directory, names what is not derivable, and verify is clean after)");
     sonny6452_ptr_step.dependOn(&run_sonny6452_ptr_tests.step);
     const sonny6386_rh_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_restore_hmac_key_file_with_tde.zig"), .target = target, .optimize = optimize });

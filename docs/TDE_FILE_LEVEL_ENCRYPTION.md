@@ -269,6 +269,95 @@ zig build test
 3. **Delete encrypted files** (they cannot be read without key)
 4. **Restart and rebuild** indexes from source data
 
+### Upgrading stores written before graph_storage 0.4.12
+
+**Who is affected:** every data directory written with page encryption
+(`GEODE_TDE_KEY` set) by a geode build that pins graph_storage 0.4.11 or
+older. Stores written without `GEODE_TDE_KEY` are not affected.
+
+**What was lost (SONNY-6441).** Those builds wrote the 16-byte AES-GCM tag
+over the last 16 bytes of every encrypted page, so whatever a store kept
+there never reached the disk. The page still authenticated, so nothing
+reported an error. graph_storage 0.4.12 keeps the tag in the page header,
+reads old pages, and returns their last 16 bytes as zero. At the 8 KiB page
+geode uses:
+
+| Store file | Lost bytes | After upgrading, without repair |
+| --- | --- | --- |
+| `nodes.store` | node in slot 169 of each page: `label_count`, `flags` (the deleted bit), `txn_stamp` | the node is present with label count 0 (its labels still read correctly); a deleted node in that slot is back; a node with no labels, properties or edges reads as absent |
+| `adj_in_dir.store` | the last two incoming-edge heads of each page (destination ids `1020p + 1018`, `1020p + 1019`) | incoming edges to those nodes from that shard are invisible; the outgoing side is intact |
+| adjacency chain blocks | an entry whose bytes reach the page end: the last v1 (24-byte) entry of a full 8 KiB block (`rel_type`, low half of `prop_head`) | that edge reads with the wrong type or properties |
+
+Property and variable-length stores, and slab adjacency blocks, kept the
+tail free and lost nothing. (4 KiB pages also lose the last v3 adjacency
+entry; geode does not use them.)
+
+**Before the first start of the new build:** stop the old server cleanly (a
+clean shutdown checkpoints; a WAL tail replayed by the new engine is not seen
+by the check below) and back up the data directory. Run the check before
+starting the new build: every page the new engine writes moves to the new
+page format, after which its damage can no longer be found.
+
+**Check:**
+
+```bash
+GEODE_TDE_KEY=<key> geode storage verify --check tde-page-tail --data-dir /var/lib/geode
+```
+
+It reads the store files without opening the store (unlike the
+`graph_store` check, which opens it and writes a checkpoint), takes the data
+directory's lock (stop the server), and prints one JSON report: per graph
+and shard, the pages still in the old format per store file
+(`old_format_pages`) and what they lost: `nodes_liveness_unknown`,
+`nodes_lost`, `in_dir_lost_heads` and `adjacency_entries`. Exit 0: nothing
+lost; exit 1: something lost, or old pages found and no key to read them.
+Without `GEODE_TDE_KEY` it can count old pages (their header carries no
+checksum of their body and no new-format flag) but not list the records.
+`adjacency_entries` reads blocks without consulting free space, so it can
+name a block on a freed page.
+
+**Repair:**
+
+```bash
+GEODE_TDE_KEY=<key> geode storage repair --tde-page-tail --i-have-a-backup --data-dir /var/lib/geode | tee tde-page-tail-repair.json
+```
+
+Offline: it takes the data directory's lock, refuses without
+`--i-have-a-backup` (exit 2) or without the key (exit 1), checks first (the
+`before` report, printed before anything is written), then repairs and checks
+again (`after`). Exit 0 when the `after` report is clean. Keep its output: it
+is the only record of the nodes whose liveness was lost. It restores:
+
+- `label_count` of each slot-169 node, from the node's label block (stored
+  elsewhere, intact), and its creation stamp (geode always writes 1);
+- the incoming-edge directory and chains of every shard with old directory
+  pages, rebuilt from that shard's outgoing edges (graph_storage's
+  `migrateColocateInEdges`).
+
+It rewrites those pages in the new format; a page holding only a lost node
+is moved to the new format by rewriting another live node on it unchanged.
+
+**Not recoverable:**
+
+- Whether a slot-169 node had been deleted. Nothing else records it: label
+  index postings keep deleted nodes, a delete keeps the node's labels,
+  properties and edge heads, the WAL is truncated at every checkpoint, and the
+  shard's node count is a best-effort statistic. These nodes stay present and
+  are listed in `nodes_liveness_unknown`; check them against your own data and
+  delete the ones that should be gone.
+- A slot-169 node with no labels, properties or edges: its whole record was
+  the lost bytes. It stays absent and is listed in `nodes_lost`.
+- A damaged adjacency chain entry (`adjacency_entries` in `adj_out` or
+  `adj_in`): no graph_storage API rewrites one entry of a block. The
+  directory of a shard with such an entry is not rebuilt either (it would
+  copy the damage over the intact incoming copy of the edge); the `repaired`
+  summary counts it under `in_dir_blocked_shards`.
+
+**No downgrade.** A build with graph_storage 0.4.11 or older cannot read a
+page in the new format (`DecryptionFailed`), and the new build writes it on
+the first change to a page, repair or not. To go back, restore the backup
+taken before the upgrade.
+
 ## Troubleshooting
 
 ### Common Errors

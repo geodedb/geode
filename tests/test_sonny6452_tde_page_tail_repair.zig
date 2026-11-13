@@ -399,6 +399,12 @@ test "SONNY-6452 (1) geode storage verify --check tde-page-tail finds the record
         // geode's 8 KiB v2/v3 chain blocks end before the tail.
         try testing.expectEqual(@as(u64, 0), try reportCount(rep, "adjacency_entries"));
         if (round == 0) {
+            std.debug.print("SONNY-6452 verify (old envelope): exit {?d}, {d} pages rewritten by the fixture, old_format_pages {d} (nodes {d}, in_dir {d}), liveness unknown {any}, lost {any}, lost heads {any}\n", .{
+                r.code,                                                                              rewritten,
+                (rep.object.get("old_format_pages") orelse return error.ReportFieldMissing).integer, try reportOldPages(rep, "nodes"),
+                try reportOldPages(rep, "in_dir"),                                                   unknown,
+                lost,                                                                                heads,
+            });
             first_report = try allocator.dupe(u8, r.stdout);
         } else if (!std.mem.eql(u8, first_report, r.stdout)) {
             std.debug.print("SONNY-6452: verify is not read-only, the second report differs:\n{s}\n---\n{s}\n", .{ first_report, r.stdout });
@@ -444,7 +450,28 @@ test "SONNY-6452 (1) geode storage verify --check tde-page-tail finds the record
         const parsed = try parseStdout(r, "repair");
         defer parsed.deinit();
         const repaired = parsed.value.object.get("repaired") orelse return error.RepairReportMissing;
+        if (std.mem.indexOf(u8, r.stdout, ",\"repaired\":")) |at| {
+            const end = std.mem.indexOfScalarPos(u8, r.stdout, at, '}') orelse r.stdout.len - 1;
+            std.debug.print("SONNY-6452 repair: liveness unknown {any}, lost {any}{s}\n", .{ unknown_want.items, lost_want, r.stdout[at .. end + 1] });
+        }
         try testing.expectEqual(@as(i64, @intCast(unknown_want.items.len)), (repaired.object.get("nodes_repaired") orelse return error.RepairReportMissing).integer);
+        // The bare node's page moved to the current envelope (the node stays
+        // absent); the source's shard got its directory rebuilt; nothing was
+        // left that the repair could not do.
+        const Want = struct { field: []const u8, value: i64, at_least: bool = false };
+        for ([_]Want{
+            .{ .field = "lost_pages_rewritten", .value = 1 },
+            .{ .field = "lost_pages_left", .value = 0 },
+            .{ .field = "in_dir_rebuilt_shards", .value = 1, .at_least = true },
+            .{ .field = "in_dir_blocked_shards", .value = 0 },
+            .{ .field = "adjacency_entries_unrepaired", .value = 0 },
+            .{ .field = "graphs_skipped", .value = 0 },
+        }) |want| {
+            const got = (repaired.object.get(want.field) orelse return error.RepairReportMissing).integer;
+            const good = if (want.at_least) got >= want.value else got == want.value;
+            if (!good) std.debug.print("SONNY-6452 repair: {s} = {d}, want {s}{d}\n", .{ want.field, got, if (want.at_least) ">= " else "", want.value });
+            try testing.expect(good);
+        }
         const before = parsed.value.object.get("before") orelse return error.RepairReportMissing;
         const unknown = try reportIds(allocator, before, "nodes_liveness_unknown");
         defer allocator.free(unknown);
@@ -521,4 +548,17 @@ test "SONNY-6452 (1) a plaintext store has nothing to check and needs no key" {
     defer parsed.deinit();
     try testing.expect(try reportOk(parsed.value));
     try testing.expectEqual(@as(u64, 0), try reportOldPages(parsed.value, "nodes"));
+}
+
+test "SONNY-6452 (1) page envelope classification: unwritten, plaintext (CRC), header-tag flag, legacy (flag clear, CRC mismatch)" {
+    const tpt = geode.tde_page_tail;
+    var page = [_]u8{0} ** page_size;
+    try testing.expectEqual(tpt.Envelope.unwritten, tpt.classify(&page));
+    page[100] = 7;
+    std.mem.writeInt(u32, page[16..20], gs.page.computeChecksum(page[gs.page.PAGE_HEADER_SIZE..]), .little);
+    try testing.expectEqual(tpt.Envelope.plaintext, tpt.classify(&page));
+    page[100] = 8;
+    try testing.expectEqual(tpt.Envelope.legacy, tpt.classify(&page));
+    page[gs.page.FLAGS_OFFSET] |= gs.page.FLAG_HEADER_TAG;
+    try testing.expectEqual(tpt.Envelope.header_tag, tpt.classify(&page));
 }

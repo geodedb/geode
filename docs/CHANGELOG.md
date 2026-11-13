@@ -14,10 +14,28 @@
   now fails instead of reading as empty. **Existing encrypted stores:** the
   fixed version reads them, but bytes already lost are not recoverable
   (affected nodes come back with a label count of zero; a deleted node in
-  that slot reappears) and there is no repair tool yet (SONNY-6452).
+  that slot reappears); `geode storage repair --tde-page-tail` (SONNY-6452,
+  below) restores what is derivable.
   **No downgrade:** once pages are rewritten, older binaries fail with
   `DecryptionFailed`. Regression: `zig build
   test-sonny6435-tde-small-pool-node-loss` (now in the aggregate).
+- **`geode storage verify --check tde-page-tail` and `geode storage repair
+  --tde-page-tail` for encrypted stores written by graph_storage <= 0.4.11
+  (SONNY-6452).** The check reads the store files without opening the store
+  and reports, per graph and shard, the pages still in the old page format
+  and what they lost: slot-169 nodes (`nodes_liveness_unknown`), nodes whose
+  whole record was the lost tail (`nodes_lost`), lost incoming-edge
+  directory heads, damaged adjacency entries; exit 1 while anything is lost.
+  The repair (offline, takes the data-directory lock, refuses without
+  `--i-have-a-backup` and `GEODE_TDE_KEY`) restores label counts from the
+  label blocks and rebuilds the incoming-edge directory from the outgoing
+  edges, rewriting those pages in the new format. Whether a slot-169 node
+  had been deleted is recorded nowhere else: such nodes stay present and are
+  listed. Run the check before the first start of the new build. See
+  docs/TDE_FILE_LEVEL_ENCRYPTION.md, "Upgrading stores written before
+  graph_storage 0.4.12". Regression: `zig build
+  test-sonny6452-tde-page-tail-repair` (a store rewritten in the old page
+  format).
 - **Crash durability (SONNY-6424): wal v0.1.23, graph-storage v0.4.12,
   raft v0.1.22, timeseries-storage v0.2.20.** The storage engine anchors its
   WAL sequence at the last checkpoint on open, and the WAL keeps its
