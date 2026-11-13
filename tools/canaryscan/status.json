@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:06:19.149103565Z",
+  "generated_at": "2026-11-13T15:35:46.974375689Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -5674,40 +5674,6 @@
       ]
     },
     {
-      "id": "REQ-AUTO-INDEX-EXPLAIN-001",
-      "features": [
-        {
-          "feature": "AutoIdIndex",
-          "aspect": "ExplainWhereClause",
-          "status": "IMPL",
-          "files": [
-            "src/execution/statement_handlers.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-02-07"
-        }
-      ]
-    },
-    {
-      "id": "REQ-AUTO-INDEX-EXPLAIN-002",
-      "features": [
-        {
-          "feature": "AutoIdIndex",
-          "aspect": "WhereClauseIndexCheck",
-          "status": "IMPL",
-          "files": [
-            "src/execution/statement_handlers.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-02-07"
-        }
-      ]
-    },
-    {
       "id": "REQ-AUTO-INDEX-EXPLAIN-003",
       "features": [
         {
@@ -5730,14 +5696,16 @@
         {
           "feature": "AutoIdIndex",
           "aspect": "PlanIndexSeek",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/execution/planned_read_runtime.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6276_explain_access_path.zig"
+          ],
           "benches": [],
           "owner": "planner",
-          "updated": "2026-04-02"
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -80390,6 +80358,20 @@
       "features": [
         {
           "feature": "EXPLAIN",
+          "aspect": "PlanMatchesExecutorSeek",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6276_explain_access_path.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "EXPLAIN",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -94463,8 +94445,8 @@
       "BENCHED": 208,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 329,
-      "TESTED": 4928
+      "IMPL": 326,
+      "TESTED": 4930
     },
     "by_aspect": {
       "2PC": 3,
@@ -95753,7 +95735,6 @@
       "ExplainProfileTarget": 1,
       "ExplainProtocolBasic": 1,
       "ExplainProtocolCalibrated": 1,
-      "ExplainWhereClause": 1,
       "ExplicitAllow": 1,
       "ExplicitCertLoadAsIs": 1,
       "ExplicitCertNotDiscarded": 1,
@@ -97195,6 +97176,7 @@
       "PlanIndexSeek": 1,
       "PlanJoinReorderDiversity": 1,
       "PlanJoinReorderVarianceEnvelope": 1,
+      "PlanMatchesExecutorSeek": 1,
       "PlanMissSingleFlight": 1,
       "PlanSelectionIntegration": 1,
       "PlanSelectionPipelineAdoption": 1,
@@ -98567,7 +98549,6 @@
       "WebhookSink": 1,
       "WellFormed": 1,
       "WhereClause": 4,
-      "WhereClauseIndexCheck": 1,
       "WhereEnvLifetime": 1,
       "WhereErrorsFailTheQuery": 1,
       "WhereEvaluation": 2,

@@ -1181,69 +1181,6 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
     };
 }
 
-// CANARY: REQ=REQ-AUTO-INDEX-EXPLAIN-002; FEATURE="AutoIdIndex"; ASPECT=WhereClauseIndexCheck; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
-/// Check if a WHERE expression contains an equality predicate on a given variable
-/// that matches an indexed property in the catalog.
-/// Extract variable name and property name from a property access expression.
-/// Handles both PropertyAccess (object.property) and Member (Ident.field) forms.
-fn extractVarProp(expr: ast.Expr) ?struct { variable: []const u8, property: []const u8 } {
-    if (expr == .PropertyAccess) {
-        const pa = expr.PropertyAccess;
-        return .{ .variable = pa.object, .property = pa.property };
-    }
-    if (expr == .Member) {
-        const m = expr.Member;
-        if (m.target.* == .Ident) {
-            return .{ .variable = m.target.Ident.orig, .property = m.field };
-        }
-    }
-    return null;
-}
-
-fn whereHasIndexedEquality(root: ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
-    // SONNY-3189: down an AND chain with a loop, not one recursion per AND.
-    var at: *const ast.Expr = &root;
-    while (at.* == .Binary and at.Binary.op == .And) {
-        if (whereHasIndexedEquality(at.Binary.right.*, var_name, label, cat)) return true;
-        at = at.Binary.left;
-    }
-    const where_expr = at.*;
-    switch (where_expr) {
-        .Binary => |bin| {
-            if (bin.op == .And) {
-                if (whereHasIndexedEquality(bin.left.*, var_name, label, cat)) return true;
-                if (whereHasIndexedEquality(bin.right.*, var_name, label, cat)) return true;
-                return false;
-            } else if (bin.op == .Eq) {
-                // Check: PropertyAccess or Member = Literal (or reversed)
-                const prop_name = blk: {
-                    if (extractVarProp(bin.left.*)) |vp| {
-                        if (std.mem.eql(u8, vp.variable, var_name)) break :blk vp.property;
-                    }
-                    if (extractVarProp(bin.right.*)) |vp| {
-                        if (std.mem.eql(u8, vp.variable, var_name)) break :blk vp.property;
-                    }
-                    break :blk @as(?[]const u8, null);
-                };
-                if (prop_name) |pn| {
-                    var idx_iter = cat.indexes.valueIterator();
-                    while (idx_iter.next()) |index_info| {
-                        if (std.mem.eql(u8, index_info.table_name, label) and
-                            index_info.columns.len > 0 and
-                            std.mem.eql(u8, index_info.columns[0], pn))
-                        {
-                            return true;
-                        }
-                    }
-                }
-                return false;
-            }
-            return false;
-        },
-        else => return false,
-    }
-}
-
 pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, context: ExecutionContext) anyerror!ExecutionResult {
     // M2: context now used for catalog access via dependency injection
     // EXPLAIN shows the query execution plan with cost estimates
@@ -1282,60 +1219,17 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
         .Query => |q| {
             if (q.match.chains.len > 0) {
                 const chain = q.match.chains[0];
-                if (chain.head) |head| {
-                    // Check if we can use an IndexSeek
-                    var use_index_seek = false;
-
-                    // Check if node pattern has label and properties that match an index
-                    if (head.labels.len > 0 and head.props != null and head.props.?.len > 0) {
-                        const label = head.labels[0];
-                        const prop_name = head.props.?[0].key;
-
-                        // Check catalog for matching index
-                        // M2: Get catalog from context via dependency injection
-                        const cat = getCatalog(allocator, context);
-                        // Phase 3: Shared lock for EXPLAIN (read-only, allows concurrent query planning)
-                        cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-                        defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-
-                        var index_iter = cat.indexes.valueIterator();
-                        while (index_iter.next()) |index_info| {
-                            // Check if index matches this label and property
-                            if (std.mem.eql(u8, index_info.table_name, label) and
-                                index_info.columns.len > 0 and
-                                std.mem.eql(u8, index_info.columns[0], prop_name))
-                            {
-                                use_index_seek = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    // CANARY: REQ=REQ-AUTO-INDEX-EXPLAIN-001; FEATURE="AutoIdIndex"; ASPECT=ExplainWhereClause; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
-                    // Also check WHERE clause for equality on indexed properties
-                    if (!use_index_seek and head.labels.len > 0) {
-                        if (q.where_clause) |where_expr| {
-                            if (head.name) |vn| {
-                                const cat_w = getCatalog(allocator, context);
-                                cat_w.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-                                defer cat_w.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-
-                                use_index_seek = whereHasIndexedEquality(where_expr, vn, head.labels[0], cat_w);
-                            }
-                        }
-                    }
-
-                    if (use_index_seek) {
-                        // IndexSeek cost: 10 (much cheaper than NodeScan)
-                        const index_cost: i64 = 10;
-                        total_cost += index_cost;
-                        try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "IndexSeek (cost: {})", .{index_cost}), .cost = index_cost });
-                    } else {
-                        // NodeScan base cost: 100 per node
-                        const node_cost: i64 = 100;
-                        total_cost += node_cost;
-                        try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "NodeScan (cost: {})", .{node_cost}), .cost = node_cost });
-                    }
+                if (chain.head != null) {
+                    // SONNY-6276: this plan is built only when the planned
+                    // runtime declines the query (above), so the legacy
+                    // executor runs it, and it scans: it never reports a
+                    // catalog index seek (SONNY-1335). It said IndexSeek for
+                    // any catalog index on the first inline property or an
+                    // indexed equality anywhere in the WHERE.
+                    // NodeScan base cost: 100 per node
+                    const node_cost: i64 = 100;
+                    total_cost += node_cost;
+                    try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "NodeScan (cost: {})", .{node_cost}), .cost = node_cost });
                 }
                 if (chain.hops.len > 0) {
                     // ExpandRelationships cost: 50 per hop

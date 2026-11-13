@@ -2376,6 +2376,21 @@
   them stay refused. A query that relied on the textual match must compare
   like types (`toString(n.id) = '1'`, `toInteger(n.id) = 1`). Regression:
   `zig build test-sonny6282-int-string-equality` (new).
+- **EXPLAIN describes the access path the executor takes (SONNY-6276).**
+  SONNY-1335 made PROFILE name an index only when the executor seeked
+  through a catalog btree or hash index; EXPLAIN kept guessing. A planned
+  EXPLAIN said `IndexSeek` for an index of any type on the property (a
+  fulltext index too) and for an indexed equality under an `AND`, where
+  the executor seeks only on a WHERE that is one equality; the legacy
+  EXPLAIN (a tenant-bound or RLS session over QUIC or gRPC, and the
+  executor's own text plan) said `IndexSeek` whenever a catalog index
+  matched, while the legacy executor scans. The planned EXPLAIN now asks
+  the executor's own start decision (the seek `collectStartSlots` makes,
+  and a catalog btree or hash index on that label and key, as PROFILE
+  reports it); the legacy EXPLAIN says scan. The response flag
+  `U:HeuristicIndexSelection`, sent with every query that had a WHERE or
+  FILTER equality whether or not an index existed, is no longer sent.
+  Regression: `zig build test-sonny6276-explain-access-path` (new).
 - **The deepest nesting the parser allows fits a gRPC connection thread
   again (SONNY-738).** Nine nested FOR bodies (`... FOR x IN [1] MATCH (n)
   WITH n FOR ...`), within the documented limit of 10, were refused with

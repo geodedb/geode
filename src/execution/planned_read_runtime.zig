@@ -290,7 +290,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const main_chain = q.match.chains[0];
             const first_node = if (main_chain.head) |head| head else main_chain.hops[0].left;
             root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
-            const scan_kind: OpKind = if (nodeCanUseIndex(context, first_node, q.where_clause))
+            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, first_node, q.where_clause))
                 .IndexSeek
             else if (first_node.labels.len > 0)
                 .LabelScan
@@ -326,7 +326,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const chain = q.match.chains[0];
             const hop = chain.hops[0];
             const vle_seed_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.left.name, "node", 0);
-            const scan_kind: OpKind = if (nodeCanUseIndex(context, hop.left, q.where_clause))
+            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, hop.left, q.where_clause))
                 .IndexSeek
             else if (hop.left.labels.len > 0)
                 .LabelScan
@@ -360,7 +360,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const chain = q.match.chains[0];
             const first_node = if (chain.head) |head| head else chain.hops[0].left;
             root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
-            const scan_kind: OpKind = if (nodeCanUseIndex(context, first_node, q.where_clause))
+            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, first_node, q.where_clause))
                 .IndexSeek
             else if (first_node.labels.len > 0)
                 .LabelScan
@@ -2724,6 +2724,104 @@ fn tryExtractPatternEqPredicate(
     return null;
 }
 
+/// SONNY-6276: the exact-property seek `collectStartSlots` starts `pattern`
+/// with: the key and value it looks up (and, for an integer no double holds,
+/// the nearest double too), or null when it scans the label. EXPLAIN asks
+/// the same question (`nodeCanUseIndex`), so the plan names the access path
+/// the executor takes.
+const StartSeedChoice = struct {
+    key: []const u8,
+    pv: graph_store.PropertyValue,
+    nearest_double: ?graph_store.PropertyValue = null,
+};
+
+fn chooseStartSeed(
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    pattern: ast.NodePattern,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    where_clause: ?ast.Expr,
+) ?StartSeedChoice {
+    if (pattern.labels.len != 1) return null;
+
+    var seed: ?StartSeedChoice = null;
+    // SONNY-2807: the WHERE arm's second seek, for an integer no double
+    // holds (see below).
+    var nearest_double: ?graph_store.PropertyValue = null;
+
+    if (pattern.props) |props| {
+        if (props.len == 0) return null;
+        const prop_env = Env{
+            .names = &.{},
+            .values = &.{},
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+        };
+        var best_len: usize = std.math.maxInt(usize);
+        for (props) |prop| {
+            if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
+            // GAP-0900 Layer-3 (Fix 2): in lean-index mode only MERGE/declared
+            // keys are present in the exact property index. An empty result from
+            // a non-indexed key is meaningless — skip it and try the next prop.
+            // No-op when lean mode is off (shouldIndexProperty is then true for all).
+            if (!graph_store.shouldIndexProperty(prop.key)) continue;
+            const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
+            const pv: graph_store.PropertyValue = switch (expected_val) {
+                .Str => |s| .{ .String = s },
+                .Int => |i| .{ .Int = i },
+                .Bool => |b| .{ .Bool = b },
+                else => continue,
+            };
+            const plen = adapter.countCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], prop.key, pv) catch continue;
+            if (plen < best_len) {
+                best_len = plen;
+                seed = .{ .key = prop.key, .pv = pv };
+                // zero postings = authoritative miss for an indexed key;
+                // one posting = unique hit — neither can be beaten by any other prop.
+                if (plen <= 1) break;
+            }
+        }
+        if (seed == null) return null; // no indexed prop → fall to label-scan path
+    } else if (where_clause) |wc| {
+        const extracted = tryExtractPatternEqPredicate(pattern.name, wc) orelse return null;
+        // GAP-0900 Layer-3 (Fix 2): same lean-index guard as the props arm above.
+        if (!graph_store.shouldIndexProperty(extracted.key)) return null;
+        const prop_env = Env{
+            .names = &.{},
+            .values = &.{},
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+        };
+        const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch return null;
+        const seed_pv: graph_store.PropertyValue = switch (expected_val) {
+            .Str => |s| graph_store.PropertyValue{ .String = s },
+            .Int => |i| blk: {
+                // SONNY-2807: `=` compares a stored DOUBLE with an
+                // integer in a double, and the seek finds the nodes whose
+                // value is exactly the integer. Past 2^53 a double may
+                // not hold the integer: `n.x = 9007199254740993` is true
+                // for a stored DOUBLE 2^53, which the seek missed. Seek
+                // the nearest double too; the WHERE filter that follows
+                // drops what `=` does not keep.
+                const nearest: f64 = @floatFromInt(i);
+                if (!doubleHoldsExactly(i)) nearest_double = .{ .Float = nearest };
+                break :blk graph_store.PropertyValue{ .Int = i };
+            },
+            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+            else => return null,
+        };
+        seed = .{ .key = extracted.key, .pv = seed_pv, .nearest_double = nearest_double };
+    } else {
+        return null;
+    }
+
+    return seed;
+}
+
 fn collectStartSlots(
     allocator: std.mem.Allocator,
     adapter: *graph_storage_adapter.StorageAdapter,
@@ -2774,8 +2872,6 @@ fn collectStartSlots(
     // if the extracted predicate is a subset of WHERE, correctness is
     // preserved.
     fp: {
-        if (pattern.labels.len != 1) break :fp;
-
         // GAP-ENT-0001 Bug A fix: pick the most-selective indexed inline prop
         // (mirrors node_scan_stream.seekIndexedCandidates). Previously the block
         // required exactly ONE inline prop and bailed for composite patterns —
@@ -2786,80 +2882,8 @@ fn collectStartSlots(
         // per-candidate verification by nodeMatchesPatternBySlot (invariant 2).
         // Seed key+value are set atomically so neither is ever valid without
         // the other — eliminates the `undefined` field and the dead `orelse`.
-        var seed: ?struct { key: []const u8, pv: graph_store.PropertyValue } = null;
-        // SONNY-2807: the WHERE arm's second seek, for an integer no double
-        // holds (see below).
-        var nearest_double: ?graph_store.PropertyValue = null;
-
-        if (pattern.props) |props| {
-            if (props.len == 0) break :fp;
-            const prop_env = Env{
-                .names = &.{},
-                .values = &.{},
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            var best_len: usize = std.math.maxInt(usize);
-            for (props) |prop| {
-                if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
-                // GAP-0900 Layer-3 (Fix 2): in lean-index mode only MERGE/declared
-                // keys are present in the exact property index. An empty result from
-                // a non-indexed key is meaningless — skip it and try the next prop.
-                // No-op when lean mode is off (shouldIndexProperty is then true for all).
-                if (!graph_store.shouldIndexProperty(prop.key)) continue;
-                const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
-                const pv: graph_store.PropertyValue = switch (expected_val) {
-                    .Str => |s| .{ .String = s },
-                    .Int => |i| .{ .Int = i },
-                    .Bool => |b| .{ .Bool = b },
-                    else => continue,
-                };
-                const plen = adapter.countCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], prop.key, pv) catch continue;
-                if (plen < best_len) {
-                    best_len = plen;
-                    seed = .{ .key = prop.key, .pv = pv };
-                    // zero postings = authoritative miss for an indexed key;
-                    // one posting = unique hit — neither can be beaten by any other prop.
-                    if (plen <= 1) break;
-                }
-            }
-            if (seed == null) break :fp; // no indexed prop → fall to label-scan path
-        } else if (where_clause) |wc| {
-            const extracted = tryExtractPatternEqPredicate(pattern.name, wc) orelse break :fp;
-            // GAP-0900 Layer-3 (Fix 2): same lean-index guard as the props arm above.
-            if (!graph_store.shouldIndexProperty(extracted.key)) break :fp;
-            const prop_env = Env{
-                .names = &.{},
-                .values = &.{},
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch break :fp;
-            const seed_pv: graph_store.PropertyValue = switch (expected_val) {
-                .Str => |s| graph_store.PropertyValue{ .String = s },
-                .Int => |i| blk: {
-                    // SONNY-2807: `=` compares a stored DOUBLE with an
-                    // integer in a double, and the seek finds the nodes whose
-                    // value is exactly the integer. Past 2^53 a double may
-                    // not hold the integer: `n.x = 9007199254740993` is true
-                    // for a stored DOUBLE 2^53, which the seek missed. Seek
-                    // the nearest double too; the WHERE filter that follows
-                    // drops what `=` does not keep.
-                    const nearest: f64 = @floatFromInt(i);
-                    if (!doubleHoldsExactly(i)) nearest_double = .{ .Float = nearest };
-                    break :blk graph_store.PropertyValue{ .Int = i };
-                },
-                .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                else => break :fp,
-            };
-            seed = .{ .key = extracted.key, .pv = seed_pv };
-        } else {
-            break :fp;
-        }
-
-        const s = seed orelse break :fp;
+        const s = chooseStartSeed(allocator, adapter, graph_name, pattern, param_names, param_values, where_clause) orelse break :fp;
+        const nearest_double = s.nearest_double;
         const exact = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
         const candidates = if (nearest_double) |d| blk: {
             defer allocator.free(exact);
@@ -3663,25 +3687,6 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
     return adapter.nodeCount(graph_name) catch 0;
 }
 
-// CANARY: REQ=REQ-AUTO-INDEX-EXPLAIN-004; FEATURE="AutoIdIndex"; ASPECT=PlanIndexSeek; STATUS=IMPL; OWNER=planner; UPDATED=2026-04-02
-/// Returns true if the catalog has an index on the given label+property pair,
-/// enabling the planner to choose IndexSeek over LabelScan.
-fn labelHasIndexForProp(context: ExecutionContext, label: []const u8, prop: []const u8) bool {
-    const cat = context.catalog;
-    cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-    var iter = cat.indexes.valueIterator();
-    while (iter.next()) |info| {
-        if (std.mem.eql(u8, info.table_name, label) and
-            info.columns.len > 0 and
-            std.mem.eql(u8, info.columns[0], prop))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 // CANARY: REQ=REQ-SONNY-1335-PROFILE-ACCESS-PATH; FEATURE="PROFILE"; ASPECT=CatalogIndexForSeek; STATUS=TESTED; TEST=tests/test_sonny1335_profile_access_path.zig; OWNER=engine; UPDATED=2026-11-11
 /// SONNY-1335: the name of the catalog index that serves an equality seek on
 /// `label`.`prop`, duplicated into `allocator`, or null when there is none.
@@ -3734,64 +3739,25 @@ fn recordStartAccess(
     op.kind = .IndexSeek;
 }
 
-/// Returns true if the node has an inline property that matches a catalog index,
-/// or if the WHERE clause contains an equality on an indexed property.
-fn nodeCanUseIndex(context: ExecutionContext, node: ast.NodePattern, where_clause: ?ast.Expr) bool {
-    if (node.labels.len == 0) return false;
-    const label = node.labels[0];
-
-    // Check inline properties (MATCH (n:Label {prop: value}))
-    if (node.props) |props| {
-        for (props) |prop| {
-            if (labelHasIndexForProp(context, label, prop.key)) return true;
-        }
-    }
-
-    // Check WHERE clause equality (MATCH (n:Label) WHERE n.prop = value)
-    if (where_clause) |where| {
-        if (node.name) |var_name| {
-            return whereClauseHasIndexedEquality(where, var_name, label, context);
-        }
-    }
-    return false;
-}
-
-fn whereClauseHasIndexedEquality(root: ast.Expr, var_name: []const u8, label: []const u8, context: ExecutionContext) bool {
-    // SONNY-3189: down an AND chain with a loop, not one recursion per AND.
-    var at: *const ast.Expr = &root;
-    while (at.* == .Binary and at.Binary.op == .And) {
-        if (whereClauseHasIndexedEquality(at.Binary.right.*, var_name, label, context)) return true;
-        at = at.Binary.left;
-    }
-    const expr = at.*;
-    switch (expr) {
-        .Binary => |bin| {
-            if (bin.op == .And) {
-                if (whereClauseHasIndexedEquality(bin.left.*, var_name, label, context)) return true;
-                return whereClauseHasIndexedEquality(bin.right.*, var_name, label, context);
-            }
-            if (bin.op == .Eq) {
-                const prop = extractVarPropName(bin.left.*, var_name) orelse
-                    extractVarPropName(bin.right.*, var_name) orelse return false;
-                return labelHasIndexForProp(context, label, prop);
-            }
-            return false;
-        },
-        else => return false,
-    }
-}
-
-fn extractVarPropName(expr: ast.Expr, var_name: []const u8) ?[]const u8 {
-    switch (expr) {
-        .PropertyAccess => |pa| {
-            if (std.mem.eql(u8, pa.object, var_name)) return pa.property;
-        },
-        .Member => |m| {
-            if (m.target.* == .Ident and std.mem.eql(u8, m.target.Ident.orig, var_name)) return m.field;
-        },
-        else => {},
-    }
-    return null;
+// CANARY: REQ=REQ-AUTO-INDEX-EXPLAIN-004; FEATURE="AutoIdIndex"; ASPECT=PlanIndexSeek; STATUS=TESTED; TEST=tests/test_sonny6276_explain_access_path.zig; OWNER=planner; UPDATED=2026-11-13
+// CANARY: REQ=REQ-SONNY-6276-EXPLAIN-ACCESS-PATH; FEATURE="EXPLAIN"; ASPECT=PlanMatchesExecutorSeek; STATUS=TESTED; TEST=tests/test_sonny6276_explain_access_path.zig; OWNER=engine; UPDATED=2026-11-13
+/// SONNY-6276: whether the executor starts `node` with an index seek, as
+/// PROFILE reports it (`recordStartAccess`): `collectStartSlots` seeks on a
+/// key (`chooseStartSeed`, the same decision) and a catalog btree or hash
+/// index covers the label and that key. It answered true for an index of any
+/// type (a fulltext one too) on any inline property, and for an indexed
+/// equality anywhere in an AND chain, where the executor seeks only on a
+/// WHERE that is one equality.
+fn nodeCanUseIndex(allocator: std.mem.Allocator, context: ExecutionContext, node: ast.NodePattern, where_clause: ?ast.Expr) bool {
+    const adapter = graph_store.getGlobalAdapter() orelse return false;
+    const graph_name = resolveGraphName(context);
+    if (!adapter.graphExists(graph_name)) return false;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const seed = chooseStartSeed(a, adapter, graph_name, node, context.query_param_names, context.query_param_values, where_clause) orelse return false;
+    const name = equalityIndexName(a, context, node.labels[0], seed.key) catch return false;
+    return name != null;
 }
 
 fn resolveGraphName(context: ExecutionContext) []const u8 {
