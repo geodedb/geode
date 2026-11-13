@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:45:42.172151844Z",
+  "generated_at": "2026-11-13T13:52:58.860017602Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86458,6 +86458,20 @@
       "features": [
         {
           "feature": "MultiGraphIsolation",
+          "aspect": "DroppedNameRefused",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6472_dropped_graph_writes.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "MultiGraphIsolation",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -94140,7 +94154,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4910
+      "TESTED": 4911
     },
     "by_aspect": {
       "2PC": 3,
@@ -95171,6 +95185,7 @@
       "DropUserFailClosed": 1,
       "DropWaitsForHydration": 1,
       "DropWaitsForReaders": 1,
+      "DroppedNameRefused": 1,
       "DryRunWrapper": 1,
       "DualListenerLifetime": 1,
       "DualTokenValidation": 1,

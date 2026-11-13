@@ -2069,6 +2069,20 @@
 
 ### Fixed
 
+- **A write racing a DROP GRAPH no longer creates the graph again
+  (SONNY-6472 item 2).** The storage adapter's write entry points
+  (`createNode`, the bulk insert and MERGE helpers, `pinOrCreateGraph`)
+  find their graph through `getOrCreateGraph`, which created any graph it
+  did not have: a write that reached it after a DROP GRAPH brought the
+  graph back, empty, for whoever wrote. The adapter now records the names
+  it dropped; `getOrCreateGraph` answers `GraphNotFound` for them, and only
+  CREATE GRAPH (`StorageAdapter.createGraph`, through
+  `GraphStore.createGraph`) creates the name afresh. A name never dropped
+  is still created by its first write. `bulkInsertNodeWithReservedId`
+  also answers `GraphNotFound` when the graph was dropped between its
+  lookup and its lock, as the bulk MERGE helpers do (SONNY-3121).
+  `StorageAdapter.dropGraph` can now return `OutOfMemory` (nothing is
+  dropped then). Regression: `zig build test-sonny6472-dropped-graph-writes`.
 - **DROP GRAPH then CREATE GRAPH of the same name starts empty again
   (SONNY-6472 item 1).** DROP GRAPH takes the graph's nodes and edges out of
   memory after the storage engine has dropped the graph. Since SONNY-6268

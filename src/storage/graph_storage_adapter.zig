@@ -3692,6 +3692,11 @@ pub const StorageAdapter = struct {
     registry: gs.registry.GraphRegistry,
     registry_path: []const u8, // owned
     mutex: std.Io.Mutex,
+    /// SONNY-6472 (2): names of graphs dropped since this adapter opened
+    /// (owned keys), under `mutex`. `getOrCreateGraph` / `pinOrCreateGraph`
+    /// answer GraphNotFound for them instead of creating the graph again; only
+    /// `createGraph` (CREATE GRAPH) does, and takes the name out.
+    dropped_graph_names: std.StringHashMapUnmanaged(void) = .empty,
 
     // GAP-0900 (observability + checkpoint-cadence): the group-commit bulk
     // fast paths (bulkInsertNodeWithReservedId* / bulkMergeNode*) write through
@@ -3884,6 +3889,7 @@ pub const StorageAdapter = struct {
         }
         self.engines.deinit();
         self.default_engine = null;
+        self.freeDroppedGraphNames();
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
@@ -3933,6 +3939,7 @@ pub const StorageAdapter = struct {
         }
         self.engines.deinit();
         self.default_engine = null;
+        self.freeDroppedGraphNames();
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
@@ -3957,12 +3964,24 @@ pub const StorageAdapter = struct {
         return out;
     }
 
+    // CANARY: REQ=REQ-SONNY-6472-NO-RESURRECT; FEATURE="MultiGraphIsolation"; ASPECT=DroppedNameRefused; STATUS=TESTED; TEST=tests/test_sonny6472_dropped_graph_writes.zig; OWNER=storage; UPDATED=2026-11-13
     /// Return the `ManagedGraph` for `name`, creating a new `GraphEngine` if
     /// the graph has not been opened yet.
+    ///
+    /// SONNY-6472 (2): a graph dropped since this adapter opened is not
+    /// created again here (GraphNotFound): a write that raced a DROP GRAPH
+    /// (`createNode`, the bulk insert and MERGE helpers, `pinOrCreateGraph`)
+    /// reached this lookup after the drop and brought the graph back. Lazy
+    /// creation of a name never dropped (the default graph's first use, an
+    /// embedding caller's first write) stays; `createGraph` (CREATE GRAPH) is
+    /// what creates a dropped name again.
     pub fn getOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.getOrCreateGraphLocked(name);
+    }
 
+    fn getOrCreateGraphLocked(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         if (self.engines.get(name)) |mg| {
             return mg;
         }
@@ -3971,7 +3990,26 @@ pub const StorageAdapter = struct {
             return self.openGraphLocked(name, entry.uuid);
         }
 
+        if (self.dropped_graph_names.contains(name)) return error.GraphNotFound;
         return self.createGraphLocked(name);
+    }
+
+    /// SONNY-6472 (2): CREATE GRAPH: `getOrCreateGraph`, and a graph dropped
+    /// earlier under this name is created afresh (its name leaves
+    /// `dropped_graph_names`).
+    pub fn createGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (self.dropped_graph_names.fetchRemove(name)) |kv| {
+            self.allocator.free(kv.key);
+        }
+        return self.getOrCreateGraphLocked(name);
+    }
+
+    fn freeDroppedGraphNames(self: *StorageAdapter) void {
+        var it = self.dropped_graph_names.keyIterator();
+        while (it.next()) |k| self.allocator.free(k.*);
+        self.dropped_graph_names.deinit(self.allocator);
     }
 
     /// Open an existing graph by name and UUID. Uses `GraphEngine.open()` to
@@ -4073,7 +4111,11 @@ pub const StorageAdapter = struct {
     /// SONNY-3132: the default graph is refused (`CannotDropDefaultGraph`),
     /// whoever calls. `GraphStore.dropGraph` checked for it only after this
     /// drop had deleted the default graph's engine and files.
-    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph }!void {
+    ///
+    /// SONNY-6472 (2): the name is recorded in `dropped_graph_names` (room
+    /// taken before anything is dropped: OutOfMemory drops nothing), so a
+    /// write racing the drop cannot create the graph again.
+    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory }!void {
         // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=AdapterRefusesDefault; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
         if (std.mem.eql(u8, name, graph_store.DEFAULT_GRAPH_NAME)) return error.CannotDropDefaultGraph;
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -4081,6 +4123,12 @@ pub const StorageAdapter = struct {
 
         if (self.engines.get(name)) |mg| {
             if (threadTxnOn(mg)) return error.ObjectInUse;
+        }
+
+        if (!self.dropped_graph_names.contains(name)) {
+            try self.dropped_graph_names.ensureUnusedCapacity(self.allocator, 1);
+            const owned = try self.allocator.dupe(u8, name);
+            self.dropped_graph_names.putAssumeCapacity(owned, {});
         }
 
         var dropped_uuid: ?[16]u8 = null;
@@ -4514,6 +4562,10 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        // SONNY-6472 (2): a DROP GRAPH that ran between the lookup above and
+        // this lock left `mg` dropped (its files deleted): GraphNotFound, as
+        // the bulk MERGE helpers answer (SONNY-3121), not a write into it.
+        if (mg.isDropped()) return error.GraphNotFound;
         try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
@@ -12087,10 +12139,8 @@ pub const StorageAdapter = struct {
     pub fn pinOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        const mg = self.engines.get(name) orelse if (self.findRegistryEntryLocked(name)) |entry|
-            try self.openGraphLocked(name, entry.uuid)
-        else
-            try self.createGraphLocked(name);
+        // SONNY-6472 (2): never a graph dropped since the adapter opened.
+        const mg = try self.getOrCreateGraphLocked(name);
         _ = mg.pins.fetchAdd(1, .acq_rel);
         return mg;
     }
