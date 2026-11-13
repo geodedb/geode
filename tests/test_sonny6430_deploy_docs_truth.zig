@@ -405,3 +405,104 @@ test "SONNY-6442 (5) docs/DOCKER_LOG_LEVEL_CONFIG.md does not give LOG_LEVEL as 
     try testing.expect(std.mem.indexOf(u8, text, "--log-level") != null);
     try testing.expectEqual(@as(usize, 0), bad);
 }
+
+// SONNY-6442 (7): compose hygiene.
+//   - docker-compose.example.yml (and docker-compose.distributed.yml)
+//     health-checked with `["CMD", "/usr/local/bin/geode query", ...]`:
+//     exec form runs its first element as the program, so the check ran a
+//     program named "geode query", which does not exist, and never passed;
+//   - docker-compose.yml told operators to set QUIC_GO_DISABLE_GSO, a
+//     quic-go (Go) variable nothing in geode reads;
+//   - the geode services of docker-compose.yml, docker-compose.dev.yml and
+//     docker-compose.gpu.yml waited for Vault, MinIO and Redis, which geode
+//     never uses, and the dev stack ran all three.
+const vault_minio_redis = [_][]const u8{ "vault", "minio", "redis" };
+
+/// The exec-form program of each `healthcheck: test: ["CMD", <program>, ...]`.
+fn healthcheckPrograms(allocator: std.mem.Allocator, text: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, text, at, "test:")) |i| {
+        at = i + "test:".len;
+        const open = std.mem.indexOfScalarPos(u8, text, at, '[') orelse continue;
+        // The list must start right after `test:` (same or next line).
+        if (std.mem.indexOfNone(u8, text[at..open], " \t\r\n") != null) continue;
+        const close = std.mem.indexOfScalarPos(u8, text, open, ']') orelse continue;
+        var elems = std.mem.splitScalar(u8, text[open + 1 .. close], ',');
+        const first = std.mem.trim(u8, elems.next() orelse continue, " \t\r\n'\"");
+        if (!std.mem.eql(u8, first, "CMD")) continue;
+        const program = std.mem.trim(u8, elems.next() orelse continue, " \t\r\n'\"");
+        try out.append(allocator, program);
+    }
+}
+
+test "SONNY-6442 (7) every compose healthcheck runs a program, not a command line, as its exec-form first argument" {
+    const allocator = testing.allocator;
+    var bad: usize = 0;
+    for (compose_files) |file| {
+        const text = try readRepoFile(allocator, file);
+        defer allocator.free(text);
+        var programs: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer programs.deinit(allocator);
+        try healthcheckPrograms(allocator, text, &programs);
+        for (programs.items) |p| {
+            if (std.mem.indexOfScalar(u8, p, ' ') != null) {
+                std.debug.print("SONNY-6442 (7): {s} health-checks with the program \"{s}\"\n", .{ file, p });
+                bad += 1;
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), bad);
+}
+
+test "SONNY-6442 (7) no compose file names the quic-go QUIC_GO_* variables" {
+    const allocator = testing.allocator;
+    var bad: usize = 0;
+    for (compose_files) |file| {
+        const text = try readRepoFile(allocator, file);
+        defer allocator.free(text);
+        if (std.mem.indexOf(u8, text, "QUIC_GO_") != null) {
+            std.debug.print("SONNY-6442 (7): {s} names a QUIC_GO_* variable\n", .{file});
+            bad += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), bad);
+}
+
+test "SONNY-6442 (7) no geode service waits for Vault, MinIO or Redis, and the dev and GPU stacks run none of them" {
+    const allocator = testing.allocator;
+    var bad: usize = 0;
+    for (compose_files) |file| {
+        const text = try readRepoFile(allocator, file);
+        defer allocator.free(text);
+        const stack_without = std.mem.eql(u8, file, "docker-compose.dev.yml") or std.mem.eql(u8, file, "docker-compose.gpu.yml");
+        var service: []const u8 = "";
+        var in_depends = false;
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |line| {
+            const trimmed = std.mem.trimStart(u8, line, " ");
+            const indent = line.len - trimmed.len;
+            if (trimmed.len == 0 or trimmed[0] == '#') continue;
+            if (indent == 2 and std.mem.endsWith(u8, std.mem.trimEnd(u8, trimmed, " \r"), ":")) {
+                service = std.mem.trimEnd(u8, trimmed, ": \r");
+                in_depends = false;
+                if (stack_without) for (vault_minio_redis) |name| {
+                    if (std.mem.eql(u8, service, name)) {
+                        std.debug.print("SONNY-6442 (7): {s} runs a {s} service\n", .{ file, name });
+                        bad += 1;
+                    }
+                };
+                continue;
+            }
+            if (indent == 4) in_depends = std.mem.startsWith(u8, trimmed, "depends_on:");
+            if (!in_depends or indent <= 4 or !std.mem.startsWith(u8, service, "geode")) continue;
+            const item = std.mem.trimEnd(u8, if (std.mem.startsWith(u8, trimmed, "- ")) trimmed[2..] else trimmed, ": \r");
+            for (vault_minio_redis) |name| {
+                if (std.mem.eql(u8, item, name)) {
+                    std.debug.print("SONNY-6442 (7): {s}: service {s} depends on {s}\n", .{ file, service, name });
+                    bad += 1;
+                }
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), bad);
+}
