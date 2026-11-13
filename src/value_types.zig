@@ -63,6 +63,13 @@ pub const EvalError = error{
     // (ISO/IEC 39075 20.29 GR 1c: invalid duration format, 22G0H). Kept apart
     // from TimeParse (a date, time or datetime string, 22007).
     DurationParse,
+    // SONNY-6489: duration and datetime arithmetic (ISO/IEC 39075 20.28,
+    // 23.1 Table 8): a duration result out of range (22015), a datetime
+    // result out of range (22008), and duration +/- duration of a
+    // year-to-month and a day-to-second operand (22G14). They were 22003.
+    IntervalFieldOverflow,
+    DatetimeFieldOverflow,
+    IncompatibleTemporalUnitGroups,
     DecimalOverflow,
     DecimalDivZero,
     // GAP-0921: CAST semantic validation — an unconvertible value (invalid

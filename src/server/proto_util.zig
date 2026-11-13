@@ -397,6 +397,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DurationParse => .{ .code = "22G0H", .message = "invalid duration format: the string is not an ISO 8601 duration (P[n]Y[n]M[n]DT[n]H[n]M[n]S)" },
         error.DecimalDivZero => .{ .code = "22012", .message = "Division by zero" },
         error.CharLengthExceeded => .{ .code = "22001", .message = "String data right truncation: the string is longer than the fixed length" },
+        error.IntervalFieldOverflow => .{ .code = "22015", .message = "interval field overflow: the duration is out of range" },
+        error.DatetimeFieldOverflow => .{ .code = "22008", .message = "datetime field overflow: the datetime is out of range" },
+        error.IncompatibleTemporalUnitGroups => .{ .code = "22G14", .message = "incompatible temporal instant unit groups: a year-to-month duration and a day-to-second duration cannot be added or subtracted (1 month is not a number of days)" },
         error.UnsupportedCastTarget => .{ .code = "0A000", .message = "Unsupported CAST target type" },
         // GAP-0926: out-of-range positional parameter.
         // SONNY-3247: a parameter the request does not supply, named or

@@ -5540,7 +5540,8 @@ REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,Watc
 REQ-SONNY-6484-SHELL-UTF8,ShellPlainMode,Utf8PassThrough,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6484_shell_utf8.zig,,cli,2026-11-13
 REQ-SONNY-6489-DATA-EXCEPTION-CODES,ErrorMapping,DataExceptionGqlstatus,TESTED,src/server/proto_util.zig,tests/test_sonny6489_data_exception_codes.zig,,engine,2026-11-13
 REQ-SONNY-6489-DATA-EXCEPTION-CODES,ErrorMapping,DataExceptionGqlstatus,TESTED,tests/test_sonny6489_data_exception_codes.zig,,,engine,2026-11-13
-REQ-SONNY-6489-DURATION-UNIT-GROUPS,DateIntervalArithmetic,UnitGroupsAndOverflowCodes,TESTED,tests/test_sonny6489_duration_unit_groups.zig,tests/test_sonny6489_duration_unit_groups.zig,,eval,2026-11-13
+REQ-SONNY-6489-DURATION-UNIT-GROUPS,DateIntervalArithmetic,UnitGroupsAndOverflowCodes,TESTED,src/eval/temporal_ops.zig,tests/test_sonny6489_duration_unit_groups.zig,,eval,2026-11-13
+REQ-SONNY-6489-DURATION-UNIT-GROUPS,DateIntervalArithmetic,UnitGroupsAndOverflowCodes,TESTED,tests/test_sonny6489_duration_unit_groups.zig,,,eval,2026-11-13
 REQ-SONNY-6489-LISTEN-ERROR-FREE,QuicTransport,ListenErrorOwnership,TESTED,tests/test_sonny6489_listen_error_free.zig,tests/test_sonny6489_listen_error_free.zig,,transport,2026-11-13
 REQ-SONNY-6489-TEMPORAL-RENDERING,TemporalTypes,DurationIsoWriter,TESTED,src/types/datetime.zig,tests/test_sonny6489_temporal_rendering.zig,,datetime,2026-11-13
 REQ-SONNY-6489-TEMPORAL-RENDERING,TemporalTypes,LocalDatetimeAndDurationFraction,TESTED,tests/test_sonny6489_temporal_rendering.zig,tests/test_sonny6489_temporal_rendering.zig,,datetime,2026-11-13

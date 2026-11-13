@@ -23,8 +23,10 @@
 // (two instants of one type) is the day-to-second duration between them, a
 // Geode extension standing for DURATION_BETWEEN(b, a). A product or quotient
 // whose month count is not a whole number of months is refused (a month has no
-// fixed length in days). Overflow is 22003, as for DATE +/- duration
-// (SONNY-2769).
+// fixed length in days). Overflow was 22003, as for DATE +/- duration
+// (SONNY-2769); since SONNY-6489 it is 22008 for a datetime result and 22015
+// for a duration result, and a year-to-month plus a day-to-second duration is
+// 22G14.
 //
 // CANARY: REQ=REQ-SONNY-2797-DURATION-ARITHMETIC; FEATURE="DateIntervalArithmetic"; ASPECT=DatetimeDurationOperators; STATUS=TESTED; TEST=tests/test_sonny2797_duration_arithmetic.zig; OWNER=eval; UPDATED=2026-11-13
 
@@ -66,9 +68,9 @@ fn checkInstantPlusDuration(s: *Session, f: *Failures) !void {
     // NULL.
     try v(s, f, "RETURN datetime('2024-01-01T00:00:00Z') + NULL AS x", "null");
     try v(s, f, "RETURN NULL - duration('P1D') AS x", "null");
-    // Overflow is 22003.
-    try expectFail(s, f, "RETURN datetime('2024-01-01T00:00:00Z') + duration('P2147483647D') AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN timestamp('2024-01-01T00:00:00') + duration('P2147483647M') AS x", &.{}, error.IntegerOverflow);
+    // Overflow is 22008 datetime field overflow (SONNY-6489).
+    try expectFail(s, f, "RETURN datetime('2024-01-01T00:00:00Z') + duration('P2147483647D') AS x", &.{}, error.DatetimeFieldOverflow);
+    try expectFail(s, f, "RETURN timestamp('2024-01-01T00:00:00') + duration('P2147483647M') AS x", &.{}, error.DatetimeFieldOverflow);
     // A number is not a duration.
     try expectFail(s, f, "RETURN datetime('2024-01-01T00:00:00Z') + 1 AS x", &.{}, error.TypeMismatch);
 }
@@ -84,9 +86,11 @@ fn checkDurationArithmetic(s: *Session, f: *Failures) !void {
     try v(s, f, "RETURN duration('P1D') - duration('PT1H') AS x", "PT23H");
     try v(s, f, "RETURN duration('PT20H') + duration('PT20H') AS x", "P1DT16H");
     try v(s, f, "RETURN duration('P1Y') - duration('P1M') AS x", "P11M");
-    try v(s, f, "RETURN duration('P1M') + duration('P1D') AS x", "P1M1D");
+    // SONNY-6489: 22G14 (20.28 GR 5c ii); a mixed operand is still added.
+    try expectFail(s, f, "RETURN duration('P1M') + duration('P1D') AS x", &.{}, error.IncompatibleTemporalUnitGroups);
+    try v(s, f, "RETURN duration('P1M1D') + duration('P1D') AS x", "P1M2D");
     try v(s, f, "RETURN duration('P1D') + duration('PT24H') = duration('P2D') AS x", "true");
-    try expectFail(s, f, "RETURN duration('P2147483647M') + duration('P1M') AS x", &.{}, error.IntegerOverflow);
+    try expectFail(s, f, "RETURN duration('P2147483647M') + duration('P1M') AS x", &.{}, error.IntervalFieldOverflow);
     try v(s, f, "RETURN duration('P1D') + NULL AS x", "null");
 }
 
@@ -105,7 +109,7 @@ fn checkScaling(s: *Session, f: *Failures) !void {
     try v(s, f, "RETURN duration('P1D') * -1 AS x", "P-1D");
     try expectFail(s, f, "RETURN duration('P1M') / 2 AS x", &.{}, error.InvalidArgs);
     try expectFail(s, f, "RETURN duration('PT1H') / 0 AS x", &.{}, error.DivisionByZero);
-    try expectFail(s, f, "RETURN duration('PT1H') * 9223372036854775807 AS x", &.{}, error.IntegerOverflow);
+    try expectFail(s, f, "RETURN duration('PT1H') * 9223372036854775807 AS x", &.{}, error.IntervalFieldOverflow);
     try v(s, f, "RETURN duration('PT1H') * NULL AS x", "null");
 }
 
@@ -179,7 +183,9 @@ test "SONNY-2797: properties of datetime and duration arithmetic (seed 0x2797)" 
         const checks = [_][]const u8{
             "RETURN ($t + $d) - $d = $t AS r",
             "RETURN ($t + $d) - $t = $d AS r",
-            "RETURN ($d + $m) - $m = $d AS r",
+            // SONNY-6489: within one unit group ($d + $m is 22G14).
+            "RETURN ($d + $d) - $d = $d AS r",
+            "RETURN ($m + $m) - $m = $m AS r",
             "RETURN $d * $k = $d + $d * ($k - 1) AS r",
         };
         for (checks) |q| {

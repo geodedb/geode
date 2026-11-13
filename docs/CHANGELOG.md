@@ -2235,6 +2235,20 @@
 
 ### Fixed
 
+- **Duration arithmetic raises the standard's exceptions (SONNY-6489 item
+  6).** ISO/IEC 39075:2024 20.28 GR 5c ii: a duration plus or minus a
+  duration of the other unit group is 22G14 (incompatible temporal instant
+  unit groups); Table 8 (23.1) names 22015 interval field overflow (20.28 GR
+  5d) and 22008 datetime field overflow. **Behaviour change:**
+  `duration('P1M') + duration('P1D')` is 22G14 (it was P1M1D); a duration
+  result out of range (`duration('P2147483647M') + duration('P1M')`,
+  `duration('PT1H') * 9223372036854775807`, an instant difference) is 22015
+  and a datetime or date result out of range (`DATE '2026-01-01' +
+  duration('P2147483647D')`) 22008, where both were 22003. Unchanged: a
+  zero duration is of either group, and a duration with both parts (Geode's
+  mixed duration, `duration('P1M1D')`, an extension: 20.29 GR 1 allows one
+  group per duration string) is added part by part. Regression: `zig build
+  test-sonny6489-duration-unit-groups`.
 - **`localdatetime()` is a local datetime; durations keep their fraction of a
   second (SONNY-6489 item 4).** `localdatetime()` and `localdatetime(s)`
   built a zoned (UTC) datetime that rendered with `Z` and compared as an
