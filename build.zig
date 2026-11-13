@@ -6180,6 +6180,22 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6453-cluster-peer-tls", "Run SONNY-6453 item 2 regression (the 2PC transport verifies participants against GEODE_CLUSTER_CA_CERT: the signing CA completes the handshake, another CA fails it; 2PC and the raft / cluster peer dial refuse with ClusterCaRequired when no cluster CA is configured; real QUIC)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6490 (1): the mTLS client CA bundle is no process-wide trust
+    // store: an outbound dial never accepts a server certificate from it.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6490_client_ca_scope.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("vendor_quic", quic_ext_mod);
+        mod.addImport("quic_x509", quic_tls_dep.module("x509"));
+        mod.addImport("security/kms_remote", kms_remote_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6490-client-ca-scope", "Run SONNY-6490 item 1 regression (loading GEODE_MTLS_CLIENT_CA installs no process-wide trust store; a QUIC dial with no CA of its own rejects a server presenting a client identity from the bundle, and server-chain validation rejects a chain ending in a client CA; the cluster peer dial and the remote KMS client pin their own anchors; real QUIC)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6442 (4): geode serve refuses an unknown option (exit 2) and
     // still parses every documented one (unit + the built binary).
     {
