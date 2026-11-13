@@ -5469,6 +5469,7 @@ REQ-SONNY-6451-HEALTH-FAILED-PEER,DistributedCluster,HealthPassKeepsFailedPeer,T
 REQ-SONNY-6451-RAFT-RESTARTED-PEER,DistributedCluster,InboundStreamReleasesWorker,TESTED,tests/test_sonny6451_raft_restarted_peer.zig,tests/test_sonny6451_raft_restarted_peer.zig,,distributed,2026-11-12
 REQ-SONNY-6451-UNKNOWN-SECRET,GQL Auth DDL,UndeclaredSecretIsAnError,TESTED,tests/test_sonny6436_fixture_secrets.zig,tests/test_sonny6436_fixture_secrets.zig,,security,2026-11-12
 REQ-SONNY-6456-CLUSTER-DEAD-CONN-REAP,DistributedCluster,ClusterListenerReapsDeadConnections,TESTED,tests/test_sonny6456_cluster_dead_conn_reap.zig,tests/test_sonny6456_cluster_dead_conn_reap.zig,,distributed,2026-11-13
+REQ-SONNY-6456-CLUSTER-HEALTH-LIVENESS,DistributedCluster,HealthLivenessFromRaftTraffic,TESTED,tests/test_sonny6456_cluster_health_liveness.zig,tests/test_sonny6456_cluster_health_liveness.zig,,distributed,2026-11-13
 REQ-SONNY-6456-SHUTDOWN-PERSISTENCE-STOP,Persistence,PersistenceStopIsPrompt,TESTED,tests/test_sonny6456_shutdown_persistence_stop.zig,tests/test_sonny6456_shutdown_persistence_stop.zig,,storage,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

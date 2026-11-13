@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:34:52.996683877Z",
+  "generated_at": "2026-11-13T07:38:17.252974252Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85716,6 +85716,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6456-CLUSTER-HEALTH-LIVENESS",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "HealthLivenessFromRaftTraffic",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6456_cluster_health_liveness.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6456_cluster_health_liveness.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6456-SHUTDOWN-PERSISTENCE-STOP",
       "features": [
         {
@@ -93365,7 +93384,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4866
+      "TESTED": 4867
     },
     "by_aspect": {
       "2PC": 3,
@@ -95020,6 +95039,7 @@
       "HavingFilter": 1,
       "HeadElement": 1,
       "HealthCheck": 1,
+      "HealthLivenessFromRaftTraffic": 1,
       "HealthPassKeepsFailedPeer": 1,
       "HeapDecimalScale": 1,
       "HeapRounding": 1,

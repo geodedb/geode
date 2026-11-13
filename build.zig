@@ -15755,6 +15755,20 @@ pub fn build(b: *std.Build) void {
     const sonny6451_sigterm_step = b.step("test-sonny6451-cluster-sigterm", "Run the SONNY-6451 item 3 regression (SIGTERM stops a cluster node's raft transport before the final flush: no raft activity, pool-join timeout or watchdog exit after it, exit within 15 s; spawns two cluster nodes)");
     sonny6451_sigterm_step.dependOn(&run_sonny6451_sigterm_tests.step);
 
+    // SONNY-6456 item 1: the cluster health monitor reports a peer failed
+    // only when it stops being heard from (spawns three cluster nodes).
+    const sonny6456_health_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6456_cluster_health_liveness.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6456_health_tests.root_module.link_libc = true;
+    spawnsBuiltGeode(sonny6456_health_tests);
+    const run_sonny6456_health_tests = b.addRunArtifact(sonny6456_health_tests);
+    shardDep(test_step, &run_sonny6456_health_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6456_health_step = b.step("test-sonny6456-cluster-health-liveness", "Run the SONNY-6456 item 1 regression (three cluster nodes: no peer is reported failed while all are up; the leader reports a killed follower failed and active again after it restarts)");
+    sonny6456_health_step.dependOn(&run_sonny6456_health_tests.step);
+
     // SONNY-6456 item 4: SIGTERM stops the persistence thread within 3 s on an
     // idle single-node server and an idle cluster node (spawns the built geode).
     const sonny6456_shutdown_tests = b.addTest(.{ .root_module = b.createModule(.{
