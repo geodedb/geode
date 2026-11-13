@@ -262,6 +262,9 @@ fn checkMode(mode: Mode) !void {
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING max(n.i) >= 20", &.{"c"});
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING min(n.i) = 10", &.{"b"});
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING size(collect(n.i)) = 5", &.{"c"});
+    // CANARY: REQ=REQ-GQL-012; FEATURE="GROUP BY/Aggregation"; ASPECT=HavingCountDistinctFilter; STATUS=TESTED; TEST=tests/test_sonny2675_grouped_having.zig; OWNER=engine; UPDATED=2026-11-13
+    // (SONNY-6459: this marker's old test, tests/test_groupby_having_count_distinct.zig,
+    // was built by no step and could not compile.)
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING count(DISTINCT n.i) = 10", &.{ "a", "b" });
     // With the grouping key, and inside a CASE.
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING n.g <> 'a' AND count(*) > 5", &.{"b"});

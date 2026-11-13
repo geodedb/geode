@@ -2064,6 +2064,14 @@
   no longer lists 32-shard, 3-5-replica horizontal scaling, and
   `docs/DISTRIBUTED_QUALITY_GAP_ANALYSIS.md` records the shard surface as
   an open residual. Regression: `zig build test-sonny6459-hygiene`.
+- **Test infrastructure: an orphan test file is gone (SONNY-6459 item 9).**
+  `tests/test_groupby_having_count_distinct.zig` was built by no step and
+  could not compile (it imported `tests/exec.zig`, `tests/eval.zig` and
+  `tests/planner.zig`, which do not exist, and called `planQuery` and
+  `runGroupedQuery` with old signatures). It is removed; its CANARY
+  marker (REQ-GQL-012 HavingCountDistinctFilter) moved to the end-to-end
+  `HAVING count(DISTINCT n.i)` check in `zig build
+  test-sonny2675-grouped-having`.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so

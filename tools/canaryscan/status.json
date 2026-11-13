@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:59:52.543116618Z",
+  "generated_at": "2026-11-13T09:01:23.40198274Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -28310,14 +28310,14 @@
           "aspect": "HavingCountDistinctFilter",
           "status": "TESTED",
           "files": [
-            "tests/test_groupby_having_count_distinct.zig"
+            "tests/test_sonny2675_grouped_having.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_012_HavingCountDistinctFilter"
+            "tests/test_sonny2675_grouped_having.zig"
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-21"
+          "updated": "2026-11-13"
         },
         {
           "feature": "Planner ISO Enforcement",

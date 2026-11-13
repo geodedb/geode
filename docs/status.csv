@@ -1927,7 +1927,7 @@ REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowAvg,TESTED,,,engine,2025-09-21,t
 REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowHandling,TESTED,,,engine,2025-09-21,tests/test_groupby_decimal_overflow.zig,5
 REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowSum,TESTED,,,engine,2025-09-21,tests/test_decimal_overflow_aggregates.zig,4
 REQ-GQL-012,GROUP BY/Aggregation,Engine,TESTED,,,engine,2025-09-20,src/exec.zig,3
-REQ-GQL-012,GROUP BY/Aggregation,HavingCountDistinctFilter,TESTED,,,engine,2025-09-21,tests/test_groupby_having_count_distinct.zig,7
+REQ-GQL-012,GROUP BY/Aggregation,HavingCountDistinctFilter,TESTED,,,engine,2026-11-13,tests/test_sonny2675_grouped_having.zig,265
 REQ-GQL-012,Planner ISO Enforcement,OrderByEnforcement,TESTED,,,planner,2025-09-25,tests/e2e_planner_order_enforcement.zig,6
 REQ-GQL-013,AdvancedUnionOperations,IntersectOperation,TESTED,,,engine,2025-10-03,tests/advanced_union_test.zig,42
 REQ-GQL-013,Transactions,MVCCVersionPruneVarianceEnvelope,BENCHED,,,txn,2025-09-21,tests/benchmark_mvcc_version_prune_variance.zig,3
