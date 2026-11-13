@@ -5481,6 +5481,7 @@ REQ-SONNY-6456-RAFT-REAL-SENDER,DistributedCluster,RaftSenderReconnectsInProcess
 REQ-SONNY-6456-SHUTDOWN-PERSISTENCE-STOP,Persistence,PersistenceStopIsPrompt,TESTED,tests/test_sonny6456_shutdown_persistence_stop.zig,tests/test_sonny6456_shutdown_persistence_stop.zig,,storage,2026-11-13
 REQ-SONNY-6459-CHECKPOINT-ONCE,Persistence,OneCheckpointPerTickAndShutdown,TESTED,tests/test_sonny6459_checkpoint_once.zig,tests/test_sonny6459_checkpoint_once.zig,,storage,2026-11-13
 REQ-SONNY-6459-CLUSTER-LAST-CONTACT,SHOW CLUSTER STATUS,LastContactFromRaftTraffic,TESTED,tests/test_sonny6459_cluster_last_contact.zig,tests/test_sonny6459_cluster_last_contact.zig,,distributed,2026-11-13
+REQ-SONNY-6459-HYGIENE,DistributedCluster,DeadJoinCodeAndUnrunInlineTests,TESTED,tests/test_sonny6459_hygiene.zig,tests/test_sonny6459_hygiene.zig,,distributed,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,TESTED,src/server/cli_args.zig,tests/test_capability_gate.zig,,server,2026-09-08

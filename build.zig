@@ -5873,6 +5873,20 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6453-hygiene", "Run SONNY-6453 item 5 regression (no compose file sets pids_limit - the limit is deploy.resources.limits.pids; src/security/kms.zig has no dead compat_fillRandom; the kms.zig inline tests no step ran moved to tests/test_kms_provider.zig; the GAP-0499 secure-zero test has a named step)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6459 items 4, 7, 8, 9: no uncompilable dynamic-join code, the
+    // distributed modules' inline tests have a step, the docs do not present
+    // join/leave or sharded scaling as working, no orphan test file.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6459_hygiene.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6459_hygiene_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6459-hygiene", "Run the SONNY-6459 items 4, 7, 8 and 9 regression (cluster.zig has no uncompilable handleJoinCluster / serializeClusterTopology; the raft_consensus, cluster, twophase and cluster_auth inline tests have a step; the docs do not present cluster join/leave or sharded scaling as working; tests/test_groupby_having_count_distinct.zig is gone)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6453 (2): 2PC, raft and the cluster coordinator dial peers
     // through one verified configuration (GEODE_CLUSTER_CA_CERT), over real
     // QUIC against an in-process server with openssl-made CAs.
