@@ -395,6 +395,78 @@ test "SONNY-6436: a key lean indexing left out of MERGE's index is never answere
 // transaction (the executor only), for each session and fixture.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// SONNY-6447 item 6, in process: the MATCH ... MERGE edge fast path
+// (`executeBulkMatchMergeEdge`) resolved its endpoints with no tenant
+// (`lookupPublicNodeIdByLabelAndAllProps`), and was safe only because the
+// session gate (`bulk_ingest.sessionAllowsKeyResolvedWrites`) keeps every
+// tenant-scoped session off it. The resolver now takes the request's tenant,
+// so with that gate removed it still never answers another tenant's node.
+// ---------------------------------------------------------------------------
+
+/// The tenant-scoped resolver's answer for `{k: 1, s: 'x'}` under `label`:
+/// "<tenant>/<t>" of the node it names, "miss" or "not-unique".
+fn endpointAnswerForTenant(s: *Session, label: []const u8, request_tenant: []const u8) ![]const u8 {
+    const a = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+    const filters = [_]gsa.StorageAdapter.PropKV{
+        .{ .key = "k", .value = .{ .Int = 1 } },
+        .{ .key = "s", .value = .{ .String = "x" } },
+    };
+    const id = a.lookupPublicNodeIdByLabelAndAllPropsForTenant(G, label, &filters, request_tenant, error.SourceNodeNotFound) catch |err| switch (err) {
+        error.SourceNodeNotFound => return "miss",
+        error.MergeKeyNotUnique => return "not-unique",
+        else => return err,
+    };
+    const store = graph_store.getGlobalStore(testing.allocator);
+    const node = (try store.nodes.getOrHydratePtr(id)) orelse return "vanished";
+    return switch (node.properties.get("t") orelse return "no-t") {
+        .String => |v| try std.fmt.allocPrint(s.arena.allocator(), "{s}/{s}", .{ node.tenant_id, v }),
+        else => "t?",
+    };
+}
+
+/// `want` exactly, or, when `may_decline`, "not-unique" (the caller then
+/// declines to the executor). Never another tenant's node.
+fn expectEndpoint(s: *Session, f: *Failures, when: []const u8, label: []const u8, request_tenant: []const u8, want: []const u8, may_decline: bool) !void {
+    const got = try endpointAnswerForTenant(s, label, request_tenant);
+    if (std.mem.eql(u8, got, want)) return;
+    if (may_decline and std.mem.eql(u8, got, "not-unique")) return;
+    try f.add("[merge-edge endpoint, {s}] {s} as {s}: resolver answered {s}, expected {s}", .{ when, label, request_tenant, got, want });
+}
+
+test "SONNY-6447: the MATCH ... MERGE edge endpoint resolver answers per tenant, never with another tenant's node" {
+    harness.silenceEngineLogs();
+    var f: Failures = .{};
+    defer f.deinit();
+    for ([_]bool{ false, true }) |registered| {
+        var s = try Session.init(.persisted);
+        defer s.deinit();
+        // Registered, `{k, s}` resolves in one composite-index probe; not,
+        // through the seed and scan.
+        if (registered) graph_store.registerCompositeMergeKey(&.{ "k", "s" });
+        defer if (registered) graph_store.clearCompositeMergeKeysForTest();
+        const when: []const u8 = if (registered) "composite key registered" else "composite key not registered";
+        // Only B's node holds the key.
+        try s.exec(TB, "CREATE (:C6447 {k: 1, s: 'x', t: 'b'})");
+        // Only A's.
+        try s.exec(TA, "CREATE (:S6447 {k: 1, s: 'x', t: 'a'})");
+        // B's (the lower id) and A's.
+        try s.exec(TB, "CREATE (:M6447 {k: 1, s: 'x', t: 'b'})");
+        try s.exec(TA, "CREATE (:M6447 {k: 1, s: 'x', t: 'a'})");
+
+        try expectEndpoint(&s, &f, when, "C6447", TA, "miss", false);
+        try expectEndpoint(&s, &f, when, "C6447", TB, TB ++ "/b", false);
+        try expectEndpoint(&s, &f, when, "C6447", UNSCOPED, TB ++ "/b", false);
+        try expectEndpoint(&s, &f, when, "S6447", TA, TA ++ "/a", false);
+        try expectEndpoint(&s, &f, when, "S6447", TB, "miss", false);
+        try expectEndpoint(&s, &f, when, "M6447", TA, TA ++ "/a", true);
+        try expectEndpoint(&s, &f, when, "M6447", TB, TB ++ "/b", true);
+        try expectEndpoint(&s, &f, when, "M6447", UNSCOPED, "not-unique", false);
+        try expectEndpoint(&s, &f, when, "N6447", TA, "miss", false);
+    }
+    try f.check("merge-edge endpoint resolver per tenant");
+}
+
 const Server = struct {
     handle: util.ServerHandle,
     data_dir: []const u8,
