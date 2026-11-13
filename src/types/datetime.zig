@@ -10,6 +10,8 @@ pub const Date = struct {
 
     pub fn fromStr(str: []const u8) Error!Date {
         if (str.len != 10 or str[4] != '-' or str[7] != '-') return Error.ParseError;
+        // SONNY-2808: digits only (parseInt took a sign: '+024-01-01').
+        if (!allDigits(str[0..4]) or !allDigits(str[5..7]) or !allDigits(str[8..10])) return Error.ParseError;
 
         const year = std.fmt.parseInt(i32, str[0..4], 10) catch return Error.ParseError;
         const month = std.fmt.parseInt(u8, str[5..7], 10) catch return Error.ParseError;
@@ -146,22 +148,32 @@ pub const Fields = struct {
 pub const Time = struct {
     micros_since_midnight: i64,
 
+    // CANARY: REQ=REQ-SONNY-2808-TEMPORAL-PARSING; FEATURE="DateTimeFunctions"; ASPECT=StrictIso8601Strings; STATUS=TESTED; TEST=tests/test_sonny2808_temporal_parsing.zig; OWNER=datetime; UPDATED=2026-11-13
+    /// An ISO 8601-1 local time of day, extended format: `hh:mm`, `hh:mm:ss`
+    /// or `hh:mm:ss.f` (1 to 6 fraction digits), and nothing else. SONNY-2808:
+    /// the parser read the first eight characters and ignored the rest, so
+    /// '10:00:00+01:00' (a zoned time) and '10:00:00xyz' parsed as 10:00:00.
     pub fn fromStr(str: []const u8) Date.Error!Time {
-        if (str.len < 8) return Date.Error.ParseError;
-
+        if (str.len < 5 or str[2] != ':') return Date.Error.ParseError;
+        if (!allDigits(str[0..2]) or !allDigits(str[3..5])) return Date.Error.ParseError;
         const hour = std.fmt.parseInt(u8, str[0..2], 10) catch return Date.Error.ParseError;
-        if (str[2] != ':') return Date.Error.ParseError;
         const minute = std.fmt.parseInt(u8, str[3..5], 10) catch return Date.Error.ParseError;
-        if (str[5] != ':') return Date.Error.ParseError;
-        const second = std.fmt.parseInt(u8, str[6..8], 10) catch return Date.Error.ParseError;
+        var second: u8 = 0;
+        var frac_str: []const u8 = "";
+        if (str.len > 5) {
+            if (str.len < 8 or str[5] != ':' or !allDigits(str[6..8])) return Date.Error.ParseError;
+            second = std.fmt.parseInt(u8, str[6..8], 10) catch return Date.Error.ParseError;
+            if (str.len > 8) {
+                if (str[8] != '.') return Date.Error.ParseError;
+                frac_str = str[9..];
+                if (frac_str.len == 0 or frac_str.len > 6 or !allDigits(frac_str)) return Date.Error.ParseError;
+            }
+        }
 
         if (hour >= 24 or minute >= 60 or second >= 60) return Date.Error.InvalidDate;
 
         var micros: i64 = @as(i64, hour) * 3600_000_000 + @as(i64, minute) * 60_000_000 + @as(i64, second) * 1_000_000;
-
-        if (str.len > 8 and str[8] == '.') {
-            const frac_str = str[9..];
-            if (frac_str.len > 6) return Date.Error.ParseError;
+        if (frac_str.len > 0) {
             const frac_val = std.fmt.parseInt(u32, frac_str, 10) catch return Date.Error.ParseError;
             const scale = std.math.powi(u32, 10, @as(u32, @intCast(6 - frac_str.len))) catch 1;
             micros += @as(i64, frac_val * scale);
@@ -224,6 +236,7 @@ pub const TimeTZ = struct {
 
         const idx = sign_index orelse return Date.Error.ParseError;
         if (idx + 6 != str.len or str[idx + 3] != ':') return Date.Error.ParseError;
+        if (!allDigits(str[idx + 1 .. idx + 3]) or !allDigits(str[idx + 4 .. idx + 6])) return Date.Error.ParseError;
 
         const time_part = str[0..idx];
         const sign: i32 = if (str[idx] == '-') -1 else 1;
@@ -304,18 +317,21 @@ pub const TimestampTZ = struct {
         if (ts_part.len < 19) return Date.Error.ParseError; // Timestamp needs at least 19 chars (YYYY-MM-DDTHH:MM:SS)
         const ts = try Timestamp.fromStr(ts_part);
 
+        // SONNY-2808: the zone designator ends the string: 'Z', or
+        // '+hh:mm' / '-hh:mm' (trailing text after either was ignored).
         var offset_seconds: i32 = 0;
-        if (tz_start < str.len) {
-            const tz_part = str[tz_start..];
-            if (tz_part[0] == 'Z') {
-                offset_seconds = 0;
-            } else if (tz_part.len >= 6 and (tz_part[0] == '+' or tz_part[0] == '-')) {
-                const sign: i32 = if (tz_part[0] == '+') 1 else -1;
-                const hours = std.fmt.parseInt(u8, tz_part[1..3], 10) catch return Date.Error.ParseError;
-                const minutes = std.fmt.parseInt(u8, tz_part[4..6], 10) catch return Date.Error.ParseError;
-                offset_seconds = sign * (@as(i32, hours) * 3600 + @as(i32, minutes) * 60);
-            }
-        }
+        const tz_part = str[tz_start..];
+        if (tz_part.len == 1 and tz_part[0] == 'Z') {
+            offset_seconds = 0;
+        } else if (tz_part.len == 6 and (tz_part[0] == '+' or tz_part[0] == '-') and tz_part[3] == ':' and
+            allDigits(tz_part[1..3]) and allDigits(tz_part[4..6]))
+        {
+            const sign: i32 = if (tz_part[0] == '+') 1 else -1;
+            const hours = std.fmt.parseInt(u8, tz_part[1..3], 10) catch return Date.Error.ParseError;
+            const minutes = std.fmt.parseInt(u8, tz_part[4..6], 10) catch return Date.Error.ParseError;
+            if (hours > 23 or minutes > 59) return Date.Error.ParseError;
+            offset_seconds = sign * (@as(i32, hours) * 3600 + @as(i32, minutes) * 60);
+        } else return Date.Error.ParseError;
 
         const utc_micros = ts.micros_since_epoch - @as(i64, offset_seconds) * 1_000_000;
         return TimestampTZ{ .micros_since_epoch_utc = utc_micros };
@@ -383,11 +399,31 @@ pub const Interval = struct {
                 continue;
             }
 
-            var num_end = i;
+            // SONNY-2808: a component is `[-]digits` (21.x <iso8601 sint>),
+            // and the seconds may carry `.digits` (<iso8601 seconds>).
+            const negative = str[i] == '-';
+            const digits_start = if (negative) i + 1 else i;
+            var num_end = digits_start;
             while (num_end < str.len and std.ascii.isDigit(str[num_end])) num_end += 1;
-            if (num_end == i or num_end >= str.len) return Date.Error.ParseError;
+            if (num_end == digits_start or num_end >= str.len) return Date.Error.ParseError;
 
-            const num = std.fmt.parseInt(i32, str[i..num_end], 10) catch return Date.Error.ParseError;
+            const magnitude = std.fmt.parseInt(i32, str[digits_start..num_end], 10) catch return Date.Error.ParseError;
+            const num = if (negative) -magnitude else magnitude;
+            var frac_micros: i64 = 0;
+            if (str[num_end] == '.') {
+                const frac_start = num_end + 1;
+                var frac_end = frac_start;
+                while (frac_end < str.len and std.ascii.isDigit(str[frac_end])) frac_end += 1;
+                if (frac_end == frac_start or frac_end >= str.len or str[frac_end] != 'S' or !in_time) return Date.Error.ParseError;
+                // Microseconds: the first six fraction digits (truncated).
+                var scale: i64 = 100_000;
+                for (str[frac_start..@min(frac_end, frac_start + 6)]) |c| {
+                    frac_micros += @as(i64, c - '0') * scale;
+                    scale = @divTrunc(scale, 10);
+                }
+                if (negative) frac_micros = -frac_micros;
+                num_end = frac_end;
+            }
             const unit = str[num_end];
 
             // GAP-0906: components accumulate with checked arithmetic — the
@@ -409,7 +445,7 @@ pub const Interval = struct {
                 },
                 'D' => days = std.math.add(i32, days, num) catch return Date.Error.ParseError,
                 'H' => micros = std.math.add(i64, micros, @as(i64, num) * 3600 * 1_000_000) catch return Date.Error.ParseError,
-                'S' => micros = std.math.add(i64, micros, @as(i64, num) * 1_000_000) catch return Date.Error.ParseError,
+                'S' => micros = std.math.add(i64, micros, @as(i64, num) * 1_000_000 + frac_micros) catch return Date.Error.ParseError,
                 else => return Date.Error.ParseError,
             }
 
@@ -454,6 +490,13 @@ pub const Interval = struct {
         return result.toOwnedSlice(allocator);
     }
 };
+
+fn allDigits(s: []const u8) bool {
+    for (s) |c| {
+        if (!std.ascii.isDigit(c)) return false;
+    }
+    return true;
+}
 
 test "date parsing" {
     const d = try Date.fromStr("2024-02-29");

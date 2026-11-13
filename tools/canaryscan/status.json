@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:34:27.965083598Z",
+  "generated_at": "2026-11-13T14:53:43.001298198Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -74531,6 +74531,7 @@
           "aspect": "StrictIso8601Strings",
           "status": "TESTED",
           "files": [
+            "src/types/datetime.zig",
             "tests/test_sonny2808_temporal_parsing.zig"
           ],
           "tests": [

@@ -136,7 +136,9 @@
 - **Tag**: `0x29`
 - **Precision**: Microseconds
 - **Format**: "HH:MM:SS[.us]"
-- **Constructor**: `Time("HH:MM:SS[.us]")`
+- **Constructor**: `Time("HH:MM[:SS[.us]]")`; a string with a zone
+  (`Z`, `+HH:MM`, `-HH:MM`) gives a TimeTZ that keeps its offset; trailing
+  text is a TimeParse error (SONNY-2808)
 
 #### TimeTZ
 
@@ -158,14 +160,19 @@
 - **Tag**: `0x2C`
 - **Storage**: Always UTC internally
 - **Format**: ISO-8601 with timezone
-- **Constructor**: `TimestampTZ("YYYY-MM-DD HH:MM:SS[.us] [±HH:MM]")`
+- **Constructor**: `TimestampTZ("YYYY-MM-DDTHH:MM:SS[.us](Z|±HH:MM)")`; the
+  zone designator ends the string. `datetime(str)` takes the same string
+  (its offset gives the instant), or one without a zone (read as UTC), or a
+  date (midnight UTC) (SONNY-2808)
 
 #### Interval
 
 - **Storage**: Tag + 4 bytes months + 4 bytes days + 8 bytes microseconds
 - **Tag**: `0x2D`
 - **Components**: months, days, microseconds
-- **Format**: ISO-8601 duration "P1Y2M3DT4H5M6S"
+- **Format**: ISO-8601 duration "P1Y2M3DT4H5M6S"; every component
+  optional, a component may be negative (`P-1D`), seconds may carry a
+  fraction (`PT1.5S`, microsecond precision) (SONNY-2808)
 - **Constructor**: `Interval("P...")` or `MakeInterval(months, days, micros)`
 
 ### Binary and JSON Types

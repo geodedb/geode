@@ -2161,6 +2161,23 @@
 
 ### Fixed
 
+- **Temporal strings parse exactly (SONNY-2808).** The time parser read the
+  first eight characters and ignored the rest. **Behaviour change:**
+  `time('10:00:00+01:00')` is the zoned time 10:00:00+01:00 (it was the
+  local time 10:00:00, offset dropped); `datetime('2024-01-01T10:00:00+02:00')`
+  is 2024-01-01T08:00:00Z (the offset was ignored: 10:00Z); trailing text is
+  refused with TimeParse in `time()`, `localtime()`, `timetz()`, `date()`,
+  `datetime()`, `timestamp()`, `timestamptz()` and `localdatetime()`
+  (`time('10:00:00xyz')` parsed); a zone in a local time or local datetime
+  string is refused; `localtime()` and `localdatetime()` of a bad string are
+  TimeParse (they were "unknown function", 42883); `time('10:00')` (reduced
+  precision) is 10:00:00. `duration()` accepts what the GQL duration string
+  grammar allows and it refused: a negative component (`P-1D`) and a
+  fraction of a second (`PT1.5S`). `CAST(<string> AS TIME | TIMESTAMP |
+  DATE)` follows the same rules (a zone or trailing text is 22018). The
+  ticket's third item (an embedded caller's MERGE tagged the default tenant)
+  was already fixed by SONNY-2686; the test pins it. Regression:
+  `zig build test-sonny2808-temporal-parsing`.
 - **Datetime and duration arithmetic (SONNY-2797).** Only `DATE +/-
   duration` was implemented; every other ISO/IEC 39075:2024 20.26 and 20.28
   operation was a type mismatch. Now: datetime, local datetime, date, time

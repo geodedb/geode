@@ -4779,7 +4779,8 @@ REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,SettleThroughExactIndex,TEST
 REQ-SONNY-2806-STORED-PROPERTY-EQUALITY,InlinePropertyMatch,ExactValueOnPersistedPaths,TESTED,src/execution/stored_property_equality.zig,tests/test_sonny2806_exact_property_matching.zig,,execution,2026-09-26
 REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY,ValueOrdering,OneNumericEqualityRule,TESTED,src/eval.zig,tests/test_sonny2807_exact_numeric_equality.zig,,eval,2026-11-13
 REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY,ValueOrdering,OneNumericEqualityRule,TESTED,tests/test_sonny2807_exact_numeric_equality.zig,,,eval,2026-11-13
-REQ-SONNY-2808-TEMPORAL-PARSING,DateTimeFunctions,StrictIso8601Strings,TESTED,tests/test_sonny2808_temporal_parsing.zig,tests/test_sonny2808_temporal_parsing.zig,,datetime,2026-11-13
+REQ-SONNY-2808-TEMPORAL-PARSING,DateTimeFunctions,StrictIso8601Strings,TESTED,src/types/datetime.zig,tests/test_sonny2808_temporal_parsing.zig,,datetime,2026-11-13
+REQ-SONNY-2808-TEMPORAL-PARSING,DateTimeFunctions,StrictIso8601Strings,TESTED,tests/test_sonny2808_temporal_parsing.zig,,,datetime,2026-11-13
 REQ-SONNY-2809-DUPLICATE-CONSTRAINT,ConstraintManagement,DuplicateNameSingleFree,TESTED,tests/test_sonny2809_duplicate_constraint.zig,tests/test_sonny2809_duplicate_constraint.zig,,schema,2026-09-26
 REQ-SONNY-2810-SNAPSHOT-FLOAT,Raft Snapshot Persistence,FloatEncoding,TESTED,src/graph_store.zig,tests/test_sonny2810_snapshot_float.zig,,distributed,2026-11-13
 REQ-SONNY-2810-SNAPSHOT-FLOAT,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny2810_snapshot_float.zig,tests/test_sonny2810_snapshot_float.zig,,distributed,2026-11-13

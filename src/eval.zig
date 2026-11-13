@@ -4407,11 +4407,15 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 else => return EvalError.TypeMismatch,
             };
 
-            // Parse the datetime string using the Timestamp parser; accept a
-            // date-only literal ('2024-06-15') as midnight UTC, matching the
-            // date()/time() siblings. A string neither form parses is a
-            // TimeParse data exception, never a swallowed 42883.
+            // A zoned datetime string ('...Z', '...+02:00') gives its instant
+            // (SONNY-2808: the offset was ignored and trailing text accepted);
+            // one with no zone is taken as UTC, and a date-only literal
+            // ('2024-06-15') as midnight UTC. A string none of these parses is
+            // a TimeParse data exception, never a swallowed 42883.
             const micros: i64 = blk: {
+                if (datetime_module.TimestampTZ.fromStr(str)) |tz| {
+                    break :blk tz.micros_since_epoch_utc;
+                } else |_| {}
                 if (datetime_module.Timestamp.fromStr(str)) |ts| {
                     break :blk ts.micros_since_epoch;
                 } else |_| {
@@ -4465,7 +4469,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 else => return null,
             };
 
-            const ts = datetime_module.Timestamp.fromStr(str) catch return null;
+            // SONNY-2808: a malformed string (or one with a zone: a local
+            // datetime has none) is a TimeParse data exception; `return null`
+            // fell through to "unknown function" (42883).
+            const ts = datetime_module.Timestamp.fromStr(str) catch return EvalError.TimeParse;
             const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = ts.micros_since_epoch } };
             return Value{ .ExtValue = tz_ts };
         } else {
@@ -4524,7 +4531,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
 
             const datetime_module = @import("types/datetime.zig");
-            const t = datetime_module.Time.fromStr(str) catch return null;
+            // SONNY-2808: see localdatetime.
+            const t = datetime_module.Time.fromStr(str) catch return EvalError.TimeParse;
 
             const eval_ext = @import("eval_extended.zig");
             const time_val = eval_ext.ExtValue{ .Time = t };
