@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T03:21:33.963967008Z",
+  "generated_at": "2026-11-13T03:25:11.969177616Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -28404,20 +28404,6 @@
             "BenchmarkCANARY_REQ_GQL_012_HashAggDistinctHighCardVarianceEnvelope"
           ],
           "benches": [],
-          "owner": "engine",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "GROUP BY/Aggregation",
-          "aspect": "HashAggSpillVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "tests/benchmark_hashagg_spill_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_012_HashAggSpillVarianceEnvelope"
-          ],
           "owner": "engine",
           "updated": "2025-09-21"
         },
@@ -93318,7 +93304,7 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 210,
+      "BENCHED": 209,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
@@ -94973,7 +94959,6 @@
       "HasGraphGrant": 2,
       "HasGraphGrantLocked": 1,
       "HashAggDistinctHighCardVarianceEnvelope": 1,
-      "HashAggSpillVarianceEnvelope": 1,
       "HashBeforeStore": 1,
       "Hashing": 1,
       "HavingCountDistinctFilter": 1,

@@ -3549,6 +3549,13 @@
 
 ### Removed
 
+- **Dead benchmark: `tests/benchmark_hashagg_spill_variance.zig`
+  (SONNY-6451 item 4).** It measured spilling in the `HashAggregator`
+  removed under SONNY-6436 item 6 (geode has no aggregation spill path),
+  no build step compiled it, and it could not compile (`../src` imports
+  outside the module root, `ArrayList.init`, `std.mem.copy`, and the old
+  `runGroupedQuery` arity). Its BENCHED marker (REQ-GQL-012
+  HashAggSpillVarianceEnvelope) described only that code.
 - **Dead code: `GraphStore.restoreNodeNoSave` / `restoreEdgeNoSave`
   (SONNY-6436 item 4).** No caller anywhere in the repository (a reference
   search finds only their definitions); both tagged the restored row tenant
