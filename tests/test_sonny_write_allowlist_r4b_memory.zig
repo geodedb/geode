@@ -75,7 +75,8 @@ const BoundJob = struct {
         if (peak < before) return self.fail("peak memory measurement unavailable", .{});
         const grew = peak - before;
         if (r.rows.len != 0) self.fail("WHERE 1 = 2: {d} row(s)", .{r.rows.len});
-        // 1,500 pairs: about 700 MB before the fix.
+        // 1,499 pairs (`range(1, 1500)`; the end is exclusive): about 700 MB
+        // before the fix.
         if (grew > 128 << 20) self.fail("WHERE 1 = 2: the peak grew {d} MiB (at most 128)", .{grew >> 20});
         if (took > 240_000) self.fail("WHERE 1 = 2: took {d} ms", .{took});
     }

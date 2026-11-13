@@ -2133,6 +2133,17 @@
   `test-sonny-write-allowlist-r4-transport` (SONNY-3368's abandoned join)
   runs in the aggregate again. Regression: `zig build
   test-sonny6466-abandoned-read-cancel`.
+- **`range(start, end[, step])` is documented as what it is: a Geode
+  extension with an exclusive end (SONNY-6466 item 3).** ISO/IEC 39075:2024
+  defines no `range` function, yet the language metadata (LSP hover and
+  completion) labelled it ISO GQL, and no document stated whether its end
+  is included. It is half-open, as in Python: `range(1, 1500)` has 1,499
+  elements, `range(1, 7, 2)` is `[1, 3, 5]`. openCypher's `range()` includes
+  its end, so a query ported from Cypher must move the end by one step. The
+  behaviour is unchanged (not breaking); the metadata now says "Geode
+  extension", docs/TYPES_AND_FUNCTIONS.md, docs/GQL_COMPLIANCE.md and
+  docs/API_REFERENCE_GENERATED.md state the contract, and the tests that
+  called a `range(1, 1500)` seed "1,500 pairs" say 1,499.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE

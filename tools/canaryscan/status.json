@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:39:45.478361111Z",
+  "generated_at": "2026-11-13T12:40:16.380630563Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86308,6 +86308,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6466-RANGE-CONTRACT",
+      "features": [
+        {
+          "feature": "range() function",
+          "aspect": "ExclusiveEndGeodeExtension",
+          "status": "TESTED",
+          "files": [
+            "tests/test_for_write_body.zig"
+          ],
+          "tests": [
+            "tests/test_for_write_body.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6466-SIBLING-READ-CANCEL-ON-CLOSE",
       "features": [
         {
@@ -94013,7 +94032,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4902
+      "TESTED": 4903
     },
     "by_aspect": {
       "2PC": 3,
@@ -95238,6 +95257,7 @@
       "ExcludeKeyMaterialAndLock": 1,
       "ExcludedShapes": 1,
       "ExclusiveAcquireUnderLoad": 1,
+      "ExclusiveEndGeodeExtension": 1,
       "ExclusiveNoFollow0600": 1,
       "ExecContextWiring": 1,
       "ExecuteCreate": 1,

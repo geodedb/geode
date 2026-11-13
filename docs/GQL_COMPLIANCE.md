@@ -184,6 +184,13 @@ RETURN size([1,2,3]), head([1,2,3]), tail([1,2,3]), last([1,2,3])
 RETURN range(1, 10)
 ```
 
+`range(start, end[, step])` is a Geode extension: ISO/IEC 39075:2024 defines
+no `range` function. Its end is **exclusive** (half-open, like Python's
+`range`): `range(1, 10)` is `[1, 2, ..., 9]`, `range(1, 7, 2)` is
+`[1, 3, 5]`, `range(5, 1, -2)` is `[5, 3]`. openCypher's `range()` includes
+its end; a query ported from Cypher must add 1 (or subtract 1 for a negative
+step) to the end. See [TYPES_AND_FUNCTIONS.md](TYPES_AND_FUNCTIONS.md#list-functions).
+
 #### Type Functions
 
 ```gql
