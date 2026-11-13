@@ -2912,6 +2912,7 @@ REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,ConcurrencyStressVariance,TEST
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,NegativeAuthMatrix,TESTED,tests/canary_remote_kms_hardening.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth,,security,2025-09-26
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,SECURITY,TESTED,src/security/kms_remote.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate|TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth,,security,2026-11-12
 REQ-GQL-TDE-EXT-KMS-REMOTE-001,RemoteKMSPrototype,TEST,TESTED,tests/canary_remote_kms.zig,TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate,,security,2025-09-26
+REQ-GQL-TDE-EXT-KMS-REMOTE-002,RemoteKMSVerifiedChannel,VerifiedChannelBoundAttestation,TESTED,tests/test_sonny6442_kms_channel.zig,tests/test_sonny6442_kms_channel.zig,,security,2026-11-12
 REQ-GQL-TDE-KEYID-001,SecureKeyIdDerivation,Security,EXEMPT,src/security/tde_key_manager.zig,,,security,2026-01-10
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,PublishedSync,TESTED,tests/canary_tde_published_overhead_sync.zig,TestCANARY_REQ_GQL_TDE_OLTP_PERF_001_PublishedOverheadClaimPresent,,perf,2026-11-12
 REQ-GQL-TDE-OLTP-PERF-001,TDEOlptOverheadValidation,RealStoreMeasurement,BENCHED,tests/test_sonny6435_tde_overhead.zig,,tests/test_sonny6435_tde_overhead.zig,perf,2026-11-12

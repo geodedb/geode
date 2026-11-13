@@ -5729,6 +5729,7 @@ pub fn build(b: *std.Build) void {
     kms_remote_mod.addImport("json", json_mod);
     kms_remote_mod.addImport("crypto_backend", crypto_backend_mod);
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    remote_kms_tests.root_module.addImport("tls_material", tls_material_mod); // SONNY-6442: kms_test_tls.zig
     remote_kms_tests.root_module.link_libc = true;
     // GAP-0514 Phase 6 P3: these tests were COMPILE-ONLY (shardDep got the
     // Compile step, never a run artifact). Named step actually RUNS the
@@ -5745,6 +5746,7 @@ pub fn build(b: *std.Build) void {
     remote_kms_hardening_tests.root_module.addImport("transport/quic", transport_quic_mod);
     remote_kms_hardening_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     remote_kms_hardening_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    remote_kms_hardening_tests.root_module.addImport("tls_material", tls_material_mod); // SONNY-6442: kms_test_tls.zig
     remote_kms_hardening_tests.root_module.link_libc = true;
     const run_remote_kms_hardening_tests = b.addRunArtifact(remote_kms_hardening_tests);
     shardDep(test_step, &run_remote_kms_hardening_tests.step, 1, test_shard_loads, test_shard_index);
@@ -5758,10 +5760,30 @@ pub fn build(b: *std.Build) void {
         tests.root_module.addImport("transport/quic", transport_quic_mod);
         tests.root_module.addImport("vendor_quic", quic_ext_mod);
         tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+        tests.root_module.addImport("tls_material", tls_material_mod); // SONNY-6442: kms_test_tls.zig
         tests.root_module.link_libc = true;
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6435-kms-attestation", "Run SONNY-6435 item 1 regression (RemoteKmsClient.attest refuses without a pinned key, rejects another server's key, a tampered or replayed attestation and a nonce-less Attest, and accepts the pinned server's fresh attestation, over real QUIC)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6442 (1-3): the remote KMS client verifies the server's
+    // certificate, binds the attestation to the TLS channel and has no local
+    // fallback; the attested hash is the KEK identifier; the seeded simulated
+    // KMS client is test-only.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6442_kms_channel.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("transport/quic", transport_quic_mod);
+        tests.root_module.addImport("vendor_quic", quic_ext_mod);
+        tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+        tests.root_module.addImport("tls_material", tls_material_mod);
+        tests.root_module.addImport("sonny6442_kms_options", opts.createModule());
+        tests.root_module.link_libc = true;
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6442-kms-channel", "Run SONNY-6442 items 1-3 regression (the remote KMS client refuses to connect without a CA bundle, with one it cannot load or to a server that bundle does not verify; rejects an attestation from another TLS channel; refuses generate/unwrap unconnected; the attested hash is the HKDF KEK identifier; the seeded simulated KMS client compiles into tests only; over real QUIC)").dependOn(&run_tests.step);
     }
 
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
@@ -15700,6 +15722,7 @@ pub fn build(b: *std.Build) void {
     sonny2394_kms_deadline_tests.root_module.addImport("transport/quic", transport_quic_mod);
     sonny2394_kms_deadline_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     sonny2394_kms_deadline_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+    sonny2394_kms_deadline_tests.root_module.addImport("tls_material", tls_material_mod); // SONNY-6442: kms_test_tls.zig
     sonny2394_kms_deadline_tests.root_module.link_libc = true;
     const run_sonny2394_kms_deadline_tests = b.addRunArtifact(sonny2394_kms_deadline_tests);
     shardDep(test_step, &run_sonny2394_kms_deadline_tests.step, 1, test_shard_loads, test_shard_index);

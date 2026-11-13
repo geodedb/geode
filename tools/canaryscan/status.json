@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:29:24.888676476Z",
+  "generated_at": "2026-11-13T00:41:53.476843699Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -44382,6 +44382,25 @@
           "benches": [],
           "owner": "security",
           "updated": "2025-09-26"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-TDE-EXT-KMS-REMOTE-002",
+      "features": [
+        {
+          "feature": "RemoteKMSVerifiedChannel",
+          "aspect": "VerifiedChannelBoundAttestation",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6442_kms_channel.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_kms_channel.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -92172,7 +92191,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4793
+      "TESTED": 4794
     },
     "by_aspect": {
       "2PC": 3,
@@ -96171,6 +96190,7 @@
       "VectorReadersLocked": 1,
       "VendorParallelPoolGating": 1,
       "Verification": 3,
+      "VerifiedChannelBoundAttestation": 1,
       "VerifiedPrincipalGate": 1,
       "VerifiesTheServersDataDir": 1,
       "Verify": 1,
