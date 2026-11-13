@@ -572,52 +572,6 @@ pub fn roundtripTest(allocator: std.mem.Allocator, test_data: []const u8) !struc
     };
 }
 
-/// Measure encryption overhead
-pub fn measureOverhead(allocator: std.mem.Allocator) !struct {
-    baseline_ops_per_sec: i64,
-    encrypted_ops_per_sec: i64,
-    overhead_percentage: f64,
-    passes_threshold: bool,
-} {
-    if (!enabled()) return error.FeatureDisabled;
-
-    const iterations: usize = 1000;
-    const test_data = try allocator.alloc(u8, 1024);
-    defer allocator.free(test_data);
-    // fips-exempt: non-security test-plaintext fill
-    compat_fillRandom(test_data);
-
-    // Baseline (no encryption)
-    const baseline_start = compat_microTimestamp();
-    for (0..iterations) |_| {
-        const copy = try allocator.alloc(u8, test_data.len);
-        @memcpy(copy, test_data);
-        allocator.free(copy);
-    }
-    const baseline_time = compat_microTimestamp() - baseline_start;
-
-    // With encryption
-    const encrypted_start = compat_microTimestamp();
-    for (0..iterations) |_| {
-        const enc = try encrypt(allocator, test_data, "overhead_test");
-        allocator.free(enc.data);
-    }
-    const encrypted_time = compat_microTimestamp() - encrypted_start;
-
-    // Calculate ops/sec. SONNY-2739: a loop timed at 0 us made the rate
-    // infinite and `@intFromFloat` aborted the server; time at least 1 us.
-    const baseline_ops = (@as(f64, iterations) / @as(f64, @floatFromInt(@max(baseline_time, 1)))) * 1000000.0;
-    const encrypted_ops = (@as(f64, iterations) / @as(f64, @floatFromInt(@max(encrypted_time, 1)))) * 1000000.0;
-    const overhead = ((baseline_ops - encrypted_ops) / baseline_ops) * 100.0;
-
-    return .{
-        .baseline_ops_per_sec = std.math.lossyCast(i64, baseline_ops),
-        .encrypted_ops_per_sec = std.math.lossyCast(i64, encrypted_ops),
-        .overhead_percentage = overhead,
-        .passes_threshold = overhead < 5.0, // <5% overhead threshold
-    };
-}
-
 /// The most concurrent transactions `simulateOLTPWorkload` runs (one
 /// thread each); more is refused with error.InvalidArgs (SONNY-6348).
 pub const max_oltp_concurrency: u32 = 64;

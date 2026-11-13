@@ -5554,7 +5554,6 @@ REQ-TDE-PROC-015,PerTenantTDEKeys,LibExportStorageDispatch,TESTED,src/lib.zig,te
 REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
-REQ-TDE-PROC-045,TDETestProcedures,MeasureOverhead,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-TDE-PROC-046,TDETestProcedures,SimulateOLTPWorkload,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6321_tde_fle_cases.zig,,tde,2026-11-12
 REQ-TDE-PROC-048,TDEProcedures,TestKeyEscrow,TESTED,src/execution/storage_dispatch.zig,,,tde,2025-10-19
 REQ-TDE-PROC-049,TDEProcedures,TestTransparentEncryption,TESTED,src/execution/storage_dispatch.zig,,,tde,2025-10-19

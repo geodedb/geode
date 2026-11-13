@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:08:18.359478816Z",
+  "generated_at": "2026-11-13T01:11:28.102451772Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87138,25 +87138,6 @@
       ]
     },
     {
-      "id": "REQ-TDE-PROC-045",
-      "features": [
-        {
-          "feature": "TDETestProcedures",
-          "aspect": "MeasureOverhead",
-          "status": "TESTED",
-          "files": [
-            "src/execution/storage_dispatch.zig"
-          ],
-          "tests": [
-            "tests/test_sonny6321_tde_procedures.zig"
-          ],
-          "benches": [],
-          "owner": "tde",
-          "updated": "2026-11-12"
-        }
-      ]
-    },
-    {
       "id": "REQ-TDE-PROC-046",
       "features": [
         {
@@ -92243,7 +92224,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4797
+      "TESTED": 4796
     },
     "by_aspect": {
       "2PC": 3,
@@ -94335,7 +94316,6 @@
       "McpCancellation": 1,
       "McpEnvelopeRoundTrip": 1,
       "MeanDistance": 1,
-      "MeasureOverhead": 1,
       "MemberOfValue": 1,
       "MemberResolution": 1,
       "MemoryEfficiency": 2,

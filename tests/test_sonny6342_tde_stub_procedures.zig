@@ -17,8 +17,8 @@
 //   - every such procedure fails with error.Unsupported (SQLSTATE 0A000),
 //     with TDE on and a key loaded as well as with TDE off;
 //   - the procedures that do run real cryptography on the server's TDE key
-//     (encrypt_page, the round-trip, escrow, wrap/unwrap, attestation and
-//     overhead self-tests) still answer;
+//     (encrypt_page, the round-trip, escrow, wrap/unwrap and attestation
+//     self-tests) still answer (SONNY-6442: not measure_overhead);
 //   - the dead fle_integration.computeBlindIndex (it called a nonexistent
 //     BlindIndex.computeHash) and its only caller, the unreferenced
 //     planner/rewrite.zig performFLERewrite, are gone (a source check).
@@ -83,6 +83,7 @@ const refused_tde = [_][]const u8{
     "tde.test_kms_failure",
     "tde.test_corrupted_key_handling",
     "tde.cleanup_key_hierarchy",
+    "tde.measure_overhead", // SONNY-6442: a memcpy-vs-AEAD timing
 };
 
 /// Procedures that run real cryptography on the server's TDE key.
@@ -94,7 +95,6 @@ const real_tde = [_][]const u8{
     "tde.encrypt_page_test",
     "tde.encrypt_backup_test",
     "tde.roundtrip_test",
-    "tde.measure_overhead",
     "tde.test_kms_wrap_unwrap",
     "tde.test_kms_attestation",
 };

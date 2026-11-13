@@ -56,7 +56,6 @@ const procedures = [_]Expect{
     .{ .name = "tde.encrypt_page_test", .flags = &.{"integrity_check"}, .sizes = &.{"page_size_encrypted"} },
     .{ .name = "tde.encrypt_backup_test", .flags = &.{"integrity_verified"}, .sizes = &.{"backup_size"} },
     .{ .name = "tde.roundtrip_test", .flags = &.{"roundtrip_success"} },
-    .{ .name = "tde.measure_overhead", .flags = &.{}, .sizes = &.{ "baseline_ops_per_sec", "encrypted_ops_per_sec" } },
     .{ .name = "tde.test_kms_wrap_unwrap", .flags = &.{ "wrap_success", "unwrap_success", "roundtrip_verified" } },
     .{ .name = "tde.test_kms_attestation", .flags = &.{ "attestation_valid", "signature_verified", "ed25519_verification", "tamper_detected" }, .uses_tde_key = false },
 };

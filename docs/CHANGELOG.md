@@ -4,6 +4,16 @@
 
 ### Security
 
+- **BREAKING (procedure): `CALL tde.measure_overhead()` is refused as
+  unsupported (SQLSTATE 0A000) (SONNY-6442 item 6).** It timed 1000
+  alloc+memcpy+free of 1 KiB as the "baseline" against 1000 AEAD
+  encryptions of the same buffer and answered
+  `passes_threshold` = overhead < 5 %. Neither loop touches storage, so the
+  percentage measured nothing about TDE overhead (and an AEAD call is always
+  far slower than a memcpy). The measurement is
+  `zig build test-sonny6435-tde-overhead` (the storage engine with page and
+  WAL encryption off vs on). The procedure is no longer classified
+  read-only. Regression: `zig build test-sonny6442-tde-measure-overhead`.
 - **Operator-visible: the Docker images run the server at the log level
   they document (SONNY-6442 item 5).** `Dockerfile`, `Dockerfile.prebuilt`,
   `Dockerfile.simple` and `Dockerfile.reliable` set `ENV LOG_LEVEL=error`
