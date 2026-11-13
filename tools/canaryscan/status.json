@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T16:10:56.870844283Z",
+  "generated_at": "2026-11-13T16:39:23.124414389Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87025,6 +87025,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6494-AUDIT-FAILCLOSED",
+      "features": [
+        {
+          "feature": "CLI Audit Configuration",
+          "aspect": "FailClosed",
+          "status": "TESTED",
+          "files": [
+            "src/cli/cli_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6494_audit_failclosed.zig"
+          ],
+          "benches": [],
+          "owner": "audit",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -94680,7 +94699,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4939
+      "TESTED": 4940
     },
     "by_aspect": {
       "2PC": 3,
@@ -96020,7 +96039,7 @@
       "Facade": 1,
       "FactoryFunction": 1,
       "Facts": 1,
-      "FailClosed": 1,
+      "FailClosed": 2,
       "FailOpenInterim": 2,
       "FailSecureOnCatalogError": 1,
       "FailSecureOnKeyError": 1,

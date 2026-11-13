@@ -118,7 +118,9 @@ test "SONNY-6494: geode serve refuses a GEODE_AUDIT_SYSLOG_PORT that is not a po
 test "SONNY-6494: geode serve refuses a GEODE_AUDIT_SYSLOG_HOST the syslog sender cannot send to" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
-    for ([_][]const u8{ "syslog.invalid", "::1:514", "[::1", "127.0.0.1:x" }) |bad| {
+    // A bare IPv6 address is refused as everywhere else (docs/DSN.md): it
+    // must be bracketed.
+    for ([_][]const u8{ "syslog.invalid", "::1", "::1:514", "[::1", "127.0.0.1:x" }) |bad| {
         const env = syslog_on ++ [_][2][]const u8{.{ "GEODE_AUDIT_SYSLOG_HOST", bad }};
         const r = try runServe(a, &env, 60);
         defer r.deinit(a);
@@ -199,7 +201,7 @@ test "SONNY-6494: a valid GEODE_AUDIT_SYSLOG_HOST / _PORT is honoured, IPv4 and 
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
     const Case = struct { ip: []const u8, host: []const u8 };
-    const cases = [_]Case{ .{ .ip = "127.0.0.1", .host = "127.0.0.1" }, .{ .ip = "::1", .host = "[::1]" }, .{ .ip = "::1", .host = "::1" } };
+    const cases = [_]Case{ .{ .ip = "127.0.0.1", .host = "127.0.0.1" }, .{ .ip = "::1", .host = "[::1]" } };
     const n: usize = if (ipv6LoopbackAvailable()) cases.len else 1;
     for (cases[0..n]) |c| {
         const rx = try UdpReceiver.open(c.ip);

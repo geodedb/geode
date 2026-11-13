@@ -2218,6 +2218,22 @@
 
 ### Fixed
 
+- **Command audit fails closed: `geode` refuses to run when the audit it
+  was asked for cannot be set up (SONNY-6494 item 4).** A
+  `GEODE_AUDIT_SYSLOG_PORT` that was not a port silently became 514, a host
+  name in `GEODE_AUDIT_SYSLOG_HOST` was kept and every audit message
+  dropped, an audit configuration error turned command audit off with a
+  warning, and an audit file that could not be opened only printed a
+  warning, so the command (including `geode serve`) ran unaudited. The env
+  form now uses the `--audit-syslog` grammar (`geode.host_port`), and any of
+  these makes the command exit non-zero naming the setting before it
+  starts. **Behaviour change:** a deployment whose `GEODE_AUDIT_*` settings
+  were silently ignored (for example `GEODE_AUDIT_FILE_ENABLED=1` with the
+  default `/var/log/geode/cli-audit.log` not writable, or a syslog host
+  name) no longer starts until they are corrected. See
+  [AUDIT_LOGGING.md](AUDIT_LOGGING.md) ("Command audit").
+  Regression: `zig build test-sonny6494-audit-failclosed` (the built
+  binary).
 - **The cluster listener binds an IPv6 `GEODE_CLUSTER_LISTEN_ADDRESS`; a
   port-only `--listen-grpc` no longer listens wider than QUIC (SONNY-6494
   item 5).** The QUIC transport bound `"{address}:{port}"`, so an IPv6
