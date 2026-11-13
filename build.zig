@@ -12629,6 +12629,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6489_topk_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6489-topk-order", "Run SONNY-6489 item 2 regression (ORDER BY ... LIMIT k, served by the top-K heap, returns the first k rows of the full ORDER BY for every k: numbers by exact value, a DECIMAL stays a DECIMAL, strings by NFC)").dependOn(&run_sonny6489_topk_tests.step);
 
+    // SONNY-6499 (1): both ORDER BY ... LIMIT fast paths return the full
+    // sort's first k rows, NULL rows and NULLS FIRST/LAST included.
+    const sonny6499_orderby_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6499_orderby_fastpath_nulls.zig"), .target = target, .optimize = optimize });
+    sonny6499_orderby_mod.addImport("geode", root_mod);
+    sonny6499_orderby_mod.addImport("logging", logging_mod);
+    const sonny6499_orderby_tests = b.addTest(.{ .root_module = sonny6499_orderby_mod });
+    const run_sonny6499_orderby_tests = b.addRunArtifact(sonny6499_orderby_tests);
+    shardDep(test_step, &run_sonny6499_orderby_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6499-orderby-fastpath-nulls", "Run SONNY-6499 item 1 regression (the value-ordered index and top-K heap ORDER BY ... LIMIT fast paths return the full sort's first k rows for every k, direction and null ordering: NULL rows, non-NFC strings, DOUBLEs; the hit counters prove which path served)").dependOn(&run_sonny6499_orderby_tests.step);
+
     // SONNY-6489 (4): localdatetime() is a local datetime; durations render
     // their fraction of a second (stringify and the wire writer).
     const sonny6489_temporal_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6489_temporal_rendering.zig"), .target = target, .optimize = optimize });

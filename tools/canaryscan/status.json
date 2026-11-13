@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:10:23.864812456Z",
+  "generated_at": "2026-11-13T18:34:46.21680353Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87518,6 +87518,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS",
+      "features": [
+        {
+          "feature": "TopKOrderedFastPath",
+          "aspect": "FastPathsReturnFullSortPrefix",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6499_orderby_fastpath_nulls.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_orderby_fastpath_nulls.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -95239,7 +95258,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4974
+      "TESTED": 4975
     },
     "by_aspect": {
       "2PC": 3,
@@ -96603,6 +96622,7 @@
       "FastPathDecline": 1,
       "FastPathFence": 1,
       "FastPathGate": 1,
+      "FastPathsReturnFullSortPrefix": 1,
       "FeatureFlag": 2,
       "FeatureFlags": 1,
       "FeatureImpl": 1,

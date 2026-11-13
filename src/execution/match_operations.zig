@@ -44,6 +44,13 @@ pub fn resetOrderedScanFastPathHits() void {
     g_ordered_scan_fastpath_hits.store(0, .monotonic);
 }
 
+// SONNY-6499: the same signal for `topKOrderedFastPath` (the bounded heap):
+// incremented once per query it SERVES; a decline leaves it unchanged.
+var g_topk_fastpath_hits: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getTopKFastPathHits() u64 {
+    return g_topk_fastpath_hits.load(.monotonic);
+}
+
 // GAP-ENT-0043 T1: diagnostic counter for GROUP BY / DISTINCT / count-by-value
 // aggregates SERVED from the in-memory exact-property index (O(distinct keys),
 // zero node materialization, zero per-node property reads). The routing tests
@@ -3594,6 +3601,8 @@ pub fn topKOrderedFastPath(
         };
         rows[i] = row;
     }
+
+    _ = g_topk_fastpath_hits.fetchAdd(1, .monotonic);
 
     return ExecutionResult{
         .columns = columns,
