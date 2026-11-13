@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:12:31.64191746Z",
+  "generated_at": "2026-11-13T11:18:50.778110108Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -69920,6 +69920,20 @@
           "benches": [],
           "owner": "transport",
           "updated": "2026-11-13"
+        },
+        {
+          "feature": "ThreadPool",
+          "aspect": "WakeEverySubmit",
+          "status": "TESTED",
+          "files": [
+            "src/transport/thread_pool.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2440_default_lane_wake.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -93800,7 +93814,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4890
+      "TESTED": 4891
     },
     "by_aspect": {
       "2PC": 3,
@@ -97875,6 +97889,7 @@
       "VisibleTenantTags": 1,
       "VulkanCompute": 1,
       "WaitForApplied": 1,
+      "WakeEverySubmit": 1,
       "WalLsnAnchorAtOpen": 1,
       "WallClockTiming": 1,
       "WatchdogExitCode": 1,
