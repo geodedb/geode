@@ -2161,6 +2161,25 @@
 
 ### Fixed
 
+- **The acceptor watchdog watches the listener it serves (SONNY-6480).**
+  The watchdog took its port from the `--listen` text, so `--listen host:0`
+  switched it off; it read only `/proc/net/udp`, so an IPv6 listener was
+  never watched; and it matched a row by port alone, so another socket on
+  the port could be read instead. It now watches the transport's bound
+  address (announced at startup: `[startup] acceptor watchdog: watching udp
+  127.0.0.1 port N`; an IPv6 listener is given as `--listen [::1]:port`),
+  reads `/proc/net/udp6` for an IPv6 listener, matches
+  address and port, and among several sockets on that address the one the
+  process owns; it does not sample once shutdown has begun. **Behaviour
+  change:** the default `GEODE_ACCEPTOR_WATCHDOG_RX_BYTES` drops from 8 MiB to
+  1 (any queued datagram): since SONNY-2719 a restart also needs no datagram
+  drained between samples, so a busy, draining acceptor is never restarted
+  whatever its backlog, while an acceptor wedged with a few connection
+  attempts queued is now restarted within the 30 s deadline (with 8 MiB it
+  never was). `QuicClientStream.readLineWithInterrupt` and
+  `QuicStream.readLine` allocate only for a line they return (an 8 KiB
+  allocation per poll retry before). Regression: `zig build
+  test-sonny6480-acceptor-watchdog` and `test-sonny6480-readline-alloc`.
 - **Temporal strings parse exactly (SONNY-2808).** The time parser read the
   first eight characters and ignored the rest. **Behaviour change:**
   `time('10:00:00+01:00')` is the zoned time 10:00:00+01:00 (it was the

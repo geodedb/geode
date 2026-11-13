@@ -243,12 +243,12 @@ test "SONNY-6480: geode serve --listen 127.0.0.1:0 watches its bound UDP port" {
     try checkServerWatchesBoundListener("127.0.0.1:0", "udp ");
 }
 
-test "SONNY-6480: geode serve --listen ::1:0 watches its IPv6 listener" {
+test "SONNY-6480: geode serve --listen [::1]:0 watches its IPv6 listener" {
     if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
     // Skip on a host without IPv6 loopback.
     const fd = udpSocket(linux.AF.INET6) catch return error.SkipZigTest;
     defer _ = linux.close(fd);
     var sa: linux.sockaddr.in6 = .{ .port = 0, .flowinfo = 0, .addr = [_]u8{0} ** 15 ++ [_]u8{1}, .scope_id = 0 };
     if (linux.errno(linux.bind(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in6))) != .SUCCESS) return error.SkipZigTest;
-    try checkServerWatchesBoundListener("::1:0", "udp6 ");
+    try checkServerWatchesBoundListener("[::1]:0", "udp6 ");
 }

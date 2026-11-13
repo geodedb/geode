@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:54:41.990018143Z",
+  "generated_at": "2026-11-13T15:02:31.627042936Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86594,6 +86594,7 @@
           "aspect": "ReadLineAllocatesOnlyForALine",
           "status": "TESTED",
           "files": [
+            "src/transport/quic.zig",
             "tests/test_sonny6480_readline_alloc.zig"
           ],
           "tests": [
@@ -86613,6 +86614,8 @@
           "aspect": "WatchesBoundListener",
           "status": "TESTED",
           "files": [
+            "src/server/acceptor_watchdog.zig",
+            "src/server/main.zig",
             "tests/test_sonny6480_acceptor_watchdog.zig"
           ],
           "tests": [
