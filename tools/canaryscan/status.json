@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:04:12.469829296Z",
+  "generated_at": "2026-11-13T12:44:43.274864585Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80268,6 +80268,20 @@
       "features": [
         {
           "feature": "ComparisonPredicate",
+          "aspect": "NeverEqual",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6282_int_string_equality.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ComparisonPredicate",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93681,7 +93695,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4884
+      "TESTED": 4885
     },
     "by_aspect": {
       "2PC": 3,
@@ -95949,6 +95963,7 @@
       "NetworkTests": 1,
       "NetworkTransport": 2,
       "NetworkTransportTests": 1,
+      "NeverEqual": 1,
       "NewlineOnEmptyInput": 1,
       "NextFreshnessGuard": 1,
       "NextPlanFreshnessGuard": 1,

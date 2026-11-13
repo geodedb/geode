@@ -2036,6 +2036,18 @@
 
 ### Fixed
 
+- **Breaking: an integer and a string are never equal (SONNY-6282).**
+  `=` and `<>` compared an INT with a STRING by their text, so
+  `WHERE n.id = 1` also matched a node whose `id` is the string `'1'`,
+  `WHERE n.id = '1'` matched the integer too, `RETURN 1 = '1'` was true,
+  and `WHERE n.id <> 1` dropped the string node; the inline map
+  `(n {id: 1})` never equated them. ISO/IEC 39075:2024 19.3 GR 1: they are
+  not essentially comparable values, and as universally comparable values
+  `=` is False (NOTE 307), so `1 = '1'` is now false and `1 <> '1'` true in
+  every session, as the inline map answers. `<`, `<=`, `>` and `>=` between
+  them stay refused. A query that relied on the textual match must compare
+  like types (`toString(n.id) = '1'`, `toInteger(n.id) = 1`). Regression:
+  `zig build test-sonny6282-int-string-equality` (new).
 - **Persisted sessions: a relationship walked from its target keeps its
   properties (SONNY-6266).** `MATCH (a)<-[{w: 2}]-(b)` answered 0, and an
   undirected hop with a relationship property map or a WHERE on the
