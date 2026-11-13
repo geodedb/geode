@@ -2235,6 +2235,19 @@
 
 ### Fixed
 
+- **FOR at the start of a subquery runs; DELETE ... RETURN ... ORDER BY /
+  LIMIT runs; CALL there and MERGE ... CREATE are refused with 0A000
+  (SONNY-6496 item 3).** Each was a syntax error (42000). A FOR may start
+  the query of an IN / NOT IN subquery or a CTE body (ISO/IEC 39075:2024
+  14.8 <for statement> is a <simple query statement>); it runs once over
+  the incoming row, as `WITH * FOR ...`, through the executor's existing
+  FOR-after-WITH path. `MATCH ... DELETE ... RETURN ... ORDER BY | SKIP |
+  LIMIT` is parsed as the query form (the DELETE statement form has no
+  page), which deletes every matched row and pages only the RETURN. A CALL
+  of a named procedure at the start of a subquery or a CTE body, and a
+  statement-level `MERGE ... CREATE`, are refused with
+  `UnsupportedQueryShape` (0A000) naming the shape, before anything runs:
+  no executor runs them. Regression: `zig build test-sonny6496-subquery-forms`.
 - **The write step keeps the scan's node copy (SONNY-6498 item 4).**
   `match_operations.stabilizeValue` boxed again (`getNodePtrForScan`) a
   node the scan had already boxed, one more detached copy per written row,

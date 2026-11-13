@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T22:18:53.592818374Z",
+  "generated_at": "2026-11-13T23:02:43.139553151Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87502,6 +87502,7 @@
           "aspect": "SubqueryStart",
           "status": "TESTED",
           "files": [
+            "src/gql/parser.zig",
             "tests/test_sonny6496_subquery_forms.zig"
           ],
           "tests": [

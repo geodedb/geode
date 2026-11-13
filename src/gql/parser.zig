@@ -785,6 +785,49 @@ pub const Parser = struct {
         return error.UnsupportedQueryShape;
     }
 
+    // CANARY: REQ=REQ-SONNY-6496-SUBQUERY-FORMS; FEATURE="LinearComposition"; ASPECT=SubqueryStart; STATUS=TESTED; TEST=tests/test_sonny6496_subquery_forms.zig; OWNER=parser; UPDATED=2026-11-13
+    /// SONNY-6496 item 3: the query of an IN / NOT IN subquery or of a CTE
+    /// body, into `out`. ISO/IEC 39075:2024 14.8 <for statement> is a
+    /// <simple query statement>, so one may start the query: it runs once
+    /// over the incoming row, as `WITH * FOR ...` (the executor's FOR after
+    /// an initial WITH). A CALL of a named procedure there is refused with
+    /// 0A000: no executor runs a query that starts with one (both were
+    /// syntax errors).
+    fn parseSubqueryInto(self: *Parser, out: *ast.Query) ParserError!void {
+        if (self.cur.kind == .FOR) return self.parseForStartedQuery(out);
+        if (self.cur.kind == .CALL and self.peekToken() != .l_brace) {
+            return self.refuseShape("CALL of a procedure at the start of a subquery or a CTE body is not supported: CALL it as a statement of its own, or start the subquery with MATCH, WITH or FOR");
+        }
+        return self.parseQueryInto(out);
+    }
+
+    /// `FOR ...` at the start of a subquery, as `WITH * FOR ...` into `out`.
+    /// Its own frame: a statement's union is large (see `parseStatement`).
+    noinline fn parseForStartedQuery(self: *Parser, out: *ast.Query) ParserError!void {
+        const a = self.arena.allocator();
+        const for_ptr = try a.create(ast.ForStatement);
+        for_ptr.* = (try self.parseForStatement()).For;
+        const star = try a.alloc(ast.ReturnItem, 1);
+        star[0] = .{ .expr = .{ .Ident = .{ .orig = "*", .cnf = "*" } }, .alias = null };
+        out.* = ast.Query{
+            .optional_match = false,
+            .match = .{ .chains = &.{} },
+            .create_pattern = null,
+            .where_clause = null,
+            .with_clause = .{ .items = star },
+            .set_clauses = &.{},
+            .remove_clauses = &.{},
+            .ret = for_ptr.return_clause orelse .{ .items = &.{}, .distinct = false },
+            .order_by = for_ptr.order_by,
+            .offset = for_ptr.offset,
+            .limit = for_ptr.limit,
+            .next_query = null,
+            .group_by = null,
+            .having = null,
+            .for_statement = for_ptr,
+        };
+    }
+
     // CANARY: REQ=REQ-SONNY-6343-NEXT-AND-CALL; FEATURE="LinearComposition"; ASPECT=NextAsWithChain; STATUS=TESTED; TEST=tests/test_sonny6343_next_and_call.zig; OWNER=parser; UPDATED=2026-11-13
     /// SONNY-6343: ISO/IEC 39075:2024 9.2 <procedure body>:
     /// `<statement> NEXT [<yield clause>] <statement>` (Feature GQ20). The
@@ -1101,9 +1144,8 @@ pub const Parser = struct {
     /// Parse CTE body - detect if it's anchor UNION recursive or simple query
     fn parseCTEBody(self: *Parser, is_recursive_context: bool, cte_name: []const u8) ParserError!ast.CommonTableExpression.CTEBody {
         // Parse first query (could be anchor or full query)
-        const first_query = try self.parseQueryForCTE();
         const first_ptr = try self.arena.allocator().create(ast.Query);
-        first_ptr.* = first_query;
+        try self.parseSubqueryInto(first_ptr);
 
         // Check for UNION (indicates recursive CTE structure)
         if (is_recursive_context and self.cur.kind == .UNION) {
@@ -1162,7 +1204,13 @@ pub const Parser = struct {
             .CREATE => self.parseCreateStatement(),
             .DELETE => self.parseDeleteStatement(),
             .DETACH => self.parseDeleteStatement(),
-            .MERGE => self.parseMergeStatement(),
+            .MERGE => blk_merge: {
+                const m = try self.parseMergeStatement();
+                // SONNY-6496 item 3: no executor runs a CREATE after a
+                // statement-level MERGE (it was a syntax error).
+                if (self.cur.kind == .CREATE) return self.refuseShape("MERGE followed by CREATE is not supported: end the MERGE with ';' and CREATE in a statement of its own, or MATCH ... MERGE ... CREATE");
+                break :blk_merge m;
+            },
             .DROP => self.parseDropStatement(),
             .SHOW => self.parseShowStatement(),
             .EXPLAIN => self.parseExplainStatement(),
@@ -1345,6 +1393,17 @@ pub const Parser = struct {
                         };
                     }
 
+                    // SONNY-6496 item 3: a RETURN with ORDER BY, SKIP,
+                    // OFFSET or LIMIT is the query form's (a DELETE
+                    // statement has no page): parse the statement again as
+                    // a query, whose executor applies the DELETE to every
+                    // row and pages only the RETURN.
+                    if (self.cur.kind == .ORDER or self.cur.kind == .SKIP or self.cur.kind == .OFFSET or self.cur.kind == .LIMIT) {
+                        self.lx.* = saved_pos;
+                        self.cur = saved_cur;
+                        const first = try self.parseQuery();
+                        break :blk_match self.handleQueryResult(first);
+                    }
                     break :blk_match .{ .Delete = .{
                         .match_clause = match_pattern,
                         .where_clause = where_clause,
@@ -3988,14 +4047,13 @@ pub const Parser = struct {
                     if (self.cur.kind == .l_paren) {
                         // IN (subquery) - parse as subquery
                         self.advance(); // consume (
-                        const subquery = try self.parseQuery();
+                        const a = self.arena.allocator();
+                        const qp = try a.create(ast.Query);
+                        try self.parseSubqueryInto(qp);
                         _ = try self.expect(.r_paren);
 
-                        const a = self.arena.allocator();
                         const vp = try a.create(ast.Expr);
                         vp.* = left;
-                        const qp = try a.create(ast.Query);
-                        qp.* = subquery;
                         return .{ .InSubquery = .{ .value = vp, .subquery = qp } };
                     } else if (self.cur.kind == .l_bracket) {
                         // IN [list] - parse as list
@@ -4039,14 +4097,13 @@ pub const Parser = struct {
                     if (self.cur.kind == .l_paren) {
                         // NOT IN (subquery)
                         self.advance(); // consume (
-                        const subquery = try self.parseQuery();
+                        const a = self.arena.allocator();
+                        const qp = try a.create(ast.Query);
+                        try self.parseSubqueryInto(qp);
                         _ = try self.expect(.r_paren);
 
-                        const a = self.arena.allocator();
                         const vp = try a.create(ast.Expr);
                         vp.* = left;
-                        const qp = try a.create(ast.Query);
-                        qp.* = subquery;
                         return .{ .NotInSubquery = .{ .value = vp, .subquery = qp } };
                     } else if (self.cur.kind == .l_bracket) {
                         // NOT IN [list]
