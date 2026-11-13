@@ -2600,8 +2600,11 @@ pub fn main() !void {
         // GAP-0258: Initialize mTLS provider for QUIC client certificate authentication
         // CANARY: REQ=REQ-AUTH-MTLS-QUIC-005; FEATURE="mTLS over QUIC"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
         // SONNY-6453: resolved (and the client CA installed) at startup.
-        if (mtls_required) {
+        // SONNY-6457: the bundle also goes to the TLS layer, which completes
+        // a client chain sent without its issuer from these CAs only.
+        if (mtls_client_ca) |*trust| {
             transport.config.require_client_cert = true;
+            transport.config.inline_client_ca_der = trust.ders;
         }
 
         var mtls_prov = geode.mtls_provider.MtlsProvider.init(gpa);

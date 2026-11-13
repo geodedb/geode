@@ -1,15 +1,17 @@
 // SONNY-2440 regression: work submitted to an idle geode pool starts at once.
 //
-// thread_pool 0.2.10 coalesces submitter wake-ups (`Core.enqueueTask`,
-// src/pool.zig:1582-1592): only every `wake_coalesce_batch`-th submit (32 by
-// default) scans for a parked worker and signals it. Its comment assumes an
-// idle worker sees the queued work through the park handshake, but that
-// covers only a worker about to park: one already parked sleeps until its
-// `idle_park_after_ns` timer expires, which geode sets to 500 ms
-// (src/transport/thread_pool.zig). So on an idle geode pool a submitted task
-// (a connection or stream handler, a background job) that was not the 32nd
-// waited up to half a second for a worker while others sat parked. geode's
-// pools now wake on every submit (`ThreadPoolConfig.wake_coalesce_batch`).
+// thread_pool 0.2.10 coalesced submitter wake-ups (`Core.enqueueTask`): only
+// every `wake_coalesce_batch`-th submit (32 by default) scanned for a parked
+// worker and signalled it. Its comment assumed an idle worker sees the queued
+// work through the park handshake, but that covers only a worker about to
+// park: one already parked slept until its `idle_park_after_ns` timer
+// expired, which geode sets to 500 ms (src/transport/thread_pool.zig). So on
+// an idle geode pool a submitted task (a connection or stream handler, a
+// background job) that was not the 32nd waited up to half a second for a
+// worker while others sat parked. thread_pool 0.2.11 (SONNY-6479) wakes a
+// parked worker whenever one is parked, at the library default
+// `wake_coalesce_batch`; geode's earlier `wake_coalesce_batch = 1` workaround
+// is gone, so this pins the library behaviour.
 //
 // Through geode's real pool wrapper with its default configuration: 8
 // workers, 7 serving the default lane, all parked; 7 default-lane tasks that

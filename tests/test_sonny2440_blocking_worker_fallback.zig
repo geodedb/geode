@@ -1,23 +1,23 @@
-// SONNY-2440 reproduction (intentionally RED until the thread_pool dependency
-// is fixed; see docs/KNOWN_TEST_ISSUES.md).
+// SONNY-2440 regression: a default-lane task starts promptly on the reserved
+// blocking worker when every default-lane worker is busy.
 //
 // geode's pools reserve one blocking-lane worker by default
 // (`ThreadPoolConfig.blocking_workers = 1`), and thread_pool documents that an
-// idle blocking worker always helps the default lane (`rebalanceLane`). But a
-// default-lane submit only wakes default-lane workers (thread_pool 0.2.10
-// `Core.scanAndWake`, src/pool.zig:1780-1801), and a parking blocking worker
-// checks only its own lane's queue counter before it sleeps
-// (`Core.idle`, src/pool.zig:2492-2493). So when every default-lane worker is
-// busy, a further default-lane task waits for the blocking worker's timed
-// park to expire: geode sets `idle_park_after_ns` to 500 ms
-// (src/transport/thread_pool.zig), so up to half a second.
+// idle blocking worker always helps the default lane (`rebalanceLane`). Up to
+// thread_pool 0.2.10 a default-lane submit only woke default-lane workers
+// (`Core.scanAndWake`) and a parking blocking worker checked only its own
+// lane's queue counter before it slept (`Core.idle`), so a further
+// default-lane task waited for the blocking worker's timed park to expire:
+// geode sets `idle_park_after_ns` to 500 ms (src/transport/thread_pool.zig),
+// so up to half a second (449 ms measured). thread_pool 0.2.11 (SONNY-6479)
+// wakes the blocking-lane helper for default-lane work.
 //
 // Through geode's real pool wrapper with its default configuration: 8
 // workers (7 default-lane, 1 blocking), all parked; 8 default-lane tasks that
 // each hold until all 8 have started. The 8th can only run on the blocking
 // worker, and must start promptly.
 //
-// CANARY: REQ=REQ-SONNY-2440-BLOCKING-WORKER-FALLBACK; FEATURE="ThreadPool"; ASPECT=DefaultLaneFallbackLatency; STATUS=IMPL; TEST=tests/test_sonny2440_blocking_worker_fallback.zig; OWNER=transport; UPDATED=2026-11-13
+// CANARY: REQ=REQ-SONNY-2440-BLOCKING-WORKER-FALLBACK; FEATURE="ThreadPool"; ASPECT=DefaultLaneFallbackLatency; STATUS=TESTED; TEST=tests/test_sonny2440_blocking_worker_fallback.zig; OWNER=transport; UPDATED=2026-11-13
 
 const std = @import("std");
 const builtin = @import("builtin");

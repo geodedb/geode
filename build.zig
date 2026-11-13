@@ -535,9 +535,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
-    .{ .name = "test-sonny2440-blocking-worker-fallback", .reason = "intentionally red reproduction of a thread_pool dependency defect (SONNY-2440, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a thread_pool release with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -1102,6 +1100,14 @@ pub fn build(b: *std.Build) void {
 
     const timeseries_storage_dep = b.dependency("timeseries_storage", .{ .target = target, .optimize = optimize });
     const timeseries_storage_ext_mod = timeseries_storage_dep.module("timeseries_storage");
+    // SONNY-6479: geode hands its own *ThreadPool to the timeseries-storage
+    // engine (src/timeseries/timeseries.zig), so both must compile against
+    // ONE thread_pool module. timeseries-storage v0.2.20 pins thread-pool
+    // v0.2.10 and geode pins v0.2.11 (same public API, wake-path internals
+    // only); point the library's "thread_pool" import at geode's module
+    // instead of a lockstep timeseries-storage re-release. Remove once
+    // timeseries-storage pins geode's thread-pool version.
+    timeseries_storage_ext_mod.addImport("thread_pool", thread_pool_ext_mod);
     const fts_storage_dep = b.dependency("fts_storage", .{ .target = target, .optimize = optimize });
     const fts_storage_ext_mod = fts_storage_dep.module("fts_storage");
     const fts_smoke_tests = b.addTest(.{ .root_module = b.createModule(.{
@@ -2390,7 +2396,7 @@ pub fn build(b: *std.Build) void {
         .root_module = transport_quic_mod,
         // SONNY-1219c: "server-initiated close" adds the M-2a close-code tests.
         // Filters only — the step ROOT is untouched (that is ticket T-2).
-        .filters = &.{ "finalizeStreamSend", "tracked streams", "server-initiated close", "tls13Exporter" },
+        .filters = &.{ "finalizeStreamSend", "tracked streams", "server-initiated close", "exportSecret" },
     });
     transport_quic_tests.root_module.link_libc = true;
     const run_transport_quic_tests = b.addRunArtifact(transport_quic_tests);
@@ -5512,15 +5518,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2440_wake_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny2440-default-lane-wake", "Run SONNY-2440 regression (every default-lane task submitted to an idle geode pool starts without waiting out a parked worker's 500 ms idle park: thread_pool's submit wakes only every wake_coalesce_batch-th time)").dependOn(&run_sonny2440_wake_tests.step);
 
-    // SONNY-2440: intentionally RED reproduction (docs/KNOWN_TEST_ISSUES.md):
-    // the defect is in the thread_pool dependency (a default-lane submit never
-    // wakes the parked blocking worker). Kept out of `shardDep` until a
-    // thread_pool release with the fix is pinned; compiled by `test-compile`.
+    // SONNY-2440: with every default-lane worker busy, a default-lane task
+    // starts promptly on the reserved blocking worker (thread_pool v0.2.11
+    // wakes it for default-lane work, SONNY-6479).
     const sonny2440_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2440_blocking_worker_fallback.zig"), .target = target, .optimize = optimize }) });
     sonny2440_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     const run_sonny2440_tests = b.addRunArtifact(sonny2440_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny2440_tests.step);
-    b.step("test-sonny2440-blocking-worker-fallback", "Run SONNY-2440 red reproduction (with every default-lane worker busy, a default-lane task waits up to idle_park_after_ns, 500 ms, for the parked blocking worker: thread_pool's scanAndWake never wakes it)").dependOn(&run_sonny2440_tests.step);
+    shardDep(test_step, &run_sonny2440_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny2440-blocking-worker-fallback", "Run SONNY-2440 regression (with every default-lane worker of a geode pool busy, a further default-lane task starts promptly on the reserved blocking worker instead of waiting out its 500 ms idle park)").dependOn(&run_sonny2440_tests.step);
 
     // Task #31: QUIC stream multiplex hang — per-connection stream pool
     // must run 4 concurrent streams, not 2.  Root cause: `submit()` routes
@@ -5900,9 +5905,7 @@ pub fn build(b: *std.Build) void {
 
     // SONNY-6457 (2): the real `geode query --client-cert --client-key`
     // binary presents its certificate to an mTLS-required geode. The CLI
-    // dials through geode-client-zig, so this stays intentionally red
-    // (docs/KNOWN_TEST_ISSUES.md) until the client library fix is pinned;
-    // compiled by test-compile.
+    // dials through geode-client-zig (fixed in v0.3.15).
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6457_cli_client_cert.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
@@ -5913,8 +5916,8 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
-        b.step("test-sonny6457-cli-client-cert", "Run SONNY-6457 item 2 reproduction, intentionally red until the geode-client-zig fix is pinned (the real geode query binary with --ca-cert and --client-cert/--client-key in GEODE_MTLS_CLIENT_CA is accepted by an mTLS-required geode; a certificate not in the bundle or none is rejected)").dependOn(&run_tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6457-cli-client-cert", "Run SONNY-6457 item 2 regression (the real geode query binary with --ca-cert and --client-cert/--client-key in GEODE_MTLS_CLIENT_CA is accepted by an mTLS-required geode; a certificate not in the bundle or none is rejected)").dependOn(&run_tests.step);
     }
 
     // SONNY-6457 (5): every geode mtls subcommand is refused as unsupported

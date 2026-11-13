@@ -12,11 +12,17 @@
 // Spawns the geode this build emitted with GEODE_MTLS_REQUIRED=1 and
 // GEODE_MTLS_CLIENT_CA, and dials it over real QUIC with client
 // certificates made by openssl:
-//   accepted: a self-signed CA certificate that is in the client CA bundle
+//   accepted: a self-signed CA certificate that is in the client CA bundle;
+//             a leaf signed by a bundle CA and sent alone (the server
+//             completes the chain from the bundle, SONNY-6457), also when
+//             the issuer is the second of two unrelated bundle CAs; a leaf
+//             with no extendedKeyUsage extension (RFC 5280: any purpose)
 //   rejected: a leaf from a CA not in the bundle, a self-signed non-CA
 //             certificate, a self-signed CA not in the bundle, an expired
-//             certificate in the bundle, no certificate, and a certificate
-//             sent without CertificateVerify
+//             certificate in the bundle, an expired leaf of a bundle CA, a
+//             leaf of a bundle CA whose extendedKeyUsage lacks clientAuth,
+//             no certificate, and a certificate sent without
+//             CertificateVerify
 //   no start: mTLS required with no client CA, with a CA file that does not
 //             exist, and together with a gRPC listener.
 //
@@ -36,11 +42,15 @@ const Fixtures = struct {
     arena: std.heap.ArenaAllocator,
     dir: []const u8,
     /// PEM bundle the server trusts: the "good" CA, the pinned client
-    /// certificate and the expired pinned certificate.
+    /// certificate, the expired pinned certificate and the "second" CA.
     bundle: []const u8,
     /// DER certificate + PEM-decoded private key per client identity.
     pinned: Ident,
     good_leaf: Ident,
+    second_leaf: Ident,
+    expired_leaf: Ident,
+    server_eku_leaf: Ident,
+    no_eku_leaf: Ident,
     other_leaf: Ident,
     self_signed_leaf: Ident,
     stray_ca: Ident,
@@ -107,8 +117,9 @@ fn makeFixtures() !Fixtures {
 
     // Self-signed CA certificates: good-ca (signs good-leaf), other-ca (not
     // trusted, signs other-leaf), pinned (trusted, used directly as a client
-    // certificate), stray-ca (self-signed CA not in the bundle).
-    for ([_][]const u8{ "good-ca", "other-ca", "pinned", "stray-ca" }) |name| {
+    // certificate), stray-ca (self-signed CA not in the bundle), second-ca
+    // (trusted, unrelated to good-ca, signs second-leaf).
+    for ([_][]const u8{ "good-ca", "other-ca", "pinned", "stray-ca", "second-ca" }) |name| {
         const key = try P.j(a, d, try std.fmt.allocPrint(a, "{s}.key", .{name}));
         const crt = try P.j(a, d, try std.fmt.allocPrint(a, "{s}.crt", .{name}));
         try run(spawn_gpa, io, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", key });
@@ -117,16 +128,28 @@ fn makeFixtures() !Fixtures {
         try argv.appendSlice(a, &ca_ext);
         try run(spawn_gpa, io, argv.items);
     }
-    // Leaves: one per issuing CA, plus a self-signed non-CA certificate.
+    // Leaves: one per issuing CA (good-ca and second-ca are in the bundle,
+    // other-ca is not), two good-ca leaves whose extendedKeyUsage is
+    // serverAuth only or absent, plus a self-signed non-CA certificate.
     const leaf_ext = try P.j(a, d, "leaf.ext");
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = leaf_ext, .data = "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\n" });
-    for ([_][2][]const u8{ .{ "good-leaf", "good-ca" }, .{ "other-leaf", "other-ca" } }) |pair| {
-        const key = try P.j(a, d, try std.fmt.allocPrint(a, "{s}.key", .{pair[0]}));
-        const csr = try P.j(a, d, try std.fmt.allocPrint(a, "{s}.csr", .{pair[0]}));
-        const crt = try P.j(a, d, try std.fmt.allocPrint(a, "{s}.crt", .{pair[0]}));
+    const server_eku_ext = try P.j(a, d, "server-eku.ext");
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = server_eku_ext, .data = "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\n" });
+    const no_eku_ext = try P.j(a, d, "no-eku.ext");
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = no_eku_ext, .data = "basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n" });
+    for ([_][3][]const u8{
+        .{ "good-leaf", "good-ca", leaf_ext },
+        .{ "other-leaf", "other-ca", leaf_ext },
+        .{ "second-leaf", "second-ca", leaf_ext },
+        .{ "server-eku-leaf", "good-ca", server_eku_ext },
+        .{ "no-eku-leaf", "good-ca", no_eku_ext },
+    }) |leaf| {
+        const key = try P.j(a, d, try std.fmt.allocPrint(a, "{s}.key", .{leaf[0]}));
+        const csr = try P.j(a, d, try std.fmt.allocPrint(a, "{s}.csr", .{leaf[0]}));
+        const crt = try P.j(a, d, try std.fmt.allocPrint(a, "{s}.crt", .{leaf[0]}));
         try run(spawn_gpa, io, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", key });
-        try run(spawn_gpa, io, &.{ "openssl", "req", "-sha256", "-new", "-key", key, "-subj", try std.fmt.allocPrint(a, "/CN=sonny6453-{s}", .{pair[0]}), "-out", csr });
-        try run(spawn_gpa, io, &.{ "openssl", "x509", "-sha256", "-req", "-in", csr, "-CA", try P.j(a, d, try std.fmt.allocPrint(a, "{s}.crt", .{pair[1]})), "-CAkey", try P.j(a, d, try std.fmt.allocPrint(a, "{s}.key", .{pair[1]})), "-CAcreateserial", "-days", "2", "-extfile", leaf_ext, "-out", crt });
+        try run(spawn_gpa, io, &.{ "openssl", "req", "-sha256", "-new", "-key", key, "-subj", try std.fmt.allocPrint(a, "/CN=sonny6453-{s}", .{leaf[0]}), "-out", csr });
+        try run(spawn_gpa, io, &.{ "openssl", "x509", "-sha256", "-req", "-in", csr, "-CA", try P.j(a, d, try std.fmt.allocPrint(a, "{s}.crt", .{leaf[1]})), "-CAkey", try P.j(a, d, try std.fmt.allocPrint(a, "{s}.key", .{leaf[1]})), "-CAcreateserial", "-days", "2", "-extfile", leaf[2], "-out", crt });
     }
     {
         const key = try P.j(a, d, "self-leaf.key");
@@ -149,16 +172,27 @@ fn makeFixtures() !Fixtures {
         try argv.appendSlice(a, &ca_ext);
         try run(spawn_gpa, io, argv.items);
         try run(spawn_gpa, io, &.{ "openssl", "ca", "-batch", "-config", cnf, "-selfsign", "-keyfile", key, "-in", csr, "-startdate", "20200101000000Z", "-enddate", "20200102000000Z", "-notext", "-out", try P.j(a, d, "expired.crt") });
+
+        // An expired leaf signed by good-ca (in the bundle).
+        const leaf_key = try P.j(a, d, "expired-leaf.key");
+        const leaf_csr = try P.j(a, d, "expired-leaf.csr");
+        try run(spawn_gpa, io, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", leaf_key });
+        try run(spawn_gpa, io, &.{ "openssl", "req", "-sha256", "-new", "-key", leaf_key, "-subj", "/CN=sonny6453-expired-leaf", "-out", leaf_csr });
+        try run(spawn_gpa, io, &.{ "openssl", "ca", "-batch", "-config", cnf, "-cert", try P.j(a, d, "good-ca.crt"), "-keyfile", try P.j(a, d, "good-ca.key"), "-in", leaf_csr, "-extfile", leaf_ext, "-startdate", "20200101000000Z", "-enddate", "20200102000000Z", "-notext", "-out", try P.j(a, d, "expired-leaf.crt") });
     }
 
     // The client CA bundle the server is told to trust.
     var bundle: std.ArrayList(u8) = .empty;
-    for ([_][]const u8{ "good-ca.crt", "pinned.crt", "expired.crt" }) |f| try bundle.appendSlice(a, try readFile(a, io, try P.j(a, d, f)));
+    for ([_][]const u8{ "good-ca.crt", "pinned.crt", "expired.crt", "second-ca.crt" }) |f| try bundle.appendSlice(a, try readFile(a, io, try P.j(a, d, f)));
     fx.bundle = try P.j(a, d, "client-ca-bundle.pem");
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = fx.bundle, .data = bundle.items });
 
     fx.pinned = try loadIdent(a, io, try P.j(a, d, "pinned.crt"), try P.j(a, d, "pinned.key"));
     fx.good_leaf = try loadIdent(a, io, try P.j(a, d, "good-leaf.crt"), try P.j(a, d, "good-leaf.key"));
+    fx.second_leaf = try loadIdent(a, io, try P.j(a, d, "second-leaf.crt"), try P.j(a, d, "second-leaf.key"));
+    fx.expired_leaf = try loadIdent(a, io, try P.j(a, d, "expired-leaf.crt"), try P.j(a, d, "expired-leaf.key"));
+    fx.server_eku_leaf = try loadIdent(a, io, try P.j(a, d, "server-eku-leaf.crt"), try P.j(a, d, "server-eku-leaf.key"));
+    fx.no_eku_leaf = try loadIdent(a, io, try P.j(a, d, "no-eku-leaf.crt"), try P.j(a, d, "no-eku-leaf.key"));
     fx.other_leaf = try loadIdent(a, io, try P.j(a, d, "other-leaf.crt"), try P.j(a, d, "other-leaf.key"));
     fx.self_signed_leaf = try loadIdent(a, io, try P.j(a, d, "self-leaf.crt"), try P.j(a, d, "self-leaf.key"));
     fx.stray_ca = try loadIdent(a, io, try P.j(a, d, "stray-ca.crt"), try P.j(a, d, "stray-ca.key"));
@@ -270,7 +304,13 @@ test "SONNY-6453: mTLS required verifies client certificates against GEODE_MTLS_
     const Case = struct { name: []const u8, cert: ?[]const u8, key: ?[]const u8, want: Outcome };
     const cases = [_]Case{
         .{ .name = "self-signed CA certificate in the client CA bundle", .cert = fx.pinned.cert, .key = fx.pinned.key, .want = .accepted },
+        .{ .name = "leaf signed by good-ca (in the bundle), sent alone", .cert = fx.good_leaf.cert, .key = fx.good_leaf.key, .want = .accepted },
+        .{ .name = "two unrelated CAs in the bundle, leaf from the second, sent alone", .cert = fx.second_leaf.cert, .key = fx.second_leaf.key, .want = .accepted },
+        .{ .name = "leaf of a bundle CA with no extendedKeyUsage (RFC 5280: any purpose)", .cert = fx.no_eku_leaf.cert, .key = fx.no_eku_leaf.key, .want = .accepted },
         .{ .name = "leaf signed by a CA not in the bundle", .cert = fx.other_leaf.cert, .key = fx.other_leaf.key, .want = .rejected },
+        .{ .name = "expired leaf signed by good-ca", .cert = fx.expired_leaf.cert, .key = fx.expired_leaf.key, .want = .rejected },
+        .{ .name = "leaf of good-ca whose extendedKeyUsage is serverAuth only", .cert = fx.server_eku_leaf.cert, .key = fx.server_eku_leaf.key, .want = .rejected },
+        .{ .name = "leaf of good-ca without CertificateVerify", .cert = fx.good_leaf.cert, .key = null, .want = .rejected },
         .{ .name = "self-signed non-CA certificate", .cert = fx.self_signed_leaf.cert, .key = fx.self_signed_leaf.key, .want = .rejected },
         .{ .name = "self-signed CA certificate not in the bundle", .cert = fx.stray_ca.cert, .key = fx.stray_ca.key, .want = .rejected },
         .{ .name = "expired certificate in the bundle", .cert = fx.expired.cert, .key = fx.expired.key, .want = .rejected },

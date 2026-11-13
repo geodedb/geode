@@ -4,6 +4,19 @@
 
 ### Security
 
+- **The TLS exporter comes from the tls library again (SONNY-6448).** The
+  remote-KMS attestation binds each reply to its channel with the RFC 8446
+  §7.5 exporter (`EXPORTER-geode-kms-attest-v3`, SONNY-6442). geode computed
+  that value itself because tls before v0.1.25 exported something else from
+  a transcript the two ends did not share. quic v0.1.50 brings tls v0.1.27,
+  whose `Context.exportSecret` is the RFC value, so geode's copy and the
+  detector test that waited for the fix are removed. **Upgrade note:** the
+  exported value is byte-for-byte the same as before (both are RFC 8446
+  §7.5), so a KMS client and server on either side of this change still
+  agree and a rolling upgrade needs no ordering. The exporter is used only by
+  the remote-KMS channel; cluster peer TLS does not use it. Regression: the
+  `exportSecret` known-answer test in `zig build test-quic-transport`, and
+  `zig build test-sonny6442-kms-channel` end to end.
 - **A user's own password change is refused in cluster mode (SONNY-1332).**
   `ALTER USER <self> SET PASSWORD` (and the forced reset after a
   `password_reset_required` login) is handled by the QUIC and gRPC
@@ -108,13 +121,26 @@
   verified CertificateVerify; and `geode serve` exits at startup when
   `GEODE_MTLS_REQUIRED` is set and `GEODE_MTLS_CLIENT_CA` is unset, cannot
   be loaded, or holds a non-CA certificate, or when `--listen-grpc` is also
-  given (the gRPC transport does not verify client certificates). Known
-  limit (dependency): the TLS library checks the client chain as sent, so a
-  client must send its chain up to a CA in the bundle (or present a pinned
-  self-signed CA certificate from the bundle); Zig `tls`-based clients
-  send only the leaf, so a leaf signed by a bundle CA is rejected (geode's
-  own clients could not present a certificate at all: SONNY-6457).
+  given (the gRPC transport does not verify client certificates).
   Regression: `zig build test-sonny6453-mtls-client-ca`.
+- **An mTLS server accepts a leaf of a `GEODE_MTLS_CLIENT_CA` CA sent
+  without its chain (SONNY-6457 item 2; quic v0.1.50, tls v0.1.27).** The
+  TLS layer checked a client chain only as sent, so a leaf signed by a
+  bundle CA was rejected unless the client also sent the CA; geode's Zig
+  clients send only the leaf, so only a pinned self-signed CA certificate
+  worked. `installClientCaTrust` now keeps the bundle's DER certificates
+  and `geode serve` hands them to the QUIC server's TLS context
+  (`QuicTransport.Config.inline_client_ca_der`), which trusts only those
+  CAs for client chains and completes a leaf-only chain from them, also
+  when the bundle holds several unrelated CAs. Unchanged: the certificate
+  counts only with a verified CertificateVerify, every certificate must be
+  within its validity period, a leaf whose extendedKeyUsage lacks
+  clientAuth is rejected (one with no extendedKeyUsage is accepted, as RFC
+  5280 specifies), and `geode serve` still refuses to start with mTLS
+  required and no usable bundle. Regression: `zig build
+  test-sonny6453-mtls-client-ca` (a leaf of a bundle CA sent alone, a leaf
+  of the second of two unrelated bundle CAs, an expired leaf, a
+  serverAuth-only leaf).
 - **geode's internal QUIC client presents the client certificate it is
   given (SONNY-6457 item 1).** `QuicClient.connectEx` put a client
   certificate path in the vendor config's `cert_path`, which makes the
@@ -126,11 +152,11 @@
   read or parsed. Cluster peer dials (`cluster_auth.dialClusterPeer`)
   still present no certificate: peer listeners do not request one and
   peers authenticate with `GEODE_CLUSTER_TOKEN`. `geode query` / `shell`
-  / `backup` / `mcp` dial through geode-client-zig, which has the same
-  defect; until the fixed library is pinned, `--client-cert` against an
-  mTLS-required server still times out (`zig build
-  test-sonny6457-cli-client-cert`, intentionally red). Regression: `zig
-  build test-sonny6457-connectex-client-cert`.
+  / `backup` / `mcp` dial through geode-client-zig, which had the same
+  defect; v0.3.15 presents the certificate as a client, so `geode query
+  --client-cert --client-key` is accepted by an mTLS-required server.
+  Regressions: `zig build test-sonny6457-connectex-client-cert` and `zig
+  build test-sonny6457-cli-client-cert` (the real `geode query` binary).
 - **The Vault Transit and AWS KMS clients compile again (SONNY-6457 item
   4).** `src/security/external_kms_client.zig` built `std.http.Client`
   without the `io` field Zig 0.16 requires and used the removed
@@ -903,19 +929,22 @@
   allocator there and leaked every extended value a WHERE read, the
   SONNY-2656 leak). Regression: `zig build
   test-sonny2670-fle-singletons-process-allocator`.
-- **Work submitted to an idle geode pool starts at once (SONNY-2440).**
-  thread_pool 0.2.10 wakes a parked worker only on every 32nd submit
-  (`wake_coalesce_batch`) and counts on idle workers seeing queued work
-  before they park; a worker already parked sleeps until its idle park
-  expires, 500 ms in geode. So a connection, stream or background task
-  submitted to an idle pool waited up to half a second (449 ms measured)
-  while workers sat parked. geode's pools now wake on every submit
-  (`ThreadPoolConfig.wake_coalesce_batch = 1`). Still open, in thread_pool:
-  with every default-lane worker busy, a default-lane task waits for the
-  parked blocking-lane worker's idle park, because a default-lane submit
-  never wakes it (red reproduction `test-sonny2440-blocking-worker-fallback`,
-  KNOWN_TEST_ISSUES; a library patch is attached to the ticket).
-  Regression: `zig build test-sonny2440-default-lane-wake`.
+- **Work submitted to an idle geode pool starts at once (SONNY-2440;
+  thread-pool v0.2.11, SONNY-6479).** thread_pool 0.2.10 woke a parked
+  worker only on every 32nd submit (`wake_coalesce_batch`) and counted on
+  idle workers seeing queued work before they park; a worker already
+  parked slept until its idle park expired, 500 ms in geode. So a
+  connection, stream or background task submitted to an idle pool waited
+  up to half a second (449 ms measured) while workers sat parked, and with
+  every default-lane worker busy a further default-lane task waited the
+  same for the parked blocking-lane worker, which a default-lane submit
+  never woke. thread-pool v0.2.11 wakes a parked worker whenever work is
+  queued and wakes the blocking-lane helper for default-lane work, so
+  geode's interim `ThreadPoolConfig.wake_coalesce_batch = 1` override (a
+  worker scan and a separate claim on every submit) is removed and the
+  pools use the library default. Regressions: `zig build
+  test-sonny2440-default-lane-wake` and `zig build
+  test-sonny2440-blocking-worker-fallback`.
 - **A CPU-starved or overloaded server is slowed, not killed by the acceptor
   wedge watchdog (SONNY-2719).** The watchdog exited the process with code 70
   ("ACCEPTOR WEDGE") once the listener's UDP rx_queue had stayed at or above
