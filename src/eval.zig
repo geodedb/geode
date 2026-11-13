@@ -23,6 +23,7 @@ const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Import shared value types from value_types.zig module
 const value_types = @import("value_types.zig");
+const query_arena = @import("server/query_arena.zig");
 
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-002; FEATURE="Circular Dependency Resolution"; ASPECT=ErrorTypeReexport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Re-export EvalError from value_types module for backward compatibility
@@ -1919,14 +1920,17 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Borrowed string pointers from the graph store become stale when
             // result rows are cached across allocator lifetimes (e.g. PULL
             // serialization reads results built during RUN_GQL).
+            // SONNY-6449: a property read is borrowed, as a member read is
+            // (`memberOfValue`); what it copies is the statement's scratch.
+            const lent = lentValueAllocator(allocator);
             switch (object) {
                 .Node => |node| {
                     if (node.properties.get(pa.property)) |val| {
                         const result = switch (val) {
                             // SONNY-6327: the shared FLE read policy; a
                             // decrypt failure is an error (never the bytes).
-                            .String => |s| Value{ .Str = try fleReadMember(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", pa.property, s, node.id) },
-                            .ExtValue => |ext| property_codec.extValueToProjectedValue(allocator, ext) catch return EvalError.OutOfMemory,
+                            .String => |s| Value{ .Str = try fleReadMemberView(lent, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", pa.property, s, node.id) },
+                            .ExtValue => |ext| property_codec.extValueToProjectedValue(lent, ext) catch return EvalError.OutOfMemory,
                             else => property_codec.propertyValueToValue(val),
                         };
                         break :blk_property result;
@@ -1938,8 +1942,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             // SONNY-6327: an edge's string goes through the
                             // same FLE read policy as a node's (it was
                             // returned as stored: ciphertext, to everyone).
-                            .String => |s| .{ .Str = try fleReadMember(allocator, .edge, edge.label, pa.property, s, edge.id) },
-                            .ExtValue => |ext| property_codec.extValueToProjectedValue(allocator, ext) catch return EvalError.OutOfMemory,
+                            .String => |s| .{ .Str = try fleReadMemberView(lent, .edge, edge.label, pa.property, s, edge.id) },
+                            .ExtValue => |ext| property_codec.extValueToProjectedValue(lent, ext) catch return EvalError.OutOfMemory,
                             else => property_codec.propertyValueToValue(val),
                         };
                         break :blk_property result;
@@ -2025,7 +2029,14 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-12-23
         // Handle bare list comprehension: [x IN list WHERE condition | x.property]
         .ListComprehension => |comp| blk_lc: {
-            const source_val = try evalExpr(allocator, comp.source.*, env);
+            // SONNY-6449, SONNY-6437 item 2: a comprehension's list, and
+            // everything evaluated to build it (its source, its WHERE, each
+            // element), is lent to the caller as a member read is: it is the
+            // statement's scratch (`lentValueAllocator`), never the caller's
+            // to free. It leaked its source and result lists on every
+            // projection path.
+            const lent = lentValueAllocator(allocator);
+            const source_val = try evalExpr(lent, comp.source.*, env);
 
             const source_list = switch (source_val) {
                 .List => |l| l,
@@ -2051,7 +2062,7 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
                 // Check filter condition if present
                 if (comp.filter) |filter| {
-                    const filter_result = try evalExpr(allocator, filter.*, new_env);
+                    const filter_result = try evalExpr(lent, filter.*, new_env);
                     const matches = switch (filter_result) {
                         .Bool => |b| b,
                         .Null => false,
@@ -2063,14 +2074,14 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
                 // Evaluate map expression if present, otherwise use the item itself
                 const result_val = if (comp.map) |map_expr|
-                    try evalExpr(allocator, map_expr.*, new_env)
+                    try evalExpr(lent, map_expr.*, new_env)
                 else
                     item;
 
-                try result_list.append(allocator, result_val);
+                try result_list.append(lent, result_val);
             }
 
-            break :blk_lc Value{ .List = try result_list.toOwnedSlice(allocator) };
+            break :blk_lc Value{ .List = try result_list.toOwnedSlice(lent) };
         },
         .BitLit => |b| blk_bit: {
             const bit_literal = if (std.mem.startsWith(u8, b, "B'")) b else std.fmt.allocPrint(allocator, "B'{s}'", .{b}) catch break :blk_bit Value{ .Null = {} };
@@ -2174,23 +2185,53 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
 // CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=EvalReadSites; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
 /// SONNY-6327: a node's or edge's stored string read as one property
-/// (`n.p`, `r.p`, in RETURN, WHERE, ORDER BY, aggregates): the shared FLE
-/// read policy (`fle_integration.readStoredString`), as an evaluator error.
-fn fleReadMember(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64) EvalError![]u8 {
-    return fle_integration.readStoredStringOwned(allocator, kind, type_name, field, stored, id) catch |err| fleEvalError(err);
-}
-
+/// (`n.p`, `r.p`, in RETURN, WHERE, ORDER BY, aggregates) goes through the
+/// shared FLE read policy (`fle_integration.readStoredString`), as an
+/// evaluator error: `fleReadMemberView`.
 // CANARY: REQ=REQ-SONNY-6433-MEMBER-READ-BORROWED; FEATURE="ExpressionEvaluator"; ASPECT=MemberReadOwnership; STATUS=TESTED; TEST=tests/test_sonny2653_planned_read_ext_read_leak.zig; OWNER=eval; UPDATED=2026-11-12
-/// SONNY-6433: `fleReadMember` for a member access (`memberOfValue`): the
-/// stored bytes themselves when the policy passes them unchanged (no FLE
-/// field, or a field the principal reads in plaintext), as a member read
-/// returned them before SONNY-6327; a decrypted or redacted string is
-/// allocated. A member value is borrowed (`value_utilities.evaluatesFresh`):
-/// the final projection duplicates it (GAP-0535) and an ORDER BY compares
-/// it without freeing it, so the copy SONNY-6327 made leaked once per row
-/// and per comparison (`test-sonny2653-planned-read-ext-read-leak`).
+// CANARY: REQ=REQ-SONNY-6449-MEMBER-READ-OWNERSHIP; FEATURE="ExpressionEvaluator"; ASPECT=LentValues; STATUS=TESTED; TEST=tests/test_sonny6449_projection_value_ownership.zig; OWNER=eval; UPDATED=2026-11-12
+/// SONNY-6433, SONNY-6449: the FLE read of a member access
+/// (`memberOfValue`, `.PropertyAccess`): the stored bytes themselves when
+/// the policy passes them unchanged (no FLE field, or a field the principal
+/// reads in plaintext); a decrypted or redacted string is allocated on
+/// `allocator`, which callers pass as `lentValueAllocator`. Either way the
+/// value is borrowed (`value_utilities.evaluatesFresh`).
 fn fleReadMemberView(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64) EvalError![]const u8 {
     return fle_integration.readStoredString(allocator, kind, type_name, field, stored, id) catch |err| fleEvalError(err);
+}
+
+/// SONNY-6449: the allocator of a value the evaluator lends its caller
+/// rather than gives it: a member read's copy (a decrypted or redacted
+/// string, a list or another extended value) and a list comprehension's
+/// list. It is the statement's scratch arena, which every executor entry
+/// point installs (`query_arena.StatementScratch`) and which outlives every
+/// row of the statement, so a lent value is never freed by a caller and
+/// never leaks, whether the caller projects it, copies it (the final
+/// projection, GAP-0535), compares it (ORDER BY, DISTINCT, GROUP BY) or
+/// drops it. Evaluated outside any executor entry point (no scratch arena)
+/// it is `allocator`'s, and is not freed.
+fn lentValueAllocator(allocator: std.mem.Allocator) std.mem.Allocator {
+    if (t_nothing_lent) return allocator;
+    return query_arena.currentScratchAllocator() orelse allocator;
+}
+
+/// SONNY-6449: set while `evalExprNothingLent` runs.
+threadlocal var t_nothing_lent: bool = false;
+
+/// SONNY-6449: `evalExpr`, with nothing lent from the scratch arena
+/// (`lentValueAllocator`): a member read's copy and a list comprehension's
+/// list are `allocator`'s, as everything else the evaluation allocates is.
+/// For a caller whose cells own every value that is not its input's: the
+/// engine-direct node scan (`node_scan_stream.buildRow`) copies a string that
+/// points into its node and frees every other cell with the result
+/// (`property_value_codec.freeValue`), so a lent value was freed with the
+/// wrong allocator (an "Invalid free" that aborted the server on an
+/// encrypted field's read).
+pub fn evalExprNothingLent(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value {
+    const previous = t_nothing_lent;
+    t_nothing_lent = true;
+    defer t_nothing_lent = previous;
+    return evalExpr(allocator, e, env);
 }
 
 /// SONNY-6327: the same, for a whole-entity read (`properties()`, map
@@ -2222,8 +2263,8 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
             const result = switch (val) {
                 // SONNY-6327: the shared FLE read policy (a decrypt failure
                 // is an error; it fell back to the stored bytes).
-                .String => |s| Value{ .Str = try fleReadMemberView(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, s, node.id) },
-                else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
+                .String => |s| Value{ .Str = try fleReadMemberView(lentValueAllocator(allocator), .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, s, node.id) },
+                else => property_codec.propertyValueToProjectedValue(lentValueAllocator(allocator), val) catch Value{ .Null = {} },
             };
             return result;
         }
@@ -2237,8 +2278,8 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
                 // SONNY-6327: the edge's record identity ("edge_<id>", as the
                 // write side encrypts it; it used the node form, so nothing
                 // decrypted and the stored bytes were returned).
-                .String => |s| Value{ .Str = try fleReadMemberView(allocator, .edge, edge.label, field, s, edge.id) },
-                else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
+                .String => |s| Value{ .Str = try fleReadMemberView(lentValueAllocator(allocator), .edge, edge.label, field, s, edge.id) },
+                else => property_codec.propertyValueToProjectedValue(lentValueAllocator(allocator), val) catch Value{ .Null = {} },
             };
             return result;
         }

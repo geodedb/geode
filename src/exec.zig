@@ -1658,6 +1658,7 @@ pub const GroupSpec = struct {
     aggs: []const Agg,
 };
 
+// CANARY: REQ=REQ-SONNY-6437-GQL-GROUP-KEYS; FEATURE="GqlEngineAggregation"; ASPECT=GroupKeyOwnership; STATUS=TESTED; TEST=tests/test_sonny6437_query_residuals.zig; OWNER=engine; UPDATED=2026-11-12
 /// Group rows (binding rows) by key columns and compute aggregates over a single Int column per agg index.
 pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const BindingValue, spec: GroupSpec, value_idxs: []const usize) ![]const []const BindingValue {
     var map = std.StringHashMap(struct {
@@ -1678,7 +1679,12 @@ pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const Bin
         // For CountDistinct maintain a hash map per-agg when needed. We store pointer array to maps allocated on demand.
         distinct_maps: []*std.StringHashMap(void),
     }).init(allocator);
-    defer map.deinit();
+    // SONNY-6437 item 3: the map owns each group's encoded key, freed here.
+    defer {
+        var keys = map.keyIterator();
+        while (keys.next()) |key_enc| allocator.free(key_enc.*);
+        map.deinit();
+    }
     // scratch buffers length per agg
     const m = spec.aggs.len;
     var i: usize = 0;
@@ -1689,7 +1695,15 @@ pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const Bin
         var k: usize = 0;
         while (k < spec.key_idxs.len) : (k += 1) key[k] = row[spec.key_idxs[k]];
         const key_enc = try rowKeyAlloc(allocator, key);
-        defer allocator.free(key_enc);
+        // SONNY-6437 item 3: a new group's map entry keeps `key_enc` (and
+        // `key`); it was freed at the end of the row, so the next row's
+        // lookup compared against freed bytes and every row was a group of
+        // its own. A row of an existing group frees both.
+        var new_group = false;
+        defer if (!new_group) {
+            allocator.free(key_enc);
+            allocator.free(key);
+        };
         const entry_ptr = blk: {
             if (map.getPtr(key_enc)) |p| break :blk p;
             // initialize accumulators
@@ -1715,6 +1729,7 @@ pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const Bin
                 distinct_maps[z] = undefined; // lazily allocated when first distinct value seen
             }
             try map.put(key_enc, .{ .key = key, .counts = counts, .sums = sums, .dec_sums = dec_sums, .dec_scale = dec_scale, .saw_decimal = saw_decimal, .ovf = ovf, .mins = mins, .maxs = maxs, .distinct_maps = distinct_maps });
+            new_group = true;
             break :blk map.getPtr(key_enc).?;
         };
         // update accumulators

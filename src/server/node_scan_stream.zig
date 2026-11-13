@@ -485,7 +485,10 @@ pub const NodeScanStream = struct {
                 }
                 var produced_node_value = false;
                 for (self.ret_items, 0..) |item, i| {
-                    const value = try eval.evalExpr(allocator, item.expr, env);
+                    // SONNY-6449: nothing lent from the scratch arena, so a
+                    // cell is either the node's (copied below) or
+                    // `allocator`'s, which the result frees.
+                    const value = try eval.evalExprNothingLent(allocator, item.expr, env);
                     // SONNY-2472 / SONNY-2464: the cell never shares memory
                     // with the node (see "Node ownership" at `destroyNode`).
                     // It is set before `produced` counts it, so the errdefer

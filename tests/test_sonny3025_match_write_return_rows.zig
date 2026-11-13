@@ -16,7 +16,7 @@
 // CANARY: REQ=REQ-SONNY-3025-WRITE-RETURN-ROWS; FEATURE="WriteBehindAggregate"; ASPECT=PlainReturnPerRow; STATUS=TESTED; TEST=tests/test_sonny3025_match_write_return_rows.zig; OWNER=engine; UPDATED=2026-11-12
 
 const std = @import("std");
-const batch = @import("test_sonny2672_read_semantics_batch.zig");
+const batch = @import("read_semantics_batch_harness.zig");
 
 const Case = batch.Case;
 

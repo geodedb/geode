@@ -2121,6 +2121,85 @@
   fails at once with `UnknownSecretError` naming the secret. The
   fixture-secrets scan refuses a computed-name secret lookup with a
   fallback. Regression: `zig build test-sonny6436-fixture-secrets`.
+- **`CALL db.relationshipTypes()` and `CALL db.propertyKeys()` omit what
+  the session's RLS label policies hide (SONNY-6437 item 5).** `CALL
+  db.labels()` omitted a denied label (SONNY-6351); the other two listed
+  every type and key. A type is a table as a label is (SONNY-2710), so a
+  denied edge type is omitted, and the keys of its edges; a node is hidden
+  by a deny on any of its labels (SONNY-2690), so under a deny the keys are
+  read from the visible nodes (the per-label key index lists a `:Pub:Sec`
+  node's keys under `:Pub`). Regression: `zig build
+  test-sonny6437-query-residuals`.
+- **A WHERE after YIELD is refused with a message that names the ISO form
+  (SONNY-6437 item 7).** `CALL db.labels() YIELD label WHERE ...` (a
+  Cypher form) is not ISO/IEC 39075:2024 GQL: 16.14 `<yield clause>` is
+  `YIELD <yield item list>` only, and a linear query (14.3) filters a call
+  query statement (14.5) with a following filter statement (14.6, `FILTER
+  [WHERE] <search condition>`). Both the statement-level `CALL` and `MATCH
+  ... CALL` answer 42000 with that explanation; they answered 42000 "a
+  statement ends at ';'..." and "expected token 'RETURN', got 'WHERE'".
+  Geode does not yet accept a FILTER statement after `CALL ... YIELD`.
+- **The `gql` executable's GROUP BY grouped every row on its own
+  (SONNY-6437 item 3).** `exec.groupAndAggregate` freed each group's
+  encoded key right after putting it in its group map, so the next row's
+  lookup compared against freed bytes and missed. The map now owns the key
+  (freed with the map); a row of an existing group frees its copy. Its sums
+  were already checked (the unchecked `+=` was in `HashAggregator`, removed
+  in SONNY-6436): a SUM or AVG past i64 range is NULL.
+- **The 3-node cluster tests take their client and cluster ports from
+  `tests/test_ports.zig` (SONNY-6450 item 2).**
+  `test-cluster-replicable-mutations` and `test-cluster-steady-state`
+  bound 127.0.0.11-13 on the fixed ports 3141 and 4242, so a second run on
+  the host, or any geode on those ports, answered them. Each node keeps its
+  own loopback address (the peer TLS certificate names them) and binds two
+  free UDP ports chosen when the cluster starts. Both pass
+  (9/9 and 3/3), and `docs/KNOWN_TEST_ISSUES.md` no longer lists
+  `test-cluster-replicable-mutations` as an intentionally red timeout
+  (SONNY-6450 item 1).
+- **A stored property chain that holds the same key twice no longer leaks
+  when it is read (SONNY-6450 item 6).** `getAllNodeProperties` /
+  `getAllEdgeProperties` decode each entry of a chain into a map
+  (`putDecodedProperty`), which copied the key and called `put`: for a key
+  already in the map, `put` kept the map's key and overwrote the value, so
+  the new key copy and the earlier value (a string's or an extended value's
+  bytes) were never freed. The later entry's value is still the one kept,
+  and the earlier one is now freed; a later null (the REMOVE tombstone)
+  still removes the key. Regression: `zig build
+  test-sonny6450-ownership-residuals` (3/3, 0 leaks; was 2 pass, 1 fail,
+  9 leaks).
+- **A member read (`n.p`) has one ownership, and every projection path owns
+  the values it builds from it (SONNY-6449, SONNY-6450 items 3-5,
+  SONNY-6437 items 1, 2, 6).** A read of an FLE-encrypted field returned a
+  decrypted or redacted string the evaluator allocated, a plain field the
+  store's bytes, and a list property a copy: callers could not tell which.
+  The legacy RETURN projection, the WITH stage, `executeReturnClauseWithNodes`
+  (CREATE / MERGE ... RETURN), the GROUP BY keys, the HAVING, both ORDER BY
+  comparators and VALUES ... MATCH kept those values in rows they do not
+  free, so each row leaked (a decrypted string, a list copy, a list
+  comprehension's lists, a concatenation, an `upper()`), and the ORDER BY
+  comparators leaked per comparison. Now: every executor entry point
+  (`executeStatementWithContext`, `executeProgramWithContext`) runs with a
+  scratch arena, the transport's or, for an embedded caller, one it opens
+  (`query_arena.StatementScratch`) and copies its result out of before it
+  closes it; a member read's copy and a list comprehension are lent from it
+  (`eval.lentValueAllocator`) and never freed by a caller; the projections
+  evaluate their items on it (`value_utilities.lentAllocator`) and the final
+  projection copies every value (nothing is adopted while a scratch arena is
+  installed: `upper(max(n.s))` computed on the arena was adopted and freed
+  with the result's allocator); the GROUP BY keys and both ORDER BY
+  comparators evaluate on an arena of their own, once per row. The
+  engine-direct node scan (QUIC's single-label RETURN), whose cells own
+  every value they do not copy out of their node, evaluates with nothing
+  lent (`eval.evalExprNothingLent`). Leak-checked
+  for plain and FLE-encrypted fields on every path (RETURN, DISTINCT, GROUP
+  BY, ORDER BY, WITH, WITH DISTINCT, WITH ORDER BY, VALUES ... MATCH, CALL
+  ... YIELD ... RETURN, CREATE / MERGE ... RETURN, list properties, list
+  comprehensions, the engine-direct node scan), in memory and persisted, with and without a request
+  scratch arena: `zig build test-sonny6449-projection-value-ownership` (9/9; was
+  0/8; e.g. `RETURN n.ssn` leaked 3 allocations, `RETURN [y IN n.v | y]` 12,
+  a persisted embedded read 39). An embedded caller's result is copied once
+  more when the statement used its scratch arena (its nodes and
+  relationships included, as the gRPC server copies a kept result).
 - **`test-startup-lazy-hydrate` finishes in under a minute instead of
   running past 25 (SONNY-6433 item 9).** Every one of its 47 tests opens,
   writes (one fsync per commit), checkpoints, crashes or closes, and reopens
@@ -3902,6 +3981,20 @@
   outside the module root, `ArrayList.init`, `std.mem.copy`, and the old
   `runGroupedQuery` arity). Its BENCHED marker (REQ-GQL-012
   HashAggSpillVarianceEnvelope) described only that code.
+- **Dead code: `match_operations.executeMatchWithOptionalPatterns` and the
+  legacy aggregate RETURN-after-WITH stage of `executeMatchQueryImpl`
+  (SONNY-6437 item 4).** Neither was reached by a parsed query: an OPTIONAL
+  MATCH clause is served by the left outer join (`optional_match`) or, with
+  a SET or REMOVE, by the write step; an aggregating RETURN after a WITH by
+  the shared projection, after an initial WITH once the WITH is bound. A
+  reference search finds no other caller, and a run with a panic at both
+  sites (`test-sonny6437-query-residuals`, `-2672-read-semantics-batch`,
+  `-3184`, `-3039`, `-3041`, `-2694`, `-2674`, `-2675`, `-3148`,
+  `gap0055`, `r4b-memory`, `gql-conformance` and 17 probe shapes) never
+  hit either. About 1,770 lines go, with the helpers only the executor used
+  (`whereReferencesLaterChains`, `whereNamesUnboundBy`); a query built
+  another way that reaches either site is refused
+  (`UnsupportedOptionalMatchShape`, `UnsupportedGroupedReturn`).
 - **Dead code: `GraphStore.restoreNodeNoSave` / `restoreEdgeNoSave`
   (SONNY-6436 item 4).** No caller anywhere in the repository (a reference
   search finds only their definitions); both tagged the restored row tenant

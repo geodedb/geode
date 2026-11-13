@@ -12,6 +12,7 @@ const WriteScope = write_scope.WriteScope;
 // A4b: fulltext write-maintenance hook (delete postings on node DELETE).
 const fts_index_ops = @import("fts_index_ops.zig");
 const value_types = @import("../value_types.zig");
+const value_utilities = @import("value_utilities.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
 
@@ -2069,7 +2070,11 @@ pub fn executeReturnClauseWithNodes(
             else => "column",
         };
         columns[i] = try allocator.dupe(u8, col_name);
-        row[i] = try eval.evalExpr(allocator, item.expr, env);
+        // SONNY-6449, SONNY-6450 item 4: the row borrows what the item
+        // computes, so it is the statement's scratch arena's
+        // (`value_utilities.lentAllocator`); on `allocator` it was never
+        // freed.
+        row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
     }
 
     rows[0] = row;

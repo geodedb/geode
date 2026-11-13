@@ -81,10 +81,11 @@ test "generateRealPlan: ORDER BY adds sort operator" {
     const allocator = testing.allocator;
     const stats = query_plan_cache.StoreStats{ .node_count = 1000, .edge_count = 500 };
 
-    // SONNY-2394: `geode.parseGql` applies the legacy US001 ORDER BY policy
-    // (bare identifiers only, unless GEODE_ORDER_KEYS_EXPR is set), so the old
-    // `ORDER BY n.name` was rejected with UnexpectedToken before any plan was
-    // generated. Order by a projected alias: legal under both parse policies,
+    // SONNY-2394: `geode.parseGql` applied the legacy US001 ORDER BY policy
+    // (bare identifiers only) then, so the old `ORDER BY n.name` was rejected
+    // with UnexpectedToken before any plan was generated. Since SONNY-6351 it
+    // accepts expression keys unless GEODE_ORDER_KEYS_EXPR=0 opts into that
+    // policy. Order by a projected alias: legal under both parse policies,
     // and still an ORDER BY for generateRealPlan to lower into a sort operator.
     var parsed = try geode.parseGql("MATCH (n) RETURN n.name AS name ORDER BY name", allocator);
     defer parsed.deinit();

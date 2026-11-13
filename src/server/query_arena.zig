@@ -136,6 +136,42 @@ pub fn currentScratchAllocator() ?std.mem.Allocator {
     return g_current_scratch;
 }
 
+// CANARY: REQ=REQ-SONNY-6449-STATEMENT-SCRATCH; FEATURE="PerQueryArenaPool"; ASPECT=StatementScratch; STATUS=TESTED; TEST=tests/test_sonny6449_projection_value_ownership.zig; OWNER=engine; UPDATED=2026-11-12
+/// SONNY-6449: the scratch arena of a statement run with none installed (an
+/// embedded caller: no transport borrowed one from the pool). The outermost
+/// executor entry point opens it, so every statement runs with a scratch
+/// arena, as one sent over a transport does, and what the evaluator gives a
+/// caller to borrow (a member read's decrypted string or list copy, a list
+/// comprehension) has one owner on every path. The entry point copies its
+/// result out of the arena before it closes it (`used`). With a scratch
+/// arena already installed it does nothing. It must not move once opened.
+pub const StatementScratch = struct {
+    arena: std.heap.ArenaAllocator = undefined,
+    previous: ?std.mem.Allocator = null,
+    installed: bool = false,
+
+    pub fn open(self: *StatementScratch, backing: std.mem.Allocator) void {
+        self.* = .{};
+        if (g_current_scratch != null) return;
+        self.arena = std.heap.ArenaAllocator.init(backing);
+        self.previous = pushScratchAllocator(self.arena.allocator());
+        self.installed = true;
+    }
+
+    /// Whether anything was allocated on the arena this opened: a result
+    /// may then borrow from it.
+    pub fn used(self: *const StatementScratch) bool {
+        return self.installed and self.arena.queryCapacity() > 0;
+    }
+
+    pub fn close(self: *StatementScratch) void {
+        if (!self.installed) return;
+        popScratchAllocator(self.previous);
+        self.arena.deinit();
+        self.installed = false;
+    }
+};
+
 // =============================================================================
 // Process-wide default pool.
 //

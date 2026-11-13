@@ -43,11 +43,19 @@
 
 const std = @import("std");
 const geode_test_bin = @import("geode_test_bin");
+const test_ports = @import("test_ports.zig");
 const builtin = @import("builtin");
 
 const BINARY_PATH = geode_test_bin.geode_exe;
 const NODE_IPS = [_][]const u8{ "127.0.0.11", "127.0.0.12", "127.0.0.13" };
-const CLUSTER_PORT_STR = "4242";
+/// SONNY-6450 item 2: the nodes' client and cluster ports (both QUIC, so
+/// UDP), free ports from tests/test_ports.zig chosen when the cluster starts.
+/// They were 3141 and 4242: a second run on the host (parallel lanes, the
+/// pre-push shards), or any geode on those ports, answered this one. Each node
+/// keeps its own loopback address (127.0.0.11-13), which the peer TLS
+/// certificate names, and binds the same two ports on it.
+var client_port: u16 = 0;
+var cluster_port: u16 = 0;
 const STARTUP_DEADLINE_MS: i64 = 45_000;
 const ADMIN_PW = "Replicable Mutations Admin Passphrase";
 
@@ -110,11 +118,11 @@ fn binaryPresent() bool {
 /// query of this suite came back empty.
 var query_ca_path: ?[]const u8 = null;
 
-/// Run `geode query` against `ip:3141` and return captured stdout (caller frees
+/// Run `geode query` against `ip:client_port` and return captured stdout (caller frees
 /// with `gpa`). Bounded by a hard timeout so a hung query can't wedge the suite.
 /// A client that exits non-zero has its stderr printed, so a failure says why.
 fn runQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []const u8, q: []const u8) ![]u8 {
-    const server = try std.fmt.allocPrint(aa, "{s}:3141", .{ip});
+    const server = try std.fmt.allocPrint(aa, "{s}:{d}", .{ ip, client_port });
     const ca = query_ca_path orelse return error.NoQueryCa;
     const argv = [_][]const u8{
         BINARY_PATH, "query",  "--server", server,
@@ -342,7 +350,10 @@ fn startCluster(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Clus
         return err;
     };
 
-    const peers = "127.0.0.11:4242,127.0.0.12:4242,127.0.0.13:4242";
+    client_port = try test_ports.freeUdpPort();
+    cluster_port = try test_ports.freeUdpPortExcept(&.{client_port});
+    const peers = try std.fmt.allocPrint(aa, "{s}:{d},{s}:{d},{s}:{d}", .{ NODE_IPS[0], cluster_port, NODE_IPS[1], cluster_port, NODE_IPS[2], cluster_port });
+    const cluster_port_str = try std.fmt.allocPrint(aa, "{d}", .{cluster_port});
     const token = "replicable-mutations-cluster-token";
     // SONNY-6429: 64 hex characters. Since SONNY-6339 a GEODE_AUTH_HMAC_KEY
     // that is not refuses startup (HmacKeyUnusable), and no node came up.
@@ -363,12 +374,12 @@ fn startCluster(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Clus
         const ip = NODE_IPS[i];
         const data_dir = try std.fmt.allocPrint(aa, "{s}/data{d}", .{ certs.dir, i + 1 });
         std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
-        const listen = try std.fmt.allocPrint(aa, "{s}:3141", .{ip});
+        const listen = try std.fmt.allocPrint(aa, "{s}:{d}", .{ ip, client_port });
         const node_id = try std.fmt.allocPrint(aa, "{d}", .{i + 1});
 
         const args = [_][]const u8{
             BINARY_PATH,      "serve",          "--listen",    listen,
-            "--cluster-port", CLUSTER_PORT_STR, "--peers",     peers,
+            "--cluster-port", cluster_port_str, "--peers",     peers,
             "--data-dir",     data_dir,         "--cert",      certs.leaf,
             "--key",          certs.key,        "--log-level", "info",
         };
@@ -378,7 +389,7 @@ fn startCluster(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Clus
         try env.put("GEODE_AUTH_HMAC_KEY", hmac);
         try env.put("GEODE_NODE_ID", node_id);
         try env.put("GEODE_PEERS", peers);
-        try env.put("GEODE_CLUSTER_PORT", CLUSTER_PORT_STR);
+        try env.put("GEODE_CLUSTER_PORT", cluster_port_str);
         try env.put("GEODE_CLUSTER_LISTEN_ADDRESS", ip);
         try env.put("GEODE_CLUSTER_CA_CERT", certs.ca);
         try env.put("GEODE_ADMIN_PASSWORD", ADMIN_PW);

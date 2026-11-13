@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:55:02.67248119Z",
+  "generated_at": "2026-11-13T08:02:29.197753056Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -36412,20 +36412,6 @@
       "id": "REQ-GQL-AGG-NO-GROUPBY-001",
       "features": [
         {
-          "feature": "AggregationWithoutGroupBy",
-          "aspect": "OptionalMatchAgg",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/geode_functions_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
-        },
-        {
           "feature": "GQLAggregation",
           "aspect": "NoGroupByAgg",
           "status": "TESTED",
@@ -36438,25 +36424,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-AGG-NO-GROUPBY-002",
-      "features": [
-        {
-          "feature": "AggregationWithoutGroupBy",
-          "aspect": "SingleRowResult",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/geode_functions_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -37909,20 +37876,6 @@
       "id": "REQ-GQL-DISTINCT-OPTIONAL-001",
       "features": [
         {
-          "feature": "DistinctOptionalMatch",
-          "aspect": "NullDedup",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
-        },
-        {
           "feature": "GQLOptionalMatch",
           "aspect": "DistinctOptional",
           "status": "TESTED",
@@ -39256,44 +39209,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-IMPLICIT-GROUPBY-FIX-001",
-      "features": [
-        {
-          "feature": "ImplicitGroupByInMatchAgg",
-          "aspect": "NonAggExprCheck",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-IMPLICIT-GROUPBY-FIX-002",
-      "features": [
-        {
-          "feature": "ImplicitGroupByInMatchAgg",
-          "aspect": "PerNodeRows",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-IN-EXPR-001",
       "features": [
         {
@@ -40098,20 +40013,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "LimitOptionalMatch",
-          "aspect": "Pagination",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -40924,20 +40825,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultipleOptionalMatch",
-          "aspect": "CumulativeMatching",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -41573,20 +41460,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "OffsetOptionalMatch",
-          "aspect": "Pagination",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -41662,44 +41535,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-OPTIONAL-MATCH-004",
-      "features": [
-        {
-          "feature": "OptionalMatchExecution",
-          "aspect": "LeftOuterJoinImpl",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-22"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-MATCH-GROUPBY-001",
-      "features": [
-        {
-          "feature": "OptionalMatchGroupBy",
-          "aspect": "GroupByHandling",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-OPTIONAL-MATCH-HOP-001",
       "features": [
         {
@@ -41719,139 +41554,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-OPTIONAL-MATCH-HOP-002",
-      "features": [
-        {
-          "feature": "OptionalMatchWithHops",
-          "aspect": "FirstChainExecution",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-MATCH-HOP-003",
-      "features": [
-        {
-          "feature": "OptionalMatchWithHops",
-          "aspect": "FirstChainVars",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-MATCH-HOP-004",
-      "features": [
-        {
-          "feature": "OptionalMatchWithHops",
-          "aspect": "FirstChainTraversal",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-MATCH-HOP-005",
-      "features": [
-        {
-          "feature": "OptionalMatchWithHops",
-          "aspect": "LeftVarLookup",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-MATCH-HOP-007",
-      "features": [
-        {
-          "feature": "OptionalMatchWithHops",
-          "aspect": "WhereFiltering",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-MATCH-HOP-008",
-      "features": [
-        {
-          "feature": "OptionalMatchWithHops",
-          "aspect": "DeferWhereForHops",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-MATCH-WITH-001",
-      "features": [
-        {
-          "feature": "OptionalMatchWithAggregation",
-          "aspect": "WithClauseHandling",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-OPTIONAL-MATCH-WITH-002",
       "features": [
         {
@@ -41867,25 +41569,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2025-12-23"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-NODE-ONLY-001",
-      "features": [
-        {
-          "feature": "OptionalMatchNodeOnly",
-          "aspect": "VariableCollection",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
         }
       ]
     },
@@ -41924,20 +41607,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "RequiredChainAfterOptional",
-          "aspect": "VariableCollection",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -41957,20 +41626,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "RequiredChainAfterOptional",
-          "aspect": "PropertyPatternMatch",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -41990,39 +41645,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "RequiredChainExpansion",
-          "aspect": "MultiTargetExpand",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-REQUIRED-PROPS-001",
-      "features": [
-        {
-          "feature": "OptionalMatchRequiredProps",
-          "aspect": "RequiredNodePropertyFilter",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
         }
       ]
     },
@@ -42042,20 +41664,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "OptionalMatchTargetNodeProps",
-          "aspect": "PropertyFilter",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -42075,20 +41683,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "OptionalMatchTargetNodeProps",
-          "aspect": "IncomingEdgeFilter",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -42127,39 +41721,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "OptionalMatchWhereFilter",
-          "aspect": "RequiredNodeFilter",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-WHERE-POST-001",
-      "features": [
-        {
-          "feature": "OptionalMatchWherePost",
-          "aspect": "PostOptionalFilter",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
         }
       ]
     },
@@ -42198,20 +41759,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "OrderByOptionalMatch",
-          "aspect": "Sorting",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/order_by_sorting_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-28"
         }
       ]
     },
@@ -42350,20 +41897,6 @@
           "benches": [],
           "owner": "execution",
           "updated": "2026-11-12"
-        },
-        {
-          "feature": "OrderByPostWithAgg",
-          "aspect": "FinalSort",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/order_by_sorting_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
         }
       ]
     },
@@ -45146,25 +44679,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-WITH-CHAIN-004",
-      "features": [
-        {
-          "feature": "ChainedWithClauseResult",
-          "aspect": "ReturnOptimization",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-24"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-WITH-CHAIN-AGG-001",
       "features": [
         {
@@ -45475,25 +44989,6 @@
       ]
     },
     {
-      "id": "REQ-GQL-WITH-WHERE-POST-001",
-      "features": [
-        {
-          "feature": "WithWherePostFilter",
-          "aspect": "AliasFiltering",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
       "id": "REQ-GQL-WITH-WHERE-POST-002",
       "features": [
         {
@@ -45513,25 +45008,6 @@
         {
           "feature": "WithWherePostFilter",
           "aspect": "NonAggPath",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "execution",
-          "updated": "2025-12-26"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-WITH-WHERE-PRE-001",
-      "features": [
-        {
-          "feature": "WithWherePreFilter",
-          "aspect": "DeferToPostWith",
           "status": "TESTED",
           "files": [
             "src/execution/match_operations.zig"
@@ -53340,20 +52816,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiGraphIsolation",
-          "aspect": "OptionalMatchFiltering",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/multi_graph.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-22"
         },
         {
           "feature": "MultiGraphIsolation",
@@ -79340,20 +78802,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-29"
-        },
-        {
-          "feature": "OptionalMatchExecution",
-          "aspect": "OptionalPathRefused",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "tests/test_sonny_write_allowlist_r4b.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-09-29"
         }
       ]
     },
@@ -85435,6 +84883,115 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6437-GQL-GROUP-KEYS",
+      "features": [
+        {
+          "feature": "GqlEngineAggregation",
+          "aspect": "GroupKeyOwnership",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6437-LEGACY-REMOVED",
+      "features": [
+        {
+          "feature": "LegacyReturnProjection",
+          "aspect": "NoAggregateWithStage",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6437-META-RLS",
+      "features": [
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "DbPropertyKeysRLSDeny",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "DbRelationshipTypesRLSDeny",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6437-QUERY-RESIDUALS",
+      "features": [
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6437-WHERE-AFTER-YIELD",
+      "features": [
+        {
+          "feature": "ProcedureCall",
+          "aspect": "YieldWhereRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6437_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6442-MASTER-KEY-CHECK-PATHS",
       "features": [
         {
@@ -85714,6 +85271,124 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6449-MEMBER-READ-OWNERSHIP",
+      "features": [
+        {
+          "feature": "ExpressionEvaluator",
+          "aspect": "LentValues",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ExpressionEvaluator",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6449-PROJECTION-OWNERSHIP",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "LentProjectionValues",
+          "status": "TESTED",
+          "files": [
+            "src/execution/value_utilities.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6449-STATEMENT-SCRATCH",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "EntryPointScratch",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "PerQueryArenaPool",
+          "aspect": "StatementScratch",
+          "status": "TESTED",
+          "files": [
+            "src/server/query_arena.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6449_projection_value_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6450-DUPLICATE-STORED-KEY",
+      "features": [
+        {
+          "feature": "EngineDirectNodeOwnership",
+          "aspect": "LaterEntryReplacesEarlier",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6450_ownership_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "EngineDirectNodeOwnership",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6450_ownership_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6450_ownership_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
           "updated": "2026-11-12"
         }
       ]
@@ -93524,7 +93199,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4875
+      "TESTED": 4855
     },
     "by_aspect": {
       "2PC": 3,
@@ -93632,7 +93307,6 @@
       "AlgorithmIntegration": 1,
       "AlgorithmIntegrity": 1,
       "AlgorithmVerification": 1,
-      "AliasFiltering": 1,
       "AllErrorsDeny": 1,
       "AllOrNothingSet": 1,
       "AllShortestPathsFilter": 1,
@@ -94318,7 +93992,6 @@
       "Cryptography": 1,
       "CtrlCCancelBuffer": 1,
       "CudaDynamicLoader": 1,
-      "CumulativeMatching": 1,
       "CurrentGraphEquality": 1,
       "CurrentTenantEquality": 1,
       "CurrentTerm": 1,
@@ -94360,9 +94033,11 @@
       "DbLabelsTenantFilter": 1,
       "DbPropertyKeys": 1,
       "DbPropertyKeysFilter": 1,
+      "DbPropertyKeysRLSDeny": 1,
       "DbPropertyKeysTenantFilter": 1,
       "DbRelTypes": 1,
       "DbRelationshipTypesFilter": 1,
+      "DbRelationshipTypesRLSDeny": 1,
       "DbRelationshipTypesTenantFilter": 1,
       "DeadlineConfigRoute": 1,
       "DebugLogControl": 1,
@@ -94410,8 +94085,7 @@
       "DefenseInDepth": 1,
       "DeferCleanup": 2,
       "DeferToHandler": 1,
-      "DeferToPostWith": 2,
-      "DeferWhereForHops": 1,
+      "DeferToPostWith": 1,
       "DeferredBackfill": 1,
       "DeferredPostWriteFlush": 1,
       "DeferredRebuild": 1,
@@ -94667,6 +94341,7 @@
       "EnhancedViewWiring": 1,
       "Entry": 1,
       "EntryPoint": 1,
+      "EntryPointScratch": 1,
       "EntryStatisticsNoDrift": 1,
       "EntryType": 1,
       "EnvConfig": 1,
@@ -94894,16 +94569,13 @@
       "FinalBatch": 1,
       "FinalPagination": 1,
       "FinalScoresImmutability": 1,
-      "FinalSort": 4,
+      "FinalSort": 3,
       "FinalSorting": 1,
       "FindAllRefs": 1,
       "FindPolicyIdByName": 1,
       "FindRoleIdByName": 1,
       "FindUserIdByName": 1,
       "FirstBootSeedForcedReset": 1,
-      "FirstChainExecution": 1,
-      "FirstChainTraversal": 1,
-      "FirstChainVars": 1,
       "FirstStreamOwnerLifetime": 1,
       "FirstStreamOwnerLifetimeTestRoot": 1,
       "FirstStreamPhaseLatency": 1,
@@ -95103,10 +94775,10 @@
       "GreyCardinalVarianceEnvelope": 1,
       "GroupAggregation": 2,
       "GroupBy": 5,
-      "GroupByHandling": 1,
       "GroupByPatterns": 1,
       "GroupByVerification": 1,
       "GroupCommitPin": 1,
+      "GroupKeyOwnership": 1,
       "GroupKeyResolution": 1,
       "GroupValidationHookImplementation": 1,
       "GroupValidationHookPipelineIntegration": 1,
@@ -95263,7 +94935,6 @@
       "InboundOccupancySweeper": 1,
       "InboundReapCountForCapacity": 1,
       "InboundStreamReleasesWorker": 1,
-      "IncomingEdgeFilter": 1,
       "IncrementalPathReachableOnWirePath": 1,
       "IncrementalRefresh": 1,
       "IncrementalSnapshot": 1,
@@ -95440,6 +95111,7 @@
       "LateKeyRegistry": 1,
       "LatencyBenchmark": 2,
       "LatencyVarianceEnvelope": 2,
+      "LaterEntryReplacesEarlier": 1,
       "LayeredArchitecture": 1,
       "LazyEvaluation": 1,
       "LazyFetchCache": 1,
@@ -95460,14 +95132,14 @@
       "Left": 1,
       "LeftNodeFiltering": 1,
       "LeftOuterJoin": 2,
-      "LeftOuterJoinImpl": 1,
-      "LeftVarLookup": 1,
       "LegacyBlake2bVerify": 1,
       "LegacyCheckTimingEqualised": 1,
       "LegacyCleanup": 1,
       "LegacyRemoval": 1,
       "LegacyRoleMapping": 1,
       "LegacyVarianceEnvelope": 1,
+      "LentProjectionValues": 1,
+      "LentValues": 1,
       "LetChain": 1,
       "LetOnce": 1,
       "LetScope": 1,
@@ -95742,7 +95414,6 @@
       "MultiPropertyMergeCoordinator": 1,
       "MultiPropertyMergeFastPath": 1,
       "MultiPropertyMergeIndexedProbe": 1,
-      "MultiTargetExpand": 1,
       "MultiTenantSignal": 1,
       "MultiWayOptimization": 1,
       "MultilineBuffering": 1,
@@ -95789,6 +95460,7 @@
       "NextFreshnessGuard": 1,
       "NextPlanFreshnessGuard": 1,
       "NextSliceStructureGuard": 1,
+      "NoAggregateWithStage": 1,
       "NoArenaCallerLeak": 1,
       "NoAuthBind": 1,
       "NoAuthFlagRefused": 1,
@@ -95870,7 +95542,6 @@
       "NodesByGraph": 1,
       "NodesByGraphLeafLock": 1,
       "NodesIndexedAccuracy": 1,
-      "NonAggExprCheck": 1,
       "NonAggPath": 1,
       "NonListRightHandSide": 2,
       "NonNumericSumAvg": 1,
@@ -95897,7 +95568,6 @@
       "NullCheck": 3,
       "NullComparison": 2,
       "NullConcat": 1,
-      "NullDedup": 1,
       "NullFields": 1,
       "NullHandling": 3,
       "NullIf": 1,
@@ -95956,10 +95626,8 @@
       "OptionStorage": 1,
       "Optional": 3,
       "OptionalMatch": 1,
-      "OptionalMatchAgg": 1,
-      "OptionalMatchFiltering": 2,
+      "OptionalMatchFiltering": 1,
       "OptionalMatchIsolation": 1,
-      "OptionalPathRefused": 1,
       "OptionsField": 1,
       "OptionsFields": 1,
       "OptionsKeyValidation": 1,
@@ -96006,7 +95674,6 @@
       "PageRankIntegration": 1,
       "PageRankMutability": 1,
       "PageRankVarianceEnvelope": 1,
-      "Pagination": 2,
       "PaginationAutoCalibration": 1,
       "PaginationExecutionStreaming": 1,
       "PaginationExecutionVarianceEnvelope": 1,
@@ -96155,7 +95822,6 @@
       "PerGroupAggregates": 1,
       "PerLabelBackfillFromPostings": 1,
       "PerMapHolders": 1,
-      "PerNodeRows": 1,
       "PerRequestInstall": 1,
       "PerRowReread": 1,
       "PerSession": 1,
@@ -96323,7 +95989,6 @@
       "PostAuthCheck": 1,
       "PostFilter": 1,
       "PostGISStyle": 1,
-      "PostOptionalFilter": 1,
       "PostProjectionFilter": 1,
       "PostQuantumSecurity": 1,
       "PostReadAckFlush": 1,
@@ -96404,14 +96069,12 @@
       "PropertyConversion": 1,
       "PropertyEvaluation": 1,
       "PropertyExistence": 1,
-      "PropertyFilter": 1,
       "PropertyFiltering": 2,
       "PropertyIndex": 1,
       "PropertyMapOrderByLimit": 1,
       "PropertyMapPutRemove": 1,
       "PropertyMatching": 1,
       "PropertyMetadata": 1,
-      "PropertyPatternMatch": 1,
       "PropertyStorage": 3,
       "PropertyStorageFootprint": 1,
       "PropertyValueIntegration": 1,
@@ -96652,7 +96315,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 294,
+      "Regression": 297,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -96716,8 +96379,6 @@
       "RequestLineLifetime": 1,
       "RequiredChain": 1,
       "RequiredExpand": 1,
-      "RequiredNodeFilter": 1,
-      "RequiredNodePropertyFilter": 1,
       "Reseal": 1,
       "ResealRefusesUnsignedLegacy": 1,
       "ResetGuardrails": 1,
@@ -96758,7 +96419,6 @@
       "ReturnAndSorting": 1,
       "ReturnExecution": 1,
       "ReturnFix": 1,
-      "ReturnOptimization": 1,
       "ReturnOwnedBeforeDelete": 1,
       "ReturnProjection": 1,
       "ReverseTraversal": 2,
@@ -97069,7 +96729,6 @@
       "SingleNodeTrueOnly": 1,
       "SinglePacketFramedWrites": 1,
       "SingleRequestExecution": 1,
-      "SingleRowResult": 1,
       "SingleSourceOfTruth": 1,
       "SingleStreamLoop": 1,
       "SingleStreamStressMode": 1,
@@ -97112,7 +96771,6 @@
       "SoleHolderEndpointTenantScope": 1,
       "SoleHolderTenantRegression": 1,
       "SortExecution": 1,
-      "Sorting": 1,
       "SourceAudit": 2,
       "SourceFileSpinner": 1,
       "SourcePreserved": 1,
@@ -97165,6 +96823,7 @@
       "StatementScopeFailed": 1,
       "StatementScopedDimScratch": 1,
       "StatementScopedRecord": 1,
+      "StatementScratch": 1,
       "StatementUndoRecord": 1,
       "StatementUndoRegression": 1,
       "StatementUndoReplay": 1,
@@ -97560,7 +97219,6 @@
       "VarReference": 1,
       "VarcharBounds": 1,
       "VariableBinding": 1,
-      "VariableCollection": 2,
       "VariableExtraction": 1,
       "VariableLookup": 2,
       "VariableMutability": 1,
@@ -97602,7 +97260,6 @@
       "WhereEnvLifetime": 1,
       "WhereEvaluation": 2,
       "WhereFilterHonored": 1,
-      "WhereFiltering": 1,
       "WherePassthrough": 1,
       "WherePredicatePushdown": 1,
       "WholeProgram": 1,
@@ -97620,7 +97277,6 @@
       "WithAggregation": 2,
       "WithBindingDoubleFree": 1,
       "WithBindingResultLeak": 1,
-      "WithClauseHandling": 1,
       "WithClauseIsolation": 1,
       "WithExecution": 2,
       "WithFiltering": 1,
@@ -97660,6 +97316,7 @@
       "XSSPrevention": 2,
       "YearMonthVsDayTime": 1,
       "YieldAndReturn": 1,
+      "YieldWhereRefusal": 1,
       "ZeroCopy": 1,
       "ZeroLength": 1,
       "ZeroLengthFilter": 1,
