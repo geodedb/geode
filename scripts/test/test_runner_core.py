@@ -230,6 +230,31 @@ def should_isolate(text):
 # ---------------------------------------------------------------------------
 
 
+class UnknownSecretError(KeyError):
+    """A ``${secret:NAME}`` the spec's secrets section does not declare.
+
+    The runners used to substitute ``default-NAME``: a value nobody chose,
+    which the server's password policy refuses for a password-named secret.
+    """
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.name = name
+
+    def __str__(self):
+        return (
+            f"${{secret:{self.name}}} is not declared in the spec's secrets section "
+            "(built-in secrets: admin_password, user_password, api_token)"
+        )
+
+
+def declared_secret(secrets, name):
+    """The value of the declared secret ``name``; UnknownSecretError otherwise."""
+    if name not in secrets:
+        raise UnknownSecretError(name)
+    return secrets[name]
+
+
 def substitute_server_variables(
     text, spec_config=None, resolved_secrets=None, env_overrides=None, instance_id=None, loop_index=None
 ):
@@ -254,7 +279,7 @@ def substitute_server_variables(
         text = text.replace("${secret:user_password}", secrets.get("user_password", "Geode Test User Passphrase"))
         text = text.replace("${secret:admin_password}", secrets.get("admin_password", "Geode Test Admin Passphrase"))
         for match in re.findall(r"\$\{secret:([^}]+)\}", text):
-            text = text.replace(f"${{secret:{match}}}", secrets.get(match, f"default-{match}"))
+            text = text.replace(f"${{secret:{match}}}", declared_secret(secrets, match))
 
     if "${GEODE_" in text or "${geode_" in text:
         secrets = resolved_secrets or {}

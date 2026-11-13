@@ -1844,6 +1844,16 @@
 
 ### Fixed
 
+- **The Python test runners fail a test that uses an undeclared secret
+  (SONNY-6451 item 5).** `scripts/test/extended_test_runner.py` and
+  `scripts/test/test_runner_core.py` substituted any `${secret:NAME}` other
+  than `admin_password`, `user_password` and `api_token` that the spec's
+  `secrets` section does not declare with `default-NAME`, a value nobody
+  chose and one the password policy refuses for a password-named secret
+  (so the test failed later with a misleading policy error). The test now
+  fails at once with `UnknownSecretError` naming the secret. The
+  fixture-secrets scan refuses a computed-name secret lookup with a
+  fallback. Regression: `zig build test-sonny6436-fixture-secrets`.
 - **`test-startup-lazy-hydrate` finishes in under a minute instead of
   running past 25 (SONNY-6433 item 9).** Every one of its 47 tests opens,
   writes (one fsync per commit), checkpoints, crashes or closes, and reopens

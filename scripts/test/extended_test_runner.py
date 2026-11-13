@@ -16,6 +16,8 @@ import yaml
 
 _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 from test_runner_core import (  # noqa: E402
+    UnknownSecretError,
+    declared_secret,
     fix_surrogate_pairs,
     start_server,
     stop_server,
@@ -191,7 +193,11 @@ def run_test(
             import re as _re
 
             for match in _re.findall(r"\$\{secret:([^}]+)\}", processed_arg):
-                processed_arg = processed_arg.replace(f"${{secret:{match}}}", secrets.get(match, f"default-{match}"))
+                try:
+                    value = declared_secret(secrets, match)
+                except UnknownSecretError as exc:
+                    return False, str(exc)
+                processed_arg = processed_arg.replace(f"${{secret:{match}}}", value)
 
         # Replace env var references like ${GEODE_SERVER_ADDRESS}, ${GEODE_ADMIN_PASSWORD}
         if "${GEODE_" in processed_arg or "${geode_" in processed_arg:
