@@ -2035,6 +2035,27 @@
 
 ### Fixed
 
+- **External KMS clients: AWS requests signed, TLS options honoured,
+  unwrap from the envelope (SONNY-6465).** `src/security/external_kms_client.zig`
+  (not yet constructed by the product; wiring is SONNY-6380): AWS KMS
+  requests are now SigV4-signed for service `kms` (they were unsigned, so real
+  AWS KMS refused them) and need static credentials (`aws_access_key` /
+  `aws_secret_key`; instance-role credentials are refused with
+  `AwsCredentialsRequired`, not implemented); `tls_ca_cert` is now the only
+  trust anchor when set and `tls_skip_verify` is refused
+  (`TlsSkipVerifyUnsupported`) instead of both being ignored; an envelope now
+  carries its Vault ciphertext or AWS CiphertextBlob (`kms_ciphertext`, also
+  in its JSON form as `kms_ct`) and `unwrap` decrypts that, checked against
+  the envelope's hash (it decrypted whatever the last wrap left in memory, so
+  nothing unwrapped after a restart); Vault `rotateKey` no longer bumps a local
+  counter (the version comes from the next wrap's `vault:v<N>:`), AWS
+  `rotateKey` refuses (`AwsKmsRotationIsManagedByAws`); `KmsProvider.deinit`
+  frees what `createKmsProvider` allocated (it leaked). The file's inline tests
+  run in `zig build test-sonny6465-external-kms-inline` (the live Vault / AWS
+  cases skip unless `VAULT_ADDR` / `AWS_KMS_ENDPOINT` and credentials are set,
+  and fail on any error once they are; they used to pass when a call failed).
+  Regression `zig build test-sonny6465-external-kms` (no network call).
+
 - **A QUIC request over the 16 MiB maximum is refused promptly
   (SONNY-3232).** The server refused such a message at its length prefix by
   ending the stream with no reply; it stopped reading, so the client, held by

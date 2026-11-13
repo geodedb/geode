@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:18:58.456413174Z",
+  "generated_at": "2026-11-13T11:21:13.563018747Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85660,6 +85660,63 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6465-AWS-SIGV4",
+      "features": [
+        {
+          "feature": "ExternalKmsClients",
+          "aspect": "AwsKmsSigV4",
+          "status": "TESTED",
+          "files": [
+            "src/security/external_kms_client.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6465_external_kms.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6465-ENVELOPE-CIPHERTEXT",
+      "features": [
+        {
+          "feature": "ExternalKmsClients",
+          "aspect": "UnwrapFromEnvelope",
+          "status": "TESTED",
+          "files": [
+            "src/security/external_kms_client.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6465_external_kms.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6465-KMS-TLS",
+      "features": [
+        {
+          "feature": "ExternalKmsClients",
+          "aspect": "TlsOptionsHonoured",
+          "status": "TESTED",
+          "files": [
+            "src/security/external_kms_client.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6465_external_kms.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93294,7 +93351,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4860
+      "TESTED": 4863
     },
     "by_aspect": {
       "2PC": 3,
@@ -93515,6 +93572,7 @@
       "AvgAggregation": 1,
       "AvgRefactor": 1,
       "AvgVarianceEnvelope": 1,
+      "AwsKmsSigV4": 1,
       "BACKUP_MANAGER": 1,
       "BATCH_ALLOC": 1,
       "BENCH": 1,
@@ -97104,6 +97162,7 @@
       "TimeseriesCallHandlers": 1,
       "Timestamp": 1,
       "TimestampTZNormalization": 1,
+      "TlsOptionsHonoured": 1,
       "ToBooleanConversion": 1,
       "ToLower": 1,
       "ToPrincipal": 1,
@@ -97259,6 +97318,7 @@
       "UnwindFiltering": 1,
       "UnwindIsolation": 1,
       "UnwindStreaming": 1,
+      "UnwrapFromEnvelope": 1,
       "UnwrapKeyAdminAllowed": 1,
       "UnwrapKeyExplicitPolicyGrants": 1,
       "UnwrapKeyGate": 1,
