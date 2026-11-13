@@ -9691,6 +9691,21 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny2441-kms-provider-paths", "Run SONNY-2441 regression (KMSProvider offers no remote_kms provider, every provider type round-trips the caller's key or refuses, and the KMS provider test is built)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6448 (7): no local_dev KMS provider (key derived from the key id)
+    // and no CA-less remote KMS client in the concurrency benchmark.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6448_kms_dead_paths.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("security/kms", sonny2441_kms_mod);
+        mod.addImport("sonny6448_kms_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6448-kms-dead-paths", "Run SONNY-6448 item 7 regression (KMSProvider has no local_dev provider whose wrapping key is derived from the key id, and the remote KMS concurrency benchmark has no client that dials without a CA bundle)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2441: the KMSProvider unit suite, built and run. (TDEKeyManager was
     // removed as never-used code in SONNY-6298; wiring is story SONNY-6380.)
     for ([_]struct { name: []const u8, path: std.Build.LazyPath, desc: []const u8 }{

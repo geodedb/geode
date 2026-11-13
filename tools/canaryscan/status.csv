@@ -5468,6 +5468,7 @@ REQ-SONNY-6447-NUMERIC-KEY-PARITY,WriteFastPathParity,IntFloatEqualEndpointKeys,
 REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS,ChunkedExecution,Regression,TESTED,tests/test_sonny6447_quic_retry_connect_stops.zig,tests/test_sonny6447_quic_retry_connect_stops.zig,,cli,2026-11-12
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,QuoteAndParenAwareSplit,TESTED,src/security/rls_core.zig,tests/test_sonny6447_rls_raw_tokenize.zig,,security,2026-11-12
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,Regression,TESTED,tests/test_sonny6447_rls_raw_tokenize.zig,tests/test_sonny6447_rls_raw_tokenize.zig,,security,2026-11-12
+REQ-SONNY-6448-KMS-NO-LOCAL-DEV,KMSProviderSystem,NoKeyFromKeyId,TESTED,tests/test_sonny6448_kms_dead_paths.zig,tests/test_sonny6448_kms_dead_paths.zig,,security,2026-11-12
 REQ-SONNY-6448-TDE-TRANSPARENT-NO-FAKE-IMPACT,TDEProcedures,NoFakePerformanceImpact,TESTED,tests/test_sonny6448_tde_transparent_encryption.zig,tests/test_sonny6448_tde_transparent_encryption.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
