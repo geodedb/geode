@@ -940,7 +940,7 @@ REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TE
 REQ-DOC-AUTH-LOCKOUT-CONFIG,AuthRateLimiting,Documentation,EXEMPT,,,security,2026-08-29,docs/USER_AUTH.md,810
 REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/MCP_LSP_BRIDGE.md,188
 REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/USER_AUTH.md,736
-REQ-DOC-MCP-SERVER-SUBSET,MCPServerSubsetDoc,Documentation,EXEMPT,,,mcp,2026-06-10,docs/MCP_SERVER.md,135
+REQ-DOC-MCP-SERVER-SUBSET,MCPServerSubsetDoc,Documentation,EXEMPT,,,mcp,2026-06-10,docs/MCP_SERVER.md,144
 REQ-DOCS-001,Docs,Documentation,TESTED,,,docs,2026-01-15,tests/test_gap_0193_final_batch.zig,545
 REQ-DOCS-API-001,Docs,APIDocumentation,TESTED,,,docs,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig,652
 REQ-DOCUMENTATION-STRUCTURE-001,DocStructure,StructureTests,IMPL,,,claude,2026-11-12,tests/test_gap_0193_batch2_testing.zig,126

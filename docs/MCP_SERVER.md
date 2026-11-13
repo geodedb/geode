@@ -112,6 +112,15 @@ the source CANARY markers.
 - See [MCP_LSP_BRIDGE.md](MCP_LSP_BRIDGE.md) for the language-bridge
   RLS pre-condition (GAP-0818).
 
+### Backend endpoint TLS
+
+The geode endpoint DSN is verified against its `ca=` bundle. A DSN with
+`insecure=true` (or `insecure_tls_skip_verify=true`, `skip_verify=true`)
+follows the CLI's `--insecure-tls-skip-verify` rule (SONNY-6453): refused
+under production conditions (a release build or `GEODE_ENV=production`)
+unless `GEODE_ALLOW_INSECURE_TLS=1` is set, and logged as a warning on
+stderr whenever it is accepted.
+
 ## Verification
 
 - `zig build test-gap0516` — drives the real MCP dispatch:

@@ -39,6 +39,15 @@
   `scripts/docker/test-ci.sh` (`GEODE_CA_CERT`, default `/certs/ca.crt`)
   and the `docker-compose.example.yml` dataset loader (`./certs/ca.crt`)
   are updated. Regression: `zig build test-sonny6453-cli-no-ca-default`.
+- **BREAKING (operator): `geode mcp` refuses an endpoint DSN with
+  `insecure=true` under production posture (SONNY-6453 item 3).** The DSN
+  parameter (`insecure`, `insecure_tls_skip_verify`, `skip_verify`) turned
+  server certificate verification off silently in any build. It now
+  follows the CLI's `--insecure-tls-skip-verify` rule: refused
+  (`InsecureTlsRefused`) in a release build or with `GEODE_ENV=production`
+  unless `GEODE_ALLOW_INSECURE_TLS=1`, and a warning on stderr whenever
+  accepted. Give the DSN a `ca=` bundle instead. Regression:
+  `zig build test-sonny6453-mcp-insecure-dsn`.
 - **Operator-visible: every cluster peer dial uses one verified
   configuration (SONNY-6453 items 2 and 5).** The 2PC transport never read
   `GEODE_CLUSTER_CA_CERT`: it dialled with verification on and no trust
