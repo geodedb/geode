@@ -279,8 +279,14 @@
             // thread_pool v0.2.7 + quic v0.1.38 + timeseries-storage v0.2.10
             // (each pin-aligned to the same thread_pool hash). A partial bump
             // fails with "expected '*pool.ThreadPool', found '*pool.ThreadPool'".
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.9#1d7275da020a43588c4f1885f7f725d5e8ce079e",
-            .hash = "thread_pool-0.2.9-11B1Bqf7eQDfHhrQAkHk0e2ABigRBFNkFEAmc8t9raZe",
+            // 2026-11-12 (SONNY-6375): thread-pool v0.2.10 fixes the LocalQueue
+            // dispatch, finalizeTask and scratch-counter data races. The
+            // lockstep partner is timeseries-storage only (v0.2.19); quic no
+            // longer type-shares the pool (build.zig passes `.thread_pool =
+            // false` to quic). graph-storage v0.4.11 moves with it because it
+            // runs its own pools from its own thread_pool copy.
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.10#698805259aa15131b14cac6798a9e95c64861797",
+            .hash = "thread_pool-0.2.10-11B1BgIlegC4g-vLCPiNdFo1QpYxROwDPX1U5erWrVTB",
         },
 
         // =======================================================================
@@ -524,8 +530,8 @@
             // no overflowed values stay byte-compatible (no manifest bump; the
             // stub tag is the versioning). Same transitive deps as v0.3.2 (no
             // diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=5fe21929aa851e7df97dc3bbdff5d48ca64e77b5#5fe21929aa851e7df97dc3bbdff5d48ca64e77b5",
-            .hash = "graph_storage-0.4.10-9UyJS7TBLAC90y84DCss2l2n9_gx_6jbUYU2Zawpxten",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.11#7bd238b0bdde8d707e7307d0433fd133640bcbd0",
+            .hash = "graph_storage-0.4.11-9UyJSwIuLQD2C6OSWZFCg7lKXqa2keAnnDCuQoljHn-t",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -594,8 +600,8 @@
         .timeseries_storage = .{
             // 2026-07-13: v0.2.10 — carries the thread_pool v0.2.7 lockstep pin
             // (popMany stalled-producer livelock fix) plus accumulated main.
-            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=c56a3346a2852b221dadf02f69bc1b29d1554826#c56a3346a2852b221dadf02f69bc1b29d1554826",
-            .hash = "timeseries_storage-0.2.18-5wzBJP5QFADY0rToFMMPnYb4-TjJJbipGQF-zzSWuzue",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.19#21e9df99bbbe3cc5244c166a06b81ac9e2d06eb3",
+            .hash = "timeseries_storage-0.2.19-5wzBJFBRFABkU8ecwbJRpnzGVRKIcXpz87_lY1F4kUgk",
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{
