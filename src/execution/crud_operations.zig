@@ -1517,6 +1517,36 @@ pub fn executeCreateQuery(
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
 
+    // CANARY: REQ=REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT; FEATURE="StatementTxnBatching"; ASPECT=CreateQueryStatementTxn; STATUS=TESTED; TEST=tests/test_sonny738_create_query_one_commit.zig; OWNER=storage; UPDATED=2026-11-13
+    // SONNY-738: the R8 statement transaction `executeCreate` opens, for the
+    // query form (`CREATE ... SET ... RETURN`, a FOR body's CREATE), so its
+    // nodes, labels, properties and relationships commit together, with one
+    // WAL fsync. Without it every adapter sub-operation committed on its own
+    // (8 commits for `CREATE (a)-[:E]->(b) SET ...`, 6 per FOR element). A
+    // session engine transaction on this graph, or a statement transaction
+    // already open on it, covers the writes instead; as in
+    // `executeCreateForBatchWithTracking`, there is no context here to open
+    // a session transaction lazily: a statement in a Geode transaction whose
+    // session engine transaction is not open yet commits at its end, as
+    // its sub-operations each did before.
+    const gsa = @import("../storage/graph_storage_adapter.zig");
+    var stmt_txn: gsa.StatementTxn = undefined;
+    var stmt_txn_open = false;
+    if (graph_store.getGlobalAdapter()) |ad| {
+        if (gsa.currentStatementTxnForGraph(target_graph) == null) {
+            if (ad.beginStatementTxn(target_graph, &stmt_txn)) |_| {
+                stmt_txn_open = true;
+            } else |err| switch (err) {
+                // GraphNotFound: the first createNode creates the graph and
+                // commits its own transactions. Nested: a statement
+                // transaction on another graph; this one auto-commits.
+                error.GraphNotFound, error.NestedStatementTxn => {},
+                else => return err,
+            }
+        }
+    }
+    errdefer if (stmt_txn_open) stmt_txn.abort();
+
     // Track created nodes by variable name for WITH/SET/RETURN clauses (store IDs not pointers)
     var created_nodes = std.StringHashMap(u64).init(allocator);
     // Don't defer deinit - we'll transfer ownership to ExecutionResult for UNION support
@@ -1903,6 +1933,12 @@ pub fn executeCreateQuery(
                 }
             },
         }
+    }
+
+    // SONNY-738: every write of the statement is done; the RETURN only reads.
+    if (stmt_txn_open) {
+        try stmt_txn.commit();
+        stmt_txn_open = false;
     }
 
     // CANARY: REQ=REQ-GQL-083; FEATURE="CreateWithClause"; ASPECT=VariablePropagation; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09

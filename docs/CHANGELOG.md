@@ -1993,6 +1993,19 @@
 
 ### Fixed
 
+- **A CREATE in a query (`CREATE ... SET ... RETURN`, a FOR body's CREATE)
+  commits one storage-engine transaction, as a CREATE statement does
+  (SONNY-738).** `executeCreateQuery` opened no statement transaction, so
+  each node, label, property and relationship it wrote committed on its
+  own, one WAL fsync each, on whichever shard it landed: 8 commits for
+  `CREATE (a:A)-[:E]->(b:B) SET ...`, 6 for each element of
+  `FOR i IN ... CREATE (:A {i: i})-[:E]->(:B {i: i})`. A 1,500-element FOR
+  seed against a server on an ext4 data dir took 191 s (27,567 fsync and
+  fdatasync calls); it now takes 21 s, one graph WAL fsync per element.
+  This was the cause of `test-sonny-write-allowlist-r4-transport`'s seed
+  timeout, not the QUIC transfer. A FOR still commits once per element,
+  not once per statement. Regression: `zig build
+  test-sonny738-create-query-one-commit`.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so

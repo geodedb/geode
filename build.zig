@@ -532,9 +532,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-cli-file-chunked", .reason = "subprocess e2e (geode serve + geode query --file on real ports); promotion owes a green run" },
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
-    .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny738-create-query-one-commit", .reason = "intentionally red TDD reproduction (SONNY-738, KNOWN_TEST_ISSUES): a query-form CREATE commits a transaction per sub-operation; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
@@ -12126,6 +12124,9 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         spawnsBuiltGeode(tests);
+        // SONNY-738: in the aggregate since its QUIC seed answers inside the
+        // client's cap (a FOR element's CREATE commits once); about 5 min.
+        shardDep(test_step, &run_tests.step, 8, test_shard_loads, test_shard_index);
         const step = b.step("test-sonny-write-allowlist-r4-transport", "Run the Task W round 4a regression over gRPC (in process) and QUIC (a spawned server): the round-3 review's PROFILE repros are refused (0A000) with nothing written; MERGE actions and later chains read the statement's variables (go/oidc ClaimJTI replay, TOTP); a SET swap swaps; an unsupplied parameter is refused (42P02) on every path, the QUIC MERGE fast path too; the parser's limits answer 54000 and 54001");
         step.dependOn(&run_tests.step);
     }
@@ -14878,9 +14879,7 @@ pub fn build(b: *std.Build) void {
     sonny738_cq_test_mod.addImport("rls_types", rls_types_mod);
     const sonny738_cq_tests = b.addTest(.{ .root_module = sonny738_cq_test_mod });
     const run_sonny738_cq_tests = b.addRunArtifact(sonny738_cq_tests);
-    // Intentionally red (docs/KNOWN_TEST_ISSUES.md) until the fix commit
-    // registers it through shardDep; compiled by test-compile.
-    if (g_test_compile_step) |c| c.dependOn(&sonny738_cq_tests.step);
+    shardDep(test_step, &run_sonny738_cq_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny738_cq_step = b.step("test-sonny738-create-query-one-commit", "Run SONNY-738 regression (a query-form CREATE -- CREATE ... RETURN / SET, a FOR body's CREATE -- through the executor commits one storage-engine transaction per statement or FOR element, as a CREATE statement does)");
     sonny738_cq_step.dependOn(&run_sonny738_cq_tests.step);
 
