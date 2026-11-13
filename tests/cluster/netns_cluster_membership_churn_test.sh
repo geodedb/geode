@@ -344,12 +344,24 @@ assert_count_steady() {
 # would (correctly) refuse to start with RaftStorageDirLocked. Reaping reproduces
 # the k8s termination ordering so M4 actually exercises durable FileStorage
 # reload rather than a same-host two-writers race the product rightly forbids.
+#
+# bin_name_pattern prints an extended regex matching the basename of $BIN, its
+# first character in a bracket expression and the rest regex-escaped.
+bin_name_pattern() {
+  local name rest
+  name="$(basename "$BIN")"
+  rest="$(printf '%s' "${name:1}" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+  printf '[%s]%s' "${name:0:1}" "$rest"
+}
 kill_and_reap() {
-  # SONNY-6447: "[g]eode", so the pattern does not match the command line of
-  # `sudo pkill` itself. It did, and pkill SIGKILLed its own sudo, whose pty
-  # hang-up can end pkill before it reaches a geode with a higher pid (pids
-  # wrap at pid_max).
-  local id=$1 t pat="[g]eode serve .*--data-dir $WORK/data$id "
+  # SONNY-6447: the first character of the binary's name is bracketed ("[g]eode"
+  # for `geode`), so the pattern does not match the command line of `sudo
+  # pkill` itself. It did, and pkill SIGKILLed its own sudo, whose pty hang-up
+  # can end pkill before it reaches a geode with a higher pid (pids wrap at
+  # pid_max). SONNY-6456: the name comes from $BIN, so a binary under test
+  # that is not called `geode` is still found and reaped.
+  local id=$1 t pat
+  pat="$(bin_name_pattern) serve .*--data-dir $WORK/data$id "
   # SIGTERM first (graceful flush attempt), then give it a few seconds.
   [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
   for t in $(seq 1 5); do pgrep -f "$pat" >/dev/null 2>&1 || break; sleep 1; done

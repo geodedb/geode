@@ -1844,7 +1844,6 @@ REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowAvg,TESTED,tests/test_decimal_ov
 REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowHandling,TESTED,tests/test_groupby_decimal_overflow.zig,TestCANARY_REQ_GQL_012_DecimalOverflowHandling,,engine,2025-09-21
 REQ-GQL-012,GROUP BY/Aggregation,DecimalOverflowSum,TESTED,tests/test_decimal_overflow_aggregates.zig,TestCANARY_REQ_GQL_012_DecimalOverflowSum,,engine,2025-09-21
 REQ-GQL-012,GROUP BY/Aggregation,Engine,TESTED,src/exec.zig,tests/e2e_protocol_groupby_basic.zig,,engine,2025-09-20
-REQ-GQL-012,GROUP BY/Aggregation,HashAggDistinctHighCardVarianceEnvelope,BENCHED,tests/benchmark_hashagg_distinct_variance.zig,BenchmarkCANARY_REQ_GQL_012_HashAggDistinctHighCardVarianceEnvelope,,engine,2025-09-21
 REQ-GQL-012,GROUP BY/Aggregation,HavingCountDistinctFilter,TESTED,tests/test_groupby_having_count_distinct.zig,TestCANARY_REQ_GQL_012_HavingCountDistinctFilter,,engine,2025-09-21
 REQ-GQL-012,Planner ISO Enforcement,OrderByEnforcement,TESTED,tests/e2e_planner_order_enforcement.zig,e2e_planner_order_enforcement,,planner,2025-09-25
 REQ-GQL-013,AdvancedUnionOperations,IntersectOperation,TESTED,tests/advanced_union_test.zig,TestCANARY_REQ_GQL_013_IntersectOperation,,engine,2025-10-03

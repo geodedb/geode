@@ -3708,6 +3708,19 @@
 
 ### Removed
 
+- **Dead benchmark: `tests/benchmark_hashagg_distinct_variance.zig`
+  (SONNY-6456 item 5).** No build step compiled it and it could not
+  compile: it imports `exec.zig`, `eval.zig` and `gql/ast.zig` relative to
+  `tests/` (no such files), discards a capture (`|_|`), and calls
+  `runGroupedQuery` with the old seven-argument arity. Grouped
+  `count(DISTINCT ...)` is covered by `zig build
+  test-sonny2675-grouped-having` and `test-sonny2675-aggregate-semantics`.
+  Its BENCHED marker
+  (REQ-GQL-012 HashAggDistinctHighCardVarianceEnvelope) described only that
+  file. The netns membership-churn script's `kill_and_reap` now matches
+  the binary under test by the name of `$BIN` (the script's first
+  argument) instead of only a binary named `geode`, so a renamed binary
+  (for example `geode-debug`) is stopped and reaped between restarts.
 - **Dead code: three test files no build step compiles, and an unused
   import (SONNY-6447 item 9).** `tests/test_build_system_module_dependencies.zig`,
   its sibling `tests/test_build_system_module_dependencies_integration.zig`
