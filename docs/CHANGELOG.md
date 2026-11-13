@@ -29,11 +29,14 @@
   test-sonny6435-tde-small-pool-node-loss` (now in the aggregate).
 - **TDE cold-read overhead measured (SONNY-6452 item 3).** `zig build
   test-sonny6435-tde-overhead` now also times reads that miss the buffer
-  pool (8-page pool per shard, 2.00 misses per read in both arms): -72.5%
-  on the dev host, i.e. encrypted misses are cheaper, because a plaintext
-  page read verifies a software CRC32C (about 15.9 us per 8 KiB page) that
-  an encrypted page (AES-256-GCM, about 2.5 us) skips. Published in
-  docs/TDE_FILE_LEVEL_ENCRYPTION.md, "Measured overhead"; gated below +10%.
+  pool (8-page pool per shard, 2.00 misses per read in both arms). With
+  graph-storage v0.4.13 (hardware CRC32C) it is +55.7% to +61.4% on the dev
+  host (about 6.2 against 9.8 us per read): an encrypted miss decrypts the
+  page, a plaintext miss only checks its CRC. With 0.4.12's software CRC32C
+  (about 15.9 us per 8 KiB page) the plaintext miss was the slower one
+  (-72.5%). Published in docs/TDE_FILE_LEVEL_ENCRYPTION.md, "Measured
+  overhead", with the other figures re-measured on 0.4.13; gated below
+  +80%.
 - **`geode storage verify --check tde-page-tail` and `geode storage repair
   --tde-page-tail` for encrypted stores written by graph_storage <= 0.4.11
   (SONNY-6452).** The check reads the store files without opening the store

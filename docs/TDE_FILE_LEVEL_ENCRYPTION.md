@@ -152,14 +152,14 @@ storage engine geode opens every graph with, the same workload with page and
 WAL encryption off and on (one operation inserts a node with a 512-byte
 property and reads an earlier node's property), the two arms interleaved
 batch by batch, medians, built ReleaseFast with the production-default
-buffer pool. 2026-11-12, a shared and loaded 16-core Threadripper PRO 3955WX
-dev host:
+buffer pool. 2026-11-13, graph_storage 0.4.13, a shared and loaded 16-core
+Threadripper PRO 3955WX dev host (load average about 11):
 
 | Workload (WAL sync) | Plain | TDE | Overhead |
 | --- | --- | --- | --- |
-| `each_commit` (the default) | 53.3 ms/op | 53.7 ms/op | +0.7% (four runs: -1.3% to +0.7%) |
-| `deferred`, no checkpoint in the timed window | 151.9 us/op | 181.5 us/op | +19.5% (three runs: +19.5% to +21.0%) |
-| Reads that miss the buffer pool (8-page pool per shard) | 36.6 us/op | 10.1 us/op | -72.5% (two runs, 2026-11-13: -72.8% and -72.5%) |
+| `each_commit` (the default) | 54.6 ms/op | 55.1 ms/op | +1.1% (four runs: -0.5% to +1.9%) |
+| `deferred`, no checkpoint in the timed window | 136.7 us/op | 164.8 us/op | +20.6% (four runs: +18.7% to +20.9%) |
+| Reads that miss the buffer pool (8-page pool per shard) | 6.2 us/op | 9.8 us/op | +56.9% (four runs: +55.7% to +61.4%) |
 
 With an fsync per commit the encryption disappears in the disk latency on
 this host (an operation is three commits, about 18 ms per fsync). Without
@@ -176,14 +176,18 @@ checkpointed stores of 16000 nodes with a 512-byte property, an exact
 8-page pool per shard (auto-size off), one operation reads the property of a
 random node; the engines' own counters show 2.00 buffer-pool misses per
 read in both arms. The store files sit in the OS page cache, so this is the
-CPU cost of a miss, not disk latency. Encrypted misses cost less: a
-plaintext page is checked with CRC32C on every read, and the standard
-library's software CRC32C takes about 15.9 us per 8 KiB page on this host,
-while AES-256-GCM (hardware AES) takes about 2.5 us, and an encrypted page
-skips the CRC. The step checks the cold-read overhead below 10%. On a CPU
-without AES instructions the decrypt is slower and the figure differs. The
-layers above the engine (executor, query, network) do the same work in both
-arms and dilute every figure here.
+CPU cost of a miss, not disk latency. An encrypted miss decrypts the page
+(AES-256-GCM, hardware AES): about 1.8 us more per miss than a plaintext
+one, which only verifies the page's CRC32C. graph_storage 0.4.13 computes
+that CRC with the CPU's CRC32C instructions (SSE4.2 / ARMv8, software
+fallback; about 0.75 us per 8 KiB page instead of 15.6 us, by the library's
+own measurement), and an encrypted page skips it. Before 0.4.13 the
+software CRC made the plaintext miss the slower one (2026-11-13 with
+graph_storage 0.4.12: 36.6 against 10.1 us/op, -72.5%). The step checks the
+cold-read overhead below 80%. On a CPU without AES or CRC32C instructions
+both arms are slower and the figure differs. The layers above the engine
+(executor, query, network) do the same work in both arms and dilute every
+figure here.
 
 ## Security Properties
 

@@ -326,15 +326,20 @@ const cold_pool_pages = 8;
 const cold_min_misses_per_read: f64 = 0.5;
 
 // The claims docs/TDE_FILE_LEVEL_ENCRYPTION.md ("Measured overhead") makes,
-// from the 2026-11-12 runs on a shared, loaded dev host (16-core
-// Threadripper PRO 3955WX): durable -1.3% to +0.7% over four runs
-// (fsync-bound, 53-58 ms per operation), commit path without fsync +19.5% to
-// +21.0% over three.
+// from the 2026-11-13 runs with graph_storage 0.4.13 on a shared, loaded dev
+// host (16-core Threadripper PRO 3955WX): durable -0.5% to +1.9% over four
+// runs (fsync-bound, 54-57 ms per operation), commit path without fsync
+// +18.7% to +20.9% over four. (2026-11-12, graph_storage 0.4.12: -1.3% to
+// +0.7% over four, +19.5% to +21.0% over three.)
 const deferred_bound: f64 = 0.35;
 const deferred_bound_text = "35%";
 const durable_bound: f64 = 0.05;
 const durable_bound_text = "5%";
 // The cold-read claim docs/TDE_FILE_LEVEL_ENCRYPTION.md makes (SONNY-6452),
-// from the runs recorded there.
-const cold_bound: f64 = 0.10;
-const cold_bound_text = "10%";
+// from the runs recorded there: +55.7% to +61.4% over four runs with
+// graph_storage 0.4.13, whose hardware CRC32C made a plaintext miss about
+// 6 us/op against about 9.7 us/op encrypted. With the software CRC of
+// 0.4.12 and older the plaintext miss was the slower one (-72.5%), which the
+// former 10% bound described.
+const cold_bound: f64 = 0.80;
+const cold_bound_text = "80%";
