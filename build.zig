@@ -537,6 +537,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
+    .{ .name = "test-sonny6484-shell-utf8", .reason = "intentionally red TDD reproduction (SONNY-6484 item 2: the plain shell drops every byte >= 127); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2440-blocking-worker-fallback", .reason = "intentionally red reproduction of a thread_pool dependency defect (SONNY-2440, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a thread_pool release with the fix" },
 };
 
@@ -6024,6 +6025,21 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6476-shell-long-line", "Run SONNY-6476 item 2 regression (the real geode shell --plain against a real server runs a 6,000-byte statement whole: no 4,095-byte truncation)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6484 item 2: the plain shell passes UTF-8 through.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6484_shell_utf8.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6484-shell-utf8", "Run SONNY-6484 item 2 regression (the real geode shell --plain against a real server round-trips 2-, 3- and 4-byte UTF-8 and combining marks through CREATE and RETURN, and refuses a line that is not valid UTF-8)").dependOn(&run_tests.step);
     }
 
     // SONNY-6484 (1): IPv6 literals in client addresses (--server, --dsn,
