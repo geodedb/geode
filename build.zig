@@ -15740,6 +15740,21 @@ pub fn build(b: *std.Build) void {
     const sonny6456_reap_step = b.step("test-sonny6456-cluster-dead-conn-reap", "Run the SONNY-6456 item 2 regression (a started ClusterCoordinator's QUIC listener reaps an inbound connection whose peer went silent, with GEODE_RAFT_DEAD_CONN_REAP_MS, well before the inbound idle deadline)");
     sonny6456_reap_step.dependOn(&run_sonny6456_reap_tests.step);
 
+    // SONNY-6456 item 3: the REAL raft sender (opted into real QUIC in a test
+    // build) reconnects after the peer closes its connection and after the
+    // peer restarts.
+    const sonny6456_sender_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6456_raft_real_sender.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6456_sender_tests.root_module.addImport("geode", root_mod);
+    sonny6456_sender_tests.root_module.link_libc = true;
+    const run_sonny6456_sender_tests = b.addRunArtifact(sonny6456_sender_tests);
+    shardDep(test_step, &run_sonny6456_sender_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6456_sender_step = b.step("test-sonny6456-raft-real-sender", "Run the SONNY-6456 item 3 regression (the real raft sender, opted into real QUIC with raft_consensus.useRealQuicInTests, reaches a started receiver, reconnects after the receiver closes its connection, and reaches the receiver after it restarts)");
+    sonny6456_sender_step.dependOn(&run_sonny6456_sender_tests.step);
+
     // SONNY-6451 item 3: SIGTERM stops a cluster node's raft transport before
     // the final flush and the node exits well inside the teardown watchdog
     // (spawns two cluster nodes of the built geode).

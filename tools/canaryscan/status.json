@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:47:46.303698559Z",
+  "generated_at": "2026-11-13T07:48:12.270021039Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85735,6 +85735,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6456-RAFT-REAL-SENDER",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "RaftSenderReconnectsInProcess",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6456_raft_real_sender.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6456_raft_real_sender.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6456-SHUTDOWN-PERSISTENCE-STOP",
       "features": [
         {
@@ -93384,7 +93403,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4867
+      "TESTED": 4868
     },
     "by_aspect": {
       "2PC": 3,
@@ -96420,6 +96439,7 @@
       "RaftDropGraphLock": 1,
       "RaftEnvelopeWire": 1,
       "RaftIntegration": 1,
+      "RaftSenderReconnectsInProcess": 1,
       "RaftState": 1,
       "RandAlias": 1,
       "RandomizedEncryption": 1,
