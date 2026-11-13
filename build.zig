@@ -535,6 +535,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
+    .{ .name = "test-sonny6435-tde-small-pool-node-loss", .reason = "intentionally red reproduction (SONNY-6435, KNOWN_TEST_ISSUES): graph_storage 0.4.10 loses committed nodes with page encryption and a small buffer pool; compiled by test-compile; register it through shardDep in the commit that bumps the fixed graph_storage" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -4960,6 +4961,20 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         bench_step.dependOn(&run_tests.step);
         b.step("test-sonny6435-tde-overhead", "Run SONNY-6435 item 2 measurement (TDE overhead of the storage engine: the same insert+read workload with page and WAL encryption off vs on, interleaved perf_gate batches, median overhead, deferred and sync_each_commit WAL sync; asserts the encrypted arm writes no plaintext)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6435 (found by item 2): intentionally red (docs/KNOWN_TEST_ISSUES.md).
+    // graph_storage 0.4.10 loses committed node records with page encryption
+    // and a buffer pool smaller than the store. Not in shardDep until the
+    // graph_storage fix lands; compiled by test-compile.
+    {
+        const gs_fast = b.dependency("graph_storage", .{ .target = target, .optimize = .ReleaseFast }).module("graph_storage");
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_tde_small_pool_node_loss.zig"), .target = target, .optimize = .ReleaseFast, .link_libc = true });
+        mod.addImport("graph_storage", gs_fast);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6435-tde-small-pool-node-loss", "Run SONNY-6435 reproduction, intentionally red until graph_storage keeps every committed node with page encryption and a buffer pool smaller than the store (8 pages per shard, no auto-size; the same sequence without a key keeps every node)").dependOn(&run_tests.step);
     }
 
     // Attach physiological redo canary tests after test_step defined
