@@ -5196,6 +5196,7 @@ REQ-SONNY-6295-CREATE-PATH-MIDDLE-NODE,CreatePath,Regression,TESTED,tests/test_s
 REQ-SONNY-6296-LEGACY-READ-GAPS,ReadSemantics,Regression,TESTED,tests/test_sonny6296_legacy_read_gaps.zig,tests/test_sonny6296_legacy_read_gaps.zig,,execution,2026-11-13
 REQ-SONNY-6296-PLANNED-WHERE-ERRORS,PlannedRead,WhereErrorsFailTheQuery,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6296_legacy_read_gaps.zig,,execution,2026-11-13
 REQ-SONNY-6296-REL-MAP-PARAMS,PatternMatching,RelationshipMapParameters,TESTED,src/execution/pattern_helpers.zig,tests/test_sonny6296_legacy_read_gaps.zig,,execution,2026-11-13
+REQ-SONNY-6297-ALLOCATION-FAILURE-SWEEP,ExecutionResultOwnership,ErrorPathOwnership,TESTED,tests/test_sonny6297_allocation_failure_sweep.zig,tests/test_sonny6297_allocation_failure_sweep.zig,,engine,2026-11-13
 REQ-SONNY-6297-PER-ROW-ITEM-LEAKS,LegacyReturnProjection,Regression,TESTED,tests/test_sonny6297_per_row_item_leaks.zig,tests/test_sonny6297_per_row_item_leaks.zig,,engine,2026-11-13
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,ManagerRestoreIsStaged,TESTED,src/storage/backup.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12
 REQ-SONNY-6300-STAGED-RESTORE-ONLY,Backup Restore,NoInPlaceRestoreOneSyncTimeouts,TESTED,tests/test_sonny6300_staged_restore_paths.zig,tests/test_sonny6300_staged_restore_paths.zig,,storage,2026-11-12

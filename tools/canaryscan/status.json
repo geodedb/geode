@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:45:05.375469764Z",
+  "generated_at": "2026-11-13T15:47:44.48214965Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81176,6 +81176,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6297-ALLOCATION-FAILURE-SWEEP",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "ErrorPathOwnership",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6297_allocation_failure_sweep.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6297_allocation_failure_sweep.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6297-PER-ROW-ITEM-LEAKS",
       "features": [
         {
@@ -94661,7 +94680,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4939
+      "TESTED": 4940
     },
     "by_aspect": {
       "2PC": 3,
@@ -95838,6 +95857,7 @@
       "ErrorHandlingIntegration": 1,
       "ErrorHandlingRobustness": 1,
       "ErrorLogging": 1,
+      "ErrorPathOwnership": 1,
       "ErrorPayloadParity": 2,
       "ErrorReporting": 1,
       "ErrorTesting": 1,
