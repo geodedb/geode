@@ -214,7 +214,6 @@ pub const types = struct {
     pub const extended = @import("types/extended.zig");
     pub const extended_functions = @import("types/extended_functions.zig");
     pub const numeric_promotion = @import("types/numeric_promotion.zig");
-    pub const int256 = @import("types/i256.zig");
     pub const hash = @import("types/hash.zig");
     pub const vector = @import("types/vector.zig");
     pub const geographic = @import("types/geographic.zig");

@@ -5348,6 +5348,11 @@
 
 ### Removed
 
+- **Dead code: `src/types/i256.zig` (SONNY-6511 item 1).** An `Int256`
+  stub (`add` with a `comptime_int` carry that cannot compile, `toString`
+  allocating from `std.testing.allocator` in product code) that nothing
+  used: its only reference was the `geode.types.int256` re-export, which
+  nothing named. Geode has no 256-bit integer type.
 - **Dead code: 37 of the 40 files under `src/graph/` and the 64 test files that only tested them
   (SONNY-6511 item 1 and 2).** A second set of graph algorithms and
   containers (builders, centrality incl. the "optimized" PageRank and
