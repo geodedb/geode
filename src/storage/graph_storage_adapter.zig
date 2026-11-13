@@ -2388,14 +2388,22 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
 /// (which join the statement or session engine txn) do it here. Without
 /// the images the property pages reached the WAL with nothing that
 /// pointed at them, and a crash lost the properties.
+/// SONNY-6492 (5) measurement only: test binaries can skip the three page
+/// images below to time and size them against the shipped path
+/// (test-sonny6492-edge-prop-image-cost). Compiled out of every other build.
+pub var bench_skip_edge_prop_head_images: bool = false;
+
 fn publishEdgePropHead(shard: *gs.GraphEngine, txn: gs.TxnId, from_id: u64, from_out_head: anytype, to_id: u64, edge_id: u64, new_head: u64) !void {
+    const log_images = !(@import("builtin").is_test and bench_skip_edge_prop_head_images);
     if (try shard.adj_out.updateEdgePropHead(from_out_head, edge_id, new_head)) |page| {
-        try shard.logPagePublic(txn, .adj_out, page);
-        try shard.logPagePublic(txn, .nodes, from_id / shard.node_store.nodes_per_page);
+        if (log_images) {
+            try shard.logPagePublic(txn, .adj_out, page);
+            try shard.logPagePublic(txn, .nodes, from_id / shard.node_store.nodes_per_page);
+        }
     }
     const in_head = try shard.in_head_dir.getHead(to_id);
     if (try shard.adj_in_remote.updateEdgePropHead(in_head, edge_id, new_head)) |page| {
-        try shard.logPagePublic(txn, .in_idx, page);
+        if (log_images) try shard.logPagePublic(txn, .in_idx, page);
     }
     // v0.2.26: copy-on-write (the mmap base is immutable). The dirty flag
     // keeps a checkpoint from re-blessing the stale edges.idx snapshot.

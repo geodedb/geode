@@ -2288,6 +2288,20 @@
   another graph. Regression: `zig build test-sonny6492-drop-graph-label-counts`
   (before: g1 counted 340 nodes with label `x:y`, its 300 and g1:x's 40;
   with the keys fixed but no purge, g1 created again counted 300).
+- **Measured: the cost of the SONNY-6471 relationship-property images
+  (SONNY-6492 item 5).** `zig build test-sonny6492-edge-prop-image-cost`
+  sets the first property of relationships through
+  `StorageAdapter.setEdgeProperty` with and without the head page images
+  (interleaved perf_gate batches; the skip exists only in test binaries).
+  Each SET that moves a property-chain head adds two 8 KiB page images to
+  the WAL: 24.8 KB of WAL per SET instead of 8.3 KB (x3), in one
+  transaction per SET and in a statement of 100 SETs alike (a SET whose
+  relationship's source is on another shard than the statement transaction
+  commits on its own, SONNY-2979). With the default fsync per commit the
+  time is within noise (-5.3% and +0.5% at about 19 ms per SET on a loaded
+  host); with `GEODE_WAL_SYNC=deferred` a SET takes 280 us instead of
+  109 us (+156%). graph-storage does not deduplicate page images within a
+  transaction. Not reduced in this change.
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness

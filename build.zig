@@ -4985,6 +4985,19 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6435-tde-overhead", "Run SONNY-6435 item 2 measurement (TDE overhead of the storage engine: the same insert+read workload with page and WAL encryption off vs on, interleaved perf_gate batches, median overhead, deferred and sync_each_commit WAL sync; asserts the encrypted arm writes no plaintext)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6492 (5): the measured cost of the SONNY-6471 relationship-
+    // property head images (interleaved perf_gate A/B, WAL bytes per SET).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_edge_prop_image_cost.zig"), .target = target, .optimize = optimize, .link_libc = true });
+        mod.addImport("geode", root_mod);
+        mod.addImport("perf_gate", perf_gate_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        bench_step.dependOn(&run_tests.step);
+        b.step("test-sonny6492-edge-prop-image-cost", "Run SONNY-6492 item 5 measurement (time and WAL bytes per relationship-property SET with and without the SONNY-6471 head page images, one transaction per SET and 100 SETs in one transaction, interleaved perf_gate batches)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6435 / SONNY-6441: graph_storage up to 0.4.11 lost committed node
     // records with page encryption (the AES-GCM tag overwrote the page tail);
     // fixed in graph_storage 0.4.12, so this runs in the aggregate.

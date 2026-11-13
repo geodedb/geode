@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:32:31.822855978Z",
+  "generated_at": "2026-11-13T19:01:21.457908644Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87020,6 +87020,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6492-EDGE-PROP-IMAGE-COST",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Measurement",
+          "status": "BENCHED",
+          "files": [
+            "tests/test_sonny6492_edge_prop_image_cost.zig"
+          ],
+          "tests": [],
+          "benches": [
+            "tests/test_sonny6492_edge_prop_image_cost.zig"
+          ],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6492-HYDRATION-LIVE-COUNT-RACE",
       "features": [
         {
@@ -94756,7 +94775,7 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 208,
+      "BENCHED": 209,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
@@ -96902,6 +96921,7 @@
       "McpDsn": 1,
       "McpEnvelopeRoundTrip": 1,
       "MeanDistance": 1,
+      "Measurement": 1,
       "MemberOfValue": 1,
       "MemberReadOwnership": 1,
       "MemberResolution": 1,

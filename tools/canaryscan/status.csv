@@ -5544,6 +5544,7 @@ REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,Watc
 REQ-SONNY-6484-SHELL-UTF8,ShellPlainMode,Utf8PassThrough,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6484_shell_utf8.zig,,cli,2026-11-13
 REQ-SONNY-6492-DROP-GRAPH-COUNTS,MultiGraphIsolation,PurgeEvictedCounts,TESTED,src/graph_store.zig,tests/test_sonny6492_drop_graph_label_counts.zig,,storage,2026-11-13
 REQ-SONNY-6492-DROP-GRAPH-COUNTS,MultiGraphIsolation,Regression,TESTED,tests/test_sonny6492_drop_graph_label_counts.zig,tests/test_sonny6492_drop_graph_label_counts.zig,,storage,2026-11-13
+REQ-SONNY-6492-EDGE-PROP-IMAGE-COST,TransactionManagement,Measurement,BENCHED,tests/test_sonny6492_edge_prop_image_cost.zig,,tests/test_sonny6492_edge_prop_image_cost.zig,storage,2026-11-13
 REQ-SONNY-6492-HYDRATION-LIVE-COUNT-RACE,StorageIntegrity,Regression,TESTED,tests/test_sonny6492_hydration_live_count_race.zig,tests/test_sonny6492_hydration_live_count_race.zig,,storage,2026-11-13
 REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT,DistributedCluster,ApplyDoesNotRecreateDroppedGraph,TESTED,src/graph_store.zig,tests/test_sonny6492_replicated_write_dropped_graph.zig,,storage,2026-11-13
 REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT,DistributedCluster,Regression,TESTED,tests/test_sonny6492_replicated_write_dropped_graph.zig,tests/test_sonny6492_replicated_write_dropped_graph.zig,,storage,2026-11-13
