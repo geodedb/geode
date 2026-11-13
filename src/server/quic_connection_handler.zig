@@ -5879,7 +5879,10 @@ pub fn handleQuicConnection(
 
     // GAP-0258: mTLS authentication over QUIC — extract peer certificate and authenticate
     // CANARY: REQ=REQ-AUTH-MTLS-QUIC-003; FEATURE="mTLS over QUIC"; ASPECT=ConnectionAuth; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
-    if (conn.getPeerCertificateDer()) |cert_der| {
+    // SONNY-6453: only a certificate the client proved it holds the key for
+    // (CertificateVerify, checked with the chain against GEODE_MTLS_CLIENT_CA
+    // by the TLS layer) counts; one sent without proof is ignored.
+    if (conn.getVerifiedPeerCertificateDer()) |cert_der| {
         const identity = mtls_provider.extractIdentity(gpa, cert_der) catch |err| {
             log.warn("mTLS: Failed to extract certificate identity", &.{Attr.string("error", @errorName(err))});
             pre_hello_exit = .mtls_rejected;
@@ -5908,7 +5911,9 @@ pub fn handleQuicConnection(
             }
         }
     } else if (transport.config.require_client_cert) {
-        log.warn("mTLS: No client certificate presented (required)", &.{});
+        log.warn("mTLS: No verified client certificate presented (required)", &.{
+            Attr.boolean("unproven_certificate_sent", conn.getPeerCertificateDer() != null),
+        });
         pre_hello_exit = .mtls_rejected;
         return error.CertificateError;
     }

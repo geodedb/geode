@@ -1145,6 +1145,18 @@ pub fn build(b: *std.Build) void {
     // libc getenv (SONNY-2394 certificate auto-generation posture).
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize, .link_libc = true });
     transport_quic_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
+    // SONNY-6453: the x509 module the QUIC library's TLS contexts use (same
+    // dependency arguments as quic's own `tls` dependency, so the same module
+    // instance): mTLS client-CA trust is installed in its global trust store.
+    // quic.zig asserts at compile time that the instances match.
+    const quic_tls_dep = quic_ext_dep.builder.dependency("tls", .{
+        .target = target,
+        .optimize = optimize,
+        .@"tls-insecure-testing" = true,
+        .fips = fips,
+        .openssl_path = openssl_path orelse "/usr/local/ssl",
+    });
+    transport_quic_mod.addImport("quic_x509", quic_tls_dep.module("x509"));
     transport_quic_mod.addImport("logging", logging_mod);
     transport_quic_mod.addImport("dns", dns_mod);
     transport_quic_mod.addImport("quic_response_metrics", quic_response_metrics_mod);

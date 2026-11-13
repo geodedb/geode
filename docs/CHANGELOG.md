@@ -4,6 +4,24 @@
 
 ### Security
 
+- **BREAKING (operator): `GEODE_MTLS_REQUIRED` verifies client
+  certificates against `GEODE_MTLS_CLIENT_CA`, and refuses to start without
+  it (SONNY-6453 item 1).** The server asked for a client certificate but
+  never told the TLS layer which CA to trust, so a certificate from the
+  operator's CA was rejected; and a client that sent ANY certificate without
+  a CertificateVerify (no proof it holds the key, no chain validation) passed
+  the "certificate present" check and went on to authenticate by password.
+  Now `GEODE_MTLS_CLIENT_CA` (a PEM bundle of CA certificates) is the only
+  trust anchor for client certificates; a certificate counts only with a
+  verified CertificateVerify; and `geode serve` exits at startup when
+  `GEODE_MTLS_REQUIRED` is set and `GEODE_MTLS_CLIENT_CA` is unset, cannot
+  be loaded, or holds a non-CA certificate, or when `--listen-grpc` is also
+  given (the gRPC transport does not verify client certificates). Known
+  limit (dependency): the TLS library checks the client chain as sent, so a
+  client must send its chain up to a CA in the bundle (or present a pinned
+  self-signed CA certificate from the bundle); Zig `tls`-based clients,
+  including `geode query --client-cert`, send only the leaf and are
+  rejected. Regression: `zig build test-sonny6453-mtls-client-ca`.
 - **BREAKING (operator): QUIC clients verify against the CA bundle they are
   given, or do not connect (SONNY-6448 item 1).** `QuicClient.connectEx`
   (the cluster, Raft and 2PC peer path, which reads

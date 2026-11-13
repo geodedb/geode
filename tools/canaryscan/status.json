@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:24:55.255303781Z",
+  "generated_at": "2026-11-13T07:30:30.24046301Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -4867,6 +4867,7 @@
           "aspect": "ClientCaTrust",
           "status": "TESTED",
           "files": [
+            "src/server/main.zig",
             "tests/test_sonny6453_mtls_client_ca.zig"
           ],
           "tests": [
