@@ -2069,6 +2069,56 @@
 
 ### Fixed
 
+- **Memory safety: with group commit off, a DROP GRAPH no longer frees a
+  graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
+  QUIC fast paths for a relationship MERGE and a multi-property node MERGE
+  call their storage helpers with no graph lock held, and the helpers took
+  no pin on the graph: a DROP GRAPH between their lookup and their locks
+  freed it under them (a use-after-free). They now pin it for the whole
+  operation (`StorageAdapter.pinOrCreateGraph`) and answer `GraphNotFound`
+  for a graph dropped meanwhile. Regression: `zig build
+  test-sonny3121-direct-bulk-pin`.
+- **Cluster: a raft snapshot no longer crashes on a large or tiny DOUBLE
+  property, and keeps every Float a Float (SONNY-2810).** The snapshot
+  serializer printed a Float in positional notation into a 32-byte buffer
+  and panicked when it did not fit (`1e40` needs 41 characters); an
+  integral Float (`3.0`) came back an INTEGER, and NaN or an infinity made
+  its node or relationship line invalid JSON, so the installer dropped it.
+  Floats are now written in shortest round-trip scientific form, and NaN
+  and the infinities as `{"$float":"nan"|"inf"|"-inf"}`, which the
+  installer reads back. Regression: `zig build test-sonny2810-snapshot-float`.
+- **An unlabeled scan over zeroed node pages fails instead of answering with
+  the nodes missing (SONNY-2409).** graph_storage reads an all-zero page as
+  a never-written one, so its node records read as empty: with every
+  `nodes.store` page zeroed, `MATCH (n) RETURN n.name` answered OK with 0
+  of 300 rows on a cold reopen, whether the derived indexes were loaded or
+  rebuilt (labeled reads already failed closed, REQ-GQL-028). The engine
+  node scan behind unlabeled reads (`StorageAdapter.scanAllNodes`) now
+  compares the live records it finds on each shard with the shard
+  manifest's live-node count and fails with `DataCorruption` (58000) when
+  records are missing; `GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK=1` turns the
+  check off for salvage, as for hydration. A page whose header alone is
+  zeroed already fails every read on graph_storage 0.4.12. Regression: `zig
+  build test-sonny2409-zeroed-page-header`.
+- **DATA LOSS: a REMOVE, DELETE or relationship-property REMOVE inside a
+  transaction no longer comes back after a crash (SONNY-2978).** A
+  transaction's changes join its session's engine transaction, which
+  graph-storage batches: its WAL page images are written only when it
+  commits (GAP-0900), and recovery replays the log in written order. A
+  REMOVE of a property, a DELETE of a node and a REMOVE of a relationship
+  property committed their own engine transaction on the same shard, so
+  the transaction's older images of the same pages reached the log after
+  theirs and a crash undid them. Since SONNY-6425 put a transaction's new
+  nodes on its engine transaction's shard, this hit every node: measured
+  against a real server killed with SIGKILL, `START TRANSACTION; CREATE`
+  x64`; MATCH (n) REMOVE n.p; COMMIT` came back with `p` on 64 of 64 nodes
+  (DELETE: 64 of 64 nodes back; edge-property REMOVE: 63 of 64). The
+  statement and session engine transactions, which span many adapter
+  calls, no longer hold their shard's WAL batch; group commit's shard
+  transactions keep theirs (a worker writes only its own shard). The
+  latent engine defect (recovery replays a batched transaction's images
+  in written, not LSN, order) remains in graph-storage. Regression: `zig
+  build test-sonny2978-overlapping-engine-txn-crash`.
 - **Operator-visible: one checkpoint per persistence tick and one per clean
   shutdown, with per-phase shutdown timings (SONNY-6459 items 1-2).** Each
   persistence tick ran the light checkpoint twice (the checkpoint hook,

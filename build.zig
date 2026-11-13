@@ -482,6 +482,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-startup-lazy-hydrate-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-scan-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-index-autobuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-sonny2745-id-maps-race-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow) of test-sonny3180-id-maps-race (SONNY-2745); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-sonny6375-global-store-race-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-sonny6375-ordered-scan-locking-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-parallel-index-rebuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
@@ -534,6 +535,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "flaky: the SONNY-3368 QUIC abandoned-join check (server idle within 100 s of the client leaving) failed 3 of 7 runs on a loaded host; the seed timeout is fixed (SONNY-738); KNOWN_TEST_ISSUES" },
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -9591,6 +9593,82 @@ pub fn build(b: *std.Build) void {
     const sonny2823_step = b.step("test-sonny2823-session-engine-txn", "Run SONNY-2823 regression (no engine transaction outlives the request that opened it or stays on a worker thread: gRPC sessions interleaved on one worker; COMMIT, ROLLBACK, a failed statement and teardown; a committed transaction, and other sessions' writes around it, survive a crash; QUIC with one worker, killed and restarted)");
     sonny2823_step.dependOn(&run_sonny2823_tests.step);
 
+    // SONNY-2978: inside a Geode transaction, a change that commits its own
+    // engine transaction on the session engine transaction's shard (REMOVE,
+    // DELETE, label SET/REMOVE, relationship DELETE, edge-property REMOVE)
+    // survives a kill of a real server: the session transaction's older page
+    // images must not reach the WAL after the change's newer ones.
+    const sonny2978_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2978_overlapping_engine_txn_crash.zig"), .target = target, .optimize = optimize });
+    sonny2978_test_mod.link_libc = true;
+    sonny2978_test_mod.addImport("geode", root_mod);
+    sonny2978_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2978_test_mod.addImport("schema", schema_mod);
+    sonny2978_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2978_tests = b.addTest(.{ .root_module = sonny2978_test_mod });
+    const run_sonny2978_tests = b.addRunArtifact(sonny2978_tests);
+    spawnsBuiltGeode(sonny2978_tests);
+    shardDep(test_step, &run_sonny2978_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2978_step = b.step("test-sonny2978-overlapping-engine-txn-crash", "Run SONNY-2978 regression (a REMOVE, DELETE, label SET or REMOVE, relationship DELETE or edge-property REMOVE inside a Geode transaction, on the session engine transaction's shard, survives a SIGKILL of a real server and a restart)");
+    sonny2978_step.dependOn(&run_sonny2978_tests.step);
+
+    // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
+    // transaction open at a SIGKILL must leave nothing after the restart
+    // (multi-request, and one request left open). Not in shardDep until the
+    // design fix lands; compiled by test-compile.
+    // SONNY-2409: zeroed page headers and zeroed pages (page 0 included) fail
+    // labeled and unlabeled reads closed, with and without rebuilt indexes.
+    const sonny2409_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2409_zeroed_page_header.zig"), .target = target, .optimize = optimize });
+    sonny2409_test_mod.addImport("geode", root_mod);
+    const sonny2409_tests = b.addTest(.{ .root_module = sonny2409_test_mod });
+    const run_sonny2409_tests = b.addRunArtifact(sonny2409_tests);
+    shardDep(test_step, &run_sonny2409_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2409_step = b.step("test-sonny2409-zeroed-page-header", "Run SONNY-2409 regression (a node or property page whose header alone, or whole page, is zeroed fails labeled, unlabeled and count reads closed on a cold reopen, page 0 included, with the derived indexes loaded or rebuilt)");
+    sonny2409_step.dependOn(&run_sonny2409_tests.step);
+
+    // SONNY-3377: an unlabeled relationship scan with a property filter
+    // answers after the persisted store is reloaded.
+    const sonny3377_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3377_unlabeled_edge_scan_reload.zig"), .target = target, .optimize = optimize });
+    sonny3377_test_mod.addImport("geode", root_mod);
+    const sonny3377_tests = b.addTest(.{ .root_module = sonny3377_test_mod });
+    const run_sonny3377_tests = b.addRunArtifact(sonny3377_tests);
+    shardDep(test_step, &run_sonny3377_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3377_step = b.step("test-sonny3377-unlabeled-edge-scan-reload", "Run SONNY-3377 regression (MATCH ()-[e]->() WHERE e.zz = 1 RETURN count(e), and its unfiltered, typed and count(*) forms, answer after a reload, clean or crash-style)");
+    sonny3377_step.dependOn(&run_sonny3377_tests.step);
+
+    // SONNY-2810: Float properties of every magnitude, integral, NaN and
+    // infinite, survive a raft snapshot round trip as Floats.
+    const sonny2810_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2810_snapshot_float.zig"), .target = target, .optimize = optimize });
+    sonny2810_test_mod.addImport("geode", root_mod);
+    const sonny2810_tests = b.addTest(.{ .root_module = sonny2810_test_mod });
+    const run_sonny2810_tests = b.addRunArtifact(sonny2810_tests);
+    shardDep(test_step, &run_sonny2810_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2810_step = b.step("test-sonny2810-snapshot-float", "Run SONNY-2810 regression (node and edge Float properties - 1e40, the f64 extremes, subnormals, 3.0, -0.0, NaN, infinities - survive createSnapshotData + installSnapshotData exactly, as Floats)");
+    sonny2810_step.dependOn(&run_sonny2810_tests.step);
+
+    // SONNY-3121: the self-locking bulk MERGE helpers the QUIC handler calls
+    // directly with group commit off hold a pin on their graph, and fail
+    // with GraphNotFound when it is dropped under them.
+    const sonny3121_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3121_direct_bulk_pin.zig"), .target = target, .optimize = optimize });
+    sonny3121_test_mod.addImport("geode", root_mod);
+    const sonny3121_tests = b.addTest(.{ .root_module = sonny3121_test_mod });
+    const run_sonny3121_tests = b.addRunArtifact(sonny3121_tests);
+    shardDep(test_step, &run_sonny3121_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3121_step = b.step("test-sonny3121-direct-bulk-pin", "Run SONNY-3121 regression (the direct bulk MERGE helpers - relationship and multi-property node - hold a pin on their graph; a DROP GRAPH between their lookup and their locks makes them fail with GraphNotFound, and the graph is freed when they let go)");
+    sonny3121_step.dependOn(&run_sonny3121_tests.step);
+
+    const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
+    sonny2979_test_mod.link_libc = true;
+    sonny2979_test_mod.addImport("geode", root_mod);
+    sonny2979_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2979_test_mod.addImport("schema", schema_mod);
+    sonny2979_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2979_tests = b.addTest(.{ .root_module = sonny2979_test_mod });
+    const run_sonny2979_tests = b.addRunArtifact(sonny2979_tests);
+    spawnsBuiltGeode(sonny2979_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny2979_tests.step);
+    const sonny2979_step = b.step("test-sonny2979-txn-crash-atomicity", "Run SONNY-2979 reproduction (intentionally red: a transaction open at a SIGKILL of a real server, over several requests or left open by one, leaves nothing after the restart)");
+    sonny2979_step.dependOn(&run_sonny2979_tests.step);
+
     // SONNY-2824: a QUIC or gRPC HELLO binds the graph it names through the
     // session-graph gate (internal, permission, existence) and creates a
     // missing graph only for a principal with the schema permission on it.
@@ -10844,6 +10922,23 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny3180_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3180_step = b.step("test-sonny3180-id-maps-race", "Run SONNY-3180 regression (GraphStore.id_maps is locked and each IdMap keeps its address: writers of distinct graphs, readers and CREATE/DROP GRAPH at once, no corruption, under the testing allocator)");
     sonny3180_step.dependOn(&run_sonny3180_tests.step);
+
+    // SONNY-2745: the same race under ThreadSanitizer: per-graph IdMap
+    // readers against first writes to new graphs (which insert into, and may
+    // grow, GraphStore.id_maps) and CREATE/DROP GRAPH. Opt-in; built with
+    // tsanTest() (SONNY-6328).
+    const sonny2745_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny3180_id_maps_race.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    sonny2745_tsan_mod.addImport("geode", root_mod);
+    const sonny2745_tsan_tests = tsanTest(b, sonny2745_tsan_mod);
+    const run_sonny2745_tsan_tests = b.addRunArtifact(sonny2745_tsan_tests);
+    const sonny2745_tsan_step = b.step("test-sonny2745-id-maps-race-tsan", "SONNY-2745 TSan: GraphStore.id_maps readers against first writes to new graphs and CREATE/DROP GRAPH, under -fsanitize-thread");
+    sonny2745_tsan_step.dependOn(&run_sonny2745_tsan_tests.step);
 
     // SONNY-3032: gRPC sessions end: one idle in an open transaction past
     // idle_in_transaction_timeout_ms is closed with its transaction rolled

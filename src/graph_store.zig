@@ -15671,10 +15671,20 @@ pub const GraphStore = struct {
                 const slice = std.fmt.bufPrint(&tmp, "{d}", .{v}) catch unreachable;
                 try buf.appendSlice(allocator, slice);
             },
+            // CANARY: REQ=REQ-SONNY-2810-SNAPSHOT-FLOAT; FEATURE="Raft Snapshot Persistence"; ASPECT=FloatEncoding; STATUS=TESTED; TEST=tests/test_sonny2810_snapshot_float.zig; OWNER=distributed; UPDATED=2026-11-13
+            // SONNY-2810: shortest round-trip scientific form, always a JSON
+            // float (it has an exponent), so `3.0` stays a Float. `{d}` into
+            // a 32-byte buffer panicked (1e40 is 41 positional digits).
+            // NaN and the infinities are no JSON numbers: a tagged object
+            // the snapshot installer reads back.
             .Float => |v| {
-                var tmp: [32]u8 = undefined;
-                const slice = std.fmt.bufPrint(&tmp, "{d}", .{v}) catch unreachable;
-                try buf.appendSlice(allocator, slice);
+                if (std.math.isNan(v)) {
+                    try buf.appendSlice(allocator, "{\"$float\":\"nan\"}");
+                } else if (std.math.isInf(v)) {
+                    try buf.appendSlice(allocator, if (v > 0) "{\"$float\":\"inf\"}" else "{\"$float\":\"-inf\"}");
+                } else {
+                    try buf.print(allocator, "{e}", .{v});
+                }
             },
             .Bool => |v| {
                 try buf.appendSlice(allocator, if (v) "true" else "false");

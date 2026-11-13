@@ -3220,6 +3220,13 @@ pub fn noteSessionCommitFailure(err: anyerror) void {
     if (t_session_commit_failure == null) t_session_commit_failure = err;
 }
 
+/// SONNY-3121 test instrumentation: called by the self-locking bulk MERGE
+/// helpers the QUIC handler calls directly when group commit is off
+/// (`bulkMergeEdgeWithIdsShardLockedForTenant`,
+/// `bulkMergeNodeWithReservedIdMultiPropForTenant`) right after they have
+/// their graph, before they lock it. A test drops the graph there.
+pub var bulk_graph_resolved_hook: ?*const fn (mg: *ManagedGraph) void = null;
+
 /// SONNY-3031 fault injection for tests: the next N commits of a session
 /// engine transaction fail (`error.InjectedSessionCommitFailure`) before
 /// they reach the engine, as a failed WAL append or fsync would.
@@ -3355,6 +3362,28 @@ fn threadTxnOn(mg: *const ManagedGraph) bool {
 /// Adapter mutation methods consult this to decide whether to batch into an
 /// existing transaction or spin their own (the R7 behaviour).  Priority:
 /// 1. per-statement txn (R8), 2. session txn (R9).
+// CANARY: REQ=REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=UnbatchedSpanningTxn; STATUS=TESTED; TEST=tests/test_sonny2978_overlapping_engine_txn_crash.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-2978: give back the shard WAL record batch (GAP-0900) that
+/// `beginTxn` opened for the engine transaction `txn_id` of `mg`, before
+/// anything is logged in it. Its page images are then written to the log
+/// as they are made, like any other transaction's.
+///
+/// A batched transaction's images are numbered when made but written only
+/// at its commit, and recovery replays the log in written order. A
+/// statement or session engine transaction stays open across many adapter
+/// calls, and some of them commit their own engine transaction on its shard
+/// (a REMOVE, a DELETE, an edge-property REMOVE, any change on a shard the
+/// statement transaction is not on that later gets one). Batched, the
+/// spanning transaction's older image of a page they share reached the log
+/// after theirs, and after a crash undid their committed change. Only
+/// `beginStatementTxnForShard` (group commit) keeps its batch: its worker
+/// writes only its own shard (REQ-QUIC-HC-016), and no writer holds the
+/// graph's write lock while the batch is open (SONNY-3029).
+fn releaseSpanningTxnWalBatch(mg: *ManagedGraph, txn_id: gs.TxnId) !void {
+    const shard = mg.engine.shards[shardedTxnShard(txn_id)];
+    try shard.txn_manager.wal.flushBatchFor(shardedTxnLocal(txn_id));
+}
+
 pub fn currentStatementTxnForGraph(graph_name: []const u8) ?*StatementTxn {
     if (t_current_statement_txn) |txn| {
         if (std.mem.eql(u8, txn.graph_name, graph_name)) return txn;
@@ -4826,7 +4855,11 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !u64 {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
-        const mg = try self.getOrCreateGraph(graph_name);
+        // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
+        const mg = try self.pinOrCreateGraph(graph_name);
+        defer self.unpinGraph(mg);
+        if (bulk_graph_resolved_hook) |hook| hook(mg);
+        if (mg.isDropped()) return error.GraphNotFound;
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4845,6 +4878,8 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        // SONNY-3121: a DROP GRAPH that ran while this op waited for the lock.
+        if (mg.isDropped()) return error.GraphNotFound;
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -5374,7 +5409,11 @@ pub const StorageAdapter = struct {
             }
         }
 
-        const mg = try self.getOrCreateGraph(graph_name);
+        // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
+        const mg = try self.pinOrCreateGraph(graph_name);
+        defer self.unpinGraph(mg);
+        if (bulk_graph_resolved_hook) |hook| hook(mg);
+        if (mg.isDropped()) return error.GraphNotFound;
         // ENG-3914 (RC-2): see the single-property path — the delegated insert
         // now runs inside this function's SHARED hold, so the deferred
         // exact-index build must happen before that hold is taken.
@@ -5409,6 +5448,8 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        // SONNY-3121: a DROP GRAPH that ran while this op waited for the lock.
+        if (mg.isDropped()) return error.GraphNotFound;
         try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
@@ -8687,11 +8728,27 @@ pub const StorageAdapter = struct {
 
         // Fan out across all shards — each shard owns a disjoint node_id range.
         var ctx = Ctx{ .entries = .empty, .alloc = allocator };
+        errdefer ctx.entries.deinit(allocator);
         for (mg.engine.shards) |shard| {
+            const found_before = ctx.entries.items.len;
+            const live_before = @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
             try shard.node_store.scanNodes(shard.manifest.next_node_id, &ctx, &Ctx.onNode);
+            if (ctx.had_error) return error.OutOfMemory;
+            // CANARY: REQ=REQ-SONNY-2409-ZEROED-PAGE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=UnlabeledScanLiveCount; STATUS=TESTED; TEST=tests/test_sonny2409_zeroed_page_header.zig; OWNER=storage; UPDATED=2026-11-13
+            // SONNY-2409: graph_storage's pager reads a zeroed page (torn
+            // write, zeroed sectors) as a fresh one, so its node records look
+            // empty and `scanNodes` skips them: an unlabeled scan answered OK
+            // with those nodes missing. Fewer live records than the shard
+            // manifest counts means lost node data: fail closed, as the
+            // hydration scan does (REQ-GQL-028, same kill switch). The
+            // smaller of the counts read before and after the scan is used.
+            const live = @min(live_before, @atomicLoad(u64, &shard.manifest.node_count, .monotonic));
+            const found = ctx.entries.items.len - found_before;
+            if (found < live and !hydration_scan.liveCountCheckDisabled()) {
+                log.warn("scanAllNodes: graph {s} shard found {d} live node record(s) but its manifest counts {d}: node pages lost or zeroed", .{ graph_name, found, live });
+                return error.DataCorruption;
+            }
         }
-
-        if (ctx.had_error) return error.OutOfMemory;
 
         return ctx.entries.toOwnedSlice(allocator);
     }
@@ -11810,6 +11867,14 @@ pub const StorageAdapter = struct {
         };
 
         const txn_id = try mg.engine.beginTxn();
+        // SONNY-2978: the statement's transaction must not hold its shard's
+        // WAL batch across the adapter calls it spans.
+        releaseSpanningTxnWalBatch(mg, txn_id) catch |err| {
+            // error-policy: A — nothing was logged in it; the abort record
+            // is best-effort, recovery treats an unfinished txn as aborted.
+            mg.engine.abortTxn(txn_id) catch {};
+            return err;
+        };
         out.* = .{
             .mg = mg,
             .txn_id = txn_id,
@@ -11884,6 +11949,14 @@ pub const StorageAdapter = struct {
         };
 
         const txn_id = try mg.engine.beginTxn();
+        // SONNY-2978: the session's transaction must not hold its shard's
+        // WAL batch across the adapter calls it spans.
+        releaseSpanningTxnWalBatch(mg, txn_id) catch |err| {
+            // error-policy: A — nothing was logged in it; the abort record
+            // is best-effort, recovery treats an unfinished txn as aborted.
+            mg.engine.abortTxn(txn_id) catch {};
+            return err;
+        };
         out.* = .{
             .mg = mg,
             .txn_id = txn_id,
@@ -11948,6 +12021,24 @@ pub const StorageAdapter = struct {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.requireExistingGraphLocked(graph_name);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3121-DIRECT-BULK-PIN; FEATURE="MultiGraphIsolation"; ASPECT=PinnedBulkLookup; STATUS=TESTED; TEST=tests/test_sonny3121_direct_bulk_pin.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-3121: `getOrCreateGraph`, with a pin taken under the same hold of
+    /// the adapter's mutex, for the self-locking bulk helpers. With group
+    /// commit off the QUIC handler calls them with no graph lock (which pins)
+    /// and no coordinator pin, and a DROP GRAPH between their lookup and their
+    /// locks freed the graph under them. The caller unpins it (`unpinGraph`)
+    /// and treats a graph found dropped (`isDropped`) as GraphNotFound.
+    pub fn pinOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(name) orelse if (self.findRegistryEntryLocked(name)) |entry|
+            try self.openGraphLocked(name, entry.uuid)
+        else
+            try self.createGraphLocked(name);
+        _ = mg.pins.fetchAdd(1, .acq_rel);
+        return mg;
     }
 
     /// SONNY-3028: pin `graph_name`'s graph (`ManagedGraph.pins`) for a caller

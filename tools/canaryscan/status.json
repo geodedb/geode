@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:14:39.210332887Z",
+  "generated_at": "2026-11-13T11:24:14.68706626Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -69834,6 +69834,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2409-ZEROED-PAGE-FAIL-CLOSED",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2409_zeroed_page_header.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2409_zeroed_page_header.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "UnlabeledScanLiveCount",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2409_zeroed_page_header.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2410-SECURITY-MANAGER-LOCKING",
       "features": [
         {
@@ -74241,6 +74274,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2810-SNAPSHOT-FLOAT",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "FloatEncoding",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2810_snapshot_float.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2810_snapshot_float.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2810_snapshot_float.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2812-DISTINCT-LIST-KEYS",
       "features": [
         {
@@ -74897,6 +74963,39 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2978_overlapping_engine_txn_crash.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2978_overlapping_engine_txn_crash.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "UnbatchedSpanningTxn",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2978_overlapping_engine_txn_crash.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -76285,6 +76384,39 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-09-27"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3121-DIRECT-BULK-PIN",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "PinnedBulkLookup",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3121_direct_bulk_pin.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3121_direct_bulk_pin.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3121_direct_bulk_pin.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -79463,6 +79595,25 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-09-29"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3377-EDGE-SCAN-RELOAD",
+      "features": [
+        {
+          "feature": "StorageNativeReads",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3377_unlabeled_edge_scan_reload.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3377_unlabeled_edge_scan_reload.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -93648,7 +93799,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4882
+      "TESTED": 4891
     },
     "by_aspect": {
       "2PC": 3,
@@ -95044,6 +95195,7 @@
       "FlakePin": 1,
       "FleLeakRegression": 1,
       "FleRoleBoundToPrincipal": 1,
+      "FloatEncoding": 1,
       "FloatSupport": 1,
       "FloatType": 1,
       "FloatTypes": 1,
@@ -96337,6 +96489,7 @@
       "PhraseSearch": 1,
       "PhysicalOperator": 1,
       "PiAndE": 1,
+      "PinnedBulkLookup": 1,
       "PinnedReaderLookups": 1,
       "Pins": 1,
       "Pipeline": 2,
@@ -96777,7 +96930,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 304,
+      "Regression": 309,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -97549,6 +97702,7 @@
       "UbuntuVersionFallback": 1,
       "UnauthenticatedAuthDDL": 1,
       "UnauthenticatedDenied": 2,
+      "UnbatchedSpanningTxn": 1,
       "UnboundedWithoutLimit": 1,
       "UndeclaredSecretIsAnError": 1,
       "UndirectedEdgeRefusal": 1,
@@ -97610,6 +97764,7 @@
       "UnknownMeansEncrypted": 1,
       "UnknownOptionRefused": 1,
       "UnknownPropertyDiagnostic": 1,
+      "UnlabeledScanLiveCount": 1,
       "UnloadableRegistryRefuses": 1,
       "UnrelatedIndexMustNotShadowScan": 2,
       "UnresolvableEndpointFailsLoud": 1,

@@ -4483,6 +4483,8 @@ REQ-SONNY-1335-PROFILE-ACCESS-PATH,PROFILE,Regression,TESTED,tests/test_sonny133
 REQ-SONNY-1562-COLD-SUBQUERY-SCAN,ExpressionPathColdScan,ResidencyIndependentCounts,TESTED,tests/test_sonny1562_cold_subquery_scan.zig,tests/test_sonny1562_cold_subquery_scan.zig,,execution,2026-11-11
 REQ-SONNY-1562-COLD-SUBQUERY-SCAN,ExpressionPathColdScan,ScanSource,TESTED,src/execution/graph_algorithms.zig,tests/test_sonny1562_cold_subquery_scan.zig,,execution,2026-11-11
 REQ-SONNY-2394-VARLEN-ROW-OWNERSHIP,VariableLengthPathRowOwnership,Regression,TESTED,tests/test_sonny2394_varlen_rel_list_ownership.zig,tests/test_sonny2394_varlen_rel_list_ownership.zig,,engine,2026-09-23
+REQ-SONNY-2409-ZEROED-PAGE-FAIL-CLOSED,StorageIntegrity,Regression,TESTED,tests/test_sonny2409_zeroed_page_header.zig,tests/test_sonny2409_zeroed_page_header.zig,,storage,2026-11-13
+REQ-SONNY-2409-ZEROED-PAGE-FAIL-CLOSED,StorageIntegrity,UnlabeledScanLiveCount,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny2409_zeroed_page_header.zig,,storage,2026-11-13
 REQ-SONNY-2410-SECURITY-MANAGER-LOCKING,SecurityManagerThreadSafety,ReentrantLock,TESTED,src/security/geode_auth_lib.zig,tests/test_sonny2410_security_manager_locking.zig,,security,2026-11-12
 REQ-SONNY-2410-SECURITY-MANAGER-LOCKING,SecurityManagerThreadSafety,Regression,TESTED,tests/test_sonny2410_security_manager_locking.zig,tests/test_sonny2410_security_manager_locking.zig,,security,2026-11-12
 REQ-SONNY-2439-PERF-METHODOLOGY,Perf Gates,MonotonicClockNoTestLocalBenchmarks,TESTED,tests/test_sonny2439_perf_methodology.zig,tests/test_sonny2439_perf_methodology.zig,,performance,2026-11-12
@@ -4761,6 +4763,8 @@ REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,Regression,TESTED,tests/test
 REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,SettleThroughExactIndex,TESTED,src/graph_store.zig,tests/test_sonny2806_merge_resolve.zig,,storage,2026-09-27
 REQ-SONNY-2806-STORED-PROPERTY-EQUALITY,InlinePropertyMatch,ExactValueOnPersistedPaths,TESTED,src/execution/stored_property_equality.zig,tests/test_sonny2806_exact_property_matching.zig,,execution,2026-09-26
 REQ-SONNY-2809-DUPLICATE-CONSTRAINT,ConstraintManagement,DuplicateNameSingleFree,TESTED,tests/test_sonny2809_duplicate_constraint.zig,tests/test_sonny2809_duplicate_constraint.zig,,schema,2026-09-26
+REQ-SONNY-2810-SNAPSHOT-FLOAT,Raft Snapshot Persistence,FloatEncoding,TESTED,src/graph_store.zig,tests/test_sonny2810_snapshot_float.zig,,distributed,2026-11-13
+REQ-SONNY-2810-SNAPSHOT-FLOAT,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny2810_snapshot_float.zig,tests/test_sonny2810_snapshot_float.zig,,distributed,2026-11-13
 REQ-SONNY-2812-DISTINCT-LIST-KEYS,AggregateSetQuantifier,ListKeys,TESTED,tests/test_sonny2812_distinct_list_keys.zig,tests/test_sonny2812_distinct_list_keys.zig,,execution,2026-11-12
 REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny2816_bulk_ingest_txn.zig,,transport,2026-09-27
 REQ-SONNY-2816-BULK-INGEST-TXN,TransactionUndoLog,BulkIngestFastPathInTxn,TESTED,tests/test_sonny2816_bulk_ingest_txn.zig,,,transport,2026-09-27
@@ -4805,6 +4809,8 @@ REQ-SONNY-2976-MERGE-TENANT-SCOPE,MergeRowVisibility,AdapterRegression,TESTED,te
 REQ-SONNY-2976-MERGE-TENANT-SCOPE,MergeRowVisibility,BulkMergeTenantScope,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny2976_merge_fast_path_tenant_scope.zig,,security,2026-11-11
 REQ-SONNY-2976-MERGE-TENANT-SCOPE,MergeRowVisibility,TenantScopedMergeLookup,TESTED,src/graph_store.zig,tests/test_sonny2976_merge_fast_path_tenant_scope.zig,,security,2026-11-11
 REQ-SONNY-2977-INLINE-MAP-SET,MatchSet,EveryInlineMapHolder,TESTED,tests/test_sonny2977_inline_map_set.zig,tests/test_sonny2977_inline_map_set.zig,,engine,2026-09-27
+REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN,TransactionManagement,Regression,TESTED,tests/test_sonny2978_overlapping_engine_txn_crash.zig,tests/test_sonny2978_overlapping_engine_txn_crash.zig,,storage,2026-11-13
+REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN,TransactionManagement,UnbatchedSpanningTxn,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny2978_overlapping_engine_txn_crash.zig,,storage,2026-11-13
 REQ-SONNY-3025-WRITE-RETURN-ROWS,WriteBehindAggregate,PlainReturnPerRow,TESTED,tests/test_sonny3025_match_write_return_rows.zig,tests/test_sonny3025_match_write_return_rows.zig,,engine,2026-11-12
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,ExplainProfileTarget,TESTED,src/query/query_traits.zig,tests/test_sonny3026_profile_txn_control.zig,,security,2026-09-27
 REQ-SONNY-3026-PROFILE-TXN-CONTROL,StatementAuthorization,GrpcHandler,TESTED,src/transport/grpc_server.zig,tests/test_sonny3026_profile_txn_control.zig,,security,2026-09-27
@@ -4894,6 +4900,8 @@ REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,PerLabelBackfillFromPostings
 REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,Regression,TESTED,tests/test_sonny3056_lean_merge_evicted_holder.zig,tests/test_sonny3056_lean_merge_evicted_holder.zig,,storage,2026-11-12
 REQ-SONNY-3059-UNDO-ALL-CHANGES,TransactionUndoLog,AdoptStatementRecord,TESTED,src/txn_undo_log.zig,tests/test_sonny3348_statement_undo.zig,,engine,2026-09-29
 REQ-SONNY-3109-MERGE-LABEL-CHANGE,MergeIdempotency,LabelChangeIndexMaintenance,TESTED,tests/test_sonny3109_merge_label_change.zig,tests/test_sonny3109_merge_label_change.zig,,storage,2026-09-27
+REQ-SONNY-3121-DIRECT-BULK-PIN,MultiGraphIsolation,PinnedBulkLookup,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny3121_direct_bulk_pin.zig,,storage,2026-11-13
+REQ-SONNY-3121-DIRECT-BULK-PIN,MultiGraphIsolation,Regression,TESTED,tests/test_sonny3121_direct_bulk_pin.zig,tests/test_sonny3121_direct_bulk_pin.zig,,storage,2026-11-13
 REQ-SONNY-3122-NO-RECREATE-ON-WRITE,MultiGraphIsolation,MaterializeKnownOnly,TESTED,src/graph_store.zig,tests/test_sonny3122_dropped_graph_not_recreated.zig,,storage,2026-11-12
 REQ-SONNY-3122-NO-RECREATE-ON-WRITE,MultiGraphIsolation,Regression,TESTED,tests/test_sonny3122_dropped_graph_not_recreated.zig,tests/test_sonny3122_dropped_graph_not_recreated.zig,,storage,2026-11-12
 REQ-SONNY-3125-SHARED-NODE-SET,SetClauseSemantics,PerRowReread,TESTED,tests/test_sonny3125_shared_node_set.zig,tests/test_sonny3125_shared_node_set.zig,,engine,2026-11-12
@@ -5095,6 +5103,7 @@ REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,MemoryOverQuic,TESTED,te
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,NodeCache,TESTED,src/execution/match_operations.zig,tests/test_sonny_write_allowlist_r4b.zig,,engine,2026-09-29
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,ReadBudgetOverGrpc,TESTED,tests/test_sonny_write_allowlist_r4_transport.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,engine,2026-09-28
 REQ-SONNY-3368-BOUNDED-JOIN,MultiChainRelationshipMatch,StreamingJoin,TESTED,src/execution/match_operations.zig,tests/test_sonny_write_allowlist_r4b.zig,,engine,2026-09-29
+REQ-SONNY-3377-EDGE-SCAN-RELOAD,StorageNativeReads,Regression,TESTED,tests/test_sonny3377_unlabeled_edge_scan_reload.zig,tests/test_sonny3377_unlabeled_edge_scan_reload.zig,,storage,2026-11-13
 REQ-SONNY-3379-GRPC-VECTOR-TEARDOWN,Test Fixtures,GrpcFixtureIndexManagerTeardown,TESTED,tests/test_sonny3379_grpc_vector_index_teardown.zig,tests/test_sonny3379_grpc_vector_index_teardown.zig,,index,2026-11-12
 REQ-SONNY-3380-MERGE-ALIAS-SET,Execution,DuplicateSetUndo,TESTED,tests/test_sonny3380_merge_alias_duplicate_set.zig,tests/test_sonny3380_merge_alias_duplicate_set.zig,,execution,2026-11-12
 REQ-SONNY-3381-UNDO-INDEX-REPAIR,Execution,UndoIndexRegression,TESTED,tests/test_sonny3381_undo_index_entries.zig,tests/test_sonny3381_undo_index_entries.zig,,execution,2026-11-12

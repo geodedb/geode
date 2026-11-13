@@ -263,6 +263,48 @@ These features implement ISO/IEC 39075:2024 GQL standard:
    rollback-to-savepoint requests are implemented; GQL has no SAVEPOINT
    statement here
 
+## Crash Durability and Atomicity (SONNY-2979)
+
+A transaction is atomic in the running server, NOT across a crash (kill -9,
+OOM kill, power loss). What holds, as of the SONNY-738 sweep:
+
+- **Write-through.** Each change is written to the storage engine as it
+  runs. Within one request, the changes on the shard of the session's engine
+  transaction (opened by the request's first change; the request's new nodes
+  are allocated there, SONNY-6425) commit together, with one WAL fsync, when
+  the request's program ends. A change on any of the other 15 shards commits
+  its own engine transaction when it runs; so do a REMOVE of a property, a
+  DELETE of a node and a REMOVE of a relationship property, wherever they
+  are.
+- **No engine transaction outlives a request** (SONNY-2823). A transaction
+  over several requests is committed in the engine request by request.
+- **A failed request's engine transaction is aborted**, not committed
+  (SONNY-3135), and the transaction is rolled back.
+- **ROLLBACK, a failed statement and a session's teardown** undo the
+  transaction through the in-memory undo log, which writes compensating
+  changes to the engine. The undo log is memory-only.
+- **COMMIT is durable.** Once COMMIT returns, every change of the
+  transaction has been fsynced to the engine WAL (per-commit fsync), and a
+  committed change made inside the transaction is never undone by recovery
+  (SONNY-2978: the session's engine transaction no longer batches its WAL
+  page images past other transactions' commits on its shard).
+
+What does NOT hold: after a crash with a transaction open, recovery keeps
+every change the transaction's requests already committed in the engine.
+Nothing on disk records that the transaction was open, so nothing undoes
+them. `zig build test-sonny2979-txn-crash-atomicity` (intentionally red,
+[KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md)) kills a real server with two
+transactions open and finds all their nodes, and a property one of them
+SET, after the restart.
+
+Making a transaction crash-atomic needs one durable commit decision for the
+whole transaction, across requests and shards: either a durable undo log
+(write an entry, fsynced, before each change reaches the engine; at
+recovery, undo every transaction with no durable commit record), or a
+transaction-wide redo buffer applied at COMMIT through a cross-shard commit
+record in graph-storage, whose 16 per-shard WALs have no shared commit
+record today.
+
 ## Future Enhancements
 
 - True MVCC (Multi-Version Concurrency Control)
