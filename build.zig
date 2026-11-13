@@ -12213,6 +12213,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2671_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2671_step = b.step("test-sonny2671-scan-page-append-oom", "Run SONNY-2671 regression (the engine-direct node scan frees the row it built when the page's append fails past 256 rows, and a small page frees everything at every allocation failure)");
     sonny2671_step.dependOn(&run_sonny2671_tests.step);
+    const sonny3148_amp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3148_write_step_amplification.zig"), .target = target, .optimize = optimize });
+    sonny3148_amp_test_mod.addImport("geode", root_mod);
+    sonny3148_amp_test_mod.addImport("logging", logging_mod);
+    sonny3148_amp_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3148_amp_tests = b.addTest(.{ .root_module = sonny3148_amp_test_mod });
+    const run_sonny3148_amp_tests = b.addRunArtifact(sonny3148_amp_tests);
+    shardDep(test_step, &run_sonny3148_amp_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3148_amp_step = b.step("test-sonny3148-write-step-amplification", "Run SONNY-3148 regression (the write step keeps one detached node copy per write, not one per refresh: boxes and bytes per written row measured)");
+    sonny3148_amp_step.dependOn(&run_sonny3148_amp_tests.step);
 
     // SONNY-2739: a float or decimal narrowed to an integer (a group or
     // DISTINCT key at 2^63, the power operator, casts, rounding functions,

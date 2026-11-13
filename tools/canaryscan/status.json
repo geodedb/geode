@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:30:04.447153185Z",
+  "generated_at": "2026-11-13T14:30:18.20904997Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -77527,6 +77527,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION",
+      "features": [
+        {
+          "feature": "WriteStep",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3148_write_step_amplification.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3148_write_step_amplification.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3166-STATEMENT-BOUNDARY",
       "features": [
         {
@@ -94600,7 +94619,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4935
+      "TESTED": 4936
     },
     "by_aspect": {
       "2PC": 3,
@@ -97748,7 +97767,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 326,
+      "Regression": 327,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
