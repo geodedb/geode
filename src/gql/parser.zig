@@ -550,6 +550,22 @@ pub const Parser = struct {
     /// pattern>, Feature GH02)? The lexer has no `~` token (`=~` and `!~`
     /// are its own), so a lone `~` is an invalid token and `<~` a `<`
     /// followed by one.
+    /// SONNY-6267: whether `second` starts where `first` ends (no separator
+    /// between them), as `<->` and `<--` are spelled.
+    fn adjacentTokens(first: tok.Token, second: tok.Token) bool {
+        return @intFromPtr(first.lexeme.ptr) + first.lexeme.len == @intFromPtr(second.lexeme.ptr);
+    }
+
+    /// SONNY-6267: a hop through an <abbreviated edge pattern> (ISO/IEC
+    /// 39075:2024 16.7), which is the empty full edge pattern of its
+    /// orientation, to the node pattern that follows.
+    fn appendAbbreviatedHop(self: *Parser, hops: *std.ArrayList(ast.Hop), left: *ast.NodePattern, dir: ast.RelDir) ParserError!void {
+        const rel = ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = dir, .min_len = null, .max_len = null };
+        const right = try self.parseNodePattern();
+        try hops.append(self.arena.allocator(), .{ .left = left.*, .rel = rel, .right = right });
+        left.* = right;
+    }
+
     fn atUndirectedEdge(self: *Parser) bool {
         if (self.cur.kind == .invalid) return self.cur.lexeme.len > 0 and self.cur.lexeme[0] == '~';
         if (self.cur.kind != .lt or self.cur.lexeme.len == 0) return false;
@@ -2480,6 +2496,8 @@ pub const Parser = struct {
         // SONNY-3140: the WHEREs either side of a WITH after the MATCH.
         var pre_with_where: ?ast.Expr = null;
         var with_where: ?ast.Expr = null;
+        // SONNY-6467 (3): FILTER statements between MATCH statements.
+        var between_filter: ?ast.Expr = null;
         // SONNY-3184: a WHERE after an OPTIONAL MATCH.
         var optional_where = false;
         // SONNY-3184, SONNY-6337: each MATCH / OPTIONAL MATCH clause and its
@@ -2626,6 +2644,7 @@ pub const Parser = struct {
                 // It is the last clause's own WHERE.
                 if (match_clauses.items.len > 0) match_clauses.items[match_clauses.items.len - 1].where = where_expr;
             }
+            try self.parseFilterBetweenMatches(&between_filter);
 
             // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=parser; UPDATED=2026-11-11
             // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-11-11
@@ -2677,6 +2696,7 @@ pub const Parser = struct {
                         }
                     }
                     try match_clauses.append(self.arena.allocator(), .{ .optional = clause_optional, .end = post_where_chains.items.len, .where = clause_where });
+                    try self.parseFilterBetweenMatches(&between_filter);
                 }
                 combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
             }
@@ -2724,7 +2744,9 @@ pub const Parser = struct {
 
         // Parse FILTER clause (ISO/IEC 39075:2024)
         // SONNY-6460 item 2: any number of them (`parseFilterStatements`).
-        const filter_expr: ?ast.Expr = try self.parseFilterStatements();
+        const final_filter: ?ast.Expr = try self.parseFilterStatements();
+        // SONNY-6467 (3): with the FILTER statements between MATCH statements.
+        var filter_expr: ?ast.Expr = if (between_filter) |earlier| (if (final_filter) |later| try self.makeBinary(.And, earlier, later) else earlier) else final_filter;
 
         // Parse inline LET clause (after MATCH/WHERE/FILTER, before WITH/RETURN)
         // Syntax: MATCH ... LET var1 = expr1, var2 = expr2 RETURN ...
@@ -2752,7 +2774,25 @@ pub const Parser = struct {
         // Optional WITH projection forwarding (works for both MATCH and CREATE)
         // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=TESTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
         var next_query_ptr: ?*ast.Query = null;
-        if (have_match and self.cur.kind == .FOR and !have_create and merge_statement == null) {
+        if (have_match and self.cur.kind == .FILTER and inline_let_bindings.items.len > 0 and !have_create and merge_statement == null) {
+            // CANARY: REQ=REQ-SONNY-6467-FILTER-AFTER-LET; FEATURE="FilterStatement"; ASPECT=AfterInlineLet; STATUS=TESTED; TEST=tests/test_sonny6467_query_residuals.zig; OWNER=parser; UPDATED=2026-11-13
+            // SONNY-6467 (3): ISO/IEC 39075:2024 14.6 <filter statement> is a
+            // <simple query statement>, so it may follow a <let statement>
+            // (14.7) and read its variables. It is `... LET x = e WITH
+            // <the pattern's variables>, x WHERE <condition> ...`: the WITH
+            // carries every row with the LET's values, and its WHERE keeps the
+            // rows the FILTER keeps.
+            const condition = (try self.parseFilterStatements()).?;
+            with_clause = .{ .items = try self.patternAndLetItems(pat, inline_let_bindings.items) };
+            // The WHERE and the FILTERs before the LET filter the pattern's
+            // rows; `where_clause` joins them with the WITH's (SONNY-3140).
+            var before: ?ast.Expr = where_expr;
+            if (filter_expr) |f| before = if (before) |w| try self.makeBinary(.And, w, f) else f;
+            filter_expr = null;
+            pre_with_where = before;
+            with_where = condition;
+            where_expr = if (before) |cond1| try self.makeBinary(.And, cond1, condition) else condition;
+        } else if (have_match and self.cur.kind == .FOR and !have_create and merge_statement == null) {
             // ISO/IEC 39075: a FOR after a MATCH extends each matched row
             // (`MATCH (n) FOR x IN n.list RETURN sum(x)`). It is the chain
             // `MATCH ... WITH <its variables> FOR ...`, whose FOR runs over
@@ -3278,8 +3318,33 @@ pub const Parser = struct {
                         continue;
                     }
                     self.advance();
+                    // SONNY-6267: ISO/IEC 39075:2024 16.7 <abbreviated edge
+                    // pattern> <minus sign>, `(a)-(b)`: the empty `-[ ]-`,
+                    // an edge in any direction.
+                    if (self.cur.kind == .l_paren) {
+                        try self.appendAbbreviatedHop(&hops, &left, .undirected);
+                        continue;
+                    }
                 } else if (self.cur.kind == .arrow_l) {
+                    const arrow = self.cur;
                     self.advance();
+                    // SONNY-6267: 16.7 <left minus right>, `(a)<->(b)` (lexed
+                    // as `<-` `>`): the empty `<-[ ]->`, an edge pointing
+                    // left or right. Geode's edges are all directed, so that
+                    // is an edge in either direction.
+                    if (self.cur.kind == .gt and adjacentTokens(arrow, self.cur)) {
+                        self.advance();
+                        if (self.cur.kind != .l_paren) return self.unexpected("expected a node pattern after <->");
+                        try self.appendAbbreviatedHop(&hops, &left, .undirected);
+                        continue;
+                    }
+                    // SONNY-6267: `<--` is not GQL. 16.7 SR: a token exposing
+                    // a minus sign on the right (`<-`) is not juxtaposed with
+                    // one exposing it on the left (`-`), as the two minus
+                    // signs would be a <simple comment introducer> (NOTE 238).
+                    if (self.cur.kind == .minus and adjacentTokens(arrow, self.cur)) {
+                        return self.unexpected("`<--` is not GQL (ISO/IEC 39075:2024 16.7: `--` begins a comment): write `<-` for an edge pointing left, `<-[ ]-` with a filler, or `-` / `<->` for either direction");
+                    }
                     // Check for bracketless left-directed relationship (<-() without bracket)
                     if (self.cur.kind == .l_paren) {
                         dir = .left;
@@ -3326,7 +3391,9 @@ pub const Parser = struct {
                 // CRITICAL FIX: For patterns like -[*]-> or -[:R*1]->, the direction should come from
                 // the TRAILING connector (->), not the leading one (-). Update the direction here.
                 if (self.cur.kind == .arrow_r) {
-                    rel.dir = .right;
+                    // SONNY-6267: 16.7 <full edge left or right>, `<-[ ]->`:
+                    // an edge pointing left or right, i.e. either direction.
+                    rel.dir = if (dir == .left) .undirected else .right;
                     self.advance();
                 } else if (self.cur.kind == .arrow_l) {
                     rel.dir = .left;
@@ -3556,6 +3623,24 @@ pub const Parser = struct {
         return left;
     }
 
+    /// SONNY-6467 (1): at `ident )`, whether an edge follows the closing
+    /// parenthesis (`(n)-`, `(n)<-`, `(n)->`, `(n)<~`, `(n)~`), which makes
+    /// `(n)` a node pattern. The parser's position is restored.
+    fn edgeFollowsVariableInParens(self: *Parser) bool {
+        const saved_lx = self.lx.*;
+        const saved_cur = self.cur;
+        defer {
+            self.lx.* = saved_lx;
+            self.cur = saved_cur;
+        }
+        self.advance(); // identifier
+        self.advance(); // )
+        return switch (self.cur.kind) {
+            .minus, .arrow_l, .arrow_r => true,
+            else => self.atUndirectedEdge(),
+        };
+    }
+
     fn parseNotExpr(self: *Parser) ParserError!ast.Expr {
         if (self.cur.kind == .NOT) {
             // Check if this is NOT IN (handled in parseCmpExpr)
@@ -3585,9 +3670,18 @@ pub const Parser = struct {
                 // expression mixing HasLabel predicates with OR/AND.  When the
                 // tokens after `(ident:Label` are `OR`, `AND`, comparison ops,
                 // or `:` continuing a multi-label test, treat as expression.
+                // SONNY-6467 (1): an identifier is a node pattern's variable
+                // only when a node pattern continues it: a label or property
+                // map (`(n:L`, `(n {`), or a closing parenthesis followed by
+                // an edge (`(n)-`, `(n)<-`, `(n)->`). Anything else is a
+                // parenthesized boolean value expression (ISO/IEC 39075:2024
+                // 19.2): `NOT (k = 1)` was `NOT EXISTS { (k) ... }`.
                 var looks_like_pattern = if (self.cur.kind == .identifier)
-                    // Identifier followed by . is property access (expression), not node pattern
-                    self.peekToken() != .dot
+                    switch (self.peekToken()) {
+                        .colon, .l_brace => true,
+                        .r_paren => self.edgeFollowsVariableInParens(),
+                        else => false,
+                    }
                 else
                     // :Label or () patterns
                     (self.cur.kind == .colon or self.cur.kind == .r_paren);
@@ -6398,6 +6492,30 @@ pub const Parser = struct {
     /// One projection item per variable `pattern` binds (path, node and edge
     /// variables, each once, in order): what a MATCH passes on to a FOR
     /// after it.
+    /// SONNY-6467 (3): the FILTER statements after one MATCH statement's
+    /// WHERE, before the next MATCH, ANDed onto `acc`. A FILTER here before a
+    /// CREATE or MERGE stays refused (it was a syntax error).
+    fn parseFilterBetweenMatches(self: *Parser, acc: *?ast.Expr) ParserError!void {
+        const condition = (try self.parseFilterStatements()) orelse return;
+        acc.* = if (acc.*) |earlier| try self.makeBinary(.And, earlier, condition) else condition;
+        if (self.cur.kind == .CREATE or self.cur.kind == .MERGE) return self.unexpected("a FILTER statement before CREATE or MERGE is not supported: filter with the MATCH statement's WHERE");
+    }
+
+    /// SONNY-6467 (3): `patternVariableItems` and then each inline LET
+    /// variable, as WITH items.
+    fn patternAndLetItems(self: *Parser, pattern: ast.GraphPattern, lets: []const ast.LetBinding) ParserError![]ast.ReturnItem {
+        const a = self.arena.allocator();
+        const pattern_items = try self.patternVariableItems(pattern);
+        const items = try a.alloc(ast.ReturnItem, pattern_items.len + lets.len);
+        @memcpy(items[0..pattern_items.len], pattern_items);
+        const unicode = @import("../unicode/unicode_tables.zig");
+        for (lets, items[pattern_items.len..]) |let, *item| {
+            const cnf = unicode.caseFoldToUpper(a, let.variable) catch let.variable;
+            item.* = .{ .expr = .{ .Ident = .{ .orig = let.variable, .cnf = cnf } }, .alias = null };
+        }
+        return items;
+    }
+
     fn patternVariableItems(self: *Parser, pattern: ast.GraphPattern) ParserError![]ast.ReturnItem {
         const a = self.arena.allocator();
         var names = std.ArrayList([]const u8).empty;

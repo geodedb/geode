@@ -455,6 +455,15 @@ test "geode#876: FOR … MATCH … SET updates exactly the matched rows" {
 // (`destroy_node`), so `absorb` asserts both trackers free their nodes the
 // same way. This drives that merge: each iteration returns one matched node,
 // and the result's single tracker must hold both.
+//
+// SONNY-6449 made the entry point copy a result out of its statement scratch
+// arena (`execution.detachFromStatementScratch`), which re-tracks every node
+// the rows hold as a copy the result owns in full; so the tracker the caller
+// gets is no longer the executor's merged one, and how it frees a node is not
+// part of the contract. What is: the statement runs on the strict testing
+// allocator, its rows stay readable after the statement returned, every node a
+// row holds is tracked by the result, and `deinit` frees each exactly once (a
+// tracker the merge dropped leaks; one it kept twice frees twice).
 test "SONNY-2463: a FOR body that returns nodes from two iterations merges their trackers" {
     lockStore();
     defer unlockStore();
@@ -468,13 +477,21 @@ test "SONNY-2463: a FOR body that returns nodes from two iterations merges their
     _ = try h.exec("CREATE (:N876 {k: 2})");
     _ = try h.exec("CREATE (:N876 {k: 3})");
 
-    const res = try h.exec("FOR i IN [1, 2] MATCH (n:N876 {k: i}) RETURN n");
+    h.ctx.session_state = &h.session;
+    var parsed = try geode.parseGqlOptions("FOR i IN [1, 2] MATCH (n:N876 {k: i}) RETURN n", h.arena.allocator(), .{});
+    defer parsed.deinit();
+    var res = try execution.executeStatementWithContext(testing.allocator, parsed.program.statements[0], h.ctx);
+    defer res.deinit(testing.allocator);
+
     try testing.expectEqual(@as(usize, 2), res.rows.len);
     const entities = res.owned_graph_entities orelse return error.ExpectedTrackedNodes;
     try testing.expectEqual(@as(usize, 2), entities.nodes.items.len);
-    try testing.expect(entities.destroy_node == null);
     for (res.rows, 0..) |row, i| {
-        const k = (row[0].Node.properties.get("k") orelse return error.NodePropertyMissing).Int;
+        const node = row[0].Node;
+        var tracked = false;
+        for (entities.nodes.items) |t| tracked = tracked or @intFromPtr(t) == @intFromPtr(node);
+        try testing.expect(tracked);
+        const k = (node.properties.get("k") orelse return error.NodePropertyMissing).Int;
         try testing.expectEqual(@as(i64, @intCast(i + 1)), k);
     }
 }

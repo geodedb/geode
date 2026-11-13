@@ -2304,6 +2304,26 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
     return id;
 }
 
+// CANARY: REQ=REQ-SONNY-6266-EDGE-PROP-HEAD-IN; FEATURE="EdgeProperties"; ASPECT=IncomingAdjacencyPropHead; STATUS=TESTED; TEST=tests/test_sonny6266_planned_reverse_edge_props.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6266: point both adjacency copies of edge `edge_id` and the edge
+/// index at its new property chain `new_head`, as graph_storage's own
+/// `engine_edge_props.setEdgeProperty` does. Since edge co-location (Phase
+/// A) the incoming copy lives in the SOURCE shard's `adj_in_remote`, keyed
+/// by `to` through `in_head_dir`, and that is what an incoming walk reads
+/// (`expandInIter`). The adapter updated the target shard's legacy `adj_in`
+/// chain instead, which a co-located edge is never in, so an edge walked
+/// from its target had no properties: `MATCH (a)<-[{w: 2}]-(b)` and every
+/// undirected match taken backwards lost the edge on the planned read.
+fn publishEdgePropHead(shard: *gs.GraphEngine, from_out_head: anytype, to_id: u64, edge_id: u64, new_head: u64) !void {
+    _ = try shard.adj_out.updateEdgePropHead(from_out_head, edge_id, new_head);
+    const in_head = try shard.in_head_dir.getHead(to_id);
+    _ = try shard.adj_in_remote.updateEdgePropHead(in_head, edge_id, new_head);
+    // v0.2.26: copy-on-write (the mmap base is immutable). The dirty flag
+    // keeps a checkpoint from re-blessing the stale edges.idx snapshot.
+    try shard.edge_index.updatePropHead(edge_id, new_head);
+    shard.edge_index_dirty = true;
+}
+
 /// Security-graph durability (gap 0026), belt-and-suspenders re-log of the
 /// node's label var_store page inside the mutating txn so it commits (and, on
 /// the security graph's `sync_each_commit` engines, fsyncs) with the mutation.
@@ -6458,6 +6478,22 @@ pub const StorageAdapter = struct {
         return mg.storage().expandOut(node_id, null, allocator);
     }
 
+    /// SONNY-6266: the property head of edge `edge_id` (whose source is
+    /// `from_slot`) as the edge index holds it, or `fallback` when the index
+    /// has no entry. An incoming adjacency entry written before SONNY-6266
+    /// keeps head 0 for an edge whose properties were set after it was
+    /// created (the adapter updated a chain incoming walks do not read); the
+    /// edge index was always kept current, so a reverse walk reads it there.
+    pub fn edgePropHeadFromIndex(self: *StorageAdapter, graph_name: []const u8, from_slot: u64, edge_id: u64, fallback: u64) !u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        const entry = (try mg.shardEngineForNode(from_slot).getEdge(edge_id)) orelse return fallback;
+        return entry.prop_head;
+    }
+
     /// Iterate all incoming edges to a node without materializing them.
     pub fn iterateIncomingEdges(
         self: *StorageAdapter,
@@ -8369,20 +8405,7 @@ pub const StorageAdapter = struct {
                     return mapPropertyEntryError(err, key);
 
             if (new_head != found_prop_head) {
-                _ = try from_shard.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, new_head);
-                // For cross-shard edges, to_node is on a different shard; for
-                // same-shard edges both adj lists are on from_shard.
-                const to_shard = mg.shardEngineForNode(to_id);
-                const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
-                _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, new_head);
-
-                // v0.2.26: copy-on-write API (getPtr removed — mmap base is
-                // immutable). Also set edge_index_dirty (the F1 blessed-stale
-                // lesson): this manual mirror mutates the index outside
-                // engine_edge_props.setEdgeProperty, so the restamp gate must
-                // see it dirty or a checkpoint would re-bless a stale snapshot.
-                try from_shard.edge_index.updatePropHead(edge_id, new_head);
-                from_shard.edge_index_dirty = true;
+                try publishEdgePropHead(from_shard, from_rec.out_head, to_id, edge_id, new_head);
             }
 
             if (found_prop_head != 0 and found_prop_head != new_head) {
@@ -8423,14 +8446,7 @@ pub const StorageAdapter = struct {
                 return mapPropertyEntryError(err, key);
 
         if (fb_new_head != fb_found_prop_head) {
-            _ = try from_shard.adj_out.updateEdgePropHead(fb_from_rec.out_head, edge_id, fb_new_head);
-            const fb_to_shard = mg.shardEngineForNode(to_id);
-            const fb_to_rec = (try fb_to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
-            _ = try fb_to_shard.adj_in.updateEdgePropHead(fb_to_rec.in_head, edge_id, fb_new_head);
-
-            // v0.2.26 copy-on-write + dirty flag (see the txn-path comment).
-            try from_shard.edge_index.updatePropHead(edge_id, fb_new_head);
-            from_shard.edge_index_dirty = true;
+            try publishEdgePropHead(from_shard, fb_from_rec.out_head, to_id, edge_id, fb_new_head);
         }
 
         if (fb_found_prop_head != 0 and fb_found_prop_head != fb_new_head) {
@@ -8449,7 +8465,7 @@ pub const StorageAdapter = struct {
     /// old loop did:
     ///   * one adapter mutex acquire → `requireExistingGraphLocked`,
     ///   * one linear `adj_out.updateEdgePropHead` scan,
-    ///   * one linear `adj_in.updateEdgePropHead` scan,
+    ///   * one linear incoming-adjacency `updateEdgePropHead` scan,
     ///   * one `refreshPropertyChainIndex` walking all previously-written
     ///     properties — the O(K²)/edge amplifier.
     ///
@@ -8457,7 +8473,7 @@ pub const StorageAdapter = struct {
     ///   * one adapter mutex acquire,
     ///   * N `putPropertyTxn` calls (each unavoidable),
     ///   * exactly one `updateEdgePropHead(adj_out)` + one
-    ///     `updateEdgePropHead(adj_in)` at the end for the terminal
+    ///     `updateEdgePropHead(adj_in_remote)` at the end for the terminal
     ///     `prop_head` (intermediate heads are never read),
     ///   * exactly one `refreshPropertyChainIndex` at the end.
     ///
@@ -8522,14 +8538,7 @@ pub const StorageAdapter = struct {
         }
 
         if (running_prop_head != orig_prop_head) {
-            _ = try from_shard.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, running_prop_head);
-            const to_shard = mg.shardEngineForNode(to_id);
-            const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
-            _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, running_prop_head);
-
-            // v0.2.26 copy-on-write + dirty flag (see the txn-path comment).
-            try from_shard.edge_index.updatePropHead(edge_id, running_prop_head);
-            from_shard.edge_index_dirty = true;
+            try publishEdgePropHead(from_shard, from_rec.out_head, to_id, edge_id, running_prop_head);
         }
 
         if (orig_prop_head != 0 and orig_prop_head != running_prop_head) {

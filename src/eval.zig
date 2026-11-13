@@ -945,14 +945,16 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                     else => false,
                 } };
             }
+            // CANARY: REQ=REQ-SONNY-6282-INT-STRING-EQUALITY; FEATURE="ComparisonPredicate"; ASPECT=NeverEqual; STATUS=TESTED; TEST=tests/test_sonny6282_int_string_equality.zig; OWNER=eval; UPDATED=2026-11-13
+            // SONNY-6282: an integer and a string are never equal. They were
+            // compared by their text, so `WHERE n.id = 1` matched an id '1'
+            // that the inline map `{id: 1}` does not. ISO/IEC 39075:2024
+            // 19.3 GR 1: they are not essentially comparable values; as
+            // universally comparable values (Feature GA04) `=` is False
+            // (NOTE 307). `<` and the other orderings stay refused.
             if ((l == .Str and r == .Int) or (l == .Int and r == .Str)) {
                 if (op != .Eq and op != .Ne) return EvalError.TypeMismatch;
-                var bufL: [64]u8 = undefined;
-                var bufR: [64]u8 = undefined;
-                const ls = try stringify(l, &bufL);
-                const rs = try stringify(r, &bufR);
-                const eq = std.mem.eql(u8, ls, rs);
-                return .{ .Bool = if (op == .Eq) eq else !eq };
+                return .{ .Bool = op == .Ne };
             }
 
             // Advanced Types Ordering

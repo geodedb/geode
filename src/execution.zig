@@ -1204,13 +1204,36 @@ pub fn applyCallFilter(allocator: std.mem.Allocator, result: *ExecutionResult, p
     result.rows = rows;
 }
 
-/// SONNY-6460 item 2: a procedure call in a transaction body, with its
-/// FILTER statements applied (`applyCallFilter`).
+// CANARY: REQ=REQ-SONNY-6467-CALL-IN-TXN-BODY; FEATURE="ProcedureCall"; ASPECT=TransactionBodyProjection; STATUS=TESTED; TEST=tests/test_sonny6467_query_residuals.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6460 item 2, SONNY-6467 item 2: a procedure call in a transaction
+/// body, finished as a statement's call is (`finishCallProcedure`). Only its
+/// FILTER statements were applied: its RETURN, ORDER BY, SKIP and LIMIT were
+/// ignored. The procedure runs without the statement's read snapshot, so the
+/// body sees its own changes.
 fn executeCallProcedureFiltered(allocator: std.mem.Allocator, proc: ast.CallProcedure, context: ExecutionContext) anyerror!ExecutionResult {
+    const window = try callWindow(proc, context);
     var result = try executeCallProcedure(allocator, proc, context);
     errdefer result.deinit(allocator);
-    try applyCallFilter(allocator, &result, proc, context);
+    try finishCallProcedure(allocator, &result, proc, window, context);
     return result;
+}
+
+/// SONNY-2779: a CALL's window, resolved before the procedure runs (a bad
+/// parameter is refused, 22G03, before anything runs).
+fn callWindow(proc: ast.CallProcedure, context: ExecutionContext) !QueryWindow {
+    return .{
+        .start = proc.offset orelse try windowParam(proc.offset_param, context) orelse 0,
+        .limit = proc.limit orelse try windowParam(proc.limit_param, context),
+    };
+}
+
+/// A procedure call's rows through its FILTER statements, its RETURN, its
+/// ORDER BY and its window (`applyQueryWindow` frees the rows it drops).
+fn finishCallProcedure(allocator: std.mem.Allocator, result: *ExecutionResult, proc: ast.CallProcedure, window: QueryWindow, context: ExecutionContext) !void {
+    try applyCallFilter(allocator, result, proc, context);
+    try projectCallReturn(allocator, result, proc, context);
+    if (proc.order_by) |order| try sortRows(allocator, result, order);
+    try applyQueryWindow(allocator, result, window);
 }
 
 pub fn queryWindow(q: ast.Query, context: ExecutionContext) !QueryWindow {
@@ -2930,16 +2953,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     // row. The rows were sliced by hand: the dropped ones
                     // leaked, an OFFSET past the end returned every row, and
                     // a SKIP or LIMIT parameter was ignored.
-                    const window = QueryWindow{
-                        .start = proc.offset orelse try windowParam(proc.offset_param, context) orelse 0,
-                        .limit = proc.limit orelse try windowParam(proc.limit_param, context),
-                    };
+                    const window = try callWindow(proc, context);
                     result = try executeCallStatement(allocator, call_stmt, context);
                     errdefer result.deinit(allocator);
-                    try applyCallFilter(allocator, &result, proc, context);
-                    try projectCallReturn(allocator, &result, proc, context);
-                    if (proc.order_by) |order| try sortRows(allocator, &result, order);
-                    try applyQueryWindow(allocator, &result, window);
+                    try finishCallProcedure(allocator, &result, proc, window, context);
                 },
                 .Subquery => |subq| {
                     // Execute the subquery in an isolated context
@@ -3578,7 +3595,6 @@ pub const PathIterator = struct {
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     queue: std.ArrayList(QueueItem),
-    visited_states: std.AutoHashMap(u64, u32),
     iteration_count: u64,
     min_len: u32,
     max_len: ?u32,
@@ -3602,8 +3618,7 @@ pub const PathIterator = struct {
     // SONNY-2679: the session's graph, tenant and RLS scope. Every edge the
     // BFS walks, and every node it steps onto, must pass it, so a path never
     // contains, ends at or runs through a node the session may not see. A step
-    // is refused BEFORE it is expanded, so a denied node also never claims a
-    // `visited_states` slot another route to the same node would need.
+    // is refused BEFORE it is expanded.
     // Required: a caller with no session to apply (a unit test, a benchmark)
     // passes `PathStepFilter.unrestricted` explicitly.
     scope: PathStepFilter,
@@ -3638,7 +3653,6 @@ pub const PathIterator = struct {
             .allocator = allocator,
             .store = store,
             .queue = queue,
-            .visited_states = std.AutoHashMap(u64, u32).init(allocator),
             .iteration_count = 0,
             .min_len = min_len,
             .max_len = max_len,
@@ -3668,7 +3682,6 @@ pub const PathIterator = struct {
             item.path.deinit(self.allocator);
         }
         self.queue.deinit(self.allocator);
-        self.visited_states.deinit();
     }
 
     // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1QueueDequeue; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
@@ -3840,13 +3853,13 @@ pub const PathIterator = struct {
             // Get the last node in the current path
             const last_node_id = current_path.nodes.items[current_path.nodes.items.len - 1];
 
-            // Check if we've visited this node at this depth before
-            const state_key = last_node_id + (@as(u64, depth) << 32);
-            if (self.visited_states.get(state_key)) |_| {
-                current_path.deinit(self.allocator);
-                continue;
-            }
-            try self.visited_states.put(state_key, depth);
+            // CANARY: REQ=REQ-SONNY-6264-VARLEN-PATH-COUNT; FEATURE="VariableLengthPaths"; ASPECT=EveryPathExpands; STATUS=TESTED; TEST=tests/test_sonny6264_varlen_path_count.zig; OWNER=execution; UPDATED=2026-11-13
+            // SONNY-6264: every path expands. Only the first path to reach a
+            // (node, depth) state used to, so a later path through the same
+            // node (a parallel edge, a diamond) lost every extension: two
+            // paths that differ in an edge are two bindings (ISO/IEC
+            // 39075:2024 22.2). The path mode restricts each path
+            // (`shouldSkipByPathMode`); the caps above bound the work.
 
             // Get edges based on direction (zero-copy: no allocation needed)
             const outgoing_edge_ids = if (self.rel_direction == 'r' or self.rel_direction == 'u') self.store.getOutgoingEdgeIds(last_node_id) else null;

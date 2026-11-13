@@ -2211,6 +2211,98 @@
   latent engine defect (recovery replays a batched transaction's images
   in written, not LSN, order) remains in graph-storage. Regression: `zig
   build test-sonny2978-overlapping-engine-txn-crash`.
+- **A relationship property map with a parameter matches on every
+  session, and an error in a WHERE fails the persisted read (SONNY-6296
+  items 2 and 5). User-visible: a query whose WHERE raises now fails.**
+  The legacy executor (in-memory, tenant-scoped and RLS sessions)
+  evaluated a relationship's property map without the query parameters, so
+  `-[:R {w: $p}]->` matched nothing, and a value it could not evaluate
+  matched every edge; it now reads the statement's parameters, and such a
+  value matches nothing. The persisted planned read turned an error in a
+  row's WHERE or FILTER (22003 overflow, 22012 division by zero, a type
+  mismatch, ...) into a dropped row and answered over the rest; it now
+  fails the query, as the other executors do (ISO/IEC 39075:2024 19.1 GR 1
+  evaluates the condition for every row; its exception is the
+  statement's). Regression: `zig build test-sonny6296-legacy-read-gaps`
+  (new).
+- **`NOT (k = 1)` is a negated comparison, not a pattern; a CALL in a
+  transaction body honours RETURN, ORDER BY, SKIP and LIMIT; FILTER after
+  an inline LET and between MATCH statements (SONNY-6467 items 1-3).**
+  After `NOT (`, any identifier not followed by `.` was taken for a node
+  pattern, so `WHERE NOT (k = 1)` was a syntax error and `WHERE NOT (flag)`
+  was `NOT EXISTS { (flag) }` (always false); an identifier is now a node
+  pattern only when a label, a property map or an edge follows it.
+  `START TRANSACTION { CALL p() YIELD x RETURN x ORDER BY x LIMIT 1 }`
+  returned every yielded row in the procedure's order; the body's CALL is
+  now finished as a statement's is. ISO/IEC 39075:2024 14.6 makes FILTER a
+  simple query statement, so `MATCH ... LET x = e FILTER x > 2 RETURN ...`
+  and `MATCH (a) FILTER a.k > 1 MATCH (a)-[:R]->(b) RETURN ...` are now
+  accepted (a FILTER before CREATE or MERGE stays refused). Regression:
+  `zig build test-sonny6467-query-residuals` (new).
+- **ISO abbreviated edge patterns `-` and `<->`, and `<-[ ]->` matches
+  either direction (SONNY-6267).** ISO/IEC 39075:2024 16.7 defines seven
+  abbreviated edge patterns; Geode accepted `<-` and `->` (and Cypher's
+  `--`, `-->`) but refused the `-` (<minus sign>, any direction) and `<->`
+  (<left minus right>) spellings, and the full `<-[ ]->` (<full edge left or
+  right>) matched outgoing edges only. `(a)-(b)`, `(a)<->(b)` and
+  `(a)<-[r]->(b)` now match an edge in either direction (every Geode edge is
+  directed). `(a)<--(b)` stays a syntax error, now with a message: it is not
+  GQL (16.7 SR: `<-` juxtaposed with `-` would spell the `--` comment
+  introducer, NOTE 238). The tilde forms (`~`, `<~`, `~>`) match undirected
+  edges, which Geode does not store, and stay refused (SONNY-6433).
+  Regression: `zig build test-sonny6267-abbreviated-edge-patterns` (new).
+- **Breaking: an integer and a string are never equal (SONNY-6282).**
+  `=` and `<>` compared an INT with a STRING by their text, so
+  `WHERE n.id = 1` also matched a node whose `id` is the string `'1'`,
+  `WHERE n.id = '1'` matched the integer too, `RETURN 1 = '1'` was true,
+  and `WHERE n.id <> 1` dropped the string node; the inline map
+  `(n {id: 1})` never equated them. ISO/IEC 39075:2024 19.3 GR 1: they are
+  not essentially comparable values, and as universally comparable values
+  `=` is False (NOTE 307), so `1 = '1'` is now false and `1 <> '1'` true in
+  every session, as the inline map answers. `<`, `<=`, `>` and `>=` between
+  them stay refused. A query that relied on the textual match must compare
+  like types (`toString(n.id) = '1'`, `toInteger(n.id) = 1`). Regression:
+  `zig build test-sonny6282-int-string-equality` (new).
+- **Persisted sessions: a relationship walked from its target keeps its
+  properties (SONNY-6266).** `MATCH (a)<-[{w: 2}]-(b)` answered 0, and an
+  undirected hop with a relationship property map or a WHERE on the
+  relationship lost every match taken backwards, on the planned read only.
+  Writing an edge's properties (`StorageAdapter.setEdgeProperty` and
+  `setEdgePropertiesBatch`) moved the new property head into the outgoing
+  adjacency and into the target shard's legacy incoming chain; since
+  graph_storage's edge co-location, incoming walks read the source shard's
+  `adj_in_remote`, which kept head 0. Both copies and the edge index are
+  now updated as graph_storage's own `setEdgeProperty` does. **Existing
+  stores** keep a stale head 0 in the incoming entries of edges written
+  before this fix; the planned read takes an incoming edge's property head
+  from the edge index, which was always current, so they answer correctly
+  without a rewrite.
+  Regression: `zig build test-sonny6266-planned-reverse-edge-props` (new),
+  and five `match_wrong` cases of `test-sonny2707-count-direction` now held
+  to the test's own walk, warm and after a checkpoint and reload.
+- **A variable-length MATCH returns one row per path, also through
+  parallel edges and diamonds (SONNY-6264). User-visible: counts
+  grow.** The traversal (`execution.PathIterator`, shared by the MATCH
+  executors, `COUNT { }`, `EXISTS { }` and pattern comprehensions, and the
+  planned read's engine-direct port of it) expanded only the first path to
+  reach a node at a given depth, so every later path through that node lost
+  its extensions: `MATCH (a:V {k: 0})-[*1..3]->(b) RETURN count(*)` gave 7
+  where 12 paths exist. Two paths that differ in an edge are two bindings
+  (ISO/IEC 39075:2024 22.2); the path mode (geode's default ACYCLIC, or an
+  explicit TRAIL / WALK / SIMPLE) still restricts each path, and the
+  10,000-iteration / 5,000-queue caps still bound the work. Regression:
+  `zig build test-sonny6264-varlen-path-count` (new), and the six
+  `path_dedup` cases of `test-sonny2707-count-direction` now held to the
+  test's own walk.
+- **`FOR x IN [ ... ]` no longer leaks the list it iterates
+  (SONNY-6449 follow-up).** `executeFor` and the FOR header expansion
+  evaluated the collection on the caller's allocator and never freed it,
+  so every FOR over a list literal or a computed list leaked it once per
+  statement. The list is now the statement's (its scratch arena), as every
+  other computed projection value is since SONNY-6449; rows that borrow
+  its elements stay valid until the result is copied out. Regression:
+  `zig build test-for-write-body` (the SONNY-2463 case now runs on the
+  strict testing allocator and frees its result).
 - **Operator-visible: one checkpoint per persistence tick and one per clean
   shutdown, with per-phase shutdown timings (SONNY-6459 items 1-2).** Each
   persistence tick ran the light checkpoint twice (the checkpoint hook,

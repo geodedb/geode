@@ -12,7 +12,7 @@
 //
 // Here: `formatPeerIp` on IPv4, IPv6 and IPv4-mapped addresses; and the real
 // Handshake handler serving real accepted TCP sockets from two peer
-// addresses (127.0.0.2 and 127.0.0.3, both loopback on Linux, bound as the
+// addresses (127.0.0.43 and 127.0.0.44, both loopback on Linux, bound as the
 // clients' source addresses; macOS uses 127.0.0.1 and ::1, its configured
 // loopback addresses): at the cap,
 // one peer's Handshake is refused while the other's is served.
@@ -146,9 +146,9 @@ test "SONNY-3313: over real sockets, anonymous Handshakes from two peer addresse
     }
 
     // Peer A: two sessions, each in an open transaction.
-    const peer_a = if (ipv6_peer_b) "127.0.0.1" else "127.0.0.2";
+    const peer_a = if (ipv6_peer_b) "127.0.0.1" else "127.0.0.43";
     const principal_a = "anonymous@" ++ peer_a;
-    var src_a = v4(127, 0, 0, if (ipv6_peer_b) 1 else 2, 0);
+    var src_a = v4(127, 0, 0, if (ipv6_peer_b) 1 else 43, 0);
     var a_sessions: [2][]const u8 = undefined;
     for (&a_sessions) |*sess| {
         const conn = try connectFrom(libc.AF.INET, &src_a, &dst, @sizeOf(posix.sockaddr.in), l.fd);
@@ -175,11 +175,11 @@ test "SONNY-3313: over real sockets, anonymous Handshakes from two peer addresse
     }
     // Peer B: served; A's cap is A's alone. macOS configures only one
     // IPv4 loopback address, so require a second real peer over IPv6 there.
-    const peer_b = if (ipv6_peer_b) "0000:0000:0000:0000:0000:0000:0000:0001" else "127.0.0.3";
+    const peer_b = if (ipv6_peer_b) "0000:0000:0000:0000:0000:0000:0000:0001" else "127.0.0.44";
     var src_b = if (ipv6_peer_b)
         v6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 0)
     else
-        v4(127, 0, 0, 3, 0);
+        v4(127, 0, 0, 44, 0);
     {
         const family = if (ipv6_peer_b) libc.AF.INET6 else libc.AF.INET;
         const len = if (ipv6_peer_b) @sizeOf(posix.sockaddr.in6) else @sizeOf(posix.sockaddr.in);
