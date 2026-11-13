@@ -5787,6 +5787,21 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6442-kms-channel", "Run SONNY-6442 items 1-3 regression (the remote KMS client refuses to connect without a CA bundle, with one it cannot load or to a server that bundle does not verify; rejects an attestation from another TLS channel; refuses generate/unwrap unconnected; the attested hash is the HKDF KEK identifier; the seeded simulated KMS client compiles into tests only; over real QUIC)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6448 (1): a QUIC client given a CA bundle verifies the server
+    // against it or does not connect (connectEx, the CLI bridge), over real
+    // QUIC with openssl-made CAs.
+    {
+        const bridge_mod = b.createModule(.{ .root_source_file = b.path("src/client/zig_quic_bridge.zig"), .target = target, .optimize = optimize });
+        bridge_mod.addImport("geode_client_zig", zig_client_real_mod);
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6448_tls_fail_closed.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("transport/quic", transport_quic_mod);
+        tests.root_module.addImport("zig_quic_bridge", bridge_mod);
+        tests.root_module.link_libc = true;
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6448-tls-fail-closed", "Run SONNY-6448 item 1 regression (QuicClient.connectEx refuses a missing, unreadable or certificate-less CA bundle instead of connecting without a trust anchor; the CLI QUIC client verifies against a supplied --ca-cert instead of ignoring it; a CA that did not sign the server fails the handshake and the right one completes it, over real QUIC)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6442 (4): geode serve refuses an unknown option (exit 2) and
     // still parses every documented one (unit + the built binary).
     {
