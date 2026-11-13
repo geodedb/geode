@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:44:00.607148548Z",
+  "generated_at": "2026-11-13T14:18:20.849064753Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86781,10 +86781,52 @@
       "features": [
         {
           "feature": "QueryChain",
+          "aspect": "AggregateWithoutMatch",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6483_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "QueryChain",
+          "aspect": "ChainingReturnOverWithStage",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6483_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "QueryChain",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
             "tests/test_sonny6483_query_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6483_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "UndirectedPatternMatch",
+          "aspect": "SelfLoopOnce",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig"
           ],
           "tests": [
             "tests/test_sonny6483_query_residuals.zig"
@@ -94463,7 +94505,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4927
+      "TESTED": 4930
     },
     "by_aspect": {
       "2PC": 3,
@@ -94558,6 +94600,7 @@
       "AggregateFunctions": 1,
       "AggregateOverAllRows": 1,
       "AggregateStats": 1,
+      "AggregateWithoutMatch": 1,
       "AggregatesInsideItems": 1,
       "AggregatesThroughSharedProjection": 1,
       "Aggregation": 7,
@@ -94927,6 +94970,7 @@
       "ChainedMergeEndpoints": 1,
       "ChainedWith": 1,
       "ChainedWriteRefusal": 1,
+      "ChainingReturnOverWithStage": 1,
       "Change": 1,
       "ChangeKey": 1,
       "ChangeStream": 1,
@@ -97863,6 +97907,7 @@
       "SelfIntersectionCheck": 1,
       "SelfLockingProcedures": 1,
       "SelfLoop": 1,
+      "SelfLoopOnce": 1,
       "SelfMatch": 1,
       "SelfOrAdminGate": 1,
       "SelfTestProceduresAndHonestMarkers": 1,

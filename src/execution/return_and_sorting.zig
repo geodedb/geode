@@ -594,16 +594,27 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
 
     // Collect column names (with disambiguation for duplicates)
     const columns = try generateUniqueColumnNames(allocator, items);
+    // SONNY-6483: an item that fails frees what was built.
+    errdefer {
+        for (columns) |c| allocator.free(c);
+        allocator.free(columns);
+    }
 
     // Evaluate expressions with provided environment (GAP-0535: each value is
     // adopted or duplicated so the result fully owns its row memory)
     // SONNY-6449: evaluated on the statement's scratch arena, then copied
     // (`value_utilities.lentAllocator`).
     const lent = value_utilities.lentAllocator(allocator);
-    var row = try allocator.alloc(Value, items.len);
+    const row = try allocator.alloc(Value, items.len);
+    var filled: usize = 0;
+    errdefer {
+        for (row[0..filled]) |v| value_utilities.freeValue(allocator, v);
+        allocator.free(row);
+    }
     for (items, 0..) |item, i| {
         const evaluated = try eval.evalExpr(lent, item.expr, env);
         row[i] = try value_utilities.ensureOwnedProjectionValue(allocator, item.expr, evaluated);
+        filled += 1;
     }
 
     var rows = try allocator.alloc([]Value, 1);

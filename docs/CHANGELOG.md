@@ -2161,6 +2161,31 @@
 
 ### Fixed
 
+- **Query residuals: an aggregating WITH followed by another WITH, aggregates
+  without MATCH under RLS, undirected self-loops, failing property maps
+  (SONNY-6483).** (1) `MATCH (z:Z) WITH z.g AS g, sum(z.k) AS s WITH g, s
+  RETURN g, s` answered NULL rows on the in-memory, tenant-scoped and RLS
+  sessions (`WITH count(*) AS c WITH c` answered 1): the chained part's
+  RETURN, which is the WITH's own items, was projected again over the rows
+  the WITH had produced. The WITH stage's rows are now the part's answer.
+  The per-row bindings the next part built, and the planned read's
+  materialized nodes on the intermediate-aggregation path, leaked on every
+  session; they are freed. (2) `RETURN count(1), sum(2)` answered `1, null`
+  (and `collect(6)` UnknownFunction) on an RLS session, where the planned
+  read is skipped: an aggregating RETURN without MATCH now aggregates over
+  its one empty record in the shared projection. (3) `MATCH (a)-[r]-(b)`
+  matched a self-loop twice on the legacy sessions; it is one path binding
+  (ISO/IEC 39075:2024 22.3 GR, 4.11.6) and now matches once, as on the
+  planned read. (4) A pattern's property map whose value fails to evaluate
+  (`{i: 1 / 0}`) matched nothing on the planned read, and on every session
+  for a relationship's map or the start node of a relationship pattern; it
+  now fails the statement (ISO/IEC 39075 19.1 GR 1), as a node map did on
+  the legacy sessions. (5) The `gql` developer tool's `--demo-eval` printed
+  a RETURN label it had already freed (a crash) and leaked every row's
+  computed values and every HAVING rewrite; `generateUniqueColumnNames` and
+  the no-MATCH RETURN freed nothing when an allocation or an item failed.
+  Regression: `zig build test-sonny6483-query-residuals`; the three
+  `match_wrong` exemptions of `test-sonny2707-count-direction` are gone.
 - **Memory safety: the legacy MATCH executor no longer returns rows that
   point into a freed snapshot (SONNY-2681).** The in-memory, tenant-scoped
   and RLS-policy sessions read through a `ReadView` that deep-copied the

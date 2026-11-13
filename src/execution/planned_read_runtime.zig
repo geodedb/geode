@@ -3109,14 +3109,17 @@ fn propsMatch(
     context: ExecutionContext,
 ) !bool {
     for (props) |prop| {
-        const expected = eval.evalExpr(allocator, prop.value.*, Env{
+        // SONNY-6483 (4): a value that fails to evaluate fails the read
+        // (ISO/IEC 39075 19.1 GR 1); it was no match. What it computes is
+        // lent from the statement's scratch arena.
+        const expected = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, Env{
             .names = &.{},
             .values = &.{},
             .param_names = param_names,
             .param_values = param_values,
             .allocator = allocator,
             .exec_context = @constCast(&context),
-        }) catch return false;
+        });
         const actual = actual_props.get(prop.key) orelse return false;
         // SONNY-2806: by value, as the legacy executor compares (a decimal by
         // representation, a DOUBLE and every extended value never). A stored
@@ -3533,18 +3536,6 @@ fn resolveWindowValue(
         }
     }
     return null;
-}
-
-fn passesPredicates(allocator: std.mem.Allocator, q: *const ast.Query, env: Env) bool {
-    if (q.where_clause) |where_expr| {
-        const value = eval.evalExpr(allocator, where_expr, env) catch return false;
-        if (!truthyPredicate(value)) return false;
-    }
-    if (q.filter_clause) |filter_expr| {
-        const value = eval.evalExpr(allocator, filter_expr, env) catch return false;
-        if (!truthyPredicate(value)) return false;
-    }
-    return true;
 }
 
 /// SONNY-6425: only the Boolean True keeps a row (ISO/IEC 39075 19.1 GR2);

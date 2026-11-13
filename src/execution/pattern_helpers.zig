@@ -9,6 +9,7 @@ const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const distinct_set = @import("distinct_set.zig");
+const value_utilities = @import("value_utilities.zig");
 const valuesEqual = execution.valuesEqual;
 
 // Local type aliases
@@ -313,10 +314,11 @@ pub fn matchesLabels(node: *graph_store.Node, required_labels: []const []const u
 // CANARY: REQ=REQ-SONNY-6296-REL-MAP-PARAMS; FEATURE="PatternMatching"; ASPECT=RelationshipMapParameters; STATUS=TESTED; TEST=tests/test_sonny6296_legacy_read_gaps.zig; OWNER=execution; UPDATED=2026-11-13
 /// SONNY-6296 (2): the map's values are evaluated with the statement's query
 /// parameters (the active context's), so `-[:R {w: $p}]->` matches; they were
-/// evaluated with none, so a parameter never matched. A value that cannot be
-/// evaluated matches nothing, as on a node (`nodeMatchesProps`); it matched
-/// every edge.
-pub fn matchesEdgeProperties(allocator: std.mem.Allocator, edge: graph_store.Edge, required_props: ?[]const ast.Property) bool {
+/// evaluated with none, so a parameter never matched. SONNY-6483 (4): a value
+/// that cannot be evaluated fails the statement (ISO/IEC 39075 19.1 GR 1), as
+/// on a node (`nodeMatchesProps`); it matched nothing. What it computes is
+/// lent from the statement's scratch arena.
+pub fn matchesEdgeProperties(allocator: std.mem.Allocator, edge: graph_store.Edge, required_props: ?[]const ast.Property) !bool {
     const props = required_props orelse return true;
     const ctx = execution.getActiveContext();
     const empty_env = Env{
@@ -329,7 +331,7 @@ pub fn matchesEdgeProperties(allocator: std.mem.Allocator, edge: graph_store.Edg
     for (props) |prop| {
         if (edge.properties.get(prop.key)) |edge_prop_val| {
             const edge_val = propertyValueToValue(edge_prop_val);
-            const expected_val = eval.evalExpr(allocator, prop.value.*, empty_env) catch return false;
+            const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, empty_env);
             if (!valuesEqual(edge_val, expected_val)) return false;
         } else {
             return false;
