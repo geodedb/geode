@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:31:20.534199263Z",
+  "generated_at": "2026-11-13T07:34:35.11111533Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -1660,14 +1660,16 @@
         {
           "feature": "2PC TLS",
           "aspect": "Security",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/distributed/twophase.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-04-10"
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -10569,6 +10571,25 @@
           "benches": [],
           "owner": "transport",
           "updated": "2026-06-04"
+        }
+      ]
+    },
+    {
+      "id": "REQ-CLUSTER-PEER-DIAL-001",
+      "features": [
+        {
+          "feature": "ClusterAuth",
+          "aspect": "PeerTls",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_auth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -93311,10 +93332,12 @@
           "files": [
             "src/distributed/raft_consensus.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-04-10"
+          "updated": "2026-11-13"
         },
         {
           "feature": "Raft RPC TLS",
@@ -93323,10 +93346,12 @@
           "files": [
             "src/distributed/raft_consensus.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-04-10"
+          "updated": "2026-11-13"
         },
         {
           "feature": "Raft RPC TLS",
@@ -93379,8 +93404,8 @@
       "BENCHED": 209,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 336,
-      "TESTED": 4866
+      "IMPL": 335,
+      "TESTED": 4868
     },
     "by_aspect": {
       "2PC": 3,
@@ -95994,6 +96019,7 @@
       "PeerDecimal": 1,
       "PeerIPExtraction": 1,
       "PeerIsolation": 1,
+      "PeerTls": 1,
       "PeerTlsHandshakeDistinctIp": 1,
       "PeersList": 1,
       "PendingStatementFailure": 1,

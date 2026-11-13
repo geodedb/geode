@@ -22,6 +22,19 @@
   self-signed CA certificate from the bundle); Zig `tls`-based clients,
   including `geode query --client-cert`, send only the leaf and are
   rejected. Regression: `zig build test-sonny6453-mtls-client-ca`.
+- **Operator-visible: every cluster peer dial uses one verified
+  configuration (SONNY-6453 items 2 and 5).** The 2PC transport never read
+  `GEODE_CLUSTER_CA_CERT`: it dialled with verification on and no trust
+  anchor, so a verified 2PC handshake could never complete. It now dials
+  exactly like raft and the cluster coordinator
+  (`cluster_auth.dialClusterPeer`): verified against
+  `GEODE_CLUSTER_CA_CERT`, or unverified with `GEODE_CLUSTER_INSECURE`
+  (Debug builds only). With neither set, raft, the coordinator and 2PC
+  refuse the dial with `ClusterCaRequired` and a log line naming the
+  variable, instead of attempting a handshake against a "system CA bundle"
+  geode never loads (the raft comment that promised one is corrected).
+  2PC (`src/distributed/twophase.zig`) is reachable from no server path
+  today. Regression: `zig build test-sonny6453-cluster-peer-tls`.
 - **BREAKING (operator): QUIC clients verify against the CA bundle they are
   given, or do not connect (SONNY-6448 item 1).** `QuicClient.connectEx`
   (the cluster, Raft and 2PC peer path, which reads

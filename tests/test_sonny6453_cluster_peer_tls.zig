@@ -1,7 +1,7 @@
 // SONNY-6453 item 2 (+ item 5's raft comment): every cluster peer dial —
 // 2PC, raft and the cluster coordinator — uses ONE verified transport
-// configuration: the CA bundle in GEODE_CLUSTER_CA_CERT, or (Debug builds
-// only) GEODE_CLUSTER_INSECURE.
+// configuration (`cluster_auth.dialClusterPeer`): the CA bundle in
+// GEODE_CLUSTER_CA_CERT, or (Debug builds only) GEODE_CLUSTER_INSECURE.
 //
 // Before: the 2PC transport never read GEODE_CLUSTER_CA_CERT. It dialled
 // with verification on and no trust anchor, so a verified 2PC handshake
@@ -23,7 +23,7 @@ const quic = @import("transport/quic");
 const test_ports = @import("test_ports.zig");
 
 const twophase = geode.distributed.twophase;
-const raft = geode.distributed.raft_consensus;
+const cluster_auth = geode.distributed.cluster_auth;
 
 const SERVER_IP = "127.0.0.2";
 
@@ -174,5 +174,32 @@ test "SONNY-6453: 2PC dials participants verified against GEODE_CLUSTER_CA_CERT"
         var t = twophase.TwoPhaseTransport.init(a);
         defer t.deinit();
         try std.testing.expectError(error.ClusterCaRequired, t.getConnection(endpoint));
+    }
+}
+
+test "SONNY-6453: the raft / cluster coordinator peer dial verifies against the cluster CA and refuses without one" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    _ = unsetenv("GEODE_CLUSTER_INSECURE");
+    var fx = try makeFixtures();
+    defer fx.deinit();
+    var srv: Server = undefined;
+    try Server.start(a, &srv, &fx);
+    defer srv.stopAndFree(a);
+    defer setClusterCa(null);
+
+    {
+        setClusterCa(null);
+        var qc = quic.QuicClient.init(a);
+        defer qc.deinit();
+        try std.testing.expectError(error.ClusterCaRequired, cluster_auth.dialClusterPeer(&qc, SERVER_IP, srv.port));
+        try std.testing.expect(qc.connection == null);
+    }
+    {
+        setClusterCa(fx.good_ca);
+        var qc = quic.QuicClient.init(a);
+        defer qc.deinit();
+        try cluster_auth.dialClusterPeer(&qc, SERVER_IP, srv.port);
+        try qc.waitForHandshake(5);
     }
 }

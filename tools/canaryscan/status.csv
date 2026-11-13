@@ -101,7 +101,7 @@ REQ-2PC-PREPARE-001,2PC,Prepare,TESTED,tests/test_gap_0193_batch4_comprehensive.
 REQ-2PC-ROLLBACK-001,2PC,Rollback,TESTED,tests/test_gap_0193_batch5_comprehensive.zig,,,txn,2026-01-16
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
 REQ-2PC-TLS-001,2PC,TLSSecurity,IMPL,tests/test_gap_0193_batch2_security.zig,,,distributed,2026-11-12
-REQ-2PC-TLS-001,2PC TLS,Security,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
+REQ-2PC-TLS-001,2PC TLS,Security,TESTED,src/distributed/twophase.zig,tests/test_sonny6453_cluster_peer_tls.zig,,distributed,2026-11-13
 REQ-2PC-TLS-002,2PC,TLSOneShot,IMPL,tests/test_gap_0193_batch2_security.zig,,,distributed,2026-11-12
 REQ-2PC-TLS-002,2PC TLS One-shot,Security,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
 REQ-2PC-TLS-003,2PC TLS,ClusterCa,TESTED,tests/test_sonny6453_cluster_peer_tls.zig,tests/test_sonny6453_cluster_peer_tls.zig,,distributed,2026-11-13
@@ -628,6 +628,7 @@ REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ExplicitCertLoadAsIs,TES
 REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ExplicitCertNotDiscarded,TESTED,tests/test_cert_provided_cert_honored.zig,tests/test_cert_provided_cert_honored.zig,,distributed,2026-06-04
 REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ExplicitCertTracking,TESTED,src/server/cli_args.zig,tests/test_cert_provided_cert_honored.zig,,distributed,2026-06-04
 REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ListenerCertProbe,TESTED,src/transport/quic.zig,tests/test_cert_provided_cert_honored.zig,,transport,2026-06-04
+REQ-CLUSTER-PEER-DIAL-001,ClusterAuth,PeerTls,TESTED,src/distributed/cluster_auth.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
 REQ-CODEQUALITY-001,CodeQuality,ErrorHandling,TESTED,tests/test_gap_0193_remaining_categories.zig,,,engine,2026-01-15
 REQ-CODEQUALITY-002,CodeQuality,MemoryManagement,TESTED,tests/test_gap_0193_remaining_categories.zig,,,engine,2026-01-15
 REQ-CODEQUALITY-003,CodeQuality,NamingConventions,TESTED,tests/test_gap_0193_remaining_categories.zig,,,engine,2026-01-15
@@ -5936,8 +5937,8 @@ REQ-WITH-GROUPBY-008,WithGroupByAggregation,OrderByAggregation,TESTED,tests/test
 REQ-WITH-GROUPBY-009,WithGroupByAggregation,NestedWith,TESTED,tests/test_gap_0193_impl_batch_promotion.zig,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15
 REQ-ZERO-LEN-PATH-002,ZeroLengthPaths,Basic,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,engine,2026-01-15
 REQ-ZERO-LEN-PATH-003,ZeroLengthPaths,SelfLoop,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,engine,2026-01-15
-SEC-D011,Raft RPC TLS,ConnectCompile,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
-SEC-D011,Raft RPC TLS,ConnectHelper,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
+SEC-D011,Raft RPC TLS,ConnectCompile,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
+SEC-D011,Raft RPC TLS,ConnectHelper,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
 SEC-D011,Raft RPC TLS,RpcClientConnect,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
 SEC-D011,Raft RPC TLS,TransportSend,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
 SONNY-1841,WriteCancelReleasesLock,Regression,TESTED,tests/test_sonny1841_write_lock_cancel.zig,tests/test_sonny1841_write_lock_cancel.zig,,execution,2026-09-18
