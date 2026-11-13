@@ -3147,22 +3147,30 @@ pub const GraphStore = struct {
                 if (std.mem.eql(u8, e.graph_name, c.graph_name)) try c.ids.append(c.allocator, id);
             }
         };
-        var nodes_to_remove: Collect = .{ .allocator = self.allocator, .graph_name = graph_name };
-        defer nodes_to_remove.ids.deinit(self.allocator);
-        self.nodes.forEachResident(&nodes_to_remove, Collect.node) catch {};
-
-        // Remove and free the nodes
-        for (nodes_to_remove.ids.items) |node_id| {
-            self.deleteNodeNoSave(node_id);
-        }
-
-        // Remove any remaining edges tagged with this graph (defensive cleanup)
+        // CANARY: REQ=REQ-SONNY-6472-DROP-PURGES-MEMORY; FEATURE="MultiGraphIsolation"; ASPECT=InMemoryPurge; STATUS=TESTED; TEST=tests/test_sonny3033_batch_graph_gate.zig; OWNER=storage; UPDATED=2026-11-13
+        // SONNY-6472 (1): the graph's resident edges, then its resident nodes,
+        // are taken out of memory directly (`removeEdgeInMemory`,
+        // `removeNodeInMemory`), never through the engine. DROP GRAPH runs
+        // this after the adapter dropped the graph's engine, and the
+        // failure-atomic deletes (SONNY-6268) read a node's incident edges
+        // and an edge's body through it: they failed with GraphNotFound and
+        // left the node "unchanged", so a graph created again under the name
+        // showed the dropped graph's nodes (its label counts and postings).
+        // Every edge of the graph is tagged with it, so the edges a node's
+        // removal would read are among the ones removed first.
         var edges_to_remove: Collect = .{ .allocator = self.allocator, .graph_name = graph_name };
         defer edges_to_remove.ids.deinit(self.allocator);
         self.edges.forEachResident(&edges_to_remove, Collect.edge) catch {};
-
         for (edges_to_remove.ids.items) |edge_id| {
-            self.deleteEdgeNoSave(edge_id);
+            const body = self.edges.get(edge_id) orelse continue;
+            self.removeEdgeInMemory(edge_id, body);
+        }
+
+        var nodes_to_remove: Collect = .{ .allocator = self.allocator, .graph_name = graph_name };
+        defer nodes_to_remove.ids.deinit(self.allocator);
+        self.nodes.forEachResident(&nodes_to_remove, Collect.node) catch {};
+        for (nodes_to_remove.ids.items) |node_id| {
+            self.removeNodeInMemory(node_id, &.{});
         }
     }
 
@@ -16581,7 +16589,9 @@ const AdapterVTable = struct {
     getOrCreateGraphFn: *const fn (*anyopaque, []const u8) anyerror!*anyopaque,
     // SONNY-3028: refuses (`ObjectInUse`) a graph the calling thread has an
     // engine transaction open on. SONNY-3132: and the default graph.
-    dropGraphFn: *const fn (*anyopaque, []const u8) error{ ObjectInUse, CannotDropDefaultGraph }!void,
+    // SONNY-6472 (2): OutOfMemory when the dropped name cannot be recorded
+    // (nothing is dropped then).
+    dropGraphFn: *const fn (*anyopaque, []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory }!void,
     createNodeFn: *const fn (*anyopaque, []const u8, []const []const u8) anyerror!u64,
     // GAP-ENT-0024: the trailing u64 is the geode-minted PUBLIC edge id,
     // stored INLINE in the durable adjacency records (v2 blocks) so a
@@ -17333,10 +17343,14 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
             return castAdapter(ctx).graphExists(name);
         }
         fn getOrCreateGraph(ctx: *anyopaque, name: []const u8) anyerror!*anyopaque {
-            const mg = try castAdapter(ctx).getOrCreateGraph(name);
+            // SONNY-6472 (2): GraphStore.createGraph (CREATE GRAPH, a HELLO
+            // allowed to create) is the one caller: it creates a graph
+            // dropped earlier under this name, which getOrCreateGraph (the
+            // write paths' lookup) no longer does.
+            const mg = try castAdapter(ctx).createGraph(name);
             return @ptrCast(mg);
         }
-        fn dropGraph(ctx: *anyopaque, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph }!void {
+        fn dropGraph(ctx: *anyopaque, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory }!void {
             try castAdapter(ctx).dropGraph(name);
         }
         fn createNode(ctx: *anyopaque, graph_name: []const u8, labels: []const []const u8) anyerror!u64 {

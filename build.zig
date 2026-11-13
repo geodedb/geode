@@ -9935,6 +9935,23 @@ pub fn build(b: *std.Build) void {
     const sonny2978_step = b.step("test-sonny2978-overlapping-engine-txn-crash", "Run SONNY-2978 regression (a REMOVE, DELETE, label SET or REMOVE, relationship DELETE or edge-property REMOVE inside a Geode transaction, on the session engine transaction's shard, survives a SIGKILL of a real server and a restart)");
     sonny2978_step.dependOn(&run_sonny2978_tests.step);
 
+    // SONNY-6471: every relationship-property write shape (CREATE/MERGE
+    // inline on the fast paths and the executor, SET r.p, SET r = {..}, REMOVE),
+    // outside and inside a transaction, same- and cross-shard, with and
+    // without TDE, survives a SIGKILL of a real server.
+    const sonny6471_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6471_edge_prop_crash.zig"), .target = target, .optimize = optimize });
+    sonny6471_test_mod.link_libc = true;
+    sonny6471_test_mod.addImport("geode", root_mod);
+    sonny6471_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6471_test_mod.addImport("schema", schema_mod);
+    sonny6471_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6471_tests = b.addTest(.{ .root_module = sonny6471_test_mod });
+    const run_sonny6471_tests = b.addRunArtifact(sonny6471_tests);
+    spawnsBuiltGeode(sonny6471_tests);
+    shardDep(test_step, &run_sonny6471_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6471_step = b.step("test-sonny6471-edge-prop-crash", "Run SONNY-6471 regression (every relationship-property write: CREATE and MERGE with inline properties on the fast paths and the executor, SET r.p, SET r = {...}, REMOVE, outside and inside a transaction, same- and cross-shard, with and without TDE, survives a SIGKILL of a real server; read back outgoing, incoming and by an unlabeled scan)");
+    sonny6471_step.dependOn(&run_sonny6471_tests.step);
+
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart
     // (multi-request, and one request left open). Not in shardDep until the
@@ -9979,6 +9996,27 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny3121_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3121_step = b.step("test-sonny3121-direct-bulk-pin", "Run SONNY-3121 regression (the direct bulk MERGE helpers - relationship and multi-property node - hold a pin on their graph; a DROP GRAPH between their lookup and their locks makes them fail with GraphNotFound, and the graph is freed when they let go)");
     sonny3121_step.dependOn(&run_sonny3121_tests.step);
+
+    // SONNY-6472 (2): a write racing a DROP GRAPH (createNode, the bulk
+    // insert, pinOrCreateGraph) fails with GraphNotFound and never creates
+    // the graph again; CREATE GRAPH does.
+    const sonny6472_writes_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6472_dropped_graph_writes.zig"), .target = target, .optimize = optimize });
+    sonny6472_writes_test_mod.addImport("geode", root_mod);
+    const sonny6472_writes_tests = b.addTest(.{ .root_module = sonny6472_writes_test_mod });
+    const run_sonny6472_writes_tests = b.addRunArtifact(sonny6472_writes_tests);
+    shardDep(test_step, &run_sonny6472_writes_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6472_writes_step = b.step("test-sonny6472-dropped-graph-writes", "Run SONNY-6472 item 2 regression (writes racing a DROP GRAPH - createNode, bulkInsertNodeWithReservedId, pinOrCreateGraph - fail with GraphNotFound and never create the dropped graph again; CREATE GRAPH creates it afresh; a never-dropped name is still created by its first write)");
+    sonny6472_writes_step.dependOn(&run_sonny6472_writes_tests.step);
+
+    // SONNY-6472 (4): the unlabeled scan's live-count check (SONNY-2409)
+    // never reports DataCorruption for a delete or create in flight.
+    const sonny6472_scan_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6472_scan_live_count_race.zig"), .target = target, .optimize = optimize });
+    sonny6472_scan_test_mod.addImport("geode", root_mod);
+    const sonny6472_scan_tests = b.addTest(.{ .root_module = sonny6472_scan_test_mod });
+    const run_sonny6472_scan_tests = b.addRunArtifact(sonny6472_scan_tests);
+    shardDep(test_step, &run_sonny6472_scan_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6472_scan_step = b.step("test-sonny6472-scan-live-count-race", "Run SONNY-6472 item 4 regression (an unlabeled node scan racing shard-locked deletes and creates never reports DataCorruption; the zeroed-page detection stays, test-sonny2409-zeroed-page-header)");
+    sonny6472_scan_step.dependOn(&run_sonny6472_scan_tests.step);
 
     const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
     sonny2979_test_mod.link_libc = true;

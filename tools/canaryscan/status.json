@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:36:26.790053477Z",
+  "generated_at": "2026-11-13T16:03:27.945341959Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86784,6 +86784,110 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6471-EDGE-PROP-CRASH",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "EdgePropHeadWalImage",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6471_edge_prop_crash.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6471_edge_prop_crash.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6471_edge_prop_crash.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6472-DROP-PURGES-MEMORY",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "InMemoryPurge",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3033_batch_graph_gate.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6472-NO-RESURRECT",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "DroppedNameRefused",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6472_dropped_graph_writes.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6472_dropped_graph_writes.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6472_dropped_graph_writes.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6472-SCAN-LIVE-COUNT-RACE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6472_scan_live_count_race.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6472_scan_live_count_race.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6476-FINGERPRINT-UID",
       "features": [
         {
@@ -94538,7 +94642,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4931
+      "TESTED": 4937
     },
     "by_aspect": {
       "2PC": 3,
@@ -95575,6 +95679,7 @@
       "DropUserFailClosed": 1,
       "DropWaitsForHydration": 1,
       "DropWaitsForReaders": 1,
+      "DroppedNameRefused": 1,
       "DryRunWrapper": 1,
       "DualListenerLifetime": 1,
       "DualTokenValidation": 1,
@@ -95629,6 +95734,7 @@
       "EdgeListBinding": 1,
       "EdgeLookup": 3,
       "EdgePersistence": 1,
+      "EdgePropHeadWalImage": 1,
       "EdgePropertyEncryption": 1,
       "EdgePropertyRemove": 1,
       "EdgePropertySet": 1,
@@ -96287,6 +96393,7 @@
       "ImplicitNoCaDefault": 1,
       "InFlightHandlerDrain": 1,
       "InMemoryCatalog": 1,
+      "InMemoryPurge": 1,
       "InWorkloadMutationVerifier": 1,
       "InboundConnSnapshot": 1,
       "InboundIdleDeadline": 1,
@@ -97690,7 +97797,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 320,
+      "Regression": 323,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

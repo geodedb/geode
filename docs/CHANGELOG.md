@@ -2506,6 +2506,74 @@
     properties).
   Regression: `zig build test-sonny2807-exact-numeric-equality`, and the
   updated past-2^53 case of `test-sonny2806-exact-property-matching`.
+- **An unlabeled scan no longer fails with a false `DataCorruption` while
+  nodes are being created or deleted (SONNY-6472 item 4).** The SONNY-2409
+  check compares the live node records a shard scan finds with the shard's
+  live-node count. The engine counts a new node before writing its record,
+  and tombstones a deleted node's record before uncounting it, so a scan
+  between the two steps of a write on another thread found one record
+  fewer and failed the read. The adapter now counts the node creates and
+  deletes in flight on the graph (`ManagedGraph.node_census_writers`) and
+  the check allows one missing record per write in flight at either count
+  read; with none in flight it stays exact. Regression: `zig build
+  test-sonny6472-scan-live-count-race`; the detection itself:
+  `test-sonny2409-zeroed-page-header`.
+- **A write racing a DROP GRAPH no longer creates the graph again
+  (SONNY-6472 item 2).** The storage adapter's write entry points
+  (`createNode`, the bulk insert and MERGE helpers, `pinOrCreateGraph`)
+  find their graph through `getOrCreateGraph`, which created any graph it
+  did not have: a write that reached it after a DROP GRAPH brought the
+  graph back, empty, for whoever wrote. The adapter now records the names
+  it dropped; `getOrCreateGraph` answers `GraphNotFound` for them, and only
+  CREATE GRAPH (`StorageAdapter.createGraph`, through
+  `GraphStore.createGraph`) creates the name afresh. A name never dropped
+  is still created by its first write. `bulkInsertNodeWithReservedId`
+  also answers `GraphNotFound` when the graph was dropped between its
+  lookup and its lock, as the bulk MERGE helpers do (SONNY-3121).
+  `StorageAdapter.dropGraph` can now return `OutOfMemory` (nothing is
+  dropped then). Regression: `zig build test-sonny6472-dropped-graph-writes`.
+- **DROP GRAPH then CREATE GRAPH of the same name starts empty again
+  (SONNY-6472 item 1).** DROP GRAPH takes the graph's nodes and edges out of
+  memory after the storage engine has dropped the graph. Since SONNY-6268
+  made node and edge deletes failure-atomic, those deletes read each
+  node's incident edges and each edge's body through the dropped engine,
+  failed with `GraphNotFound` and left the node in memory, so a graph
+  created again under the name answered with the dropped graph's nodes
+  (its label counts and postings): `test-sonny3033-batch-graph-gate`
+  failed. The drop now removes the graph's resident edges, then its
+  resident nodes, in memory directly. Regression: `zig build
+  test-sonny3033-batch-graph-gate`.
+- **A request's REMOVE and DELETE join its transaction's engine
+  transaction on that shard (SONNY-6472 item 3).** Inside a Geode
+  transaction, `StorageAdapter.deleteNode`, `removeNodeProperty` and
+  `removeEdgeProperty` committed an engine transaction of their own even
+  on the shard of the session's engine transaction, so a crash before the
+  request ended kept them while losing the request's other changes on that
+  shard. They now join it, as SET and CREATE already did; a relationship
+  property removed inside it is written as a null tombstone (reads drop it,
+  SONNY-6433). Changes on other shards still commit one engine transaction
+  each (SONNY-2979). Regression: `zig build
+  test-sonny2978-overlapping-engine-txn-crash` (new case: a SIGKILL during
+  the request keeps the 4 of 64 nodes, node properties and relationship
+  properties on that shard; before, none).
+- **Data loss: relationship properties survive a crash (SONNY-6471).**
+  Writing a relationship property moves the head of its property chain,
+  which the relationship's adjacency entries and the edge index hold.
+  `StorageAdapter.setEdgeProperty` and `setEdgePropertiesBatch` rewrote
+  those entries without logging the pages in the engine transaction, so
+  after a SIGKILL the property pages came back with nothing pointing at
+  them: properties set by `SET r.p`, `SET r = {...}` and, in part, by
+  CREATE and MERGE with inline relationship properties (the QUIC fast
+  paths, the executor, a `/*+BATCH*/` program) were lost, inside and
+  outside a transaction. `publishEdgePropHead` now logs the outgoing
+  adjacency page, the source's node page and the incoming adjacency page
+  in the same transaction as the property pages, as graph_storage's own
+  `setEdgeProperty` does. Cost: three more 8 KiB page images in the WAL
+  per relationship-property write that moves a head (no extra fsync).
+  Regression: `zig build test-sonny6471-edge-prop-crash` (every write
+  shape, outside and inside a transaction, same- and cross-shard, with and
+  without TDE; read back outgoing, incoming and by an unlabeled scan after
+  the restart).
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE

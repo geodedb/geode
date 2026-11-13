@@ -1844,6 +1844,13 @@ pub const ManagedGraph = struct {
     /// `dropGraph` freed the graph under its lock's holders and waiters, whose
     /// release was then a use-after-free.
     pins: std.atomic.Value(u32) = .init(0),
+    /// SONNY-6472 (4): node creates and deletes in flight through this
+    /// adapter. The engine counts a node (`manifest.node_count`) and writes or
+    /// tombstones its record in separate steps (a create counts at
+    /// `allocNode`, then writes the record; a delete tombstones, then
+    /// uncounts), so each one in flight can leave one record fewer than the
+    /// count. `scanAllNodes` allows that many and no more.
+    node_census_writers: std.atomic.Value(u32) = .init(0),
     // CANARY: REQ=REQ-SONNY-3029-GROUP-COMMIT-TXN-GATE; FEATURE="High-Concurrency Mutations"; ASPECT=TxnGate; STATUS=TESTED; TEST=tests/test_sonny3029_group_commit_txn_gate.zig; OWNER=storage; UPDATED=2026-09-27
     /// SONNY-3029: group-commit batches with a statement transaction open on
     /// this graph (`enterBatchTxn`), and threads that hold or wait for its
@@ -2004,6 +2011,17 @@ pub const ManagedGraph = struct {
 
     /// SONNY-3028: was this graph dropped (it is out of `engines`, and its
     /// last pin frees it)?
+    /// SONNY-6472 (4): bracket a node create or delete (`node_census_writers`):
+    /// from before the engine counts or tombstones the node to after its
+    /// record and count agree.
+    pub fn beginNodeCensusWrite(self: *ManagedGraph) void {
+        _ = self.node_census_writers.fetchAdd(1, .seq_cst);
+    }
+
+    pub fn endNodeCensusWrite(self: *ManagedGraph) void {
+        _ = self.node_census_writers.fetchSub(1, .seq_cst);
+    }
+
     pub fn isDropped(self: *const ManagedGraph) bool {
         return self.pins.load(.acquire) & dropped_bit != 0;
     }
@@ -2349,6 +2367,7 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
 }
 
 // CANARY: REQ=REQ-SONNY-6266-EDGE-PROP-HEAD-IN; FEATURE="EdgeProperties"; ASPECT=IncomingAdjacencyPropHead; STATUS=TESTED; TEST=tests/test_sonny6266_planned_reverse_edge_props.zig; OWNER=storage; UPDATED=2026-11-13
+// CANARY: REQ=REQ-SONNY-6471-EDGE-PROP-CRASH; FEATURE="TransactionManagement"; ASPECT=EdgePropHeadWalImage; STATUS=TESTED; TEST=tests/test_sonny6471_edge_prop_crash.zig; OWNER=storage; UPDATED=2026-11-13
 /// SONNY-6266: point both adjacency copies of edge `edge_id` and the edge
 /// index at its new property chain `new_head`, as graph_storage's own
 /// `engine_edge_props.setEdgeProperty` does. Since edge co-location (Phase
@@ -2358,10 +2377,26 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
 /// chain instead, which a co-located edge is never in, so an edge walked
 /// from its target had no properties: `MATCH (a)<-[{w: 2}]-(b)` and every
 /// undirected match taken backwards lost the edge on the planned read.
-fn publishEdgePropHead(shard: *gs.GraphEngine, from_out_head: anytype, to_id: u64, edge_id: u64, new_head: u64) !void {
-    _ = try shard.adj_out.updateEdgePropHead(from_out_head, edge_id, new_head);
+///
+/// SONNY-6471: and WAL-image, in `txn` (the txn the property pages were
+/// written in), every page this rewrites, page for page as graph_storage's
+/// `setEdgeProperty` does: the outgoing adjacency page, the source's node
+/// page (it puts the source in recovery's tail-affected set, so the edge
+/// index is re-derived from its adjacency on first access after a crash)
+/// and the incoming adjacency page. graph_storage has no variant of its
+/// `setEdgeProperty` that joins a caller's txn, so the adapter's writers
+/// (which join the statement or session engine txn) do it here. Without
+/// the images the property pages reached the WAL with nothing that
+/// pointed at them, and a crash lost the properties.
+fn publishEdgePropHead(shard: *gs.GraphEngine, txn: gs.TxnId, from_id: u64, from_out_head: anytype, to_id: u64, edge_id: u64, new_head: u64) !void {
+    if (try shard.adj_out.updateEdgePropHead(from_out_head, edge_id, new_head)) |page| {
+        try shard.logPagePublic(txn, .adj_out, page);
+        try shard.logPagePublic(txn, .nodes, from_id / shard.node_store.nodes_per_page);
+    }
     const in_head = try shard.in_head_dir.getHead(to_id);
-    _ = try shard.adj_in_remote.updateEdgePropHead(in_head, edge_id, new_head);
+    if (try shard.adj_in_remote.updateEdgePropHead(in_head, edge_id, new_head)) |page| {
+        try shard.logPagePublic(txn, .in_idx, page);
+    }
     // v0.2.26: copy-on-write (the mmap base is immutable). The dirty flag
     // keeps a checkpoint from re-blessing the stale edges.idx snapshot.
     try shard.edge_index.updatePropHead(edge_id, new_head);
@@ -3291,6 +3326,11 @@ pub fn noteSessionCommitFailure(err: anyerror) void {
 /// their graph, before they lock it. A test drops the graph there.
 pub var bulk_graph_resolved_hook: ?*const fn (mg: *ManagedGraph) void = null;
 
+/// SONNY-6472 (4) test hook: runs in `bulkInsertNodeWithReservedIdGraphLocked`
+/// right after the engine counted the new node and before its record is
+/// written. A test scans the graph there.
+pub var node_slot_allocated_hook: ?*const fn (mg: *ManagedGraph) void = null;
+
 /// SONNY-3031 fault injection for tests: the next N commits of a session
 /// engine transaction fail (`error.InjectedSessionCommitFailure`) before
 /// they reach the engine, as a failed WAL append or fsync would.
@@ -3719,6 +3759,11 @@ pub const StorageAdapter = struct {
     registry: gs.registry.GraphRegistry,
     registry_path: []const u8, // owned
     mutex: std.Io.Mutex,
+    /// SONNY-6472 (2): names of graphs dropped since this adapter opened
+    /// (owned keys), under `mutex`. `getOrCreateGraph` / `pinOrCreateGraph`
+    /// answer GraphNotFound for them instead of creating the graph again; only
+    /// `createGraph` (CREATE GRAPH) does, and takes the name out.
+    dropped_graph_names: std.StringHashMapUnmanaged(void) = .empty,
 
     // GAP-0900 (observability + checkpoint-cadence): the group-commit bulk
     // fast paths (bulkInsertNodeWithReservedId* / bulkMergeNode*) write through
@@ -3911,6 +3956,7 @@ pub const StorageAdapter = struct {
         }
         self.engines.deinit();
         self.default_engine = null;
+        self.freeDroppedGraphNames();
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
@@ -3960,6 +4006,7 @@ pub const StorageAdapter = struct {
         }
         self.engines.deinit();
         self.default_engine = null;
+        self.freeDroppedGraphNames();
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
@@ -3984,12 +4031,24 @@ pub const StorageAdapter = struct {
         return out;
     }
 
+    // CANARY: REQ=REQ-SONNY-6472-NO-RESURRECT; FEATURE="MultiGraphIsolation"; ASPECT=DroppedNameRefused; STATUS=TESTED; TEST=tests/test_sonny6472_dropped_graph_writes.zig; OWNER=storage; UPDATED=2026-11-13
     /// Return the `ManagedGraph` for `name`, creating a new `GraphEngine` if
     /// the graph has not been opened yet.
+    ///
+    /// SONNY-6472 (2): a graph dropped since this adapter opened is not
+    /// created again here (GraphNotFound): a write that raced a DROP GRAPH
+    /// (`createNode`, the bulk insert and MERGE helpers, `pinOrCreateGraph`)
+    /// reached this lookup after the drop and brought the graph back. Lazy
+    /// creation of a name never dropped (the default graph's first use, an
+    /// embedding caller's first write) stays; `createGraph` (CREATE GRAPH) is
+    /// what creates a dropped name again.
     pub fn getOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.getOrCreateGraphLocked(name);
+    }
 
+    fn getOrCreateGraphLocked(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         if (self.engines.get(name)) |mg| {
             return mg;
         }
@@ -3998,7 +4057,26 @@ pub const StorageAdapter = struct {
             return self.openGraphLocked(name, entry.uuid);
         }
 
+        if (self.dropped_graph_names.contains(name)) return error.GraphNotFound;
         return self.createGraphLocked(name);
+    }
+
+    /// SONNY-6472 (2): CREATE GRAPH: `getOrCreateGraph`, and a graph dropped
+    /// earlier under this name is created afresh (its name leaves
+    /// `dropped_graph_names`).
+    pub fn createGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (self.dropped_graph_names.fetchRemove(name)) |kv| {
+            self.allocator.free(kv.key);
+        }
+        return self.getOrCreateGraphLocked(name);
+    }
+
+    fn freeDroppedGraphNames(self: *StorageAdapter) void {
+        var it = self.dropped_graph_names.keyIterator();
+        while (it.next()) |k| self.allocator.free(k.*);
+        self.dropped_graph_names.deinit(self.allocator);
     }
 
     /// Open an existing graph by name and UUID. Uses `GraphEngine.open()` to
@@ -4100,7 +4178,11 @@ pub const StorageAdapter = struct {
     /// SONNY-3132: the default graph is refused (`CannotDropDefaultGraph`),
     /// whoever calls. `GraphStore.dropGraph` checked for it only after this
     /// drop had deleted the default graph's engine and files.
-    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph }!void {
+    ///
+    /// SONNY-6472 (2): the name is recorded in `dropped_graph_names` (room
+    /// taken before anything is dropped: OutOfMemory drops nothing), so a
+    /// write racing the drop cannot create the graph again.
+    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory }!void {
         // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=AdapterRefusesDefault; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
         if (std.mem.eql(u8, name, graph_store.DEFAULT_GRAPH_NAME)) return error.CannotDropDefaultGraph;
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -4108,6 +4190,12 @@ pub const StorageAdapter = struct {
 
         if (self.engines.get(name)) |mg| {
             if (threadTxnOn(mg)) return error.ObjectInUse;
+        }
+
+        if (!self.dropped_graph_names.contains(name)) {
+            try self.dropped_graph_names.ensureUnusedCapacity(self.allocator, 1);
+            const owned = try self.allocator.dupe(u8, name);
+            self.dropped_graph_names.putAssumeCapacity(owned, {});
         }
 
         var dropped_uuid: ?[16]u8 = null;
@@ -4270,6 +4358,8 @@ pub const StorageAdapter = struct {
         // `beginTxn` pick their shard round-robin from the SAME counter, so
         // the node always landed on another shard and committed in its own
         // transactions (3-6 commits, each a WAL fsync, for a one-node CREATE).
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const node_id = if (stmt_txn) |s|
             try mg.engine.shards[shardedTxnShard(s.txn_id)].allocNode()
@@ -4541,6 +4631,10 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        // SONNY-6472 (2): a DROP GRAPH that ran between the lookup above and
+        // this lock left `mg` dropped (its files deleted): GraphNotFound, as
+        // the bulk MERGE helpers answer (SONNY-3121), not a write into it.
+        if (mg.isDropped()) return error.GraphNotFound;
         try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
@@ -4604,7 +4698,10 @@ pub const StorageAdapter = struct {
         // only protects string-keyed metadata maps (label dictionary and
         // GraphStore indexes), so holding it while doing putNode/putProperty
         // serializes otherwise-independent shard workers.
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
         const slot_id = try node_shard.allocNode();
+        if (node_slot_allocated_hook) |hook| hook(mg);
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const stmt_local: ?gs.TxnId = if (stmt_txn) |s|
             shardLocalTxnForNode(s.txn_id, slot_id)
@@ -6276,6 +6373,8 @@ pub const StorageAdapter = struct {
             if (shard_txns[si]) |t| shard.abortTxn(t) catch {};
         };
 
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const node_id = try mg.engine.allocNode();
@@ -6321,11 +6420,17 @@ pub const StorageAdapter = struct {
         // directly to the shard that owns node_id so the txn and the data
         // mutation are on the same single-threaded engine (ShardedGraphEngine
         // migration: Task 7).
-        const txn = try shard.beginTxn();
+        // SONNY-6472 (3): join the statement/session engine txn when it is on
+        // the node's shard, so the request's same-shard changes commit (and
+        // are lost to a crash) together, as setNodeProperty's do.
+        const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, node_id) else null;
+        const txn = joined orelse try shard.beginTxn();
         // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer shard.abortTxn(txn) catch {};
+        errdefer if (joined == null) shard.abortTxn(txn) catch {};
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
         try shard.deleteNodeTxn(node_id, txn);
-        try shard.commitTxn(txn);
+        if (joined == null) try shard.commitTxn(txn);
         // OTel Task 13: graph data model mutation counter.
         const _om13dn = @import("otel_metrics");
         _om13dn.recordNodeMutation(.delete, graph_name, .success);
@@ -6804,9 +6909,13 @@ pub const StorageAdapter = struct {
         }
 
         // R7: batch putProperty + putNode into one txn on the node's shard.
-        const txn = try node_shard.beginTxn();
+        // SONNY-6472 (3): that txn is the statement/session engine txn when
+        // it is on the node's shard (as in setNodeProperty), so the request's
+        // same-shard changes commit, and are lost to a crash, together.
+        const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, node_id) else null;
+        const txn = joined orelse try node_shard.beginTxn();
         // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer node_shard.abortTxn(txn) catch {};
+        errdefer if (joined == null) node_shard.abortTxn(txn) catch {};
 
         const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, key, .null, txn);
         rec.prop_head = new_prop_head;
@@ -6820,7 +6929,7 @@ pub const StorageAdapter = struct {
         // shard and raise `error.TxnNotFound`. Mirrors setNodeProperty /
         // setNodePropertiesBatch / setEdgeProperty which already commit
         // through node_shard / from_shard directly.
-        try node_shard.commitTxn(txn);
+        if (joined == null) try node_shard.commitTxn(txn);
 
         // RC-4: drop the old posting only once the tombstone is durable —
         // a failure before this point must leave the index describing the
@@ -8472,7 +8581,7 @@ pub const StorageAdapter = struct {
                     return mapPropertyEntryError(err, key);
 
             if (new_head != found_prop_head) {
-                try publishEdgePropHead(from_shard, from_rec.out_head, to_id, edge_id, new_head);
+                try publishEdgePropHead(from_shard, local_txn, from_id, from_rec.out_head, to_id, edge_id, new_head);
             }
 
             if (found_prop_head != 0 and found_prop_head != new_head) {
@@ -8513,7 +8622,7 @@ pub const StorageAdapter = struct {
                 return mapPropertyEntryError(err, key);
 
         if (fb_new_head != fb_found_prop_head) {
-            try publishEdgePropHead(from_shard, fb_from_rec.out_head, to_id, edge_id, fb_new_head);
+            try publishEdgePropHead(from_shard, fb_local_txn, from_id, fb_from_rec.out_head, to_id, edge_id, fb_new_head);
         }
 
         if (fb_found_prop_head != 0 and fb_found_prop_head != fb_new_head) {
@@ -8605,7 +8714,7 @@ pub const StorageAdapter = struct {
         }
 
         if (running_prop_head != orig_prop_head) {
-            try publishEdgePropHead(from_shard, from_rec.out_head, to_id, edge_id, running_prop_head);
+            try publishEdgePropHead(from_shard, local_txn, from_id, from_rec.out_head, to_id, edge_id, running_prop_head);
         }
 
         if (orig_prop_head != 0 and orig_prop_head != running_prop_head) {
@@ -8807,9 +8916,16 @@ pub const StorageAdapter = struct {
         errdefer ctx.entries.deinit(allocator);
         for (mg.engine.shards) |shard| {
             const found_before = ctx.entries.items.len;
-            const live_before = @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+            // SONNY-6472 (4): each count is read BEFORE the writers in flight,
+            // so a create counted by the first read whose record the scan
+            // missed, or a delete the scan missed that the second read still
+            // counts, is a writer in flight at the read after it.
+            const live_before = @atomicLoad(u64, &shard.manifest.node_count, .seq_cst);
+            const writers_before = mg.node_census_writers.load(.seq_cst);
             try shard.node_store.scanNodes(shard.manifest.next_node_id, &ctx, &Ctx.onNode);
             if (ctx.had_error) return error.OutOfMemory;
+            const live_after = @atomicLoad(u64, &shard.manifest.node_count, .seq_cst);
+            const writers_after = mg.node_census_writers.load(.seq_cst);
             // CANARY: REQ=REQ-SONNY-2409-ZEROED-PAGE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=UnlabeledScanLiveCount; STATUS=TESTED; TEST=tests/test_sonny2409_zeroed_page_header.zig; OWNER=storage; UPDATED=2026-11-13
             // SONNY-2409: graph_storage's pager reads a zeroed page (torn
             // write, zeroed sectors) as a fresh one, so its node records look
@@ -8818,9 +8934,14 @@ pub const StorageAdapter = struct {
             // manifest counts means lost node data: fail closed, as the
             // hydration scan does (REQ-GQL-028, same kill switch). The
             // smaller of the counts read before and after the scan is used.
-            const live = @min(live_before, @atomicLoad(u64, &shard.manifest.node_count, .monotonic));
+            // SONNY-6472 (4): less one record per node create or delete in
+            // flight at either read (the engine counts and writes a node in
+            // separate steps): a write on another thread made a false
+            // DataCorruption. With no writer in flight the check is exact.
+            const live = @min(live_before, live_after);
+            const slack: u64 = @as(u64, writers_before) + writers_after;
             const found = ctx.entries.items.len - found_before;
-            if (found < live and !hydration_scan.liveCountCheckDisabled()) {
+            if (found + slack < live and !hydration_scan.liveCountCheckDisabled()) {
                 log.warn("scanAllNodes: graph {s} shard found {d} live node record(s) but its manifest counts {d}: node pages lost or zeroed", .{ graph_name, found, live });
                 return error.DataCorruption;
             }
@@ -11472,6 +11593,13 @@ pub const StorageAdapter = struct {
 
     /// Remove a property from an edge. Delegates to the engine's
     /// `removeEdgeProperty` which handles adjacency list scanning internally.
+    ///
+    /// SONNY-6472 (3): inside a statement/session engine txn on the edge's
+    /// shard (the source's), the removal joins it instead: a null tombstone
+    /// (what `removeNodeProperty` writes; reads drop it, SONNY-6433) through
+    /// `setEdgeProperty`, so the request's same-shard changes commit, and are
+    /// lost to a crash, together. The engine's in-place remove commits its own
+    /// txn and has no variant that joins one.
     pub fn removeEdgeProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -11485,6 +11613,19 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        if (currentStatementTxnForGraph(graph_name)) |s| {
+            if (shardLocalTxnForNode(s.txn_id, from_id) != null) {
+                const from_shard = mg.shardEngineForNode(from_id);
+                try from_shard.ensureDerivedHydrated();
+                const entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
+                if (entry.from != from_id) return error.EdgeNotFound;
+                if (entry.prop_head == 0) return; // no properties to remove
+                // Absent key: nothing to remove (no tombstone written).
+                const existing = (try from_shard.getProperty(entry.prop_head, key, self.allocator)) orelse return;
+                freeOwnedStorageProperty(self.allocator, existing);
+                return self.setEdgeProperty(graph_name, from_id, entry.neighbor, edge_id, key, .Null);
+            }
+        }
         try mg.engine.removeEdgeProperty(from_id, edge_id, key);
     }
 
@@ -12109,10 +12250,8 @@ pub const StorageAdapter = struct {
     pub fn pinOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        const mg = self.engines.get(name) orelse if (self.findRegistryEntryLocked(name)) |entry|
-            try self.openGraphLocked(name, entry.uuid)
-        else
-            try self.createGraphLocked(name);
+        // SONNY-6472 (2): never a graph dropped since the adapter opened.
+        const mg = try self.getOrCreateGraphLocked(name);
         _ = mg.pins.fetchAdd(1, .acq_rel);
         return mg;
     }

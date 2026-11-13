@@ -5527,6 +5527,12 @@ REQ-SONNY-6467-QUERY-RESIDUALS,BooleanExpressions,Regression,TESTED,tests/test_s
 REQ-SONNY-6468-BATCH-FLE-SEAL-ONCE,FieldLevelEncryption,BatchSealOnce,TESTED,src/graph_store.zig,tests/test_sonny6468_catalog_and_batch_fle.zig,,security,2026-11-13
 REQ-SONNY-6468-CATALOG-AND-BATCH-FLE,SchemaCatalog,Regression,TESTED,tests/test_sonny6468_catalog_and_batch_fle.zig,tests/test_sonny6468_catalog_and_batch_fle.zig,,security,2026-11-13
 REQ-SONNY-6468-CATALOG-PROCESS-ALLOCATOR,SchemaCatalog,SingletonOnProcessAllocator,TESTED,src/execution.zig,tests/test_sonny6468_catalog_and_batch_fle.zig,,execution,2026-11-13
+REQ-SONNY-6471-EDGE-PROP-CRASH,TransactionManagement,EdgePropHeadWalImage,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6471_edge_prop_crash.zig,,storage,2026-11-13
+REQ-SONNY-6471-EDGE-PROP-CRASH,TransactionManagement,Regression,TESTED,tests/test_sonny6471_edge_prop_crash.zig,tests/test_sonny6471_edge_prop_crash.zig,,storage,2026-11-13
+REQ-SONNY-6472-DROP-PURGES-MEMORY,MultiGraphIsolation,InMemoryPurge,TESTED,src/graph_store.zig,tests/test_sonny3033_batch_graph_gate.zig,,storage,2026-11-13
+REQ-SONNY-6472-NO-RESURRECT,MultiGraphIsolation,DroppedNameRefused,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6472_dropped_graph_writes.zig,,storage,2026-11-13
+REQ-SONNY-6472-NO-RESURRECT,MultiGraphIsolation,Regression,TESTED,tests/test_sonny6472_dropped_graph_writes.zig,tests/test_sonny6472_dropped_graph_writes.zig,,storage,2026-11-13
+REQ-SONNY-6472-SCAN-LIVE-COUNT-RACE,StorageIntegrity,Regression,TESTED,tests/test_sonny6472_scan_live_count_race.zig,tests/test_sonny6472_scan_live_count_race.zig,,storage,2026-11-13
 REQ-SONNY-6476-FINGERPRINT-UID,CliSessionStorage,PortableUid,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,cli,2026-11-13
 REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6476_shell_long_line.zig,,cli,2026-11-13
 REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,tests/test_sonny6476_shell_long_line.zig,,,cli,2026-11-13
