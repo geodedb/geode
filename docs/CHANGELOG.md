@@ -1902,6 +1902,23 @@
 
 ### Fixed
 
+- **Operator-visible: SIGTERM no longer stalls up to ~10 s before the final
+  flush, and the default graph's periodic light checkpoint lands again
+  (SONNY-6456 item 4).** The persistence loop and the final flush in
+  `stopPersistenceThread` held the default graph's read lock while running
+  the persistence checkpoint hook, which checkpoints through the storage
+  adapter and so takes each graph's EXCLUSIVE lock. For the default graph
+  it waited on its own thread's read lock until its 5 s deadline and
+  skipped the graph: "bounded checkpoint skipped: rwlock busy past
+  deadline graph=default rwlock_state=4294967296" on every persistence
+  tick once the default graph held data, so its light checkpoint never
+  ran while the server was up. At SIGTERM, stopping the persistence thread
+  waited out the tick in progress and then the same deadline again
+  (8.6 s measured on an idle server; SIGTERM-to-exit 10-12 s). The hook
+  now runs holding no graph lock (the store lock still covers it when
+  there is no adapter). The shutdown log gains "[shutdown] persistence
+  thread stopped (<n>ms)" (13-17 ms idle). Regression:
+  `zig build test-sonny6456-shutdown-persistence-stop`.
 - **Operator-visible: on SIGTERM a cluster node stops its raft transport
   before the final flush and exits promptly (SONNY-6451 item 3).**
   `geode serve` stopped the `ClusterCoordinator` only in a defer that ran
