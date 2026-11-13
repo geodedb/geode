@@ -2018,6 +2018,16 @@
   even when nothing changed (1.1-1.3 s for two graphs), and about 225 pool
   worker threads are joined one at a time (about 1 s). Regression:
   `zig build test-sonny6459-checkpoint-once`.
+- **Operator-visible: SHOW CLUSTER STATUS `last_contact_ms` is the time
+  since the peer was last heard from (SONNY-6459 item 3).** Each raft
+  peer's `last_contact` was set once, when the peer list was built at
+  startup, so the column grew from start for every peer, up or down. Every
+  authenticated inbound raft frame from a peer now refreshes it (the same
+  signal the health monitor uses); until the first one it still counts
+  from startup. The field is written and read atomically. On a real
+  three-node cluster the leader now reports 12-19 ms for live peers 10 s
+  after start (it reported 7186 ms) and about 8 s for a follower killed 7 s
+  earlier. Regression: `zig build test-sonny6459-cluster-last-contact`.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so

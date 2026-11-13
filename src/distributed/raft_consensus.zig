@@ -353,6 +353,10 @@ pub const Peer = struct {
     endpoint: []const u8,
     port: u16,
     alive: bool,
+    /// Wall-clock ms of the last authenticated raft frame from this peer
+    /// (start time until the first). SONNY-6459: written by the cluster's
+    /// inbound handlers (`ClusterCoordinator.noteHeardFrom`) while other
+    /// threads read it, so access it with `@atomicLoad` / `@atomicStore`.
     last_contact: i64,
     rpc_client: ?*RpcClient,
 };
@@ -3581,8 +3585,18 @@ pub const RaftNode = struct {
     /// Linear scan is fine: the peer count is bounded by the cluster size
     /// (typically 3-7) and message dispatch dominates lookup cost.
     fn findPeerById(self: *RaftNode, to: u64) ?Peer {
-        for (self.peers) |p| {
-            if (p.id == to) return p;
+        for (self.peers) |*p| {
+            if (p.id != to) continue;
+            // SONNY-6459: `last_contact` is stored atomically by the
+            // cluster's inbound handlers; copy it with an atomic load.
+            return .{
+                .id = p.id,
+                .endpoint = p.endpoint,
+                .port = p.port,
+                .alive = p.alive,
+                .last_contact = @atomicLoad(i64, &p.last_contact, .monotonic),
+                .rpc_client = p.rpc_client,
+            };
         }
         return null;
     }

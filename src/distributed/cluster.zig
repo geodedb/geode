@@ -1608,7 +1608,15 @@ pub const ClusterCoordinator = struct {
 
     /// SONNY-6456: record that an authenticated raft frame from `node_id`
     /// arrived at `now_ms` (the health monitor's liveness signal).
+    ///
+    /// SONNY-6459: also the raft peer's `last_contact` (SHOW CLUSTER STATUS
+    /// `last_contact_ms`), which was set once at startup and never again.
+    /// `raft.peers` is fixed after init; the field is written and read
+    /// atomically (no lock: SHOW CLUSTER STATUS reads it from query threads).
     fn noteHeardFrom(self: *ClusterCoordinator, node_id: u64, now_ms: i64) void {
+        for (self.raft.peers) |*peer| {
+            if (peer.id == node_id) @atomicStore(i64, &peer.last_contact, now_ms, .monotonic);
+        }
         const io = std.Io.Threaded.global_single_threaded.io();
         self.cluster_state_mutex.lockUncancelable(io);
         defer self.cluster_state_mutex.unlock(io);
