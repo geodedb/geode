@@ -2235,6 +2235,20 @@
 
 ### Fixed
 
+- **`ORDER BY ... LIMIT k` returns the first k rows of the full ORDER BY
+  (SONNY-6489 item 2).** The top-K heap that serves `MATCH (n:L) RETURN n.k
+  ORDER BY n.k LIMIT k` compared an INT with a DOUBLE or DECIMAL through f64
+  (9007199254740993 tied DOUBLE 2^53, DECIMAL 0.1 tied DOUBLE 0.1), ordered
+  strings by raw bytes, returned a DECIMAL as a DOUBLE, and dropped every
+  stored DOUBLE row (a DOUBLE is stored as an extended value). It now keeps
+  the value the full path projects and orders with the full sort's own
+  comparator (`compareValuesWithNullsPolicy`: numbers by exact value,
+  SONNY-2807; strings by NFC, SONNY-3055); a key of any other kind makes the
+  fast path decline (the full sort serves it) instead of dropping the row.
+  The value-ordered index path returns a DECIMAL as a DECIMAL too.
+  **Behaviour change:** those queries return the DOUBLE rows they omitted, a
+  DECIMAL column comes back as DECIMAL (was DOUBLE), and ties broken by f64
+  are ordered exactly. Regression: `zig build test-sonny6489-topk-order`.
 - **Data exceptions answer their GQLSTATUS, not 58000 (SONNY-6489 item 1).**
   `proto_util.mapError` had no arm for these, so QUIC and gRPC clients were
   told the server broke (58000) when a value was bad. **Behaviour change**

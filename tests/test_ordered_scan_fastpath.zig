@@ -188,6 +188,9 @@ fn numOf(v: anytype) f64 {
     return switch (v) {
         .Int => |i| @floatFromInt(i),
         .Double => |d| d,
+        // SONNY-6489: `{k3: 1.0}` stores a DECIMAL, and the heap returns it
+        // as one (as the full ORDER BY does); it returned a DOUBLE.
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
         else => std.math.nan(f64),
     };
 }

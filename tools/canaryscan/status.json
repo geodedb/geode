@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T16:26:44.467336252Z",
+  "generated_at": "2026-11-13T16:27:10.198565991Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86930,6 +86930,7 @@
           "aspect": "TopKHeapSharesFullSortOrder",
           "status": "TESTED",
           "files": [
+            "src/execution/match_operations.zig",
             "tests/test_sonny6489_topk_order.zig"
           ],
           "tests": [

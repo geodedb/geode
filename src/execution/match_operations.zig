@@ -153,6 +153,7 @@ const executeWithClause = execution.executeWithClause;
 // Import pattern matching helpers (extracted for modularity)
 // CANARY: REQ=REQ-REFACTOR-MATCH-008; FEATURE="MatchOperationsRefactor"; ASPECT=PatternHelpersImport; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
 const pattern_helpers = @import("pattern_helpers.zig");
+const value_order = @import("value_order.zig");
 const optional_match = @import("optional_match.zig");
 pub const PatternInfo = pattern_helpers.PatternInfo;
 pub const DispatchResult = pattern_helpers.DispatchResult;
@@ -3280,47 +3281,43 @@ pub fn groupByAggregateFastPath(
 // GAP-0812 Task 3.1: direction of ORDER BY for the top-K fast path.
 const OrderDir = enum { asc, desc };
 
-/// Scratch entry held in the K-bounded heap. We keep the property value in
-/// its native type (int XOR float XOR string) so we can re-emit it with the
-/// same `Value` tag the slow path would — preserving Int → Int / Double →
-/// Double / Str → Str round-tripping. `node_id` is retained for future
-/// extensions (e.g., returning the node itself); for now only the value is
-/// written back.
+/// Scratch entry held in the K-bounded heap: the property as the query value
+/// the slow path would project for `n.k` (`pattern_helpers.propertyValueToValue`),
+/// re-emitted with the same tag (INT, DOUBLE, DECIMAL, string). `node_id` is
+/// retained for future extensions (e.g., returning the node itself); for now
+/// only the value is written back.
 ///
-/// GAP-0902: `val_str` adds STRING order-key support (the live `source_id`
-/// shape). When `kind == .str`, `val_str` is an OWNED copy (the engine-direct
-/// property read returns memory freed per-iteration, and the heap keeps the
-/// entry across many iterations) allocated on the topK arena and freed when the
+/// GAP-0902: a string order key is an OWNED copy (the engine-direct property
+/// read returns memory freed per-iteration, and the heap keeps the entry
+/// across many iterations) allocated on the topK arena and freed when the
 /// arena drops at end-of-query.
-const TopKKind = enum { int, float, str };
 const TopKEntry = struct {
-    // Meaningful field is selected by `kind`.
-    val_int: i64 = 0,
-    val_float: f64 = 0,
-    val_str: []const u8 = "",
-    kind: TopKKind = .int,
+    value: Value = .{ .Null = {} },
     node_id: u64 = 0,
 };
 
-/// Total order over heap entries. Numeric entries compare numerically
-/// (same-type int compares stay lossless); string entries compare
-/// lexicographically. Mixed numeric/string never co-occur for one ORDER BY
-/// key (a property is one type across the scan in practice; if a stray
-/// off-type value appears it is skipped before insertion), so the cross-kind
-/// arm is a stable deterministic fallback (numeric < string) rather than a
-/// correctness path. Returns `true` iff `a < b`.
+// CANARY: REQ=REQ-SONNY-6489-TOPK-EXACT-ORDER; FEATURE="ValueOrdering"; ASPECT=TopKHeapSharesFullSortOrder; STATUS=TESTED; TEST=tests/test_sonny6489_topk_order.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6489: the order of the full ORDER BY
+/// (`return_and_sorting.compareValuesWithNullsPolicy`): numbers by exact
+/// value across INT, DOUBLE and DECIMAL (SONNY-2807), strings by their NFC
+/// form (SONNY-3055). It compared an INT with a DOUBLE or DECIMAL through f64
+/// and strings by raw bytes, so `LIMIT k` disagreed with the full order.
+/// Returns `true` iff `a < b`.
 fn entryLess(a: TopKEntry, b: TopKEntry) bool {
-    if (a.kind == .str and b.kind == .str) {
-        return std.mem.order(u8, a.val_str, b.val_str) == .lt;
-    }
-    if (a.kind == .str or b.kind == .str) {
-        // Deterministic cross-kind fallback: numerics sort before strings.
-        return b.kind == .str;
-    }
-    if (a.kind == .int and b.kind == .int) return a.val_int < b.val_int;
-    const af: f64 = if (a.kind == .float) a.val_float else @as(f64, @floatFromInt(a.val_int));
-    const bf: f64 = if (b.kind == .float) b.val_float else @as(f64, @floatFromInt(b.val_int));
-    return af < bf;
+    return return_and_sorting.compareValuesWithNullsPolicy(a.value, b.value, .default) < 0;
+}
+
+/// SONNY-6489: the heap entry for a stored order key, or null when the key is
+/// not a number or a string. Those are the kinds the heap orders as the full
+/// ORDER BY does; for any other kind the caller declines the fast path
+/// (the full sort serves it), where it used to drop the row. A stored DOUBLE
+/// arrives as an extended value and was dropped too. Strings are copied onto
+/// `ka`.
+fn topkEntryFor(ka: std.mem.Allocator, node_id: u64, pv: graph_store.PropertyValue) !?TopKEntry {
+    const v = pattern_helpers.propertyValueToValue(pv);
+    if (v == .Str) return .{ .node_id = node_id, .value = .{ .Str = try ka.dupe(u8, v.Str) } };
+    if (value_order.numberOf(v) == null) return null;
+    return .{ .node_id = node_id, .value = v };
 }
 
 fn entryGreater(a: TopKEntry, b: TopKEntry) bool {
@@ -3524,26 +3521,8 @@ pub fn topKOrderedFastPath(
                 const node = read_store.nodes.get(node_id) orelse continue;
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 const pv = prop_store.getNodeProperty(node_id, ret_key) orelse continue;
-                var entry: TopKEntry = .{ .node_id = node_id };
-                switch (pv) {
-                    .Int => |iv| {
-                        entry.val_int = iv;
-                        entry.kind = .int;
-                    },
-                    .Float => |fv| {
-                        entry.val_float = fv;
-                        entry.kind = .float;
-                    },
-                    .Decimal => |d| {
-                        entry.val_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
-                        entry.kind = .float;
-                    },
-                    .String => |s| {
-                        entry.val_str = try ka.dupe(u8, s);
-                        entry.kind = .str;
-                    },
-                    else => continue,
-                }
+                if (pv == .Null) continue;
+                const entry = (try topkEntryFor(ka, node_id, pv)) orelse return null;
                 topkConsider(&heap, entry, k, is_desc);
             }
         }
@@ -3571,26 +3550,11 @@ pub fn topKOrderedFastPath(
                 .string => |s| allocator.free(s),
                 else => {},
             };
-            var entry: TopKEntry = .{ .node_id = slot_id };
-            switch (pv) {
-                .int => |iv| {
-                    entry.val_int = iv;
-                    entry.kind = .int;
-                },
-                .float => |fv| {
-                    entry.val_float = fv;
-                    entry.kind = .float;
-                },
-                .decimal => |d| {
-                    entry.val_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
-                    entry.kind = .float;
-                },
-                .string => |s| {
-                    entry.val_str = try ka.dupe(u8, s);
-                    entry.kind = .str;
-                },
-                else => continue,
-            }
+            if (pv == .null) continue;
+            // On the topK arena: an extended value (a stored DOUBLE) decodes
+            // into it.
+            const stored = graph_storage_adapter.fromStorageProperty(ka, pv) catch return null;
+            const entry = (try topkEntryFor(ka, slot_id, stored)) orelse return null;
             topkConsider(&heap, entry, k, is_desc);
         }
     }
@@ -3619,13 +3583,13 @@ pub fn topKOrderedFastPath(
     var rows = try allocator.alloc([]Value, heap.items.len);
     for (heap.items, 0..) |entry, i| {
         const row = try allocator.alloc(Value, 1);
-        row[0] = switch (entry.kind) {
-            .float => Value{ .Double = entry.val_float },
-            .int => Value{ .Int = entry.val_int },
+        row[0] = switch (entry.value) {
             // Dupe onto `allocator` so the value outlives `key_arena`. The
             // result is `owns_value_memory`-free at the same boundary the
             // executor frees other Str values (handled by the result deinit).
-            .str => Value{ .Str = try allocator.dupe(u8, entry.val_str) },
+            .Str => |s| Value{ .Str = try allocator.dupe(u8, s) },
+            // A number (`topkEntryFor`): no memory of its own.
+            else => entry.value,
         };
         rows[i] = row;
     }
@@ -3800,7 +3764,8 @@ pub fn orderedScanFastPath(
         const v: Value = switch (pv) {
             .int => |iv| Value{ .Int = iv },
             .float => |fv| Value{ .Double = fv },
-            .decimal => |d| Value{ .Double = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))) },
+            // SONNY-6489: a DECIMAL stays a DECIMAL, as the full path projects it.
+            .decimal => |d| pattern_helpers.propertyValueToValue(.{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } }),
             .string => |s| Value{ .Str = try allocator.dupe(u8, s) },
             else => continue,
         };
