@@ -59,6 +59,39 @@ pub fn parseHostPort(addr: []const u8, default_port: u16) !HostPort {
     };
 }
 
+/// How `initClient` treats the server's certificate (SONNY-6448).
+pub const Verification = enum {
+    /// Verify the chain (against the --ca-cert bundle) and the server name.
+    verify,
+    /// --insecure-tls-skip-verify / --insecure: the flag parser has already
+    /// run the production-posture gate and printed its warning.
+    skip_by_flag,
+    /// No CA, no mTLS material, no flag: the dev default. Unverified, and
+    /// says so on stderr.
+    skip_no_trust_material,
+};
+
+/// A supplied CA bundle or mTLS material always means verification; it is
+/// skipped only on the explicit flag or when there is nothing to verify with.
+pub fn verificationPolicy(tls_config: TlsConfig) Verification {
+    if (tls_config.insecure) return .skip_by_flag;
+    const has_trust_material = tls_config.ca_cert_path != null or
+        tls_config.client_cert_path != null or tls_config.client_key_path != null;
+    return if (has_trust_material) .verify else .skip_no_trust_material;
+}
+
+var implicit_insecure_warned = std.atomic.Value(bool).init(false);
+
+fn warnImplicitInsecureOnce() void {
+    if (@import("builtin").is_test) return; // stderr output fails a zig test step
+    if (implicit_insecure_warned.swap(true, .monotonic)) return;
+    std.debug.print(
+        "WARNING: TLS server certificate NOT verified (no --ca-cert given). " ++
+            "Pass --ca-cert <path> to verify the server.\n",
+        .{},
+    );
+}
+
 pub fn initClient(
     allocator: std.mem.Allocator,
     host: []const u8,
@@ -67,11 +100,8 @@ pub fn initClient(
     username: ?[]const u8,
     password: ?[]const u8,
 ) !zig_client.GeodeClient {
-    const using_client_certs = tls_config.client_cert_path != null or tls_config.client_key_path != null;
-
-    // Preserve the CLI's long-standing behavior: QUIC connections default to
-    // trusting local/dev certificates unless the caller is explicitly using
-    // mutual TLS material.
+    const policy = verificationPolicy(tls_config);
+    if (policy == .skip_no_trust_material) warnImplicitInsecureOnce();
     return try initClientWithInsecureSetting(
         allocator,
         host,
@@ -79,7 +109,7 @@ pub fn initClient(
         tls_config,
         username,
         password,
-        if (using_client_certs) tls_config.insecure else true,
+        policy != .verify,
     );
 }
 

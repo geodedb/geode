@@ -394,21 +394,18 @@ fn handleTdeTestTransparentEncryption(allocator: std.mem.Allocator, _: ast.CallP
     // Test transparent encryption with various data types
     const result = try tde_mod.testTransparentEncryption(allocator);
 
-    const columns = try allocator.alloc([]const u8, 4);
+    // SONNY-6448: no performance-impact column (it timed AEAD round trips
+    // against memcpy, which is not TDE overhead).
+    const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "types_tested");
     columns[1] = try allocator.dupe(u8, "all_transparent");
-    columns[2] = try allocator.dupe(u8, "performance_impact_pct");
-    columns[3] = try allocator.dupe(u8, "errors_encountered");
+    columns[2] = try allocator.dupe(u8, "errors_encountered");
 
     const rows = try allocator.alloc([]Value, 1);
-    const row = try allocator.alloc(Value, 4);
+    const row = try allocator.alloc(Value, 3);
     row[0] = Value{ .Int = @intCast(result.types_tested) };
     row[1] = Value{ .Bool = result.all_transparent };
-    // Convert float to decimal (performance_impact_pct is a percentage like 15.5)
-    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
-    const pct_int = try decimal128.checkedScaledCoeff(result.performance_impact_pct, 100.0);
-    row[2] = Value{ .Decimal = .{ .coeff = pct_int, .scale = 2 } };
-    row[3] = Value{ .Int = @intCast(result.errors_encountered) };
+    row[2] = Value{ .Int = @intCast(result.errors_encountered) };
     rows[0] = row;
 
     return ExecutionResult{

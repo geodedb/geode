@@ -115,12 +115,9 @@ webhooks:
 
 ### Cost-Based Optimizer (Always On)
 
-The optimizer runs by default; enable tracing for diagnostics:
+The optimizer runs by default; `EXPLAIN (VERBOSE)` shows its decisions:
 
 ```bash
-# Optional: trace decisions
-export GEODE_TRACE_OPTIMIZER=1
-
 ./geode query "EXPLAIN (VERBOSE) MATCH (n) RETURN n"
 ```
 
@@ -232,21 +229,15 @@ optimizer:
 
 ### Environment Variables (Updated Set)
 
+The log level is the `geode serve --log-level` option (there is no log
+level or log format variable, SONNY-6448).
+
 ```bash
 # Core settings
 GEODE_DATA_DIR=/var/lib/geode
-GEODE_LOG_LEVEL=info
-GEODE_LOG_FORMAT=json
-
-# Optimizer tracing (functional without flag)
-GEODE_TRACE_OPTIMIZER=1   # Optional
 
 # Transparent Data Encryption
-GEODE_DISK_KEY_HEX=<64 hex chars>   # Provide to ensure encrypted pages/WAL on new data
-
-# CDC
-CDC_KAFKA_BROKERS=kafka1:9092,kafka2:9092
-CDC_WEBHOOK_ENDPOINT=https://api.example.com/webhook
+GEODE_TDE_KEY=<64 hex chars>   # Encrypts pages and the WAL of new data
 ```
 
 ## Monitoring

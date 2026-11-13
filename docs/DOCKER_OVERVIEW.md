@@ -381,6 +381,14 @@ Preferred resolution, in order:
    accepted, the CLI prints a loud `WARNING: TLS certificate verification
    DISABLED` banner. Never do this in production.
 
+`geode query`, `geode shell` and the REPL verify the server against a
+`--ca-cert` bundle whenever one is given, and refuse to connect if it
+cannot be loaded (SONNY-6448; before, they ignored `--ca-cert` unless
+`--client-cert`/`--client-key` were also given). With no `--ca-cert`, no
+client certificate and no insecure flag they connect without verification
+and print `WARNING: TLS server certificate NOT verified (no --ca-cert
+given)` once on stderr.
+
 A Debug build (the default of `zig build`) is not gated unless
 `GEODE_ENV=production` is set. This is why `.gitlab-ci.yml` deliberately
 builds Debug for the GQL compliance job — its test runner connects to

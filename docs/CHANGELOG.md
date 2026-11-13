@@ -4,6 +4,64 @@
 
 ### Security
 
+- **BREAKING (operator): QUIC clients verify against the CA bundle they are
+  given, or do not connect (SONNY-6448 item 1).** `QuicClient.connectEx`
+  (the cluster, Raft and 2PC peer path, which reads
+  `GEODE_CLUSTER_CA_CERT`) logged a warning and connected WITHOUT a trust
+  anchor when the bundle could not be loaded; a missing, unreadable or
+  certificate-less file now fails the connect with the load error.
+  `geode query`, `geode shell` and the REPL turned certificate verification
+  off unless `--client-cert`/`--client-key` were given, so `--ca-cert` was
+  ignored and a server signed by any CA was accepted; a `--ca-cert` now
+  always verifies (chain and server name), and the no-trust-material
+  default (no `--ca-cert`, no client certificate, no insecure flag) still
+  connects unverified but says so once on stderr. Operators whose
+  `--ca-cert` / `GEODE_HEALTH_CA_CERT` does not actually sign the server
+  certificate (or whose certificate lacks the dialled name) now get a
+  refused connection. Regression: `zig build test-sonny6448-tls-fail-closed`.
+- **BREAKING (procedure): `CALL tde.test_transparent_encryption()` no longer
+  answers `performance_impact_pct` (SONNY-6448 item 4).** The figure timed
+  five AEAD encrypt+decrypt round trips against plain copies of the same
+  buffers, which says nothing about TDE overhead (the flaw
+  `tde.measure_overhead` had). The procedure still round-trips every test
+  type through the server's TDE key and answers `types_tested`,
+  `all_transparent` and `errors_encountered`. The overhead measurement is
+  `zig build test-sonny6435-tde-overhead`. Regression:
+  `zig build test-sonny6448-tde-transparent-encryption`.
+- **Operator-visible: `docker compose config` accepts
+  `docker-compose.distributed.yml` and
+  `docker-integration/docker-compose.integration.yml` (SONNY-6448 item 5).**
+  Their geode services set `pids_limit` next to `deploy.resources.limits`,
+  which Compose rejects ("can't set distinct values on 'pids_limit' and
+  'deploy.resources.limits.pids'"), so neither stack started. The limit
+  (4096) is now `deploy.resources.limits.pids`. Docs and `.env.example` no
+  longer give variables nothing reads (SONNY-6448 item 6): the cluster
+  variables in `docs/docker/DOCKER.md` are the ones geode reads
+  (`GEODE_CLUSTER_TOKEN`, `GEODE_PEERS`, `GEODE_NODE_ID`,
+  `GEODE_CLUSTER_NAME`, `GEODE_CLUSTER_PORT`, `GEODE_CLUSTER_CA_CERT`), not
+  `NODE_ID`, `NODE_ROLE`, `CLUSTER_NAME`, `GEODE_DISTRIBUTED`,
+  `GEODE_SHARD_COUNT` or `GEODE_REPLICATION_FACTOR`; `docs/USAGE.md` drops
+  `GEODE_LOG_LEVEL`, `GEODE_LOG_FORMAT`, `GEODE_TRACE_OPTIMIZER` and the
+  `CDC_*` names and gives the TDE key as `GEODE_TDE_KEY` (not
+  `GEODE_DISK_KEY_HEX`); `docs/deployment/DEPLOYMENT.md` and `.env.example`
+  drop `GEODE_LISTEN_ADDR` (and `GEODE_MEMORY_LIMIT` / `GEODE_CPU_LIMIT`)
+  and say `GEODE_LOG_LEVEL` is a compose variable passed as `--log-level`.
+  The deploy-docs-truth test now runs `docker compose config` on every
+  compose file (when docker is on PATH) and covers `docs/USAGE.md`,
+  `docs/deployment/DEPLOYMENT.md`, `docs/docker/*.md` and `.env.example`.
+  Regression: `zig build test-sonny6430-deploy-docs-truth`.
+- **BREAKING (library): the `local_dev` KMS provider is removed (SONNY-6448
+  item 7).** `KMSProvider` (`src/security/kms.zig`) offered a `local_dev`
+  provider whose wrapping key was HKDF(key id); a wrapped key carries its
+  key id, so anyone holding one could unwrap it, and its "legacy" unwrap
+  used a nonce derived from CRC32(key id). It was constructible in a Debug
+  build and nothing in the product used it (KMS wiring is SONNY-6380). It is
+  gone with `localDevProvider`, the `defaultProvider` that returned it and
+  their tests; `external_kms` (test builds only) is the one provider that
+  wraps. The unused `connectClient` in
+  `benchmarks/benchmark_remote_kms_unwrap_concurrency.zig`, which dialled the
+  remote KMS with no CA bundle, is gone too. Regression:
+  `zig build test-sonny6448-kms-dead-paths`.
 - **BREAKING (operator): `geode fle migrate-encrypt` and in-process FLE
   refuse a `GEODE_MASTER_KEY` other than the recorded one (SONNY-6442 item
   8).** The key check value in `fle_master_key.kcv` (SONNY-6435) was

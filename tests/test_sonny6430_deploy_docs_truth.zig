@@ -78,6 +78,7 @@ const compose_files = [_][]const u8{
     "docker-compose.gpu.yml",
     "docker-compose.otel.yml",
     "docker-compose.override.yml",
+    "docker-integration/docker-compose.integration.yml", // SONNY-6448 (5)
 };
 const deploy_docs = [_][]const u8{
     "docs/SERVER_FEATURES.md",
@@ -100,6 +101,13 @@ fn readVariables(allocator: std.mem.Allocator) !std.StringHashMap(void) {
         .{ .dir = "src", .ext = ".zig", .prefix = "\"GEODE_" },
         .{ .dir = "docker", .ext = ".sh", .prefix = "$GEODE_" },
         .{ .dir = "docker", .ext = ".sh", .prefix = "${GEODE_" },
+        // SONNY-6448 (6): docs/docker/DOCKER_INTEGRATION_TESTS.md documents
+        // the variables the integration-test scripts read, and those they
+        // export to the client test suites they run.
+        .{ .dir = "docker-integration", .ext = ".sh", .prefix = "$GEODE_" },
+        .{ .dir = "docker-integration", .ext = ".sh", .prefix = "export GEODE_" },
+        .{ .dir = "docker-integration", .ext = ".sh", .prefix = "${GEODE_" },
+        .{ .dir = "docker-integration", .ext = ".py", .prefix = "\"GEODE_" },
     }) |scan| {
         const root = try std.fs.path.join(allocator, &.{ options.repo_root, scan.dir });
         defer allocator.free(root);
@@ -117,7 +125,7 @@ fn readVariables(allocator: std.mem.Allocator) !std.StringHashMap(void) {
                 var end = start + "GEODE_".len;
                 while (end < text.len and isVarChar(text[end])) end += 1;
                 at = end;
-                // A Zig literal must be the whole string: "GEODE_X".
+                // A Zig / Python literal must be the whole string: "GEODE_X".
                 if (scan.prefix[0] == '"' and (end >= text.len or text[end] != '"')) continue;
                 if (set.contains(text[start..end])) continue;
                 try set.put(try allocator.dupe(u8, text[start..end]), {});
@@ -182,25 +190,202 @@ test "SONNY-6435 (5) the compose files and the deployment docs name no GEODE_* v
             }
         }
     }
-    for (deploy_docs) |file| {
+    for (deploy_docs) |file| bad += try unreadInDoc(allocator, &read, file);
+    try testing.expectEqual(@as(usize, 0), bad);
+}
+
+/// GEODE_* names `file` gives that no source file reads, outside a
+/// paragraph that says the server does not read them. Printed; returns the
+/// count.
+fn unreadInDoc(allocator: std.mem.Allocator, read: *const std.StringHashMap(void), file: []const u8) !usize {
+    const text = try readRepoFile(allocator, file);
+    defer allocator.free(text);
+    var bad: usize = 0;
+    var paragraphs = std.mem.splitSequence(u8, text, "\n\n");
+    while (paragraphs.next()) |para| {
+        if (std.mem.indexOf(u8, para, "reads none of") != null or std.mem.indexOf(u8, para, "does not read") != null or
+            std.ascii.indexOfIgnoreCase(para, "there is no") != null) continue;
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, para, at, "GEODE_")) |i| {
+            var end = i + "GEODE_".len;
+            while (end < para.len and isVarChar(para[end])) end += 1;
+            at = end;
+            if (i > 0 and isVarChar(para[i - 1])) continue;
+            const name = para[i..end];
+            if (!read.contains(name)) {
+                std.debug.print("{s} names {s}, which no source file reads\n", .{ file, name });
+                bad += 1;
+            }
+        }
+    }
+    return bad;
+}
+
+// SONNY-6448 (6): docs/USAGE.md, docs/deployment/DEPLOYMENT.md,
+// docs/docker/DOCKER.md and .env.example still gave NODE_ID, NODE_ROLE,
+// CLUSTER_NAME, GEODE_DISTRIBUTED, GEODE_SHARD_COUNT,
+// GEODE_REPLICATION_FACTOR, GEODE_LOG_LEVEL, GEODE_LOG_FORMAT,
+// GEODE_LISTEN_ADDR and other names nothing reads. The same rule as above
+// now covers them and every docs/docker/*.md. In .env.example a GEODE_*
+// name also counts when a compose file substitutes it (`${GEODE_X}`): that
+// is the operator's own compose variable.
+test "SONNY-6448 (6) docs/USAGE.md, docs/deployment/DEPLOYMENT.md and docs/docker/*.md name no GEODE_* variable that no source file reads" {
+    const allocator = testing.allocator;
+    var read = try readVariables(allocator);
+    defer freeKeys(allocator, &read);
+    // Sanity: the integration-test scripts' variables are found.
+    try testing.expect(read.contains("GEODE_HOST"));
+
+    var bad: usize = 0;
+    bad += try unreadInDoc(allocator, &read, "docs/USAGE.md");
+    bad += try unreadInDoc(allocator, &read, "docs/deployment/DEPLOYMENT.md");
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const docker_docs = try std.fs.path.join(allocator, &.{ options.repo_root, "docs/docker" });
+    defer allocator.free(docker_docs);
+    var dir = try std.Io.Dir.cwd().openDir(io, docker_docs, .{ .iterate = true });
+    defer dir.close(io);
+    var it = dir.iterate();
+    var seen: usize = 0;
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".md")) continue;
+        const rel = try std.fmt.allocPrint(allocator, "docs/docker/{s}", .{entry.name});
+        defer allocator.free(rel);
+        bad += try unreadInDoc(allocator, &read, rel);
+        seen += 1;
+    }
+    try testing.expect(seen > 0);
+    try testing.expectEqual(@as(usize, 0), bad);
+}
+
+test "SONNY-6448 (6) .env.example sets no GEODE_* variable that neither a source file nor a compose file reads" {
+    const allocator = testing.allocator;
+    var read = try readVariables(allocator);
+    defer freeKeys(allocator, &read);
+    // Names the compose files substitute.
+    var substituted: std.ArrayListUnmanaged([]u8) = .empty;
+    defer {
+        for (substituted.items) |n| allocator.free(n);
+        substituted.deinit(allocator);
+    }
+    for (compose_files) |file| {
         const text = try readRepoFile(allocator, file);
         defer allocator.free(text);
-        var paragraphs = std.mem.splitSequence(u8, text, "\n\n");
-        while (paragraphs.next()) |para| {
-            if (std.mem.indexOf(u8, para, "reads none of") != null or std.mem.indexOf(u8, para, "does not read") != null or
-                std.ascii.indexOfIgnoreCase(para, "there is no") != null) continue;
-            var at: usize = 0;
-            while (std.mem.indexOfPos(u8, para, at, "GEODE_")) |i| {
-                var end = i + "GEODE_".len;
-                while (end < para.len and isVarChar(para[end])) end += 1;
-                at = end;
-                if (i > 0 and isVarChar(para[i - 1])) continue;
-                const name = para[i..end];
-                if (!read.contains(name)) {
-                    std.debug.print("SONNY-6435 (5): {s} names {s}, which no source file reads\n", .{ file, name });
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, text, at, "${GEODE_")) |i| {
+            var end = i + 2;
+            while (end < text.len and isVarChar(text[end])) end += 1;
+            at = end;
+            try substituted.append(allocator, try allocator.dupe(u8, text[i + 2 .. end]));
+        }
+    }
+
+    const text = try readRepoFile(allocator, ".env.example");
+    defer allocator.free(text);
+    var bad: usize = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "GEODE_")) continue;
+        var end: usize = 0;
+        while (end < line.len and isVarChar(line[end])) end += 1;
+        const name = line[0..end];
+        if (read.contains(name)) continue;
+        const is_substituted = for (substituted.items) |n| {
+            if (std.mem.eql(u8, n, name)) break true;
+        } else false;
+        if (!is_substituted) {
+            std.debug.print("SONNY-6448 (6): .env.example sets {s}, which no source or compose file reads\n", .{name});
+            bad += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), bad);
+}
+
+// SONNY-6448 (5): docker-compose.distributed.yml (three services) and
+// docker-integration/docker-compose.integration.yml set `pids_limit` on a
+// service that also has `deploy.resources.limits`; Compose takes the two as
+// the same limit and `docker compose config` refuses the file ("can't set
+// distinct values on 'pids_limit' and 'deploy.resources.limits.pids'"). The
+// contract: no service sets both (the limit goes in
+// `deploy.resources.limits.pids` there), and `docker compose config`
+// accepts every compose file when docker is on PATH.
+test "SONNY-6448 (5) no compose service sets pids_limit next to deploy.resources.limits" {
+    const allocator = testing.allocator;
+    var bad: usize = 0;
+    for (compose_files) |file| {
+        const text = try readRepoFile(allocator, file);
+        defer allocator.free(text);
+        var service: []const u8 = "";
+        var pids_limit = false;
+        var limits = false;
+        var in_deploy = false;
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (true) {
+            const next = lines.next();
+            const line = next orelse "";
+            const trimmed = std.mem.trimStart(u8, line, " ");
+            const indent = line.len - trimmed.len;
+            if (next != null and (trimmed.len == 0 or trimmed[0] == '#')) continue;
+            // A new top-level key or service (or the end) closes the service.
+            if (next == null or indent <= 2) {
+                if (pids_limit and limits) {
+                    std.debug.print("SONNY-6448 (5): {s}: service {s} sets pids_limit and deploy.resources.limits\n", .{ file, service });
                     bad += 1;
                 }
+                if (next == null) break;
+                service = std.mem.trimEnd(u8, trimmed, ": \r");
+                pids_limit = false;
+                limits = false;
+                in_deploy = false;
+                continue;
             }
+            if (indent == 4) {
+                in_deploy = std.mem.startsWith(u8, trimmed, "deploy:");
+                if (std.mem.startsWith(u8, trimmed, "pids_limit:")) pids_limit = true;
+            } else if (in_deploy and std.mem.startsWith(u8, trimmed, "limits:")) {
+                limits = true;
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), bad);
+}
+
+test "SONNY-6448 (5) docker compose config accepts every compose file" {
+    const allocator = testing.allocator;
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const probe = std.process.run(allocator, io, .{ .argv = &.{ "docker", "compose", "version" } }) catch return error.SkipZigTest;
+    allocator.free(probe.stdout);
+    allocator.free(probe.stderr);
+    if (probe.term != .exited or probe.term.exited != 0) return error.SkipZigTest;
+
+    var bad: usize = 0;
+    for (compose_files) |file| {
+        const text = try readRepoFile(allocator, file);
+        defer allocator.free(text);
+        // A `${NAME:?message}` variable must be set; give each a placeholder.
+        var env = std.process.Environ.Map.init(allocator);
+        defer env.deinit();
+        try env.put("PATH", std.mem.span(std.c.getenv("PATH") orelse "/usr/bin:/bin"));
+        if (std.c.getenv("HOME")) |home| try env.put("HOME", std.mem.span(home));
+        var at: usize = 0;
+        while (std.mem.indexOfPos(u8, text, at, "${")) |i| {
+            var end = i + 2;
+            while (end < text.len and isVarChar(text[end])) end += 1;
+            at = end;
+            if (end + 1 < text.len and text[end] == ':' and text[end + 1] == '?') try env.put(text[i + 2 .. end], "placeholder");
+        }
+        const abs = try std.fs.path.join(allocator, &.{ options.repo_root, file });
+        defer allocator.free(abs);
+        const res = try std.process.run(allocator, io, .{
+            .argv = &.{ "docker", "compose", "-f", abs, "config", "-q" },
+            .environ_map = &env,
+        });
+        defer allocator.free(res.stdout);
+        defer allocator.free(res.stderr);
+        if (res.term != .exited or res.term.exited != 0) {
+            std.debug.print("SONNY-6448 (5): docker compose config rejects {s}: {s}\n", .{ file, res.stderr });
+            bad += 1;
         }
     }
     try testing.expectEqual(@as(usize, 0), bad);

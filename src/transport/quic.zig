@@ -2199,6 +2199,29 @@ test "tls13Exporter matches RFC 8448-style HKDF-Expand-Label construction (SONNY
     try std.testing.expect(!std.mem.eql(u8, &out, &other));
 }
 
+// SONNY-6448 retirement detector. `exportTlsKeyingMaterial` computes the
+// exporter here because the pinned tls library's `Context.exportSecret` is
+// not RFC 8446 §7.5. This test FAILS once the pinned library computes the
+// RFC value (tls fix e29f289 on branch fix/sonny-6448-exporter-rfc8446,
+// released after v0.1.24). When it fails: make `exportTlsKeyingMaterial`
+// call `ctx.exportSecret(label, out)`, delete `tls13Exporter`,
+// `hkdfExpandLabel` and their tests, and delete this test.
+test "tls13Exporter still needed: the pinned tls Context.exportSecret is not RFC 8446 §7.5 (SONNY-6448: retire the geode exporter when this fails)" {
+    const TlsContext = std.meta.Child(std.meta.Child(@FieldType(Connection, "tls_context")));
+    var ctx = try TlsContext.init(.{ .allocator = std.testing.allocator, .role = .Client }, .{});
+    defer ctx.deinit();
+    const secret = [_]u8{0x42} ** 32;
+    const SecretT = @FieldType(@TypeOf(ctx.secrets.exporter_master), "value");
+    ctx.secrets.exporter_master.store(.Application, .sha256, SecretT.fromSlice(.sha256, &secret));
+
+    var library: [32]u8 = undefined;
+    try ctx.exportSecret("EXPORTER-geode-detector", &library);
+    var rfc: [32]u8 = undefined;
+    try tls13Exporter(&secret, "EXPORTER-geode-detector", &rfc);
+    // Equal means the library is fixed: retire the workaround (see above).
+    try std.testing.expect(!std.mem.eql(u8, &library, &rfc));
+}
+
 pub const QuicClient = struct {
     allocator: std.mem.Allocator,
     /// Heap-allocated endpoint (via api.endpointInit / api.endpointDeinit).
@@ -2362,13 +2385,15 @@ pub const QuicClient = struct {
         // cfg.inline_ca_chain_der (DER trust anchors), NOT cfg.ca_path (a path string).
         // Load the CA bundle here so cluster TLS actually has a trust anchor and can
         // complete a leaf-only server chain. Owned by self; freed in deinit().
+        // SONNY-6448: a CA bundle that cannot be loaded is an error, never a
+        // connection without the trust anchor the caller asked for.
         if (ca_cert_path) |ca_p| {
-            self.ca_chain_der = loadCaChainDer(self.allocator, ca_p) catch |err| blk: {
-                tlog.warn("cluster TLS: failed to load CA chain; proceeding without pinned anchor", &.{
+            self.ca_chain_der = loadCaChainDer(self.allocator, ca_p) catch |err| {
+                tlog.err("TLS: cannot load CA bundle; refusing to connect", &.{
                     Attr.string("path", ca_p),
                     Attr.string("error", @errorName(err)),
                 });
-                break :blk null;
+                return err;
             };
         }
 
@@ -2421,8 +2446,8 @@ pub const QuicClient = struct {
 
     /// Connect and verify the server's certificate chain against the CA
     /// bundle at `ca_cert_path` and its name against `address` (SONNY-6442).
-    /// Unlike `connectEx`, a CA bundle that cannot be loaded is an error,
-    /// never a connection without a trust anchor.
+    /// A CA bundle that cannot be loaded is an error, never a connection
+    /// without a trust anchor (as in `connectEx` since SONNY-6448).
     pub fn connectWithCa(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: []const u8) !void {
         self.ca_chain_der = try loadCaChainDer(self.allocator, ca_cert_path);
         return self.connectEx(address, port, null, null, null);

@@ -33,17 +33,6 @@ fn compat_timestamp() i64 {
     }
     return @as(i64, ts.sec);
 }
-fn compat_microTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
-}
 const flags_mod = @import("feature_flags");
 const key_manager = @import("tde_key_manager.zig");
 const nonce_gen = @import("tde_nonce_gen.zig");
@@ -405,7 +394,6 @@ pub fn testKeyEscrow(allocator: std.mem.Allocator) !struct {
 pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
     types_tested: u32,
     all_transparent: bool,
-    performance_impact_pct: f64,
     errors_encountered: u32,
 } {
     if (!enabled()) return error.FeatureDisabled;
@@ -422,21 +410,9 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
         .{ .name = "VECTOR", .size = 512 },
     };
 
-    // SONNY-6342: the impact is measured against the same buffers copied
-    // without encryption (it was measured against an invented 1000 us).
-    const copy_start = compat_microTimestamp();
-    for (test_types) |test_type| {
-        const data = try allocator.alloc(u8, test_type.size);
-        defer allocator.free(data);
-        // fips-exempt: non-security test-plaintext fill
-        compat_fillRandom(data);
-        const copy = try allocator.dupe(u8, data);
-        allocator.free(copy);
-    }
-    const copy_time: u64 = @intCast(@max(compat_microTimestamp() - copy_start, 1));
-
-    const baseline_time = compat_microTimestamp();
-
+    // SONNY-6448: no performance figure. One compared these AEAD round trips
+    // with plain copies of the same buffers, which says nothing about TDE
+    // overhead; the measurement is `zig build test-sonny6435-tde-overhead`.
     for (test_types) |test_type| {
         const data = try allocator.alloc(u8, test_type.size);
         defer allocator.free(data);
@@ -465,13 +441,9 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
         types_tested += 1;
     }
 
-    const elapsed_time: u64 = @intCast(@max(compat_microTimestamp() - baseline_time, 0));
-    const performance_impact = (@as(f64, @floatFromInt(elapsed_time)) / @as(f64, @floatFromInt(copy_time)) - 1.0) * 100.0;
-
     return .{
         .types_tested = types_tested,
         .all_transparent = errors == 0,
-        .performance_impact_pct = performance_impact,
         .errors_encountered = errors,
     };
 }

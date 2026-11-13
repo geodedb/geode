@@ -84,11 +84,16 @@ docker-compose exec geode geode query "RETURN 1 AS health" --server 127.0.0.1:84
 
 All configuration is managed through `.env` file:
 
+geode itself does not read `GEODE_LOG_LEVEL`: `docker-compose.yml`
+substitutes it into the `geode serve --log-level` option (debug, info, warn,
+error). The listen address is the `--listen` option in the compose
+`command` (SONNY-6448).
+
 ```bash
 # Geode Configuration
-GEODE_LOG_LEVEL=info           # Log level: debug, info, warn, error
+# geode does not read GEODE_LOG_LEVEL; docker-compose.yml passes it as --log-level
+GEODE_LOG_LEVEL=info
 GEODE_DATA_DIR=/data           # Data directory path
-GEODE_LISTEN_ADDR=0.0.0.0:8443 # Listen address
 
 # Vault Configuration
 VAULT_ADDR=http://vault:8200

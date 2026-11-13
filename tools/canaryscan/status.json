@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T03:22:16.301330562Z",
+  "generated_at": "2026-11-13T04:58:40.357130829Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85611,6 +85611,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6448-KMS-NO-LOCAL-DEV",
+      "features": [
+        {
+          "feature": "KMSProviderSystem",
+          "aspect": "NoKeyFromKeyId",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6448_kms_dead_paths.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6448_kms_dead_paths.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6448-TDE-TRANSPARENT-NO-FAKE-IMPACT",
+      "features": [
+        {
+          "feature": "TDEProcedures",
+          "aspect": "NoFakePerformanceImpact",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6448_tde_transparent_encryption.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6448_tde_transparent_encryption.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93241,7 +93279,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4858
+      "TESTED": 4860
     },
     "by_aspect": {
       "2PC": 3,
@@ -95514,6 +95552,7 @@
       "NoFabricatedKmsSelfTestTruth": 1,
       "NoFabricatedResults": 1,
       "NoFakeOverheadMeasurement": 1,
+      "NoFakePerformanceImpact": 1,
       "NoFalseSuccessOnShutdown": 1,
       "NoFixedListenPorts": 1,
       "NoFixedSharedPaths": 1,
@@ -95523,6 +95562,7 @@
       "NoInMemoryFallback": 1,
       "NoInPlaceRestoreOneSyncTimeouts": 1,
       "NoKeyBeforeVerify": 1,
+      "NoKeyFromKeyId": 1,
       "NoKeyNoFile": 1,
       "NoKeyOverExistingRecords": 1,
       "NoLeakOnInitDeinit": 1,

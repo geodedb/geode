@@ -5787,6 +5787,21 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6442-kms-channel", "Run SONNY-6442 items 1-3 regression (the remote KMS client refuses to connect without a CA bundle, with one it cannot load or to a server that bundle does not verify; rejects an attestation from another TLS channel; refuses generate/unwrap unconnected; the attested hash is the HKDF KEK identifier; the seeded simulated KMS client compiles into tests only; over real QUIC)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6448 (1): a QUIC client given a CA bundle verifies the server
+    // against it or does not connect (connectEx, the CLI bridge), over real
+    // QUIC with openssl-made CAs.
+    {
+        const bridge_mod = b.createModule(.{ .root_source_file = b.path("src/client/zig_quic_bridge.zig"), .target = target, .optimize = optimize });
+        bridge_mod.addImport("geode_client_zig", zig_client_real_mod);
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6448_tls_fail_closed.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("transport/quic", transport_quic_mod);
+        tests.root_module.addImport("zig_quic_bridge", bridge_mod);
+        tests.root_module.link_libc = true;
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6448-tls-fail-closed", "Run SONNY-6448 item 1 regression (QuicClient.connectEx refuses a missing, unreadable or certificate-less CA bundle instead of connecting without a trust anchor; the CLI QUIC client verifies against a supplied --ca-cert instead of ignoring it; a CA that did not sign the server fails the handshake and the right one completes it, over real QUIC)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6442 (4): geode serve refuses an unknown option (exit 2) and
     // still parses every documented one (unit + the built binary).
     {
@@ -9676,10 +9691,25 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny2441-kms-provider-paths", "Run SONNY-2441 regression (KMSProvider offers no remote_kms provider, every provider type round-trips the caller's key or refuses, and the KMS provider test is built)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6448 (7): no local_dev KMS provider (key derived from the key id)
+    // and no CA-less remote KMS client in the concurrency benchmark.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6448_kms_dead_paths.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("security/kms", sonny2441_kms_mod);
+        mod.addImport("sonny6448_kms_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6448-kms-dead-paths", "Run SONNY-6448 item 7 regression (KMSProvider has no local_dev provider whose wrapping key is derived from the key id, and the remote KMS concurrency benchmark has no client that dials without a CA bundle)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2441: the KMSProvider unit suite, built and run. (TDEKeyManager was
     // removed as never-used code in SONNY-6298; wiring is story SONNY-6380.)
     for ([_]struct { name: []const u8, path: std.Build.LazyPath, desc: []const u8 }{
-        .{ .name = "test-kms-provider", .path = b.path("tests/test_kms_provider.zig"), .desc = "Run the KMSProvider local_dev / external_kms unit suite (SONNY-2441: registered)" },
+        .{ .name = "test-kms-provider", .path = b.path("tests/test_kms_provider.zig"), .desc = "Run the KMSProvider external_kms unit suite (SONNY-2441: registered; SONNY-6448: no local_dev)" },
     }) |t| {
         const mod = b.createModule(.{ .root_source_file = t.path, .target = target, .optimize = optimize });
         mod.link_libc = true;
@@ -9953,11 +9983,12 @@ pub fn build(b: *std.Build) void {
         const opts = b.addOptions();
         opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_deploy_docs_truth.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true; // SONNY-6448 (5): getenv for the docker compose config run
         mod.addImport("sonny6430_dd_options", opts.createModule());
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6430-deploy-docs-truth", "Run SONNY-6430 item 9 regression (the compose files pass no S3_* variable to geode; SERVER_FEATURES 1.3 names GEODE_TDE_KEY, no GEODE_DISK_KEY_HEX, KMS integration or automatic rotation; NIX_DEPLOYMENT says the Nix packaging is gone and has no federation block; the security inventory names no GEODE_WAL_KEY)").dependOn(&run_tests.step);
+        b.step("test-sonny6430-deploy-docs-truth", "Run SONNY-6430 item 9 regression (the compose files pass no S3_* variable to geode; SERVER_FEATURES 1.3 names GEODE_TDE_KEY, no GEODE_DISK_KEY_HEX, KMS integration or automatic rotation; NIX_DEPLOYMENT says the Nix packaging is gone and has no federation block; the security inventory names no GEODE_WAL_KEY), plus SONNY-6435/6442/6448 deploy-config truth (no compose file, Dockerfile, deployment doc, docs/USAGE.md, docs/docker/*.md or .env.example names a GEODE_* variable nothing reads; every compose file passes docker compose config, none sets pids_limit)").dependOn(&run_tests.step);
     }
 
     // SONNY-6322: a backup never holds the audit signing seed; a store
@@ -10051,6 +10082,18 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6442-tde-measure-overhead", "Run SONNY-6442 item 6 regression (CALL tde.measure_overhead() is refused as unsupported with TDE on or off, and the memcpy-vs-AEAD measurement is gone; the real measurement is test-sonny6435-tde-overhead)").dependOn(&run_tests.step);
+    }
+    // SONNY-6448 (4): tde.test_transparent_encryption reported a
+    // memcpy-vs-AEAD "performance_impact_pct"; the self-test stays, the
+    // figure is gone.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6448_tde_transparent_encryption.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6448-tde-transparent-encryption", "Run SONNY-6448 item 4 regression (CALL tde.test_transparent_encryption() still round-trips every type through the server's TDE key and answers types_tested, all_transparent and errors_encountered, without the memcpy-vs-AEAD performance_impact_pct; FeatureDisabled with TDE off)").dependOn(&run_tests.step);
     }
     // SONNY-6442 (8): geode fle and in-process FLE check the master key
     // check value too, through the helper geode serve uses.

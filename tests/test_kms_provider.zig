@@ -7,9 +7,9 @@ const kms = @import("security/kms");
 test "TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider" {
     const allocator = testing.allocator;
 
-    // Both providers KMSProvider implements (SONNY-2441 removed remote_kms).
+    // The provider KMSProvider implements (SONNY-2441 removed remote_kms,
+    // SONNY-6448 local_dev).
     const provider_configs = [_]kms.KMSConfig{
-        .{ .provider_type = .local_dev },
         .{ .provider_type = .external_kms, .seed = 0x123456789ABCDEF0 },
     };
 
@@ -26,41 +26,9 @@ test "TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider" {
         const master_key_id = try provider.fetchActiveMasterKey();
         try testing.expect(master_key_id.len > 0);
 
-        if (config.provider_type == .local_dev) {
-            try testing.expectEqualStrings("local-dev-master-key-v1", master_key_id);
-        } else if (config.provider_type == .external_kms) {
-            defer allocator.free(master_key_id);
-            try testing.expect(std.mem.startsWith(u8, master_key_id, "external-kms-"));
-        }
+        defer allocator.free(master_key_id);
+        try testing.expect(std.mem.startsWith(u8, master_key_id, "external-kms-"));
     }
-}
-
-test "KMS local dev provider security warning" {
-    const allocator = testing.allocator;
-    var provider = try kms.localDevProvider(allocator);
-    defer provider.deinit();
-
-    const plaintext1 = "test_data_key_12345678901234567890"; // 32 bytes
-    const plaintext2 = "different_key_098765432109876543"; // 32 bytes
-
-    var wrapped1 = try provider.wrapDataKey(plaintext1);
-    defer wrapped1.deinit(allocator);
-
-    var wrapped2 = try provider.wrapDataKey(plaintext2);
-    defer wrapped2.deinit(allocator);
-
-    // Different plaintexts should produce different ciphertexts
-    try testing.expect(!std.mem.eql(u8, wrapped1.ciphertext, wrapped2.ciphertext));
-
-    // Verify unwrapping works correctly
-    const unwrapped1 = try provider.unwrapDataKey(wrapped1);
-    defer allocator.free(unwrapped1);
-
-    const unwrapped2 = try provider.unwrapDataKey(wrapped2);
-    defer allocator.free(unwrapped2);
-
-    try testing.expectEqualSlices(u8, plaintext1, unwrapped1);
-    try testing.expectEqualSlices(u8, plaintext2, unwrapped2);
 }
 
 test "KMS external provider deterministic behavior" {
@@ -132,17 +100,9 @@ test "KMS external provider different seeds" {
 test "KMS metadata handling" {
     const allocator = testing.allocator;
 
-    // Test local dev provider (no metadata)
-    var local_provider = try kms.localDevProvider(allocator);
-    defer local_provider.deinit();
-
     const plaintext = "metadata_test_key_12345678901234"; // 32 bytes
-    var local_wrapped = try local_provider.wrapDataKey(plaintext);
-    defer local_wrapped.deinit(allocator);
 
-    try testing.expect(local_wrapped.metadata == null);
-
-    // Test external KMS provider (has metadata)
+    // External KMS provider (has metadata)
     var external_provider = try kms.externalKMSProvider(allocator, 0xFEEDFACEDEADBEEF);
     defer external_provider.deinit();
 
@@ -187,22 +147,12 @@ test "KMS error handling" {
 test "KMS factory functions" {
     const allocator = testing.allocator;
 
-    // Test localDevProvider factory
-    var local = try kms.localDevProvider(allocator);
-    defer local.deinit();
-    try testing.expectEqual(kms.KMSProviderType.local_dev, local.config.provider_type);
-
     // Test externalKMSProvider factory
     const seed = 0x1337C0DE;
     var external = try kms.externalKMSProvider(allocator, seed);
     defer external.deinit();
     try testing.expectEqual(kms.KMSProviderType.external_kms, external.config.provider_type);
     try testing.expectEqual(seed, external.config.seed.?);
-
-    // Test defaultProvider legacy function
-    var default = try kms.defaultProvider();
-    defer default.deinit();
-    try testing.expectEqual(kms.KMSProviderType.local_dev, default.config.provider_type);
 }
 
 test "KMS custom master key ID" {
@@ -210,7 +160,8 @@ test "KMS custom master key ID" {
 
     const custom_key_id = "custom-enterprise-key-2025";
     var provider = try kms.KMSProvider.init(allocator, kms.KMSConfig{
-        .provider_type = .local_dev,
+        .provider_type = .external_kms,
+        .seed = 0xC0570A,
         .master_key_id = custom_key_id,
     });
     defer provider.deinit();
