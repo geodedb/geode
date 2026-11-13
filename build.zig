@@ -534,6 +534,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny738-create-query-one-commit", .reason = "intentionally red TDD reproduction (SONNY-738, KNOWN_TEST_ISSUES): a query-form CREATE commits a transaction per sub-operation; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
@@ -14866,6 +14867,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6425_shard_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6425_shard_step = b.step("test-sonny6425-create-one-shard-commit", "Run SONNY-6425 item 4 regression (a one-node CREATE through the executor commits exactly one storage-engine transaction: the node is allocated on the statement transaction's shard)");
     sonny6425_shard_step.dependOn(&run_sonny6425_shard_tests.step);
+
+    // SONNY-738: a query-form CREATE (CREATE ... RETURN / SET, a FOR body's
+    // CREATE) commits one engine transaction, as a CREATE statement does.
+    const sonny738_cq_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny738_create_query_one_commit.zig"), .target = target, .optimize = optimize });
+    sonny738_cq_test_mod.link_libc = true;
+    sonny738_cq_test_mod.addImport("geode", root_mod);
+    sonny738_cq_test_mod.addImport("logging", logging_mod);
+    sonny738_cq_test_mod.addImport("rls", rls_mod);
+    sonny738_cq_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny738_cq_tests = b.addTest(.{ .root_module = sonny738_cq_test_mod });
+    const run_sonny738_cq_tests = b.addRunArtifact(sonny738_cq_tests);
+    // Intentionally red (docs/KNOWN_TEST_ISSUES.md) until the fix commit
+    // registers it through shardDep; compiled by test-compile.
+    if (g_test_compile_step) |c| c.dependOn(&sonny738_cq_tests.step);
+    const sonny738_cq_step = b.step("test-sonny738-create-query-one-commit", "Run SONNY-738 regression (a query-form CREATE -- CREATE ... RETURN / SET, a FOR body's CREATE -- through the executor commits one storage-engine transaction per statement or FOR element, as a CREATE statement does)");
+    sonny738_cq_step.dependOn(&run_sonny738_cq_tests.step);
 
     // SONNY-6425 item 5: dropGraph under the caller's own read lock refuses.
     const sonny6425_drop_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6425_drop_under_own_read_lock.zig"), .target = target, .optimize = optimize });
