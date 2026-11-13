@@ -2028,6 +2028,20 @@
   three-node cluster the leader now reports 12-19 ms for live peers 10 s
   after start (it reported 7186 ms) and about 8 s for a follower killed 7 s
   earlier. Regression: `zig build test-sonny6459-cluster-last-contact`.
+- **Operator-visible: the raft sender follows a peer to a new endpoint, and
+  the cluster listener closes connections it cannot hand off (SONNY-6459
+  items 5-6).** `raft_consensus.Transport` reused its cached connection to
+  a peer whenever one was established, even after the peer's configured
+  host or port changed, so frames for the peer kept going to its old
+  address. A cached connection to an endpoint the peer no longer has is
+  now dropped and rebuilt ("raft transport peer endpoint changed;
+  reconnecting"); an IP change behind an unchanged host name stays with
+  the re-resolve reaper. `ClusterCoordinator.networkLoop` did nothing with
+  an accepted connection when it had no connection pool (the connection
+  stayed tracked and open), and ended the accept loop, leaking the
+  connection, when it could not allocate the task context. Both now close
+  and untrack the connection and log it. Regression: `zig build
+  test-sonny6459-cluster-transport`.
 - **Test infrastructure: the distributed modules' inline tests run again,
   and test-graph-store compiles again (SONNY-6459 item 7).** Zig collects
   inline tests only from a test root's own module. The inline tests of

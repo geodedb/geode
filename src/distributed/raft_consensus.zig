@@ -796,6 +796,14 @@ pub const Transport = struct {
             self.allocator.destroy(self);
         }
 
+        /// SONNY-6459: whether this connection was built for `peer`'s current
+        /// configured endpoint (host and port). A change of the IP behind an
+        /// unchanged host name is the client poll loop's re-resolve reaper's
+        /// job (`resolved_ip`); this check costs no DNS lookup per send.
+        fn connectsTo(self: *const PeerConnection, peer: Peer) bool {
+            return self.port == peer.port and std.mem.eql(u8, self.endpoint, peer.endpoint);
+        }
+
         /// Acquire a reference. Must be called while holding the parent
         /// Transport's `peers_mutex` to ensure the entry is still in the map.
         fn acquire(self: *PeerConnection) void {
@@ -1933,14 +1941,32 @@ pub const Transport = struct {
     fn getOrCreatePeerConnection(self: *Transport, peer: Peer) !*PeerConnection {
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        // Fast path: already cached and established.
+        // Fast path: already cached and established, to the peer's current
+        // endpoint. SONNY-6459: a cached connection to an endpoint the peer
+        // no longer has is dropped and rebuilt below; it used to be reused,
+        // so frames for the peer kept going to its old address.
         {
+            var moved: ?*PeerConnection = null;
+            defer if (moved) |pc| {
+                log.info("raft transport peer endpoint changed; reconnecting", &.{
+                    Attr.uint("peer", peer.id),
+                    Attr.string("old_endpoint", pc.endpoint),
+                    Attr.string("new_endpoint", peer.endpoint),
+                });
+                // Drop the map's implicit ref (outside `peers_mutex`, as
+                // evictPeerConnection does); a concurrent holder deinits last.
+                if (pc.release()) pc.deinit();
+            };
             self.peers_mutex.lockUncancelable(io);
             defer self.peers_mutex.unlock(io);
             if (self.peers.get(peer.id)) |existing| {
                 if (existing.established) {
-                    existing.acquire();
-                    return existing;
+                    if (existing.connectsTo(peer)) {
+                        existing.acquire();
+                        return existing;
+                    }
+                    moved = existing;
+                    _ = self.peers.remove(peer.id);
                 }
             }
         }
@@ -1997,13 +2023,23 @@ pub const Transport = struct {
         // Re-acquire the lock to insert.  If another caller beat us to
         // it, prefer the existing entry and discard ours so we never
         // leave a half-initialized client in the map.
+        var replaced: ?*PeerConnection = null;
+        defer if (replaced) |pc| {
+            if (pc.release()) pc.deinit();
+        };
         self.peers_mutex.lockUncancelable(io);
         defer self.peers_mutex.unlock(io);
         if (self.peers.get(peer.id)) |existing| {
             if (existing.established) {
-                conn.deinit();
-                existing.acquire();
-                return existing;
+                if (existing.connectsTo(peer)) {
+                    conn.deinit();
+                    existing.acquire();
+                    return existing;
+                }
+                // SONNY-6459: a racing caller cached a connection to the
+                // peer's old endpoint; ours replaces it.
+                replaced = existing;
+                _ = self.peers.remove(peer.id);
             }
         }
         // RC2: seed this (re)built connection's probation state from the carry.

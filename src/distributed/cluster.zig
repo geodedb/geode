@@ -1422,25 +1422,35 @@ pub const ClusterCoordinator = struct {
                 continue;
             }
 
-            if (self.connection_pool) |pool| {
-                const ctx = try self.allocator.create(ConnectionTaskCtx);
-                errdefer self.allocator.destroy(ctx);
-                ctx.* = .{
-                    .allocator = self.allocator,
-                    .coordinator = self,
-                    .conn = conn,
-                    // RC-A: stamp the idle clock at ACCEPT, not at worker
-                    // acquisition — a queued conn (no free worker yet) still ages.
-                    .accepted_ms = compat_milliTimestamp(),
-                };
-                if (!pool.submit(.{
-                    .context = @ptrCast(ctx),
-                    .callback = runConnectionTask,
-                })) {
-                    self.allocator.destroy(ctx);
-                    log.warn("Connection pool saturated, dropping cluster connection", &.{});
-                    self.network_transport.quic_server.?.destroyConnection(conn);
-                }
+            // SONNY-6459: an accepted connection nobody will handle is closed
+            // and untracked here; it used to stay tracked by the listener
+            // (with no pool), or end this loop and stay tracked (when the
+            // task context could not be allocated).
+            const pool = self.connection_pool orelse {
+                log.warn("Cluster connection accepted with no connection pool; closing it", &.{});
+                self.network_transport.quic_server.?.destroyConnection(conn);
+                continue;
+            };
+            const ctx = self.allocator.create(ConnectionTaskCtx) catch {
+                log.err("Out of memory for a cluster connection task; closing the connection", &.{});
+                self.network_transport.quic_server.?.destroyConnection(conn);
+                continue;
+            };
+            ctx.* = .{
+                .allocator = self.allocator,
+                .coordinator = self,
+                .conn = conn,
+                // RC-A: stamp the idle clock at ACCEPT, not at worker
+                // acquisition — a queued conn (no free worker yet) still ages.
+                .accepted_ms = compat_milliTimestamp(),
+            };
+            if (!pool.submit(.{
+                .context = @ptrCast(ctx),
+                .callback = runConnectionTask,
+            })) {
+                self.allocator.destroy(ctx);
+                log.warn("Connection pool saturated, dropping cluster connection", &.{});
+                self.network_transport.quic_server.?.destroyConnection(conn);
             }
         }
     }

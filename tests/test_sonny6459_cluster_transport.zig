@@ -8,7 +8,8 @@
 // The test starts a real coordinator (127.0.0.94) with the dead-connection
 // reaper off and the inbound idle deadline far away, drops its connection
 // pool, connects a real QUIC client that sends raft frames, and requires the
-// listener to let go of the connection at once.
+// listener to close the connection (the client sees CONNECTION_CLOSE) and
+// stop tracking it.
 //
 // Item 6: `raft_consensus.Transport.getOrCreatePeerConnection` returned the
 // cached connection for a peer id whenever it was established, even when
@@ -150,23 +151,24 @@ test "SONNY-6459 item 5: with no connection pool the cluster listener closes an 
     try raft.writeRaftFrame(a, stream, 2, 7, msg);
 
     const server = &coord.network_transport.quic_server.?;
-    // The accept loop takes the connection; with no pool it must close it
-    // (the listener stops tracking it) rather than leave it tracked.
+    // The accept loop takes the connection; with no pool it must close it:
+    // the client sees CONNECTION_CLOSE and the listener stops tracking it.
+    // (Left alone it stays open: the reapers are off and the client keeps
+    // talking.)
     const t0 = nowMillis();
-    var seen = false;
     var last_send = t0;
     while (nowMillis() - t0 < 5_000) : (sleepMs(5)) {
         client.poll(5) catch {};
+        if (client.isClosed() and server.getConnectionCount() == 0) break;
         if (nowMillis() - last_send >= 200) {
             last_send = nowMillis();
             raft.writeRaftFrame(a, stream, 2, 7, msg) catch {};
         }
-        const n = server.getConnectionCount();
-        if (n > 0) seen = true;
-        if (seen and n == 0) break;
     }
+    const closed = client.isClosed();
     const left = server.getConnectionCount();
-    std.debug.print("accepted with no pool: tracked once={}, still tracked after {d} ms: {d}\n", .{ seen, nowMillis() - t0, left });
+    std.debug.print("accepted with no pool: closed by the listener={}, still tracked after {d} ms: {d}\n", .{ closed, nowMillis() - t0, left });
+    try std.testing.expect(closed);
     try std.testing.expectEqual(@as(usize, 0), left);
     try std.testing.expectEqual(@as(u32, 0), coord.active_connections.load(.acquire));
 }
