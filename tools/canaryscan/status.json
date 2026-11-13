@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T05:15:02.386491354Z",
+  "generated_at": "2026-11-13T07:20:41.542122742Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85697,6 +85697,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6456-SHUTDOWN-PERSISTENCE-STOP",
+      "features": [
+        {
+          "feature": "Persistence",
+          "aspect": "PersistenceStopIsPrompt",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6456_shutdown_persistence_stop.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6456_shutdown_persistence_stop.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93327,7 +93346,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4864
+      "TESTED": 4865
     },
     "by_aspect": {
       "2PC": 3,
@@ -95982,6 +96001,7 @@
       "PersistableLengths": 1,
       "Persistence": 1,
       "PersistenceDeleteFailure": 1,
+      "PersistenceStopIsPrompt": 1,
       "PersistentFollowupBackoff": 1,
       "PersistentResolver": 1,
       "PersistentStorage": 2,

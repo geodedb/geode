@@ -15739,6 +15739,20 @@ pub fn build(b: *std.Build) void {
     const sonny6451_sigterm_step = b.step("test-sonny6451-cluster-sigterm", "Run the SONNY-6451 item 3 regression (SIGTERM stops a cluster node's raft transport before the final flush: no raft activity, pool-join timeout or watchdog exit after it, exit within 15 s; spawns two cluster nodes)");
     sonny6451_sigterm_step.dependOn(&run_sonny6451_sigterm_tests.step);
 
+    // SONNY-6456 item 4: SIGTERM stops the persistence thread within 3 s on an
+    // idle single-node server and an idle cluster node (spawns the built geode).
+    const sonny6456_shutdown_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6456_shutdown_persistence_stop.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6456_shutdown_tests.root_module.link_libc = true;
+    spawnsBuiltGeode(sonny6456_shutdown_tests);
+    const run_sonny6456_shutdown_tests = b.addRunArtifact(sonny6456_shutdown_tests);
+    shardDep(test_step, &run_sonny6456_shutdown_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6456_shutdown_step = b.step("test-sonny6456-shutdown-persistence-stop", "Run the SONNY-6456 item 4 regression (SIGTERM stops the persistence thread within 3 s and the process exits within 10 s on an idle single-node server and an idle cluster node; no light checkpoint of the default graph is skipped)");
+    sonny6456_shutdown_step.dependOn(&run_sonny6456_shutdown_tests.step);
+
     // SONNY-6436 item 5: an RLS policy admits a row only when its predicate
     // is True, in the raw-string interpreter and the compiled VM.
     const sonny6436_rls_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_rls_raw_truthiness.zig"), .target = target, .optimize = optimize });
