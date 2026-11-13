@@ -210,8 +210,15 @@
             // send leaves the entry tracked. Fixes the remote-backup stall at
             // 11-14 MB (SONNY-6430 item 1, test-sonny6430-remote-backup-large).
             // Lockstep with geode-client-zig v0.3.14 (one quic module).
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.49#f4ea7685f3e46884ee93e54486683f10ec4a8770",
-            .hash = "quic-0.1.49-gBIqUTe1QQCBDjdbxhAGJkA0iaVTE9aLjadbDX6hEk9w",
+            // 2026-11-13: v0.1.50 (b2f1bf1, SONNY-6457) — adds
+            // `QuicConfig.inline_client_ca_der`, passed to the server TLS
+            // context as `trusted_ca_der`, so a server completes a client
+            // chain from the configured client CAs (a CA-issued leaf sent
+            // alone is accepted). Pins tls v0.1.27 (RFC 8446 exporter, client
+            // chain completion, HKDF-Expand-Label fix). Lockstep with
+            // geode-client-zig v0.3.15 (one quic module).
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.50#b2f1bf1f2d524da79933e39201a82bfa1e75e465",
+            .hash = "quic-0.1.50-gBIqUWjJQQACZrQHqXXPW1FXTxQSDBXsXXHhOIVFWb7I",
         },
 
         // =======================================================================
@@ -300,8 +307,14 @@
             // longer type-shares the pool (build.zig passes `.thread_pool =
             // false` to quic). graph-storage v0.4.11 moves with it because it
             // runs its own pools from its own thread_pool copy.
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.10#698805259aa15131b14cac6798a9e95c64861797",
-            .hash = "thread_pool-0.2.10-11B1BgIlegC4g-vLCPiNdFo1QpYxROwDPX1U5erWrVTB",
+            // 2026-11-13: v0.2.11 (666b7ac, SONNY-6479) — a submit wakes a
+            // parked worker whenever one is parked (no longer only every
+            // `wake_coalesce_batch`-th submit), default-lane work wakes the
+            // parked blocking-lane helper, and the lane helper takes one task
+            // at a time. Fixes SONNY-2440 in the library; geode's
+            // `wake_coalesce_batch = 1` workaround is dropped.
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.11#666b7ac0cc8b92d5773df5e79ea4fd421bd77e99",
+            .hash = "thread_pool-0.2.11-11B1Bk2GegC5mn18xNrkmF0lMrgrWqijO7PXmftrkuSe",
         },
 
         // =======================================================================
@@ -424,8 +437,13 @@
             // 2026-11-13: v0.3.14 (98aae06) — lockstep with geode's quic v0.1.49
             // bump (SONNY-6434), so the graph has one quic module; no client
             // code change. It still pins dns v0.1.27 (see .dns).
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.14#98aae06c20ca55349d693618a14495066e75cd3f",
-            .hash = "geode_client_zig-0.3.14-8ysbVz-RCwAJLHjFgD3guIA2tcwa4OlACqBmJi86GEIL",
+            // 2026-11-13: v0.3.15 (6706227, SONNY-6457) — a configured client
+            // certificate is presented as a client (it no longer turns the
+            // endpoint into a server), so `geode query --client-cert` works
+            // against an mTLS-required server. Lockstep with quic v0.1.50
+            // and tls v0.1.27.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.15#6706227a3b87f01f2eb8a00b261f87bba0136edb",
+            .hash = "geode_client_zig-0.3.15-8ysbV3nOCwC5ldttZ-c08qS7k2FnCuYpJ2FS7BrX_UCR",
         },
 
         // =======================================================================

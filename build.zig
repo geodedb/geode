@@ -1102,6 +1102,14 @@ pub fn build(b: *std.Build) void {
 
     const timeseries_storage_dep = b.dependency("timeseries_storage", .{ .target = target, .optimize = optimize });
     const timeseries_storage_ext_mod = timeseries_storage_dep.module("timeseries_storage");
+    // SONNY-6479: geode hands its own *ThreadPool to the timeseries-storage
+    // engine (src/timeseries/timeseries.zig), so both must compile against
+    // ONE thread_pool module. timeseries-storage v0.2.20 pins thread-pool
+    // v0.2.10 and geode pins v0.2.11 (same public API, wake-path internals
+    // only); point the library's "thread_pool" import at geode's module
+    // instead of a lockstep timeseries-storage re-release. Remove once
+    // timeseries-storage pins geode's thread-pool version.
+    timeseries_storage_ext_mod.addImport("thread_pool", thread_pool_ext_mod);
     const fts_storage_dep = b.dependency("fts_storage", .{ .target = target, .optimize = optimize });
     const fts_storage_ext_mod = fts_storage_dep.module("fts_storage");
     const fts_smoke_tests = b.addTest(.{ .root_module = b.createModule(.{
