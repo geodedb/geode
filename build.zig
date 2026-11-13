@@ -10140,7 +10140,7 @@ pub fn build(b: *std.Build) void {
     const run_sonny6492_fs_tests = b.addRunArtifact(sonny6492_fs_tests);
     spawnsBuiltGeode(sonny6492_fs_tests);
     shardDep(test_step, &run_sonny6492_fs_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6492_fs_step = b.step("test-sonny6492-checkpoint-free-store-crash", "Run SONNY-6492 item 1 regression (a real server checkpoints, a checkpoint then stops between its manifest/WAL truncate and its free.store save, the server is SIGKILLed: every node is there after the restart, by label and by an unlabeled scan, and new nodes do not reuse live pages; with and without TDE)");
+    const sonny6492_fs_step = b.step("test-sonny6492-checkpoint-free-store-crash", "Run SONNY-6492 item 1 regression against a real server with SIGKILLs, with and without TDE: a store an old graph-storage release crashed in its checkpoint window (newer manifest, empty WAL, older free.store) keeps every node, also after many new nodes; a failed free.store save fails the checkpoint before its manifest and WAL replay keeps every node; a restart after a completed checkpoint rebuilds no page bitmaps");
     sonny6492_fs_step.dependOn(&run_sonny6492_fs_tests.step);
     // SONNY-6491: label and relationship-type names first assigned since the
     // last checkpoint (labels.dict is not in the WAL) survive a SIGKILL of a
