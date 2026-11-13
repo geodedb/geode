@@ -536,6 +536,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
+    .{ .name = "test-sonny6511-graph-type-string-field", .reason = "intentionally red reproduction (SONNY-6511 item 6, KNOWN_TEST_ISSUES): CREATE GRAPH TYPE refuses a type keyword (STRING, INTEGER, ...) as a field type; the fix is in src/gql/parser.zig, another lane's file in this sweep; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6297-allocation-failure-sweep", .reason = "intentionally red reproduction (SONNY-6297, KNOWN_TEST_ISSUES): statement shapes still leak on allocation-failure paths; compiled by test-compile; register it through shardDep in the commit that makes every shape clean" },
 };
 
@@ -12856,6 +12857,15 @@ pub fn build(b: *std.Build) void {
     // SONNY-2848: intentionally RED TDD reproduction (docs/KNOWN_TEST_ISSUES.md):
     // kept out of `shardDep` until the commit that fixes it; compiled by
     // `test-compile` meanwhile.
+    // SONNY-6511 item 6: intentionally red reproduction, out of the aggregate
+    // (see not_in_aggregate_steps); register through shardDep with the fix.
+    const sonny6511_gt_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6511_graph_type_string_field.zig"), .target = target, .optimize = optimize });
+    sonny6511_gt_mod.addImport("geode", root_mod);
+    const sonny6511_gt_tests = b.addTest(.{ .root_module = sonny6511_gt_mod });
+    const run_sonny6511_gt_tests = b.addRunArtifact(sonny6511_gt_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6511_gt_tests.step);
+    b.step("test-sonny6511-graph-type-string-field", "Run SONNY-6511 item 6 red reproduction (CREATE GRAPH TYPE T AS { x STRING } is refused: the parser takes only an identifier as a field type, and STRING, INTEGER, BOOLEAN, FLOAT, DATE are keywords)").dependOn(&run_sonny6511_gt_tests.step);
+
     const sonny2848_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2848_tenant_subquery_aggregation.zig"), .target = target, .optimize = optimize });
     sonny2848_mod.addImport("geode", root_mod);
     sonny2848_mod.addImport("rls", rls_mod);
