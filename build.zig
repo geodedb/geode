@@ -11190,6 +11190,20 @@ pub fn build(b: *std.Build) void {
     const sonny1335_step = b.step("test-sonny1335-profile-access-path", "Run SONNY-1335 regression (PROFILE names an index only when the executor seeked a real catalog btree/hash index, and that name is listed by SHOW INDEXES; an unindexed property, an index on another label or property, a fulltext index, a dropped index, an AND the executor scans, and a tenant-bound version-1 profile all report a scan, never \"heuristic_index\"; gRPC in process)");
     sonny1335_step.dependOn(&run_sonny1335_tests.step);
 
+    // SONNY-6276: EXPLAIN describes the access path the executor takes, the one PROFILE reports. See tests/test_sonny6276_explain_access_path.zig.
+    const sonny6276_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6276_explain_access_path.zig"), .target = target, .optimize = optimize });
+    sonny6276_test_mod.link_libc = true;
+    sonny6276_test_mod.addImport("geode", root_mod);
+    sonny6276_test_mod.addImport("schema", schema_mod);
+    sonny6276_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6276_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6276_test_mod.addImport("logging", logging_mod);
+    const sonny6276_tests = b.addTest(.{ .root_module = sonny6276_test_mod });
+    const run_sonny6276_tests = b.addRunArtifact(sonny6276_tests);
+    shardDep(test_step, &run_sonny6276_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6276_step = b.step("test-sonny6276-explain-access-path", "Run SONNY-6276 regression (EXPLAIN says IndexSeek exactly where PROFILE reports the executor seeked a catalog btree/hash index: not for a fulltext index, an index on another label or property, an equality under an AND, a dropped index, or the tenant-bound legacy executor; no U:HeuristicIndexSelection flag for a plain equality; gRPC in process)");
+    sonny6276_step.dependOn(&run_sonny6276_tests.step);
+
     // SONNY-3181, SONNY-3189: an operator chain longer than the parser's cap
     // (max_expr_links) is refused with 42000; up to it, the query analysis,
     // the printer and the evaluator walk chains with loops. gRPC in process

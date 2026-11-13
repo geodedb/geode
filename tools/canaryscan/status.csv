@@ -5146,6 +5146,7 @@ REQ-SONNY-6273-DROP-POLICY-ATOMIC,GPS Policy Persistence,Regression,TESTED,tests
 REQ-SONNY-6274-FLE-CATALOG-NO-TMP,FieldLevelEncryption,CatalogPath,TESTED,src/schema/fle_catalog.zig,tests/test_sonny6274_fle_catalog_no_tmp.zig,,security,2026-11-11
 REQ-SONNY-6274-FLE-CATALOG-NO-TMP,FieldLevelEncryption,PrivateFileWrite,TESTED,src/storage/tde_file_encryption.zig,tests/test_sonny6274_fle_catalog_no_tmp.zig,,security,2026-11-11
 REQ-SONNY-6274-FLE-CATALOG-NO-TMP,FieldLevelEncryption,Regression,TESTED,tests/test_sonny6274_fle_catalog_no_tmp.zig,tests/test_sonny6274_fle_catalog_no_tmp.zig,,security,2026-11-11
+REQ-SONNY-6276-EXPLAIN-ACCESS-PATH,EXPLAIN,Regression,TESTED,tests/test_sonny6276_explain_access_path.zig,tests/test_sonny6276_explain_access_path.zig,,engine,2026-11-13
 REQ-SONNY-6278-CUSTOM-ROLE-LIFETIME,GQL Auth DDL,CustomRoleStoreOwnsMemory,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6278_custom_role_lifetime.zig,,security,2026-11-11
 REQ-SONNY-6278-CUSTOM-ROLE-LIFETIME,GQL Auth DDL,Regression,TESTED,tests/test_sonny6278_custom_role_lifetime.zig,tests/test_sonny6278_custom_role_lifetime.zig,,security,2026-11-11
 REQ-SONNY-6281-EXISTENCE-CONSTRAINTS,ConstraintEnforcement,CatalogKinds,TESTED,src/schema/catalog.zig,tests/test_sonny6281_existence_constraints.zig,,catalog,2026-11-12

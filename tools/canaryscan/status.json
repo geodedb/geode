@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:01:04.934327169Z",
+  "generated_at": "2026-11-13T15:06:19.149103565Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -80386,6 +80386,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6276-EXPLAIN-ACCESS-PATH",
+      "features": [
+        {
+          "feature": "EXPLAIN",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6276_explain_access_path.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6276_explain_access_path.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6278-CUSTOM-ROLE-LIFETIME",
       "features": [
         {
@@ -94445,7 +94464,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4927
+      "TESTED": 4928
     },
     "by_aspect": {
       "2PC": 3,
@@ -97596,7 +97615,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 319,
+      "Regression": 320,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
