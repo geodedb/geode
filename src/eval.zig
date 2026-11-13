@@ -579,6 +579,8 @@ const truthy = value_types.truthy;
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
 const type_promotion = @import("eval/type_promotion.zig");
 const value_order = @import("execution/value_order.zig");
+const temporal_ops = @import("eval/temporal_ops.zig");
+const canonical_string = @import("unicode/canonical_string.zig");
 const decimal_text = @import("types/decimal_text.zig");
 
 // CANARY: REQ=REQ-EVAL-REFACTOR-001; FEATURE="EvalExpr Refactoring"; ASPECT=CallHandlersImport; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
@@ -743,19 +745,13 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
             // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-            // Date + Interval: Add months and days from interval to date
-            // Date + Interval (either order): the months, the day clamped to
-            // the target month, then the days. SONNY-2769: the month and day
-            // arithmetic was i32 and aborted the server past it
-            // (`DATE '2026-01-01' + duration('P2147483647D')`); a date past the
-            // day range is 22003.
-            if ((l == .Date and r == .Interval) or (l == .Interval and r == .Date)) {
-                const date = if (l == .Date) l.Date else r.Date;
-                const interval = if (l == .Interval) l.Interval else r.Interval;
-                const days = @import("types/datetime.zig").Date.addMonthsDays(date.days_since_epoch, interval.months, interval.days) catch
-                    return EvalError.IntegerOverflow;
-                break :blk .{ .Date = .{ .days_since_epoch = days } };
-            }
+            // An instant (date, time, zoned time, local or zoned datetime)
+            // plus a duration, in either order, and a duration plus a
+            // duration (SONNY-2797; only Date + Interval was implemented):
+            // the months, the day clamped to the target month, then the
+            // day-to-second part. SONNY-2769: a result past the range is
+            // 22003.
+            if (try temporal_ops.evalTemporal(.Add, l, r)) |v| break :blk v;
             return EvalError.TypeMismatch;
         },
         .Sub => blk2: {
@@ -779,13 +775,9 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
             }
             // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-            // Date - Interval: Subtract months and days from interval
-            if (l == .Date and r == .Interval) {
-                // SONNY-2769: see Date + Interval.
-                const days = @import("types/datetime.zig").Date.addMonthsDays(l.Date.days_since_epoch, -@as(i64, r.Interval.months), -@as(i64, r.Interval.days)) catch
-                    return EvalError.IntegerOverflow;
-                break :blk2 .{ .Date = .{ .days_since_epoch = days } };
-            }
+            // An instant minus a duration, a duration minus a duration, and
+            // the duration between two instants of one type (SONNY-2797).
+            if (try temporal_ops.evalTemporal(.Sub, l, r)) |v| break :blk2 v;
             return EvalError.TypeMismatch;
         },
         .Mul => blk3: {
@@ -808,6 +800,8 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const prod = std.math.mul(i128, ld.coeff, rd.coeff) catch return EvalError.DecimalOverflow;
                 break :blk3 .{ .Decimal = .{ .coeff = prod, .scale = res_scale } };
             }
+            // A duration times a number, either order (SONNY-2797).
+            if (try temporal_ops.evalTemporal(.Mul, l, r)) |v| break :blk3 v;
             return EvalError.TypeMismatch;
         },
         .Div => blk4: {
@@ -844,6 +838,8 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
 
                 break :blk4 .{ .Decimal = .{ .coeff = quotient, .scale = @intCast(result_scale) } };
             }
+            // A duration divided by a number (SONNY-2797).
+            if (try temporal_ops.evalTemporal(.Div, l, r)) |v| break :blk4 v;
             return EvalError.TypeMismatch;
         },
         .Mod => blk_mod: {
@@ -883,27 +879,21 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if (exactNumber(l)) |a| {
                 if (exactNumber(r)) |b| break :blk5 .{ .Bool = cmpToBool(op, @intCast(value_order.compareNumbers(a, b))) };
             }
-            // Float-promoted numeric comparison. The arm set above covers the
-            // EXACT integer/decimal pairings; there was no float branch at all,
-            // so any comparison touching a Real/Double fell through to
-            // TypeMismatch — and after a3d4726d made avg() always produce
-            // Double, `WITH avg(x) AS a WHERE a > k` silently emptied (the
-            // post-WITH filter swallows eval errors into row exclusion).
-            // Promote to f64 only when a float is actually involved, so the
-            // exact arms keep integer/decimal comparisons precise.
-            if (l == .Real or l == .Double or r == .Real or r == .Double) {
-                if (numericValueAsF64(l)) |lf| {
-                    if (numericValueAsF64(r)) |rf| {
-                        break :blk5 .{ .Bool = switch (op) {
-                            .Eq => lf == rf,
-                            .Ne => lf != rf,
-                            .Lt => lf < rf,
-                            .Le => lf <= rf,
-                            .Gt => lf > rf,
-                            .Ge => lf >= rf,
-                            else => false,
-                        } };
-                    }
+            // CANARY: REQ=REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY; FEATURE="ValueOrdering"; ASPECT=OneNumericEqualityRule; STATUS=TESTED; TEST=tests/test_sonny2807_exact_numeric_equality.zig; OWNER=eval; UPDATED=2026-11-13
+            // A comparison touching a REAL or a DOUBLE. SONNY-2807: by exact
+            // numerical value too (ISO/IEC 39075:2024 19.3 GR 3a: numbers
+            // "are compared with respect to their numerical values"), as
+            // GROUP BY, DISTINCT, ORDER BY, an inline map, MERGE and the exact
+            // index seek compare them (value_order). The exact operand was
+            // converted to f64, so DOUBLE 0.1 = DECIMAL 0.1 was TRUE (the
+            // double is 0.1000000000000000055...) and past 2^53 an integer
+            // equalled the double nearest it, while the same two values were
+            // two GROUP BY groups and an inline map told them apart. NaN keeps
+            // IEEE 754 semantics: it is equal to, and ordered against, nothing.
+            if (value_order.numberOf(l)) |a| {
+                if (value_order.numberOf(r)) |b| {
+                    if (isNanNumber(a) or isNanNumber(b)) break :blk5 .{ .Bool = op == .Ne };
+                    break :blk5 .{ .Bool = cmpToBool(op, @intCast(value_order.compareNumbers(a, b))) };
                 }
             }
             if (l == .Str and r == .Str) {
@@ -928,12 +918,10 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                     // BOTH to NFC (a non-ASCII string may normalize to a different form, so we
                     // must never shortcut unless BOTH operands are ASCII).
                     if (@import("builtin").is_test) nfc_fallback_count += 1;
-                    const unicode = @import("unicode/geode_unicode.zig");
-                    const ln = unicode.nfcNormalize(alloc, l.Str) catch return EvalError.Unsupported;
-                    defer alloc.free(ln);
-                    const rn = unicode.nfcNormalize(alloc, r.Str) catch return EvalError.Unsupported;
-                    defer alloc.free(rn);
-                    break :nfc_blk std.mem.order(u8, ln, rn);
+                    // SONNY-3055: full UAX #15 NFC (canonical_string), the
+                    // form every key, index and equality shares. The helper
+                    // here knew two characters (é and É).
+                    break :nfc_blk canonical_string.order(alloc, l.Str, r.Str) catch return EvalError.OutOfMemory;
                 };
                 return .{ .Bool = switch (op) {
                     .Eq => ord == .eq,
@@ -2299,93 +2287,19 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
         return extracted;
     }
 
-    // Handle direct Date value property access (from date() function)
-    if (target == .Date) {
-        const datetime_module = @import("types/datetime.zig");
-        const ymd = datetime_module.Date.dateFromDays(target.Date.days_since_epoch);
+    // CANARY: REQ=REQ-SONNY-2796-TEMPORAL-FIELDS; FEATURE="DateTimeFunctions"; ASPECT=FieldsBefore1970; STATUS=TESTED; TEST=tests/test_sonny2796_temporal_fields.zig; OWNER=datetime; UPDATED=2026-11-13
+    // The fields of a date, a time, a zoned time, a local or a zoned datetime
+    // (plain or extended form). SONNY-2796: a zoned datetime's time of day
+    // was @rem of its microseconds since the epoch, negative before 1970
+    // (`datetime('1969-12-31T23:30:15Z').hour` was -1, `.minute` -30), and a
+    // local datetime or a plain zoned datetime (`timestamp()`,
+    // `timestamptz()`) and a zoned time had no fields (NULL).
+    if (temporalField(target, field)) |v| return v;
 
-        if (std.mem.eql(u8, field, "year")) {
-            return Value{ .Int = ymd.year };
-        } else if (std.mem.eql(u8, field, "month")) {
-            return Value{ .Int = ymd.month };
-        } else if (std.mem.eql(u8, field, "day")) {
-            return Value{ .Int = ymd.day };
-        }
-    }
-
-    // Handle direct Time value property access (from time() function)
-    if (target == .Time) {
-        const hours = @divFloor(target.Time.micros_since_midnight, 3600_000_000);
-        const minutes = @divFloor(@rem(target.Time.micros_since_midnight, 3600_000_000), 60_000_000);
-        const seconds = @divFloor(@rem(target.Time.micros_since_midnight, 60_000_000), 1_000_000);
-
-        if (std.mem.eql(u8, field, "hour")) {
-            return Value{ .Int = @intCast(hours) };
-        } else if (std.mem.eql(u8, field, "minute")) {
-            return Value{ .Int = @intCast(minutes) };
-        } else if (std.mem.eql(u8, field, "second")) {
-            return Value{ .Int = @intCast(seconds) };
-        }
-    }
-
-    // If target is an ExtValue, handle datetime property access
+    // If target is an ExtValue, handle JSON member access
     if (target == .ExtValue) {
         const ext = target.ExtValue;
         switch (ext) {
-            .TimestampTZ => |ts| {
-                // Extract date and time components from timestamp
-                const days = @divFloor(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
-                const time_micros = @rem(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
-
-                // Get date components
-                const datetime_module = @import("types/datetime.zig");
-                const date = datetime_module.Date{ .days_since_epoch = @intCast(days) };
-                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                // Get time components
-                const hours = @divFloor(time_micros, 3600_000_000);
-                const minutes = @divFloor(@rem(time_micros, 3600_000_000), 60_000_000);
-                const seconds = @divFloor(@rem(time_micros, 60_000_000), 1_000_000);
-
-                if (std.mem.eql(u8, field, "year")) {
-                    return Value{ .Int = ymd.year };
-                } else if (std.mem.eql(u8, field, "month")) {
-                    return Value{ .Int = ymd.month };
-                } else if (std.mem.eql(u8, field, "day")) {
-                    return Value{ .Int = ymd.day };
-                } else if (std.mem.eql(u8, field, "hour")) {
-                    return Value{ .Int = @intCast(hours) };
-                } else if (std.mem.eql(u8, field, "minute")) {
-                    return Value{ .Int = @intCast(minutes) };
-                } else if (std.mem.eql(u8, field, "second")) {
-                    return Value{ .Int = @intCast(seconds) };
-                }
-            },
-            .Date => |d| {
-                const datetime_module = @import("types/datetime.zig");
-                const ymd = datetime_module.Date.dateFromDays(d.days_since_epoch);
-
-                if (std.mem.eql(u8, field, "year")) {
-                    return Value{ .Int = ymd.year };
-                } else if (std.mem.eql(u8, field, "month")) {
-                    return Value{ .Int = ymd.month };
-                } else if (std.mem.eql(u8, field, "day")) {
-                    return Value{ .Int = ymd.day };
-                }
-            },
-            .Time => |t| {
-                const hours = @divFloor(t.micros_since_midnight, 3600_000_000);
-                const minutes = @divFloor(@rem(t.micros_since_midnight, 3600_000_000), 60_000_000);
-                const seconds = @divFloor(@rem(t.micros_since_midnight, 60_000_000), 1_000_000);
-
-                if (std.mem.eql(u8, field, "hour")) {
-                    return Value{ .Int = @intCast(hours) };
-                } else if (std.mem.eql(u8, field, "minute")) {
-                    return Value{ .Int = @intCast(minutes) };
-                } else if (std.mem.eql(u8, field, "second")) {
-                    return Value{ .Int = @intCast(seconds) };
-                }
-            },
             // CANARY: REQ=REQ-MAP-PROP-003; FEATURE="MapProperties"; ASPECT=JsonMemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // Handle member access on JSON strings (map properties stored as JSON)
             .Json => |json_str| {
@@ -4495,11 +4409,15 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 else => return EvalError.TypeMismatch,
             };
 
-            // Parse the datetime string using the Timestamp parser; accept a
-            // date-only literal ('2024-06-15') as midnight UTC, matching the
-            // date()/time() siblings. A string neither form parses is a
-            // TimeParse data exception, never a swallowed 42883.
+            // A zoned datetime string ('...Z', '...+02:00') gives its instant
+            // (SONNY-2808: the offset was ignored and trailing text accepted);
+            // one with no zone is taken as UTC, and a date-only literal
+            // ('2024-06-15') as midnight UTC. A string none of these parses is
+            // a TimeParse data exception, never a swallowed 42883.
             const micros: i64 = blk: {
+                if (datetime_module.TimestampTZ.fromStr(str)) |tz| {
+                    break :blk tz.micros_since_epoch_utc;
+                } else |_| {}
                 if (datetime_module.Timestamp.fromStr(str)) |ts| {
                     break :blk ts.micros_since_epoch;
                 } else |_| {
@@ -4553,7 +4471,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 else => return null,
             };
 
-            const ts = datetime_module.Timestamp.fromStr(str) catch return null;
+            // SONNY-2808: a malformed string (or one with a zone: a local
+            // datetime has none) is a TimeParse data exception; `return null`
+            // fell through to "unknown function" (42883).
+            const ts = datetime_module.Timestamp.fromStr(str) catch return EvalError.TimeParse;
             const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = ts.micros_since_epoch } };
             return Value{ .ExtValue = tz_ts };
         } else {
@@ -4612,7 +4533,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
 
             const datetime_module = @import("types/datetime.zig");
-            const t = datetime_module.Time.fromStr(str) catch return null;
+            // SONNY-2808: see localdatetime.
+            const t = datetime_module.Time.fromStr(str) catch return EvalError.TimeParse;
 
             const eval_ext = @import("eval_extended.zig");
             const time_val = eval_ext.ExtValue{ .Time = t };
@@ -5339,9 +5261,50 @@ fn concatOperand(alloc: std.mem.Allocator, v: Value, buf: *[64]u8) EvalError![]c
 }
 
 /// An INT, SMALLINT, BIGINT or DECIMAL as an exact number, else null.
+/// The named field of a temporal value, as an INTEGER, or null when `v` is
+/// not a temporal value or has no such field. A zoned datetime is held as its
+/// UTC instant (Geode keeps no displacement), so its fields are UTC's; a zoned
+/// time's are its own time of day.
+fn temporalField(v: Value, field: []const u8) ?Value {
+    const datetime_module = @import("types/datetime.zig");
+    const F = datetime_module.Fields;
+    const fields: F = switch (v) {
+        .Date => |d| F.ofDate(d.days_since_epoch),
+        .Time => |t| F.ofTimeOfDay(t.micros_since_midnight),
+        .TimeTZ => |t| F.ofTimeOfDay(t.time.micros_since_midnight),
+        .Timestamp => |t| F.ofEpochMicros(t.micros_since_epoch),
+        .TimestampTZ => |t| F.ofEpochMicros(t.micros_since_epoch_utc),
+        .ExtValue => |e| switch (e) {
+            .Date => |d| F.ofDate(d.days_since_epoch),
+            .Time => |t| F.ofTimeOfDay(t.micros_since_midnight),
+            .TimeTZ => |t| F.ofTimeOfDay(t.time.micros_since_midnight),
+            .Timestamp => |t| F.ofEpochMicros(t.micros_since_epoch),
+            .TimestampTZ => |t| F.ofEpochMicros(t.micros_since_epoch_utc),
+            else => return null,
+        },
+        else => return null,
+    };
+    const n: ?i64 = blk: {
+        if (std.mem.eql(u8, field, "year")) break :blk fields.year;
+        if (std.mem.eql(u8, field, "month")) break :blk fields.month;
+        if (std.mem.eql(u8, field, "day")) break :blk fields.day;
+        if (std.mem.eql(u8, field, "hour")) break :blk fields.hour;
+        if (std.mem.eql(u8, field, "minute")) break :blk fields.minute;
+        if (std.mem.eql(u8, field, "second")) break :blk fields.second;
+        if (std.mem.eql(u8, field, "millisecond")) break :blk if (fields.microsecond) |us| @divTrunc(us, 1000) else null;
+        if (std.mem.eql(u8, field, "microsecond")) break :blk fields.microsecond;
+        break :blk null;
+    };
+    return if (n) |x| .{ .Int = x } else null;
+}
+
 fn exactNumber(v: Value) ?value_order.Number {
     const n = value_order.numberOf(v) orelse return null;
     return if (n == .exact) n else null;
+}
+
+fn isNanNumber(n: value_order.Number) bool {
+    return n == .float and std.math.isNan(n.float);
 }
 
 // ---------------------------------------------------------------------------
@@ -5782,4 +5745,5 @@ test {
     // file (see build.zig "EVAL CALL-HANDLER UNIT TESTS").
     _ = ts_call_handlers;
     _ = quantifier_call_handlers;
+    _ = temporal_ops; // SONNY-2797
 }

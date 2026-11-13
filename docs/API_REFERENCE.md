@@ -151,8 +151,9 @@ on every write (SONNY-2846):
   key conflicts only when every property is present and equal.
 - **Equality:** the rule MERGE and inline property maps match by: numbers
   by exact value (`1` = `1.0`, `1.5` = `1.50`; a DOUBLE `0.1` is not the
-  decimal `0.1`), strings byte for byte (an NFC and an NFD spelling are two
-  values, though the `=` operator compares them equal), `'1'` is not `1`.
+  decimal `0.1`), strings by their Unicode NFC form (an NFC and an NFD
+  spelling are one value, as the `=` operator compares them; SONNY-3055),
+  `'1'` is not `1`.
 - **Existing data:** `CREATE CONSTRAINT ... IS UNIQUE` (or `NODE KEY`) over
   nodes that already share a value is refused with `23505`, naming how many
   groups of nodes share one; remove the duplicates first.

@@ -4723,6 +4723,10 @@ REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,InMemoryCatalog,TESTED,src/schem
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,ProcessLifetimeIndexManager,TESTED,src/execution/statement_dispatcher.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,Regression,TESTED,tests/test_sonny2795_drop_index_catalog.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,VectorReadersLocked,TESTED,src/execution/statement_dispatcher.zig,tests/test_sonny2795_drop_index_catalog.zig,,catalog,2026-11-11
+REQ-SONNY-2796-TEMPORAL-FIELDS,DateTimeFunctions,FieldsBefore1970,TESTED,src/eval.zig,tests/test_sonny2796_temporal_fields.zig,,datetime,2026-11-13
+REQ-SONNY-2796-TEMPORAL-FIELDS,DateTimeFunctions,FieldsBefore1970,TESTED,tests/test_sonny2796_temporal_fields.zig,,,datetime,2026-11-13
+REQ-SONNY-2797-DURATION-ARITHMETIC,DateIntervalArithmetic,DatetimeDurationOperators,TESTED,src/eval/temporal_ops.zig,tests/test_sonny2797_duration_arithmetic.zig,,eval,2026-11-13
+REQ-SONNY-2797-DURATION-ARITHMETIC,DateIntervalArithmetic,DatetimeDurationOperators,TESTED,tests/test_sonny2797_duration_arithmetic.zig,,,eval,2026-11-13
 REQ-SONNY-2798-OFFLINE-VERIFY-FIRST,OfflineAuthStoreSafety,Regression,TESTED,tests/test_sonny2798_offline_verify.zig,tests/test_sonny2798_offline_verify.zig,,security,2026-09-26
 REQ-SONNY-2798-OFFLINE-VERIFY-FIRST,OfflineAuthStoreSafety,VerifyBeforeChange,TESTED,src/cli/cli_auth_helpers.zig,tests/test_sonny2798_offline_verify.zig,,security,2026-09-26
 REQ-SONNY-2799-FAILED-TXN-ROLLBACK,TransactionManagement,DeferToHandler,TESTED,src/execution.zig,tests/test_sonny2805_txn_sessions.zig,,engine,2026-09-26
@@ -4761,6 +4765,10 @@ REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,ExactIndexCandidates,TESTED,
 REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,Regression,TESTED,tests/test_sonny2806_merge_resolve.zig,tests/test_sonny2806_merge_resolve.zig,,storage,2026-09-27
 REQ-SONNY-2806-MERGE-RESOLVE-EXACT,MergeIdempotency,SettleThroughExactIndex,TESTED,src/graph_store.zig,tests/test_sonny2806_merge_resolve.zig,,storage,2026-09-27
 REQ-SONNY-2806-STORED-PROPERTY-EQUALITY,InlinePropertyMatch,ExactValueOnPersistedPaths,TESTED,src/execution/stored_property_equality.zig,tests/test_sonny2806_exact_property_matching.zig,,execution,2026-09-26
+REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY,ValueOrdering,OneNumericEqualityRule,TESTED,src/eval.zig,tests/test_sonny2807_exact_numeric_equality.zig,,eval,2026-11-13
+REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY,ValueOrdering,OneNumericEqualityRule,TESTED,tests/test_sonny2807_exact_numeric_equality.zig,,,eval,2026-11-13
+REQ-SONNY-2808-TEMPORAL-PARSING,DateTimeFunctions,StrictIso8601Strings,TESTED,src/types/datetime.zig,tests/test_sonny2808_temporal_parsing.zig,,datetime,2026-11-13
+REQ-SONNY-2808-TEMPORAL-PARSING,DateTimeFunctions,StrictIso8601Strings,TESTED,tests/test_sonny2808_temporal_parsing.zig,,,datetime,2026-11-13
 REQ-SONNY-2809-DUPLICATE-CONSTRAINT,ConstraintManagement,DuplicateNameSingleFree,TESTED,tests/test_sonny2809_duplicate_constraint.zig,tests/test_sonny2809_duplicate_constraint.zig,,schema,2026-09-26
 REQ-SONNY-2810-SNAPSHOT-FLOAT,Raft Snapshot Persistence,FloatEncoding,TESTED,src/graph_store.zig,tests/test_sonny2810_snapshot_float.zig,,distributed,2026-11-13
 REQ-SONNY-2810-SNAPSHOT-FLOAT,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny2810_snapshot_float.zig,tests/test_sonny2810_snapshot_float.zig,,distributed,2026-11-13
@@ -4894,6 +4902,8 @@ REQ-SONNY-3046-WITH-BOUND-JOIN,ChainedMatchJoin,FinalAggregate,TESTED,src/execut
 REQ-SONNY-3046-WITH-BOUND-JOIN,ChainedMatchJoin,Regression,TESTED,tests/test_sonny3046_with_bound_variable_join.zig,tests/test_sonny3046_with_bound_variable_join.zig,,engine,2026-11-11
 REQ-SONNY-3046-WITH-BOUND-JOIN,ChainedMatchJoin,SeededJoin,TESTED,src/execution/match_operations.zig,tests/test_sonny3046_with_bound_variable_join.zig,,engine,2026-11-11
 REQ-SONNY-3046-WITH-BOUND-JOIN,ChainedMatchJoin,WithStar,TESTED,src/execution/query_execution.zig,tests/test_sonny3046_with_bound_variable_join.zig,,engine,2026-11-11
+REQ-SONNY-3055-NFC-STRING-IDENTITY,UnicodeEval,CanonicalNfcForm,TESTED,src/unicode/canonical_string.zig,tests/test_sonny3055_nfc_string_identity.zig,,unicode,2026-11-13
+REQ-SONNY-3055-NFC-STRING-IDENTITY,UnicodeEval,Regression,TESTED,tests/test_sonny3055_nfc_string_identity.zig,tests/test_sonny3055_nfc_string_identity.zig,,unicode,2026-11-13
 REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,LateKeyRegistry,TESTED,src/graph_store.zig,tests/test_sonny3056_lean_merge_evicted_holder.zig,,storage,2026-11-12
 REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,PerLabelBackfillFromPostings,TESTED,src/graph_store.zig,tests/test_sonny3056_lean_merge_evicted_holder.zig,,storage,2026-11-12
 REQ-SONNY-3056-LEAN-MERGE-BACKFILL,MergeIdempotency,Regression,TESTED,tests/test_sonny3056_lean_merge_evicted_holder.zig,tests/test_sonny3056_lean_merge_evicted_holder.zig,,storage,2026-11-12
@@ -5521,6 +5531,11 @@ REQ-SONNY-6468-CATALOG-PROCESS-ALLOCATOR,SchemaCatalog,SingletonOnProcessAllocat
 REQ-SONNY-6476-FINGERPRINT-UID,CliSessionStorage,PortableUid,TESTED,src/cli/security/session_storage.zig,src/cli/security/session_storage.zig,,cli,2026-11-13
 REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6476_shell_long_line.zig,,cli,2026-11-13
 REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,tests/test_sonny6476_shell_long_line.zig,,,cli,2026-11-13
+REQ-SONNY-6480-READLINE-NO-ALLOC,QuicClient,ReadLineAllocatesOnlyForALine,TESTED,src/transport/quic.zig,tests/test_sonny6480_readline_alloc.zig,,transport,2026-11-13
+REQ-SONNY-6480-READLINE-NO-ALLOC,QuicClient,ReadLineAllocatesOnlyForALine,TESTED,tests/test_sonny6480_readline_alloc.zig,,,transport,2026-11-13
+REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,src/server/acceptor_watchdog.zig,tests/test_sonny6480_acceptor_watchdog.zig,,transport,2026-11-13
+REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,src/server/main.zig,,,transport,2026-11-13
+REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,tests/test_sonny6480_acceptor_watchdog.zig,,,transport,2026-11-13
 REQ-SONNY-6484-SHELL-UTF8,ShellPlainMode,Utf8PassThrough,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny6484_shell_utf8.zig,,cli,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13

@@ -14,6 +14,7 @@ const value_types = @import("../value_types.zig");
 const value_order = @import("value_order.zig");
 const property_codec = @import("../property_value_codec.zig");
 const ExtValue = @import("../eval_extended.zig").ExtValue;
+const canonical_string = @import("../unicode/canonical_string.zig");
 
 const Value = value_types.Value;
 
@@ -25,7 +26,8 @@ pub fn valuesEqual(a: Value, b: Value) bool {
     // Compare same types
     if (a == .Int and b == .Int) return a.Int == b.Int;
     if (a == .Bool and b == .Bool) return a.Bool == b.Bool;
-    if (a == .Str and b == .Str) return std.mem.eql(u8, a.Str, b.Str);
+    // SONNY-3055: strings by their NFC forms, as `=` compares them.
+    if (a == .Str and b == .Str) return canonical_string.eqlNoAlloc(a.Str, b.Str);
 
     // SONNY-2769 (round 5): two numbers are equal when their exact values
     // are (value_order, the identity GROUP BY and DISTINCT key them by): 1.5
@@ -61,9 +63,9 @@ pub fn valuesEqual(a: Value, b: Value) bool {
     if (b == .List and a == .ExtValue and a.ExtValue == .List) return listEqualsExtList(b.List, a.ExtValue.List);
 
     // String types
-    if (a == .Char and b == .Char) return std.mem.eql(u8, a.Char.data, b.Char.data);
-    if (a == .Varchar and b == .Varchar) return std.mem.eql(u8, a.Varchar.data, b.Varchar.data);
-    if (a == .Text and b == .Text) return std.mem.eql(u8, a.Text, b.Text);
+    if (a == .Char and b == .Char) return canonical_string.eqlNoAlloc(a.Char.data, b.Char.data);
+    if (a == .Varchar and b == .Varchar) return canonical_string.eqlNoAlloc(a.Varchar.data, b.Varchar.data);
+    if (a == .Text and b == .Text) return canonical_string.eqlNoAlloc(a.Text, b.Text);
     if (a == .Bytea and b == .Bytea) return std.mem.eql(u8, a.Bytea, b.Bytea);
     if (a == .Json and b == .Json) return std.mem.eql(u8, a.Json, b.Json);
     if (a == .Jsonb and b == .Jsonb) return std.mem.eql(u8, a.Jsonb.data, b.Jsonb.data);

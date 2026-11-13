@@ -136,7 +136,9 @@
 - **Tag**: `0x29`
 - **Precision**: Microseconds
 - **Format**: "HH:MM:SS[.us]"
-- **Constructor**: `Time("HH:MM:SS[.us]")`
+- **Constructor**: `Time("HH:MM[:SS[.us]]")`; a string with a zone
+  (`Z`, `+HH:MM`, `-HH:MM`) gives a TimeTZ that keeps its offset; trailing
+  text is a TimeParse error (SONNY-2808)
 
 #### TimeTZ
 
@@ -158,14 +160,19 @@
 - **Tag**: `0x2C`
 - **Storage**: Always UTC internally
 - **Format**: ISO-8601 with timezone
-- **Constructor**: `TimestampTZ("YYYY-MM-DD HH:MM:SS[.us] [±HH:MM]")`
+- **Constructor**: `TimestampTZ("YYYY-MM-DDTHH:MM:SS[.us](Z|±HH:MM)")`; the
+  zone designator ends the string. `datetime(str)` takes the same string
+  (its offset gives the instant), or one without a zone (read as UTC), or a
+  date (midnight UTC) (SONNY-2808)
 
 #### Interval
 
 - **Storage**: Tag + 4 bytes months + 4 bytes days + 8 bytes microseconds
 - **Tag**: `0x2D`
 - **Components**: months, days, microseconds
-- **Format**: ISO-8601 duration "P1Y2M3DT4H5M6S"
+- **Format**: ISO-8601 duration "P1Y2M3DT4H5M6S"; every component
+  optional, a component may be negative (`P-1D`), seconds may carry a
+  fraction (`PT1.5S`, microsecond precision) (SONNY-2808)
 - **Constructor**: `Interval("P...")` or `MakeInterval(months, days, micros)`
 
 ### Binary and JSON Types
@@ -503,6 +510,24 @@
 
 ### Date/Time Arithmetic
 
+Operators (ISO/IEC 39075:2024 20.26 and 20.28; SONNY-2797):
+
+- `instant + duration`, `duration + instant`, `instant - duration` for a
+  date, time, zoned time, local or zoned datetime: the months as calendar
+  months, the day clamped to the target month (`2024-01-31 + P1M` is
+  `2024-02-29`), then the day-to-second part; a date takes its whole days,
+  a time of day wraps at 24 hours.
+- `duration + duration`, `duration - duration`: part by part, the
+  day-to-second part normalized (`PT20H + PT20H` is `P1DT16H`).
+- `duration * number`, `number * duration`, `duration / number`: a result
+  with a fraction of a month is refused (22023: a month has no fixed length);
+  a fraction of a microsecond is truncated; `/ 0` is 22012.
+- `instant - instant` (one type): the day-to-second duration between them
+  (Geode extension for `DURATION_BETWEEN`); two types are 22G04.
+- A result out of range is 22003.
+
+Functions:
+
 - `date_add(date, interval)` - Add interval to date
 - `date_sub(date, interval)` - Subtract interval
 - `ts_add(timestamp, interval)` - Add to timestamp
@@ -513,6 +538,12 @@
 
 - `date_part(part, date|timestamp)` - Extract year/month/day/hour/etc.
 - `time_part(part, time)` - Extract hour/minute/second
+- Member access `v.year`, `.month`, `.day`, `.hour`, `.minute`, `.second`,
+  `.millisecond`, `.microsecond` on a date, time, zoned time, local or zoned
+  datetime: the fields of the value's ISO 8601 representation, the time of
+  day taken modulo 24 hours (so a datetime before 1970 has hours 0-23); a
+  zoned datetime is held as its UTC instant, so its fields are UTC's; a
+  field the value lacks (`date(...).hour`) is NULL (SONNY-2796).
 
 ## List Functions
 
@@ -685,6 +716,21 @@ distance_haversine(point1, point2)
    - Char ignores trailing spaces
    - Enum compares by ordinal
    - UUID compares bytewise
+   - Numbers (INT, SMALLINT, BIGINT, DECIMAL, REAL, DOUBLE) compare by their
+     exact numerical value, whatever their types (ISO/IEC 39075:2024 19.3,
+     General Rule 3a). `=`, the order operators, IN, GROUP BY, DISTINCT,
+     ORDER BY, joins, inline property maps, MERGE and index seeks share this
+     one rule: `1 = 1.0 = DOUBLE 1.0`, `DOUBLE 0.5 = 0.5`, but the DOUBLE
+     nearest 0.1 (0.1000000000000000055...) is not the DECIMAL 0.1 and is
+     greater than it. NaN equals nothing under `=` (IEEE 754) and is one
+     value for GROUP BY and DISTINCT, sorting after every number
+     (SONNY-2807).
+   - Strings (STRING, TEXT, VARCHAR, CHAR values) compare by the UTF-8 bytes
+     of their Unicode Normalization Form C (UAX #15, Unicode 15.1): a
+     precomposed `'é'` equals `'e'` + U+0301, U+212B ANGSTROM SIGN equals
+     `'Å'`. `=`, the order operators, IN, GROUP BY, DISTINCT, ORDER BY,
+     joins, inline property maps, MERGE, UNIQUE and the index seeks share
+     this one rule; values are stored as written (SONNY-3055).
 
 ## Performance Characteristics
 

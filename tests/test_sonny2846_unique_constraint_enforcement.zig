@@ -17,7 +17,8 @@
 //     same value (no cross-tenant existence oracle), one tenant may not;
 //   * a NULL or missing property is no conflict (SQL: NULLs are distinct);
 //   * values compare as MERGE matches them: 1 = 1.0, '1' <> 1, and strings
-//     byte for byte (an NFC and an NFD spelling are two values);
+//     by their NFC form (an NFC and an NFD spelling are one value,
+//     SONNY-3055);
 //   * a MERGE that matches the holder is fine, one that creates is checked;
 //   * CREATE CONSTRAINT over data that already has duplicates is refused;
 //   * an engine-wide (legacy) row applies in every graph, each graph
@@ -215,10 +216,11 @@ fn exerciseCore(h: *Harness) !void {
     try h.run("CREATE (:P {id: '1'})");
     try h.run("CREATE (:P {id: 1.5})");
     try h.expectViolation("CREATE (:P {id: 1.50})");
-    // NFC 'é' (U+00E9) and NFD 'é' (e + U+0301) are two values to MERGE, so
-    // to UNIQUE as well; the same bytes twice are one.
+    // SONNY-3055: NFC 'é' (U+00E9) and NFD 'é' (e + U+0301) are one value to
+    // MERGE (their NFC forms are equal), so to UNIQUE as well, as are the
+    // same bytes twice.
     try h.run("CREATE (:P {id: '\u{00E9}'})");
-    try h.run("CREATE (:P {id: 'e\u{0301}'})");
+    try h.expectViolation("CREATE (:P {id: 'e\u{0301}'})");
     try h.expectViolation("CREATE (:P {id: '\u{00E9}'})");
 
     // ---- SET of a taken value is refused, and the old value stays ----

@@ -3337,9 +3337,12 @@ pub fn main() !void {
             registry: *runtime_metrics_mod.Registry,
             should_stop: *std.atomic.Value(u32),
             allocator: std.mem.Allocator,
-            // QUIC listener port for the accept-path wedge watchdog (0 = unknown
-            // → watchdog inert). Parsed from `--listen host:port`.
-            quic_port: u16,
+            // The QUIC listener the accept-path wedge watchdog watches: the
+            // transport's bound address (null = unknown, watchdog inert).
+            // SONNY-6480: it was the port parsed from `--listen host:port`,
+            // so `host:0` left the watchdog off, and only the port was
+            // matched (IPv4 only).
+            listener: ?acceptor_watchdog.ListenerAddr,
             // SONNY-2719: the listener's drained-datagram count, the
             // watchdog's progress signal.
             transport: *quic_transport.QuicTransport,
@@ -3348,19 +3351,24 @@ pub fn main() !void {
             // its in-flight reads are cancelled. GEODE_QUIC_STALL_CANCEL_MS.
             conn_stall_threshold_ns: u64,
         };
-        // Resolve the QUIC listener port for the wedge watchdog.
-        const watchdog_quic_port: u16 = blk: {
-            const la = listen_quic orelse break :blk 0;
-            const pcolon = std.mem.lastIndexOfScalar(u8, la, ':') orelse break :blk 0;
-            break :blk std.fmt.parseInt(u16, la[pcolon + 1 ..], 10) catch 0;
+        // CANARY: REQ=REQ-SONNY-6480-WATCHDOG-LISTENER; FEATURE="QUIC High-Concurrency Connection Admission"; ASPECT=WatchesBoundListener; STATUS=TESTED; TEST=tests/test_sonny6480_acceptor_watchdog.zig; OWNER=transport; UPDATED=2026-11-13
+        // The listener the wedge watchdog watches: the bound socket.
+        const watchdog_listener: ?acceptor_watchdog.ListenerAddr = blk: {
+            const st = transport.boundAddress() orelse break :blk null;
+            break :blk acceptor_watchdog.ListenerAddr.fromStorage(&st);
         };
+        if (watchdog_listener) |wl| {
+            std.debug.print("[startup] acceptor watchdog: watching {s} {f} port {d}\n", .{ wl.tableName(), wl, wl.port });
+        } else {
+            std.debug.print("[startup] acceptor watchdog: off (the QUIC listener's address is unknown)\n", .{});
+        }
         const metrics_ctx = try gpa.create(MetricsCtx);
         defer gpa.destroy(metrics_ctx);
         metrics_ctx.* = .{
             .registry = metrics_registry,
             .should_stop = &metrics_should_stop,
             .allocator = gpa,
-            .quic_port = watchdog_quic_port,
+            .listener = watchdog_listener,
             .transport = &transport,
             .conn_stall_threshold_ns = @as(u64, envUsize(gpa, "GEODE_QUIC_STALL_CANCEL_MS", default_conn_stall_cancel_ms, min_conn_stall_cancel_ms, max_conn_stall_cancel_ms)) * std.time.ns_per_ms,
         };
@@ -3522,8 +3530,10 @@ pub fn main() !void {
                     // recovery. Self-restart so the orchestrator recovers it.
                     // See docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md.
                     // CANARY: REQ=REQ-QUIC-ACCEPTOR-WEDGE-WATCHDOG; FEATURE="QUIC High-Concurrency Connection Admission"; ASPECT=AcceptPathWedgeAutoRecovery; STATUS=TESTED; TEST=src/server/acceptor_watchdog.zig; OWNER=transport; UPDATED=2026-06-05
-                    if (wd_cfg.enabled and ctx.quic_port != 0) {
-                        if (acceptor_watchdog.readListenerRxQueue(ctx.quic_port)) |rx| {
+                    // SONNY-6480: not once shutdown has begun (the acceptor
+                    // stops accepting, so queued datagrams are not drained).
+                    if (wd_cfg.enabled and ctx.listener != null and !ctx.transport.isShuttingDown()) {
+                        if (acceptor_watchdog.readListenerRxQueue(ctx.listener.?)) |rx| {
                             const now_ms2: i64 = @intCast(now_ns / std.time.ns_per_ms);
                             // SONNY-2719: with the drained-datagram count, so a
                             // starved or overloaded acceptor that is still
@@ -3531,11 +3541,11 @@ pub fn main() !void {
                             if (wd_tracker.update(rx, ctx.transport.getDatagramsDrained(), now_ms2, wd_cfg) == .restart) {
                                 std.log.err(
                                     "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes stayed >= {d} with no datagram drained for >= {d}ms — the QUIC acceptor is wedged and not draining new connections. Self-restarting so the orchestrator recovers automatically (set GEODE_ACCEPTOR_WATCHDOG_DISABLE=1 to opt out).",
-                                    .{ ctx.quic_port, rx, wd_cfg.rx_threshold_bytes, wd_cfg.deadline_ms },
+                                    .{ ctx.listener.?.port, rx, wd_cfg.rx_threshold_bytes, wd_cfg.deadline_ms },
                                 );
                                 std.debug.print(
                                     "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes, no datagram drained for >= {d}ms; self-restarting for automatic recovery.\n",
-                                    .{ ctx.quic_port, rx, wd_cfg.deadline_ms },
+                                    .{ ctx.listener.?.port, rx, wd_cfg.deadline_ms },
                                 );
                                 // Let the log flush, then exit non-zero so the
                                 // k8s restartPolicy restarts the pod. (This path

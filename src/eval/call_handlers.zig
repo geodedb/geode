@@ -1779,7 +1779,12 @@ pub fn evalAdvancedTypeFunction(
         if (args.len != 1) return null;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = textLike(arg) orelse return Value{ .Null = {} };
-        return Value{ .Time = datetime.Time.fromStr(text) catch return EvalError.TimeParse };
+        // SONNY-2808: a time string with a zone ('10:00:00+01:00',
+        // '10:00:00Z') is a zoned time and keeps its displacement (ISO/IEC
+        // 39075 ZONED_TIME); the offset was dropped. One without is a local
+        // time. Anything else is TimeParse.
+        if (datetime.Time.fromStr(text)) |t| return Value{ .Time = t } else |_| {}
+        return Value{ .TimeTZ = datetime.TimeTZ.fromStr(text) catch return EvalError.TimeParse };
     }
 
     if (std.mem.eql(u8, function_name, "timetz")) {

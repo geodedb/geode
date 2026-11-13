@@ -927,6 +927,19 @@ pub const QuicTransport = struct {
         return if (port != 0) port else self.config.port;
     }
 
+    /// The listening socket's bound address (SONNY-6480: the acceptor
+    /// watchdog watches it), or null before `listen` or if it cannot be read.
+    pub fn boundAddress(self: *QuicTransport) ?std.posix.sockaddr.storage {
+        const ep = self.endpoint orelse return null;
+        const addr = ep.transport.getLocalAddr() catch return null;
+        return addr.storage;
+    }
+
+    /// Whether shutdown has begun (the acceptor stops accepting).
+    pub fn isShuttingDown(self: *QuicTransport) bool {
+        return self.shutting_down.load(.acquire);
+    }
+
     fn pollOnce(self: *QuicTransport, timeout_ms: u32) !api.PollStats {
         if (self.endpoint) |ep| {
             const timeout_i32: i32 = if (timeout_ms > std.math.maxInt(i32))
@@ -1931,9 +1944,11 @@ pub const QuicStream = struct {
         }
     }
 
+    /// SONNY-6480: as `QuicClientStream.readLineWithInterrupt`, the line
+    /// grows with the bytes read; a call that reads nothing allocates nothing.
     pub fn readLine(self: *QuicStream, max_size: usize) ![]u8 {
-        var temp_buf = try self.allocator.alloc(u8, max_size);
-        defer self.allocator.free(temp_buf);
+        var line: std.ArrayList(u8) = .empty;
+        defer line.deinit(self.allocator);
         var pos: usize = 0;
         var retry_count: usize = 0;
         const max_retries: usize = 100; // Max 100 retries = 500ms wait time
@@ -1967,7 +1982,7 @@ pub const QuicStream = struct {
                 return error.UnexpectedEndOfStream;
             }
 
-            temp_buf[pos] = byte[0];
+            try line.append(self.allocator, byte[0]);
             pos += 1;
             retry_count = 0; // Reset retry count when we successfully read a byte
 
@@ -1976,11 +1991,8 @@ pub const QuicStream = struct {
 
         if (pos == 0) return error.EndOfStream;
 
-        const result = try self.allocator.alloc(u8, pos);
-        @memcpy(result, temp_buf[0..pos]);
-
         // GAP-0200: Debug prints removed from hot path for performance
-        return result;
+        return line.toOwnedSlice(self.allocator);
     }
 
     pub fn close(self: *QuicStream) void {
@@ -2806,9 +2818,15 @@ pub const QuicClientStream = struct {
 
     /// readLine with optional interrupt checking callback
     /// If interrupt_check returns true, returns error.Interrupted
+    // CANARY: REQ=REQ-SONNY-6480-READLINE-NO-ALLOC; FEATURE="QuicClient"; ASPECT=ReadLineAllocatesOnlyForALine; STATUS=TESTED; TEST=tests/test_sonny6480_readline_alloc.zig; OWNER=transport; UPDATED=2026-11-13
+    /// SONNY-6480: the line is collected in a buffer that grows with the
+    /// bytes read, so a call that reads nothing (WouldBlock, Interrupted)
+    /// allocates nothing; it allocated `max_size` (8 KiB from the shell and
+    /// the KMS client) on every call, an mmap/munmap pair per poll retry on
+    /// page_allocator.
     pub fn readLineWithInterrupt(self: *QuicClientStream, max_size: usize, interrupt_check: ?*const fn () bool) ![]u8 {
-        var temp_buf = try self.allocator.alloc(u8, max_size);
-        defer self.allocator.free(temp_buf);
+        var line: std.ArrayList(u8) = .empty;
+        defer line.deinit(self.allocator);
         var pos: usize = 0;
         var retry_count: usize = 0;
         const max_retries: usize = 20; // Max 20 retries = ~100ms, allows frequent interrupt checks
@@ -2855,7 +2873,7 @@ pub const QuicClientStream = struct {
                 continue;
             }
 
-            temp_buf[pos] = byte[0];
+            try line.append(self.allocator, byte[0]);
             pos += 1;
             retry_count = 0; // Reset retry count when we successfully read a byte
 
@@ -2864,9 +2882,7 @@ pub const QuicClientStream = struct {
 
         if (pos == 0) return error.EndOfStream;
 
-        const result = try self.allocator.alloc(u8, pos);
-        @memcpy(result, temp_buf[0..pos]);
-        return result;
+        return line.toOwnedSlice(self.allocator);
     }
 
     pub fn close(self: *QuicClientStream) void {

@@ -2355,6 +2355,128 @@
   `std.atomic.Atomic`) and its helpers had no caller. The live inbound
   cluster RPC path is `handleClusterRpcLocal`, unchanged. No inbound 2PC
   path existed, so no replay check was lost.
+- **The acceptor watchdog watches the listener it serves (SONNY-6480).**
+  The watchdog took its port from the `--listen` text, so `--listen host:0`
+  switched it off; it read only `/proc/net/udp`, so an IPv6 listener was
+  never watched; and it matched a row by port alone, so another socket on
+  the port could be read instead. It now watches the transport's bound
+  address (announced at startup: `[startup] acceptor watchdog: watching udp
+  127.0.0.1 port N`; an IPv6 listener is given as `--listen [::1]:port`),
+  reads `/proc/net/udp6` for an IPv6 listener, matches
+  address and port, and among several sockets on that address the one the
+  process owns; it does not sample once shutdown has begun. **Behaviour
+  change:** the default `GEODE_ACCEPTOR_WATCHDOG_RX_BYTES` drops from 8 MiB to
+  1 (any queued datagram): since SONNY-2719 a restart also needs no datagram
+  drained between samples, so a busy, draining acceptor is never restarted
+  whatever its backlog, while an acceptor wedged with a few connection
+  attempts queued is now restarted within the 30 s deadline (with 8 MiB it
+  never was). `QuicClientStream.readLineWithInterrupt` and
+  `QuicStream.readLine` allocate only for a line they return (an 8 KiB
+  allocation per poll retry before). Regression: `zig build
+  test-sonny6480-acceptor-watchdog` and `test-sonny6480-readline-alloc`.
+- **Temporal strings parse exactly (SONNY-2808).** The time parser read the
+  first eight characters and ignored the rest. **Behaviour change:**
+  `time('10:00:00+01:00')` is the zoned time 10:00:00+01:00 (it was the
+  local time 10:00:00, offset dropped); `datetime('2024-01-01T10:00:00+02:00')`
+  is 2024-01-01T08:00:00Z (the offset was ignored: 10:00Z); trailing text is
+  refused with TimeParse in `time()`, `localtime()`, `timetz()`, `date()`,
+  `datetime()`, `timestamp()`, `timestamptz()` and `localdatetime()`
+  (`time('10:00:00xyz')` parsed); a zone in a local time or local datetime
+  string is refused; `localtime()` and `localdatetime()` of a bad string are
+  TimeParse (they were "unknown function", 42883); `time('10:00')` (reduced
+  precision) is 10:00:00. `duration()` accepts what the GQL duration string
+  grammar allows and it refused: a negative component (`P-1D`) and a
+  fraction of a second (`PT1.5S`). `CAST(<string> AS TIME | TIMESTAMP |
+  DATE)` follows the same rules (a zone or trailing text is 22018). The
+  ticket's third item (an embedded caller's MERGE tagged the default tenant)
+  was already fixed by SONNY-2686; the test pins it. Regression:
+  `zig build test-sonny2808-temporal-parsing`.
+- **Datetime and duration arithmetic (SONNY-2797).** Only `DATE +/-
+  duration` was implemented; every other ISO/IEC 39075:2024 20.26 and 20.28
+  operation was a type mismatch. Now: datetime, local datetime, date, time
+  and zoned time `+`/`-` a duration (and duration `+` instant), months first
+  as calendar months with the day clamped to the target month
+  (`datetime('2024-01-31T10:00:00Z') + duration('P1M')` is
+  2024-02-29T10:00:00Z), then the day-to-second part; a time of day wraps at
+  24 hours; a date takes the whole days (so `date + PT48H` is two days later;
+  it was the same date). Duration `+`/`-` duration (part by part, the
+  day-to-second part normalized: `PT20H + PT20H` = `P1DT16H`), duration `*`
+  number, number `*` duration and duration `/` number (a month count that is
+  not whole, `P1M / 2`, is refused with 22023; a fraction of a microsecond is
+  truncated; `/ 0` is 22012). `instant - instant` of one type is the
+  day-to-second duration between them (a Geode extension for
+  DURATION_BETWEEN; two types are 22G04). Overflow is 22003, as for `DATE +/-
+  duration` (the standard names 22008/22015). Regression: `zig build
+  test-sonny2797-duration-arithmetic` (incl. a fixed-seed property test).
+- **Temporal fields before 1970 (SONNY-2796).** `.hour`, `.minute` and
+  `.second` of a zoned datetime took the time of day with a truncating
+  remainder, negative before 1970: `datetime('1969-12-31T23:30:15Z').hour`
+  was -1 and `.minute` -30; they are now 23 and 30 (the floor modulo of a
+  day; ISO/IEC 39075:2024 20.27 takes the fields of the ISO 8601
+  representation). A local datetime (`timestamp()`), a zoned datetime built
+  by `timestamptz()` and a zoned time (`timetz()`) had no fields (NULL); they
+  now have `year`...`second` (and `millisecond`, `microsecond`) as their
+  kind allows. A zoned datetime is held as its UTC instant, so its fields are
+  UTC's. The ticket's `tde.configure_rotation('x', -1)` is already refused
+  (0A000, SONNY-6342). Regression: `zig build
+  test-sonny2796-temporal-fields`.
+- **One string identity: NFC, on every path (SONNY-3055).** `=` compared
+  two strings by their Unicode Normalization Form C (UAX #15) forms, but its
+  NFC knew two characters (é and É), and everything else that decides string
+  identity compared raw bytes: an inline property map and MERGE, the
+  persisted read paths' matcher, GROUP BY and DISTINCT, the planned read's
+  hash join, the exact node-property index the WHERE and inline-map seeks
+  probe, MERGE's property index and tuple locks, and UNIQUE. So `WHERE n.s =
+  'é'` (precomposed) missed a stored `'e' + U+0301` that `=` called equal,
+  MERGE created a second node, and the two were two groups. Every path now
+  compares, keys and hashes the full NFC form (the `strings` dependency's
+  Unicode 15.1 normalizer; ISO/IEC 39075:2024 19.3 GR 3b compares strings by
+  a collation, and leaves operations on unnormalized strings
+  implementation-defined, IA003). **Behaviour change:**
+  - `RETURN 'Å' = 'Å'` (U+212B ANGSTROM SIGN against U+00C5), Hangul
+    syllables against their jamo, and marks in another order now compare
+    equal (FALSE before); `'e' + U+0301 = 'é'` was already TRUE for `=`.
+  - `MATCH (n) WHERE n.s = 'é'`, `{s: 'é'}`, `IN`, MERGE and UNIQUE find a
+    stored decomposed `'é'` (they did not); GROUP BY, DISTINCT and
+    `count(DISTINCT ...)` make the two forms one group (they were two).
+  - ORDER BY, `<` and `min`/`max` order strings by their NFC bytes: a
+    decomposed `'é'` sorts after `'f'`, as a precomposed one did.
+  - **Upgrade:** the persisted exact index (`prop_exact.idx` GENPIDX6,
+    `prop_rev.idx` GENRVIX3) and the hydration snapshots
+    (`HYDRATION_SNAP_VERSION` 6) change format; files written by an earlier
+    binary are stale and rebuilt on open (a one-time rebuild; no wrong answer
+    is served from an old file). ASCII and NFC strings keep their keys.
+  Regression: `zig build test-sonny3055-nfc-string-identity`.
+- **One numeric equality rule: `=` compares a DOUBLE and an exact number by
+  exact value (SONNY-2807).** ISO/IEC 39075:2024 19.3 (General Rule 3a)
+  compares numbers "with respect to their numerical values". GROUP BY,
+  DISTINCT, ORDER BY, an inline property map, MERGE and the exact index seek
+  already did; `=`, `<>`, `<`, `<=`, `>`, `>=` (and IN, CASE and NULLIF,
+  which use `=`) converted the exact operand to a double instead, so the
+  same two values were equal to `=` and two groups to GROUP BY. They now
+  compare exactly, NaN keeping IEEE semantics (it equals nothing). The
+  planned read's two-pattern hash join (`MATCH (a:T), (b:T) WHERE a.x =
+  b.x`) keys values by the GROUP BY key: it dropped every row whose key was
+  a DECIMAL or an extended value (a DOUBLE parameter, a SMALLINT, a date),
+  never joined an INT with an equal DOUBLE, and let the string `'i:1'` share
+  a key with the integer 1. **Behaviour change** (for a DOUBLE, typically a
+  client float parameter or a stored float property, against a DECIMAL
+  literal such as `0.1`):
+  - `RETURN $d = 0.1` with `$d` the DOUBLE 0.1: TRUE before, FALSE now
+    (the double is 0.1000000000000000055...); `$d > 0.1` FALSE before, TRUE
+    now; `$d IN [0.1]` TRUE before, FALSE now.
+  - `MATCH (n) WHERE n.x = 0.1` no longer returns a node whose x is the
+    DOUBLE 0.1 (it already did not match `{x: 0.1}` or group with 0.1).
+    To compare with a double, compare with a double (`n.x = $d`).
+  - `RETURN 9007199254740993 = $d` with `$d` the DOUBLE 2^53: TRUE before,
+    FALSE now (no double holds 2^53 + 1).
+  - A value a double holds exactly is unaffected: `DOUBLE 0.5 = 0.5`,
+    `DOUBLE 1.0 = 1`.
+  - On a persisted session, `MATCH (a:T), (b:T) WHERE a.x = b.x` returns
+    the pairs whose x are equal (it returned none for decimal or DOUBLE
+    properties).
+  Regression: `zig build test-sonny2807-exact-numeric-equality`, and the
+  updated past-2^53 case of `test-sonny2806-exact-property-matching`.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE

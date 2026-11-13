@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:46:02.621821236Z",
+  "generated_at": "2026-11-13T15:26:15.231325516Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -73679,6 +73679,46 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2796-TEMPORAL-FIELDS",
+      "features": [
+        {
+          "feature": "DateTimeFunctions",
+          "aspect": "FieldsBefore1970",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig",
+            "tests/test_sonny2796_temporal_fields.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2796_temporal_fields.zig"
+          ],
+          "benches": [],
+          "owner": "datetime",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2797-DURATION-ARITHMETIC",
+      "features": [
+        {
+          "feature": "DateIntervalArithmetic",
+          "aspect": "DatetimeDurationOperators",
+          "status": "TESTED",
+          "files": [
+            "src/eval/temporal_ops.zig",
+            "tests/test_sonny2797_duration_arithmetic.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2797_duration_arithmetic.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2798-OFFLINE-VERIFY-FIRST",
       "features": [
         {
@@ -74292,6 +74332,46 @@
           "benches": [],
           "owner": "execution",
           "updated": "2026-09-26"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY",
+      "features": [
+        {
+          "feature": "ValueOrdering",
+          "aspect": "OneNumericEqualityRule",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig",
+            "tests/test_sonny2807_exact_numeric_equality.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2807_exact_numeric_equality.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2808-TEMPORAL-PARSING",
+      "features": [
+        {
+          "feature": "DateTimeFunctions",
+          "aspect": "StrictIso8601Strings",
+          "status": "TESTED",
+          "files": [
+            "src/types/datetime.zig",
+            "tests/test_sonny2808_temporal_parsing.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2808_temporal_parsing.zig"
+          ],
+          "benches": [],
+          "owner": "datetime",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -76340,6 +76420,39 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-11-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-3055-NFC-STRING-IDENTITY",
+      "features": [
+        {
+          "feature": "UnicodeEval",
+          "aspect": "CanonicalNfcForm",
+          "status": "TESTED",
+          "files": [
+            "src/unicode/canonical_string.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3055_nfc_string_identity.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "UnicodeEval",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3055_nfc_string_identity.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3055_nfc_string_identity.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -86724,6 +86837,47 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6480-READLINE-NO-ALLOC",
+      "features": [
+        {
+          "feature": "QuicClient",
+          "aspect": "ReadLineAllocatesOnlyForALine",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig",
+            "tests/test_sonny6480_readline_alloc.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6480_readline_alloc.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6480-WATCHDOG-LISTENER",
+      "features": [
+        {
+          "feature": "QUIC High-Concurrency Connection Admission",
+          "aspect": "WatchesBoundListener",
+          "status": "TESTED",
+          "files": [
+            "src/server/acceptor_watchdog.zig",
+            "src/server/main.zig",
+            "tests/test_sonny6480_acceptor_watchdog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6480_acceptor_watchdog.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6484-SHELL-UTF8",
       "features": [
         {
@@ -94398,7 +94552,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4924
+      "TESTED": 4932
     },
     "by_aspect": {
       "2PC": 3,
@@ -94815,6 +94969,7 @@
       "CandidateRowVisibility": 1,
       "CandidateShardReadLocks": 1,
       "CanonicalKeyEncoding": 1,
+      "CanonicalNfcForm": 1,
       "CanonicalRecordHash": 1,
       "CardinalityEstimation": 2,
       "CardinalityPrivacyGuard": 1,
@@ -95228,6 +95383,7 @@
       "DateParsing": 1,
       "DateTime": 1,
       "DateType": 1,
+      "DatetimeDurationOperators": 1,
       "DbConstraints": 1,
       "DbConstraintsLocked": 1,
       "DbIndexes": 1,
@@ -95762,6 +95918,7 @@
       "FederationIntegration": 1,
       "FieldAllowlist": 1,
       "FieldRequiresEncryptionCheck": 1,
+      "FieldsBefore1970": 1,
       "FileAccessAPI": 1,
       "FileCreation": 1,
       "FileEncryption": 1,
@@ -96827,6 +96984,7 @@
       "OneEncryptionIdentity": 1,
       "OneEngine": 1,
       "OneGraphLockAtATime": 1,
+      "OneNumericEqualityRule": 1,
       "OneReadPolicyForNodesAndEdges": 1,
       "OneRequestContextForQuicAndGrpc": 1,
       "OneResolver": 1,
@@ -97483,6 +97641,7 @@
       "ReadGateDecide": 1,
       "ReadGraphList": 2,
       "ReadHolderTracking": 1,
+      "ReadLineAllocatesOnlyForALine": 1,
       "ReadMapPartialFailure": 1,
       "ReadMutationExecuteSplit": 1,
       "ReadOnlyAllowsMatch": 1,
@@ -97545,7 +97704,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 319,
+      "Regression": 320,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -98119,6 +98278,7 @@
       "StressHarnessTeardown": 1,
       "StressTests": 1,
       "StrictCreatePolicy": 1,
+      "StrictIso8601Strings": 1,
       "String": 1,
       "StringFunctions": 4,
       "StringHelpers": 1,
@@ -98495,6 +98655,7 @@
       "WalLsnAnchorAtOpen": 1,
       "WallClockTiming": 1,
       "WatchdogExitCode": 1,
+      "WatchesBoundListener": 1,
       "WebhookSink": 1,
       "WellFormed": 1,
       "WhereClause": 4,
