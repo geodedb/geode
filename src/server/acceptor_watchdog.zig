@@ -116,30 +116,58 @@ pub fn parseUdpRxQueueBytes(proc_net_udp: []const u8, local_port: u16) ?u64 {
 
 pub const Action = enum { ok, restart };
 
-/// Tracks how long the listener rx_queue has stayed continuously above the
-/// threshold. `update` is PURE: feed it the current rx_queue, a monotonic
-/// millisecond clock, and the config; it returns `.restart` once the backlog
-/// has persisted past the deadline. Time is injected so it is deterministically
-/// testable. A reading below the threshold resets the streak.
-pub const WedgeTracker = struct {
-    /// Monotonic ms at which rx_queue first crossed the threshold during the
-    /// current streak, or null when below threshold.
-    high_since_ms: ?i64 = null,
+/// SONNY-2719: the most stall time one sample interval may add. The metrics
+/// loop samples every 5 s; an interval much longer than that means the
+/// watchdog itself did not run (the process was frozen, the host suspended
+/// or starved of CPU), and nothing can be concluded about that span: the
+/// acceptor did not run either.
+pub const max_interval_credit_ms: i64 = 10_000;
 
-    pub fn update(self: *WedgeTracker, rx_queue_bytes: u64, now_ms: i64, cfg: Config) Action {
-        if (!cfg.enabled) {
-            self.high_since_ms = null;
+// CANARY: REQ=REQ-SONNY-2719-PROGRESS-BASED-WEDGE; FEATURE="QUIC High-Concurrency Connection Admission"; ASPECT=StarvationIsNotAWedge; STATUS=TESTED; TEST=tests/test_sonny2719_starved_acceptor_survives.zig; OWNER=transport; UPDATED=2026-11-13
+/// Tracks how long the listener has stayed backlogged with nothing drained.
+/// `update` is PURE: feed it the current rx_queue, the endpoint's running
+/// count of drained datagrams (`QuicTransport.getDatagramsDrained`), a
+/// monotonic millisecond clock and the config; it returns `.restart` once the
+/// acceptor has been backlogged without draining a datagram for the deadline.
+/// Time is injected so it is deterministically testable.
+///
+/// SONNY-2719: the backlog alone is not a wedge. A starved acceptor (a 1-CPU
+/// runner, a throttled container) or an overloaded one keeps a backlog while
+/// it drains it, slower than datagrams arrive; restarting it drops every
+/// connection and helps nothing. So the streak resets whenever a datagram was
+/// drained since the previous sample, or a sample is below the threshold, and
+/// one interval adds at most `max_interval_credit_ms`. A wedged acceptor
+/// drains nothing and is restarted after the deadline, as before.
+pub const WedgeTracker = struct {
+    /// Backlogged, nothing drained, accumulated over consecutive samples.
+    stalled_ms: i64 = 0,
+    last_ms: ?i64 = null,
+    last_drained: u64 = 0,
+    last_high: bool = false,
+
+    pub fn update(self: *WedgeTracker, rx_queue_bytes: u64, drained_total: u64, now_ms: i64, cfg: Config) Action {
+        const prev_ms = self.last_ms;
+        const prev_drained = self.last_drained;
+        const prev_high = self.last_high;
+        const high = cfg.enabled and rx_queue_bytes >= cfg.rx_threshold_bytes;
+        self.last_ms = now_ms;
+        self.last_drained = drained_total;
+        self.last_high = high;
+
+        // Below the threshold (or disabled), or the first backlogged sample
+        // of a streak: nothing to attribute yet.
+        if (!high or !prev_high or prev_ms == null) {
+            self.stalled_ms = 0;
             return .ok;
         }
-        if (rx_queue_bytes < cfg.rx_threshold_bytes) {
-            self.high_since_ms = null;
+        // Drained since the last sample: slow, not wedged.
+        if (drained_total != prev_drained) {
+            self.stalled_ms = 0;
             return .ok;
         }
-        const since = self.high_since_ms orelse blk: {
-            self.high_since_ms = now_ms;
-            break :blk now_ms;
-        };
-        if (now_ms -| since >= cfg.deadline_ms) return .restart;
+        const interval = std.math.clamp(now_ms -| prev_ms.?, 0, max_interval_credit_ms);
+        self.stalled_ms +|= interval;
+        if (self.stalled_ms >= cfg.deadline_ms) return .restart;
         return .ok;
     }
 };
@@ -218,30 +246,70 @@ test "WedgeTracker: sustained backlog past the deadline triggers restart" {
     const cfg = Config{ .rx_threshold_bytes = 1000, .deadline_ms = 10_000 };
     var t = WedgeTracker{};
     // First high reading: streak starts, no restart yet.
-    try std.testing.expectEqual(Action.ok, t.update(5000, 1_000, cfg));
-    // Still high but inside the deadline.
-    try std.testing.expectEqual(Action.ok, t.update(5000, 9_000, cfg));
-    // High for >= deadline -> restart.
-    try std.testing.expectEqual(Action.restart, t.update(5000, 11_001, cfg));
+    try std.testing.expectEqual(Action.ok, t.update(5000, 7, 1_000, cfg));
+    // Still high, nothing drained, but inside the deadline.
+    try std.testing.expectEqual(Action.ok, t.update(5000, 7, 9_000, cfg));
+    // High with nothing drained for >= deadline -> restart.
+    try std.testing.expectEqual(Action.restart, t.update(5000, 7, 11_001, cfg));
 }
 
 test "WedgeTracker: a dip below the threshold resets the streak (no false restart)" {
     const cfg = Config{ .rx_threshold_bytes = 1000, .deadline_ms = 10_000 };
     var t = WedgeTracker{};
-    try std.testing.expectEqual(Action.ok, t.update(5000, 1_000, cfg));
-    try std.testing.expectEqual(Action.ok, t.update(5000, 9_000, cfg));
+    try std.testing.expectEqual(Action.ok, t.update(5000, 0, 1_000, cfg));
+    try std.testing.expectEqual(Action.ok, t.update(5000, 0, 9_000, cfg));
     // Drained — reset.
-    try std.testing.expectEqual(Action.ok, t.update(0, 9_500, cfg));
+    try std.testing.expectEqual(Action.ok, t.update(0, 0, 9_500, cfg));
     // Backs up again; the deadline restarts from here, so a reading that would
     // have tripped the old streak does NOT restart.
-    try std.testing.expectEqual(Action.ok, t.update(5000, 12_000, cfg));
-    try std.testing.expectEqual(Action.ok, t.update(5000, 21_000, cfg));
-    try std.testing.expectEqual(Action.restart, t.update(5000, 22_001, cfg));
+    try std.testing.expectEqual(Action.ok, t.update(5000, 0, 12_000, cfg));
+    try std.testing.expectEqual(Action.ok, t.update(5000, 0, 21_000, cfg));
+    try std.testing.expectEqual(Action.restart, t.update(5000, 0, 22_001, cfg));
 }
 
 test "WedgeTracker: disabled never restarts" {
     const cfg = Config{ .enabled = false, .rx_threshold_bytes = 1, .deadline_ms = 1 };
     var t = WedgeTracker{};
-    try std.testing.expectEqual(Action.ok, t.update(1_000_000, 1_000, cfg));
-    try std.testing.expectEqual(Action.ok, t.update(1_000_000, 1_000_000, cfg));
+    try std.testing.expectEqual(Action.ok, t.update(1_000_000, 0, 1_000, cfg));
+    try std.testing.expectEqual(Action.ok, t.update(1_000_000, 0, 1_000_000, cfg));
+}
+
+test "SONNY-2719 WedgeTracker: a backlogged acceptor that drains between samples is starved, not wedged" {
+    const cfg = Config{ .rx_threshold_bytes = 1000, .deadline_ms = 10_000 };
+    var t = WedgeTracker{};
+    // Backlogged at every 5 s sample for ten minutes, a few datagrams
+    // drained in each interval: never a restart.
+    var now: i64 = 0;
+    var drained: u64 = 0;
+    while (now <= 600_000) : (now += 5_000) {
+        try std.testing.expectEqual(Action.ok, t.update(8_000_000, drained, now, cfg));
+        drained += 3;
+    }
+    // Then it stops draining with the backlog in place (`now` is the next
+    // 5 s tick): a wedge, restarted after the deadline.
+    drained -= 3;
+    try std.testing.expectEqual(Action.ok, t.update(8_000_000, drained, now, cfg));
+    try std.testing.expectEqual(Action.restart, t.update(8_000_000, drained, now + 5_000, cfg));
+}
+
+test "SONNY-2719 WedgeTracker: a sample interval the watchdog did not run through adds at most the interval credit" {
+    const cfg = Config{ .rx_threshold_bytes = 1000, .deadline_ms = 30_000 };
+    var t = WedgeTracker{};
+    try std.testing.expectEqual(Action.ok, t.update(5000, 9, 0, cfg));
+    // The whole process was frozen for a minute (SIGSTOP, a suspended VM, a
+    // starved host): the acceptor could not drain either.
+    try std.testing.expectEqual(Action.ok, t.update(5000, 9, 60_000, cfg));
+    try std.testing.expectEqual(max_interval_credit_ms, t.stalled_ms);
+    // Running again, it drains: the streak ends.
+    try std.testing.expectEqual(Action.ok, t.update(5000, 50, 65_000, cfg));
+    try std.testing.expectEqual(@as(i64, 0), t.stalled_ms);
+    // A real wedge while the watchdog runs normally is still caught.
+    var now: i64 = 65_000;
+    var action: Action = .ok;
+    while (action == .ok and now < 200_000) {
+        now += 5_000;
+        action = t.update(5000, 50, now, cfg);
+    }
+    try std.testing.expectEqual(Action.restart, action);
+    try std.testing.expectEqual(@as(i64, 95_000), now);
 }

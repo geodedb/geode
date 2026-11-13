@@ -553,6 +553,13 @@ pub const QuicTransport = struct {
     /// would-block loop for another iteration. Surface via the
     /// `quic_poll_overrun_total` gauge.
     poll_overrun_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    // CANARY: REQ=REQ-SONNY-2719-DATAGRAMS-DRAINED; FEATURE="QUIC High-Concurrency Connection Admission"; ASPECT=AcceptorProgressCounter; STATUS=TESTED; TEST=tests/test_sonny2719_starved_acceptor_survives.zig; OWNER=transport; UPDATED=2026-11-13
+    /// SONNY-2719: datagrams this endpoint has read off its socket, over
+    /// every server-side poll (the poll loop and the accept path). The
+    /// acceptor wedge watchdog's progress signal: a wedged acceptor drains
+    /// nothing; a starved or overloaded one drains slower than datagrams
+    /// arrive, and is not wedged.
+    datagrams_drained: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Last wall-clock ns a slow-poll warning was emitted (rate limiting).
     /// See shouldWarnSlowPoll and observePollCycle. Updated lock-free via CAS.
     slow_poll_last_warn_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
@@ -929,6 +936,7 @@ pub const QuicTransport = struct {
             // quiet socket wakes every blocked handler every 500us.
             const stats = try ep.pollWithStats(timeout_i32);
             if (stats.packets_processed > 0) {
+                _ = self.datagrams_drained.fetchAdd(stats.packets_processed, .monotonic);
                 self.poll_sync.notifyPoll();
             }
             return stats;
@@ -1208,14 +1216,20 @@ pub const QuicTransport = struct {
         return self.poll_overrun_total.load(.monotonic);
     }
 
+    /// SONNY-2719: datagrams drained off this endpoint's socket so far.
+    pub fn getDatagramsDrained(self: *QuicTransport) u64 {
+        return self.datagrams_drained.load(.monotonic);
+    }
+
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
         // Gap 0039: refuse new connections the moment shutdown is signalled.
         if (self.shutting_down.load(.acquire)) return null;
         if (self.endpoint) |ep| {
             // QUIC library v0.1.10: poll() is internally thread-safe
-            ep.poll(0) catch {
+            const stats = ep.pollWithStats(0) catch {
                 return null;
             };
+            _ = self.datagrams_drained.fetchAdd(stats.packets_processed, .monotonic); // SONNY-2719
             self.poll_sync.notifyPoll();
             const conn = api.tryAccept(ep) orelse return null;
             const wrapper = self.allocator.create(QuicConnection) catch return null;

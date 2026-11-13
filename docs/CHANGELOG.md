@@ -820,6 +820,20 @@
   allocator there and leaked every extended value a WHERE read, the
   SONNY-2656 leak). Regression: `zig build
   test-sonny2670-fle-singletons-process-allocator`.
+- **A CPU-starved or overloaded server is slowed, not killed by the acceptor
+  wedge watchdog (SONNY-2719).** The watchdog exited the process with code 70
+  ("ACCEPTOR WEDGE") once the listener's UDP rx_queue had stayed at or above
+  its threshold for the deadline of wall-clock time, so a server that was
+  draining its backlog more slowly than datagrams arrived (a 1-CPU runner, a
+  throttled container, the CI thresholds of 64 KiB) was restarted and lost
+  every connection. A wedge now also requires that no datagram was drained
+  from the socket over the whole deadline (`QuicTransport.getDatagramsDrained`,
+  counted on every server-side poll), and one 5 s sample interval adds at
+  most 10 s to it (a longer gap means the watchdog itself did not run).
+  A wedged acceptor, which drains nothing, is still restarted after the
+  deadline. Regression: `zig build test-sonny2719-starved-acceptor-survives`
+  (a real `geode serve` throttled to 5% of a CPU with a backlogged listener),
+  and the tracker cases in `zig build test-acceptor-watchdog`.
 - **The schema catalog lives for the process; a batch property write
   encrypts each FLE value once (SONNY-6468).** `ensureCatalogInstance` made
   the process-wide catalog on its first caller's allocator, so a request

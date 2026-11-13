@@ -3325,6 +3325,9 @@ pub fn main() !void {
             // QUIC listener port for the accept-path wedge watchdog (0 = unknown
             // → watchdog inert). Parsed from `--listen host:port`.
             quic_port: u16,
+            // SONNY-2719: the listener's drained-datagram count, the
+            // watchdog's progress signal.
+            transport: *quic_transport.QuicTransport,
         };
         // Resolve the QUIC listener port for the wedge watchdog.
         const watchdog_quic_port: u16 = blk: {
@@ -3339,6 +3342,7 @@ pub fn main() !void {
             .should_stop = &metrics_should_stop,
             .allocator = gpa,
             .quic_port = watchdog_quic_port,
+            .transport = &transport,
         };
 
         // PERF-D / #816: park on `should_stop` via futexWaitTimeout instead
@@ -3498,13 +3502,16 @@ pub fn main() !void {
                     if (wd_cfg.enabled and ctx.quic_port != 0) {
                         if (acceptor_watchdog.readListenerRxQueue(ctx.quic_port)) |rx| {
                             const now_ms2: i64 = @intCast(now_ns / std.time.ns_per_ms);
-                            if (wd_tracker.update(rx, now_ms2, wd_cfg) == .restart) {
+                            // SONNY-2719: with the drained-datagram count, so a
+                            // starved or overloaded acceptor that is still
+                            // reading its socket is not taken for a wedge.
+                            if (wd_tracker.update(rx, ctx.transport.getDatagramsDrained(), now_ms2, wd_cfg) == .restart) {
                                 std.log.err(
-                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes stayed >= {d} for >= {d}ms — the QUIC acceptor is wedged and not draining new connections. Self-restarting so the orchestrator recovers automatically (set GEODE_ACCEPTOR_WATCHDOG_DISABLE=1 to opt out).",
+                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes stayed >= {d} with no datagram drained for >= {d}ms — the QUIC acceptor is wedged and not draining new connections. Self-restarting so the orchestrator recovers automatically (set GEODE_ACCEPTOR_WATCHDOG_DISABLE=1 to opt out).",
                                     .{ ctx.quic_port, rx, wd_cfg.rx_threshold_bytes, wd_cfg.deadline_ms },
                                 );
                                 std.debug.print(
-                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes wedged >= {d}ms; self-restarting for automatic recovery.\n",
+                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes, no datagram drained for >= {d}ms; self-restarting for automatic recovery.\n",
                                     .{ ctx.quic_port, rx, wd_cfg.deadline_ms },
                                 );
                                 // Let the log flush, then exit non-zero so the
