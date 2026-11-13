@@ -412,7 +412,7 @@ fn addNodeToLabelMap(node: ast.NodePattern, map: *LabelMap) void {
 
 const geode = @import("../lib.zig");
 
-test "recommend encrypted for password property" {
+test "recommendations: recommend encrypted for password property" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("CREATE (u:User {password: 'x'})", allocator);
     defer result.deinit();
@@ -424,7 +424,7 @@ test "recommend encrypted for password property" {
     try std.testing.expectEqualStrings("geode/suggest-encrypted", recs[0].code);
 }
 
-test "recommend searchable for email property" {
+test "recommendations: recommend searchable for email property" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("INSERT (u:User {email: 'a@b.com'})", allocator);
     defer result.deinit();
@@ -436,7 +436,7 @@ test "recommend searchable for email property" {
     try std.testing.expectEqualStrings("geode/suggest-searchable", recs[0].code);
 }
 
-test "no recommendation for non-sensitive properties" {
+test "recommendations: no recommendation for non-sensitive properties" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("CREATE (p:Product {price: 9.99})", allocator);
     defer result.deinit();
@@ -447,7 +447,7 @@ test "no recommendation for non-sensitive properties" {
     try std.testing.expectEqual(@as(usize, 0), recs.len);
 }
 
-test "recommend index for WHERE equality" {
+test "recommendations: recommend index for WHERE equality" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (n:Person) WHERE n.email = 'x' RETURN n", allocator);
     defer result.deinit();
@@ -463,7 +463,7 @@ test "recommend index for WHERE equality" {
     try std.testing.expect(found_index);
 }
 
-test "recommend fulltext for CONTAINS" {
+test "recommendations: recommend fulltext for CONTAINS" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (n:Article) WHERE n.content CONTAINS 'x' RETURN n", allocator);
     defer result.deinit();
@@ -479,7 +479,7 @@ test "recommend fulltext for CONTAINS" {
     try std.testing.expect(found);
 }
 
-test "recommend vector index for embedding property" {
+test "recommendations: recommend vector index for embedding property" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("CREATE (d:Doc {embedding: [1.0]})", allocator);
     defer result.deinit();
@@ -495,7 +495,7 @@ test "recommend vector index for embedding property" {
     try std.testing.expect(found);
 }
 
-test "recommend path mode for variable-length path" {
+test "recommendations: recommend path mode for variable-length path" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (a)-[*1..5]->(b) RETURN a", allocator);
     defer result.deinit();
@@ -511,7 +511,7 @@ test "recommend path mode for variable-length path" {
     try std.testing.expect(found);
 }
 
-test "recommend coalesce for IS NULL" {
+test "recommendations: recommend coalesce for IS NULL" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (n:Person) WHERE n.nick IS NULL RETURN n", allocator);
     defer result.deinit();
@@ -527,7 +527,7 @@ test "recommend coalesce for IS NULL" {
     try std.testing.expect(found);
 }
 
-test "recommend degree for count relationship" {
+test "recommendations: recommend degree for count relationship" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (n)-[r]->() RETURN n, count(r)", allocator);
     defer result.deinit();
@@ -543,7 +543,7 @@ test "recommend degree for count relationship" {
     try std.testing.expect(found);
 }
 
-test "multiple recommendations for multiple patterns" {
+test "recommendations: multiple recommendations for multiple patterns" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (u:User) WHERE u.email = 'x' RETURN u", allocator);
     defer result.deinit();
@@ -555,9 +555,9 @@ test "multiple recommendations for multiple patterns" {
     try std.testing.expect(recs.len >= 1);
 }
 
-test "recommend encrypted in graph type fields" {
+test "recommendations: recommend encrypted in graph type fields" {
     const allocator = std.testing.allocator;
-    var result = try geode.parseGql("CREATE GRAPH TYPE T (password STRING)", allocator);
+    var result = try geode.parseGql("CREATE GRAPH TYPE T AS { password text }", allocator);
     defer result.deinit();
 
     var engine = RecommendationEngine.init(allocator);
@@ -567,9 +567,9 @@ test "recommend encrypted in graph type fields" {
     try std.testing.expectEqualStrings("geode/suggest-encrypted", recs[0].code);
 }
 
-test "skip recommendation when annotation already present" {
+test "recommendations: skip recommendation when annotation already present" {
     const allocator = std.testing.allocator;
-    var result = try geode.parseGql("CREATE GRAPH TYPE T (password STRING @encrypted)", allocator);
+    var result = try geode.parseGql("CREATE GRAPH TYPE T AS { ssn text @encrypted }", allocator);
     defer result.deinit();
 
     var engine = RecommendationEngine.init(allocator);
@@ -579,26 +579,56 @@ test "skip recommendation when annotation already present" {
     for (recs) |rec| {
         if (std.mem.eql(u8, rec.code, "geode/suggest-encrypted")) {
             // If there's a recommendation for encrypted, it should not be for 'password'
-            try std.testing.expect(std.mem.indexOf(u8, rec.message, "'password'") == null);
+            try std.testing.expect(std.mem.indexOf(u8, rec.message, "'ssn'") == null);
         }
     }
 }
 
-test "isSensitivePropertyName detects high sensitivity" {
+test "recommendations: isSensitivePropertyName detects high sensitivity" {
     try std.testing.expect(isSensitivePropertyName("password") == .high);
     try std.testing.expect(isSensitivePropertyName("PASSWORD") == .high);
     try std.testing.expect(isSensitivePropertyName("api_key") == .high);
     try std.testing.expect(isSensitivePropertyName("ssn") == .high);
 }
 
-test "isSensitivePropertyName detects medium sensitivity" {
+test "recommendations: isSensitivePropertyName detects medium sensitivity" {
     try std.testing.expect(isSensitivePropertyName("email") == .medium);
     try std.testing.expect(isSensitivePropertyName("phone") == .medium);
     try std.testing.expect(isSensitivePropertyName("address") == .medium);
 }
 
-test "isSensitivePropertyName returns null for non-sensitive" {
+test "recommendations: isSensitivePropertyName returns null for non-sensitive" {
     try std.testing.expect(isSensitivePropertyName("name") == null);
     try std.testing.expect(isSensitivePropertyName("price") == null);
     try std.testing.expect(isSensitivePropertyName("count") == null);
+}
+
+fn expectCode(src: []const u8, code: []const u8, needle: []const u8) !void {
+    const allocator = std.testing.allocator;
+    var result = try geode.parseGql(src, allocator);
+    defer result.deinit();
+
+    var engine = RecommendationEngine.init(allocator);
+    defer engine.deinit();
+    const recs = try engine.analyze(result.program);
+    for (recs) |rec| {
+        if (std.mem.eql(u8, rec.code, code) and std.mem.indexOf(u8, rec.message, needle) != null) return;
+    }
+    return error.TestExpectedRecommendation;
+}
+
+test "recommendations: index for ORDER BY property names the label" {
+    try expectCode("MATCH (n:Person) RETURN n ORDER BY n.age", "geode/suggest-index", "CREATE INDEX ON :Person(age)");
+}
+
+test "recommendations: index for FILTER equality" {
+    try expectCode("MATCH (n:Person) FILTER n.age = 30 RETURN n", "geode/suggest-index", "CREATE INDEX ON :Person(age)");
+}
+
+test "recommendations: fulltext for STARTS WITH" {
+    try expectCode("MATCH (n:Article) WHERE n.title STARTS WITH 'x' RETURN n", "geode/suggest-fulltext-index", "STARTS WITH on 'title'");
+}
+
+test "recommendations: WHERE equality names the matched label and property" {
+    try expectCode("MATCH (n:Person) WHERE n.age = 30 RETURN n", "geode/suggest-index", "CREATE INDEX ON :Person(age)");
 }

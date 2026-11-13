@@ -535,6 +535,8 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6494-mcp-validate-recommendations", .reason = "intentionally red TDD reproduction (SONNY-6494 item 1); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6494-recommendations-inline", .reason = "intentionally red TDD reproduction (SONNY-6494 item 1); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
 };
 
@@ -7984,6 +7986,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0516_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
     gap0516_step.dependOn(&run_gap0516_tests.step);
+    // SONNY-6494 (1): MCP `validate` (tools/call through processMessage)
+    // shows each recommendation kind of src/gql/recommendations.zig.
+    const sonny6494_mcp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_mcp_validate_recommendations.zig"), .target = target, .optimize = optimize });
+    sonny6494_mcp_test_mod.addImport("mcp_server", gap0516_server_mod);
+    sonny6494_mcp_test_mod.link_libc = true;
+    const sonny6494_mcp_tests = b.addTest(.{ .root_module = sonny6494_mcp_test_mod });
+    const run_sonny6494_mcp_tests = b.addRunArtifact(sonny6494_mcp_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6494_mcp_tests.step);
+    const sonny6494_mcp_step = b.step("test-sonny6494-mcp-validate-recommendations", "Run SONNY-6494 item 1 regression (MCP validate, through the real tools/call dispatch, shows the index, fulltext-index, coalesce, encrypted, searchable, vector-index, path-mode and degree recommendations on the query shapes that trigger them)");
+    sonny6494_mcp_step.dependOn(&run_sonny6494_mcp_tests.step);
 
     // Task 6 (hybrid-RAG audit spec): MCP server read-only mode. Roots the
     // regression file through src/mcp/server.zig exposed as `mcp_server`,
@@ -16008,6 +16020,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6460_exec_inline_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6460_exec_inline_step = b.step("test-sonny6460-exec-inline", "Run src/exec.zig inline unit tests (grouping, HAVING, ORDER BY, set operations; SONNY-6460)");
     sonny6460_exec_inline_step.dependOn(&run_sonny6460_exec_inline_tests.step);
+    // SONNY-6494 (1): src/gql/recommendations.zig's inline tests (the MCP
+    // `validate` / LSP diagnostics recommendation engine), filtered from the
+    // geode lib module as test-sonny6460-exec-inline does.
+    const sonny6494_rec_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"recommendations:"} });
+    const run_sonny6494_rec_inline_tests = b.addRunArtifact(sonny6494_rec_inline_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6494_rec_inline_tests.step);
+    const sonny6494_rec_inline_step = b.step("test-sonny6494-recommendations-inline", "Run src/gql/recommendations.zig inline unit tests (FLE/index/fulltext/vector/path-mode/coalesce/degree recommendations behind MCP validate and LSP diagnostics; SONNY-6494)");
+    sonny6494_rec_inline_step.dependOn(&run_sonny6494_rec_inline_tests.step);
 
     // SONNY-6460 item 6: every cluster test step binds loopback addresses no
     // other test uses, so the aggregate can run them at the same time.

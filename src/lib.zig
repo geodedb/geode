@@ -977,3 +977,11 @@ test "SONNY-6342 AuthProvider: authn inline test root" {
 test "exec.zig: inline test root" {
     _ = @import("exec.zig");
 }
+
+// SONNY-6494: src/gql/recommendations.zig's inline tests entered no test
+// binary. Named with the "recommendations:" filter of `zig build
+// test-sonny6494-recommendations-inline`, so the filter keeps this block,
+// and with it the file, in discovery.
+test "recommendations: inline test root" {
+    _ = @import("gql/recommendations.zig");
+}
