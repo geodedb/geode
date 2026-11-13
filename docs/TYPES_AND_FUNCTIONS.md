@@ -513,6 +513,12 @@
 
 - `date_part(part, date|timestamp)` - Extract year/month/day/hour/etc.
 - `time_part(part, time)` - Extract hour/minute/second
+- Member access `v.year`, `.month`, `.day`, `.hour`, `.minute`, `.second`,
+  `.millisecond`, `.microsecond` on a date, time, zoned time, local or zoned
+  datetime: the fields of the value's ISO 8601 representation, the time of
+  day taken modulo 24 hours (so a datetime before 1970 has hours 0-23); a
+  zoned datetime is held as its UTC instant, so its fields are UTC's; a
+  field the value lacks (`date(...).hour`) is NULL (SONNY-2796).
 
 ## Distance and Spatial Functions
 

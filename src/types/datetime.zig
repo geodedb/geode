@@ -105,6 +105,44 @@ pub const Date = struct {
     }
 };
 
+/// The fields of a temporal value (SONNY-2796): the calendar date and the
+/// time of day of its ISO 8601 representation. The time of day is the floor
+/// modulo of a day, so a datetime before 1970 has the hours of its day (it
+/// was @rem, negative). A field the value lacks is null.
+pub const Fields = struct {
+    year: ?i64 = null,
+    month: ?i64 = null,
+    day: ?i64 = null,
+    hour: ?i64 = null,
+    minute: ?i64 = null,
+    second: ?i64 = null,
+    microsecond: ?i64 = null,
+
+    pub fn ofDate(days_since_epoch: i32) Fields {
+        const ymd = Date.dateFromDays(days_since_epoch);
+        return .{ .year = ymd.year, .month = ymd.month, .day = ymd.day };
+    }
+
+    pub fn ofTimeOfDay(micros: i64) Fields {
+        const tod = @mod(micros, std.time.us_per_day);
+        return .{
+            .hour = @divFloor(tod, std.time.us_per_hour),
+            .minute = @divFloor(@mod(tod, std.time.us_per_hour), std.time.us_per_min),
+            .second = @divFloor(@mod(tod, std.time.us_per_min), std.time.us_per_s),
+            .microsecond = @mod(tod, std.time.us_per_s),
+        };
+    }
+
+    pub fn ofEpochMicros(micros: i64) Fields {
+        var f = ofTimeOfDay(micros);
+        const date = ofDate(@intCast(@divFloor(micros, std.time.us_per_day)));
+        f.year = date.year;
+        f.month = date.month;
+        f.day = date.day;
+        return f;
+    }
+};
+
 pub const Time = struct {
     micros_since_midnight: i64,
 

@@ -2161,6 +2161,18 @@
 
 ### Fixed
 
+- **Temporal fields before 1970 (SONNY-2796).** `.hour`, `.minute` and
+  `.second` of a zoned datetime took the time of day with a truncating
+  remainder, negative before 1970: `datetime('1969-12-31T23:30:15Z').hour`
+  was -1 and `.minute` -30; they are now 23 and 30 (the floor modulo of a
+  day; ISO/IEC 39075:2024 20.27 takes the fields of the ISO 8601
+  representation). A local datetime (`timestamp()`), a zoned datetime built
+  by `timestamptz()` and a zoned time (`timetz()`) had no fields (NULL); they
+  now have `year`...`second` (and `millisecond`, `microsecond`) as their
+  kind allows. A zoned datetime is held as its UTC instant, so its fields are
+  UTC's. The ticket's `tde.configure_rotation('x', -1)` is already refused
+  (0A000, SONNY-6342). Regression: `zig build
+  test-sonny2796-temporal-fields`.
 - **One string identity: NFC, on every path (SONNY-3055).** `=` compared
   two strings by their Unicode Normalization Form C (UAX #15) forms, but its
   NFC knew two characters (é and É), and everything else that decides string

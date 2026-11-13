@@ -2290,93 +2290,19 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
         return extracted;
     }
 
-    // Handle direct Date value property access (from date() function)
-    if (target == .Date) {
-        const datetime_module = @import("types/datetime.zig");
-        const ymd = datetime_module.Date.dateFromDays(target.Date.days_since_epoch);
+    // CANARY: REQ=REQ-SONNY-2796-TEMPORAL-FIELDS; FEATURE="DateTimeFunctions"; ASPECT=FieldsBefore1970; STATUS=TESTED; TEST=tests/test_sonny2796_temporal_fields.zig; OWNER=datetime; UPDATED=2026-11-13
+    // The fields of a date, a time, a zoned time, a local or a zoned datetime
+    // (plain or extended form). SONNY-2796: a zoned datetime's time of day
+    // was @rem of its microseconds since the epoch, negative before 1970
+    // (`datetime('1969-12-31T23:30:15Z').hour` was -1, `.minute` -30), and a
+    // local datetime or a plain zoned datetime (`timestamp()`,
+    // `timestamptz()`) and a zoned time had no fields (NULL).
+    if (temporalField(target, field)) |v| return v;
 
-        if (std.mem.eql(u8, field, "year")) {
-            return Value{ .Int = ymd.year };
-        } else if (std.mem.eql(u8, field, "month")) {
-            return Value{ .Int = ymd.month };
-        } else if (std.mem.eql(u8, field, "day")) {
-            return Value{ .Int = ymd.day };
-        }
-    }
-
-    // Handle direct Time value property access (from time() function)
-    if (target == .Time) {
-        const hours = @divFloor(target.Time.micros_since_midnight, 3600_000_000);
-        const minutes = @divFloor(@rem(target.Time.micros_since_midnight, 3600_000_000), 60_000_000);
-        const seconds = @divFloor(@rem(target.Time.micros_since_midnight, 60_000_000), 1_000_000);
-
-        if (std.mem.eql(u8, field, "hour")) {
-            return Value{ .Int = @intCast(hours) };
-        } else if (std.mem.eql(u8, field, "minute")) {
-            return Value{ .Int = @intCast(minutes) };
-        } else if (std.mem.eql(u8, field, "second")) {
-            return Value{ .Int = @intCast(seconds) };
-        }
-    }
-
-    // If target is an ExtValue, handle datetime property access
+    // If target is an ExtValue, handle JSON member access
     if (target == .ExtValue) {
         const ext = target.ExtValue;
         switch (ext) {
-            .TimestampTZ => |ts| {
-                // Extract date and time components from timestamp
-                const days = @divFloor(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
-                const time_micros = @rem(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
-
-                // Get date components
-                const datetime_module = @import("types/datetime.zig");
-                const date = datetime_module.Date{ .days_since_epoch = @intCast(days) };
-                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                // Get time components
-                const hours = @divFloor(time_micros, 3600_000_000);
-                const minutes = @divFloor(@rem(time_micros, 3600_000_000), 60_000_000);
-                const seconds = @divFloor(@rem(time_micros, 60_000_000), 1_000_000);
-
-                if (std.mem.eql(u8, field, "year")) {
-                    return Value{ .Int = ymd.year };
-                } else if (std.mem.eql(u8, field, "month")) {
-                    return Value{ .Int = ymd.month };
-                } else if (std.mem.eql(u8, field, "day")) {
-                    return Value{ .Int = ymd.day };
-                } else if (std.mem.eql(u8, field, "hour")) {
-                    return Value{ .Int = @intCast(hours) };
-                } else if (std.mem.eql(u8, field, "minute")) {
-                    return Value{ .Int = @intCast(minutes) };
-                } else if (std.mem.eql(u8, field, "second")) {
-                    return Value{ .Int = @intCast(seconds) };
-                }
-            },
-            .Date => |d| {
-                const datetime_module = @import("types/datetime.zig");
-                const ymd = datetime_module.Date.dateFromDays(d.days_since_epoch);
-
-                if (std.mem.eql(u8, field, "year")) {
-                    return Value{ .Int = ymd.year };
-                } else if (std.mem.eql(u8, field, "month")) {
-                    return Value{ .Int = ymd.month };
-                } else if (std.mem.eql(u8, field, "day")) {
-                    return Value{ .Int = ymd.day };
-                }
-            },
-            .Time => |t| {
-                const hours = @divFloor(t.micros_since_midnight, 3600_000_000);
-                const minutes = @divFloor(@rem(t.micros_since_midnight, 3600_000_000), 60_000_000);
-                const seconds = @divFloor(@rem(t.micros_since_midnight, 60_000_000), 1_000_000);
-
-                if (std.mem.eql(u8, field, "hour")) {
-                    return Value{ .Int = @intCast(hours) };
-                } else if (std.mem.eql(u8, field, "minute")) {
-                    return Value{ .Int = @intCast(minutes) };
-                } else if (std.mem.eql(u8, field, "second")) {
-                    return Value{ .Int = @intCast(seconds) };
-                }
-            },
             // CANARY: REQ=REQ-MAP-PROP-003; FEATURE="MapProperties"; ASPECT=JsonMemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // Handle member access on JSON strings (map properties stored as JSON)
             .Json => |json_str| {
@@ -5330,6 +5256,43 @@ fn concatOperand(alloc: std.mem.Allocator, v: Value, buf: *[64]u8) EvalError![]c
 }
 
 /// An INT, SMALLINT, BIGINT or DECIMAL as an exact number, else null.
+/// The named field of a temporal value, as an INTEGER, or null when `v` is
+/// not a temporal value or has no such field. A zoned datetime is held as its
+/// UTC instant (Geode keeps no displacement), so its fields are UTC's; a zoned
+/// time's are its own time of day.
+fn temporalField(v: Value, field: []const u8) ?Value {
+    const datetime_module = @import("types/datetime.zig");
+    const F = datetime_module.Fields;
+    const fields: F = switch (v) {
+        .Date => |d| F.ofDate(d.days_since_epoch),
+        .Time => |t| F.ofTimeOfDay(t.micros_since_midnight),
+        .TimeTZ => |t| F.ofTimeOfDay(t.time.micros_since_midnight),
+        .Timestamp => |t| F.ofEpochMicros(t.micros_since_epoch),
+        .TimestampTZ => |t| F.ofEpochMicros(t.micros_since_epoch_utc),
+        .ExtValue => |e| switch (e) {
+            .Date => |d| F.ofDate(d.days_since_epoch),
+            .Time => |t| F.ofTimeOfDay(t.micros_since_midnight),
+            .TimeTZ => |t| F.ofTimeOfDay(t.time.micros_since_midnight),
+            .Timestamp => |t| F.ofEpochMicros(t.micros_since_epoch),
+            .TimestampTZ => |t| F.ofEpochMicros(t.micros_since_epoch_utc),
+            else => return null,
+        },
+        else => return null,
+    };
+    const n: ?i64 = blk: {
+        if (std.mem.eql(u8, field, "year")) break :blk fields.year;
+        if (std.mem.eql(u8, field, "month")) break :blk fields.month;
+        if (std.mem.eql(u8, field, "day")) break :blk fields.day;
+        if (std.mem.eql(u8, field, "hour")) break :blk fields.hour;
+        if (std.mem.eql(u8, field, "minute")) break :blk fields.minute;
+        if (std.mem.eql(u8, field, "second")) break :blk fields.second;
+        if (std.mem.eql(u8, field, "millisecond")) break :blk if (fields.microsecond) |us| @divTrunc(us, 1000) else null;
+        if (std.mem.eql(u8, field, "microsecond")) break :blk fields.microsecond;
+        break :blk null;
+    };
+    return if (n) |x| .{ .Int = x } else null;
+}
+
 fn exactNumber(v: Value) ?value_order.Number {
     const n = value_order.numberOf(v) orelse return null;
     return if (n == .exact) n else null;
