@@ -9968,11 +9968,12 @@ pub fn build(b: *std.Build) void {
         const opts = b.addOptions();
         opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6430_deploy_docs_truth.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true; // SONNY-6448 (5): getenv for the docker compose config run
         mod.addImport("sonny6430_dd_options", opts.createModule());
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6430-deploy-docs-truth", "Run SONNY-6430 item 9 regression (the compose files pass no S3_* variable to geode; SERVER_FEATURES 1.3 names GEODE_TDE_KEY, no GEODE_DISK_KEY_HEX, KMS integration or automatic rotation; NIX_DEPLOYMENT says the Nix packaging is gone and has no federation block; the security inventory names no GEODE_WAL_KEY)").dependOn(&run_tests.step);
+        b.step("test-sonny6430-deploy-docs-truth", "Run SONNY-6430 item 9 regression (the compose files pass no S3_* variable to geode; SERVER_FEATURES 1.3 names GEODE_TDE_KEY, no GEODE_DISK_KEY_HEX, KMS integration or automatic rotation; NIX_DEPLOYMENT says the Nix packaging is gone and has no federation block; the security inventory names no GEODE_WAL_KEY), plus SONNY-6435/6442/6448 deploy-config truth (no compose file, Dockerfile, deployment doc, docs/USAGE.md, docs/docker/*.md or .env.example names a GEODE_* variable nothing reads; every compose file passes docker compose config, none sets pids_limit)").dependOn(&run_tests.step);
     }
 
     // SONNY-6322: a backup never holds the audit signing seed; a store
