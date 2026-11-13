@@ -4989,6 +4989,7 @@ REQ-SONNY-3191-HOLD-AT-COMMIT,MultiGraphIsolation,ReleaseAtStatement,TESTED,src/
 REQ-SONNY-3191-POLICY-EXPR-BOUNDS,GPS Expression Compilation,NestingAndLinkBounds,TESTED,src/security/policy_expression.zig,tests/test_sonny3191_round13_items.zig,,security,2026-09-27
 REQ-SONNY-3191-RESERVED-GRAPH-NAMES,MultiGraphIsolation,RefuseReserved,TESTED,src/execution/session_graph.zig,tests/test_sonny3191_round13_items.zig,,storage,2026-09-27
 REQ-SONNY-3191-ROUND13-ITEMS,MultiGraphIsolation,Regression,TESTED,tests/test_sonny3191_round13_items.zig,tests/test_sonny3191_round13_items.zig,,storage,2026-09-27
+REQ-SONNY-3232-OVERSIZE-REFUSAL,QuicTransport,OversizeMessageRefusedFast,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny3232_quic_request_size.zig,,transport,2026-11-13
 REQ-SONNY-3232-QUIC-LARGE-REQUEST,QuicTransport,Diagnosis,TESTED,tests/test_sonny3232_quic_large_request.zig,tests/test_sonny3232_quic_large_request.zig,,transport,2026-09-28
 REQ-SONNY-3233-CACHE-LOCKING,BoundedNodeCache,ShardLockedReservation,TESTED,src/storage/node_cache.zig,tests/test_sonny3233_cache_graph_locking.zig,,storage,2026-09-28
 REQ-SONNY-3233-CACHE-LOCKING,GraphRegistry,GraphsMutex,TESTED,src/graph_store.zig,tests/test_sonny3233_cache_graph_locking.zig,,storage,2026-09-28

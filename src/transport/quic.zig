@@ -117,6 +117,11 @@ pub const app_error = struct {
     /// knows the connection died under it and that a retry on a fresh
     /// connection is the correct response (it is not a graceful close).
     pub const server_teardown: u64 = 0x4745_0001;
+
+    /// SONNY-3232: the client sent a message over the 16 MiB maximum. The
+    /// server answered SQLSTATE 54000 on the stream and closed the
+    /// connection, since it cannot stop the client sending the rest.
+    pub const message_too_large: u64 = 0x4745_0002;
 };
 
 // Module-level pointer set by listen() so the OTel gauge callback can read
@@ -1764,6 +1769,19 @@ pub const QuicStream = struct {
     /// racing a connection teardown cannot double-free.
     released: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
+    /// SONNY-3232: close this stream's connection with `app_error_code`
+    /// (CONNECTION_CLOSE on the wire), from a stream handler that must stop
+    /// the peer sending: the library cannot send STOP_SENDING. The connection
+    /// drains and is torn down by its acceptor as for a peer close.
+    pub fn closeConnection(self: *QuicStream, app_error_code: u64) void {
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
+        api.closeConnection(self.connection, app_error_code) catch {};
+        if (self.poll_sync) |ps| ps.notifyPoll();
+    }
+
     pub fn write(self: *QuicStream, data: []const u8) !usize {
         if (self.shutdown_requested) |shutdown| {
             if (shutdown.load(.acquire)) return QuicError.Closed;
@@ -2710,6 +2728,10 @@ pub const QuicClientStream = struct {
         const max_blocked_retries: usize = 1_000_000; // safety cap; wall-clock deadline is authoritative
         while (written < data.len) {
             if (monoNsRaw() -| start_ns > max_blocked_ns) return QuicError.WriteError;
+            // SONNY-3232: a peer that closed the connection (a server
+            // refusing a message over its maximum) frees no more credit; stop
+            // now instead of waiting out the writer deadline.
+            if (api.isDrained(self.connection)) return QuicError.Closed;
             const n = self.write(data[written..]) catch |err| {
                 if (err == error.FlowControlBlocked or err == error.WouldBlock) {
                     blocked_retries += 1;

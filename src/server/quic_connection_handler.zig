@@ -1900,6 +1900,9 @@ pub const BufferedProtoReader = struct {
     buffer: std.ArrayList(u8),
     start_index: usize = 0,
     read_buf: [4096]u8 = undefined,
+    /// SONNY-3232: the declared length of a message refused as over
+    /// `max_client_message_bytes` (for the 54000 answer).
+    oversize_declared_len: u32 = 0,
     /// #864 §10 per-stream stall observability.  Monotonic-clock
     /// timestamp of the most recent `nextMessage` iteration (either a
     /// successful message delivery, an EOF, a WouldBlock tick, or a
@@ -2018,8 +2021,9 @@ pub const BufferedProtoReader = struct {
 
         const len_bytes = unread[0..4];
         const msg_len = std.mem.readInt(u32, len_bytes, .big);
-        if (msg_len > 16 * 1024 * 1024) {
+        if (msg_len > max_client_message_bytes) {
             log.err("MessageTooLarge: msg_len={d} bytes_in_buf={d} start_index={d}", &.{ Attr.int("msg_len", @intCast(msg_len)), Attr.int("buf_len", @intCast(self.buffer.items.len)), Attr.int("start", @intCast(self.start_index)) });
+            self.oversize_declared_len = msg_len;
             return error.MessageTooLarge;
         }
 
@@ -2404,6 +2408,27 @@ fn sendSinglePageExecutionResultBatched(
 fn sendPostFilterError(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, err: anyerror) !void {
     const info = proto_util.mapError(err);
     try sendExecuteError(allocator, stream, info.code, info.message, &.{}, &.{});
+}
+
+/// The largest framed client message (length prefix excluded) the server
+/// reads: 16 MiB (docs/USAGE.md).
+pub const max_client_message_bytes: u32 = 16 * 1024 * 1024;
+
+// CANARY: REQ=REQ-SONNY-3232-OVERSIZE-REFUSAL; FEATURE="QuicTransport"; ASPECT=OversizeMessageRefusedFast; STATUS=TESTED; TEST=tests/test_sonny3232_quic_request_size.zig; OWNER=transport; UPDATED=2026-11-13
+/// SONNY-3232: refuse a client message over the maximum size: answer 54000
+/// on the stream (best effort) and close the connection with
+/// `app_error.message_too_large`, so the client fails at once. The stream
+/// used to end with no reply while the client, held by the stream window it
+/// could no longer use, blocked until its own writer deadline.
+fn refuseMessageTooLarge(allocator: std.mem.Allocator, stream: *quic_transport.QuicStream, declared_len: u32) void {
+    log.warn("refusing a client message over the maximum size; closing its connection", &.{
+        Attr.int("msg_len", @intCast(declared_len)),
+        Attr.int("max", @intCast(max_client_message_bytes)),
+    });
+    var buf: [192]u8 = undefined;
+    const message = std.fmt.bufPrint(&buf, "request message of {d} bytes exceeds the maximum message size of {d} bytes (16 MiB); split it or use parameters", .{ declared_len, max_client_message_bytes }) catch "request message exceeds the maximum message size of 16777216 bytes (16 MiB)";
+    sendExecuteError(allocator, stream, "54000", message, &.{}, &.{}) catch {};
+    stream.closeConnection(quic_transport.app_error.message_too_large);
 }
 
 fn sendExecuteError(
@@ -3873,6 +3898,10 @@ fn runStreamQueryLoopWithReader(
     while (true) {
         const packet_opt = line_reader.nextMessage() catch |err| {
             if (isIdleStreamReadError(err)) return;
+            if (err == error.MessageTooLarge) {
+                refuseMessageTooLarge(gpa, stream, line_reader.oversize_declared_len);
+                return;
+            }
             if (err == error.WouldBlock) {
                 if (stream.poll_sync) |ps| {
                     ps.waitForPoll(quic_transport.server_handler_wait_for_poll_ns);
@@ -5650,6 +5679,10 @@ fn processCooperativeFirstStream(ctx: *FirstStreamOwnerContext) CooperativeFirst
                     ctx.cooperative_generation_seen.store(read_generation, .release);
                     return .keep;
                 }
+                if (err == error.MessageTooLarge) {
+                    refuseMessageTooLarge(gpa, ctx.stream, ctx.reader.oversize_declared_len);
+                    return .done;
+                }
                 if (isIdleStreamReadError(err)) return .done;
                 log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
                 return .done;
@@ -5982,6 +6015,7 @@ pub fn handleQuicConnection(
                     }
                     continue;
                 }
+                if (err == error.MessageTooLarge) refuseMessageTooLarge(gpa, stream, line_reader.oversize_declared_len);
                 log.err("Protobuf read error during HELLO", &.{Attr.string("error", @errorName(err))});
                 pre_hello_exit = .hello_read_error;
                 return err;

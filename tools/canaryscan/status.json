@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:05:06.941057456Z",
+  "generated_at": "2026-11-13T11:18:58.456413174Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -77784,6 +77784,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3232-OVERSIZE-REFUSAL",
+      "features": [
+        {
+          "feature": "QuicTransport",
+          "aspect": "OversizeMessageRefusedFast",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3232_quic_request_size.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3232-QUIC-LARGE-REQUEST",
       "features": [
         {
@@ -93275,7 +93294,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4859
+      "TESTED": 4860
     },
     "by_aspect": {
       "2PC": 3,
@@ -95739,6 +95758,7 @@
       "OverheadClaimsMatchMeasurement": 1,
       "OverlapAndContains": 1,
       "OverlongStoredPolicy": 1,
+      "OversizeMessageRefusedFast": 1,
       "OversizedValueErrorMapping": 1,
       "OwnedGraphEntities": 1,
       "OwnedKeys": 1,

@@ -10,7 +10,8 @@
 //     window, blocked writing and failed only at its own 60 s writer deadline,
 //     with nothing to say why. The server now answers 54000 on the stream and
 //     closes the connection with application error `message_too_large`, so
-//     the client fails within seconds (asserted: well under the 60 s writer
+//     the client's write stops as soon as the close arrives (asserted: the
+//     failure is the server's close or 54000, inside the 60 s writer
 //     deadline) and the server serves the next connection.
 //   * A request larger than the 10 MiB stream receive window is still
 //     transferred very slowly (ReleaseSafe: 16 MiB in ~168 s; Debug: no
@@ -33,9 +34,13 @@ const envelope_room: usize = 4096;
 const answer_bound_s: u32 = 120;
 /// The recorded maximum-size case waits this long, then moves on.
 const recorded_bound_s: u32 = 30;
-/// An over-maximum request must fail well inside the client's 60 s writer
-/// deadline (it used to take exactly that long).
-const refusal_bound_ms: u64 = 20_000;
+/// An over-maximum request must fail inside the client's 60 s writer
+/// deadline. The time includes the client encoding and starting to send
+/// 16 MiB (about 20 s for a Debug client), so the decisive check is HOW it
+/// fails: the server's close (`Closed`) or its 54000 answer, not the
+/// writer deadline or a truncated stream (`WriteError` /
+/// `IncompleteResponse`, as before the fix).
+const refusal_bound_ms: u64 = 45_000;
 
 fn monoMs() u64 {
     return @intCast(std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toMilliseconds());
@@ -127,9 +132,11 @@ test "SONNY-3232 QUIC requests of 1 MiB and 4 MiB are answered, one over the 16 
         const bytes = max_message_bytes + 64;
         const o = try probe(allocator, addr, server_pid, bytes, answer_bound_s);
         defer if (o.error_code) |c| allocator.free(c);
-        const refused = o.served_n == null and (o.transport_error != null or (o.error_code != null and std.mem.eql(u8, o.error_code.?, "54000")));
+        const closed_by_server = if (o.transport_error) |e| std.mem.eql(u8, e, "Closed") else false;
+        const answered_54000 = if (o.error_code) |c| std.mem.eql(u8, c, "54000") else false;
+        const refused = o.served_n == null and (closed_by_server or answered_54000);
         const ok = refused and o.ms <= refusal_bound_ms;
-        std.debug.print("SONNY-3232 {s}: {d}-byte request (over the maximum) -> served={any} error={?s} transport={?s} in {d} ms{s}\n", .{ @tagName(builtin.mode), bytes, o.served_n, o.error_code, o.transport_error, o.ms, if (ok) "" else "  <-- UNEXPECTED (must be refused within 20 s)" });
+        std.debug.print("SONNY-3232 {s}: {d}-byte request (over the maximum) -> served={any} error={?s} transport={?s} in {d} ms{s}\n", .{ @tagName(builtin.mode), bytes, o.served_n, o.error_code, o.transport_error, o.ms, if (ok) "" else "  <-- UNEXPECTED (must be refused by the server: Closed or 54000, within 45 s)" });
         if (!ok) failures += 1;
         if (!try smallRequestServed(allocator, addr, server_pid)) failures += 1;
     }

@@ -2035,6 +2035,23 @@
 
 ### Fixed
 
+- **A QUIC request over the 16 MiB maximum is refused promptly
+  (SONNY-3232).** The server refused such a message at its length prefix by
+  ending the stream with no reply; it stopped reading, so the client, held by
+  the stream window, blocked writing until its own 60 s writer deadline and
+  learned nothing. The server now answers SQLSTATE 54000 (the message names
+  the size and the 16,777,216-byte limit) and closes the connection with the
+  new QUIC application error `message_too_large` (0x47450002), since the QUIC
+  library cannot send STOP_SENDING; geode's own QUIC client stops writing as
+  soon as the peer has closed the connection. Requests of 1 MiB and 4 MiB are
+  answered (the loss-recovery stall round 15 hit, SONNY-3351, was fixed in
+  quic 0.1.48). Still open: a request larger than the 10 MiB stream receive
+  window crawls once the window is spent (ReleaseSafe answered 16 MiB in
+  ~168 s; a Debug server did not answer it in 300 s), in the QUIC library's
+  flow-control credit path. Keep QUIC requests well under 10 MiB (use
+  parameters or `geode query --batch`). Regression
+  `zig build test-sonny3232-quic-request-size`.
+
 - **gRPC streaming Execute pages node-scan fast-path reads (SONNY-2465).**
   The streamed `/Execute` drain (`pushResultPages`) paged only an executor
   result; a statement served by the node-scan fast path holds a scan stream

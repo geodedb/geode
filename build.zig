@@ -11601,7 +11601,7 @@ pub fn build(b: *std.Build) void {
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny3232-quic-request-size", "Run SONNY-3232 regression (a real geode serve over QUIC: 1 MiB and 4 MiB requests are answered with their full size; one over the 16 MiB maximum message fails within 20 s, not at the client's 60 s writer deadline; the server serves the next connection after each; the maximum-size request is recorded, not asserted: the window credit past 10 MiB crawls in the QUIC library)").dependOn(&run_tests.step);
+        b.step("test-sonny3232-quic-request-size", "Run SONNY-3232 regression (a real geode serve over QUIC: 1 MiB and 4 MiB requests are answered with their full size; one over the 16 MiB maximum message is refused by the server (its connection closed with message_too_large after a 54000 answer) inside the client's 60 s writer deadline; the server serves the next connection after each; the maximum-size request is recorded, not asserted: the window credit past 10 MiB crawls in the QUIC library)").dependOn(&run_tests.step);
     }
 
     // SONNY-2790: the fulltext statements (CREATE/DROP INDEX, geode.fts.*)
