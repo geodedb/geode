@@ -2880,8 +2880,8 @@ REQ-GQL-UNICODE-008,UnicodeBuildVerification,TableCheck,EXEMPT,build.zig,,,unico
 REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,src/fts/advanced.zig,TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower,,unicode,2025-09-27
 REQ-GQL-UNICODE-008,UnicodeFtsAdvanced,AnalyzerLower,TESTED,tests/canary_unicode_fts.zig,TestCANARY_REQ_GQL_UNICODE_008_FtsAdvancedAnalyzer,,unicode,2025-09-27
 REQ-GQL-UNICODE-009,UnicodeEval,CompareNfc,TESTED,src/eval.zig,TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc,,unicode,2025-09-27
-REQ-GQL-UNICODE-010,UnicodeOrderBy,CompareNfc,TESTED,src/exec.zig,TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc,,unicode,2025-09-27
-REQ-GQL-UNICODE-010,UnicodeOrderBy,CompareNfc,TESTED,tests/canary_unicode_orderby.zig,,,unicode,2025-09-27
+REQ-GQL-UNICODE-010,UnicodeOrderBy,CompareNfc,TESTED,tests/canary_unicode_orderby.zig,TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc,,unicode,2025-09-27
+REQ-GQL-UNICODE-010,UnicodeOrderBy,CompareNfc,TESTED,src/exec.zig,tests/test_sonny6499_exec_order_nfc.zig,,unicode,2026-11-13
 REQ-GQL-UNICODE-012,UTF-8 -> UTF-16 Conversion,ClientTestZig,TESTED,tests/canary_client_unicode.zig,TestCANARY_ClientUnicode_Utf8ToUtf16,,clients,2025-09-27
 REQ-GQL-UNICODE-012,UnicodeUtf16,Utf8ToUtf16,TESTED,src/unicode/geode_unicode.zig,TestCANARY_REQ_GQL_UNICODE_012_Utf8ToUtf16RoundTrip,,unicode,2025-09-27
 REQ-GQL-UNICODE-013,UTF-16 -> UTF-8 Conversion,ClientTestZig,TESTED,tests/canary_client_unicode.zig,TestCANARY_ClientUnicode_Utf16ToUtf8,,clients,2025-09-27

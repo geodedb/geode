@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:13:19.668300139Z",
+  "generated_at": "2026-11-13T19:14:23.42748374Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -43829,7 +43829,6 @@
           "aspect": "CompareNfc",
           "status": "TESTED",
           "files": [
-            "src/exec.zig",
             "tests/canary_unicode_orderby.zig"
           ],
           "tests": [
@@ -43838,6 +43837,20 @@
           "benches": [],
           "owner": "unicode",
           "updated": "2025-09-27"
+        },
+        {
+          "feature": "UnicodeOrderBy",
+          "aspect": "CompareNfc",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_exec_order_nfc.zig"
+          ],
+          "benches": [],
+          "owner": "unicode",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -95329,7 +95342,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4979
+      "TESTED": 4980
     },
     "by_aspect": {
       "2PC": 3,
@@ -95915,7 +95928,7 @@
       "Community": 3,
       "CommunityDetection": 1,
       "Compaction": 1,
-      "CompareNfc": 2,
+      "CompareNfc": 3,
       "ComparisonHelpers": 1,
       "Compilation": 1,
       "CompilationStability": 1,

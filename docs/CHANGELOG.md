@@ -2235,6 +2235,14 @@
 
 ### Fixed
 
+- **The `exec` ORDER BY text fallback orders strings by NFC (SONNY-6499 item
+  5).** `exec.stableOrderByTemporal` (the standalone `exec` executor's ORDER
+  BY, used by the `gql --demo-sort` driver) compares keys it cannot order as
+  datetimes by their text, after the partial `geode_unicode.nfcNormalize`
+  (it knows é and É only): U+212A KELVIN SIGN sorted after every ASCII
+  letter. It now compares with `canonical_string.orderNoAlloc`, the order
+  the full ORDER BY uses (SONNY-3055). Regression:
+  `zig build test-sonny6499-exec-order-nfc`.
 - **`geode serve --data-dir` with a relative path holding `..` starts, and a
   startup refusal leaks nothing (SONNY-6499 item 3).** On a fresh directory
   `--data-dir ../X` refused to start with "HMAC key required": the server

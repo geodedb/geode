@@ -21,9 +21,10 @@ Form C (UAX #15) from the `strings` dependency, through
 DISTINCT, ORDER BY, joins, inline property maps, MERGE, UNIQUE and the exact
 property index all compare the NFC forms' UTF-8 bytes (ASCII and NFC strings
 take a no-allocation fast path). Values are stored as written. The subset
-normalizer `nfcNormalize` below is no longer used by `=` or any key; it
-remains in the FTS analyzer (`src/fts/advanced.zig`) and in the text fallback
-of the `exec.zig` ORDER BY comparator.
+normalizer `nfcNormalize` below is no longer used by `=`, any key or any
+ORDER BY (the `exec.zig` text fallback uses `canonical_string` since
+SONNY-6499); it remains in the FTS analyzer (`src/fts/advanced.zig`) and in
+the FTS tokenizer (`src/index/fts_tokenizer.zig`, index and query terms).
 
 ## Features & Requirement IDs
 
