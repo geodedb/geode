@@ -18,8 +18,10 @@
 //     -> SILENT DIVERGENCE (followers never see it). This is the divergence proof.
 //
 // These tests spin up three REAL `geode serve` processes on distinct loopback
-// IPs (127.0.0.11/12/13) with CA-signed peer TLS -- the same fixture the
+// IPs (127.0.0.21/22/23) with CA-signed peer TLS -- the same fixture the
 // node-CREATE replication regression (test_cluster_3node_steady_state.zig) uses,
+// on addresses of its own (SONNY-6460: no other test step uses 127.0.0.21-23,
+// so this suite and the steady-state one run at the same time in the aggregate),
 // because true follower convergence can only be observed across SEPARATE stores
 // (separate processes). The in-process raft fixture shares ONE process-global
 // GraphStore and serializes raft on a single-threaded-IO mutex, so it cannot
@@ -38,7 +40,7 @@
 //
 // Skips (error.SkipZigTest, never silently passes) when: not linux, the geode
 // binary is missing (run `zig build` first), openssl is unavailable, or
-// 127.0.0.11 cannot be bound. Set GEODE_SKIP_SUBPROC_CLUSTER=1 to opt out on a
+// 127.0.0.21 cannot be bound. Set GEODE_SKIP_SUBPROC_CLUSTER=1 to opt out on a
 // flaky CI runner.
 
 const std = @import("std");
@@ -47,12 +49,12 @@ const test_ports = @import("test_ports.zig");
 const builtin = @import("builtin");
 
 const BINARY_PATH = geode_test_bin.geode_exe;
-const NODE_IPS = [_][]const u8{ "127.0.0.11", "127.0.0.12", "127.0.0.13" };
+const NODE_IPS = [_][]const u8{ "127.0.0.21", "127.0.0.22", "127.0.0.23" };
 /// SONNY-6450 item 2: the nodes' client and cluster ports (both QUIC, so
 /// UDP), free ports from tests/test_ports.zig chosen when the cluster starts.
 /// They were 3141 and 4242: a second run on the host (parallel lanes, the
 /// pre-push shards), or any geode on those ports, answered this one. Each node
-/// keeps its own loopback address (127.0.0.11-13), which the peer TLS
+/// keeps its own loopback address (127.0.0.21-23), which the peer TLS
 /// certificate names, and binds the same two ports on it.
 var client_port: u16 = 0;
 var cluster_port: u16 = 0;
@@ -183,7 +185,7 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
 
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = ext,
-        .data = "subjectAltName=IP:127.0.0.11,IP:127.0.0.12,IP:127.0.0.13,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
+        .data = "subjectAltName=IP:127.0.0.21,IP:127.0.0.22,IP:127.0.0.23,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
     });
     // Pin SHA-256 below: system LibreSSL otherwise defaults to SHA-1,
     // which the real peer certificate verifier correctly rejects.

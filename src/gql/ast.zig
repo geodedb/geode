@@ -542,6 +542,10 @@ pub const MergeStatement = struct {
 pub const CallProcedure = struct {
     procedure: Expr, // Function call expression: db.labels()
     yield_items: ?[]ReturnItem = null, // YIELD clause items
+    // SONNY-6460: the FILTER statements after the call (ISO/IEC 39075:2024
+    // 14.6), their conditions ANDed; a row is kept only when it is True. A
+    // pointer: an inline Expr grew every Query and parseQuery frame.
+    filter: ?*const Expr = null,
     return_clause: ?ReturnClause = null, // Optional RETURN clause
     order_by: ?OrderBy = null, // ORDER BY clause
     limit: ?usize = null, // LIMIT clause
@@ -565,6 +569,8 @@ pub const CallStatement = union(enum) {
 pub const CallClause = struct {
     procedure: Expr, // Function call expression: algo.bfs.stream(node)
     yield_items: ?[]ReturnItem = null, // YIELD clause items (required for MATCH+CALL)
+    // SONNY-6460: the FILTER statements after the call, as `CallProcedure.filter`.
+    filter: ?*const Expr = null,
 };
 
 pub const SetClause = union(enum) {

@@ -283,32 +283,95 @@ fn collectSortedPairs(allocator: std.mem.Allocator, r: execution.ExecutionResult
     return pairs;
 }
 
-test "engine-direct OPTIONAL MATCH equals clone-path oracle (differential)" {
+const PathKind = enum { engine_direct, clone_path };
+
+/// Runs `query`, asserts which executor served it, and returns its sorted
+/// (p.k, c.k) rows.
+fn runPairs(h: *Harness, query: []const u8, kind: PathKind) ![]Pair {
+    const aa = h.arena.allocator();
+    planned_read_runtime.resetPathRowsMaterialized();
+    const r = try h.runQuery(query);
+    switch (kind) {
+        .engine_direct => try testing.expect(planned_read_runtime.getPathRowsMaterialized() > 0),
+        .clone_path => try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized()),
+    }
+    return collectSortedPairs(aa, r);
+}
+
+/// `got` equals the hand-computed `expected` (sorted by lessPair) exactly.
+fn expectPairs(expected: []const Pair, got: []const Pair) !void {
+    try testing.expectEqual(expected.len, got.len);
+    for (expected, got) |x, y| {
+        try testing.expectEqualStrings(x.a, y.a);
+        try testing.expectEqualStrings(x.b, y.b);
+    }
+}
+
+// SONNY-6460: a WHERE written after an OPTIONAL MATCH is that clause's own
+// <graph pattern where clause> (ISO/IEC 39075:2024 16.3, 16.4): it sits inside
+// the <optional operand>, which 14.4 SR 4)f)i) rewrites to
+// `OPTIONAL CALL (p) { MATCH ... WHERE ... RETURN c }`. It filters only the
+// optional part; a left row it rejects is kept with NULL optional bindings.
+// A filter over the result rows is a WHERE on the preceding non-optional MATCH
+// or a FILTER statement (14.6) after the OPTIONAL MATCH. Each scoping is
+// compared below between an engine-direct query and a clone-path query that
+// asks the same question, and both are checked against hand-computed rows.
+
+test "engine-direct OPTIONAL MATCH equals clone-path oracle (differential, statement-level filter)" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
     try h.seed();
-    const aa = h.arena.allocator();
 
-    // Engine-direct covered shape.
-    planned_read_runtime.resetPathRowsMaterialized();
-    var direct = try h.runQuery("MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R]->(c:T) RETURN p.k, c.k");
-    defer direct.deinit(aa);
-    const direct_rows_materialized = planned_read_runtime.getPathRowsMaterialized();
-    try testing.expect(direct_rows_materialized > 0); // engine-direct
+    // Only p1 survives the filter; p1 has children c1, c2.
+    const expected = [_]Pair{ .{ .a = "p1", .b = "c1" }, .{ .a = "p1", .b = "c2" } };
 
-    // Oracle: WHERE on the main var forces the legacy clone-path executor.
-    planned_read_runtime.resetPathRowsMaterialized();
-    var oracle = try h.runQuery("MATCH (p:T) OPTIONAL MATCH (p)-[:R]->(c:T) WHERE p.k = 'p1' RETURN p.k, c.k");
-    defer oracle.deinit(aa);
-    try testing.expectEqual(@as(u64, 0), planned_read_runtime.getPathRowsMaterialized()); // legacy path
+    const direct = try runPairs(&h, "MATCH (p:T {k:'p1'}) OPTIONAL MATCH (p)-[:R]->(c:T) RETURN p.k, c.k", .engine_direct);
+    try expectPairs(&expected, direct);
 
-    const dp = try collectSortedPairs(aa, direct);
-    const op = try collectSortedPairs(aa, oracle);
-    try testing.expectEqual(op.len, dp.len);
-    for (dp, op) |x, y| {
-        try testing.expect(std.mem.eql(u8, x.a, y.a));
-        try testing.expect(std.mem.eql(u8, x.b, y.b));
-    }
+    // WHERE on the non-optional MATCH filters the left rows before the
+    // optional part is joined (the WHERE forces the clone path).
+    const where_first = try runPairs(&h, "MATCH (p:T) WHERE p.k = 'p1' OPTIONAL MATCH (p)-[:R]->(c:T) RETURN p.k, c.k", .clone_path);
+    try expectPairs(&expected, where_first);
+
+    // A FILTER statement after the OPTIONAL MATCH filters the result rows.
+    const filtered = try runPairs(&h, "MATCH (p:T) OPTIONAL MATCH (p)-[:R]->(c:T) FILTER p.k = 'p1' RETURN p.k, c.k", .clone_path);
+    try expectPairs(&expected, filtered);
+}
+
+test "engine-direct OPTIONAL MATCH equals clone-path oracle (differential, per-clause WHERE)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.seed();
+
+    // Every :T node is a left row; only p1 -> c1 satisfies the optional
+    // clause's condition, every other left row keeps a NULL c.
+    const expected = [_]Pair{
+        .{ .a = "c1", .b = "<null>" },
+        .{ .a = "c2", .b = "<null>" },
+        .{ .a = "p1", .b = "c1" },
+        .{ .a = "p2", .b = "<null>" },
+    };
+
+    // A literal inline property on the optional endpoint is the same
+    // condition, served engine-direct.
+    const direct = try runPairs(&h, "MATCH (p:T) OPTIONAL MATCH (p)-[:R]->(c:T {k:'c1'}) RETURN p.k, c.k", .engine_direct);
+    try expectPairs(&expected, direct);
+
+    const where_opt = try runPairs(&h, "MATCH (p:T) OPTIONAL MATCH (p)-[:R]->(c:T) WHERE c.k = 'c1' RETURN p.k, c.k", .clone_path);
+    try expectPairs(&expected, where_opt);
+
+    // The query this test used as its oracle before SONNY-6460: the WHERE on
+    // the left variable is the optional clause's own, so it keeps every left
+    // row (5 rows), not just p1's two.
+    const where_left = try runPairs(&h, "MATCH (p:T) OPTIONAL MATCH (p)-[:R]->(c:T) WHERE p.k = 'p1' RETURN p.k, c.k", .clone_path);
+    const expected_left = [_]Pair{
+        .{ .a = "c1", .b = "<null>" },
+        .{ .a = "c2", .b = "<null>" },
+        .{ .a = "p1", .b = "c1" },
+        .{ .a = "p1", .b = "c2" },
+        .{ .a = "p2", .b = "<null>" },
+    };
+    try expectPairs(&expected_left, where_left);
 }
 
 // ---------------------------------------------------------------------------

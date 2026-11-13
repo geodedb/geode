@@ -9,10 +9,12 @@
 // fell back to a "system CA bundle" that is never loaded. Now a dial with
 // no CA configured is refused up front with error.ClusterCaRequired.
 //
-// Real QUIC: an in-process `QuicTransport` server on 127.0.0.2 presents a
+// Real QUIC: an in-process `QuicTransport` server on 127.0.0.31 presents a
 // leaf signed by CA "good"; the 2PC transport and the raft/cluster connect
 // helper dial it with the right CA, another CA, and none. Fixtures are made
-// with openssl (skips only if openssl is absent or 127.0.0.2 cannot be bound).
+// with openssl (skips only if openssl is absent or 127.0.0.31 cannot be bound).
+// 127.0.0.31 is an address no other test step uses (SONNY-6460), so the
+// free port it binds there cannot collide with another step's.
 //
 // CANARY: REQ=REQ-2PC-TLS-003; FEATURE="2PC TLS"; ASPECT=ClusterCa; STATUS=TESTED; TEST=tests/test_sonny6453_cluster_peer_tls.zig; OWNER=distributed; UPDATED=2026-11-13
 
@@ -25,7 +27,7 @@ const test_ports = @import("test_ports.zig");
 const twophase = geode.distributed.twophase;
 const cluster_auth = geode.distributed.cluster_auth;
 
-const SERVER_IP = "127.0.0.2";
+const SERVER_IP = "127.0.0.31";
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
@@ -84,7 +86,7 @@ fn makeFixtures() !Fixtures {
 
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = ext,
-        .data = "subjectAltName=IP:127.0.0.2,DNS:127.0.0.2\nextendedKeyUsage=serverAuth\n",
+        .data = "subjectAltName=IP:127.0.0.31,DNS:127.0.0.31\nextendedKeyUsage=serverAuth\n",
     });
     for ([_][2][]const u8{ .{ good_key, fx.good_ca }, .{ other_key, fx.other_ca } }, [_][]const u8{ "/CN=sonny6453-good-ca", "/CN=sonny6453-other-ca" }) |pair, subj| {
         try run(spawn_gpa, io, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", pair[0] });

@@ -12,7 +12,8 @@
 // returns, and leaked the entry's endpoint and metadata.
 //
 // The test drives one real health pass on a real ClusterCoordinator with two
-// configured peers whose last heartbeat is long past.
+// configured peers whose last heartbeat is long past. Its addresses
+// (127.0.0.14-16) are its own (SONNY-6460): no other test step uses them.
 //
 // CANARY: REQ=REQ-SONNY-6451-HEALTH-FAILED-PEER; FEATURE="DistributedCluster"; ASPECT=HealthPassKeepsFailedPeer; STATUS=TESTED; TEST=tests/test_sonny6451_health_failed_peer.zig; OWNER=distributed; UPDATED=2026-11-12
 
@@ -32,14 +33,14 @@ fn nowMillis() i64 {
 
 fn newCoordinator(a: std.mem.Allocator, port: u16) !*ClusterCoordinator {
     const peers = [_]ClusterCoordinator.PeerConfig{
-        .{ .id = 2, .address = "127.0.0.12", .port = port + 1 },
-        .{ .id = 3, .address = "127.0.0.13", .port = port + 2 },
+        .{ .id = 2, .address = "127.0.0.15", .port = port + 1 },
+        .{ .id = 3, .address = "127.0.0.16", .port = port + 2 },
     };
     const coord = try a.create(ClusterCoordinator);
     errdefer a.destroy(coord);
     coord.* = try ClusterCoordinator.init(a, 1, .{
         .peers = peers[0..],
-        .listen_address = "127.0.0.11",
+        .listen_address = "127.0.0.14",
         .cluster_port = port,
         .cluster_token = "test-sonny6451-health",
         .cluster_name = "test-sonny6451-health",
@@ -92,8 +93,8 @@ test "SONNY-6451: a health pass over two failed peers handles exactly those two 
 
     // Both peers stay in the address book, marked failed.
     try std.testing.expectEqual(@as(usize, 2), coord.cluster_state.nodes.items.len);
-    try std.testing.expectEqualStrings("127.0.0.12:23111", endpointOf(coord, 2) orelse return error.PeerRemoved);
-    try std.testing.expectEqualStrings("127.0.0.13:23112", endpointOf(coord, 3) orelse return error.PeerRemoved);
+    try std.testing.expectEqualStrings("127.0.0.15:23111", endpointOf(coord, 2) orelse return error.PeerRemoved);
+    try std.testing.expectEqualStrings("127.0.0.16:23112", endpointOf(coord, 3) orelse return error.PeerRemoved);
     try std.testing.expectEqual(ClusterCoordinator.NodeState.failed, stateOf(coord, 2).?);
     try std.testing.expectEqual(ClusterCoordinator.NodeState.failed, stateOf(coord, 3).?);
 }

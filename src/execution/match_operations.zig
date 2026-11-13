@@ -4349,7 +4349,31 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
     defer allocator.free(names);
     @memcpy(names[0..match_columns.len], match_columns);
     @memcpy(names[match_columns.len..], yield_names.items);
-    var joined = ExecutionResult{ .columns = names, .rows = joined_rows.items, .flags = .empty };
+    // SONNY-6460 item 2: the FILTER statements after the CALL (ISO/IEC
+    // 39075:2024 14.6) keep a joined row only when their condition is True
+    // (19.1 GR 2); it sees the MATCH variables and the yielded columns.
+    var filtered: std.ArrayList([]Value) = .empty;
+    defer filtered.deinit(allocator);
+    var rows_after_filter: [][]Value = joined_rows.items;
+    if (call_clause.filter) |filter_ptr| {
+        const filter = filter_ptr.*;
+        var scratch = std.heap.ArenaAllocator.init(allocator);
+        defer scratch.deinit();
+        for (joined_rows.items) |joined_row| {
+            _ = scratch.reset(.retain_capacity);
+            const env: eval.Env = .{
+                .names = names,
+                .values = joined_row,
+                .param_names = context.query_param_names,
+                .param_values = context.query_param_values,
+                .allocator = scratch.allocator(),
+            };
+            const verdict = try eval.evalExpr(scratch.allocator(), filter, env);
+            if (verdict == .Bool and verdict.Bool) try filtered.append(allocator, joined_row);
+        }
+        rows_after_filter = filtered.items;
+    }
+    var joined = ExecutionResult{ .columns = names, .rows = rows_after_filter, .flags = .empty };
     // The MATCH rows' nodes and relationships, which the result's rows point at.
     joined.owned_graph_entities = bindings.rows.owned_graph_entities;
     bindings.rows.owned_graph_entities = null;

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:44:48.901786353Z",
+  "generated_at": "2026-11-13T09:55:47.786254632Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85664,6 +85664,176 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6460-CLUSTER-TEST-ADDRESSES",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DisjointLoopbackAddresses",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6460_cluster_test_addresses.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_cluster_test_addresses.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6460-FILTER-STATEMENT",
+      "features": [
+        {
+          "feature": "FilterStatement",
+          "aspect": "CallFilter",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_filter_statement.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "FilterStatement",
+          "aspect": "Parser",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_filter_statement.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "FilterStatement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6460_filter_statement.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_filter_statement.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6460-GQL-GROUP-OWNERSHIP",
+      "features": [
+        {
+          "feature": "GqlEngineAggregation",
+          "aspect": "GroupAccumulatorOwnership",
+          "status": "TESTED",
+          "files": [
+            "src/exec.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6460-META-ENDPOINT-RLS",
+      "features": [
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "EdgeEndpointVisibility",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_meta_rls.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "GPS Metadata Isolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6460_meta_rls.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_meta_rls.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6460-PROFILE-SCRATCH",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "ProfiledEntryPointScratch",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_unscoped_eval.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6460_unscoped_eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_unscoped_eval.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6460-QUERY-RESIDUALS",
+      "features": [
+        {
+          "feature": "GqlEngineAggregation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6460_query_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93331,7 +93501,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4864
+      "TESTED": 4874
     },
     "by_aspect": {
       "2PC": 3,
@@ -93726,6 +93896,7 @@
       "CalibrationEntries": 1,
       "CallDispatch": 1,
       "CallExecution": 1,
+      "CallFilter": 1,
       "CallHandlers": 1,
       "CallHandlersImport": 1,
       "CallParsing": 1,
@@ -94288,6 +94459,7 @@
       "DisabledPolicy": 1,
       "DiscardGraphGrant": 1,
       "DiscoveryRows": 2,
+      "DisjointLoopbackAddresses": 1,
       "DiskEncryption": 1,
       "Dispatch": 11,
       "DispatchArm": 1,
@@ -94405,6 +94577,7 @@
       "EdgeCreateInMemory": 1,
       "EdgeCreation": 1,
       "EdgeCutMinimization": 1,
+      "EdgeEndpointVisibility": 1,
       "EdgeGraphNameLoad": 1,
       "EdgeGraphNamePersistence": 1,
       "EdgeGraphTag": 2,
@@ -94908,6 +95081,7 @@
       "GreyCardinal": 1,
       "GreyCardinalCompositeMetricBreakdownVarianceEnvelope": 1,
       "GreyCardinalVarianceEnvelope": 1,
+      "GroupAccumulatorOwnership": 1,
       "GroupAggregation": 2,
       "GroupBy": 5,
       "GroupByPatterns": 1,
@@ -95835,7 +96009,7 @@
       "ParseHotPath": 1,
       "ParseHotPathWiring": 1,
       "ParseTimeEnforcement": 1,
-      "Parser": 26,
+      "Parser": 27,
       "ParserBasic": 1,
       "ParserCreateQuery": 1,
       "ParserCreateStatement": 2,
@@ -96185,6 +96359,7 @@
       "Profile": 1,
       "ProfileIndexName": 1,
       "ProfiledEntryPoint": 1,
+      "ProfiledEntryPointScratch": 1,
       "ProfiledRelayScope": 1,
       "ProgramEnd": 1,
       "ProgramEndAbort": 1,
@@ -96452,7 +96627,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 298,
+      "Regression": 302,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

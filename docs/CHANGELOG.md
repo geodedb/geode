@@ -4,6 +4,14 @@
 
 ### Security
 
+- **`db.relationshipTypes()` and `db.propertyKeys()` no longer list what
+  only edges with an RLS-hidden endpoint carry (SONNY-6460 item 5).** The
+  RLS label policies were applied to an edge's type only, so a user denied
+  `:Sec` was still told the type and the property keys of edges that touch a
+  `:Sec` node, which no MATCH of theirs reaches (SONNY-2679). Under a deny an
+  edge now counts only when its type is allowed and neither endpoint is
+  hidden; an endpoint that cannot be read counts as hidden. Regression:
+  `zig build test-sonny6460-meta-rls` (in the aggregate).
 - **Encrypted (TDE) stores no longer lose committed records
   (SONNY-6441; graph_storage 0.4.12).** The storage engine wrote the 16-byte
   AES-GCM tag over the last 16 bytes of every encrypted page. At the default
@@ -2012,6 +2020,16 @@
 
 ### Added
 
+- **The ISO FILTER statement after `CALL ... YIELD` (SONNY-6460 item 2).**
+  `FILTER [WHERE] <condition>` (ISO/IEC 39075:2024 14.6) now follows
+  `CALL ... [YIELD ...]` and `MATCH ... CALL ... YIELD ...`, and any number
+  of FILTER statements may follow one another (after a MATCH only one was
+  accepted). A row is kept only when the condition is True; False and NULL
+  drop it. After a CALL the condition reads the yielded columns by their
+  YIELD names; after `MATCH ... CALL` also the MATCH variables. The 42000
+  refusal of a WHERE after YIELD now points at `FILTER [WHERE]` instead of
+  saying Geode does not accept it. See `docs/GQL_COMPLIANCE.md` (FILTER
+  Statement). Regression: `zig build test-sonny6460-filter-statement`.
 - **CANARY Governance Tokens:** 24 CANARY markers added across timeseries source files (GAP-0281)
 - **Legacy GAP ID Mapping:** Documented mapping from Grey Cardinal GAP-004/005/006 to GAP-0279+ numbering (GAP-0288)
 - **Time-Series Audit Report:** `docs/TIMESERIES_AUDIT_REPORT.md` tracking all timeseries gap status
@@ -2144,6 +2162,44 @@
   timeout, not the QUIC transfer. A FOR still commits once per element,
   not once per statement. Regression: `zig build
   test-sonny738-create-query-one-commit`.
+- **An embedded PROFILE no longer leaks the member reads it evaluates
+  (SONNY-6460 item 4).** `planned_read_runtime.executeProfiledIfSupported`
+  runs a statement of its own but opened no statement scratch arena (the
+  other executor entry points have since SONNY-6449), so called with none
+  installed, a list property's copy and an FLE field's decrypted or
+  redacted string were allocated on the caller's allocator and never freed.
+  It now opens one and copies its result out before closing it. Regression:
+  `zig build test-sonny6460-unscoped-eval` (leak-checked).
+- **The `gql` executable's GROUP BY engine no longer leaks, crashes or
+  hangs (SONNY-6460 item 3).** `src/exec.zig` `groupAndAggregate` never
+  freed a group's accumulators or key slice (every grouped query leaked),
+  and COUNT DISTINCT read its per-group set through an `undefined` pointer
+  (a general protection fault). Its inline tests had compiled in no step;
+  running them (`zig build test-sonny6460-exec-inline`, now in the
+  aggregate) found more in the same engine: a HAVING with AND, OR or NOT
+  pointed at dead stack and looped forever; an aggregate inside a HAVING
+  comparison (`HAVING count(*) > 2 AND ...`) was never computed; the
+  aggregate and set-operation (UNION/INTERSECT/EXCEPT) maps kept keys they
+  had freed; an ORDER BY returned a freed buffer; `count_distinct(x)` read
+  NULL; the planner refused `countDistinct`/`count_distinct` and a DECIMAL
+  literal in HAVING. `groupAndAggregate`'s caller frees its result with
+  `exec.freeGroupedRows`; `runGroupedQuery` allocates its result and
+  scratch on the allocator it is given, which the `gql` executable now
+  passes as a per-query arena. Regression: `zig build
+  test-sonny6460-query-residuals` (leak-checked, including every
+  allocation failure).
+- **Test infrastructure: each cluster test step has loopback addresses of
+  its own (SONNY-6460 item 6).** The two subprocess cluster suites
+  (`test-cluster-steady-state`, `test-cluster-replicable-mutations`), which
+  the aggregate `zig build test` already runs, both started their three
+  nodes on 127.0.0.11-13, and the SONNY-6451 health test configured the
+  same three; `test-sonny6453-cluster-peer-tls` and
+  `test-gap0838-cluster-tls` listened on 127.0.0.2 with four other steps.
+  Concurrent steps on one address could probe and bind the same free port.
+  The replicable-mutations suite now uses 127.0.0.21-23, the health test
+  127.0.0.14-16, the peer TLS tests 127.0.0.31 and 127.0.0.32;
+  `zig build test-sonny6460-cluster-test-addresses` (in the aggregate)
+  fails when a cluster test step's address appears in another test source.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so

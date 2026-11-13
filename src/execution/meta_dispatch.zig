@@ -204,11 +204,32 @@ fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.
     var policies = try sessionLabelPolicies(allocator, ctx);
     defer if (policies) |*p| p.deinit();
 
+    // SONNY-6460 item 5: under a deny, a type is listed only when one of its
+    // edges is visible (`edgeVisible`): the type index also counts edges
+    // whose endpoint the policy hides, which a MATCH never reaches.
+    const reached = try allocator.alloc(bool, types.len);
+    defer allocator.free(reached);
+    @memset(reached, true);
+    if (policies) |*p| if (p.denied.count() > 0) {
+        @memset(reached, false);
+        const edge_ids = try store.allEdgeIds(allocator);
+        defer allocator.free(edge_ids);
+        for (edge_ids) |edge_id| {
+            const edge = store.getEdgePtrHydrated(edge_id) orelse continue;
+            if (!tenant_visibility.passesTenantFilterSlice(edge.tenant_id, filter_tenant)) continue;
+            if (!edgeVisible(store, p, edge)) continue;
+            for (types, reached) |t, *r| {
+                if (std.mem.eql(u8, t, edge.label)) r.* = true;
+            }
+        }
+    };
+
     // listEdgeTypes returns types in hash-iteration order; sort for stability.
     var sorted = try std.ArrayList([]const u8).initCapacity(allocator, types.len);
     defer sorted.deinit(allocator);
-    for (types) |t| {
+    for (types, reached) |t, r| {
         if (policies) |*p| if (p.entries(t).denied) continue;
+        if (!r) continue;
         try sorted.append(allocator, t);
     }
     std.mem.sort([]const u8, sorted.items, {}, lessThanString);
@@ -339,7 +360,9 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
         // descendants' edges), not the exact tag.
         if (!tenant_visibility.passesTenantFilterSlice(edge.tenant_id, filter_tenant)) continue;
         // SONNY-6437 item 5: an edge of a denied type is hidden.
-        if (policies) |*p| if (p.entries(edge.label).denied) continue;
+        // SONNY-6460 item 5: and so is one with an endpoint the policy
+        // hides (`edgeVisible`), as a MATCH does not reach it.
+        if (denies) if (!edgeVisible(store, &policies.?, edge)) continue;
         var prop_iter = edge.properties.iterator();
         while (prop_iter.next()) |p| {
             const key = p.key_ptr.*;
@@ -371,6 +394,20 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
         .owns_value_memory = true,
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6460-META-ENDPOINT-RLS; FEATURE="GPS Metadata Isolation"; ASPECT=EdgeEndpointVisibility; STATUS=TESTED; TEST=tests/test_sonny6460_meta_rls.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6460 item 5: whether a session under the label policies `policies`
+/// reaches `edge`, as a MATCH does (SONNY-2679): its type is not denied and
+/// neither endpoint is hidden (`nodeDenied`). An endpoint that cannot be read
+/// counts as hidden (fail closed).
+fn edgeVisible(store: *graph_store.GraphStore, policies: *const rls_types.RLSFilterEngine.LabelPolicySnapshot, edge: anytype) bool {
+    if (policies.entries(edge.label).denied) return false;
+    for ([_]u64{ edge.from_id, edge.to_id }) |node_id| {
+        const node = store.getNodePtrHydrated(node_id) orelse return false;
+        if (nodeDenied(policies, node.labels)) return false;
+    }
+    return true;
 }
 
 /// SONNY-6437 item 5: whether a label policy hides a node with `labels`: a

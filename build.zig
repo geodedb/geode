@@ -2323,7 +2323,9 @@ pub fn build(b: *std.Build) void {
     first_boot_pw_step.dependOn(&run_first_boot_pw_tests.step);
 
     // Regression for docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md
-    // 3 real geode subprocesses on DISTINCT loopback IPs (127.0.0.11/12/13),
+    // 3 real geode subprocesses on DISTINCT loopback IPs (127.0.0.11/12/13; no
+    // other test uses them, SONNY-6460: test-cluster-replicable-mutations runs
+    // beside it in the aggregate on 127.0.0.21-23),
     // same cluster port, CA-signed TLS, asserting a single leader is elected and
     // HOLDS for >= N seconds (the flap-to-all-candidates failure mode). Requires
     // the geode this build emitted + openssl (SKIPs without openssl) and the
@@ -15077,6 +15079,69 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6437_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6437_step = b.step("test-sonny6437-query-residuals", "Run SONNY-6437 regressions (the gql engine's SUM/AVG past i64 is NULL, not a panic; OPTIONAL MATCH, SET and WITH shapes of the removed legacy executors are answered by the live ones; db.relationshipTypes() and db.propertyKeys() omit what the session's RLS label policies hide; a WHERE after YIELD is refused with 42000 naming the ISO FILTER statement)");
     sonny6437_step.dependOn(&run_sonny6437_tests.step);
+
+    // SONNY-6460: the gql engine's groupAndAggregate frees what it builds
+    // (leak-checked), and src/exec.zig's inline tests, which no step
+    // compiled, run through root_mod filtered to their "exec.zig:" prefix
+    // (src/lib.zig's "exec.zig: inline test root" block pulls the file in).
+    const sonny6460_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6460_query_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6460_test_mod.addImport("geode", root_mod);
+    const sonny6460_tests = b.addTest(.{ .root_module = sonny6460_test_mod });
+    const run_sonny6460_tests = b.addRunArtifact(sonny6460_tests);
+    shardDep(test_step, &run_sonny6460_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6460_step = b.step("test-sonny6460-query-residuals", "Run SONNY-6460 regressions (the gql engine's GROUP BY frees its per-group accumulators, keys and COUNT DISTINCT sets, also when an allocation fails)");
+    sonny6460_step.dependOn(&run_sonny6460_tests.step);
+    // SONNY-6460 item 5: db.relationshipTypes() and db.propertyKeys() omit
+    // what only edges with an RLS-hidden endpoint carry.
+    const sonny6460_meta_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6460_meta_rls.zig"), .target = target, .optimize = optimize });
+    sonny6460_meta_mod.addImport("geode", root_mod);
+    sonny6460_meta_mod.addImport("logging", logging_mod);
+    sonny6460_meta_mod.addImport("rls_types", rls_types_mod);
+    const sonny6460_meta_tests = b.addTest(.{ .root_module = sonny6460_meta_mod });
+    const run_sonny6460_meta_tests = b.addRunArtifact(sonny6460_meta_tests);
+    shardDep(test_step, &run_sonny6460_meta_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6460_meta_step = b.step("test-sonny6460-meta-rls", "Run SONNY-6460 item 5 regression (db.relationshipTypes() and db.propertyKeys() omit the types and keys only edges with an endpoint the session's RLS label policies hide carry, as a MATCH does not reach those edges)");
+    sonny6460_meta_step.dependOn(&run_sonny6460_meta_tests.step);
+    // SONNY-6460 item 2: the ISO/IEC 39075:2024 14.6 FILTER statement after
+    // CALL ... YIELD, after MATCH ... CALL ... YIELD and after MATCH.
+    const sonny6460_filter_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6460_filter_statement.zig"), .target = target, .optimize = optimize });
+    sonny6460_filter_mod.addImport("geode", root_mod);
+    sonny6460_filter_mod.addImport("logging", logging_mod);
+    const sonny6460_filter_tests = b.addTest(.{ .root_module = sonny6460_filter_mod });
+    const run_sonny6460_filter_tests = b.addRunArtifact(sonny6460_filter_tests);
+    shardDep(test_step, &run_sonny6460_filter_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6460_filter_step = b.step("test-sonny6460-filter-statement", "Run SONNY-6460 item 2 regression (FILTER [WHERE] <condition> after CALL ... YIELD, after MATCH ... CALL ... YIELD and after MATCH, repeated; keeps a row only when the condition is True; a WHERE after YIELD stays 42000 naming FILTER)");
+    sonny6460_filter_step.dependOn(&run_sonny6460_filter_tests.step);
+    // SONNY-6460 item 4: the embedded PROFILE entry point
+    // (planned_read_runtime.executeProfiledIfSupported) runs with a statement
+    // scratch arena, so the member reads it lends are freed.
+    const sonny6460_unscoped_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6460_unscoped_eval.zig"), .target = target, .optimize = optimize });
+    sonny6460_unscoped_mod.link_libc = true; // setenv/unsetenv
+    sonny6460_unscoped_mod.addImport("geode", root_mod);
+    sonny6460_unscoped_mod.addImport("logging", logging_mod);
+    const sonny6460_unscoped_tests = b.addTest(.{ .root_module = sonny6460_unscoped_mod });
+    const run_sonny6460_unscoped_tests = b.addRunArtifact(sonny6460_unscoped_tests);
+    shardDep(test_step, &run_sonny6460_unscoped_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6460_unscoped_step = b.step("test-sonny6460-unscoped-eval", "Run SONNY-6460 item 4 regression (an embedded PROFILE through planned_read_runtime.executeProfiledIfSupported, with no scratch arena installed, frees the member reads it lends: a list property, an FLE field decrypted and redacted; leak-checked)");
+    sonny6460_unscoped_step.dependOn(&run_sonny6460_unscoped_tests.step);
+    const sonny6460_exec_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{ "exec.zig:", "TestCANARY_REQ_GQL_012_CountDistinctExec" } });
+    const run_sonny6460_exec_inline_tests = b.addRunArtifact(sonny6460_exec_inline_tests);
+    shardDep(test_step, &run_sonny6460_exec_inline_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6460_exec_inline_step = b.step("test-sonny6460-exec-inline", "Run src/exec.zig inline unit tests (grouping, HAVING, ORDER BY, set operations; SONNY-6460)");
+    sonny6460_exec_inline_step.dependOn(&run_sonny6460_exec_inline_tests.step);
+
+    // SONNY-6460 item 6: every cluster test step binds loopback addresses no
+    // other test uses, so the aggregate can run them at the same time.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6460_cluster_test_addresses.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6460_addresses_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6460-cluster-test-addresses", "Run SONNY-6460 item 6 regression (each cluster test step - the steady-state and replicable-mutations subprocess clusters, the SONNY-6451/6453/6456 cluster steps, GAP-0838 peer TLS - names loopback addresses no other test source uses)").dependOn(&run_tests.step);
+    }
 
     const sonny6334_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6334_fle_authorization.zig"), .target = target, .optimize = optimize });
     sonny6334_test_mod.link_libc = true; // setenv/unsetenv/chmod

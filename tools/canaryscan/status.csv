@@ -5464,6 +5464,16 @@ REQ-SONNY-6459-CLUSTER-LAST-CONTACT,SHOW CLUSTER STATUS,LastContactFromRaftTraff
 REQ-SONNY-6459-CLUSTER-TRANSPORT,DistributedCluster,AcceptWithoutPoolAndPeerEndpointChange,TESTED,tests/test_sonny6459_cluster_transport.zig,tests/test_sonny6459_cluster_transport.zig,,distributed,2026-11-13
 REQ-SONNY-6459-DISTRIBUTED-INLINE-TESTS,DistributedCluster,InlineTestRoot,TESTED,src/distributed_inline_test_root.zig,tests/test_sonny6459_hygiene.zig,,distributed,2026-11-13
 REQ-SONNY-6459-HYGIENE,DistributedCluster,DeadJoinCodeAndUnrunInlineTests,TESTED,tests/test_sonny6459_hygiene.zig,tests/test_sonny6459_hygiene.zig,,distributed,2026-11-13
+REQ-SONNY-6460-CLUSTER-TEST-ADDRESSES,DistributedCluster,DisjointLoopbackAddresses,TESTED,tests/test_sonny6460_cluster_test_addresses.zig,tests/test_sonny6460_cluster_test_addresses.zig,,distributed,2026-11-13
+REQ-SONNY-6460-FILTER-STATEMENT,FilterStatement,CallFilter,TESTED,src/execution.zig,tests/test_sonny6460_filter_statement.zig,,engine,2026-11-13
+REQ-SONNY-6460-FILTER-STATEMENT,FilterStatement,Parser,TESTED,src/gql/parser.zig,tests/test_sonny6460_filter_statement.zig,,parser,2026-11-13
+REQ-SONNY-6460-FILTER-STATEMENT,FilterStatement,Regression,TESTED,tests/test_sonny6460_filter_statement.zig,tests/test_sonny6460_filter_statement.zig,,parser,2026-11-13
+REQ-SONNY-6460-GQL-GROUP-OWNERSHIP,GqlEngineAggregation,GroupAccumulatorOwnership,TESTED,src/exec.zig,tests/test_sonny6460_query_residuals.zig,,engine,2026-11-13
+REQ-SONNY-6460-META-ENDPOINT-RLS,GPS Metadata Isolation,EdgeEndpointVisibility,TESTED,src/execution/meta_dispatch.zig,tests/test_sonny6460_meta_rls.zig,,security,2026-11-13
+REQ-SONNY-6460-META-ENDPOINT-RLS,GPS Metadata Isolation,Regression,TESTED,tests/test_sonny6460_meta_rls.zig,tests/test_sonny6460_meta_rls.zig,,security,2026-11-13
+REQ-SONNY-6460-PROFILE-SCRATCH,ExecutionResultOwnership,ProfiledEntryPointScratch,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6460_unscoped_eval.zig,,execution,2026-11-13
+REQ-SONNY-6460-PROFILE-SCRATCH,ExecutionResultOwnership,Regression,TESTED,tests/test_sonny6460_unscoped_eval.zig,tests/test_sonny6460_unscoped_eval.zig,,execution,2026-11-13
+REQ-SONNY-6460-QUERY-RESIDUALS,GqlEngineAggregation,Regression,TESTED,tests/test_sonny6460_query_residuals.zig,tests/test_sonny6460_query_residuals.zig,,engine,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08

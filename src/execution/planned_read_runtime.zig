@@ -479,6 +479,17 @@ pub fn executeProfiledIfSupported(
     // CANARY: REQ=REQ-PROFILE-RLS-TENANT-001; FEATURE="PROFILE"; ASPECT=ActiveContextPush; STATUS=TESTED; TEST=tests/test_profile_rls_tenant.zig; OWNER=security; UPDATED=2026-08-29
     const prev_ctx = execution.pushActiveContext(&context);
     defer execution.popActiveContext(prev_ctx);
+    // CANARY: REQ=REQ-SONNY-6460-PROFILE-SCRATCH; FEATURE="ExecutionResultOwnership"; ASPECT=ProfiledEntryPointScratch; STATUS=TESTED; TEST=tests/test_sonny6460_unscoped_eval.zig; OWNER=execution; UPDATED=2026-11-13
+    // SONNY-6460 item 4: a statement scratch arena, as the executor's other
+    // entry points open one (`execution.executeStatementWithContext`). An
+    // embedded caller of this `pub` entry point had none, so what the
+    // evaluator lends (a list property's copy, a decrypted or redacted FLE
+    // string: `eval.lentValueAllocator`) fell back to `allocator` and was
+    // freed by no one. With an arena already installed (a transport's, or a
+    // statement's when `executeIfSupported` runs inside one) it does nothing.
+    var scratch: query_arena.StatementScratch = .{};
+    scratch.open(allocator);
+    defer scratch.close();
     // CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProfiledEntryPoint; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
     // SONNY-3027: a profiled query is a program of its own, like one run
     // through `executeProgramWithContext`: the session engine transaction a
@@ -530,6 +541,12 @@ pub fn executeProfiledIfSupported(
     }
     execution.endStatementSucceeded(owns_scope, context.catalog) catch |err| {
         profiled.result.deinit(allocator);
+        profiled.deinitMetadata(allocator);
+        return err;
+    };
+    // SONNY-6460 item 4: the result is copied out of the arena opened above
+    // before it closes (it frees the result on failure).
+    execution.detachFromStatementScratch(allocator, &scratch, &profiled.result) catch |err| {
         profiled.deinitMetadata(allocator);
         return err;
     };

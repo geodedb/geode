@@ -3,16 +3,17 @@
 // GAP-0838 regression: the Raft peer QUIC/TLS handshake must complete across
 // DISTINCT peer IPs in SECURE mode (no GEODE_CLUSTER_INSECURE). Loopback +
 // insecure masked this for two releases (0.6.7, 0.6.12). This test binds the
-// server on 127.0.0.2 (a distinct loopback IP), uses a real openssl-generated
+// server on 127.0.0.32 (a distinct loopback IP), uses a real openssl-generated
 // CA-issued leaf, and validates the handshake with secure verification.
+// 127.0.0.32 is an address no other test step uses (SONNY-6460).
 //
-// Skips (error.SkipZigTest) only if openssl is unavailable or 127.0.0.2 cannot
+// Skips (error.SkipZigTest) only if openssl is unavailable or 127.0.0.32 cannot
 // be bound — never silently passes.
 const std = @import("std");
 const builtin = @import("builtin");
 const quic = @import("transport/quic");
 
-const SERVER_IP = "127.0.0.2";
+const SERVER_IP = "127.0.0.32";
 
 const Fixtures = struct {
     dir: []const u8,
@@ -36,7 +37,7 @@ fn run(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) !void {
     if (result.term != .exited or result.term.exited != 0) return error.OpensslFailed;
 }
 
-// Generate a CA, a CA-issued leaf with SAN=IP:127.0.0.2,DNS:127.0.0.2, and a
+// Generate a CA, a CA-issued leaf with SAN=IP:127.0.0.32,DNS:127.0.0.32, and a
 // standalone self-signed server cert with the same SANs. Returns paths under a
 // fresh temp dir. Caller frees nothing (arena-style: dir removed by caller).
 fn makeFixtures(a: std.mem.Allocator) !Fixtures {
@@ -71,7 +72,7 @@ fn makeFixtures(a: std.mem.Allocator) !Fixtures {
     // SAN extension file
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = ext,
-        .data = "subjectAltName=IP:127.0.0.2,DNS:127.0.0.2\nextendedKeyUsage=serverAuth\n",
+        .data = "subjectAltName=IP:127.0.0.32,DNS:127.0.0.32\nextendedKeyUsage=serverAuth\n",
     });
     // CA (P-256 self-signed)
     try run(spawn_gpa, io, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ca_key });
@@ -86,7 +87,7 @@ fn makeFixtures(a: std.mem.Allocator) !Fixtures {
     // `-addext` (openssl 3.x). The CA-issued leaf above correctly uses
     // `x509 -req -extfile <ext>`.
     try run(spawn_gpa, io, &.{ "openssl", "ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", ss_key });
-    try run(spawn_gpa, io, &.{ "openssl", "req", "-x509", "-new", "-key", ss_key, "-days", "3650", "-subj", "/CN=geode-peer", "-addext", "subjectAltName=IP:127.0.0.2,DNS:127.0.0.2", "-addext", "extendedKeyUsage=serverAuth", "-out", ss_pem });
+    try run(spawn_gpa, io, &.{ "openssl", "req", "-x509", "-new", "-key", ss_key, "-days", "3650", "-subj", "/CN=geode-peer", "-addext", "subjectAltName=IP:127.0.0.32,DNS:127.0.0.32", "-addext", "extendedKeyUsage=serverAuth", "-out", ss_pem });
 
     return .{ .dir = dir, .ca_pem = ca_pem, .leaf_pem = leaf_pem, .leaf_key = leaf_key, .selfsigned_pem = ss_pem, .selfsigned_key = ss_key };
 }
@@ -107,7 +108,7 @@ const ServerHandle = struct {
     stop: *std.atomic.Value(bool),
 };
 
-// Bring up a server on 127.0.0.2:port with cert/key, return port + handles.
+// Bring up a server on 127.0.0.32:port with cert/key, return port + handles.
 fn startServer(a: std.mem.Allocator, cert: []const u8, key: []const u8, port: u16) !ServerHandle {
     const t = try a.create(quic.QuicTransport);
     t.* = try quic.QuicTransport.init(a, .{
@@ -182,7 +183,7 @@ test "GAP-0838: secure peer TLS handshake on distinct IP succeeds with CA trust 
 
     var client = quic.QuicClient.init(a);
     defer client.deinit();
-    // connectEx with the CA as trust anchor; SNI = "127.0.0.2" matches IP SAN.
+    // connectEx with the CA as trust anchor; SNI = "127.0.0.32" matches IP SAN.
     try client.connectEx(SERVER_IP, 24843, fx.ca_pem, null, null);
     try client.waitForHandshake(5); // must SUCCEED
 }

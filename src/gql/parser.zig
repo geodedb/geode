@@ -577,7 +577,33 @@ pub const Parser = struct {
     /// with a message that says so (42000); it was a bare syntax error.
     fn refuseWhereAfterYield(self: *Parser) ParserError!void {
         if (self.cur.kind != .WHERE) return;
-        return self.unexpected("a WHERE after YIELD is not ISO/IEC 39075 GQL: a <yield clause> (16.14) is YIELD <yield item list> only, and the standard filters a procedure call's rows with a FILTER statement (14.6) after the CALL, which Geode does not yet accept after CALL ... YIELD");
+        return self.unexpected("a WHERE after YIELD is not ISO/IEC 39075 GQL: a <yield clause> (16.14) is YIELD <yield item list> only; filter a procedure call's rows with a FILTER statement (14.6) after it: CALL ... YIELD ... FILTER [WHERE] <condition>");
+    }
+
+    // CANARY: REQ=REQ-SONNY-6460-FILTER-STATEMENT; FEATURE="FilterStatement"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_sonny6460_filter_statement.zig; OWNER=parser; UPDATED=2026-11-13
+    /// SONNY-6460 item 2: ISO/IEC 39075:2024 14.6 <filter statement>,
+    /// `FILTER { <where clause> | <search condition> }` (SR 2: `FILTER SC` is
+    /// `FILTER WHERE SC`), any number in a row. Each keeps a record only when
+    /// its condition is True (16.13 GR 2, 19.1 GR 2), so consecutive ones are
+    /// their conditions ANDed. Null when there is none.
+    fn parseFilterStatements(self: *Parser) ParserError!?ast.Expr {
+        var combined: ?ast.Expr = null;
+        while (self.cur.kind == .FILTER) {
+            self.advance();
+            if (self.cur.kind == .WHERE) self.advance();
+            const condition = try self.parseOrExpr();
+            combined = if (combined) |earlier| try self.makeBinary(.And, earlier, condition) else condition;
+        }
+        return combined;
+    }
+
+    /// `parseFilterStatements`, the condition on the parser's arena: a
+    /// procedure call keeps a pointer (`ast.CallProcedure.filter`).
+    fn parseFilterStatementsBoxed(self: *Parser) ParserError!?*const ast.Expr {
+        const condition = (try self.parseFilterStatements()) orelse return null;
+        const boxed = try self.arena.allocator().create(ast.Expr);
+        boxed.* = condition;
+        return boxed;
     }
 
     fn unexpected(self: *Parser, what: []const u8) ParserError {
@@ -1777,6 +1803,9 @@ pub const Parser = struct {
                         try self.refuseWhereAfterYield();
                     }
 
+                    // SONNY-6460 item 2: FILTER statements over the call's rows.
+                    const call_filter = try self.parseFilterStatementsBoxed();
+
                     // Optional RETURN clause
                     var return_clause: ?ast.ReturnClause = null;
                     if (self.cur.kind == .RETURN) {
@@ -1842,6 +1871,7 @@ pub const Parser = struct {
                     break :blk_call .{ .Call = .{ .Procedure = .{
                         .procedure = procedure,
                         .yield_items = yield_items,
+                        .filter = call_filter,
                         .return_clause = return_clause,
                         .order_by = order_by,
                         .limit = limit,
@@ -2693,15 +2723,8 @@ pub const Parser = struct {
         }
 
         // Parse FILTER clause (ISO/IEC 39075:2024)
-        var filter_expr: ?ast.Expr = null;
-        if (self.cur.kind == .FILTER) {
-            self.advance();
-            // FILTER can have optional WHERE keyword: "FILTER WHERE expr" or "FILTER expr"
-            if (self.cur.kind == .WHERE) {
-                self.advance();
-            }
-            filter_expr = try self.parseOrExpr();
-        }
+        // SONNY-6460 item 2: any number of them (`parseFilterStatements`).
+        const filter_expr: ?ast.Expr = try self.parseFilterStatements();
 
         // Parse inline LET clause (after MATCH/WHERE/FILTER, before WITH/RETURN)
         // Syntax: MATCH ... LET var1 = expr1, var2 = expr2 RETURN ...
@@ -2982,6 +3005,8 @@ pub const Parser = struct {
             call_clause = .{
                 .procedure = procedure,
                 .yield_items = yield_items,
+                // SONNY-6460 item 2: FILTER statements over the joined rows.
+                .filter = try self.parseFilterStatementsBoxed(),
             };
         }
 

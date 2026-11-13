@@ -1453,7 +1453,7 @@ const QueryExprs = struct {
     index: usize = 0,
 
     fn next(self: *QueryExprs) ?ast.Expr {
-        while (self.stage < 20) {
+        while (self.stage < 21) {
             if (self.at()) |e| return e;
             self.stage += 1;
             self.index = 0;
@@ -1493,6 +1493,7 @@ const QueryExprs = struct {
             },
             18 => if (q.merge_statement) |m| if (m.return_clause) |r| if (self.index < r.items.len) return self.take(r.items[self.index].expr),
             19 => return self.single(if (q.call_clause) |cc| cc.procedure else null),
+            20 => return self.single(if (q.call_clause) |cc| if (cc.filter) |filter| filter.* else null else null),
             else => {},
         }
         return null;

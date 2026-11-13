@@ -339,6 +339,9 @@ fn isAggregateCall(e: ast.Expr) bool {
             if (std.ascii.eqlIgnoreCase(name, "avg")) break :blk true;
             if (std.ascii.eqlIgnoreCase(name, "min")) break :blk true;
             if (std.ascii.eqlIgnoreCase(name, "max")) break :blk true;
+            // SONNY-6460 item 3: the COUNT DISTINCT spellings the gql
+            // engine's grouped executor computes (`exec.runGroupedQuery`).
+            if (std.ascii.eqlIgnoreCase(name, "countdistinct") or std.ascii.eqlIgnoreCase(name, "count_distinct")) break :blk true;
             break :blk false;
         },
         else => false,
@@ -409,7 +412,7 @@ fn validateGroupBy(allocator: std.mem.Allocator, q: ast.Query) PlanError!void {
 /// P2-3: Now accepts allocator for temporary string allocations
 fn exprAllowedInGroup(allocator: std.mem.Allocator, e: ast.Expr, allowed: *std.StringHashMap(void)) bool {
     return switch (e) {
-        .Int, .Bool, .Null, .String => true,
+        .Int, .Bool, .Null, .String, .Decimal => true,
         .Ident => |id| allowed.contains(id.orig),
         .Member => blk: {
             const ss = printer.stringifyExprAlloc(allocator, e, .{}) catch break :blk false;
