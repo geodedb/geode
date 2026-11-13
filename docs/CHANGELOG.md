@@ -2235,6 +2235,22 @@
 
 ### Fixed
 
+- **LSP and MCP recommendations point at their token, and their errors
+  are no longer dropped (SONNY-6511 item 4).** Every recommendation of
+  `src/gql/recommendations.zig` was reported at line 0, column 0, and an
+  error of the engine (out of memory included) was turned into "no
+  recommendations" by both `src/mcp/lsp.zig` `validateQuery` and
+  `src/cli/lsp/features/diagnostics.zig`. The AST carries no positions, so
+  `RecommendationEngine.analyzeSource` finds each recommendation's token
+  (property or field name, `count`, the `*` of a variable-length path) in
+  the source, outside strings and comments; the LSP range covers it
+  (0-based) and MCP reports 1-based line/column with an exclusive end
+  column. Errors now fail the request. The LSP diagnostics also dropped a
+  semantic-analysis allocation failure the same way, leaked diagnostic
+  messages, a scope key and a document when an allocation failed, and
+  `Document.update` left the text pointing at freed memory when its copy
+  failed; all fixed. `zig build test-sonny6511-recommendation-positions`
+  and `test-lsp` (`src/cli/lsp/recommendation_positions_test.zig`).
 - **`geode shell` keeps the character typed after ESC; audit switches take
   any-case booleans and refuse anything else (SONNY-6511 item 5).** The
   line editor consumed ESC and the following byte as one key whenever that

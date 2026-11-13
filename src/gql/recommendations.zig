@@ -17,12 +17,115 @@ pub const Severity = enum {
 };
 
 pub const Recommendation = struct {
+    /// 0-based line and byte column of `anchor` in the analysed source
+    /// (`analyzeSource`); 0, 0 from `analyze`, which has no source.
     line: u32,
     column: u32,
     severity: Severity,
     code: []const u8,
     message: []const u8,
+    /// SONNY-6511: the source token the recommendation is about (a property
+    /// or field name, `count`, or the `*` of a variable-length path),
+    /// borrowed from the AST. The AST carries no source positions, so
+    /// `analyzeSource` finds the token in the source text.
+    anchor: []const u8 = "",
+    /// Byte column one past the anchor on `line` (the anchor is one token).
+    end_column: u32 = 0,
 };
+
+/// A one-line source range: 0-based line, byte columns [column, end_column).
+pub const SourceSpan = struct {
+    line: u32,
+    column: u32,
+    end_column: u32,
+};
+
+fn isWordByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c >= 0x80;
+}
+
+/// SONNY-6511: the `nth` (0-based) occurrence of `token` in `source` outside
+/// string literals and comments, compared ASCII case-insensitively; a word
+/// token must be a whole word. An empty `token` finds the first byte that is
+/// not whitespace or comment (the start of the first statement).
+pub fn locate(source: []const u8, token: []const u8, nth: usize) ?SourceSpan {
+    const word = token.len > 0 and isWordByte(token[0]);
+    var seen: usize = 0;
+    var line: u32 = 0;
+    var line_start: usize = 0;
+    var i: usize = 0;
+    while (i < source.len) {
+        const c = source[i];
+        if (c == '\n') {
+            line += 1;
+            i += 1;
+            line_start = i;
+            continue;
+        }
+        // Comments: // and -- to the end of the line, /* ... */.
+        if (i + 1 < source.len and ((c == '/' and source[i + 1] == '/') or (c == '-' and source[i + 1] == '-'))) {
+            while (i < source.len and source[i] != '\n') i += 1;
+            continue;
+        }
+        if (i + 1 < source.len and c == '/' and source[i + 1] == '*') {
+            i += 2;
+            while (i < source.len and !(source[i] == '*' and i + 1 < source.len and source[i + 1] == '/')) {
+                if (source[i] == '\n') {
+                    line += 1;
+                    line_start = i + 1;
+                }
+                i += 1;
+            }
+            i = @min(source.len, i + 2);
+            continue;
+        }
+        // String literals: '...' and "...", with backslash escapes and
+        // doubled quotes.
+        if (c == '\'' or c == '"') {
+            i += 1;
+            while (i < source.len) {
+                if (source[i] == '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (source[i] == '\n') {
+                    line += 1;
+                    line_start = i + 1;
+                }
+                if (source[i] == c) {
+                    if (i + 1 < source.len and source[i + 1] == c) {
+                        i += 2;
+                        continue;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        if (std.ascii.isWhitespace(c)) {
+            i += 1;
+            continue;
+        }
+        if (token.len == 0) return .{ .line = line, .column = @intCast(i - line_start), .end_column = @intCast(i - line_start) };
+        const fits = i + token.len <= source.len and std.ascii.eqlIgnoreCase(source[i .. i + token.len], token);
+        const bounded = !word or ((i == 0 or !isWordByte(source[i - 1])) and (i + token.len == source.len or !isWordByte(source[i + token.len])));
+        if (fits and bounded) {
+            if (seen == nth) return .{ .line = line, .column = @intCast(i - line_start), .end_column = @intCast(i + token.len - line_start) };
+            seen += 1;
+            i += token.len;
+            continue;
+        }
+        // Step over the rest of a word so a token never matches inside one.
+        if (isWordByte(c)) {
+            while (i < source.len and isWordByte(source[i])) i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    return null;
+}
 
 /// Maps variable names to their labels from graph patterns.
 const LabelMap = std.StringHashMap([]const u8);
@@ -57,6 +160,28 @@ pub const RecommendationEngine = struct {
     pub fn analyze(self: *RecommendationEngine, program: ast.Program) ![]const Recommendation {
         for (program.statements) |stmt| {
             try self.analyzeStatement(stmt);
+        }
+        return self.results.items;
+    }
+
+    /// SONNY-6511: `analyze`, then place each recommendation on its anchor
+    /// in `source` (the text `program` was parsed from): the n-th
+    /// recommendation naming an anchor goes to the anchor's n-th whole-word
+    /// occurrence outside string literals and comments. One whose anchor is
+    /// not found goes to the start of the first statement (the AST has no
+    /// statement positions either).
+    pub fn analyzeSource(self: *RecommendationEngine, program: ast.Program, source: []const u8) ![]const Recommendation {
+        _ = try self.analyze(program);
+        const fallback = locate(source, "", 0) orelse SourceSpan{ .line = 0, .column = 0, .end_column = 0 };
+        for (self.results.items, 0..) |*rec, i| {
+            var nth: usize = 0;
+            for (self.results.items[0..i]) |prev| {
+                if (std.ascii.eqlIgnoreCase(prev.anchor, rec.anchor)) nth += 1;
+            }
+            const span = (if (rec.anchor.len > 0) locate(source, rec.anchor, nth) else null) orelse fallback;
+            rec.line = span.line;
+            rec.column = span.column;
+            rec.end_column = span.end_column;
         }
         return self.results.items;
     }
@@ -107,6 +232,7 @@ pub const RecommendationEngine = struct {
                         .column = 0,
                         .severity = .hint,
                         .code = "geode/suggest-index",
+                        .anchor = pa.property,
                         .message = msg,
                     });
                 }
@@ -128,6 +254,7 @@ pub const RecommendationEngine = struct {
                             .column = 0,
                             .severity = .information,
                             .code = "geode/suggest-path-mode",
+                            .anchor = "*",
                             .message = try self.allocator.dupe(u8, "Variable-length path detected. Consider using a path mode (TRAIL, ACYCLIC, SIMPLE) or shortestPath() for deterministic traversal."),
                         });
                     }
@@ -167,6 +294,7 @@ pub const RecommendationEngine = struct {
                             .column = 0,
                             .severity = .information,
                             .code = "geode/suggest-encrypted",
+                            .anchor = prop.key,
                             .message = msg,
                         });
                     },
@@ -177,6 +305,7 @@ pub const RecommendationEngine = struct {
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-searchable",
+                            .anchor = prop.key,
                             .message = msg,
                         });
                     },
@@ -195,6 +324,7 @@ pub const RecommendationEngine = struct {
                     .column = 0,
                     .severity = .hint,
                     .code = "geode/suggest-vector-index",
+                    .anchor = prop.key,
                     .message = msg,
                 });
             }
@@ -225,6 +355,7 @@ pub const RecommendationEngine = struct {
                             .column = 0,
                             .severity = .information,
                             .code = "geode/suggest-encrypted",
+                            .anchor = field.name,
                             .message = msg,
                         });
                     },
@@ -235,6 +366,7 @@ pub const RecommendationEngine = struct {
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-searchable",
+                            .anchor = field.name,
                             .message = msg,
                         });
                     },
@@ -256,6 +388,7 @@ pub const RecommendationEngine = struct {
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-index",
+                            .anchor = pa.property,
                             .message = msg,
                         });
                     } else if (propertyRef(bin.right.*)) |pa| {
@@ -266,6 +399,7 @@ pub const RecommendationEngine = struct {
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-index",
+                            .anchor = pa.property,
                             .message = msg,
                         });
                     }
@@ -283,6 +417,7 @@ pub const RecommendationEngine = struct {
                         .column = 0,
                         .severity = .hint,
                         .code = "geode/suggest-fulltext-index",
+                        .anchor = pa.property,
                         .message = msg,
                     });
                 }
@@ -296,6 +431,7 @@ pub const RecommendationEngine = struct {
                         .column = 0,
                         .severity = .hint,
                         .code = "geode/suggest-fulltext-index",
+                        .anchor = pa.property,
                         .message = msg,
                     });
                 }
@@ -315,6 +451,7 @@ pub const RecommendationEngine = struct {
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-coalesce",
+                            .anchor = pa.property,
                             .message = msg,
                         });
                     }
@@ -342,6 +479,7 @@ pub const RecommendationEngine = struct {
                                 .column = 0,
                                 .severity = .hint,
                                 .code = "geode/suggest-degree",
+                                .anchor = "count",
                                 .message = try self.allocator.dupe(u8, "count() on a relationship variable may be replaceable with indegree()/outdegree() or algo.degree.stream for better performance."),
                             });
                         }

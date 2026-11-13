@@ -196,16 +196,20 @@ pub fn validateQuery(allocator: std.mem.Allocator, query: []const u8) ![]const u
         });
     }
 
-    // Run recommendation engine for context-aware suggestions
+    // Run recommendation engine for context-aware suggestions.
+    // SONNY-6511: its errors (out-of-memory included) reach the caller; they
+    // used to answer as if there were no recommendation. Positions come from
+    // the source (the AST has none): 0-based there, 1-based here like the
+    // parse errors above (lexer line/col start at 1).
     var rec_engine = mod.recommendations.RecommendationEngine.init(allocator);
     defer rec_engine.deinit();
-    const suggestions = rec_engine.analyze(program) catch &[_]mod.recommendations.Recommendation{};
+    const suggestions = try rec_engine.analyzeSource(program, query);
     for (suggestions) |suggestion| {
         try diagnostics.append(allocator, Diagnostic{
-            .line = suggestion.line,
-            .column = suggestion.column,
-            .end_line = suggestion.line,
-            .end_column = suggestion.column,
+            .line = suggestion.line + 1,
+            .column = suggestion.column + 1,
+            .end_line = suggestion.line + 1,
+            .end_column = suggestion.end_column + 1,
             .severity = switch (suggestion.severity) {
                 .information => .information,
                 .hint => .hint,

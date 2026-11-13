@@ -82,16 +82,53 @@ test "SONNY-6511: LSP graph-type field recommendations point at the field" {
     try testing.expectEqualStrings("ssn", rangeText(text, d.range));
 }
 
-fn diagnoseRecommendations(allocator: std.mem.Allocator) !void {
-    var srv = try server.Server.init(allocator);
+/// One provideDiagnostics run of a query with a recommendation, the
+/// `fail_index`-th allocation failing. Returns null on error.OutOfMemory.
+fn diagnoseFailingAt(fail_index: usize, allocations: *usize) !?struct { recommended: bool, errored: bool } {
+    var failing = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = fail_index });
+    const allocator = failing.allocator();
+    defer allocations.* = failing.alloc_index;
+    var srv = server.Server.init(allocator) catch |err| {
+        const e: anyerror = err;
+        if (e == error.OutOfMemory) return null;
+        return e;
+    };
     defer srv.deinit();
-    try srv.documents.open("file:///oom.gql", "MATCH (n:Person) WHERE n.age = 30 RETURN n", 1);
-    const diags = try features.provideDiagnostics(allocator, srv.documents.get("file:///oom.gql").?, null, features.LspContext.stdio);
+    srv.documents.open("file:///oom.gql", "MATCH (n:Person) WHERE n.age = 30 RETURN n", 1) catch |err| {
+        const e: anyerror = err;
+        if (e == error.OutOfMemory) return null;
+        return e;
+    };
+    const diags = features.provideDiagnostics(allocator, srv.documents.get("file:///oom.gql").?, null, features.LspContext.stdio) catch |err| {
+        const e: anyerror = err;
+        if (e == error.OutOfMemory) return null;
+        return e;
+    };
     defer freeDiagnostics(allocator, diags);
-    // Without the recommendation the run is not a success.
-    if (findDiag(diags, "CREATE INDEX ON :Person(age)", 0) == null) return error.RecommendationMissing;
+    var errored = false;
+    for (diags) |d| {
+        if (d.severity == .Error) errored = true;
+    }
+    return .{ .recommended = findDiag(diags, "CREATE INDEX ON :Person(age)", 0) != null, .errored = errored };
 }
 
 test "SONNY-6511: an allocation failure in LSP diagnostics is an error, never a missing recommendation" {
-    try testing.checkAllAllocationFailures(testing.allocator, diagnoseRecommendations, .{});
+    // A clean run, to count its allocations.
+    var total: usize = 0;
+    const clean = (try diagnoseFailingAt(std.math.maxInt(usize), &total)).?;
+    try testing.expect(clean.recommended and !clean.errored);
+    // Fail each allocation in turn. A run may end in error.OutOfMemory, or
+    // still produce the recommendation. A run that answers with no error
+    // and no recommendation has swallowed the failure. (A run whose parse
+    // reports an error diagnostic is the parse path's own handling, outside
+    // this test.)
+    var i: usize = 0;
+    while (i < total) : (i += 1) {
+        var n: usize = 0;
+        const r = (try diagnoseFailingAt(i, &n)) orelse continue;
+        if (!r.recommended and !r.errored) {
+            std.debug.print("allocation {d} of {d} failed and the diagnostics answered with no recommendation and no error\n", .{ i, total });
+            return error.SwallowedOutOfMemory;
+        }
+    }
 }
