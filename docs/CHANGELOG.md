@@ -2011,6 +2011,14 @@
 
 ### Fixed
 
+- **An embedded PROFILE no longer leaks the member reads it evaluates
+  (SONNY-6460 item 4).** `planned_read_runtime.executeProfiledIfSupported`
+  runs a statement of its own but opened no statement scratch arena (the
+  other executor entry points have since SONNY-6449), so called with none
+  installed, a list property's copy and an FLE field's decrypted or
+  redacted string were allocated on the caller's allocator and never freed.
+  It now opens one and copies its result out before closing it. Regression:
+  `zig build test-sonny6460-unscoped-eval` (leak-checked).
 - **The `gql` executable's GROUP BY engine no longer leaks, crashes or
   hangs (SONNY-6460 item 3).** `src/exec.zig` `groupAndAggregate` never
   freed a group's accumulators or key slice (every grouped query leaked),

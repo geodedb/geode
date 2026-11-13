@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:49:12.681077357Z",
+  "generated_at": "2026-11-13T09:52:01.951836525Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85687,6 +85687,20 @@
       "features": [
         {
           "feature": "ExecutionResultOwnership",
+          "aspect": "ProfiledEntryPointScratch",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_unscoped_eval.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ExecutionResultOwnership",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93355,7 +93369,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4864
+      "TESTED": 4865
     },
     "by_aspect": {
       "2PC": 3,
@@ -96207,6 +96221,7 @@
       "Profile": 1,
       "ProfileIndexName": 1,
       "ProfiledEntryPoint": 1,
+      "ProfiledEntryPointScratch": 1,
       "ProfiledRelayScope": 1,
       "ProgramEnd": 1,
       "ProgramEndAbort": 1,

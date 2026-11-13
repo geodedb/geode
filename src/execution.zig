@@ -1463,7 +1463,7 @@ pub fn validateProgramShapes(program: *const ast.Program, context: ExecutionCont
 /// is copied out of it first: its values (`ownResultValues`) and its nodes
 /// and relationships (`ownGraphEntities`), as the gRPC server keeps a result
 /// past its request.
-fn detachFromStatementScratch(allocator: std.mem.Allocator, scratch: *const query_arena.StatementScratch, result: *ExecutionResult) !void {
+pub fn detachFromStatementScratch(allocator: std.mem.Allocator, scratch: *const query_arena.StatementScratch, result: *ExecutionResult) !void {
     if (!scratch.used()) return;
     errdefer result.deinit(allocator);
     try value_utilities.ownResultValues(allocator, result);

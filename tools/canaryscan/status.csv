@@ -5466,6 +5466,7 @@ REQ-SONNY-6460-FILTER-STATEMENT,FilterStatement,Regression,TESTED,tests/test_son
 REQ-SONNY-6460-GQL-GROUP-OWNERSHIP,GqlEngineAggregation,GroupAccumulatorOwnership,TESTED,src/exec.zig,tests/test_sonny6460_query_residuals.zig,,engine,2026-11-13
 REQ-SONNY-6460-META-ENDPOINT-RLS,GPS Metadata Isolation,EdgeEndpointVisibility,TESTED,src/execution/meta_dispatch.zig,tests/test_sonny6460_meta_rls.zig,,security,2026-11-13
 REQ-SONNY-6460-META-ENDPOINT-RLS,GPS Metadata Isolation,Regression,TESTED,tests/test_sonny6460_meta_rls.zig,tests/test_sonny6460_meta_rls.zig,,security,2026-11-13
+REQ-SONNY-6460-PROFILE-SCRATCH,ExecutionResultOwnership,ProfiledEntryPointScratch,TESTED,src/execution/planned_read_runtime.zig,tests/test_sonny6460_unscoped_eval.zig,,execution,2026-11-13
 REQ-SONNY-6460-PROFILE-SCRATCH,ExecutionResultOwnership,Regression,TESTED,tests/test_sonny6460_unscoped_eval.zig,tests/test_sonny6460_unscoped_eval.zig,,execution,2026-11-13
 REQ-SONNY-6460-QUERY-RESIDUALS,GqlEngineAggregation,Regression,TESTED,tests/test_sonny6460_query_residuals.zig,tests/test_sonny6460_query_residuals.zig,,engine,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
