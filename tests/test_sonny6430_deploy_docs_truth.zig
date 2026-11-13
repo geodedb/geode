@@ -84,6 +84,7 @@ const deploy_docs = [_][]const u8{
     "docs/DOCKER_OVERVIEW.md",
     "docs/TDE_FILE_LEVEL_ENCRYPTION.md",
     "docs/NIX_DEPLOYMENT.md",
+    "docs/DOCKER_LOG_LEVEL_CONFIG.md", // SONNY-6442 (5)
 };
 
 fn isVarChar(c: u8) bool {
@@ -273,4 +274,134 @@ test "SONNY-6430 (9) docs/NIX_DEPLOYMENT.md says the Nix packaging is not in thi
     // The repository has no flake.nix; the guide must say so up front.
     const head = text[0..@min(text.len, 2000)];
     try testing.expect(std.mem.indexOf(u8, head, "not in this repository") != null);
+}
+
+// SONNY-6442 (5): Dockerfile, Dockerfile.prebuilt, Dockerfile.simple and
+// Dockerfile.reliable set `ENV LOG_LEVEL=error` (and Dockerfile.base and the
+// dev images too), and docs/DOCKER_LOG_LEVEL_CONFIG.md documented it as the
+// image's log level, but geode reads no LOG_LEVEL: only the vendored QUIC
+// library's own logger does, and its default is already `error`. The server
+// ran at its default `info`. docker-integration/Dockerfile.server set
+// GEODE_LOG_LEVEL and GEODE_LISTEN, which nothing reads.
+//
+// The contract: no Dockerfile sets LOG_LEVEL or a GEODE_* variable no source
+// file reads, and every image that runs `geode serve` gives its log level
+// with --log-level.
+const dockerfiles = [_][]const u8{
+    "Dockerfile",
+    "Dockerfile.base",
+    "Dockerfile.ci",
+    "Dockerfile.ci.alpine",
+    "Dockerfile.ci.gpu",
+    "Dockerfile.dev",
+    "Dockerfile.devimage",
+    "Dockerfile.devimage.fips",
+    "Dockerfile.gpu",
+    "Dockerfile.prebuilt",
+    "Dockerfile.release",
+    "Dockerfile.release.alpine",
+    "Dockerfile.release.fips",
+    "Dockerfile.release.gpu",
+    "Dockerfile.reliable",
+    "Dockerfile.simple",
+    "docker-integration/Dockerfile.server",
+};
+
+/// The variable names an `ENV` instruction (with its `\` continuation lines)
+/// sets: `ENV A=1 B=2` or the legacy `ENV A 1`.
+fn dockerEnvKeys(allocator: std.mem.Allocator, text: []const u8, out: *std.ArrayListUnmanaged([]const u8)) !void {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    var in_env = false;
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        var rest: []const u8 = undefined;
+        if (std.mem.startsWith(u8, line, "ENV ")) {
+            rest = line["ENV ".len..];
+            // Legacy form `ENV KEY value`: one key, no '='.
+            var first = std.mem.tokenizeScalar(u8, rest, ' ');
+            if (first.next()) |tok| if (std.mem.indexOfScalar(u8, tok, '=') == null) {
+                try out.append(allocator, tok);
+                in_env = false;
+                continue;
+            };
+        } else if (in_env) {
+            rest = line;
+        } else continue;
+        in_env = std.mem.endsWith(u8, line, "\\");
+        var toks = std.mem.tokenizeScalar(u8, rest, ' ');
+        while (toks.next()) |tok| {
+            const eq = std.mem.indexOfScalar(u8, tok, '=') orelse continue;
+            var end: usize = 0;
+            while (end < eq and isVarChar(tok[end])) end += 1;
+            if (end == eq and end > 0) try out.append(allocator, tok[0..eq]);
+        }
+    }
+}
+
+test "SONNY-6442 (5) no Dockerfile sets LOG_LEVEL or a GEODE_* variable no source file reads" {
+    const allocator = testing.allocator;
+    var read = try readVariables(allocator);
+    defer freeKeys(allocator, &read);
+    var bad: usize = 0;
+    for (dockerfiles) |file| {
+        const text = try readRepoFile(allocator, file);
+        defer allocator.free(text);
+        var keys: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer keys.deinit(allocator);
+        try dockerEnvKeys(allocator, text, &keys);
+        for (keys.items) |k| {
+            const unread = std.mem.eql(u8, k, "LOG_LEVEL") or (std.mem.startsWith(u8, k, "GEODE_") and !read.contains(k));
+            if (unread) {
+                std.debug.print("SONNY-6442 (5): {s} sets {s}, which geode does not read\n", .{ file, k });
+                bad += 1;
+            }
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), bad);
+}
+
+test "SONNY-6442 (5) every image that runs geode serve gives its log level with --log-level" {
+    const allocator = testing.allocator;
+    var bad: usize = 0;
+    var serving: usize = 0;
+    for (dockerfiles) |file| {
+        const text = try readRepoFile(allocator, file);
+        defer allocator.free(text);
+        var runs_serve = false;
+        var has_level = false;
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |line| {
+            if (!std.mem.startsWith(u8, line, "ENTRYPOINT ") and !std.mem.startsWith(u8, line, "CMD ")) continue;
+            if (std.mem.indexOf(u8, line, "\"serve\"") != null) runs_serve = true;
+            if (std.mem.indexOf(u8, line, "\"--log-level\"") != null) has_level = true;
+        }
+        if (!runs_serve) continue;
+        serving += 1;
+        if (!has_level) {
+            std.debug.print("SONNY-6442 (5): {s} runs geode serve without --log-level\n", .{file});
+            bad += 1;
+        }
+    }
+    try testing.expect(serving >= 10);
+    try testing.expectEqual(@as(usize, 0), bad);
+}
+
+test "SONNY-6442 (5) docs/DOCKER_LOG_LEVEL_CONFIG.md does not give LOG_LEVEL as the image's log level" {
+    const allocator = testing.allocator;
+    const text = try readRepoFile(allocator, "docs/DOCKER_LOG_LEVEL_CONFIG.md");
+    defer allocator.free(text);
+    var bad: usize = 0;
+    for ([_][]const u8{
+        "Added: `ENV LOG_LEVEL=error`",
+        "docker run -e LOG_LEVEL=debug",
+        "LOG_LEVEL=debug docker-compose up",
+        "Server code respects LOG_LEVEL",
+    }) |claim| {
+        if (std.mem.indexOf(u8, text, claim) != null) {
+            std.debug.print("SONNY-6442 (5): docs/DOCKER_LOG_LEVEL_CONFIG.md still says \"{s}\"\n", .{claim});
+            bad += 1;
+        }
+    }
+    try testing.expect(std.mem.indexOf(u8, text, "--log-level") != null);
+    try testing.expectEqual(@as(usize, 0), bad);
 }
