@@ -10084,6 +10084,20 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6484-client-hard-deadline", "Run SONNY-6484 item 3 regression (the shared QUIC test client: executeAndCollectWithTimeout and readPacket fail with Timeout at their deadline against a live but stopped server instead of waiting up to the 120 s liveness cap; calls that take no timeout still wait while the server is alive)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6487 (3): the interactive shell edits multi-byte text (PTY).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_repl_utf8.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-repl-utf8", "Run SONNY-6487 item 3 regression (geode shell through a pseudo-terminal: multi-byte characters and a combining mark typed key by key are kept, the cursor and Backspace/Delete step over whole grapheme clusters, the statement reaches the server intact, and Ctrl-R finds a non-ASCII search term)").dependOn(&run_tests.step);
+    }
     // SONNY-6487 (2): one host:port grammar; IPv6 listen and dial end to end.
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_ipv6_serve.zig"), .target = target, .optimize = optimize });
