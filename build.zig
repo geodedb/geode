@@ -10142,6 +10142,38 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6492_fs_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6492_fs_step = b.step("test-sonny6492-checkpoint-free-store-crash", "Run SONNY-6492 item 1 regression (a real server checkpoints, a checkpoint then stops between its manifest/WAL truncate and its free.store save, the server is SIGKILLed: every node is there after the restart, by label and by an unlabeled scan, and new nodes do not reuse live pages; with and without TDE)");
     sonny6492_fs_step.dependOn(&run_sonny6492_fs_tests.step);
+    // SONNY-6491: label and relationship-type names first assigned since the
+    // last checkpoint (labels.dict is not in the WAL) survive a SIGKILL of a
+    // real server, on every label-creating write shape.
+    const sonny6491_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6491_label_name_crash.zig"), .target = target, .optimize = optimize });
+    sonny6491_test_mod.link_libc = true;
+    sonny6491_test_mod.addImport("geode", root_mod);
+    sonny6491_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6491_test_mod.addImport("schema", schema_mod);
+    sonny6491_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6491_tests = b.addTest(.{ .root_module = sonny6491_test_mod });
+    const run_sonny6491_tests = b.addRunArtifact(sonny6491_tests);
+    spawnsBuiltGeode(sonny6491_tests);
+    shardDep(test_step, &run_sonny6491_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6491_step = b.step("test-sonny6491-label-name-crash", "Run SONNY-6491 regression (label and relationship-type names first assigned since the last checkpoint, by CREATE with one or many new labels, the MERGE and /*+BATCH*/ bulk-MERGE fast paths, SET n:L, an explicit transaction and a new relationship type, survive a SIGKILL of a real server: counted by label and listed by db.labels() after the restart)");
+    sonny6491_step.dependOn(&run_sonny6491_tests.step);
+
+    // SONNY-6491 follow-up: an ORDER BY on a label no node has yet must not
+    // leave the label's name or id out of step across a restart (SIGKILL and
+    // clean shutdown; the shard dictionaries agree on every id), and the
+    // ORDER BY auto-build names no label.
+    const sonny6491ob_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6491_orderby_label_intern.zig"), .target = target, .optimize = optimize });
+    sonny6491ob_test_mod.link_libc = true;
+    sonny6491ob_test_mod.addImport("geode", root_mod);
+    sonny6491ob_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6491ob_test_mod.addImport("schema", schema_mod);
+    sonny6491ob_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6491ob_tests = b.addTest(.{ .root_module = sonny6491ob_test_mod });
+    const run_sonny6491ob_tests = b.addRunArtifact(sonny6491ob_tests);
+    spawnsBuiltGeode(sonny6491ob_tests);
+    shardDep(test_step, &run_sonny6491ob_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6491ob_step = b.step("test-sonny6491-orderby-label-intern", "Run SONNY-6491 follow-up regression (an ORDER BY on a label no node has yet, then CREATE: the label is counted and listed by db.labels() after a SIGKILL and after a clean shutdown of a real server, nodes of further new labels on other shards are each found under their own label after a restart with all 16 shard dictionaries agreeing on every id; createOrderedIndex names an unseen label on every shard and durably; the ORDER BY auto-build trigger names no label)");
+    sonny6491ob_step.dependOn(&run_sonny6491ob_tests.step);
 
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart

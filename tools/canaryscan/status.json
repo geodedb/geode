@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T23:05:34.50577535Z",
+  "generated_at": "2026-11-13T23:42:54.795634674Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -21642,7 +21642,7 @@
           ],
           "benches": [],
           "owner": "storage",
-          "updated": "2026-07-10"
+          "updated": "2026-11-13"
         },
         {
           "feature": "CrashRecovery",
@@ -85368,6 +85368,58 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6491-LABEL-NAME-CRASH",
+      "features": [
+        {
+          "feature": "CrashRecovery",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6491_label_name_crash.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6491_label_name_crash.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6491-ORDERBY-LABEL-INTERN",
+      "features": [
+        {
+          "feature": "CrashRecovery",
+          "aspect": "OrderedIndexLabelViaEngine",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6491_orderby_label_intern.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "CrashRecovery",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6491_orderby_label_intern.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6491_orderby_label_intern.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6492-DROP-GRAPH-COUNTS",
       "features": [
         {
@@ -93207,7 +93259,7 @@
       "COMPLETE": 2,
       "EXEMPT": 215,
       "IMPL": 326,
-      "TESTED": 4917
+      "TESTED": 4920
     },
     "by_aspect": {
       "2PC": 3,
@@ -95647,6 +95699,7 @@
       "OrderByParsing": 1,
       "OrderKeyExprOverrideEnv": 1,
       "OrderedEmission": 1,
+      "OrderedIndexLabelViaEngine": 1,
       "OrderedTokenize": 1,
       "Ordering": 1,
       "OrderingConcurrency": 1,
@@ -96288,7 +96341,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 338,
+      "Regression": 340,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

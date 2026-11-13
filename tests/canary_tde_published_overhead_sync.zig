@@ -3,8 +3,8 @@ const std = @import("std");
 // TDE Overhead Published Sync Test
 // Keeps every PUBLISHED TDE-overhead claim in sync with the measurement.
 // SONNY-6435: the overhead is measured (`zig build
-// test-sonny6435-tde-overhead`: +0.7% with the default per-commit fsync,
-// about +20% on the commit path without fsync), so the published docs cite
+// test-sonny6435-tde-overhead`: about +1% with the default per-commit fsync,
+// about +29% on the commit path without fsync), so the published docs cite
 // that step and make neither the unmeasured "<5%" target claim nor a "<1%"
 // one. (SONNY-2394: these docs had drifted to "<1%"; SONNY-6430 removed the
 // never-compiled threshold test that asserted `true`.)

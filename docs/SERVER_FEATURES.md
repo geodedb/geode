@@ -823,8 +823,9 @@ the server (`src/security/tde_hierarchy.zig` is compiled only by a test).
 **Performance Overhead** (measured, `zig build test-sonny6435-tde-overhead`,
 [TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead)):
 
-- With the default per-commit WAL fsync: +0.7% (fsync-bound on the measuring host)
-- On the commit path without fsync (`GEODE_WAL_SYNC=deferred`): about +20%
+- With the default per-commit WAL fsync: about +1% (fsync-bound on the measuring host)
+- On the commit path without fsync (`GEODE_WAL_SYNC=deferred`): about +29%
+- On reads that miss the buffer pool: about +60%
 
 ### 7.2 Key Management System (KMS)
 

@@ -82,7 +82,7 @@ Master (provider source) -> Derivation -> { data_key, wal_key }
 
 - External KMS network client & retry semantics.
 - Secure storage of KMS credentials (vault / process isolation).
-- TDE overhead is measured (`zig build test-sonny6435-tde-overhead`, SONNY-6435): +0.7% with per-commit fsync, about +20% on the commit path without fsync; reads that miss the buffer pool are not measured (graph_storage small-pool node loss).
+- TDE overhead is measured (`zig build test-sonny6435-tde-overhead`, SONNY-6435): about +1% with per-commit fsync, about +29% on the commit path without fsync, about +60% on reads that miss the buffer pool (an encrypted miss decrypts the page; graph_storage 0.4.14, see TDE_FILE_LEVEL_ENCRYPTION.md, "Measured overhead").
 - Backup key workflow finalization (staging keys pre-rotation).
 
 ## Status Summary

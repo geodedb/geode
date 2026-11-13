@@ -1438,7 +1438,10 @@ pub const LabelStringDict = struct {
                 try local.id_to_str.put(id, owned);
                 return id;
             },
-            .external => |dict| return dict.getOrAssign(label),
+            // SONNY-6491: the view is shard 0's engine dictionary. A name
+            // assigned here reaches neither the other shards nor disk, so the
+            // view only reads; new names go through `resolvePersistedLabelId`.
+            .external => |dict| return dict.getId(label) orelse error.LabelDictionaryViewIsReadOnly,
         }
     }
 
@@ -2335,35 +2338,24 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
     if (mg.label_dict.getId(label)) |id| return id;
     // CANARY: REQ=REQ-QUIC-HC-171; FEATURE="High-Concurrency Mutations"; ASPECT=LabelDictionaryCheckpoint; STATUS=IMPL; TEST=tests/perf/test_group_commit_coordinator.zig; OWNER=storage; UPDATED=2026-05-29
     //
-    // LabelStringDict is a view over shard 0's dictionary. Creating labels
-    // through that view updates memory but does not dirty the sharded engines,
-    // so checkpoint/reopen can recover nodes with label IDs whose names were
-    // never persisted. Use the engine API for first sight of a label: it
-    // broadcasts the mapping to every shard and dirties the dictionaries.
-    const id = try mg.engine.getOrAssignLabel(label);
-
-    // Label-dictionary durability (gap 0026 for the security graph;
-    // GAP-0915 extended it to EVERY graph): the label dictionary is NOT
-    // WAL-logged — it is persisted only at checkpoint (labels.dict).
-    // Per-commit WAL fsync alone is therefore insufficient on a FRESH
-    // (never-checkpointed) graph: after an unclean crash, recovery replays
-    // the node records from the fsynced WAL but has lost the name→id
-    // mappings, leaving every record unreachable BY LABEL — labeled MATCH
-    // returned 0 while `MATCH (n)` saw the full committed set. Persist the
-    // (tiny, bounded — a handful of labels ever) per-shard dictionaries
-    // synchronously on FIRST sight of a label, and fail the mutation if the
-    // persist fails: durability before ack, fail closed. saveToFile is
-    // atomic (tmp + fsync + rename), matching the checkpoint writer, so a
-    // crash mid-save leaves the previous dictionary intact.
-    // CANARY: REQ=REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD; FEATURE="CrashRecovery"; ASPECT=LabelDictFirstSightPersist; STATUS=TESTED; TEST=tests/test_gap0910_0915_crash_recovery.zig; OWNER=storage; UPDATED=2026-07-10
-    {
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        for (mg.engine.shards) |shard| {
-            const labels_path = try std.fmt.bufPrint(&path_buf, "{s}/labels.dict", .{shard.graph_dir.path});
-            try shard.label_dict.saveToFile(labels_path);
-        }
-    }
-    return id;
+    // LabelStringDict is a view over shard 0's dictionary and only reads
+    // (SONNY-6491): a name created through it would reach neither the other
+    // shards nor disk. Use the engine API for first sight of a label: it
+    // assigns the name on every shard, shard 0 first, and returns shard 0's id.
+    //
+    // Label-dictionary durability (gap 0026 for the security graph,
+    // GAP-0915 for every graph): the label dictionary is not WAL-logged, so a
+    // name must be on disk before any committed record carries its id, or a
+    // crash leaves the records unreachable by label (labeled MATCH 0 while
+    // `MATCH (n)` sees them all). graph_storage 0.4.14 (SONNY-6491) does this
+    // itself: each shard's `getOrAssignLabel` writes its labels.dict (tmp,
+    // fsync, rename, directory fsync) before returning a NEW name's id, and an
+    // error fails the mutation (durability before ack, fail closed).
+    // Checkpoints no longer write labels.dict. geode used to rewrite every
+    // shard's file here as well, which on 0.4.14 only added 16 fsyncs per new
+    // name.
+    // CANARY: REQ=REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD; FEATURE="CrashRecovery"; ASPECT=LabelDictFirstSightPersist; STATUS=TESTED; TEST=tests/test_gap0910_0915_crash_recovery.zig; OWNER=storage; UPDATED=2026-11-13
+    return try mg.engine.getOrAssignLabel(label);
 }
 
 // CANARY: REQ=REQ-SONNY-6266-EDGE-PROP-HEAD-IN; FEATURE="EdgeProperties"; ASPECT=IncomingAdjacencyPropHead; STATUS=TESTED; TEST=tests/test_sonny6266_planned_reverse_edge_props.zig; OWNER=storage; UPDATED=2026-11-13
@@ -7368,9 +7360,13 @@ pub const StorageAdapter = struct {
     /// shard (the engine call no-ops re-registration and rebuilds the tree from
     /// the shard's current live nodes).
     ///
-    /// The label is interned if it does not yet exist, so CREATE INDEX may run
-    /// before the first node of `label` is written (the registration then
-    /// maintains the tree as nodes arrive, exactly like the exact index).
+    /// The label is named through the engine (all shards, durably) if it does
+    /// not yet exist, so a caller may register the index before the first node
+    /// of `label` is written (the registration then maintains the tree as
+    /// nodes arrive, exactly like the exact index). The ORDER BY auto-build
+    /// never gets here for an unknown label (`spawnOrderedIndexBuildAsync`
+    /// declines: a read does not name labels). The caller must not hold the
+    /// graph's lock.
     pub fn createOrderedIndex(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -7379,7 +7375,24 @@ pub const StorageAdapter = struct {
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const mg = try self.getOrCreateGraph(graph_name);
-        const label_id = mg.label_dict.getId(label) orelse try mg.label_dict.getOrCreate(label);
+        // CANARY: REQ=REQ-SONNY-6491-ORDERBY-LABEL-INTERN; FEATURE="CrashRecovery"; ASPECT=OrderedIndexLabelViaEngine; STATUS=TESTED; TEST=tests/test_sonny6491_orderby_label_intern.zig; OWNER=storage; UPDATED=2026-11-13
+        // SONNY-6491: a new label is named through the engine, as every other
+        // writer names it (`resolvePersistedLabelId`): on all 16 shards, made
+        // durable before its id is used. Naming it in shard 0's dictionary
+        // alone (the view) lost it on restart and left shards 1..15 one id
+        // behind for every later name. Under `mg.rwlock` SHARED (excludes the
+        // EXCLUSIVE writers, which name labels without the mutex) and then
+        // `string_indexes_mutex` (excludes the SHARED writers, which name
+        // labels under it): the same discipline as the shard-locked writers,
+        // without a shard lock, and no other lock is taken while it is held.
+        const label_id = blk: {
+            exclusiveWaitingBackoff(mg);
+            mg.rwlock.lockSharedUncancelable(io);
+            defer mg.rwlock.unlockShared(io);
+            mg.string_indexes_mutex.lockUncancelable(io);
+            defer mg.string_indexes_mutex.unlock(io);
+            break :blk try resolvePersistedLabelId(mg, label);
+        };
 
         // Per-shard registration + build-from-live-scan. The engine call MUTATES
         // the shard (registers the pair, rebuilds the tree via a live scan, marks
@@ -7792,6 +7805,10 @@ pub const StorageAdapter = struct {
         if (orderedAutobuildDisabled()) return;
         // Fast pre-check OUTSIDE the lock: already registered -> nothing to do.
         if (self.isOrderedIndexRegistered(graph_name, label, key)) return;
+        // SONNY-6491: an ORDER BY on a label no node carries has nothing to
+        // index, and a read must not name a label (durable metadata). Decline;
+        // the first ORDER BY after the label's first node starts the build.
+        _ = (self.resolveLabelScanContext(graph_name, label) catch return) orelse return;
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.exact_persist_mutex.lockUncancelable(io);

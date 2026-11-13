@@ -118,6 +118,69 @@
   with a lost node could not be opened. The check takes its table of lost
   slots from graph_storage (`edge.legacyTailLoss`). Regression: `zig build
   test-sonny6452-tde-page-tail-repair`.
+- **graph-storage v0.4.14 (SONNY-6473, SONNY-6491, SONNY-6470): crash
+  recovery and checkpoint ordering.** Crash recovery applies only the
+  newest committed image of each page (by LSN): transactions that overlapped
+  a batched transaction on the same shard no longer lose committed writes
+  after a crash, including in logs written by older releases that are still
+  on disk at upgrade. A checkpoint now makes `free.store` durable before the
+  manifest, and the manifest rename durable before the WAL truncate; a stale
+  `free.store` left by a crash during an older release's checkpoint is
+  detected at open and rebuilt from the store files (logged as a warning).
+  A new label or relationship-type name is made durable (fsync, rename,
+  directory fsync of each shard's `labels.dict`) when it is first assigned;
+  checkpoints no longer write `labels.dict`, and creating a graph writes an
+  empty one. A store whose `labels.dict` lost names to a crash during an
+  older release's checkpoint logs a warning at open; those names cannot be
+  recovered. WAL record checksums use the CPU's CRC32C instruction, which
+  took about 50 us off each operation of the commit path without fsync in
+  both TDE arms of `zig build test-sonny6435-tde-overhead`; encryption still
+  costs about 26 us there, so the published TDE overhead on that path is
+  now about +29% (four runs: +28.8% to +38.1%, the high one at load average
+  99; 0.4.13: about +20%). With the default per-commit fsync it is about
+  +1%, on buffer-pool misses about +60%; the gates (35%, 5%, 80%) are
+  unchanged. docs/TDE_FILE_LEVEL_ENCRYPTION.md, README, KMS_PROVIDER_SYSTEM,
+  DESIGN_TDE_KMS and SERVER_FEATURES carry the new figures.
+  **Upgrade notes:** no store format change and no downgrade restriction
+  from 0.4.13. The first record of each new label name costs 16 file fsyncs
+  and 16 directory fsyncs (one of each per shard, serially, inside the
+  engine); geode no longer rewrites the 16 dictionaries itself (it did on
+  first sight of a name since GAP-0915: 16 file fsyncs, which 0.4.14 made
+  redundant). Writes that reuse existing names are unchanged. Measured
+  against a real server, 0.4.13 and 0.4.14 binaries as shipped, 5
+  interleaved rounds, medians, dev host at load average about 5: a CREATE
+  or MERGE that introduces one new label 325 -> 620 ms and 321 -> 618 ms
+  (1.9x: 32 fsyncs against 16, about 20 ms each on this disk); one CREATE
+  that introduces 30 new labels 8.9 -> 17.5 s; a `/*+BATCH*/` bulk-MERGE
+  that introduces 10 new labels 3.1 -> 6.2 s; CREATE and MERGE on existing
+  labels unchanged (19-23 ms in both). Without the removal it was about 3x
+  (48 fsyncs). Ingest that introduces many distinct labels pays this once
+  per name. Regression: `zig build test-sonny6491-label-name-crash` (every
+  label-creating write shape, SIGKILL, restart, counted by label and listed
+  by `db.labels()`).
+- **An ORDER BY on a label no node has yet no longer loses that label or
+  splits the shards' label ids (SONNY-6491).** `MATCH (n:L) RETURN n.k
+  ORDER BY n.k LIMIT m` starts a one-time background build of the
+  value-ordered index; for a label no node carried, the build named `L` in
+  shard 0's label dictionary only, not through the engine. With
+  graph-storage 0.4.14, which writes `labels.dict` only when the engine
+  assigns a name, a following `CREATE (:L)` lost `L` after a crash
+  (`MATCH (n:L)` found nothing) and `db.labels()` stopped listing it after
+  any restart; and since shards 1..15 never learned `L`, every later new
+  name got an id one lower on those shards than on shard 0. Queries read
+  names through shard 0's dictionary, so no wrong rows came back, but the
+  other shards' dictionaries on disk named the wrong labels for those ids.
+  The ORDER BY now declines to start a build for a label no node has (a
+  read names no labels; the first ORDER BY after the label's first node
+  builds the index), `createOrderedIndex` names an unknown label through
+  the engine on every shard, durably, and the shard 0 dictionary view
+  refuses to assign names (`error.LabelDictionaryViewIsReadOnly`).
+  **Existing stores:** dictionaries already split this way stay split (the
+  engine does not reconcile them); geode reads only shard 0's, which is
+  consistent with the records. Regression: `zig build
+  test-sonny6491-orderby-label-intern` (SIGKILL and clean restart, the 16
+  shard dictionaries on disk compared name by name, `createOrderedIndex`
+  on an unseen label, and the ORDER BY trigger naming nothing).
 - **graph-storage v0.4.13 (SONNY-6461).** Adds `repairAdjTailEntries`,
   hardware CRC32C page checksums (an 8 KiB page about 15.6 us -> 0.75 us,
   on every buffer-pool miss and flush), an offline `free.store` reader and

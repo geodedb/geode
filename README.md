@@ -222,7 +222,7 @@ COMMIT;
 
 ### **Data Protection**
 
-- **Transparent Data Encryption (TDE)** - AES-256-GCM pages and WAL under `GEODE_TDE_KEY`. Measured overhead (`zig build test-sonny6435-tde-overhead`): +0.7% with the default per-commit fsync, about +20% on the commit path without fsync ([docs/TDE_FILE_LEVEL_ENCRYPTION.md](docs/TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
+- **Transparent Data Encryption (TDE)** - AES-256-GCM pages and WAL under `GEODE_TDE_KEY`. Measured overhead (`zig build test-sonny6435-tde-overhead`): about +1% with the default per-commit fsync, about +29% on the commit path without fsync ([docs/TDE_FILE_LEVEL_ENCRYPTION.md](docs/TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
 - **Key Management System (KMS)** - KMS provider clients (local, external, remote over QUIC, Vault). The TDE master key comes from `GEODE_TDE_KEY`; it is not fetched from or wrapped by a KMS (see [docs/KMS_PROVIDER_SYSTEM.md](docs/KMS_PROVIDER_SYSTEM.md))
 - **Audit Logging** - Comprehensive compliance tracking
 - **Data Classification** - 5-level security classification system

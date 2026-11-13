@@ -577,8 +577,25 @@
             // reader (`FreeSpaceManager.buffer_pool` is now `?*BufferPool`) and
             // fixes the compare-bench zero-baseline PASS. No geode dependency
             // other than geode itself consumes graph-storage (no diamond on it).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.13#df5fa574e41c382b87bc7c735cdca9f9e9866776",
-            .hash = "graph_storage-0.4.13-9UyJS1EnLwD40TjKwbxR6C62LWH7chWbCTeuHdfRqjKJ",
+            // v0.4.14 (2026-11-13, SONNY-6473, SONNY-6491, SONNY-6470): crash
+            // recovery applies only the newest committed image of each page (by
+            // LSN), so overlapping batched transactions no longer lose committed
+            // writes after a crash, including WALs already on disk. Checkpoint
+            // side files are ordered for crash safety (free.store durable before
+            // the manifest; the manifest rename dir-fsynced before the WAL
+            // truncate; a stale free.store from an older release is detected and
+            // rebuilt). Label names are made durable when first assigned
+            // (`getOrAssignLabel` does tmp+fsync+rename+dir-fsync of the shard's
+            // labels.dict per NEW name; checkpoints no longer write labels.dict;
+            // `create` writes an empty one): labels are not in the WAL, so a
+            // crash used to lose names assigned since the last checkpoint. WAL
+            // record checksums use streaming hardware CRC32C; free.store refuses
+            // a host layout it would misread. API additions only
+            // (`crc32c.Hasher`, `free_space.checkHostLayout`,
+            // `free_space.host_layout_supported`). Same transitive deps as
+            // v0.4.13 (no diamond).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.14#fc913be98c87f999ea217721c9437f3f74796014",
+            .hash = "graph_storage-0.4.14-9UyJSz_kLwApVECl_iInjDSakbUB3ln7wT60iVXdadif",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
