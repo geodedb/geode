@@ -2069,6 +2069,18 @@
 
 ### Fixed
 
+- **An unlabeled scan no longer fails with a false `DataCorruption` while
+  nodes are being created or deleted (SONNY-6472 item 4).** The SONNY-2409
+  check compares the live node records a shard scan finds with the shard's
+  live-node count. The engine counts a new node before writing its record,
+  and tombstones a deleted node's record before uncounting it, so a scan
+  between the two steps of a write on another thread found one record
+  fewer and failed the read. The adapter now counts the node creates and
+  deletes in flight on the graph (`ManagedGraph.node_census_writers`) and
+  the check allows one missing record per write in flight at either count
+  read; with none in flight it stays exact. Regression: `zig build
+  test-sonny6472-scan-live-count-race`; the detection itself:
+  `test-sonny2409-zeroed-page-header`.
 - **A write racing a DROP GRAPH no longer creates the graph again
   (SONNY-6472 item 2).** The storage adapter's write entry points
   (`createNode`, the bulk insert and MERGE helpers, `pinOrCreateGraph`)

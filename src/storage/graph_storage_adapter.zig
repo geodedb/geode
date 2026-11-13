@@ -1800,6 +1800,13 @@ pub const ManagedGraph = struct {
     /// `dropGraph` freed the graph under its lock's holders and waiters, whose
     /// release was then a use-after-free.
     pins: std.atomic.Value(u32) = .init(0),
+    /// SONNY-6472 (4): node creates and deletes in flight through this
+    /// adapter. The engine counts a node (`manifest.node_count`) and writes or
+    /// tombstones its record in separate steps (a create counts at
+    /// `allocNode`, then writes the record; a delete tombstones, then
+    /// uncounts), so each one in flight can leave one record fewer than the
+    /// count. `scanAllNodes` allows that many and no more.
+    node_census_writers: std.atomic.Value(u32) = .init(0),
     // CANARY: REQ=REQ-SONNY-3029-GROUP-COMMIT-TXN-GATE; FEATURE="High-Concurrency Mutations"; ASPECT=TxnGate; STATUS=TESTED; TEST=tests/test_sonny3029_group_commit_txn_gate.zig; OWNER=storage; UPDATED=2026-09-27
     /// SONNY-3029: group-commit batches with a statement transaction open on
     /// this graph (`enterBatchTxn`), and threads that hold or wait for its
@@ -1960,6 +1967,17 @@ pub const ManagedGraph = struct {
 
     /// SONNY-3028: was this graph dropped (it is out of `engines`, and its
     /// last pin frees it)?
+    /// SONNY-6472 (4): bracket a node create or delete (`node_census_writers`):
+    /// from before the engine counts or tombstones the node to after its
+    /// record and count agree.
+    pub fn beginNodeCensusWrite(self: *ManagedGraph) void {
+        _ = self.node_census_writers.fetchAdd(1, .seq_cst);
+    }
+
+    pub fn endNodeCensusWrite(self: *ManagedGraph) void {
+        _ = self.node_census_writers.fetchSub(1, .seq_cst);
+    }
+
     pub fn isDropped(self: *const ManagedGraph) bool {
         return self.pins.load(.acquire) & dropped_bit != 0;
     }
@@ -4296,6 +4314,8 @@ pub const StorageAdapter = struct {
         // `beginTxn` pick their shard round-robin from the SAME counter, so
         // the node always landed on another shard and committed in its own
         // transactions (3-6 commits, each a WAL fsync, for a one-node CREATE).
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const node_id = if (stmt_txn) |s|
             try mg.engine.shards[shardedTxnShard(s.txn_id)].allocNode()
@@ -4634,6 +4654,8 @@ pub const StorageAdapter = struct {
         // only protects string-keyed metadata maps (label dictionary and
         // GraphStore indexes), so holding it while doing putNode/putProperty
         // serializes otherwise-independent shard workers.
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
         const slot_id = try node_shard.allocNode();
         if (node_slot_allocated_hook) |hook| hook(mg);
         const stmt_txn = currentStatementTxnForGraph(graph_name);
@@ -6307,6 +6329,8 @@ pub const StorageAdapter = struct {
             if (shard_txns[si]) |t| shard.abortTxn(t) catch {};
         };
 
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const node_id = try mg.engine.allocNode();
@@ -6359,6 +6383,8 @@ pub const StorageAdapter = struct {
         const txn = joined orelse try shard.beginTxn();
         // error-policy: A — best-effort rollback on an already-failing path.
         errdefer if (joined == null) shard.abortTxn(txn) catch {};
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
         try shard.deleteNodeTxn(node_id, txn);
         if (joined == null) try shard.commitTxn(txn);
         // OTel Task 13: graph data model mutation counter.
@@ -8823,9 +8849,16 @@ pub const StorageAdapter = struct {
         errdefer ctx.entries.deinit(allocator);
         for (mg.engine.shards) |shard| {
             const found_before = ctx.entries.items.len;
-            const live_before = @atomicLoad(u64, &shard.manifest.node_count, .monotonic);
+            // SONNY-6472 (4): each count is read BEFORE the writers in flight,
+            // so a create counted by the first read whose record the scan
+            // missed, or a delete the scan missed that the second read still
+            // counts, is a writer in flight at the read after it.
+            const live_before = @atomicLoad(u64, &shard.manifest.node_count, .seq_cst);
+            const writers_before = mg.node_census_writers.load(.seq_cst);
             try shard.node_store.scanNodes(shard.manifest.next_node_id, &ctx, &Ctx.onNode);
             if (ctx.had_error) return error.OutOfMemory;
+            const live_after = @atomicLoad(u64, &shard.manifest.node_count, .seq_cst);
+            const writers_after = mg.node_census_writers.load(.seq_cst);
             // CANARY: REQ=REQ-SONNY-2409-ZEROED-PAGE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=UnlabeledScanLiveCount; STATUS=TESTED; TEST=tests/test_sonny2409_zeroed_page_header.zig; OWNER=storage; UPDATED=2026-11-13
             // SONNY-2409: graph_storage's pager reads a zeroed page (torn
             // write, zeroed sectors) as a fresh one, so its node records look
@@ -8834,9 +8867,14 @@ pub const StorageAdapter = struct {
             // manifest counts means lost node data: fail closed, as the
             // hydration scan does (REQ-GQL-028, same kill switch). The
             // smaller of the counts read before and after the scan is used.
-            const live = @min(live_before, @atomicLoad(u64, &shard.manifest.node_count, .monotonic));
+            // SONNY-6472 (4): less one record per node create or delete in
+            // flight at either read (the engine counts and writes a node in
+            // separate steps): a write on another thread made a false
+            // DataCorruption. With no writer in flight the check is exact.
+            const live = @min(live_before, live_after);
+            const slack: u64 = @as(u64, writers_before) + writers_after;
             const found = ctx.entries.items.len - found_before;
-            if (found < live and !hydration_scan.liveCountCheckDisabled()) {
+            if (found + slack < live and !hydration_scan.liveCountCheckDisabled()) {
                 log.warn("scanAllNodes: graph {s} shard found {d} live node record(s) but its manifest counts {d}: node pages lost or zeroed", .{ graph_name, found, live });
                 return error.DataCorruption;
             }
