@@ -566,21 +566,6 @@ const ReplicationPayload = struct {
     }
 };
 
-/// SEC-D012: Minimal join response that does not leak full cluster topology.
-const JoinResponsePayload = struct {
-    assigned_node_id: u64 = 0,
-    node_count: u32 = 0,
-    success: bool = false,
-
-    pub const _desc_table = .{
-        .assigned_node_id = fd(1, .{ .scalar = .uint64 }),
-        .node_count = fd(2, .{ .scalar = .uint32 }),
-        .success = fd(3, .{ .scalar = .bool }),
-    };
-
-    pub fn deinit(_: *@This(), _: Allocator) void {}
-};
-
 /// SEC-D009: Replay protection guard for Raft frames.
 const ReplayGuard = struct {
     mutex: std.Io.Mutex = std.Io.Mutex.init,
@@ -627,20 +612,6 @@ const ReplayGuard = struct {
     }
 };
 
-const NodeInfoProto = struct {
-    id: u64 = 0,
-    endpoint: []const u8 = "",
-
-    pub const _desc_table = .{
-        .id = fd(1, .{ .scalar = .uint64 }),
-        .endpoint = fd(2, .{ .scalar = .string }),
-    };
-
-    pub fn deinit(self: *NodeInfoProto, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
 const TxnMetadata = struct {
     client_id: []const u8 = "",
     timestamp: i64 = 0,
@@ -653,54 +624,6 @@ const TxnMetadata = struct {
     };
 
     pub fn deinit(self: *TxnMetadata, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
-const TopologyNode = struct {
-    id: u64 = 0,
-    endpoint: []const u8 = "",
-    state: []const u8 = "",
-
-    pub const _desc_table = .{
-        .id = fd(1, .{ .scalar = .uint64 }),
-        .endpoint = fd(2, .{ .scalar = .string }),
-        .state = fd(3, .{ .scalar = .string }),
-    };
-
-    pub fn deinit(self: *TopologyNode, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
-const TopologyShard = struct {
-    id: u64 = 0,
-    primary_node: u64 = 0,
-    replica_count: u32 = 0,
-    size_bytes: u64 = 0,
-
-    pub const _desc_table = .{
-        .id = fd(1, .{ .scalar = .uint64 }),
-        .primary_node = fd(2, .{ .scalar = .uint64 }),
-        .replica_count = fd(3, .{ .scalar = .uint32 }),
-        .size_bytes = fd(4, .{ .scalar = .uint64 }),
-    };
-
-    pub fn deinit(self: *TopologyShard, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
-const TopologyPayload = struct {
-    nodes: std.ArrayList(TopologyNode),
-    shards: std.ArrayList(TopologyShard),
-
-    pub const _desc_table = .{
-        .nodes = fd(1, .{ .repeated = .{ .submessage = {} } }),
-        .shards = fd(2, .{ .repeated = .{ .submessage = {} } }),
-    };
-
-    pub fn deinit(self: *TopologyPayload, allocator: std.mem.Allocator) void {
         protobuf.deinit(allocator, self);
     }
 };
@@ -1080,11 +1003,10 @@ pub const ClusterCoordinator = struct {
         // Task A5 (2026-05-25 plan): seed cluster_state.nodes from PeerConfig
         // so the network transport's findNodeEndpoint() lookup works from
         // t=0.  Without this bridge, sendToNode(peer_id) always returns
-        // error.NodeNotFound because cluster_state.nodes only gets populated
-        // by inbound JOIN_CLUSTER messages — but the leader hasn't been
-        // elected yet, so no node has joined yet, so the address book is
-        // empty, so RequestVote can't be sent, so no leader is ever
-        // elected.  The "host:port" endpoint format matches what
+        // error.NodeNotFound because nothing else populates
+        // cluster_state.nodes (there is no dynamic join; SONNY-6459 removed
+        // the never-called JOIN_CLUSTER handler), so the address book stays
+        // empty, RequestVote can't be sent, and no leader is ever elected.  The "host:port" endpoint format matches what
         // findNodeEndpoint() (this file, search "lastIndexOf") expects.
         errdefer {
             for (cluster_state.nodes.items) |*node| {
@@ -1500,25 +1422,35 @@ pub const ClusterCoordinator = struct {
                 continue;
             }
 
-            if (self.connection_pool) |pool| {
-                const ctx = try self.allocator.create(ConnectionTaskCtx);
-                errdefer self.allocator.destroy(ctx);
-                ctx.* = .{
-                    .allocator = self.allocator,
-                    .coordinator = self,
-                    .conn = conn,
-                    // RC-A: stamp the idle clock at ACCEPT, not at worker
-                    // acquisition — a queued conn (no free worker yet) still ages.
-                    .accepted_ms = compat_milliTimestamp(),
-                };
-                if (!pool.submit(.{
-                    .context = @ptrCast(ctx),
-                    .callback = runConnectionTask,
-                })) {
-                    self.allocator.destroy(ctx);
-                    log.warn("Connection pool saturated, dropping cluster connection", &.{});
-                    self.network_transport.quic_server.?.destroyConnection(conn);
-                }
+            // SONNY-6459: an accepted connection nobody will handle is closed
+            // and untracked here; it used to stay tracked by the listener
+            // (with no pool), or end this loop and stay tracked (when the
+            // task context could not be allocated).
+            const pool = self.connection_pool orelse {
+                log.warn("Cluster connection accepted with no connection pool; closing it", &.{});
+                self.network_transport.quic_server.?.destroyConnection(conn);
+                continue;
+            };
+            const ctx = self.allocator.create(ConnectionTaskCtx) catch {
+                log.err("Out of memory for a cluster connection task; closing the connection", &.{});
+                self.network_transport.quic_server.?.destroyConnection(conn);
+                continue;
+            };
+            ctx.* = .{
+                .allocator = self.allocator,
+                .coordinator = self,
+                .conn = conn,
+                // RC-A: stamp the idle clock at ACCEPT, not at worker
+                // acquisition — a queued conn (no free worker yet) still ages.
+                .accepted_ms = compat_milliTimestamp(),
+            };
+            if (!pool.submit(.{
+                .context = @ptrCast(ctx),
+                .callback = runConnectionTask,
+            })) {
+                self.allocator.destroy(ctx);
+                log.warn("Connection pool saturated, dropping cluster connection", &.{});
+                self.network_transport.quic_server.?.destroyConnection(conn);
             }
         }
     }
@@ -1608,7 +1540,15 @@ pub const ClusterCoordinator = struct {
 
     /// SONNY-6456: record that an authenticated raft frame from `node_id`
     /// arrived at `now_ms` (the health monitor's liveness signal).
+    ///
+    /// SONNY-6459: also the raft peer's `last_contact` (SHOW CLUSTER STATUS
+    /// `last_contact_ms`), which was set once at startup and never again.
+    /// `raft.peers` is fixed after init; the field is written and read
+    /// atomically (no lock: SHOW CLUSTER STATUS reads it from query threads).
     fn noteHeardFrom(self: *ClusterCoordinator, node_id: u64, now_ms: i64) void {
+        for (self.raft.peers) |*peer| {
+            if (peer.id == node_id) @atomicStore(i64, &peer.last_contact, now_ms, .monotonic);
+        }
         const io = std.Io.Threaded.global_single_threaded.io();
         self.cluster_state_mutex.lockUncancelable(io);
         defer self.cluster_state_mutex.unlock(io);
@@ -2035,8 +1975,9 @@ pub const ClusterCoordinator = struct {
     /// arriving on this path are rejected with ERR so the originator
     /// surfaces a clear failure rather than silently no-op'ing. The
     /// dead pre-A3e leave/replicate/failover stubs were removed
-    /// (GAP-0889); `handleJoinCluster` is retained for the planned
-    /// dynamic-join wire-up but has no caller on this path yet.
+    /// (GAP-0889), and the never-called, uncompilable `handleJoinCluster`
+    /// and topology serializer (SONNY-6459): membership is the static
+    /// peer list.
     fn handleClusterRpcLocal(self: *ClusterCoordinator, msg: Message) !Response {
         switch (msg.msg_type) {
             .READ => return self.executeLocalRead(msg),
@@ -2234,38 +2175,6 @@ pub const ClusterCoordinator = struct {
     fn handleClusterMessage(self: *ClusterCoordinator, msg: Message) !Response {
         // Route based on message type
         return self.handleShardQuery(msg);
-    }
-
-    fn handleJoinCluster(self: *ClusterCoordinator, msg: Message) !Response {
-        // SEC-D002: Always validate cluster token before revealing topology.
-        // Reject join requests without valid token regardless of whether env var is set.
-        if (!cluster_auth.validateClusterToken(msg.auth_token)) {
-            log.warn("JOIN_CLUSTER rejected: invalid or missing cluster token", &.{
-                Attr.string("client_id", msg.client_id orelse "unknown"),
-            });
-            return Response{
-                .status = .ERR,
-                .data = null,
-            };
-        }
-
-        if (self.raft.state != .leader) {
-            return Response{
-                .status = .REDIRECT,
-                .leader_id = self.cluster_state.leader_node,
-            };
-        }
-
-        const node_info = try parseNodeInfo(self.allocator, msg.data orelse return error.InvalidNodeInfo);
-        try self.cluster_state.nodes.append(node_info);
-
-        // Trigger rebalancing
-        try self.rebalanceShards();
-
-        return Response{
-            .status = .OK,
-            .data = try self.serializeMinimalJoinResponse(node_info.id),
-        };
     }
 
     fn handleNodeFailure(self: *ClusterCoordinator, failed_node: u64) !void {
@@ -2602,131 +2511,6 @@ pub const ClusterCoordinator = struct {
         log.warn("Shard not found for replication", &.{
             Attr.uint("shard_id", shard_id),
         });
-    }
-
-    // CANARY: REQ=REQ-DIST-CLUSTER-003; FEATURE="DistributedCluster"; ASPECT=Rebalance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-    fn rebalanceShards(self: *ClusterCoordinator) !void {
-        const node_count = self.cluster_state.nodes.items.len;
-        if (node_count == 0) {
-            log.warn("No nodes available for rebalancing", &.{});
-            return;
-        }
-
-        log.info("Rebalancing shards across nodes", &.{
-            Attr.uint("node_count", node_count),
-        });
-
-        // Calculate target shards per node
-        const shard_count = self.cluster_state.shards.items.len;
-        const target_per_node = (shard_count + node_count - 1) / node_count; // Round up
-
-        // Count current shards per node
-        var shards_per_node = std.AutoHashMap(u64, usize).init(self.allocator);
-        defer shards_per_node.deinit();
-
-        for (self.cluster_state.shards.items) |shard| {
-            const entry = try shards_per_node.getOrPut(shard.primary_node);
-            if (!entry.found_existing) {
-                entry.value_ptr.* = 0;
-            }
-            entry.value_ptr.* += 1;
-        }
-
-        // Find overloaded and underloaded nodes
-        var moves_needed: usize = 0;
-        for (self.cluster_state.nodes.items) |node| {
-            const current = shards_per_node.get(node.id) orelse 0;
-            if (current > target_per_node) {
-                moves_needed += current - target_per_node;
-            }
-        }
-
-        log.info("Rebalance analysis", &.{
-            Attr.uint("shard_count", shard_count),
-            Attr.uint("node_count", node_count),
-            Attr.uint("target_per_node", target_per_node),
-            Attr.uint("moves_needed", moves_needed),
-        });
-    }
-
-    // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-    fn serializeClusterTopology(self: *ClusterCoordinator) ![]const u8 {
-        var nodes = std.ArrayList(TopologyNode).init(self.allocator);
-        defer nodes.deinit(self.allocator);
-
-        for (self.cluster_state.nodes.items) |node| {
-            try nodes.append(self.allocator, TopologyNode{
-                .id = node.id,
-                .endpoint = node.endpoint,
-                .state = @tagName(node.state),
-            });
-        }
-
-        var shards = std.ArrayList(TopologyShard).init(self.allocator);
-        defer shards.deinit(self.allocator);
-
-        for (self.cluster_state.shards.items) |shard| {
-            try shards.append(self.allocator, TopologyShard{
-                .id = shard.id,
-                .primary_node = shard.primary_node,
-                .replica_count = @intCast(shard.replica_nodes.len),
-                .size_bytes = shard.size_bytes,
-            });
-        }
-
-        const payload = TopologyPayload{
-            .nodes = nodes,
-            .shards = shards,
-        };
-
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
-        defer aw.deinit();
-        try protobuf.encode(&aw.writer, self.allocator, payload);
-        const body = aw.writer.buffer[0..aw.writer.end];
-        return self.allocator.dupe(u8, body);
-    }
-
-    /// SEC-D012: Build a minimal join response that reveals only the assigned
-    /// node ID, the current node count, and a success flag -- no topology.
-    fn serializeMinimalJoinResponse(self: *ClusterCoordinator, assigned_id: u64) ![]const u8 {
-        const payload = JoinResponsePayload{
-            .assigned_node_id = assigned_id,
-            .node_count = @intCast(self.cluster_state.nodes.items.len),
-            .success = true,
-        };
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 64);
-        defer aw.deinit();
-        try protobuf.encode(&aw.writer, self.allocator, payload);
-        return self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
-    }
-
-    fn parseNodeInfo(allocator: Allocator, data: []const u8) !NodeInfo {
-        var reader: std.Io.Reader = .fixed(data);
-        var parsed = protobuf.decode(NodeInfoProto, &reader, allocator) catch |e| {
-            log.warn("parseNodeInfo protobuf error", &.{
-                Attr.string("error", @errorName(e)),
-            });
-            return error.InvalidNodeInfo;
-        };
-        defer parsed.deinit(allocator);
-
-        const endpoint_val = if (parsed.endpoint.len > 0) parsed.endpoint else "unknown:0";
-        const endpoint_copy = try allocator.dupe(u8, endpoint_val);
-        return NodeInfo{
-            .id = parsed.id,
-            .endpoint = endpoint_copy,
-            .state = .joining,
-            .role = .follower,
-            .capacity = .{
-                .cpu_cores = 8,
-                .memory_gb = 16,
-                .storage_gb = 100,
-                .network_mbps = 1000,
-                .current_load = 0.0,
-            },
-            .last_heartbeat = compat_milliTimestamp(),
-            .metadata = std.StringHashMap([]const u8).init(allocator),
-        };
     }
 
     // === Public Raft proposal API (Task A3d of 2026-05-25 plan) ===
@@ -3308,25 +3092,6 @@ test "Message struct carries auth_token field" {
 test "Message auth_token defaults to empty" {
     const msg = Message{};
     try testing.expectEqualStrings("", msg.auth_token);
-}
-
-test "SEC-D012: minimal join response has no topology" {
-    // JoinResponsePayload must carry exactly 3 fields: assigned_node_id, node_count, success.
-    // It must NOT contain endpoint, shard, or any other topology detail.
-    const info = @typeInfo(JoinResponsePayload);
-    const fields = info.@"struct".fields;
-    try testing.expectEqual(@as(usize, 3), fields.len);
-
-    // Verify the exact field names
-    try testing.expectEqualStrings("assigned_node_id", fields[0].name);
-    try testing.expectEqualStrings("node_count", fields[1].name);
-    try testing.expectEqualStrings("success", fields[2].name);
-
-    // Verify defaults are safe (no information leak)
-    const payload = JoinResponsePayload{};
-    try testing.expectEqual(@as(u64, 0), payload.assigned_node_id);
-    try testing.expectEqual(@as(u32, 0), payload.node_count);
-    try testing.expectEqual(false, payload.success);
 }
 
 test "SEC-D009: ReplayGuard rejects duplicate within window" {

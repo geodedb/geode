@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T08:36:09.213169315Z",
+  "generated_at": "2026-11-13T09:21:36.461454985Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -12071,40 +12071,6 @@
         {
           "feature": "DistributedCluster",
           "aspect": "Replication",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/cluster.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-01"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-CLUSTER-003",
-      "features": [
-        {
-          "feature": "DistributedCluster",
-          "aspect": "Rebalance",
-          "status": "IMPL",
-          "files": [
-            "src/distributed/cluster.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-04-01"
-        }
-      ]
-    },
-    {
-      "id": "REQ-DIST-CLUSTER-004",
-      "features": [
-        {
-          "feature": "DistributedCluster",
-          "aspect": "Topology",
           "status": "IMPL",
           "files": [
             "src/distributed/cluster.zig"
@@ -28344,14 +28310,14 @@
           "aspect": "HavingCountDistinctFilter",
           "status": "TESTED",
           "files": [
-            "tests/test_groupby_having_count_distinct.zig"
+            "tests/test_sonny2675_grouped_having.zig"
           ],
           "tests": [
-            "TestCANARY_REQ_GQL_012_HavingCountDistinctFilter"
+            "tests/test_sonny2675_grouped_having.zig"
           ],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-21"
+          "updated": "2026-11-13"
         },
         {
           "feature": "Planner ISO Enforcement",
@@ -85603,6 +85569,101 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6459-CHECKPOINT-ONCE",
+      "features": [
+        {
+          "feature": "Persistence",
+          "aspect": "OneCheckpointPerTickAndShutdown",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6459_checkpoint_once.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6459_checkpoint_once.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6459-CLUSTER-LAST-CONTACT",
+      "features": [
+        {
+          "feature": "SHOW CLUSTER STATUS",
+          "aspect": "LastContactFromRaftTraffic",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6459_cluster_last_contact.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6459_cluster_last_contact.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6459-CLUSTER-TRANSPORT",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "AcceptWithoutPoolAndPeerEndpointChange",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6459_cluster_transport.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6459_cluster_transport.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6459-DISTRIBUTED-INLINE-TESTS",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "InlineTestRoot",
+          "status": "TESTED",
+          "files": [
+            "src/distributed_inline_test_root.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6459_hygiene.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6459-HYGIENE",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DeadJoinCodeAndUnrunInlineTests",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6459_hygiene.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6459_hygiene.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93236,8 +93297,8 @@
       "BENCHED": 208,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 335,
-      "TESTED": 4857
+      "IMPL": 333,
+      "TESTED": 4862
     },
     "by_aspect": {
       "2PC": 3,
@@ -93270,6 +93331,7 @@
       "AbortedTxnGate": 1,
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
+      "AcceptWithoutPoolAndPeerEndpointChange": 1,
       "AcceptorSpawn": 1,
       "AccessControl": 3,
       "AccurateStorageMetrics": 1,
@@ -94077,6 +94139,7 @@
       "DbRelationshipTypesFilter": 1,
       "DbRelationshipTypesRLSDeny": 1,
       "DbRelationshipTypesTenantFilter": 1,
+      "DeadJoinCodeAndUnrunInlineTests": 1,
       "DeadlineConfigRoute": 1,
       "DebugLogControl": 1,
       "DecTypeReexport": 1,
@@ -95018,6 +95081,7 @@
       "InlineKey": 1,
       "InlineNodeProps": 1,
       "InlineRelProps": 1,
+      "InlineTestRoot": 1,
       "InlineValueParsing": 1,
       "InputParsing": 1,
       "InputSafety": 1,
@@ -95145,6 +95209,7 @@
       "LargeScaleAndCancellation": 1,
       "LargeScaleIntegration": 1,
       "LargeScaleStability": 1,
+      "LastContactFromRaftTraffic": 1,
       "LastElement": 1,
       "LateKeyRegistry": 1,
       "LatencyBenchmark": 2,
@@ -95639,6 +95704,7 @@
       "OnCreateSetRelationship": 1,
       "OnMessage": 1,
       "OneActionDerivation": 1,
+      "OneCheckpointPerTickAndShutdown": 1,
       "OneEncryptionIdentity": 1,
       "OneEngine": 1,
       "OneGraphLockAtATime": 1,
@@ -96315,7 +96381,6 @@
       "RealStoreMeasurement": 1,
       "RealityFreshnessGuard": 1,
       "ReasonCodePresent": 1,
-      "Rebalance": 1,
       "RebuildAgainAfterSwap": 1,
       "RebuildAgainRequest": 1,
       "RebuildBackfill": 1,
@@ -97057,7 +97122,7 @@
       "ToolsThreading": 1,
       "TopLevelAgg": 1,
       "TopologicalSortKahn": 1,
-      "Topology": 2,
+      "Topology": 1,
       "Training": 1,
       "Transaction": 1,
       "TransactionCoord": 1,

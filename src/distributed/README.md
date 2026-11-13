@@ -181,8 +181,19 @@ federation-aware query optimization.
 
 - **Consensus:** Raft leader election and log replication are functional.
   `raft_persistent.zig` provides durable state across restarts.
-- **Cluster:** `ClusterCoordinator` handles node join/leave, health checks,
-  and protobuf-based intra-cluster messaging.
+- **Cluster:** membership is the static `--peers` / `GEODE_PEERS` list read
+  at startup; there is no dynamic join or leave (a JOIN_CLUSTER message is
+  answered with ERR; the uncompilable, never-called `handleJoinCluster` and
+  topology serializer were removed, SONNY-6459). `ClusterCoordinator` runs
+  health checks (a peer is failed when it is not heard from for 5 s) and
+  protobuf-based intra-cluster messaging.
+- **Shards:** nothing in production fills `cluster_state.shards`, so shard
+  forwarding (`forwardToShard`), replica promotion on node failure
+  (`promoteReplica`) and the replication-factor repair
+  (`ensureReplicationFactor`) never run outside tests
+  (`zig build test-cluster-forward-to-shard` populates shards by hand). A
+  failed node's raft role is taken over by raft leader election, not by
+  shard failover.
 - **Writes:** Replicated within the documented slice; other write surfaces
   fail closed in cluster mode.
 - **Two-phase commit:** Coordinator and participant roles are implemented.

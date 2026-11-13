@@ -5873,6 +5873,20 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6453-hygiene", "Run SONNY-6453 item 5 regression (no compose file sets pids_limit - the limit is deploy.resources.limits.pids; src/security/kms.zig has no dead compat_fillRandom; the kms.zig inline tests no step ran moved to tests/test_kms_provider.zig; the GAP-0499 secure-zero test has a named step)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6459 items 4, 7, 8, 9: no uncompilable dynamic-join code, the
+    // distributed modules' inline tests have a step, the docs do not present
+    // join/leave or sharded scaling as working, no orphan test file.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6459_hygiene.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6459_hygiene_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6459-hygiene", "Run the SONNY-6459 items 4, 7, 8 and 9 regression (cluster.zig has no uncompilable handleJoinCluster / serializeClusterTopology; the raft_consensus, cluster, twophase and cluster_auth inline tests have a step; the docs do not present cluster join/leave or sharded scaling as working; tests/test_groupby_having_count_distinct.zig is gone)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6453 (2): 2PC, raft and the cluster coordinator dial peers
     // through one verified configuration (GEODE_CLUSTER_CA_CERT), over real
     // QUIC against an in-process server with openssl-made CAs.
@@ -6042,6 +6056,21 @@ pub fn build(b: *std.Build) void {
     eval_handler_mod.addImport("distributed_schema", distributed_schema_mod);
     eval_handler_mod.addImport("protobuf", protobuf_mod);
     eval_handler_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    // SONNY-6459: in test builds raft_consensus.zig now references the real
+    // QUIC module (SONNY-6456 `useRealQuicInTests`); it used to sit in the
+    // untaken branch of a comptime `is_test` switch. These two test roots
+    // compile raft_consensus.zig and failed with "no module named
+    // 'transport/quic'". They get their own instance of the module, wired
+    // like transport_quic_mod but with their otel_metrics instance (two
+    // modules rooted at otel_metrics.zig cannot share one compilation).
+    const transport_quic_mod_for_gs_tests = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    {
+        var it = transport_quic_mod.import_table.iterator();
+        while (it.next()) |entry| transport_quic_mod_for_gs_tests.addImport(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    transport_quic_mod_for_gs_tests.addImport("otel_metrics", otel_metrics_mod_for_gs_tests);
+    graph_store_unit_tests.root_module.addImport("transport/quic", transport_quic_mod_for_gs_tests);
+    eval_handler_mod.addImport("transport/quic", transport_quic_mod_for_gs_tests);
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=build; UPDATED=2026-06-11
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);
@@ -6081,6 +6110,46 @@ pub fn build(b: *std.Build) void {
     graph_store_mod.addImport("rls", rls_mod);
     graph_store_unit_tests.root_module.addImport("rls", rls_mod);
     eval_handler_mod.addImport("rls", rls_mod);
+
+    // SONNY-6459 item 7: the inline tests of src/distributed/raft_consensus.zig,
+    // cluster.zig, twophase.zig and cluster_auth.zig, through a src/-rooted
+    // module wired like the graph_store test root above (the first three are
+    // also collected there; twophase.zig's were collected by no test root).
+    // That root's import set compiles these files without the `geode`
+    // library module, whose files would otherwise belong to two modules.
+    // The filters select those four files' tests.
+    const distributed_inline_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed_inline_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    {
+        var it = graph_store_unit_tests.root_module.import_table.iterator();
+        while (it.next()) |entry| distributed_inline_mod.addImport(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    const distributed_inline_tests = b.addTest(.{
+        .root_module = distributed_inline_mod,
+        // twophase.zig: every test except the two that call
+        // `TwoPCCoordinator.handleMessage`, which cannot compile (protobuf
+        // 0.1.6 cannot decode TwoPhaseMessage's union submessages).
+        .filters = &.{
+            "distributed.raft_consensus.test.",
+            "distributed.cluster.test.",
+            "distributed.cluster_auth.test.",
+            "distributed.twophase.test.applyUndoOperation ",
+            "distributed.twophase.test.Transaction.",
+            "distributed.twophase.test.getClusterToken ",
+            "distributed.twophase.test.prepare message ",
+            "distributed.twophase.test.2PC nonce generation ",
+            "distributed.twophase.test.captureNodePreImage ",
+            "distributed.twophase.test.captureEdgePreImage ",
+        },
+    });
+    const run_distributed_inline_tests = b.addRunArtifact(distributed_inline_tests);
+    const distributed_inline_step = b.step("test-sonny6459-distributed-inline", "Run the inline tests of src/distributed/raft_consensus.zig, cluster.zig, twophase.zig and cluster_auth.zig (SONNY-6459 item 7)");
+    distributed_inline_step.dependOn(&run_distributed_inline_tests.step);
+    shardDep(test_step, &run_distributed_inline_tests.step, 1, test_shard_loads, test_shard_index);
 
     // rls_core.zig's inline tests (the GAP-0496 QueryRewriter tests went with
     // the dead QueryRewriter, SONNY-3038).
@@ -15877,6 +15946,22 @@ pub fn build(b: *std.Build) void {
     const sonny6456_reap_step = b.step("test-sonny6456-cluster-dead-conn-reap", "Run the SONNY-6456 item 2 regression (a started ClusterCoordinator's QUIC listener reaps an inbound connection whose peer went silent, with GEODE_RAFT_DEAD_CONN_REAP_MS, well before the inbound idle deadline)");
     sonny6456_reap_step.dependOn(&run_sonny6456_reap_tests.step);
 
+    // SONNY-6459 items 5-6: the cluster listener closes a connection it has
+    // no pool for; the real raft sender reconnects when a peer's endpoint
+    // changes (127.0.0.94-98).
+    const sonny6459_transport_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6459_cluster_transport.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6459_transport_tests.root_module.addImport("geode", root_mod);
+    sonny6459_transport_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    sonny6459_transport_tests.root_module.link_libc = true;
+    const run_sonny6459_transport_tests = b.addRunArtifact(sonny6459_transport_tests);
+    shardDep(test_step, &run_sonny6459_transport_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6459_transport_step = b.step("test-sonny6459-cluster-transport", "Run the SONNY-6459 items 5-6 regression (a started ClusterCoordinator with no connection pool closes an accepted connection at once; the real raft sender sends to a peer's new endpoint after it changes, not over the cached connection to the old one)");
+    sonny6459_transport_step.dependOn(&run_sonny6459_transport_tests.step);
+
     // SONNY-6456 item 3: the REAL raft sender (opted into real QUIC in a test
     // build) reconnects after the peer closes its connection and after the
     // peer restarts.
@@ -15934,6 +16019,35 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6456_shutdown_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6456_shutdown_step = b.step("test-sonny6456-shutdown-persistence-stop", "Run the SONNY-6456 item 4 regression (SIGTERM stops the persistence thread within 3 s and the process exits within 10 s on an idle single-node server and an idle cluster node; no light checkpoint of the default graph is skipped)");
     sonny6456_shutdown_step.dependOn(&run_sonny6456_shutdown_tests.step);
+
+    // SONNY-6459 items 1-2: one light checkpoint per persistence tick, and one
+    // full checkpoint (no other) per clean shutdown (spawns the built geode).
+    const sonny6459_ckpt_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6459_checkpoint_once.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6459_ckpt_tests.root_module.link_libc = true;
+    spawnsBuiltGeode(sonny6459_ckpt_tests);
+    const run_sonny6459_ckpt_tests = b.addRunArtifact(sonny6459_ckpt_tests);
+    shardDep(test_step, &run_sonny6459_ckpt_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6459_ckpt_step = b.step("test-sonny6459-checkpoint-once", "Run the SONNY-6459 items 1-2 regression (each persistence tick advances checkpoints_total by one; a SIGTERM runs the full checkpoint once per graph and no other checkpoint, logs its phase timings, and the data survives a restart)");
+    sonny6459_ckpt_step.dependOn(&run_sonny6459_ckpt_tests.step);
+
+    // SONNY-6459 item 3: SHOW CLUSTER STATUS last_contact_ms follows raft
+    // traffic on a real three-node cluster (spawns the built geode;
+    // 127.0.0.91-93).
+    const sonny6459_lc_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6459_cluster_last_contact.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6459_lc_tests.root_module.link_libc = true;
+    spawnsBuiltGeode(sonny6459_lc_tests);
+    const run_sonny6459_lc_tests = b.addRunArtifact(sonny6459_lc_tests);
+    shardDep(test_step, &run_sonny6459_lc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6459_lc_step = b.step("test-sonny6459-cluster-last-contact", "Run the SONNY-6459 item 3 regression (three real cluster nodes: SHOW CLUSTER STATUS on the leader reports a last_contact_ms under 5 s for live peers well after start, and a growing one for a killed follower)");
+    sonny6459_lc_step.dependOn(&run_sonny6459_lc_tests.step);
 
     // SONNY-6436 item 5: an RLS policy admits a row only when its predicate
     // is True, in the raw-string interpreter and the compiled VM.

@@ -901,6 +901,10 @@ fn handleShutdownSignal(_: posix.SIG) callconv(.c) void {
 /// watchdog disarms instead of force-exiting a completed shutdown.
 var g_shutdown_flush_done = std.atomic.Value(bool).init(false);
 
+/// SONNY-6459: when the shutdown tail noticed the signal (ms, 0 = no
+/// shutdown yet), so the last teardown line can report the whole shutdown.
+var g_shutdown_started_ms = std.atomic.Value(i64).init(0);
+
 fn compat_sleepMs(ms: u64) void {
     if (comptime @import("builtin").os.tag == .linux) {
         const req = std.os.linux.timespec{
@@ -1368,6 +1372,14 @@ pub fn main() !void {
             .{ fd_raise.soft_before, fd_raise.soft_after, fd_raise.hard },
         );
     }
+    // SONNY-6459: runs last (registered first): the whole SIGTERM shutdown,
+    // teardown and allocator leak check included.
+    defer if (g_shutdown_started_ms.load(.acquire) != 0) {
+        std.debug.print(
+            "[shutdown] teardown complete ({d}ms after the signal)\n",
+            .{compat_milliTimestamp() - g_shutdown_started_ms.load(.acquire)},
+        );
+    };
     var gpa_instance = ServerAllocator{};
     defer {
         if (builtin.mode == .Debug) _ = gpa_instance.deinit();
@@ -2692,7 +2704,13 @@ pub fn main() !void {
             // from under the handler.
             const grpc_still_running = grpc_transport.grpcInflightCount();
             if (grpc_still_running == 0) {
+                const close_t0 = compat_milliTimestamp();
                 graph_store.deinitGlobalStore();
+                // SONNY-6459: per-phase shutdown timing (the storage engines'
+                // close runs here: each shard's WAL writes its checkpoint file).
+                if (g_shutdown_started_ms.load(.acquire) != 0) {
+                    std.debug.print("[shutdown] store closed ({d}ms)\n", .{compat_milliTimestamp() - close_t0});
+                }
             } else {
                 log.warn("skipping global store free at teardown: gRPC handler still in flight", &.{
                     Attr.int("grpc_inflight", @intCast(grpc_still_running)),
@@ -3744,6 +3762,9 @@ pub fn main() !void {
             });
         }
         std.debug.print("[shutdown] signal received, flushing data and stopping...\n", .{});
+        g_shutdown_started_ms.store(compat_milliTimestamp(), .release);
+        // SONNY-6459: checkpoint runs this shutdown makes (reported below).
+        const checkpoint_runs_at_signal = graph_store.checkpointRunsTotal();
 
         // ── Gap 0039: bounded graceful connection drain ─────────────────
         // Abandoned peers (client vanished without CONNECTION_CLOSE) used to
@@ -3835,7 +3856,9 @@ pub fn main() !void {
         // stuck handler, and before the teardown watchdog is armed. However
         // long the checkpoint takes, the watchdog cannot cut it short.
         const pstop_t0 = compat_milliTimestamp();
-        graph_store.stopPersistenceThread(gpa);
+        // SONNY-6459: no final light checkpoint here when the FULL one below
+        // applies — it flushes the same pages and truncates the same WAL.
+        graph_store.stopPersistenceThreadForCleanShutdown();
         std.debug.print(
             "[shutdown] persistence thread stopped ({d}ms)\n",
             .{compat_milliTimestamp() - pstop_t0},
@@ -3892,10 +3915,14 @@ pub fn main() !void {
             );
         }
 
+        const flush_t0 = compat_milliTimestamp();
         graph_store.flushForCleanShutdown();
         g_shutdown_flush_done.store(true, .release); // disarm the first-stage watchdog
         persistence_flushed_eagerly = true;
-        std.debug.print("[shutdown] data flush complete\n", .{});
+        std.debug.print(
+            "[shutdown] data flush complete ({d}ms, checkpoint runs since the signal: {d})\n",
+            .{ compat_milliTimestamp() - flush_t0, graph_store.checkpointRunsTotal() -| checkpoint_runs_at_signal },
+        );
 
         // ── Gap 0039: bounded teardown ──────────────────────────────────
         // Everything durable is on disk. If the remaining LIFO teardown

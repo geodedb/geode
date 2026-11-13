@@ -1525,7 +1525,7 @@ test "applyUndoOperation deletes created node" {
                 .node_id = 42,
                 .label = "",
                 .graph_name = "",
-                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+                .properties = .empty,
             },
         },
         .timestamp = compat_timestamp(),
@@ -1556,7 +1556,7 @@ test "applyUndoOperation deletes created edge" {
                 .target_id = 2,
                 .edge_type = "",
                 .graph_name = "",
-                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+                .properties = .empty,
             },
         },
         .timestamp = compat_timestamp(),
@@ -1576,7 +1576,7 @@ test "applyUndoOperation without store does not crash" {
                 .node_id = 99,
                 .label = "",
                 .graph_name = "",
-                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+                .properties = .empty,
             },
         },
         .timestamp = 0,
@@ -1614,7 +1614,7 @@ test "Transaction.abort applies undo log via store" {
                 .node_id = 77,
                 .label = "",
                 .graph_name = "",
-                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+                .properties = .empty,
             },
         },
         .timestamp = compat_timestamp(),
@@ -1635,7 +1635,7 @@ test "getClusterToken returns empty when env not set" {
 
 test "prepare message includes auth_token field" {
     // Verify that the TwoPhaseMessage struct accepts auth_token field
-    var ops = std.ArrayList(Operation).init(testing.allocator);
+    var ops: std.ArrayList(Operation) = .empty;
     defer ops.deinit(testing.allocator);
     const msg = TwoPhaseMessage{
         .msg_type = .PREPARE,
@@ -1648,24 +1648,28 @@ test "prepare message includes auth_token field" {
     try testing.expectEqualStrings("test-token-value", msg.auth_token);
 }
 
-fn stubSendCommit(_: ?*anyopaque, _: []const u8, _: TwoPhaseMessage, _: u64) anyerror!TwoPhaseResponse {
+/// A participant response the caller owns: `prepareWorker` and `commit` free
+/// what `send` returns with the transaction's allocator (testing.allocator in
+/// these tests), so its strings are allocated, not literals (SONNY-6459).
+fn stubResponse(vote: dist_schema.TwoPhaseVote) !TwoPhaseResponse {
+    const a = testing.allocator;
+    const transaction_id = try a.dupe(u8, "txn-init-test");
+    errdefer a.free(transaction_id);
     return TwoPhaseResponse{
         .msg_type = .PREPARE_RESPONSE,
-        .transaction_id = "txn-init-test",
-        .participant_id = "p1",
-        .vote = .VOTE_COMMIT,
+        .transaction_id = transaction_id,
+        .participant_id = try a.dupe(u8, "p1"),
+        .vote = vote,
         .timestamp = 0,
     };
 }
 
+fn stubSendCommit(_: ?*anyopaque, _: []const u8, _: TwoPhaseMessage, _: u64) anyerror!TwoPhaseResponse {
+    return stubResponse(.VOTE_COMMIT);
+}
+
 fn stubSendAbort(_: ?*anyopaque, _: []const u8, _: TwoPhaseMessage, _: u64) anyerror!TwoPhaseResponse {
-    return TwoPhaseResponse{
-        .msg_type = .PREPARE_RESPONSE,
-        .transaction_id = "txn-init-test",
-        .participant_id = "p1",
-        .vote = .VOTE_ABORT,
-        .timestamp = 0,
-    };
+    return stubResponse(.VOTE_ABORT);
 }
 
 test "Transaction.init creates valid initial state" {
@@ -1829,7 +1833,7 @@ test "Transaction.rollbackToSavepoint removes operations after savepoint" {
             .node_id = 1,
             .label = "",
             .graph_name = "",
-            .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            .properties = .empty,
         },
     });
     try txn.createSavepoint("sp1");
@@ -1839,7 +1843,7 @@ test "Transaction.rollbackToSavepoint removes operations after savepoint" {
             .node_id = 2,
             .label = "",
             .graph_name = "",
-            .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            .properties = .empty,
         },
     });
 
@@ -1883,7 +1887,7 @@ test "TwoPCCoordinator.handleMessage rejects replayed nonce" {
     defer coord.deinit();
 
     // Build a valid 2PC PREPARE message with a specific nonce.
-    var ops = std.ArrayList(Operation).init(ally);
+    var ops: std.ArrayList(Operation) = .empty;
     defer ops.deinit(ally);
     const msg = TwoPhaseMessage{
         .msg_type = .PREPARE,
@@ -1921,7 +1925,7 @@ test "TwoPCCoordinator.handleMessage rejects zero nonce" {
     });
     defer coord.deinit();
 
-    var ops = std.ArrayList(Operation).init(ally);
+    var ops: std.ArrayList(Operation) = .empty;
     defer ops.deinit(ally);
     const msg = TwoPhaseMessage{
         .msg_type = .PREPARE,
@@ -1957,20 +1961,22 @@ test "applyUndoOperation UPDATE node restores pre-image properties" {
     try store.setNodeProperty(200, "age", .{ .Int = 99 });
 
     // Build an undo entry for UPDATE with pre-image = original values.
+    // UndoEntry owns its strings (`deinit` frees them), so they are
+    // allocated here, not literals (SONNY-6459).
     var pre_props = std.ArrayList(proto_schema.MapEntry).empty;
-    const name_val = proto_schema.Value{ .kind = .{ .string_val = .{ .value = "Alice", .kind = .STRING } } };
+    const name_val = proto_schema.Value{ .kind = .{ .string_val = .{ .value = try testing.allocator.dupe(u8, "Alice"), .kind = .STRING } } };
     const age_val = proto_schema.Value{ .kind = .{ .int_val = .{ .value = 30, .kind = .INT } } };
-    try pre_props.append(testing.allocator, .{ .key = "name", .value = name_val });
-    try pre_props.append(testing.allocator, .{ .key = "age", .value = age_val });
+    try pre_props.append(testing.allocator, .{ .key = try testing.allocator.dupe(u8, "name"), .value = name_val });
+    try pre_props.append(testing.allocator, .{ .key = try testing.allocator.dupe(u8, "age"), .value = age_val });
 
     var undo = UndoEntry{
         .operation = .{
             .node_op = .{
                 .op_type = .UPDATE,
                 .node_id = 200,
-                .label = "Person",
+                .label = try testing.allocator.dupe(u8, "Person"),
                 .graph_name = "",
-                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+                .properties = .empty,
             },
         },
         .timestamp = compat_timestamp(),
@@ -1997,8 +2003,8 @@ test "applyUndoOperation DELETE node re-creates node from pre-image" {
 
     // Build undo entry for DELETE with pre-image.
     var pre_props = std.ArrayList(proto_schema.MapEntry).empty;
-    const model_val = proto_schema.Value{ .kind = .{ .string_val = .{ .value = "Sedan", .kind = .STRING } } };
-    try pre_props.append(testing.allocator, .{ .key = "model", .value = model_val });
+    const model_val = proto_schema.Value{ .kind = .{ .string_val = .{ .value = try testing.allocator.dupe(u8, "Sedan"), .kind = .STRING } } };
+    try pre_props.append(testing.allocator, .{ .key = try testing.allocator.dupe(u8, "model"), .value = model_val });
 
     var pre_labels = std.ArrayList([]const u8).empty;
     try pre_labels.append(testing.allocator, try testing.allocator.dupe(u8, "Car"));
@@ -2008,9 +2014,9 @@ test "applyUndoOperation DELETE node re-creates node from pre-image" {
             .node_op = .{
                 .op_type = .DELETE,
                 .node_id = 201,
-                .label = "Car",
-                .graph_name = graph_store.DEFAULT_GRAPH_NAME,
-                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+                .label = try testing.allocator.dupe(u8, "Car"),
+                .graph_name = try testing.allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+                .properties = .empty,
             },
         },
         .timestamp = compat_timestamp(),
@@ -2045,9 +2051,9 @@ test "captureNodePreImage captures properties and labels" {
             .node_op = .{
                 .op_type = .UPDATE,
                 .node_id = 300,
-                .label = "Widget",
-                .graph_name = graph_store.DEFAULT_GRAPH_NAME,
-                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+                .label = try testing.allocator.dupe(u8, "Widget"),
+                .graph_name = try testing.allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+                .properties = .empty,
             },
         },
         .timestamp = compat_timestamp(),
@@ -2085,9 +2091,9 @@ test "captureEdgePreImage captures edge properties" {
                 .edge_id = 400,
                 .source_id = 1,
                 .target_id = 2,
-                .edge_type = "LIKES",
-                .graph_name = graph_store.DEFAULT_GRAPH_NAME,
-                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+                .edge_type = try testing.allocator.dupe(u8, "LIKES"),
+                .graph_name = try testing.allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+                .properties = .empty,
             },
         },
         .timestamp = compat_timestamp(),
@@ -2115,7 +2121,7 @@ test "applyUndoOperation UPDATE node without pre-image logs warning and is no-op
                 .node_id = 500,
                 .label = "",
                 .graph_name = "",
-                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+                .properties = .empty,
             },
         },
         .timestamp = compat_timestamp(),

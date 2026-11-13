@@ -462,9 +462,8 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
     // Emit one row for this node, plus one per peer in coord.raft.peers.
     // raft.peers is the authoritative cluster membership populated from
     // PeerConfig at init time (resolvePeers in cluster.zig). The previous
-    // implementation read cluster_state.nodes, which is mutated at runtime
-    // by handleJoinCluster and was observed empty in subprocess runs even
-    // though raft.peers was populated correctly. Using raft.peers guarantees
+    // implementation read cluster_state.nodes, which was observed empty in
+    // subprocess runs even though raft.peers was populated correctly. Using raft.peers guarantees
     // SHOW CLUSTER STATUS reflects the configured membership immediately.
     // Self is intentionally NOT in that list so we emit it explicitly.
     const peer_count = coord.raft.peers.len;
@@ -493,7 +492,7 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
     rows[0][5] = Value{ .Int = 0 };
 
     // Rows 1..N: peers as recorded in coord.raft.peers.
-    for (coord.raft.peers, 0..) |peer, i| {
+    for (coord.raft.peers, 0..) |*peer, i| {
         const row = try allocator.alloc(Value, column_names.len);
         row[0] = Value{ .Int = @intCast(peer.id) };
 
@@ -519,8 +518,11 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
         row[4] = Value{ .Str = peer_endpoint };
 
         // last_contact_ms = now - last_contact (raft.peers tracks this
-        // separately from cluster_state).
-        const delta_ms: i64 = if (peer.last_contact == 0) 0 else now_ms - peer.last_contact;
+        // separately from cluster_state). SONNY-6459: last_contact is the
+        // last authenticated raft frame from the peer (start time until the
+        // first one), stored atomically by the cluster's inbound handlers.
+        const last_contact = @atomicLoad(i64, &peer.last_contact, .monotonic);
+        const delta_ms: i64 = if (last_contact == 0) 0 else now_ms - last_contact;
         row[5] = Value{ .Int = @max(@as(i64, 0), delta_ms) };
         rows[i + 1] = row;
     }

@@ -17363,6 +17363,17 @@ pub fn openDetachedAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !
 }
 
 pub fn deinitGlobalAdapter() void {
+    deinitGlobalAdapterEx(false);
+}
+
+/// `after_clean_shutdown_flush`: the clean-shutdown FULL checkpoint
+/// (`flushForCleanShutdown`) already ran for this store, with every writer
+/// drained, so the final `checkpointAll` is skipped (SONNY-6459: it re-ran the
+/// FULL checkpoint, re-writing every graph's exact property index and the
+/// registry). Durability does not depend on it: each commit is fsynced to the
+/// engine WAL, and `engine.close()` (in `adapter.deinit`) still checkpoints any
+/// engine with un-checkpointed pages.
+fn deinitGlobalAdapterEx(after_clean_shutdown_flush: bool) void {
     // Task 19 (2026-04-23): stop per-graph group-commit coordinators BEFORE
     // the adapter goes away — the coordinator threads call into the adapter
     // on every apply, so they MUST stop first.  Safe to call when no
@@ -17377,8 +17388,8 @@ pub fn deinitGlobalAdapter() void {
     // server shutdown must still checkpoint loaded per-graph engines before the
     // adapter is destroyed, otherwise the in-memory high-concurrency mutations
     // are visible before shutdown but missing after restart.
-    if (global_adapter) |adapter| {
-        adapter.checkpointAll() catch |err| {
+    if (global_adapter != null and !after_clean_shutdown_flush) {
+        global_adapter.?.checkpointAll() catch |err| {
             log.err("per-graph storage checkpoint failed during adapter shutdown", &.{
                 Attr.string("error", @errorName(err)),
             });
@@ -18026,6 +18037,28 @@ pub fn startPersistenceThread(interval_ms: u64) void {
 
 pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
     _ = allocator;
+    stopPersistenceLoop();
+    persistenceFinalFlush();
+}
+
+/// SONNY-6459: stop the persistence loop for a clean shutdown. When the
+/// clean-shutdown FULL checkpoint (`flushForCleanShutdown`) will run next, the
+/// final LIGHT checkpoint `stopPersistenceThread` runs is skipped: the FULL one
+/// flushes the same pages and truncates the same WAL. Otherwise (no adapter or
+/// no data dir) the usual final flush runs.
+pub fn stopPersistenceThreadForCleanShutdown() void {
+    stopPersistenceLoop();
+    if (cleanShutdownFlushApplies()) return;
+    persistenceFinalFlush();
+}
+
+/// SONNY-6459: completed adapter checkpoint runs (`checkpoints_total`; 0 with
+/// no adapter). The server reports how many a shutdown made.
+pub fn checkpointRunsTotal() u64 {
+    return if (global_adapter) |adapter| adapter.checkpointsTotal() else 0;
+}
+
+fn stopPersistenceLoop() void {
     g_persist_shutdown.store(1, .release);
     const io = std.Io.Threaded.global_single_threaded.io();
     io.futexWake(u32, &g_persist_shutdown.raw, std.math.maxInt(u32));
@@ -18033,6 +18066,9 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
         pool.deinit();
         g_persist_pool = null;
     }
+}
+
+fn persistenceFinalFlush() void {
     // Final flush — no worker threads should be running at this point
     // but take the lock for safety. Use split-phase for consistency with
     // the persistence loop (P3: avoid holding lock during TDE finalization).
@@ -18125,21 +18161,31 @@ fn persistenceLoop() void {
                 // P1: WAL checkpoint — use per-graph read locks when adapter is available,
                 // falling back to the global shared lock for backward compatibility.
                 if (global_adapter) |adapter| {
-                    if (g_wal_checkpoint_fn) |checkpoint_fn| {
-                        // SONNY-6456: run the hook holding NO graph lock. It
-                        // checkpoints through the adapter, which takes each
-                        // graph's EXCLUSIVE lock itself; a read lock on the
-                        // default graph held here made that wait on this very
-                        // thread until its 5 s deadline, skip the default
-                        // graph on every tick, and stall SIGTERM by up to two
-                        // deadlines (this tick, then the final flush).
-                        checkpoint_fn(store_ptr);
-                    }
                     // Checkpoint per-graph storage on WAL checkpoint ticks.
                     // GAP-0900 Layer-2: LIGHT — a runtime checkpoint must stay
                     // O(dirty); a full O(graph) checkpoint here stalls a large
                     // ingest for minutes under the exclusive store lock.
-                    if (adapter.checkpointAllLight()) |_| {
+                    //
+                    // SONNY-6459: the installed hook (`wal.checkpointHook` ->
+                    // `saveToFileEx(true)`) IS that light checkpoint; calling
+                    // `adapter.checkpointAllLight()` after it ran a second one
+                    // on every tick. Without a hook, checkpoint here.
+                    //
+                    // SONNY-6456: run the hook holding NO graph lock. It
+                    // checkpoints through the adapter, which takes each
+                    // graph's EXCLUSIVE lock itself; a read lock on the
+                    // default graph held here made that wait on this very
+                    // thread until its 5 s deadline, skip the default graph
+                    // on every tick, and stall SIGTERM by up to two deadlines
+                    // (this tick, then the final flush).
+                    const runs_before = adapter.checkpointsTotal();
+                    const tick_result: anyerror!void = if (g_wal_checkpoint_fn) |checkpoint_fn| blk: {
+                        // The hook logs its own failure; a run that landed
+                        // advanced the counter.
+                        checkpoint_fn(store_ptr);
+                        break :blk if (adapter.checkpointsTotal() != runs_before) {} else error.CheckpointHookFailed;
+                    } else adapter.checkpointAllLight();
+                    if (tick_result) |_| {
                         // GAP-ENT-0038: this legacy CDC-WAL-triggered branch was
                         // completely SILENT on success while resetting the
                         // deferred cadence state (pending ops zeroed, clock
@@ -18725,8 +18771,7 @@ var g_clean_shutdown_flushed: std.atomic.Value(bool) = std.atomic.Value(bool).in
 /// correctly REJECTS the (now-uncovered) snapshots and safely re-scans, with no
 /// data loss (G1/G3 — never serve a snapshot across a committed tail).
 pub fn flushForCleanShutdown() void {
-    if (!(initialized.load(.acquire) and globalStorePtr() != null)) return;
-    if (getGlobalAdapter() == null or global_store.?.data_dir.len == 0) return;
+    if (!cleanShutdownFlushApplies()) return;
     global_store.?.saveToFileEx(false) catch |err| {
         // Do NOT set the latch: leave the (retryable) checkpoint for the deinit
         // path so a flush failure never downgrades durability.
@@ -18736,6 +18781,13 @@ pub fn flushForCleanShutdown() void {
         return;
     };
     g_clean_shutdown_flushed.store(true, .release);
+}
+
+/// Whether `flushForCleanShutdown` checkpoints anything: a store with a real
+/// persistence adapter and a data dir.
+fn cleanShutdownFlushApplies() bool {
+    if (!(initialized.load(.acquire) and globalStorePtr() != null)) return false;
+    return getGlobalAdapter() != null and global_store.?.data_dir.len > 0;
 }
 
 fn deinitGlobalStoreEx(clean: bool) void {
@@ -18766,10 +18818,12 @@ fn deinitGlobalStoreEx(clean: bool) void {
                 // watchdog and re-serialising every graph's loop2 snapshots is
                 // O(graph) (minutes at 14.27M) — it would burn the whole teardown
                 // budget, and any checkpoint work it triggers could re-advance the
-                // engine epoch. The store is already durable + reload-ready; the
-                // no-op `adapter.checkpointAll()` inside `deinitGlobalAdapter`
-                // stays as a belt-and-suspenders for any (server-drained-away) late
-                // dirty. Just free memory below.
+                // engine epoch. The store is already durable + reload-ready, and
+                // `deinitGlobalAdapterEx(true)` below skips its `checkpointAll`
+                // too (SONNY-6459: it was not a no-op — it re-wrote every
+                // graph's exact property index and the registry); a late dirty
+                // engine is still checkpointed by `engine.close()`. Just free
+                // memory below.
             } else {
                 global_store.?.saveToFileEx(false) catch |err| {
                     log.err("clean-shutdown IdMap snapshot persist failed", &.{
@@ -18783,7 +18837,9 @@ fn deinitGlobalStoreEx(clean: bool) void {
         global_store_allocator = null;
         initialized.store(false, .release);
     }
-    deinitGlobalAdapter();
+    // SONNY-6459: the latch is this store's; consume it so it cannot reach
+    // another adapter teardown.
+    deinitGlobalAdapterEx(clean and g_clean_shutdown_flushed.swap(false, .acq_rel));
 }
 
 // Unit tests for label index functionality

@@ -2018,6 +2018,99 @@
 
 ### Fixed
 
+- **Operator-visible: one checkpoint per persistence tick and one per clean
+  shutdown, with per-phase shutdown timings (SONNY-6459 items 1-2).** Each
+  persistence tick ran the light checkpoint twice (the checkpoint hook,
+  then `adapter.checkpointAllLight()` again), so `checkpoints_total` rose
+  by 2 per tick. A SIGTERM ran a light checkpoint while stopping the
+  persistence thread, then the clean-shutdown FULL checkpoint, then a
+  second FULL checkpoint in `deinitGlobalAdapter` after "[shutdown] data
+  flush complete", which re-wrote every graph's exact property index and
+  the graph registry ("full checkpoint: exact-index persist decision"
+  logged twice per graph). A tick now runs one light checkpoint, and a
+  clean shutdown runs the FULL checkpoint only. Durability is unchanged:
+  every commit is fsynced to the engine WAL, and closing an engine still
+  checkpoints any pages written after the flush. The shutdown log now
+  reads "[shutdown] data flush complete (<n>ms, checkpoint runs since the
+  signal: <k>)", "[shutdown] store closed (<n>ms)" and "[shutdown]
+  teardown complete (<n>ms after the signal)". Measured on a busy disk
+  (Debug build, one node written): SIGTERM-to-exit is about 8.5 s on the
+  first shutdown after a graph is created and about 3 s afterwards. The
+  rest is in dependencies: graph-storage's first FULL checkpoint of a new
+  graph writes the derived indexes of all 16 shards (tmp file, fsync,
+  rename, directory fsync per file; 5.8 s, then 155 ms on later
+  shutdowns), each shard's WAL writes `graph.wal.ckpt` with fsyncs on close
+  even when nothing changed (1.1-1.3 s for two graphs), and about 225 pool
+  worker threads are joined one at a time (about 1 s). Regression:
+  `zig build test-sonny6459-checkpoint-once`.
+- **Operator-visible: SHOW CLUSTER STATUS `last_contact_ms` is the time
+  since the peer was last heard from (SONNY-6459 item 3).** Each raft
+  peer's `last_contact` was set once, when the peer list was built at
+  startup, so the column grew from start for every peer, up or down. Every
+  authenticated inbound raft frame from a peer now refreshes it (the same
+  signal the health monitor uses); until the first one it still counts
+  from startup. The field is written and read atomically. On a real
+  three-node cluster the leader now reports 12-19 ms for live peers 10 s
+  after start (it reported 7186 ms) and about 8 s for a follower killed 7 s
+  earlier. Regression: `zig build test-sonny6459-cluster-last-contact`.
+- **Operator-visible: the raft sender follows a peer to a new endpoint, and
+  the cluster listener closes connections it cannot hand off (SONNY-6459
+  items 5-6).** `raft_consensus.Transport` reused its cached connection to
+  a peer whenever one was established, even after the peer's configured
+  host or port changed, so frames for the peer kept going to its old
+  address. A cached connection to an endpoint the peer no longer has is
+  now dropped and rebuilt ("raft transport peer endpoint changed;
+  reconnecting"); an IP change behind an unchanged host name stays with
+  the re-resolve reaper. `ClusterCoordinator.networkLoop` did nothing with
+  an accepted connection when it had no connection pool (the connection
+  stayed tracked and open), and ended the accept loop, leaking the
+  connection, when it could not allocate the task context. Both now close
+  and untrack the connection and log it. Regression: `zig build
+  test-sonny6459-cluster-transport`.
+- **Test infrastructure: the distributed modules' inline tests run again,
+  and test-graph-store compiles again (SONNY-6459 item 7).** Zig collects
+  inline tests only from a test root's own module. The inline tests of
+  `src/distributed/raft_consensus.zig`, `cluster.zig` and
+  `cluster_auth.zig` are collected only by the unfiltered
+  `src/graph_store.zig` and `src/eval.zig` roots (`zig build
+  test-graph-store`, `test-gap0866`), and since SONNY-6456 (raft's
+  `useRealQuicInTests`) neither compiled: raft_consensus.zig needs the
+  `transport/quic` module in test builds too, and those roots did not have
+  it. They now get their own instance of it. `twophase.zig`'s 23 inline
+  tests were collected by no root; the new step `zig build
+  test-sonny6459-distributed-inline` (a src/-rooted module wired like the
+  graph_store root) runs the four files' tests, 59 in all. Fixed on the
+  way: 13 twophase tests did not compile (pre-0.16
+  `ArrayList.init`), and seven freed string literals (the 2PC send stubs
+  and the undo-log tests now hand over allocated data, as the owners
+  expect). Not run: twophase's two `TwoPCCoordinator.handleMessage` tests,
+  because that function cannot compile (protobuf 0.1.6 cannot decode the
+  union submessages of `TwoPhaseMessage`); nothing outside twophase.zig
+  uses `TwoPCCoordinator`.
+- **Docs: a cluster has no dynamic join and no shard failover (SONNY-6459
+  items 4 and 8).** `ClusterCoordinator.handleJoinCluster` and
+  `serializeClusterTopology` had no caller (the inbound cluster RPC
+  dispatcher answers JOIN_CLUSTER with ERR) and did not compile
+  (`nodes.append` without an allocator, `ArrayList(...).init`); Zig never
+  analysed them, so nothing noticed. They are removed with what only they
+  used (`parseNodeInfo`, `rebalanceShards`, `serializeMinimalJoinResponse`,
+  `NodeInfoProto`, `JoinResponsePayload` and its inline test, the
+  `Topology*` payloads). Membership is the static `--peers` list. Nothing
+  in production fills the coordinator's shard table, so `forwardToShard`,
+  `promoteReplica` and `ensureReplicationFactor` run only in tests; the
+  code stays pending a decision. `src/distributed/README.md` no longer
+  says the coordinator handles node join/leave, `docs/SERVER_FEATURES.md`
+  no longer lists 32-shard, 3-5-replica horizontal scaling, and
+  `docs/DISTRIBUTED_QUALITY_GAP_ANALYSIS.md` records the shard surface as
+  an open residual. Regression: `zig build test-sonny6459-hygiene`.
+- **Test infrastructure: an orphan test file is gone (SONNY-6459 item 9).**
+  `tests/test_groupby_having_count_distinct.zig` was built by no step and
+  could not compile (it imported `tests/exec.zig`, `tests/eval.zig` and
+  `tests/planner.zig`, which do not exist, and called `planQuery` and
+  `runGroupedQuery` with old signatures). It is removed; its CANARY
+  marker (REQ-GQL-012 HavingCountDistinctFilter) moved to the end-to-end
+  `HAVING count(DISTINCT n.i)` check in `zig build
+  test-sonny2675-grouped-having`.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so
