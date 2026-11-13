@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:55:02.67248119Z",
+  "generated_at": "2026-11-13T08:48:56.951686778Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85890,6 +85890,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
+      "features": [
+        {
+          "feature": "StatementTxnBatching",
+          "aspect": "CreateQueryStatementTxn",
+          "status": "TESTED",
+          "files": [
+            "src/execution/crud_operations.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_create_query_one_commit.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "StatementTxnBatching",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny738_create_query_one_commit.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_create_query_one_commit.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93524,7 +93557,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4875
+      "TESTED": 4877
     },
     "by_aspect": {
       "2PC": 3,
@@ -94285,6 +94318,7 @@
       "CreatePolicyWriteThrough": 1,
       "CreatePrePass": 1,
       "CreateQuery": 2,
+      "CreateQueryStatementTxn": 1,
       "CreateRefusesFlaggedId": 1,
       "CreateRole": 1,
       "CreateRoleFailureReported": 1,
@@ -96652,7 +96686,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 294,
+      "Regression": 295,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

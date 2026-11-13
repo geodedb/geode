@@ -202,8 +202,16 @@
             // Native macOS transport and current-main paired UDP gate passed.
             // 2026-10-26: serialize FIN, RESET_STREAM and STOP_SENDING with
             // stream mutations. QUIC !51 and its main pipeline passed all checks.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.48#274109bd5a0a268b7e64cd00a406d00a61bd1de2",
-            .hash = "quic-0.1.48-gBIqUR_-QACpHwpcYcn4npRszy-RS-cTq-y3rH8KkknM",
+            // 2026-11-13: v0.1.49 (f4ea768, SONNY-6434) — ACK processing and
+            // STREAM loss recovery do bounded work per packet: retransmit
+            // entries are kept in packet-number order, an ACK frame's ranges
+            // reach recovery whole (no 256-PN enumeration cap), at most two
+            // lost packets are retransmitted per ACK oldest first, and a failed
+            // send leaves the entry tracked. Fixes the remote-backup stall at
+            // 11-14 MB (SONNY-6430 item 1, test-sonny6430-remote-backup-large).
+            // Lockstep with geode-client-zig v0.3.14 (one quic module).
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.49#f4ea7685f3e46884ee93e54486683f10ec4a8770",
+            .hash = "quic-0.1.49-gBIqUTe1QQCBDjdbxhAGJkA0iaVTE9aLjadbDX6hEk9w",
         },
 
         // =======================================================================
@@ -257,9 +265,16 @@
         },
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
+        // 2026-11-13: v0.1.28 (3c0a560, SONNY-6447) — Address.eql no longer
+        // panics: it sized both addresses by family (getOsSockLen) and a
+        // receive's source address left unwritten (undefined) had none. It now
+        // compares by family, and the receive paths zero the source address.
+        // Lockstep with audit v0.1.24, which pins the same dns. Known diamond:
+        // geode-client-zig v0.3.14 still pins dns v0.1.27 (no client tag on
+        // v0.1.28 yet).
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git?ref=5b71169ae2763020482a7672b7f0b16d3b577f75#5b71169ae2763020482a7672b7f0b16d3b577f75",
-            .hash = "dns-0.1.27-x4U-zfVqGACo8cYBKhXmcD9V8CTwM-E7064GPc7L6Du_",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git?ref=v0.1.28#3c0a5602afd42aef6e5543dccb5b0dc8a92cabf5",
+            .hash = "dns-0.1.28-x4U-zSWCGAA2rnMI5f5kDd8OoAIp2LoOXz_gJKOg3XgQ",
         },
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
@@ -406,8 +421,11 @@
             // geode's quic v0.1.46 bump (client Finished retransmit until
             // HANDSHAKE_DONE). Still no client tag on this quic, hence ref=main.
             // Includes main's be724ae transport/entropy pins, plus portable deadlines.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.13#9966a5a91600fc84176139662b22cb63d4b8b19b",
-            .hash = "geode_client_zig-0.3.13-8ysbV6mQCwBgwep5P2LawnvZYDYxjvam-f789sjPAM69",
+            // 2026-11-13: v0.3.14 (98aae06) — lockstep with geode's quic v0.1.49
+            // bump (SONNY-6434), so the graph has one quic module; no client
+            // code change. It still pins dns v0.1.27 (see .dns).
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.14#98aae06c20ca55349d693618a14495066e75cd3f",
+            .hash = "geode_client_zig-0.3.14-8ysbVz-RCwAJLHjFgD3guIA2tcwa4OlACqBmJi86GEIL",
         },
 
         // =======================================================================
@@ -556,9 +574,11 @@
         // =======================================================================
 
         // Audit - Event modeling, filtering, CEF formatting, syslog/file sinks
+        // 2026-11-13: v0.1.24 (55335ac) — tagged release; pins dns v0.1.28
+        // (SONNY-6447) in lockstep with geode's dns pin.
         .audit = .{
-            .url = "git+https://gitlab.com/devnw/zig/audit.git?ref=c0e2abfdb024026816688354dbb56427ce79448a#c0e2abfdb024026816688354dbb56427ce79448a",
-            .hash = "audit-0.1.23-J9TtCGHMBgBjgmCtq1yJLc8XfvORDEdWOSF_SnY_NWtT",
+            .url = "git+https://gitlab.com/devnw/zig/audit.git?ref=v0.1.24#55335ac747e556f002903397bd560c2abb0ba484",
+            .hash = "audit-0.1.24-J9TtCEDMBgDwI59tWiqQGXe9blJspf-GVfmW0Et5ls1z",
         },
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics
