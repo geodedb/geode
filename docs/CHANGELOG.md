@@ -2035,6 +2035,16 @@
 
 ### Fixed
 
+- **`geode shell --plain` exits at end of input (SONNY-3060).** Piping a
+  file or a here-doc into `geode shell --plain` used to run the statements
+  and then print `geode>` prompts forever: the plain-mode reader treated
+  Zig 0.16's `error.EndOfStream` as "end of this line" and read again. The
+  shell now ends the session at EOF and exits with status 0 (a last line
+  without a trailing newline still runs first); any other stdin read error
+  ends the shell with a non-zero status instead of looping. Regression
+  `zig build test-sonny3060-shell-plain-eof` runs the real shell against a
+  real server with piped input.
+
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so

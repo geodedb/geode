@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:01:57.870912612Z",
+  "generated_at": "2026-11-13T09:32:03.481477106Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -68851,6 +68851,25 @@
       ]
     },
     {
+      "id": "REQ-SHELL-PLAIN-EOF-001",
+      "features": [
+        {
+          "feature": "ShellPlainMode",
+          "aspect": "ExitAtEndOfInput",
+          "status": "TESTED",
+          "files": [
+            "src/client/repl/repl_loop.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3060_shell_plain_eof.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SHELL-RECONNECT-011",
       "features": [
         {
@@ -93218,7 +93237,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4856
+      "TESTED": 4857
     },
     "by_aspect": {
       "2PC": 3,
@@ -94476,6 +94495,7 @@
       "Exists": 1,
       "ExistsCheck": 1,
       "ExistsPredicateIsolation": 1,
+      "ExitAtEndOfInput": 1,
       "ExitCode": 2,
       "ExitLeaksArgonBoundsLoggerDocker": 1,
       "ExpandPathsAndLists": 1,

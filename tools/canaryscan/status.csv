@@ -4420,6 +4420,7 @@ REQ-SHELL-PLAIN-003,ShellPlainMode,PlainPrompt,TESTED,src/client/repl/repl_loop.
 REQ-SHELL-PLAIN-007,ShellPlainMode,PlainModeRun,TESTED,src/client/repl/repl_loop.zig,geodetestlab/specs/shell_plain_mode.yml,,cli,2026-06-11
 REQ-SHELL-PLAIN-009,ShellPlainMode,InterruptCheckTTY,TESTED,src/client/repl/repl_dispatch.zig,tests/test_gap0514_repl_dispatch.zig,,cli,2026-06-11
 REQ-SHELL-PLAIN-012,ShellPlainMode,MetaCommandDispatch,TESTED,src/client/repl/repl_loop.zig,geodetestlab/specs/shell_plain_mode.yml,,cli,2026-06-11
+REQ-SHELL-PLAIN-EOF-001,ShellPlainMode,ExitAtEndOfInput,TESTED,src/client/repl/repl_loop.zig,tests/test_sonny3060_shell_plain_eof.zig,,cli,2026-11-13
 REQ-SHELL-RECONNECT-011,ShellAutoReconnect,ExecuteWithRetry,TESTED,src/client/repl/repl_dispatch.zig,,,cli,2026-01-29
 REQ-SHELL-RECONNECT-013,ShellAutoReconnect,TxnStatementCount,TESTED,src/client/repl/repl_loop.zig,,,cli,2026-01-29
 REQ-SHELL-RECONNECT-014,ShellAutoReconnect,CacheCredentialsOnAuth,TESTED,src/client/repl/repl_loop.zig,,,cli,2026-01-29
