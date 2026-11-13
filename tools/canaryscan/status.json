@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T02:26:38.737344865Z",
+  "generated_at": "2026-11-13T02:40:04.617183023Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84462,6 +84462,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6447-MERGE-EDGE-ENDPOINT-TENANT",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "CompositeEndpointTenantScope",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6447-NUMERIC-KEY-PARITY",
       "features": [
         {
@@ -92194,7 +92213,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4798
+      "TESTED": 4799
     },
     "by_aspect": {
       "2PC": 3,
@@ -92777,6 +92796,7 @@
       "ComplianceLog": 1,
       "Composite": 1,
       "CompositeBackfillFromPostings": 1,
+      "CompositeEndpointTenantScope": 1,
       "CompositeSoleHolderEndpoint": 1,
       "ComprehensiveBatch3": 1,
       "ComprehensiveBatch4": 1,

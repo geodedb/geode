@@ -7428,6 +7428,19 @@ pub const GraphStore = struct {
         return self.residentNodeSatisfies(id, Check{ .graph_name = graph_name, .label = label, .source = source, .tenant = tenant }, Check.holds);
     }
 
+    /// SONNY-6447: whether node `id` exists in `graph_name` and carries
+    /// `tenant` (hydrated if it is not resident).
+    pub fn nodeInGraphAndTenant(self: *GraphStore, id: u64, graph_name: []const u8, tenant: []const u8) !bool {
+        const Check = struct {
+            graph_name: []const u8,
+            tenant: []const u8,
+            fn holds(c: @This(), node: *const Node) bool {
+                return std.mem.eql(u8, node.graph_name, c.graph_name) and std.mem.eql(u8, node.tenant_id, c.tenant);
+            }
+        };
+        return self.residentNodeSatisfies(id, Check{ .graph_name = graph_name, .tenant = tenant }, Check.holds);
+    }
+
     /// Whether `pred(context, node)` holds for node `id`, or false when no
     /// such node exists. The node is hydrated if it is not resident, then
     /// read under its cache shard's SHARED lock: under a SHARED graph lock a

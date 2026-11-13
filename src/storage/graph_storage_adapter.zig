@@ -7820,6 +7820,33 @@ pub const StorageAdapter = struct {
         return propertyValuesEqual(actual, f.value);
     }
 
+    // CANARY: REQ=REQ-SONNY-6447-MERGE-EDGE-ENDPOINT-TENANT; FEATURE="WriteFastPathParity"; ASPECT=CompositeEndpointTenantScope; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6447: `lookupPublicNodeIdByLabelAndAllProps` for a request of
+    /// `request_tenant` (the tag its writes carry), for the MATCH ... MERGE
+    /// edge fast path's endpoints. An unscoped request (`mergeTenantScope`)
+    /// is answered as `lookupPublicNodeIdByLabelAndAllProps` answers. A
+    /// scoped one: that resolver's sole match (of any tenant) when it is the
+    /// request's tenant's node; `missing_err` when no node matches, or the
+    /// sole match is another tenant's (so none of this tenant's does);
+    /// `error.MergeKeyNotUnique` when more nodes match (some may be this
+    /// tenant's), or the match's tenant could not be read. Another tenant's
+    /// node is never the answer, whatever gate the caller passed.
+    pub fn lookupPublicNodeIdByLabelAndAllPropsForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        filters: []const PropKV,
+        request_tenant: []const u8,
+        missing_err: anyerror,
+    ) !u64 {
+        const scope = mergeTenantScope(request_tenant);
+        const id = try self.lookupPublicNodeIdByLabelAndAllProps(graph_name, label, filters, missing_err);
+        const tenant = scope orelse return id;
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const own = store.nodeInGraphAndTenant(id, graph_name, tenant) catch return error.MergeKeyNotUnique;
+        return if (own) id else missing_err;
+    }
+
     /// Verify every filter against the public-id node's stored properties.
     /// Reads each property engine-direct by slot — NO full-node hydration
     /// (Phase 2). SONNY-6362: the seed's filter too; the merge probe that

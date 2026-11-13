@@ -1709,6 +1709,20 @@
 
 ### Fixed
 
+- **The MATCH ... MERGE edge fast path resolves its endpoints for the
+  request's tenant (SONNY-6447 item 6).** `executeBulkMatchMergeEdge`
+  resolved both endpoints with no tenant
+  (`lookupPublicNodeIdByLabelAndAllProps`) and was safe only because the
+  session gate (`bulk_ingest.sessionAllowsKeyResolvedWrites`) sends every
+  tenant-scoped session to the executor. It now calls
+  `lookupPublicNodeIdByLabelAndAllPropsForTenant` with the request's
+  tenant: an unscoped request is answered as before; a scoped one gets the
+  sole matching node only when it is that tenant's, a miss when the sole
+  match is another tenant's, and a decline (`MergeKeyNotUnique`, the
+  executor answers) when several nodes match. Another tenant's node is never
+  an endpoint, whatever gate the caller passed. No behaviour changes today
+  (the gate still declines scoped sessions). Regression: `zig build
+  test-sonny6429-sole-holder-tenant-wire`.
 - **`geode query --file` over QUIC stops, with the summary, when the retry
   of a rejected chunk cannot connect (SONNY-6447 item 7).** When the server
   rejects a chunk, the CLI retries its statements one at a time on one new

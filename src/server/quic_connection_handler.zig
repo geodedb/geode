@@ -1094,12 +1094,17 @@ fn executeBulkMatchMergeEdge(
         // orphan-skipping EVERY edge (the from-dump edge phase committed ZERO
         // edges). `lookupPublicNodeIdByLabelAndAllProps` carries the same
         // authoritative-miss fast-negative (no O(N) scan on a dangling endpoint).
-        const s = adapter.lookupPublicNodeIdByLabelAndAllProps(query_graph_name, spec.source.label, src_filters, error.SourceNodeNotFound) catch |err| switch (err) {
+        // SONNY-6447: resolved for the request's tenant, so another tenant's
+        // node is never an endpoint, independently of the session gate
+        // (`bulk_ingest.sessionAllowsKeyResolvedWrites`) that today keeps a
+        // tenant-scoped session off this path.
+        const request_tenant = fle_integration.getCurrentTenantIdCtx(&ctx);
+        const s = adapter.lookupPublicNodeIdByLabelAndAllPropsForTenant(query_graph_name, spec.source.label, src_filters, request_tenant, error.SourceNodeNotFound) catch |err| switch (err) {
             error.SourceNodeNotFound => break :blk null,
             error.MergeKeyNotUnique => return false, // SONNY-6429
             else => return err,
         };
-        const t = adapter.lookupPublicNodeIdByLabelAndAllProps(query_graph_name, spec.target.label, dst_filters, error.TargetNodeNotFound) catch |err| switch (err) {
+        const t = adapter.lookupPublicNodeIdByLabelAndAllPropsForTenant(query_graph_name, spec.target.label, dst_filters, request_tenant, error.TargetNodeNotFound) catch |err| switch (err) {
             error.TargetNodeNotFound => break :blk null,
             error.MergeKeyNotUnique => return false, // SONNY-6429
             else => return err,
