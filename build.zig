@@ -11862,7 +11862,7 @@ pub fn build(b: *std.Build) void {
     const run_sonny3232_tests = b.addRunArtifact(sonny3232_tests);
     spawnsBuiltGeode(sonny3232_tests);
     shardDep(test_step, &run_sonny3232_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (a QUIC request of 256 KiB is answered, one past the 16 MiB maximum is not, 1 MiB and 4 MiB outcomes are recorded (SONNY-3232, left for S2); the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
+    const sonny3232_step = b.step("test-sonny3232-quic-large-request", "Run SONNY-3232 regression (QUIC requests of 256 KiB, 1 MiB and 4 MiB are answered (SONNY-3351: quic v0.1.47 keeps lost STREAM data until retransmitted), one past the 16 MiB maximum is not; the server survives each and serves the next connection; spawned server; Debug and ReleaseSafe)");
     sonny3232_step.dependOn(&run_sonny3232_tests.step);
 
     // SONNY-3232: QUIC requests of 1 MiB and 4 MiB are answered; one over the

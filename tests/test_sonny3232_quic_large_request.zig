@@ -26,7 +26,12 @@
 // about 1.4 s, and a Debug server time out on 1 MiB in one run and answer
 // 4 MiB in 14.8 s in another. Any size large enough to see burst loss can
 // stall. The same loss recovery carries QUIC responses and the Raft
-// transport. The library bug is SONNY-3351 (quic v0.1.44), left for S2.
+// transport. The library bug is SONNY-3351 (quic v0.1.44), fixed in quic
+// v0.1.47 ("Stop freeing lost STREAM data before it is retransmitted":
+// acknowledged STREAM packets are released by ACK range membership, never
+// by the prune) and v0.1.49 (SONNY-6434, ACK work bounded by the ranges);
+// geode pins v0.1.49. The 1 MiB and 4 MiB cases are therefore asserted
+// (SONNY-3351): they were recorded, not asserted, while the bug stood.
 //
 // A request past the 16 MiB cap is refused at its length prefix, but the
 // server ends the stream without a reply and without STOP_SENDING (the
@@ -34,10 +39,11 @@
 // only at its own timeout (34 to 62 s observed). The review's intent was a
 // clean, quick refusal: that is NOT met, and this test does not claim it.
 // It asserts only what holds now: the server survives each request and
-// serves the next connection; 256 KiB is answered; a request past the cap
-// is not answered as if it ran (an observation of how it fails, with its
-// time, is printed). The 1 MiB and 4 MiB outcomes are recorded, not
-// asserted.
+// serves the next connection; 256 KiB, 1 MiB and 4 MiB are answered; a
+// request past the cap is not answered as if it ran (an observation of how
+// it fails, with its time, is printed). (Since SONNY-3232's follow-up the
+// server answers 54000 and closes; tests/test_sonny3232_quic_request_size.zig
+// asserts that.)
 //
 // Every HELLO, and the small request that checks the server serves on, waits
 // for its reply as long as the server process stays alive, capped at 60 s
@@ -66,7 +72,7 @@ fn monoMs() u64 {
     return @as(u64, @intCast(ts.sec)) * std.time.ms_per_s + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
 }
 
-test "SONNY-3232: a QUIC request of 256 KiB is answered, one past the 16 MiB maximum is not, and the server survives 1 MiB and 4 MiB requests and serves on" {
+test "SONNY-3232: QUIC requests of 256 KiB, 1 MiB and 4 MiB are answered (SONNY-3351), one past the 16 MiB maximum is not, and the server serves on" {
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const io_fs = std.Io.Threaded.global_single_threaded.io();
@@ -93,10 +99,10 @@ test "SONNY-3232: a QUIC request of 256 KiB is answered, one past the 16 MiB max
     const Case = struct { bytes: usize, served: ?bool };
     const cases = [_]Case{
         .{ .bytes = 256 * 1024, .served = true },
-        // Recorded, not asserted: answered or not depending on timing (burst
-        // loss and the library's loss recovery; SONNY-3351, left for S2).
-        .{ .bytes = 1024 * 1024, .served = null },
-        .{ .bytes = 4 * 1024 * 1024, .served = null },
+        // Asserted since quic v0.1.47 fixed the loss recovery that left a hole
+        // in the stream (SONNY-3351; they were recorded, not asserted).
+        .{ .bytes = 1024 * 1024, .served = true },
+        .{ .bytes = 4 * 1024 * 1024, .served = true },
         // The framed message (the query plus its envelope) just over 16 MiB.
         // Asserted: not served. Observed, not asserted: how and how late it
         // fails (the intended quick, clean refusal is not met; S2).
