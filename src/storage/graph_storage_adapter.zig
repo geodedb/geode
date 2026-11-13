@@ -6294,11 +6294,15 @@ pub const StorageAdapter = struct {
         // directly to the shard that owns node_id so the txn and the data
         // mutation are on the same single-threaded engine (ShardedGraphEngine
         // migration: Task 7).
-        const txn = try shard.beginTxn();
+        // SONNY-6472 (3): join the statement/session engine txn when it is on
+        // the node's shard, so the request's same-shard changes commit (and
+        // are lost to a crash) together, as setNodeProperty's do.
+        const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, node_id) else null;
+        const txn = joined orelse try shard.beginTxn();
         // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer shard.abortTxn(txn) catch {};
+        errdefer if (joined == null) shard.abortTxn(txn) catch {};
         try shard.deleteNodeTxn(node_id, txn);
-        try shard.commitTxn(txn);
+        if (joined == null) try shard.commitTxn(txn);
         // OTel Task 13: graph data model mutation counter.
         const _om13dn = @import("otel_metrics");
         _om13dn.recordNodeMutation(.delete, graph_name, .success);
@@ -6777,9 +6781,13 @@ pub const StorageAdapter = struct {
         }
 
         // R7: batch putProperty + putNode into one txn on the node's shard.
-        const txn = try node_shard.beginTxn();
+        // SONNY-6472 (3): that txn is the statement/session engine txn when
+        // it is on the node's shard (as in setNodeProperty), so the request's
+        // same-shard changes commit, and are lost to a crash, together.
+        const joined: ?gs.TxnId = if (currentStatementTxnForGraph(graph_name)) |s| shardLocalTxnForNode(s.txn_id, node_id) else null;
+        const txn = joined orelse try node_shard.beginTxn();
         // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer node_shard.abortTxn(txn) catch {};
+        errdefer if (joined == null) node_shard.abortTxn(txn) catch {};
 
         const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, key, .null, txn);
         rec.prop_head = new_prop_head;
@@ -6793,7 +6801,7 @@ pub const StorageAdapter = struct {
         // shard and raise `error.TxnNotFound`. Mirrors setNodeProperty /
         // setNodePropertiesBatch / setEdgeProperty which already commit
         // through node_shard / from_shard directly.
-        try node_shard.commitTxn(txn);
+        if (joined == null) try node_shard.commitTxn(txn);
 
         // RC-4: drop the old posting only once the tombstone is durable —
         // a failure before this point must leave the index describing the
@@ -11422,6 +11430,13 @@ pub const StorageAdapter = struct {
 
     /// Remove a property from an edge. Delegates to the engine's
     /// `removeEdgeProperty` which handles adjacency list scanning internally.
+    ///
+    /// SONNY-6472 (3): inside a statement/session engine txn on the edge's
+    /// shard (the source's), the removal joins it instead: a null tombstone
+    /// (what `removeNodeProperty` writes; reads drop it, SONNY-6433) through
+    /// `setEdgeProperty`, so the request's same-shard changes commit, and are
+    /// lost to a crash, together. The engine's in-place remove commits its own
+    /// txn and has no variant that joins one.
     pub fn removeEdgeProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -11435,6 +11450,19 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        if (currentStatementTxnForGraph(graph_name)) |s| {
+            if (shardLocalTxnForNode(s.txn_id, from_id) != null) {
+                const from_shard = mg.shardEngineForNode(from_id);
+                try from_shard.ensureDerivedHydrated();
+                const entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
+                if (entry.from != from_id) return error.EdgeNotFound;
+                if (entry.prop_head == 0) return; // no properties to remove
+                // Absent key: nothing to remove (no tombstone written).
+                const existing = (try from_shard.getProperty(entry.prop_head, key, self.allocator)) orelse return;
+                freeOwnedStorageProperty(self.allocator, existing);
+                return self.setEdgeProperty(graph_name, from_id, entry.neighbor, edge_id, key, .Null);
+            }
+        }
         try mg.engine.removeEdgeProperty(from_id, edge_id, key);
     }
 

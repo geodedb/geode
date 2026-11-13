@@ -2069,6 +2069,19 @@
 
 ### Fixed
 
+- **A request's REMOVE and DELETE join its transaction's engine
+  transaction on that shard (SONNY-6472 item 3).** Inside a Geode
+  transaction, `StorageAdapter.deleteNode`, `removeNodeProperty` and
+  `removeEdgeProperty` committed an engine transaction of their own even
+  on the shard of the session's engine transaction, so a crash before the
+  request ended kept them while losing the request's other changes on that
+  shard. They now join it, as SET and CREATE already did; a relationship
+  property removed inside it is written as a null tombstone (reads drop it,
+  SONNY-6433). Changes on other shards still commit one engine transaction
+  each (SONNY-2979). Regression: `zig build
+  test-sonny2978-overlapping-engine-txn-crash` (new case: a SIGKILL during
+  the request keeps the 4 of 64 nodes, node properties and relationship
+  properties on that shard; before, none).
 - **Data loss: relationship properties survive a crash (SONNY-6471).**
   Writing a relationship property moves the head of its property chain,
   which the relationship's adjacency entries and the edge index hold.
