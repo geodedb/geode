@@ -19,6 +19,15 @@
   `--ca-cert` / `GEODE_HEALTH_CA_CERT` does not actually sign the server
   certificate (or whose certificate lacks the dialled name) now get a
   refused connection. Regression: `zig build test-sonny6448-tls-fail-closed`.
+- **BREAKING (procedure): `CALL tde.test_transparent_encryption()` no longer
+  answers `performance_impact_pct` (SONNY-6448 item 4).** The figure timed
+  five AEAD encrypt+decrypt round trips against plain copies of the same
+  buffers, which says nothing about TDE overhead (the flaw
+  `tde.measure_overhead` had). The procedure still round-trips every test
+  type through the server's TDE key and answers `types_tested`,
+  `all_transparent` and `errors_encountered`. The overhead measurement is
+  `zig build test-sonny6435-tde-overhead`. Regression:
+  `zig build test-sonny6448-tde-transparent-encryption`.
 - **BREAKING (operator): `geode fle migrate-encrypt` and in-process FLE
   refuse a `GEODE_MASTER_KEY` other than the recorded one (SONNY-6442 item
   8).** The key check value in `fle_master_key.kcv` (SONNY-6435) was
