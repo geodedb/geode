@@ -9684,6 +9684,16 @@ pub fn build(b: *std.Build) void {
     const sonny6472_writes_step = b.step("test-sonny6472-dropped-graph-writes", "Run SONNY-6472 item 2 regression (writes racing a DROP GRAPH - createNode, bulkInsertNodeWithReservedId, pinOrCreateGraph - fail with GraphNotFound and never create the dropped graph again; CREATE GRAPH creates it afresh; a never-dropped name is still created by its first write)");
     sonny6472_writes_step.dependOn(&run_sonny6472_writes_tests.step);
 
+    // SONNY-6472 (4): the unlabeled scan's live-count check (SONNY-2409)
+    // never reports DataCorruption for a delete or create in flight.
+    const sonny6472_scan_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6472_scan_live_count_race.zig"), .target = target, .optimize = optimize });
+    sonny6472_scan_test_mod.addImport("geode", root_mod);
+    const sonny6472_scan_tests = b.addTest(.{ .root_module = sonny6472_scan_test_mod });
+    const run_sonny6472_scan_tests = b.addRunArtifact(sonny6472_scan_tests);
+    shardDep(test_step, &run_sonny6472_scan_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6472_scan_step = b.step("test-sonny6472-scan-live-count-race", "Run SONNY-6472 item 4 regression (an unlabeled node scan racing shard-locked deletes and creates never reports DataCorruption; the zeroed-page detection stays, test-sonny2409-zeroed-page-header)");
+    sonny6472_scan_step.dependOn(&run_sonny6472_scan_tests.step);
+
     const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
     sonny2979_test_mod.link_libc = true;
     sonny2979_test_mod.addImport("geode", root_mod);

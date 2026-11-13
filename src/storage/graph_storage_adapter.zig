@@ -3264,6 +3264,11 @@ pub fn noteSessionCommitFailure(err: anyerror) void {
 /// their graph, before they lock it. A test drops the graph there.
 pub var bulk_graph_resolved_hook: ?*const fn (mg: *ManagedGraph) void = null;
 
+/// SONNY-6472 (4) test hook: runs in `bulkInsertNodeWithReservedIdGraphLocked`
+/// right after the engine counted the new node and before its record is
+/// written. A test scans the graph there.
+pub var node_slot_allocated_hook: ?*const fn (mg: *ManagedGraph) void = null;
+
 /// SONNY-3031 fault injection for tests: the next N commits of a session
 /// engine transaction fail (`error.InjectedSessionCommitFailure`) before
 /// they reach the engine, as a failed WAL append or fsync would.
@@ -4630,6 +4635,7 @@ pub const StorageAdapter = struct {
         // GraphStore indexes), so holding it while doing putNode/putProperty
         // serializes otherwise-independent shard workers.
         const slot_id = try node_shard.allocNode();
+        if (node_slot_allocated_hook) |hook| hook(mg);
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const stmt_local: ?gs.TxnId = if (stmt_txn) |s|
             shardLocalTxnForNode(s.txn_id, slot_id)
