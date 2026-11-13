@@ -118,7 +118,7 @@ pub const PrometheusExporter = struct {
         if (self.metrics.getPtr(name)) |metric| {
             switch (metric.value) {
                 .counter => |*c| c.* += value,
-                else => return error.TypeMismatch,
+                else => return error.MetricKindMismatch,
             }
         }
     }
@@ -128,7 +128,7 @@ pub const PrometheusExporter = struct {
         if (self.metrics.getPtr(name)) |metric| {
             switch (metric.value) {
                 .gauge => |*g| g.* = value,
-                else => return error.TypeMismatch,
+                else => return error.MetricKindMismatch,
             }
         }
     }
@@ -148,7 +148,7 @@ pub const PrometheusExporter = struct {
                         }
                     }
                 },
-                else => return error.TypeMismatch,
+                else => return error.MetricKindMismatch,
             }
         }
     }

@@ -45,7 +45,7 @@ fn roundedScale6(f: f64) EvalError!i128 {
     return decimal128.checkedScaledCoeff(@round(f * 1_000_000), 1.0);
 }
 
-fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
+pub fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
     return switch (err) {
         evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
         evaluator_functions.EvaluatorError.DivisionByZero => EvalError.DivisionByZero,
@@ -1116,6 +1116,12 @@ pub fn evalTypeCastFunction(
             }
         }
 
+        // SONNY-6499: a source type with no conversion to the target (ISO
+        // 20.8 Table 4 "N"; GR 7 d ii for a dynamically typed value) is
+        // TypeMismatch, 22G03 invalid value type; text that is not a literal
+        // of the target is InvalidCast, 22018 (GR g ii, i ii), or for a
+        // datetime target TimeParse, 22007 (GR k i, l i).
+
         // Normalize base type to uppercase
         var upper_buf: [32]u8 = undefined;
         const type_len = @min(base_type.len, upper_buf.len);
@@ -1141,7 +1147,7 @@ pub fn evalTypeCastFunction(
                 },
                 .Double => |x| return Value{ .Decimal = .{ .coeff = try doubleToDecimal(x, target_scale), .scale = target_scale } },
                 // GAP-0921: an unconvertible source value is a cast error.
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1176,7 +1182,7 @@ pub fn evalTypeCastFunction(
                 // Geode extension (Table 4: BOOLEAN to a number is not valid).
                 .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
                 // GAP-0921: an unconvertible source value is a cast error.
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1211,7 +1217,7 @@ pub fn evalTypeCastFunction(
                 // SONNY-6499: a list, record, reference or extension value
                 // has no character form here (ISO 20.8 Table 4); refused, it
                 // was NULL.
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1238,7 +1244,7 @@ pub fn evalTypeCastFunction(
                     if (!std.math.isFinite(f)) return EvalError.NumericOutOfRange;
                     return Value{ .Double = f };
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1259,7 +1265,7 @@ pub fn evalTypeCastFunction(
                         return EvalError.InvalidCast;
                     }
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1269,7 +1275,7 @@ pub fn evalTypeCastFunction(
                 .Str => |s| {
                     const datetime_module = @import("../types/datetime.zig");
                     // GAP-0921: a non-date string is a cast error, not NULL.
-                    const date = datetime_module.Date.fromStr(castTrim(s)) catch return EvalError.InvalidCast;
+                    const date = datetime_module.Date.fromStr(castTrim(s)) catch return EvalError.TimeParse;
                     return Value{ .Date = date };
                 },
                 .Date => return value_arg,
@@ -1278,7 +1284,7 @@ pub fn evalTypeCastFunction(
                     const days: i32 = @intCast(@divFloor(ts.micros_since_epoch, 24 * 3600 * 1_000_000));
                     return Value{ .Date = datetime_module.Date{ .days_since_epoch = days } };
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1288,7 +1294,7 @@ pub fn evalTypeCastFunction(
                 .Str => |s| {
                     const datetime_module = @import("../types/datetime.zig");
                     // GAP-0921: a non-time string is a cast error, not NULL.
-                    const time = datetime_module.Time.fromStr(castTrim(s)) catch return EvalError.InvalidCast;
+                    const time = datetime_module.Time.fromStr(castTrim(s)) catch return EvalError.TimeParse;
                     return Value{ .Time = time };
                 },
                 .Time => return value_arg,
@@ -1297,7 +1303,7 @@ pub fn evalTypeCastFunction(
                     const micros = @rem(ts.micros_since_epoch, 24 * 3600 * @as(i64, 1_000_000));
                     return Value{ .Time = datetime_module.Time{ .micros_since_midnight = if (micros < 0) micros + 24 * 3600 * 1_000_000 else micros } };
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1307,14 +1313,14 @@ pub fn evalTypeCastFunction(
                 .Str => |s| {
                     const datetime_module = @import("../types/datetime.zig");
                     // GAP-0921: a non-timestamp string is a cast error.
-                    const ts = datetime_module.Timestamp.fromStr(castTrim(s)) catch return EvalError.InvalidCast;
+                    const ts = datetime_module.Timestamp.fromStr(castTrim(s)) catch return EvalError.TimeParse;
                     return Value{ .Timestamp = ts };
                 },
                 .Timestamp => return value_arg,
                 .Date => |d| {
                     return Value{ .Timestamp = .{ .micros_since_epoch = @as(i64, d.days_since_epoch) * 24 * 3600 * 1_000_000 } };
                 },
-                else => return EvalError.InvalidCast,
+                else => return EvalError.TypeMismatch,
             }
         }
 
@@ -1993,7 +1999,13 @@ pub fn evalAdvancedTypeFunction(
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         const text = textLike(arg) orelse return Value{ .Null = {} };
         // SONNY-6489: invalid duration format (22G0H), 20.29 GR 1c.
-        return Value{ .Interval = datetime.Interval.fromStr(text) catch return EvalError.DurationParse };
+        return Value{
+            .Interval = datetime.Interval.fromStr(text) catch |e| return switch (e) {
+                // SONNY-6499: a component past its range is 22015.
+                error.IntervalFieldOverflow => EvalError.IntervalFieldOverflow,
+                else => EvalError.DurationParse,
+            },
+        };
     }
 
     if (std.mem.eql(u8, function_name, "makeinterval")) {

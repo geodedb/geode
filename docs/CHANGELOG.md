@@ -2235,6 +2235,33 @@
 
 ### Fixed
 
+- **Data errors answer their ISO/IEC 39075 Table 8 GQLSTATUS (SONNY-6499
+  item 6).** `proto_util.mapError`, on QUIC and gRPC: `TypeMismatch` (a
+  value of the wrong type for an operation, a function or a CAST) is 22G03
+  invalid value type, was 58000; the internal failures it also stood for
+  now keep their own errors (the evaluator mappers of `sqrt`, `asin`,
+  `acos`, `log`, `toInteger`, `toReal` turned every other error, out of
+  memory included, into `TypeMismatch`; the Prometheus exporter's metric
+  kind mismatch is `MetricKindMismatch`). `FloatNaN` 22003 (no GQL number
+  is NaN or infinite); `IndexOutOfBounds` 22011 (substring); `RangeTooLarge`
+  54000 (range() past 10,000,000 elements, the class the other size limits
+  use); `RangeBoundsError` 22000; text that does not parse as a JSON, XML,
+  URL, domain, UUID, bit string, hexadecimal, subnet, IDNA name or enum
+  value 22018 (were 58000), an IP or MAC address 22018 (was 22P02, a
+  PostgreSQL code); a duration component past its field's range
+  (`P999999999Y`) 22015 interval field overflow (was 22G0H; it was also
+  turned into NULL by the function dispatch once it had its own identity,
+  now surfaced). CAST: a source type with no conversion to the target
+  (20.8 GR 7 d ii, Table 4 "N": a list to STRING, a BOOLEAN to DOUBLE) is
+  22G03 (was 22018); a datetime string that does not parse is 22007 (GR k
+  i; was 22018). The unused `InvalidTypeConversion` arm (no raise site) was
+  removed. Durations: a string naming both unit groups (`P1M1D`) stays
+  accepted as a Geode extension (ISO 20.29 GR 1 would make it 22G0H) and
+  round-trips; adding or subtracting a year-to-month and a day-to-second
+  duration stays 22G14 (SONNY-6489); documented in
+  docs/TYPE_QUICK_REFERENCE.md. **Behaviour change:** clients see the codes
+  above instead of 58000 / 22018 / 22P02 / 22G0H. Regression:
+  `zig build test-sonny6499-gqlstate-residuals`.
 - **The `exec` ORDER BY text fallback orders strings by NFC (SONNY-6499 item
   5).** `exec.stableOrderByTemporal` (the standalone `exec` executor's ORDER
   BY, used by the `gql --demo-sort` driver) compares keys it cannot order as

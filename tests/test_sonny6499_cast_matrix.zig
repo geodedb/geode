@@ -59,9 +59,9 @@ fn checkToString(s: *Session, f: *Failures) !void {
     try expectValue(s, f, "RETURN CAST('abc' AS STRING) AS x", &.{}, "'abc'");
     try expectValue(s, f, "RETURN CAST(date('2024-01-02') AS STRING) AS x", &.{}, "'2024-01-02'");
     // Table 4: a list, a record and a reference value have no character
-    // form; refused, never NULL.
-    try expectFail(s, f, "RETURN CAST([1, 2] AS STRING) AS x", &.{}, error.InvalidCast);
-    try expectFail(s, f, "RETURN CAST({a: 1} AS STRING) AS x", &.{}, error.InvalidCast);
+    // form; refused (22G03, GR 7 d ii), never NULL.
+    try expectFail(s, f, "RETURN CAST([1, 2] AS STRING) AS x", &.{}, error.TypeMismatch);
+    try expectFail(s, f, "RETURN CAST({a: 1} AS STRING) AS x", &.{}, error.TypeMismatch);
     try expectValue(s, f, "RETURN CAST(null AS STRING) AS x", &.{}, "null");
 }
 
@@ -83,7 +83,9 @@ fn checkToApproximate(s: *Session, f: *Failures) !void {
     // 22003.
     try expectFail(s, f, "RETURN CAST('1e400' AS FLOAT) AS x", &.{}, error.NumericOutOfRange);
     // Table 4: BOOLEAN -> numeric is not a valid combination.
-    try expectFail(s, f, "RETURN CAST(true AS DOUBLE) AS x", &.{}, error.InvalidCast);
+    try expectFail(s, f, "RETURN CAST(true AS DOUBLE) AS x", &.{}, error.TypeMismatch);
+    // GR k i: a date string that does not parse is 22007.
+    try expectFail(s, f, "RETURN CAST('2024-13-45' AS DATE) AS x", &.{}, error.TimeParse);
 }
 
 fn checkToExact(s: *Session, f: *Failures) !void {

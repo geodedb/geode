@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:21:34.391824256Z",
+  "generated_at": "2026-11-13T19:28:46.044274528Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87576,6 +87576,7 @@
           "aspect": "DataExceptionGqlstatusResiduals",
           "status": "TESTED",
           "files": [
+            "src/server/proto_util.zig",
             "tests/test_sonny6499_gqlstate_residuals.zig"
           ],
           "tests": [
