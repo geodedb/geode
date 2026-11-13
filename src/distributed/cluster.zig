@@ -1852,10 +1852,6 @@ pub const ClusterCoordinator = struct {
         }
     }
 
-    /// Peek the first byte on `stream` and dispatch to either the
-    /// raft frame reader (existing behaviour) or the cluster RPC
-    /// handler (A3e, this commit).  See the `CLUSTER_RPC_MAGIC`
-    /// comment for the wire format and rationale.
     /// SONNY-6451: what a handler parked on a quiet multiplexed raft stream
     /// watches, so that it gives the stream (and its worker) up.
     const InboundStreamWatch = struct {
@@ -1883,6 +1879,10 @@ pub const ClusterCoordinator = struct {
         return shouldReapIdleInboundConnection(compat_milliTimestamp(), last_frame_ms, watch.idle_deadline_ms);
     }
 
+    /// Peek the first byte on `stream` and dispatch to either the
+    /// raft frame reader (existing behaviour) or the cluster RPC
+    /// handler (A3e, this commit).  See the `CLUSTER_RPC_MAGIC`
+    /// comment for the wire format and rationale.
     fn dispatchInboundStream(self: *ClusterCoordinator, stream: *quic.QuicStream, watch: *const InboundStreamWatch) !void {
         var first: [1]u8 = undefined;
         readExactCluster(stream, first[0..]) catch |err| {
