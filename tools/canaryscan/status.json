@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-12T23:39:59.922772179Z",
+  "generated_at": "2026-11-13T00:00:00.812277772Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84480,6 +84480,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6435-TDE-CLAIMS-TRUTH",
+      "features": [
+        {
+          "feature": "Docs",
+          "aspect": "NoUnmeasuredTdeOverheadClaim",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6435_tde_claims_truth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6435_tde_claims_truth.zig"
+          ],
+          "benches": [],
+          "owner": "perf",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92165,7 +92184,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4793
+      "TESTED": 4794
     },
     "by_aspect": {
       "2PC": 3,
@@ -94453,6 +94472,7 @@
       "NoTmpCertFallback": 1,
       "NoUnauditedOpen": 1,
       "NoUncompiledPersistenceOrSimulatedKmsClaims": 1,
+      "NoUnmeasuredTdeOverheadClaim": 1,
       "NoUnreadDeployConfig": 1,
       "NodeCache": 1,
       "NodeCapture": 1,

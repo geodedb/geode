@@ -9839,6 +9839,19 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6422-backup-docs-truth", "Run SONNY-6422 item 9 regression (TODO, GQL_COMPLIANCE, SERVER_FEATURES, DOCKER_OVERVIEW and NIX_DEPLOYMENT present no S3 / DigitalOcean Spaces backup target, option or variable, and the FLE PQC research spec does not present tde_kms_integration.zig as current code)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6435 item 2: no unmeasured TDE overhead claim, no simulated
+    // TDE benchmark; the published docs cite the real measurement.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6435_tde_claims_truth.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6435_tc_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6435-tde-claims-truth", "Run SONNY-6435 item 2 regression (the simulated TDE benchmarks are gone, no doc claims an unmeasured <1% / <5% TDE overhead, and README, BENCHMARK_REPORT, KMS_PROVIDER_SYSTEM and TDE_FILE_LEVEL_ENCRYPTION cite zig build test-sonny6435-tde-overhead)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6430 item 9: deployment config and docs describe only settings
     // the server has.
     {
