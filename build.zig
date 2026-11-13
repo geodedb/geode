@@ -5882,6 +5882,22 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6457-mtls-cli-unsupported", "Run SONNY-6457 item 5 regression (geode mtls map create/list/delete, config and status are refused as unsupported, SONNY-6458, exit non-zero, name GEODE_MTLS_REQUIRED and write no geode_mtls_state.db; mtls --help says so)").dependOn(&run_tests.step);
     }
 
+    // SONNY-3060: `geode shell --plain` exits 0 at end of input (piped file,
+    // here-doc) instead of printing prompts forever.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3060_shell_plain_eof.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny3060-shell-plain-eof", "Run SONNY-3060 regression (the real geode shell --plain against a real server exits 0 when its piped stdin reaches EOF: empty input, newline-terminated statements, and a last line without a newline, which still runs)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6453 (3): an MCP endpoint DSN with insecure=true follows the CLI
     // insecure-TLS rule (refused under production posture, warned otherwise).
     {
