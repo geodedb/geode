@@ -274,3 +274,85 @@ pub fn sweep(s: *Session, query: []const u8, params: []const Param, max_runs: us
     }
     return res;
 }
+
+/// A statement and what it must answer.
+pub const Case = struct {
+    q: []const u8,
+    params: []const Param = &.{},
+    /// The rows, each rendered as `a, b`; in any order unless `ordered`.
+    want: []const []const u8 = &.{},
+    ordered: bool = false,
+    sort_lists: bool = false,
+    /// The statement must fail with this error instead.
+    err: ?anyerror = null,
+    /// Run in these modes only (every mode when empty).
+    only: []const Mode = &.{},
+};
+
+/// Every failed check, reported together.
+pub const Failures = struct {
+    items: std.ArrayList([]const u8) = .empty,
+
+    pub fn add(self: *Failures, comptime fmt: []const u8, args: anytype) !void {
+        try self.items.append(testing.allocator, try std.fmt.allocPrint(testing.allocator, fmt, args));
+    }
+
+    pub fn deinit(self: *Failures) void {
+        for (self.items.items) |msg| testing.allocator.free(msg);
+        self.items.deinit(testing.allocator);
+    }
+
+    pub fn check(self: *Failures, name: []const u8) !void {
+        if (self.items.items.len == 0) return;
+        std.debug.print("\n{s}: {d} failed check(s):\n", .{ name, self.items.items.len });
+        for (self.items.items) |msg| std.debug.print("  {s}\n", .{msg});
+        return error.CasesFailed;
+    }
+};
+
+/// Run `c` in session `s`, with and without a scratch arena installed, and
+/// record every wrong answer and every leak.
+pub fn checkCase(s: *Session, f: *Failures, c: Case) !void {
+    if (c.only.len > 0 and std.mem.indexOfScalar(Mode, c.only, s.mode) == null) return;
+    const aa = s.arena.allocator();
+    for ([_]Install{ .scratch, .embedded }) |install| {
+        const o = try run(s, install, c.q, c.params, c.sort_lists);
+        const tag = .{ @tagName(s.mode), @tagName(install), c.q };
+        if (o.leaked) try f.add("[{s}/{s}] {s}: leaked memory", tag);
+        if (o.err) |err| {
+            if (c.err) |want| {
+                if (err != want) try f.add("[{s}/{s}] {s}: expected error {s}, got error {s}", .{ tag[0], tag[1], tag[2], @errorName(want), @errorName(err) });
+            } else try f.add("[{s}/{s}] {s}: error {s}", .{ tag[0], tag[1], tag[2], @errorName(err) });
+            continue;
+        }
+        const rows = o.rows.?;
+        if (c.err) |want| {
+            try f.add("[{s}/{s}] {s}: expected error {s}, got {d} rows {{{s}}}", .{ tag[0], tag[1], tag[2], @errorName(want), rows.len, try std.mem.join(aa, " | ", rows) });
+            continue;
+        }
+        const exp = try aa.dupe([]const u8, c.want);
+        const got = try aa.dupe([]const u8, rows);
+        if (!c.ordered) {
+            std.mem.sort([]const u8, exp, {}, lessThan);
+            std.mem.sort([]const u8, got, {}, lessThan);
+        }
+        const same = exp.len == got.len and for (exp, got) |w, g| {
+            if (!std.mem.eql(u8, w, g)) break false;
+        } else true;
+        if (!same) try f.add("[{s}/{s}] {s}: expected {{{s}}}, got {{{s}}}", .{ tag[0], tag[1], tag[2], try std.mem.join(aa, " | ", exp), try std.mem.join(aa, " | ", got) });
+    }
+}
+
+/// Run `cases` in a fresh session of every mode seeded with `visible` and
+/// `hidden` (see `Session.seed`).
+pub fn inEveryMode(name: []const u8, visible: []const []const u8, hidden: []const []const u8, cases: []const Case) !void {
+    var f: Failures = .{};
+    defer f.deinit();
+    for (modes) |mode| {
+        var s = try Session.init(mode);
+        defer s.deinit();
+        try s.seed(visible, hidden);
+        for (cases) |c| try checkCase(&s, &f, c);
+    }
+    try f.check(name);
+}
