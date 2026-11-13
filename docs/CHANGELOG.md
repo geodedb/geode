@@ -2161,6 +2161,19 @@
 
 ### Fixed
 
+- **Memory safety: an allocation failure no longer crashes a read, and
+  fewer error paths leak (SONNY-6297).** Running statements with each of
+  their allocations failing in turn found two crashes: tearing down a
+  half-built read snapshot (`CALL db.labels()`) re-registered the default
+  graph and panicked when that allocation failed, and the planned read's
+  projection plan freed its key lists twice when a slice could not be
+  made. Both are fixed, and a failed copy no longer leaves the copies made
+  before it unowned (`duplicateValue`, `ownResultValues`,
+  `adoptProjectionRowValues`), nor the shared projection a group key, a
+  group's list or a column list, nor the planned read its final
+  projection. Other error paths still leak; `zig build
+  test-sonny6297-allocation-failure-sweep` reproduces them (an
+  intentionally red step, see `docs/KNOWN_TEST_ISSUES.md`).
 - **Per-row items of the legacy traversals are freed, and an item that
   fails fails the statement (SONNY-6297).** The variable-length traversal,
   the multi-pattern executors and the WITH stage's RETURN computed their

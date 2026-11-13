@@ -268,21 +268,33 @@ pub fn duplicateValue(allocator: std.mem.Allocator, value: Value) !Value {
     return switch (value) {
         .Null, .Int, .Bool, .Decimal => value, // These are copy-by-value
         .Str => |s| .{ .Str = try allocator.dupe(u8, s) },
+        // SONNY-6297: a failed allocation frees the part copied so far (a
+        // list's earlier elements, a map's earlier entries, the pending key
+        // and value).
         .List => |list| blk: {
             const new_list = try allocator.alloc(Value, list.len);
+            var filled: usize = 0;
+            errdefer {
+                for (new_list[0..filled]) |item| freeValue(allocator, item);
+                allocator.free(new_list);
+            }
             for (list, 0..) |item, i| {
                 new_list[i] = try duplicateValue(allocator, item);
+                filled += 1;
             }
             break :blk .{ .List = new_list };
         },
         .Map => |map_const| blk: {
             var map = map_const;
             var new_map = std.StringHashMap(Value).init(allocator);
+            errdefer freeValue(allocator, .{ .Map = new_map });
+            try new_map.ensureTotalCapacity(map.count());
             var it = map.iterator();
             while (it.next()) |entry| {
                 const key = try allocator.dupe(u8, entry.key_ptr.*);
+                errdefer allocator.free(key);
                 const val = try duplicateValue(allocator, entry.value_ptr.*);
-                try new_map.put(key, val);
+                new_map.putAssumeCapacity(key, val);
             }
             break :blk .{ .Map = new_map };
         },
@@ -371,7 +383,26 @@ pub fn adoptProjectionRowValues(
     // SONNY-6449: what the projection computed on a scratch arena is the
     // arena's (`lentAllocator`): copied, never adopted.
     const lent = valuesAreLent();
+    // SONNY-6297: a failed copy frees the cells made owned before it and
+    // leaves them NULL; the result stays borrowed and freed none of them.
+    var rows_done: usize = 0;
+    var cells_done: usize = 0;
+    errdefer {
+        for (result.rows[0..rows_done]) |row| {
+            for (row) |*val| {
+                freeValue(allocator, val.*);
+                val.* = .Null;
+            }
+        }
+        if (rows_done < result.rows.len) {
+            for (result.rows[rows_done][0..cells_done]) |*val| {
+                freeValue(allocator, val.*);
+                val.* = .Null;
+            }
+        }
+    }
     for (result.rows) |row| {
+        cells_done = 0;
         for (row, 0..) |val, i| {
             const adopt = !lent and i < items.len and adoptable: {
                 switch (items[i].expr) {
@@ -382,7 +413,9 @@ pub fn adoptProjectionRowValues(
             if (!adopt) {
                 row[i] = try duplicateValue(allocator, val);
             }
+            cells_done += 1;
         }
+        rows_done += 1;
     }
     result.owns_value_memory = true;
 }
@@ -522,10 +555,43 @@ pub fn ownResultValues(allocator: std.mem.Allocator, result: *ExecutionResult) !
     // is not a shape any producer builds. Copying under it would pair
     // `duplicateValue` with a free that is not its inverse.
     if (result.free_value != null) return error.Unsupported;
-    for (result.rows) |row| {
-        for (row) |*val| val.* = try duplicateValue(allocator, val.*);
+    // SONNY-6297: a failed copy frees the copies made before it and leaves
+    // those cells NULL. The result stays borrowed (its deinit frees no
+    // value), so the copies leaked.
+    var rows_done: usize = 0;
+    var cells_done: usize = 0;
+    var flags_done: usize = 0;
+    errdefer {
+        for (result.rows[0..rows_done]) |row| {
+            for (row) |*val| {
+                freeValue(allocator, val.*);
+                val.* = .Null;
+            }
+        }
+        if (rows_done < result.rows.len) {
+            for (result.rows[rows_done][0..cells_done]) |*val| {
+                freeValue(allocator, val.*);
+                val.* = .Null;
+            }
+        }
+        for (result.flags.items[0..flags_done]) |*flag| {
+            allocator.free(flag.*);
+            flag.* = "";
+        }
     }
-    for (result.flags.items) |*flag| flag.* = try allocator.dupe(u8, flag.*);
+    for (result.rows) |row| {
+        cells_done = 0;
+        for (row) |*val| {
+            val.* = try duplicateValue(allocator, val.*);
+            cells_done += 1;
+        }
+        rows_done += 1;
+    }
+    cells_done = 0;
+    for (result.flags.items) |*flag| {
+        flag.* = try allocator.dupe(u8, flag.*);
+        flags_done += 1;
+    }
     result.owns_value_memory = true;
 }
 

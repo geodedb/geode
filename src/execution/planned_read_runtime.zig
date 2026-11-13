@@ -633,6 +633,7 @@ fn executeProfiledInScope(
         // SONNY-2667: a HAVING without a GROUP BY is a WHERE after RETURN, so it
         // belongs to the RETURN stage below, not to this one.
         var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.withStageGroupBy(), execution.withStageHaving(q.*), param_names, param_values);
+        // (Nothing below can fail before `result` takes it over.)
         transferOwnedGraphEntities(&result, &with_result);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 
@@ -699,6 +700,10 @@ fn executeProfiledInScope(
         const input_rows = result.rows.len;
         const start_ns = nowNs();
         var projected = try transformResultRowsWithParams(allocator, result, return_stage, return_group_by, return_having, param_names, param_values);
+        // SONNY-6297: freed when making it own its values fails (it leaked);
+        // `result` takes it over below.
+        var projected_taken = false;
+        errdefer if (!projected_taken) projected.deinit(allocator);
         // GAP-0535: the final projection is the result handed to the caller —
         // make it fully OWN its row values (adopt provably-fresh call results,
         // deep-duplicate everything else) so ExecutionResult.deinit is
@@ -715,6 +720,7 @@ fn executeProfiledInScope(
         trace.ops[return_op_index].time_ns = elapsedSince(start_ns);
 
         result = projected;
+        projected_taken = true;
 
         if (q.ret.distinct) {
             const op_index = nextOpIndex(trace.ops, .Distinct, &distinct_occurrence) orelse unreachable;
@@ -2161,43 +2167,37 @@ fn buildProjectionPlan(
     // transfer ownership of the slice.
     for (projections, 0..) |*proj, idx| {
         switch (proj.*) {
+            // SONNY-6297: a list is left empty (`clearAndFree`), never
+            // undefined, and a failed `toOwnedSlice` frees only the slices
+            // already committed: the errdefers above free the lists and
+            // `projections`. The lists were freed here and again by them (a
+            // double free, a crash on an allocation failure).
             .unused => {
                 // Defensive: analyzer only promotes to .keys on member
                 // accesses; .unused + non-empty list shouldn't happen,
                 // but clean up just in case.
                 for (key_lists[idx].items) |k| allocator.free(k);
-                key_lists[idx].deinit(allocator);
+                key_lists[idx].clearAndFree(allocator);
             },
             .keys => {
                 const deduped = dedupInPlace(key_lists[idx].items, allocator);
                 // Truncate the list to the dedup length before transferring.
                 key_lists[idx].items = key_lists[idx].items[0..deduped];
                 const owned = key_lists[idx].toOwnedSlice(allocator) catch |err| {
-                    // toOwnedSlice on Zig 0.16 can OOM — treat as bail.
-                    // Free remaining keys and unwind.
-                    for (key_lists[idx].items) |k| allocator.free(k);
-                    key_lists[idx].deinit(allocator);
-                    // Free everything we already committed.
                     for (projections[0..idx]) |p| switch (p) {
                         .keys => |k| {
-                            for (k) |s| allocator.free(s);
+                            for (k) |key| allocator.free(key);
                             allocator.free(k);
                         },
                         else => {},
                     };
-                    // And the remaining scratch lists.
-                    for (key_lists[idx + 1 ..]) |*rest| {
-                        for (rest.items) |s| allocator.free(s);
-                        rest.deinit(allocator);
-                    }
-                    allocator.free(projections);
                     return err;
                 };
                 proj.* = .{ .keys = owned };
             },
             .full => {
                 for (key_lists[idx].items) |k| allocator.free(k);
-                key_lists[idx].deinit(allocator);
+                key_lists[idx].clearAndFree(allocator);
             },
         }
     }

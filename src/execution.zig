@@ -4964,16 +4964,10 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             const group_key = try key_buf.toOwnedSlice(allocator);
 
             // Add row to its group
-            if (groups.getPtr(group_key)) |group_list| {
-                try group_list.append(allocator, input_row);
-                allocator.free(group_key);
-            } else {
-                // GAP-0220 FIX: Use try for proper error propagation
-                var new_list = try std.ArrayList([]const Value).initCapacity(allocator, 4);
-                try new_list.append(allocator, input_row);
-                try groups.put(group_key, new_list);
-                group_keys_list.append(allocator, group_key) catch {};
-            }
+            // SONNY-6297: on a failed allocation the key and a new group's
+            // list are freed (they leaked, and a key the key list could not
+            // take was dropped with `catch {}`).
+            try addToGroup(allocator, &groups, &group_keys_list, group_key, input_row);
         }
 
         // For each group, compute aggregations and produce one output row
@@ -5046,17 +5040,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     }
                     var key_buf = key_aw.toArrayList();
                     const group_key = try key_buf.toOwnedSlice(allocator);
-
-                    if (groups.getPtr(group_key)) |group_list| {
-                        try group_list.append(allocator, input_row);
-                        allocator.free(group_key);
-                    } else {
-                        // GAP-0220 FIX: Use try for proper error propagation
-                        var new_list = try std.ArrayList([]const Value).initCapacity(allocator, 4);
-                        try new_list.append(allocator, input_row);
-                        try groups.put(group_key, new_list);
-                        try group_keys_list.append(allocator, group_key);
-                    }
+                    try addToGroup(allocator, &groups, &group_keys_list, group_key, input_row);
                 }
 
                 // For each group, compute aggregations and produce one output row
@@ -5114,7 +5098,12 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     // Apply ORDER BY if present
     if (with_clause.order_by) |order_by| {
         const columns_slice = try new_columns.toOwnedSlice(allocator);
-        const rows_slice = try new_rows.toOwnedSlice(allocator);
+        // SONNY-6297: the columns go back to their list when the rows'
+        // slice cannot be made (they were lost).
+        const rows_slice = new_rows.toOwnedSlice(allocator) catch |err| {
+            new_columns = std.ArrayList([]const u8).fromOwnedSlice(columns_slice);
+            return err;
+        };
         defer {
             new_columns = std.ArrayList([]const u8).fromOwnedSlice(columns_slice);
             new_rows = std.ArrayList([]Value).fromOwnedSlice(rows_slice);
@@ -5161,16 +5150,49 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
     }
 
     // Create a new flags list to avoid sharing references
+    // SONNY-6297: freed with what was copied when an allocation fails, and
+    // the result's slices made only once nothing more can fail.
     var new_flags = try std.ArrayList([]const u8).initCapacity(allocator, input_result.flags.items.len);
+    errdefer {
+        for (new_flags.items) |flag| allocator.free(flag);
+        new_flags.deinit(allocator);
+    }
     for (input_result.flags.items) |flag| {
-        try new_flags.append(allocator, try allocator.dupe(u8, flag));
+        new_flags.appendAssumeCapacity(try allocator.dupe(u8, flag));
+    }
+    const columns = try new_columns.toOwnedSlice(allocator);
+    errdefer {
+        for (columns) |column| allocator.free(column);
+        allocator.free(columns);
     }
 
     return ExecutionResult{
-        .columns = try new_columns.toOwnedSlice(allocator),
+        .columns = columns,
         .rows = try new_rows.toOwnedSlice(allocator),
         .flags = new_flags,
     };
+}
+
+/// SONNY-6297: add `row` to the group `key` names, taking `key` (freed when
+/// the group exists or an allocation fails).
+fn addToGroup(
+    allocator: std.mem.Allocator,
+    groups: *std.StringHashMap(std.ArrayList([]const Value)),
+    keys: *std.ArrayList([]const u8),
+    key: []u8,
+    row: []const Value,
+) !void {
+    if (groups.getPtr(key)) |group_list| {
+        allocator.free(key);
+        return group_list.append(allocator, row);
+    }
+    errdefer allocator.free(key);
+    var new_list = try std.ArrayList([]const Value).initCapacity(allocator, 4);
+    errdefer new_list.deinit(allocator);
+    new_list.appendAssumeCapacity(row);
+    try keys.ensureUnusedCapacity(allocator, 1);
+    try groups.put(key, new_list);
+    keys.appendAssumeCapacity(key);
 }
 
 /// A WITH's SKIP or LIMIT parameter `name`, from the parameters in scope
