@@ -15590,6 +15590,29 @@ pub fn build(b: *std.Build) void {
     gap0927_step.dependOn(&run_conn_pool_diag_tests.step);
     shardDep(test_step, &run_conn_pool_diag_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // SONNY-6511 (3): the inline tests of server files no step's filter named,
+    // through the same executable-import module: the global stream throttle
+    // (active_stream_registry.zig), the buffered proto reader's activity
+    // metrics and the metrics server. (proto_reader_registry.zig,
+    // leaked_conn_reaper.zig and ActiveStreamRegistry run in
+    // test-sonny-quic-stream-semantics; server/main.zig's in test-gap0927;
+    // grpc_server.zig's in its shim step.)
+    const sonny6511_server_inline_tests = b.addTest(.{
+        .name = "sonny6511-server-inline",
+        .root_module = conn_pool_diag_mod,
+        .filters = &.{
+            "GlobalStreamThrottle ",
+            "recordActivity advances last_activity_ns",
+            "getIdleNs grows when no activity is recorded",
+            "getIdleNs returns 0 when no activity has ever been recorded",
+            "appendCompactSummary formats a single compact line",
+            "MetricsServer initialization",
+        },
+    });
+    const run_sonny6511_server_inline_tests = b.addRunArtifact(sonny6511_server_inline_tests);
+    shardDep(test_step, &run_sonny6511_server_inline_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6511-server-inline", "Run SONNY-6511 item 3: the inline tests of src/server/active_stream_registry.zig (GlobalStreamThrottle), buffered_proto_reader_metrics.zig and src/monitoring/metrics_server.zig, which no step's filter named, rooted with the geode executable's imports").dependOn(&run_sonny6511_server_inline_tests.step);
+
     // SONNY-1835 / SONNY-1837 / SONNY-1841: QUIC stream-semantics batch. The
     // proof predicates are inline tests in server/quic_connection_handler.zig
     // and server/proto_reader_registry.zig, collected via a thin src/-rooted
