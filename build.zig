@@ -13019,6 +13019,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6343_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6343_step = b.step("test-sonny6343-next-and-call", "Run SONNY-6343 regression (ISO NEXT: the result table of the statement before it continues as the next statement's working table, with ORDER BY, LIMIT, aggregates, DISTINCT and a YIELD clause; NEXT with no result table or after a UNION, and every inline CALL { } form other than a statement-level CALL { } followed by WITH, WHERE or RETURN, is refused with 0A000: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny6343_step.dependOn(&run_sonny6343_tests.step);
+    // SONNY-6496 item 1: after WITH / NEXT only the projected variables are in scope. See tests/test_sonny6496_with_scope.zig.
+    const sonny6496_scope_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6496_with_scope.zig"), .target = target, .optimize = optimize });
+    sonny6496_scope_test_mod.addImport("geode", root_mod);
+    sonny6496_scope_test_mod.addImport("logging", logging_mod);
+    sonny6496_scope_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6496_scope_tests = b.addTest(.{ .root_module = sonny6496_scope_test_mod });
+    const run_sonny6496_scope_tests = b.addRunArtifact(sonny6496_scope_tests);
+    shardDep(test_step, &run_sonny6496_scope_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6496_scope_step = b.step("test-sonny6496-with-scope", "Run SONNY-6496 regression (after WITH and NEXT only the projected variables are in scope: a reference to any other variable, in WHERE, RETURN, ORDER BY, an aggregate, a later MATCH, a subquery, a FOR or a write clause, is refused with 42000 before anything runs; projected names, WITH *, later MATCH / FOR / YIELD bindings, parameters and comprehension locals stay in scope: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6496_scope_step.dependOn(&run_sonny6496_scope_tests.step);
 
     // SONNY-3111: the write shapes the ticket lists, refused with nothing written or written right. See tests/test_sonny3111_write_shape_matrix.zig.
     const sonny3111_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3111_write_shape_matrix.zig"), .target = target, .optimize = optimize });

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:10:23.864812456Z",
+  "generated_at": "2026-11-13T18:28:24.529810998Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87518,6 +87518,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6496-WITH-SCOPE",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "ProjectionScope",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6496_with_scope.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6496_with_scope.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -95239,7 +95258,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4974
+      "TESTED": 4975
     },
     "by_aspect": {
       "2PC": 3,
@@ -98151,6 +98170,7 @@
       "ProgramWriteLock": 1,
       "ProgressPrintedOncePerStep": 1,
       "ProgressTracking": 2,
+      "ProjectionScope": 1,
       "ProjectionWalker": 1,
       "PrometheusBridge": 1,
       "PromptSigintCheck": 1,
