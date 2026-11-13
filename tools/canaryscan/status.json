@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T04:35:52.844159205Z",
+  "generated_at": "2026-11-13T04:37:12.197510028Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85777,6 +85777,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6450-DUPLICATE-STORED-KEY",
+      "features": [
+        {
+          "feature": "EngineDirectNodeOwnership",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6450_ownership_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6450_ownership_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93407,7 +93426,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4867
+      "TESTED": 4868
     },
     "by_aspect": {
       "2PC": 3,
@@ -96529,7 +96548,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 295,
+      "Regression": 296,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

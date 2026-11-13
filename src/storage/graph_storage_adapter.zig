@@ -1579,7 +1579,8 @@ fn freeReadPropertyMap(allocator: Allocator, map: *std.StringHashMap(gs.Property
 /// both copies once the put succeeds. If a copy or the put itself fails, the
 /// copies made so far are freed here, and the map is unchanged (SONNY-2463:
 /// they used to leak).
-fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue), key: []const u8, encoded: []const u8) !void {
+/// `pub` for the SONNY-6450 item 6 regression.
+pub fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue), key: []const u8, encoded: []const u8) !void {
     const decoded = try gs.property.decode(allocator, encoded);
     // CANARY: REQ=REQ-SONNY-6433-KEYS-AFTER-REMOVE; FEATURE="PropertyStorage"; ASPECT=TombstoneNotAProperty; STATUS=TESTED; TEST=tests/test_sonny6433_keys_after_remove.zig; OWNER=storage; UPDATED=2026-11-12
     // SONNY-6433: a null is the tombstone `removeNodeProperty` (REMOVE, and

@@ -14831,6 +14831,17 @@ pub fn build(b: *std.Build) void {
     const sonny6449_step = b.step("test-sonny6449-projection-value-ownership", "Run SONNY-6449 regression (a member read has one ownership and every projection path -- RETURN, RETURN DISTINCT, GROUP BY and ORDER BY keys, WITH, WITH DISTINCT, WITH ORDER BY, VALUES ... MATCH, CALL ... YIELD ... RETURN, CREATE/MERGE ... RETURN, list properties, list comprehensions -- owns the row values it builds: plain and FLE-encrypted fields, with and without a scratch arena, leak-checked)");
     sonny6449_step.dependOn(&run_sonny6449_tests.step);
 
+    // SONNY-6450 item 6: the same key twice in a stored property chain keeps
+    // the later value and frees the earlier one (leak-checked).
+    const sonny6450_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6450_ownership_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6450_test_mod.addImport("geode", root_mod);
+    sonny6450_test_mod.addImport("graph_storage", graph_storage_mod);
+    const sonny6450_tests = b.addTest(.{ .root_module = sonny6450_test_mod });
+    const run_sonny6450_tests = b.addRunArtifact(sonny6450_tests);
+    shardDep(test_step, &run_sonny6450_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6450_step = b.step("test-sonny6450-ownership-residuals", "Run SONNY-6450 item 6 regression (a key held twice in a stored property chain keeps the later value and frees the earlier one; a later null removes it; no leak under allocation failure)");
+    sonny6450_step.dependOn(&run_sonny6450_tests.step);
+
     const sonny6334_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6334_fle_authorization.zig"), .target = target, .optimize = optimize });
     sonny6334_test_mod.link_libc = true; // setenv/unsetenv/chmod
     sonny6334_test_mod.addImport("geode", root_mod);
