@@ -2859,6 +2859,29 @@
 
 ### Removed
 
+- **Dead code: `GraphStore.restoreNodeNoSave` / `restoreEdgeNoSave`
+  (SONNY-6436 item 4).** No caller anywhere in the repository (a reference
+  search finds only their definitions); both tagged the restored row tenant
+  `default`.
+- **Dead code: the old `src/server/graph/exec.zig` engine and
+  `src/exec.zig`'s `HashAggregator` (SONNY-6436 item 6).** No executable
+  reaches `server/graph/exec.zig` (it was re-exported as
+  `geode.graph_exec` and imported only by test files no build step
+  compiles); its `isTruthyValue` (a non-zero integer or non-empty string as
+  true) went with it, with `tests/canary_property_access.zig`,
+  `tests/debug/debug_property_access.zig`,
+  `tests/benchmark_match_label_property_variance.zig` and the one test of
+  `tests/index_optimizer_regression_test.zig` that used it. `src/exec.zig`
+  is live (the `gql` executable runs its grouping and set operations;
+  `groupAndAggregate` accumulates sums with overflow detection, and
+  `runGroupedQuery`'s HAVING keeps a group only when True),
+  but its `HashAggregator`, with the unchecked `+=` sums, was referenced by
+  nothing in `src/` and no longer compiled (Zig 0.15 ArrayList calls); it
+  and the eleven uncompiled `tests/*hashagg*` / mixed-aggregation files that
+  only exercised it are removed. Their CANARY markers
+  (REQ-WHERE-EVAL-001, REQ-WITH-WHERE-001, REQ-EXPR-TYPE-003,
+  REQ-DECIMAL-OVERFLOW-001/002 and two REQ-GQL-017 entries) described
+  only this code.
 - **Test files no build step compiled, cited by TESTED markers (SONNY-6430
   item 4).** `tests/test_mfa_policies.zig` now drives the real
   `SecurityManager` and runs as `zig build test-mfa-policies` (6/6); the

@@ -16395,69 +16395,6 @@ pub const GraphStore = struct {
         }
     }
 
-    /// Restore a deleted node without saving (used during rollback)
-    pub fn restoreNodeNoSave(self: *GraphStore, node_id: u64, labels: []const []const u8, graph_name: []const u8) !void {
-        // Copy labels
-        const labels_copy = try self.allocator.alloc([]const u8, labels.len);
-        for (labels, 0..) |label, i| {
-            labels_copy[i] = try self.allocator.dupe(u8, label);
-        }
-
-        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
-
-        const node = Node{
-            .id = node_id,
-            .labels = labels_copy,
-            .properties = CompactPropertyMap.init(self.allocator),
-            .graph_name = graph_name_copy,
-            .tenant_id = tenant_id_copy,
-        };
-
-        try self.nodes.put(node_id, node);
-
-        try self.ensureGraph(graph_name);
-        for (labels) |label| {
-            try self.addToLabelIndex(graph_name, label, node_id);
-        }
-        // PERF-B/C (issues #811, #814): restoreNodeNoSave is the rollback
-        // counterpart to createNode — mirror the index bumps. The restored
-        // node carries no properties (rollback re-runs SetProperty ops
-        // separately), so only label-level counters fire here.
-        try self.addNodeToGraphIndex(graph_name, node_id);
-        for (labels) |label| {
-            try self.bumpLabelCount(graph_name, DEFAULT_TENANT_ID, label);
-        }
-    }
-
-    /// Restore a deleted edge without saving (used during rollback)
-    pub fn restoreEdgeNoSave(self: *GraphStore, edge_id: u64, from_id: u64, to_id: u64, label: []const u8, graph_name: []const u8) !void {
-        const label_copy = try self.allocator.dupe(u8, label);
-        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
-        const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
-
-        const edge = Edge{
-            .id = edge_id,
-            .from_id = from_id,
-            .to_id = to_id,
-            .label = label_copy,
-            .properties = CompactPropertyMap.init(self.allocator),
-            .graph_name = graph_name_copy,
-            .tenant_id = tenant_id_copy,
-        };
-
-        try self.edges.put(edge_id, edge);
-
-        try self.ensureGraph(graph_name);
-        try self.addToAdjacencyIndex(from_id, to_id, edge_id);
-        // PERF-P0-001: Maintain edge-type index during rollback restore
-        try self.addToEdgeTypeIndex(graph_name, label, edge_id);
-        // PERF-C (issue #814): tenant-keyed edge-type counter for rollback.
-        try self.bumpEdgeTypeCount(graph_name, DEFAULT_TENANT_ID, label);
-        // Per-(graph,type) exact counter (typed count(r:TYPE) fast path).
-        self.bumpGraphEdgeTypeCount(graph_name, label);
-    }
-
     /// Add a label to a node without saving (used during rollback)
     pub fn addNodeLabelNoSave(self: *GraphStore, node_id: u64, label: []const u8) !void {
         if (self.nodes.getPtr(node_id)) |node| {

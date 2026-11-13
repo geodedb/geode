@@ -258,8 +258,6 @@ pub const streaming = struct {
         pub const kafka_wire = @import("streaming/sinks/kafka_wire.zig");
     };
 };
-// Re-export server graph executor for tests needing internal MATCH primitives
-pub const graph_exec = @import("server/graph/exec.zig");
 // Re-export server state for unified binary
 pub const server_state = @import("server/server_state.zig");
 pub const capability_gate = @import("server/capability_gate.zig");
