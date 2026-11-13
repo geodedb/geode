@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:27:02.42905575Z",
+  "generated_at": "2026-11-13T00:41:39.987429035Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84314,6 +84314,20 @@
       "features": [
         {
           "feature": "DistributedCluster",
+          "aspect": "ApplyQueuesRemovedText",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_replication.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_follower_fts_rebuild.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "DistributedCluster",
           "aspect": "FollowerRemovedTextRebuild",
           "status": "TESTED",
           "files": [
@@ -84324,6 +84338,20 @@
           ],
           "benches": [],
           "owner": "distributed",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "FullText",
+          "aspect": "ApplyRemovedTextRebuild",
+          "status": "TESTED",
+          "files": [
+            "src/execution/fts_index_ops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6433_follower_fts_rebuild.zig"
+          ],
+          "benches": [],
+          "owner": "fts",
           "updated": "2026-11-12"
         }
       ]
@@ -92110,7 +92138,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4788
+      "TESTED": 4790
     },
     "by_aspect": {
       "2PC": 3,
@@ -92255,6 +92283,8 @@
       "ApplyMergeIntegration": 1,
       "ApplyNodeCreate": 1,
       "ApplyOverRows": 1,
+      "ApplyQueuesRemovedText": 1,
+      "ApplyRemovedTextRebuild": 1,
       "ApplySetGroups": 1,
       "ApplySnapshotPointer": 1,
       "ApplyStatementBatch": 1,

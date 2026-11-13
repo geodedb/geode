@@ -60,8 +60,10 @@ pub const MAGIC = [4]u8{ 'G', 'N', 'C', '1' };
 //   * `.upsert` appends current properties after GMRG on-match-set or GUPD
 //     set/remove, matching the executor's SET hook. It must not tombstone the
 //     id: the pinned engine's tombstones are permanent, so delete+reindex
-//     would hide the node. The documented stale-posting residual remains
-//     identical on leader and follower (see property_mutation.zig).
+//     would hide the node. Text the entry took away (a replaced or removed
+//     string) queues the covering indexes for a rebuild at the end of the
+//     entry, as the executor does at a statement's end (SONNY-6433,
+//     `FtsApplyTextHooks`).
 //   * `.delete` ↔ executor `.delete` — fired BEFORE the store node delete
 //     (mirroring crud_operations.zig:4161) so labels are still resolvable.
 // Edges carry no FTS content (the executor maintains FTS only on node paths),
@@ -96,6 +98,47 @@ pub fn setFtsApplyHook(hook: ?FtsApplyHook) void {
 
 inline fn fireFtsApplyHook(store: *GraphStore, graph: []const u8, node_id: u64, op: FtsApplyOp) void {
     if (g_fts_apply_hook) |hook| hook(store, graph, node_id, op);
+}
+
+// CANARY: REQ=REQ-SONNY-6433-FOLLOWER-FTS-REBUILD; FEATURE="DistributedCluster"; ASPECT=ApplyQueuesRemovedText; STATUS=TESTED; TEST=tests/test_sonny6433_follower_fts_rebuild.zig; OWNER=distributed; UPDATED=2026-11-12
+/// SONNY-6433: text a node lost in an applied entry. The fts engine cannot
+/// take words out of a document, so the executor queues each covering
+/// full-text index for a rebuild when a SET replaces a non-empty string or a
+/// REMOVE drops one (`fts_index_ops.queueRebuildForRemovedText`) and rebuilds
+/// them at the statement's end. The apply functions below report the same
+/// losses through `FtsApplyTextHooks.removed` (after the write; the
+/// property's key) and end each applied entry with `FtsApplyTextHooks.flush`,
+/// so a follower drops the old words as the leader does (it appended the
+/// new text and kept the old). Both run on the apply thread, a follower's
+/// only writer (every write on a follower is refused).
+pub const FtsApplyTextHooks = struct {
+    removed: *const fn (store: *GraphStore, graph: []const u8, node_id: u64, key: []const u8) void,
+    flush: *const fn (store: *GraphStore) void,
+};
+
+var g_fts_apply_text_hooks: ?FtsApplyTextHooks = null;
+
+/// Install (or clear with null) the hooks; `fts_index_ops.registerFtsApplyHook`.
+pub fn setFtsApplyTextHooks(hooks: ?FtsApplyTextHooks) void {
+    g_fts_apply_text_hooks = hooks;
+}
+
+inline fn fireFtsRemovedText(store: *GraphStore, graph: []const u8, node_id: u64, key: []const u8) void {
+    if (g_fts_apply_text_hooks) |h| h.removed(store, graph, node_id, key);
+}
+
+inline fn fireFtsFlush(store: *GraphStore) void {
+    if (g_fts_apply_text_hooks) |h| h.flush(store);
+}
+
+/// Does setting (or, `new` null, removing) `key` take a non-empty string
+/// away from the node? As `property_mutation.replacesText`.
+fn losesText(store: *GraphStore, node_id: u64, key: []const u8, new: ?PropertyValue) bool {
+    if (g_fts_apply_text_hooks == null) return false;
+    const old = store.getNodeProperty(node_id, key) orelse return false;
+    if (old != .String or old.String.len == 0) return false;
+    const n = new orelse return true;
+    return n != .String or !std.mem.eql(u8, n.String, old.String);
 }
 
 pub const Prop = struct { key: []const u8, value: PropertyValue };
@@ -811,9 +854,11 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     var pi: usize = 0;
     while (pi < nprops) : (pi += 1) {
         const p = try readProp(&r);
+        const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
         // Idempotent: setNodeProperty no-ops if the node is absent and overwrites
         // in place otherwise.
         try store.setNodeProperty(node_id, p.key, p.value);
+        if (lost) fireFtsRemovedText(store, graph, node_id, p.key);
     }
 
     // FTS symmetry: ON MATCH SET mutates node content — maintain covering
@@ -822,6 +867,7 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     // Intentionally unconditional on re-apply: set-overwrite re-firing matches
     // the executor's repeated-SET semantics — symmetric with the leader.
     fireFtsApplyHook(store, graph, node_id, .upsert);
+    fireFtsFlush(store); // SONNY-6433
 
     return node_id;
 }
@@ -937,9 +983,11 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         var si: usize = 0;
         while (si < nset) : (si += 1) {
             const p = try readProp(&r);
+            const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
             // Idempotent: setNodeProperty no-ops if the node is absent and
             // overwrites in place otherwise.
             try store.setNodeProperty(node_id, p.key, p.value);
+            if (lost) fireFtsRemovedText(store, graph, node_id, p.key);
         }
 
         // remove_props
@@ -947,8 +995,10 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         var ri: usize = 0;
         while (ri < nrem) : (ri += 1) {
             const key = try r.str16();
+            const lost = losesText(store, node_id, key, null); // SONNY-6433
             // removeNodeProperty no-ops on an absent node OR an absent key.
             store.removeNodeProperty(node_id, key);
+            if (lost) fireFtsRemovedText(store, graph, node_id, key);
         }
 
         // add_labels
@@ -981,6 +1031,9 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         // matches the executor's repeated-SET semantics — symmetric.
         fireFtsApplyHook(store, graph, node_id, .upsert);
     }
+    // SONNY-6433: rebuild the indexes this entry queued, as the executor
+    // does at a statement's end.
+    fireFtsFlush(store);
 
     return update_count;
 }

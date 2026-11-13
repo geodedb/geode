@@ -1632,6 +1632,20 @@
 
 ### Fixed
 
+- **A cluster follower drops replaced or removed text from its fulltext
+  indexes, as the leader does (SONNY-6433 item 3).** The fts engine cannot
+  take words out of a document, so the executor queues every covering index
+  for a rebuild when a SET replaces indexed text or a REMOVE drops it and
+  rebuilds it at the statement's end (SONNY-6368, SONNY-6421). A follower
+  applies the committed GUPD / GMRG entry with the store mutators and the
+  FTS apply hook's upsert only: it appended the new text and kept answering
+  `geode.fts.search` for the old words. The apply functions now report text
+  a node lost (`cluster_replication.FtsApplyTextHooks`, registered by
+  `fts_index_ops.registerFtsApplyHook`) and end each applied entry with the
+  same flush, on the apply thread (a follower's only writer).
+  `docs/FULLTEXT_SEARCH.md` is updated, and `tests/test_fts_apply_symmetry.zig`
+  now expects the old term gone on the apply path. Regression: `zig build
+  test-sonny6433-follower-fts-rebuild`.
 - **BREAKING (query): a MERGE with a null key is refused (22004); a
   list-valued MERGE key matches by value; `FOR u IN [...] CREATE ... RETURN
   u` returns `u` (SONNY-6433 item 2, the SONNY-3245 remainder).** A null

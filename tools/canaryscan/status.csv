@@ -5397,7 +5397,9 @@ REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED,Key configuration,ServerStartupRefusal,TESTED
 REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED,Key configuration,SetButUnusableKeyRefuses,TESTED,tests/test_sonny6422_env_key_fail_closed.zig,tests/test_sonny6422_env_key_fail_closed.zig,,security,2026-11-12
 REQ-SONNY-6422-PHANTOM-ONCE-PER-COMMIT,MVCC Phantom Prevention,RangeLookupOncePerCommit,TESTED,tests/test_sonny6422_phantom_check_once_per_commit.zig,tests/test_sonny6422_phantom_check_once_per_commit.zig,,txn,2026-11-12
 REQ-SONNY-6422-REMOTE-BACKUP-PROGRESS,CLI Backup,ProgressPrintedOncePerStep,TESTED,tests/test_sonny6422_remote_backup_progress.zig,tests/test_sonny6422_remote_backup_progress.zig,,cli,2026-11-12
+REQ-SONNY-6433-FOLLOWER-FTS-REBUILD,DistributedCluster,ApplyQueuesRemovedText,TESTED,src/distributed/cluster_replication.zig,tests/test_sonny6433_follower_fts_rebuild.zig,,distributed,2026-11-12
 REQ-SONNY-6433-FOLLOWER-FTS-REBUILD,DistributedCluster,FollowerRemovedTextRebuild,TESTED,tests/test_sonny6433_follower_fts_rebuild.zig,tests/test_sonny6433_follower_fts_rebuild.zig,,distributed,2026-11-12
+REQ-SONNY-6433-FOLLOWER-FTS-REBUILD,FullText,ApplyRemovedTextRebuild,TESTED,src/execution/fts_index_ops.zig,tests/test_sonny6433_follower_fts_rebuild.zig,,fts,2026-11-12
 REQ-SONNY-6433-KEYS-AFTER-REMOVE,PropertyStorage,RemovedPropertyAbsent,TESTED,tests/test_sonny6433_keys_after_remove.zig,tests/test_sonny6433_keys_after_remove.zig,,storage,2026-11-12
 REQ-SONNY-6433-KEYS-AFTER-REMOVE,PropertyStorage,TombstoneNotAProperty,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6433_keys_after_remove.zig,,storage,2026-11-12
 REQ-SONNY-6433-MERGE-KEYS,MergeStatement,BulkNullKeyRefused,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6433_merge_keys.zig,,transport,2026-11-12
