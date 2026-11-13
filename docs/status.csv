@@ -3236,9 +3236,9 @@ REQ-LIB-MIGRATION-JSON-042,JSON Library Migration,MCPResources,TESTED,,,mcp,2026
 REQ-LIB-MIGRATION-JSON-043,JSON Library Migration,ResourceResponse,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig,95
 REQ-LIB-MIGRATION-JSON-044,JSON Library Migration,ResourceError,TESTED,,,mcp,2026-01-24,src/mcp/resources.zig,109
 REQ-LIB-MIGRATION-JSON-048,JSON Library Migration,MCPLSP,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,24
-REQ-LIB-MIGRATION-JSON-049,JSON Library Migration,LSPValidation,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,577
-REQ-LIB-MIGRATION-JSON-050,JSON Library Migration,LSPCompletions,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,603
-REQ-LIB-MIGRATION-JSON-051,JSON Library Migration,LSPHover,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,626
+REQ-LIB-MIGRATION-JSON-049,JSON Library Migration,LSPValidation,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,579
+REQ-LIB-MIGRATION-JSON-050,JSON Library Migration,LSPCompletions,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,605
+REQ-LIB-MIGRATION-JSON-051,JSON Library Migration,LSPHover,TESTED,,,mcp,2026-01-24,src/mcp/lsp.zig,628
 REQ-LIB-MIGRATION-JSON-052,JSON Library Migration,CDCStreaming,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,59
 REQ-LIB-MIGRATION-JSON-053,JSON Library Migration,CDCEventSerialize,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,1262
 REQ-LIB-MIGRATION-JSON-054,JSON Library Migration,CDCSnapshots,TESTED,,,streaming,2026-01-24,src/streaming/cdc_enhanced.zig,817
@@ -3521,7 +3521,7 @@ REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,EXEMPT,,,mcp,2026-04-11,src/mcp
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig,7
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig,7
 REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig,30
-REQ-MCP-GAP-0819,GqlInputChokepointResponse,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig,556
+REQ-MCP-GAP-0819,GqlInputChokepointResponse,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig,558
 REQ-MCP-LSP-BRIDGE-001,MCPLSPBridgeContract,BridgeContract,TESTED,,,mcp,2026-06-10,src/mcp/lsp.zig,22
 REQ-MCP-READ-ONLY-001,MCPReadOnly,Classifier,TESTED,,,mcp,2026-08-28,src/mcp/tools.zig,407
 REQ-MCP-READ-ONLY-001,MCPReadOnly,ClassifierImport,TESTED,,,mcp,2026-08-28,src/mcp/tools.zig,43

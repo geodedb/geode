@@ -2189,6 +2189,17 @@
 
 ### Fixed
 
+- **MCP hover: function and procedure signatures are no longer built in
+  fixed stack buffers (SONNY-6487 item 1).** `src/mcp/lsp.zig` `getHover`
+  wrote a function's parameter list into a 1024-byte stack array and a
+  procedure's YIELD column list into a 2048-byte one with unchecked index
+  writes. A longer signature aborted the MCP server with `index out of
+  bounds` in Debug and ReleaseSafe (the release mode) and wrote past the
+  stack buffer in ReleaseFast. The hover text comes only from the built-in
+  `language_metadata` table (longest today: 66 and 22 bytes), so no request
+  could trigger it; the lists are now allocated to their real length
+  (`formatHoverParams`, `formatHoverColumns`). Regression:
+  `zig build test-sonny6487-mcp-hover-bounds`.
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness
