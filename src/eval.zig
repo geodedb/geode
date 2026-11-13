@@ -883,27 +883,21 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if (exactNumber(l)) |a| {
                 if (exactNumber(r)) |b| break :blk5 .{ .Bool = cmpToBool(op, @intCast(value_order.compareNumbers(a, b))) };
             }
-            // Float-promoted numeric comparison. The arm set above covers the
-            // EXACT integer/decimal pairings; there was no float branch at all,
-            // so any comparison touching a Real/Double fell through to
-            // TypeMismatch — and after a3d4726d made avg() always produce
-            // Double, `WITH avg(x) AS a WHERE a > k` silently emptied (the
-            // post-WITH filter swallows eval errors into row exclusion).
-            // Promote to f64 only when a float is actually involved, so the
-            // exact arms keep integer/decimal comparisons precise.
-            if (l == .Real or l == .Double or r == .Real or r == .Double) {
-                if (numericValueAsF64(l)) |lf| {
-                    if (numericValueAsF64(r)) |rf| {
-                        break :blk5 .{ .Bool = switch (op) {
-                            .Eq => lf == rf,
-                            .Ne => lf != rf,
-                            .Lt => lf < rf,
-                            .Le => lf <= rf,
-                            .Gt => lf > rf,
-                            .Ge => lf >= rf,
-                            else => false,
-                        } };
-                    }
+            // CANARY: REQ=REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY; FEATURE="ValueOrdering"; ASPECT=OneNumericEqualityRule; STATUS=TESTED; TEST=tests/test_sonny2807_exact_numeric_equality.zig; OWNER=eval; UPDATED=2026-11-13
+            // A comparison touching a REAL or a DOUBLE. SONNY-2807: by exact
+            // numerical value too (ISO/IEC 39075:2024 19.3 GR 3a: numbers
+            // "are compared with respect to their numerical values"), as
+            // GROUP BY, DISTINCT, ORDER BY, an inline map, MERGE and the exact
+            // index seek compare them (value_order). The exact operand was
+            // converted to f64, so DOUBLE 0.1 = DECIMAL 0.1 was TRUE (the
+            // double is 0.1000000000000000055...) and past 2^53 an integer
+            // equalled the double nearest it, while the same two values were
+            // two GROUP BY groups and an inline map told them apart. NaN keeps
+            // IEEE 754 semantics: it is equal to, and ordered against, nothing.
+            if (value_order.numberOf(l)) |a| {
+                if (value_order.numberOf(r)) |b| {
+                    if (isNanNumber(a) or isNanNumber(b)) break :blk5 .{ .Bool = op == .Ne };
+                    break :blk5 .{ .Bool = cmpToBool(op, @intCast(value_order.compareNumbers(a, b))) };
                 }
             }
             if (l == .Str and r == .Str) {
@@ -5340,6 +5334,10 @@ fn concatOperand(alloc: std.mem.Allocator, v: Value, buf: *[64]u8) EvalError![]c
 fn exactNumber(v: Value) ?value_order.Number {
     const n = value_order.numberOf(v) orelse return null;
     return if (n == .exact) n else null;
+}
+
+fn isNanNumber(n: value_order.Number) bool {
+    return n == .float and std.math.isNan(n.float);
 }
 
 // ---------------------------------------------------------------------------

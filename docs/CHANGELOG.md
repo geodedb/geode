@@ -2161,6 +2161,36 @@
 
 ### Fixed
 
+- **One numeric equality rule: `=` compares a DOUBLE and an exact number by
+  exact value (SONNY-2807).** ISO/IEC 39075:2024 19.3 (General Rule 3a)
+  compares numbers "with respect to their numerical values". GROUP BY,
+  DISTINCT, ORDER BY, an inline property map, MERGE and the exact index seek
+  already did; `=`, `<>`, `<`, `<=`, `>`, `>=` (and IN, CASE and NULLIF,
+  which use `=`) converted the exact operand to a double instead, so the
+  same two values were equal to `=` and two groups to GROUP BY. They now
+  compare exactly, NaN keeping IEEE semantics (it equals nothing). The
+  planned read's two-pattern hash join (`MATCH (a:T), (b:T) WHERE a.x =
+  b.x`) keys values by the GROUP BY key: it dropped every row whose key was
+  a DECIMAL or an extended value (a DOUBLE parameter, a SMALLINT, a date),
+  never joined an INT with an equal DOUBLE, and let the string `'i:1'` share
+  a key with the integer 1. **Behaviour change** (for a DOUBLE, typically a
+  client float parameter or a stored float property, against a DECIMAL
+  literal such as `0.1`):
+  - `RETURN $d = 0.1` with `$d` the DOUBLE 0.1: TRUE before, FALSE now
+    (the double is 0.1000000000000000055...); `$d > 0.1` FALSE before, TRUE
+    now; `$d IN [0.1]` TRUE before, FALSE now.
+  - `MATCH (n) WHERE n.x = 0.1` no longer returns a node whose x is the
+    DOUBLE 0.1 (it already did not match `{x: 0.1}` or group with 0.1).
+    To compare with a double, compare with a double (`n.x = $d`).
+  - `RETURN 9007199254740993 = $d` with `$d` the DOUBLE 2^53: TRUE before,
+    FALSE now (no double holds 2^53 + 1).
+  - A value a double holds exactly is unaffected: `DOUBLE 0.5 = 0.5`,
+    `DOUBLE 1.0 = 1`.
+  - On a persisted session, `MATCH (a:T), (b:T) WHERE a.x = b.x` returns
+    the pairs whose x are equal (it returned none for decimal or DOUBLE
+    properties).
+  Regression: `zig build test-sonny2807-exact-numeric-equality`, and the
+  updated past-2^53 case of `test-sonny2806-exact-property-matching`.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE

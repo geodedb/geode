@@ -10,6 +10,8 @@ const value_utilities = @import("value_utilities.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const stored_property_equality = @import("stored_property_equality.zig");
+const distinct_set = @import("distinct_set.zig");
+const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const query_arena = @import("../server/query_arena.zig");
 const pattern_helpers = @import("pattern_helpers.zig");
@@ -1803,8 +1805,18 @@ fn extractJoinPredicate(root: ast.Expr, chain_vars: []const ?[]const u8) ?JoinPr
     }
 }
 
-// Get a node property as a comparable string key using an arena allocator so
-// no explicit cleanup is needed — the arena frees everything at once.
+// Get a node property as a hash-join key using an arena allocator so no
+// explicit cleanup is needed — the arena frees everything at once. NULL (or
+// no property) joins nothing, as `=` with NULL is never true.
+//
+// SONNY-2807: the key is the canonical value key GROUP BY and DISTINCT use
+// (distinct_set.writeKey), so two values join exactly when they are one
+// group: numbers by exact value, whatever their type. The key was the text of
+// an INT ("i:1") or a DOUBLE ("f:1"), the raw bytes of a string, and nothing
+// for a decimal or any extended value: `MATCH (a:T), (b:T) WHERE a.x = b.x`
+// returned no row for decimal or DOUBLE-parameter properties, an INT never
+// joined a DOUBLE of the same value, and the string 'i:1' shared a key with
+// the integer 1.
 fn slotPropertyAsHashKey(
     arena: std.mem.Allocator,
     adapter: *graph_storage_adapter.StorageAdapter,
@@ -1813,14 +1825,11 @@ fn slotPropertyAsHashKey(
     prop_name: []const u8,
 ) !?[]const u8 {
     const maybe_val = adapter.getNodeProperty(graph_name, slot_id, prop_name, arena) catch return null;
-    const val = maybe_val orelse return null;
-    return switch (val) {
-        .string => |s| s,
-        .int => |i| try std.fmt.allocPrint(arena, "i:{d}", .{i}),
-        .bool => |b| @as([]const u8, if (b) "b:1" else "b:0"),
-        .float => |f| try std.fmt.allocPrint(arena, "f:{d}", .{f}),
-        else => null,
-    };
+    const stored = maybe_val orelse return null;
+    const decoded = try graph_storage_adapter.fromStorageProperty(arena, stored);
+    var key: std.Io.Writer.Allocating = .init(arena);
+    if (!try distinct_set.writeKey(&key.writer, arena, property_codec.propertyValueToValue(decoded))) return null;
+    return key.written();
 }
 
 fn materializeMultiChainRow(
@@ -2701,14 +2710,6 @@ fn propertyAccessMatches(expr: ast.Expr, pattern_name: []const u8) ?[]const u8 {
     };
 }
 
-/// Whether the double nearest `i` is `i` itself (always within 2^53).
-fn doubleHoldsExactly(i: i64) bool {
-    const f: f64 = @floatFromInt(i);
-    // maxInt(i64) rounds up to 2^63, which no i64 holds.
-    if (f >= 0x1p63) return false;
-    return @as(i64, @intFromFloat(f)) == i;
-}
-
 fn tryExtractPatternEqPredicate(
     pattern_name: ?[]const u8,
     where: ast.Expr,
@@ -2797,9 +2798,6 @@ fn collectStartSlots(
         // Seed key+value are set atomically so neither is ever valid without
         // the other — eliminates the `undefined` field and the dead `orelse`.
         var seed: ?struct { key: []const u8, pv: graph_store.PropertyValue } = null;
-        // SONNY-2807: the WHERE arm's second seek, for an integer no double
-        // holds (see below).
-        var nearest_double: ?graph_store.PropertyValue = null;
 
         if (pattern.props) |props| {
             if (props.len == 0) break :fp;
@@ -2849,18 +2847,10 @@ fn collectStartSlots(
             const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch break :fp;
             const seed_pv: graph_store.PropertyValue = switch (expected_val) {
                 .Str => |s| graph_store.PropertyValue{ .String = s },
-                .Int => |i| blk: {
-                    // SONNY-2807: `=` compares a stored DOUBLE with an
-                    // integer in a double, and the seek finds the nodes whose
-                    // value is exactly the integer. Past 2^53 a double may
-                    // not hold the integer: `n.x = 9007199254740993` is true
-                    // for a stored DOUBLE 2^53, which the seek missed. Seek
-                    // the nearest double too; the WHERE filter that follows
-                    // drops what `=` does not keep.
-                    const nearest: f64 = @floatFromInt(i);
-                    if (!doubleHoldsExactly(i)) nearest_double = .{ .Float = nearest };
-                    break :blk graph_store.PropertyValue{ .Int = i };
-                },
+                // SONNY-2807: `=` compares numbers by exact value, as the
+                // exact index keys them, so the integer's own posting is every
+                // node `=` can find (a stored DOUBLE 2^53 is not 2^53 + 1).
+                .Int => |i| graph_store.PropertyValue{ .Int = i },
                 .Bool => |b| graph_store.PropertyValue{ .Bool = b },
                 else => break :fp,
             };
@@ -2870,20 +2860,7 @@ fn collectStartSlots(
         }
 
         const s = seed orelse break :fp;
-        const exact = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
-        const candidates = if (nearest_double) |d| blk: {
-            defer allocator.free(exact);
-            const near = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, d, allocator) catch break :fp;
-            defer allocator.free(near);
-            // Two values, two postings: disjoint but for a hash collision.
-            var both = try std.ArrayList(u64).initCapacity(allocator, exact.len + near.len);
-            errdefer both.deinit(allocator);
-            both.appendSliceAssumeCapacity(exact);
-            for (near) |slot| {
-                if (std.mem.indexOfScalar(u64, exact, slot) == null) both.appendAssumeCapacity(slot);
-            }
-            break :blk try both.toOwnedSlice(allocator);
-        } else exact;
+        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
         defer allocator.free(candidates);
 
         var verified = try std.ArrayList(u64).initCapacity(allocator, candidates.len);

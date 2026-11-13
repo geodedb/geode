@@ -664,6 +664,15 @@ distance_haversine(point1, point2)
    - Char ignores trailing spaces
    - Enum compares by ordinal
    - UUID compares bytewise
+   - Numbers (INT, SMALLINT, BIGINT, DECIMAL, REAL, DOUBLE) compare by their
+     exact numerical value, whatever their types (ISO/IEC 39075:2024 19.3,
+     General Rule 3a). `=`, the order operators, IN, GROUP BY, DISTINCT,
+     ORDER BY, joins, inline property maps, MERGE and index seeks share this
+     one rule: `1 = 1.0 = DOUBLE 1.0`, `DOUBLE 0.5 = 0.5`, but the DOUBLE
+     nearest 0.1 (0.1000000000000000055...) is not the DECIMAL 0.1 and is
+     greater than it. NaN equals nothing under `=` (IEEE 754) and is one
+     value for GROUP BY and DISTINCT, sorting after every number
+     (SONNY-2807).
 
 ## Performance Characteristics
 
