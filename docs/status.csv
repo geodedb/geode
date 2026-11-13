@@ -2010,7 +2010,7 @@ REQ-GQL-017-TUTORIAL,Docs,Tutorial,IMPL,,,docs,2026-11-12,tests/test_gap_0193_ba
 REQ-GQL-018,QueryPlanCaching,CacheEviction,TESTED,,,engine,2025-10-03,tests/query_plan_cache_test.zig,9
 REQ-GQL-018,Transport Parity Summary Diff Guard,GovernanceTest,TESTED,,,tooling,2025-09-24,tests/e2e_parity_summary_diff_guard.zig,7
 REQ-GQL-018,Transport Parity Summary Guard,GovernanceTest,TESTED,,,tooling,2025-09-24,tests/e2e_parity_summary_guard.zig,5
-REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,,,engine,2025-09-24,tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig,23
+REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,,,engine,2026-11-13,tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig,36
 REQ-GQL-019,QueryOptimization,CostBasedOptimization,TESTED,,,engine,2025-10-03,tests/query_plan_cache_test.zig,15
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,IMPL,,,distributed,2026-04-05,src/distributed/cluster.zig,2621
 REQ-GQL-020,QueryOptimization,MemoryEstimation,TESTED,,,engine,2025-10-03,tests/query_plan_cache_test.zig,21

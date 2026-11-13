@@ -1923,7 +1923,7 @@ REQ-GQL-017-TUTORIAL,Docs,Tutorial,IMPL,tests/test_gap_0193_batch2_misc.zig,,,do
 REQ-GQL-018,QueryPlanCaching,CacheEviction,TESTED,tests/query_plan_cache_test.zig,TestCANARY_REQ_GQL_018_CacheEviction,,engine,2025-10-03
 REQ-GQL-018,Transport Parity Summary Diff Guard,GovernanceTest,TESTED,tests/e2e_parity_summary_diff_guard.zig,TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard,,tooling,2025-09-24
 REQ-GQL-018,Transport Parity Summary Guard,GovernanceTest,TESTED,tests/e2e_parity_summary_guard.zig,TestCANARY_REQ_GQL_018_ParitySummaryGuard,,tooling,2025-09-24
-REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig,TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows,,engine,2025-09-24
+REQ-GQL-018,Transport Parity VarLen Dataset Rows,ProtocolE2E,TESTED,tests/e2e_protocol_transport_parity_varlen_dataset_rows.zig,TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows,,engine,2026-11-13
 REQ-GQL-019,QueryOptimization,CostBasedOptimization,TESTED,tests/query_plan_cache_test.zig,TestCANARY_REQ_GQL_019_CostBasedOptimization,,engine,2025-10-03
 REQ-GQL-020,Cluster QUIC Messaging,SendToNode,IMPL,src/distributed/cluster.zig,,,distributed,2026-04-05
 REQ-GQL-020,QueryOptimization,MemoryEstimation,TESTED,tests/query_plan_cache_test.zig,TestCANARY_REQ_GQL_020_MemoryEstimation,,engine,2025-10-03

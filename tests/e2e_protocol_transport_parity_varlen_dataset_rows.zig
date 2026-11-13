@@ -20,15 +20,37 @@ fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
     return std.json.Stringify.valueAlloc(allocator, rows_val, .{});
 }
 
-// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity VarLen Dataset Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows; OWNER=engine; UPDATED=2025-09-24
-// Uses curated dataset under data/varlen_determinism to stress equal-length path tiebreaks; compares full rows across transports.
+/// SONNY-6476 item 1: the dataset the query reads, with equal-length paths
+/// whose order only the ORDER BY decides (A reaches D through B and through
+/// C; B and C each reach E). Seeded into a fresh data directory every run.
+const seed_statements = [_][]const u8{
+    "CREATE (:Person {name: 'A'}), (:Person {name: 'B'}), (:Person {name: 'C'}), (:Person {name: 'D'}), (:Person {name: 'E'})",
+    "MATCH (a:Person {name: 'A'}), (b:Person {name: 'B'}) CREATE (a)-[:KNOWS]->(b)",
+    "MATCH (a:Person {name: 'A'}), (c:Person {name: 'C'}) CREATE (a)-[:KNOWS]->(c)",
+    "MATCH (b:Person {name: 'B'}), (d:Person {name: 'D'}) CREATE (b)-[:KNOWS]->(d)",
+    "MATCH (c:Person {name: 'C'}), (d:Person {name: 'D'}) CREATE (c)-[:KNOWS]->(d)",
+    "MATCH (b:Person {name: 'B'}), (e:Person {name: 'E'}) CREATE (b)-[:KNOWS]->(e)",
+    "MATCH (c:Person {name: 'C'}), (e:Person {name: 'E'}) CREATE (c)-[:KNOWS]->(e)",
+};
+
+// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity VarLen Dataset Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_TransportParity_VarLenDatasetRows; OWNER=engine; UPDATED=2026-11-13
+// Seeds a dataset of equal-length variable-length paths into a fresh data
+// directory and checks that two runs of the same ordered query agree.
+// SONNY-6476: the data directory was the fixed, relative
+// `./data/varlen_determinism`, which outlived every run; a store left there
+// with other credentials made the step fail, and no dataset was ever seeded.
 test "protocol: transport parity varlen dataset rows QUIC (gated)" {
     util.testStart("transport parity varlen dataset rows QUIC");
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
     const exe = geode_test_bin.geode_exe;
-    const data_dir = "./data/varlen_determinism";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd_len = try std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf);
+    const data_dir = try std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..cwd_len], &tmp.sub_path });
+    defer allocator.free(data_dir);
     const q = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 6";
 
     // Get random port
@@ -44,6 +66,14 @@ test "protocol: transport parity varlen dataset rows QUIC (gated)" {
     var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data_dir", data_dir }, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 10000);
+
+    util.progress("Seeding the dataset...", .{});
+    for (seed_statements) |stmt| {
+        const sres = try run(allocator, addr, &.{ exe, stmt, "--format", "json" });
+        defer allocator.free(sres.out);
+        defer allocator.free(sres.err);
+        try std.testing.expectEqual(@as(i32, 0), sres.code);
+    }
 
     util.progress("Running first query...", .{});
     const qres = try run(allocator, addr, &.{ exe, q, "--format", "json" });
@@ -63,6 +93,8 @@ test "protocol: transport parity varlen dataset rows QUIC (gated)" {
 
     util.progress("Comparing results...", .{});
     try std.testing.expect(std.mem.eql(u8, qrows, qrows2));
+    // The rows are the seeded paths, in ORDER BY order (not an empty store).
+    try std.testing.expectEqualStrings("[{\"a\":\"A\",\"b\":\"B\"},{\"a\":\"A\",\"b\":\"C\"},{\"a\":\"A\",\"b\":\"D\"},{\"a\":\"A\",\"b\":\"D\"},{\"a\":\"A\",\"b\":\"E\"},{\"a\":\"A\",\"b\":\"E\"}]", qrows);
 
     util.testPass();
 }

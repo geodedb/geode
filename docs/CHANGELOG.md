@@ -2155,6 +2155,13 @@
   (SONNY-6476 item 3).** `getSystemFingerprint` called the Linux `getuid`
   syscall on every non-Windows target. Regression: the inline test in
   `src/cli/security/session_storage.zig` (`zig build test-sonny6463-inline`).
+- **`test-transport-parity` no longer depends on a leftover data directory
+  (SONNY-6476 item 1).** The varlen dataset parity smoke ran against the
+  fixed relative `./data/varlen_determinism`, which outlived every run; a
+  store left there with other credentials failed the step (11/12), and the
+  "curated dataset" was never seeded, so it compared two empty answers. It
+  now seeds its dataset into a fresh temporary directory and asserts the
+  rows.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE
