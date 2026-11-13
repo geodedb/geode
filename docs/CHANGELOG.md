@@ -2036,6 +2036,15 @@
 
 ### Fixed
 
+- **`FOR x IN [ ... ]` no longer leaks the list it iterates
+  (SONNY-6449 follow-up).** `executeFor` and the FOR header expansion
+  evaluated the collection on the caller's allocator and never freed it,
+  so every FOR over a list literal or a computed list leaked it once per
+  statement. The list is now the statement's (its scratch arena), as every
+  other computed projection value is since SONNY-6449; rows that borrow
+  its elements stay valid until the result is copied out. Regression:
+  `zig build test-for-write-body` (the SONNY-2463 case now runs on the
+  strict testing allocator and frees its result).
 - **Operator-visible: one checkpoint per persistence tick and one per clean
   shutdown, with per-phase shutdown timings (SONNY-6459 items 1-2).** Each
   persistence tick ran the light checkpoint twice (the checkpoint hook,
