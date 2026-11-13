@@ -5579,6 +5579,7 @@ REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED
 REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED,tests/test_sonny6489_topk_order.zig,,,execution,2026-11-13
 REQ-SONNY-6499-CAST-MATRIX,TypeCasting,StandardCastMatrix,TESTED,tests/test_sonny6499_cast_matrix.zig,tests/test_sonny6499_cast_matrix.zig,,eval,2026-11-13
 REQ-SONNY-6499-EXEC-ORDER-NFC,UnicodeOrderBy,ExecTextFallbackNfc,TESTED,tests/test_sonny6499_exec_order_nfc.zig,tests/test_sonny6499_exec_order_nfc.zig,,unicode,2026-11-13
+REQ-SONNY-6499-GQLSTATE-RESIDUALS,ErrorMapping,DataExceptionGqlstatusResiduals,TESTED,tests/test_sonny6499_gqlstate_residuals.zig,tests/test_sonny6499_gqlstate_residuals.zig,,engine,2026-11-13
 REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS,OrderedIndex,ColumnEntriesAndNfc,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6499_orderby_fastpath_nulls.zig,,storage,2026-11-13
 REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS,TopKOrderedFastPath,FastPathsReturnFullSortPrefix,TESTED,tests/test_sonny6499_orderby_fastpath_nulls.zig,tests/test_sonny6499_orderby_fastpath_nulls.zig,,execution,2026-11-13
 REQ-SONNY-6499-RELATIVE-DATA-DIR,Server Startup,RelativeDataDirAndRefusalCleanup,TESTED,tests/test_sonny6499_relative_data_dir.zig,tests/test_sonny6499_relative_data_dir.zig,,security,2026-11-13

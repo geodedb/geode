@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:14:23.42748374Z",
+  "generated_at": "2026-11-13T19:21:34.391824256Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87569,6 +87569,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6499-GQLSTATE-RESIDUALS",
+      "features": [
+        {
+          "feature": "ErrorMapping",
+          "aspect": "DataExceptionGqlstatusResiduals",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6499_gqlstate_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6499_gqlstate_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS",
       "features": [
         {
@@ -95342,7 +95361,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4980
+      "TESTED": 4981
     },
     "by_aspect": {
       "2PC": 3,
@@ -96168,6 +96187,7 @@
       "DataDirPermissions": 1,
       "DataDirPermissionsHelper": 1,
       "DataExceptionGqlstatus": 1,
+      "DataExceptionGqlstatusResiduals": 1,
       "DataExport": 1,
       "DataGeneration": 1,
       "DataIngestion": 2,
