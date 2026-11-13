@@ -536,7 +536,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
-    .{ .name = "test-sonny2440-blocking-worker-fallback", .reason = "intentionally red reproduction of a thread_pool dependency defect (SONNY-2440, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a thread_pool release with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -5518,15 +5517,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2440_wake_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny2440-default-lane-wake", "Run SONNY-2440 regression (every default-lane task submitted to an idle geode pool starts without waiting out a parked worker's 500 ms idle park: thread_pool's submit wakes only every wake_coalesce_batch-th time)").dependOn(&run_sonny2440_wake_tests.step);
 
-    // SONNY-2440: intentionally RED reproduction (docs/KNOWN_TEST_ISSUES.md):
-    // the defect is in the thread_pool dependency (a default-lane submit never
-    // wakes the parked blocking worker). Kept out of `shardDep` until a
-    // thread_pool release with the fix is pinned; compiled by `test-compile`.
+    // SONNY-2440: with every default-lane worker busy, a default-lane task
+    // starts promptly on the reserved blocking worker (thread_pool v0.2.11
+    // wakes it for default-lane work, SONNY-6479).
     const sonny2440_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2440_blocking_worker_fallback.zig"), .target = target, .optimize = optimize }) });
     sonny2440_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     const run_sonny2440_tests = b.addRunArtifact(sonny2440_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny2440_tests.step);
-    b.step("test-sonny2440-blocking-worker-fallback", "Run SONNY-2440 red reproduction (with every default-lane worker busy, a default-lane task waits up to idle_park_after_ns, 500 ms, for the parked blocking worker: thread_pool's scanAndWake never wakes it)").dependOn(&run_sonny2440_tests.step);
+    shardDep(test_step, &run_sonny2440_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny2440-blocking-worker-fallback", "Run SONNY-2440 regression (with every default-lane worker of a geode pool busy, a further default-lane task starts promptly on the reserved blocking worker instead of waiting out its 500 ms idle park)").dependOn(&run_sonny2440_tests.step);
 
     // Task #31: QUIC stream multiplex hang — per-connection stream pool
     // must run 4 concurrent streams, not 2.  Root cause: `submit()` routes
