@@ -1902,6 +1902,20 @@
 
 ### Fixed
 
+- **Test infrastructure: in-process tests can run the real raft sender
+  (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
+  QUIC client and listener with a do-nothing stub in every test binary, so
+  `raft.Transport.send` sent nothing in any test and the SONNY-6451
+  sender-side reconnect had only churn-log evidence. The stub is now the
+  default and `raft_consensus.useRealQuicInTests(true)` makes the clients
+  and listeners created afterwards real (production builds are
+  unchanged). New regression `zig build test-sonny6456-raft-real-sender`
+  drives the real sender against a started receiver: it delivers, sees
+  `ConnectionClosed` after the receiver gives up the idle connection and
+  rebuilds it, and reaches the receiver after it restarts. A peer moving
+  to a new IP under the same name is not covered in process (it needs a
+  DNS server the test controls); the netns membership-churn script covers
+  it.
 - **Operator-visible: the cluster health monitor reports a peer failed only
   when it stops being heard from (SONNY-6456 item 1).** A peer's
   `last_heartbeat` was written only when its entry was created, never when

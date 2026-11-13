@@ -105,9 +105,10 @@ const Incarnation = struct {
 /// CONNECTION_CLOSE, like a killed or force-exited peer process (the churn
 /// harness's restarts) or one whose old IP is blackholed (its reschedules):
 /// its endpoint is never polled again. The caller deinits it only after the
-/// assertions. (A real QUIC client: raft_consensus.zig swaps its `quic` for a
-/// no-op stub in every test binary, so `raft.Transport.send` sends nothing
-/// here.) Sets `delivered`.
+/// assertions. (A raw QUIC client, so the test controls exactly when the
+/// incarnation goes silent; the real raft sender is exercised in-process by
+/// tests/test_sonny6456_raft_real_sender.zig via `raft.useRealQuicInTests`.)
+/// Sets `delivered`.
 fn incarnation(a: std.mem.Allocator, coord: *ClusterCoordinator, port: u16, term: u64, inc: *Incarnation, delivered: *bool) !void {
     inc.client = quic.QuicClient.init(a);
     errdefer inc.client.deinit();
