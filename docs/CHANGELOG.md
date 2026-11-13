@@ -2144,6 +2144,13 @@
   extension", docs/TYPES_AND_FUNCTIONS.md, docs/GQL_COMPLIANCE.md and
   docs/API_REFERENCE_GENERATED.md state the contract, and the tests that
   called a `range(1, 1500)` seed "1,500 pairs" say 1,499.
+- **`geode shell --plain` runs a line longer than 4,095 bytes whole
+  (SONNY-6476 item 2).** The plain-mode reader used a fixed 4,096-byte line
+  buffer and cut a longer line without a word: the first 4,095 bytes ran as
+  one statement and the rest as another. The line now grows as it is read,
+  up to 16 MiB (the server's largest request); a longer line is refused
+  whole with an error. Regression: `zig build
+  test-sonny6476-shell-long-line`.
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE

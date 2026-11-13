@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:58:02.607024325Z",
+  "generated_at": "2026-11-13T13:01:19.569935161Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86391,6 +86391,7 @@
           "aspect": "LineLongerThan4095Bytes",
           "status": "TESTED",
           "files": [
+            "src/client/repl/repl_loop.zig",
             "tests/test_sonny6476_shell_long_line.zig"
           ],
           "tests": [
