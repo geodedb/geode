@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:45:32.533020299Z",
+  "generated_at": "2026-11-13T12:58:02.607024325Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86384,6 +86384,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6476-SHELL-LONG-LINE",
+      "features": [
+        {
+          "feature": "ShellPlainMode",
+          "aspect": "LineLongerThan4095Bytes",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6476_shell_long_line.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6476_shell_long_line.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -94051,7 +94070,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4904
+      "TESTED": 4905
     },
     "by_aspect": {
       "2PC": 3,
@@ -96030,6 +96049,7 @@
       "LimitErrorRelay": 1,
       "LimitInChain": 1,
       "Limiter": 1,
+      "LineLongerThan4095Bytes": 1,
       "LintCompliance": 1,
       "List": 1,
       "ListAccess": 2,
