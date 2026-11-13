@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:18:50.778110108Z",
+  "generated_at": "2026-11-13T11:32:18.075410229Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -69867,6 +69867,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2412-KMS-LATENCY-FLAT",
+      "features": [
+        {
+          "feature": "RemoteKMSPrototype",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2412_kms_latency_flat.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2412_kms_latency_flat.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2439-PERF-METHODOLOGY",
       "features": [
         {
@@ -93814,7 +93833,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4891
+      "TESTED": 4892
     },
     "by_aspect": {
       "2PC": 3,
@@ -96947,7 +96966,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 306,
+      "Regression": 307,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
