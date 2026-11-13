@@ -11132,6 +11132,15 @@ pub fn build(b: *std.Build) void {
     const sonny3133_step = b.step("test-sonny3133-parser-nesting", "Run SONNY-3133 regression (no nesting of PROFILE/EXPLAIN, a START TRANSACTION body, a parenthesized statement, VALUES, WITH, CALL { }, FOR, NOT, unary minus/plus, shortestPath or an expression overflows a 16 MiB stack: clean parse error; ordinary nesting parses; gRPC X11 bomb gets 42000; run in Debug and ReleaseSafe)");
     sonny3133_step.dependOn(&run_sonny3133_tests.step);
 
+    // SONNY-738 (item 0b): one level of query nesting costs the parser's stack no more than its budget. See tests/test_sonny738_parser_frame_budget.zig.
+    const sonny738_frame_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny738_parser_frame_budget.zig"), .target = target, .optimize = optimize });
+    sonny738_frame_test_mod.addImport("geode", root_mod);
+    const sonny738_frame_tests = b.addTest(.{ .root_module = sonny738_frame_test_mod });
+    const run_sonny738_frame_tests = b.addRunArtifact(sonny738_frame_tests);
+    shardDep(test_step, &run_sonny738_frame_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny738_frame_step = b.step("test-sonny738-parser-frame-budget", "Run SONNY-738 regression (the stack one level of WITH, CALL { }, IN (subquery) and FOR nesting costs the parser, and the deepest allowed nesting's whole parse, stay within budget, so the deepest nesting fits an 8 MiB gRPC connection thread)");
+    sonny738_frame_step.dependOn(&run_sonny738_frame_tests.step);
+
     // SONNY-3134: DROP GRAPH and CREATE OR REPLACE GRAPH of a graph any
     // session's open transaction changed are refused (55006). gRPC in process
     // and QUIC against a spawned server.

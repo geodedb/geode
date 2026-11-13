@@ -35,8 +35,23 @@ const stack_reserve_bytes: usize = if (builtin.mode == .Debug) 2 * 1024 * 1024 e
 /// this frame is not on the thread's stack (a fiber's). SONNY-3181: the
 /// bounds lookup is `stack_guard`'s, which the evaluator shares.
 fn stackHasRoom() bool {
+    if (test_frame_probe) |probe| probe.lowest = @min(probe.lowest, @frameAddress());
     return stack_guard.hasRoomBelow(@frameAddress(), stack_reserve_bytes);
 }
+
+// CANARY: REQ=REQ-SONNY-738-PARSER-FRAME-BUDGET; FEATURE="GQLParser"; ASPECT=FrameProbe; STATUS=TESTED; TEST=tests/test_sonny738_parser_frame_budget.zig; OWNER=parser; UPDATED=2026-11-13
+/// SONNY-738 (item 0b): a test seam that measures the parser's stack. When
+/// set on a thread, `parseQuery` records its frame address at each query
+/// nesting depth and `stackHasRoom` the lowest frame address it is called
+/// from, so a test can pin what one level of query nesting costs (a parser
+/// change that grows it fails that test, not the slow transport test whose
+/// deepest nesting stops fitting an 8 MiB connection thread). Never set
+/// outside tests.
+pub const FrameProbe = struct {
+    query_frames: [Parser.max_query_nesting + 1]usize = @splat(0),
+    lowest: usize = std.math.maxInt(usize),
+};
+pub threadlocal var test_frame_probe: ?*FrameProbe = null;
 
 /// SONNY-3133: statements nested in statements (EXPLAIN, EXPLAIN POLICY FOR,
 /// PROFILE, a START TRANSACTION body, a parenthesized statement, a VALUES
@@ -2177,6 +2192,7 @@ pub const Parser = struct {
         // SONNY-3244: queries nest at most `max_query_nesting` deep.
         try self.enterQuery();
         defer self.query_depth -= 1;
+        if (test_frame_probe) |probe| probe.query_frames[self.query_depth] = @frameAddress();
         // SONNY-3190: the SET, REMOVE and CREATE clauses of this part.
         var write_clauses: usize = 0;
         // Parse LET bindings first (LET $var = expr, ...)

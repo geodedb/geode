@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:24:29.639749239Z",
+  "generated_at": "2026-11-13T14:45:44.580050843Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86790,6 +86790,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-738-PARSER-FRAME-BUDGET",
+      "features": [
+        {
+          "feature": "GQLParser",
+          "aspect": "FrameBudget",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny738_parser_frame_budget.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_parser_frame_budget.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "GQLParser",
+          "aspect": "FrameProbe",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny738_parser_frame_budget.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -94412,7 +94445,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4925
+      "TESTED": 4927
     },
     "by_aspect": {
       "2PC": 3,
@@ -95831,6 +95864,8 @@
       "FormatValue": 1,
       "ForwardToShard": 1,
       "Foundation": 1,
+      "FrameBudget": 1,
+      "FrameProbe": 1,
       "Framework": 3,
       "FrameworkTesting": 1,
       "FreeExtendedReadCopy": 1,
