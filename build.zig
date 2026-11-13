@@ -534,7 +534,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6460-cluster-test-addresses", .reason = "intentionally red TDD reproduction (SONNY-6460 item 6); register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
@@ -2325,7 +2324,9 @@ pub fn build(b: *std.Build) void {
     first_boot_pw_step.dependOn(&run_first_boot_pw_tests.step);
 
     // Regression for docs/bugs/2026-06-04-cluster-raft-no-stable-quorum-writes-time-out.md
-    // 3 real geode subprocesses on DISTINCT loopback IPs (127.0.0.11/12/13),
+    // 3 real geode subprocesses on DISTINCT loopback IPs (127.0.0.11/12/13; no
+    // other test uses them, SONNY-6460: test-cluster-replicable-mutations runs
+    // beside it in the aggregate on 127.0.0.21-23),
     // same cluster port, CA-signed TLS, asserting a single leader is elected and
     // HOLDS for >= N seconds (the flap-to-all-candidates failure mode). Requires
     // the geode this build emitted + openssl (SKIPs without openssl) and the
@@ -15011,6 +15012,7 @@ pub fn build(b: *std.Build) void {
         mod.addImport("sonny6460_addresses_options", opts.createModule());
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6460-cluster-test-addresses", "Run SONNY-6460 item 6 regression (each cluster test step - the steady-state and replicable-mutations subprocess clusters, the SONNY-6451/6453/6456 cluster steps, GAP-0838 peer TLS - names loopback addresses no other test source uses)").dependOn(&run_tests.step);
     }
 

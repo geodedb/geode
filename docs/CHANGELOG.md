@@ -2011,6 +2011,18 @@
   passes as a per-query arena. Regression: `zig build
   test-sonny6460-query-residuals` (leak-checked, including every
   allocation failure).
+- **Test infrastructure: each cluster test step has loopback addresses of
+  its own (SONNY-6460 item 6).** The two subprocess cluster suites
+  (`test-cluster-steady-state`, `test-cluster-replicable-mutations`), which
+  the aggregate `zig build test` already runs, both started their three
+  nodes on 127.0.0.11-13, and the SONNY-6451 health test configured the
+  same three; `test-sonny6453-cluster-peer-tls` and
+  `test-gap0838-cluster-tls` listened on 127.0.0.2 with four other steps.
+  Concurrent steps on one address could probe and bind the same free port.
+  The replicable-mutations suite now uses 127.0.0.21-23, the health test
+  127.0.0.14-16, the peer TLS tests 127.0.0.31 and 127.0.0.32;
+  `zig build test-sonny6460-cluster-test-addresses` (in the aggregate)
+  fails when a cluster test step's address appears in another test source.
 - **Test infrastructure: in-process tests can run the real raft sender
   (SONNY-6456 item 3).** `src/distributed/raft_consensus.zig` replaced its
   QUIC client and listener with a do-nothing stub in every test binary, so
