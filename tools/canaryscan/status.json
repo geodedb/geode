@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:34:53.66013913Z",
+  "generated_at": "2026-11-13T15:38:45.646098302Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -9120,7 +9120,7 @@
           ],
           "benches": [],
           "owner": "cli",
-          "updated": "2026-11-07"
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -54521,6 +54521,25 @@
       ]
     },
     {
+      "id": "REQ-NET-HOSTPORT-6487",
+      "features": [
+        {
+          "feature": "Shared host:port parser",
+          "aspect": "AddressGrammar",
+          "status": "TESTED",
+          "files": [
+            "src/client/host_port.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6487_host_port.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-NETWORK-SECURITY-001",
       "features": [
         {
@@ -94398,7 +94417,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4924
+      "TESTED": 4925
     },
     "by_aspect": {
       "2PC": 3,
@@ -94475,6 +94494,7 @@
       "AddGraph": 1,
       "AddShard": 1,
       "Addition": 2,
+      "AddressGrammar": 1,
       "AdminAllowed": 4,
       "AdminOnlyKeyAdministration": 1,
       "AdminResetOverWire": 1,

@@ -400,12 +400,12 @@ const Addr = struct {
     port: u16,
 };
 
-fn parseAddr(addr: []const u8) !Addr {
-    const colon = std.mem.lastIndexOfScalar(u8, addr, ':') orelse return error.InvalidAddress;
-    const host = addr[0..colon];
-    if (host.len == 0) return error.InvalidAddress;
-    const port = try std.fmt.parseInt(u16, addr[colon + 1 ..], 10);
-    return .{ .host = host, .port = port };
+/// SONNY-6487: `host:port` or `[ipv6]:port` (geode.host_port, the server's
+/// own grammar); the host comes back without brackets.
+pub fn parseAddr(addr: []const u8) !Addr {
+    const hp = geode.host_port.split(addr, null) catch return error.InvalidAddress;
+    if (hp.host.len == 0) return error.InvalidAddress;
+    return .{ .host = hp.host, .port = hp.port };
 }
 
 pub const TestValue = union(enum) {

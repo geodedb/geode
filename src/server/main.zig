@@ -2548,18 +2548,18 @@ pub fn main() !void {
 
     // QUIC mode: preferred over TCP
     if (listen_quic) |addr_str| {
-        const colon = std.mem.lastIndexOfScalar(u8, addr_str, ':');
-        var port: u16 = quic_transport.DEFAULT_PORT;
-        var address_str: []const u8 = "0.0.0.0";
-
-        if (colon) |ci| {
-            address_str = addr_str[0..ci];
-            const p = addr_str[ci + 1 ..];
-            port = std.fmt.parseUnsigned(u16, p, 10) catch quic_transport.DEFAULT_PORT;
-        } else {
-            // If no colon, treat as port only
-            port = std.fmt.parseUnsigned(u16, addr_str, 10) catch quic_transport.DEFAULT_PORT;
-        }
+        // SONNY-6487: the shared host:port grammar. parseArgs already refused
+        // an address this cannot resolve; an IPv6 address keeps its brackets
+        // because the transport binds "{address}:{port}".
+        const quic_listen = cli_args.resolveQuicListen(addr_str) catch |err| {
+            log.err("Invalid --listen address; refusing to start", &.{
+                Attr.string("listen", addr_str),
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        };
+        const port: u16 = quic_listen.port;
+        const address_str: []const u8 = quic_listen.address;
 
         // Initialize QUIC transport
         // GAP-0327: honor --max-connections; 0 means "transport default".

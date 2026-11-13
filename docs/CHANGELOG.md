@@ -2200,6 +2200,32 @@
   could trigger it; the lists are now allocated to their real length
   (`formatHoverParams`, `formatHoverColumns`). Regression:
   `zig build test-sonny6487-mcp-hover-bounds`.
+- **Addresses: one host:port grammar; IPv6 listen and dial; a bad port is
+  an error (SONNY-6487 item 2).** `geode serve --listen` / `--listen-grpc`,
+  the cluster peer list (`GEODE_PEERS`, `--peers`) and dialler, the 2PC
+  participant dialler, `geode lsp --listen`, the `geode query` / `shell`
+  `--server` paths, `--audit-syslog`, Kafka brokers, KMS endpoint probes and
+  the shared test client split addresses on their last (or first) colon and
+  ignored brackets, so `[::1]:4242` kept its brackets as the host and a bare
+  `::1:4242` was read as host `::1`. They now all use
+  `src/client/host_port.zig` (`geode.host_port`, the docs/DSN.md grammar
+  `zig_quic_bridge.parseHostPort` already used). Operator-visible:
+  `--listen <host>:<not a port>` refuses to start (it listened on port
+  3141), `--listen localhost` binds 127.0.0.1:3141 (it bound 0.0.0.0:3141),
+  a bare IPv6 address is refused everywhere (`geode lsp --listen ::1:9257`
+  used to work by accident: write `[::1]:9257`), `GEODE_CLUSTER_PORT` that is
+  not a port refuses cluster bootstrap (it fell back to 4242), and
+  `--audit-syslog <host>:<not a port>` and `--audit-syslog <host name>` are
+  refused (they sent to port 514, or dropped every message). The syslog
+  sender addressed 127.0.0.1 as 1.0.0.127 (byte order) and dropped IPv6
+  targets; both are delivered now. `--listen [::1]:<port>` serves over IPv6,
+  and geode's own QUIC client (cluster peers, tests) binds an IPv6 endpoint
+  and brackets the dial address for an IPv6 server. The CLI client
+  (geode-client-zig) is still IPv4-only: it looks names up in both families,
+  prefers IPv4, and refuses an IPv6-only destination with
+  `Ipv6EndpointUnsupported` instead of failing with a bare `InvalidAddress`.
+  Regressions: `zig build test-sonny6487-host-port`,
+  `test-sonny6487-endpoint-host-family`, `test-sonny6487-ipv6-serve`.
 - **Server: removed the unused MVCC manager fields from the connection
   state (SONNY-6487 item 6).** `ServerState.mvcc_manager` and
   `current_mvcc_txn` (`src/server/server_state.zig`) were never set or read;

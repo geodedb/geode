@@ -2158,6 +2158,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     cli_args_mod.addImport("config", config_mod);
+    // SONNY-6487: the shared host:port parser (geode.host_port).
+    cli_args_mod.addImport("geode", root_mod);
     cli_args_mod.addImport("build_options", build_options_mod);
     const cli_args_cluster_tests = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("tests/test_cli_args_cluster.zig"),
@@ -6818,7 +6820,8 @@ pub fn build(b: *std.Build) void {
     // Removed along with its test registration.
 
     const streaming_test = b.addTest(.{
-        .root_module = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize }),
+        // SONNY-6487: rooted in src/ so kafka_sink.zig reaches src/client/host_port.zig.
+        .root_module = b.createModule(.{ .root_source_file = b.path("src/cdc_enhanced_test_root.zig"), .target = target, .optimize = optimize }),
     });
     streaming_test.root_module.link_libc = true;
     streaming_test.root_module.addImport("logging", logging_mod);

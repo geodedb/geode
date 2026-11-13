@@ -2519,11 +2519,16 @@ pub const QuicClient = struct {
         };
         self.quic_config = cfg;
 
-        // Initialize client endpoint using api.endpointInit (heap-allocates Endpoint).
-        self.endpoint = try api.endpointInit(&self.allocator, "0.0.0.0:0", cfg);
+        // SONNY-6487: an IPv6 server needs an IPv6 endpoint and a bracketed
+        // dial address (`[::1]:3141`); the endpoint was always 0.0.0.0:0 and
+        // `::1:3141` is not a parseable address.
+        const server_v6 = std.mem.indexOfScalar(u8, resolved.ip, ':') != null;
+        self.endpoint = try api.endpointInit(&self.allocator, if (server_v6) "[::]:0" else "0.0.0.0:0", cfg);
 
-        // Create server address string using resolved IP.
-        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
+        const server_addr = if (server_v6)
+            try std.fmt.allocPrint(self.allocator, "[{s}]:{d}", .{ resolved.ip, port })
+        else
+            try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
         defer self.allocator.free(server_addr);
 
         // Connect to server using public API.
@@ -2613,11 +2618,16 @@ pub const QuicClient = struct {
         };
         self.quic_config = cfg;
 
-        // Initialize client endpoint using api.endpointInit (heap-allocates Endpoint).
-        self.endpoint = try api.endpointInit(&self.allocator, "0.0.0.0:0", cfg);
+        // SONNY-6487: an IPv6 server needs an IPv6 endpoint and a bracketed
+        // dial address (`[::1]:3141`); the endpoint was always 0.0.0.0:0 and
+        // `::1:3141` is not a parseable address.
+        const server_v6 = std.mem.indexOfScalar(u8, resolved.ip, ':') != null;
+        self.endpoint = try api.endpointInit(&self.allocator, if (server_v6) "[::]:0" else "0.0.0.0:0", cfg);
 
-        // Create server address string using resolved IP.
-        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
+        const server_addr = if (server_v6)
+            try std.fmt.allocPrint(self.allocator, "[{s}]:{d}", .{ resolved.ip, port })
+        else
+            try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
         defer self.allocator.free(server_addr);
 
         // Connect to server using public API. SNI uses original hostname for TLS.

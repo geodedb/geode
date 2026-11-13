@@ -14,7 +14,8 @@ const DnsProbe = struct {
         defer results.close(io);
         calls += 1;
         correct_name = std.mem.eql(u8, name.bytes, "geode.local");
-        correct_family = options.family == .ip4;
+        // SONNY-6487: both families are looked up; IPv4 is preferred.
+        correct_family = options.family == null;
         if (fail) return error.UnknownHostName;
         results.putOne(io, .{ .address = .{ .ip4 = .{ .bytes = .{ 192, 0, 2, 18 }, .port = options.port } } }) catch |err| switch (err) {
             error.Canceled => return error.Canceled,
@@ -54,7 +55,8 @@ test "dns_failure_is_returned_without_selecting_a_local_address" {
 }
 
 test "ip_literals_remain_owned_and_unchanged" {
-    for ([_][]const u8{ "127.0.0.1", "192.0.2.18", "::1", "[::1]" }) |host| {
+    // SONNY-6487: IPv6 literals are refused (test_sonny6487_endpoint_host_family.zig).
+    for ([_][]const u8{ "127.0.0.1", "192.0.2.18" }) |host| {
         const resolved = try endpoint_host.resolveAlloc(std.testing.allocator, host);
         defer std.testing.allocator.free(resolved);
         try std.testing.expectEqualStrings(host, resolved);

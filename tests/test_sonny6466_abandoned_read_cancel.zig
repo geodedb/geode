@@ -185,11 +185,10 @@ const MuxConn = struct {
     client: quic.QuicClient,
 
     fn connect(allocator: std.mem.Allocator, addr: []const u8) !MuxConn {
-        const colon = std.mem.lastIndexOfScalar(u8, addr, ':') orelse return error.InvalidAddress;
-        const port = try std.fmt.parseInt(u16, addr[colon + 1 ..], 10);
+        const parsed = try util.parseAddr(addr);
         var client = quic.QuicClient.init(allocator);
         errdefer client.deinit();
-        try client.connectInsecure(addr[0..colon], port, true);
+        try client.connectInsecure(parsed.host, parsed.port, true);
         try client.waitForHandshake(10);
         return .{ .allocator = allocator, .client = client };
     }

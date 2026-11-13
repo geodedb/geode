@@ -7,6 +7,7 @@
 /// Extracted as part of Phase 1, M1.3 of the modularization effort.
 const std = @import("std");
 const cb = @import("crypto_backend");
+const host_port_lib = @import("../client/host_port.zig");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -221,11 +222,11 @@ fn probeKmsReachable(allocator: std.mem.Allocator, endpoint: []const u8) !bool {
             host_port = host_port[0..slash_idx];
         }
     }
-    const colon_idx = std.mem.lastIndexOfScalar(u8, host_port, ':') orelse return false;
-    const host = host_port[0..colon_idx];
-    const port_str = host_port[colon_idx + 1 ..];
-    if (host.len == 0 or port_str.len == 0) return false;
-    const port = std.fmt.parseInt(u16, port_str, 10) catch return false;
+    // SONNY-6487: host:port or [ipv6]:port (the shared grammar).
+    const hp = host_port_lib.split(host_port, null) catch return false;
+    if (hp.host.len == 0) return false;
+    const host = hp.host;
+    const port = hp.port;
 
     // We only support IP-literal hosts for the fail-closed probe.  Bare
     // hostnames would require DNS, which the harness scenario does not

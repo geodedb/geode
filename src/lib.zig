@@ -184,6 +184,8 @@ pub const advanced_types_optimizer = @import("optimizer/advanced_types_optimizer
 // off the legacy in-repo client implementations.
 pub const zig_client = @import("geode_client_zig");
 pub const zig_quic_bridge = @import("client/zig_quic_bridge.zig");
+/// SONNY-6487: the one host:port grammar (docs/DSN.md) every address uses.
+pub const host_port = @import("client/host_port.zig");
 // Re-export unicode utilities (normalization, case folding, UTF-16/WTF-8 helpers)
 pub const unicode = @import("unicode/geode_unicode.zig");
 pub const unicode_tables = @import("unicode/unicode_tables.zig");
