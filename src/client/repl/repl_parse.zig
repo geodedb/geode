@@ -33,15 +33,6 @@ pub fn isIncompleteGqlStatement(input: []const u8) bool {
     const trimmed = std.mem.trim(u8, input, " \t\n\r");
     if (trimmed.len == 0) return false;
 
-    // Convert to uppercase for case-insensitive matching
-    var upper_input: [4096]u8 = undefined;
-    if (trimmed.len >= upper_input.len) return false;
-
-    for (trimmed, 0..) |c, i| {
-        upper_input[i] = std.ascii.toUpper(c);
-    }
-    const upper_slice = upper_input[0..trimmed.len];
-
     // Keywords that when appearing at the END of input indicate incompleteness
     const trailing_keywords = [_][]const u8{
         "MATCH",
@@ -72,12 +63,16 @@ pub fn isIncompleteGqlStatement(input: []const u8) bool {
         "UNWIND",
     };
 
-    // Check if input ends with an incomplete GQL keyword
+    // Check if input ends with an incomplete GQL keyword (case-insensitive).
+    // SONNY-6494: only the tail is compared. The input was upper-cased into a
+    // 4096-byte buffer first, and longer input was called complete, so a
+    // statement over 4 KiB typed across lines was submitted at the first
+    // line that ended in a keyword.
     for (trailing_keywords) |pattern| {
-        if (std.mem.endsWith(u8, upper_slice, pattern)) {
+        if (trimmed.len >= pattern.len and std.ascii.eqlIgnoreCase(trimmed[trimmed.len - pattern.len ..], pattern)) {
             // Make sure it's a word boundary (not part of a larger identifier)
-            if (upper_slice.len == pattern.len) return true;
-            const char_before = upper_slice[upper_slice.len - pattern.len - 1];
+            if (trimmed.len == pattern.len) return true;
+            const char_before = trimmed[trimmed.len - pattern.len - 1];
             if (!std.ascii.isAlphanumeric(char_before) and char_before != '_') {
                 return true;
             }
@@ -87,7 +82,21 @@ pub fn isIncompleteGqlStatement(input: []const u8) bool {
     return false;
 }
 
-test "parser balance" {
+test "repl_parse: SONNY-6494: a statement over 4 KiB ending in a keyword is incomplete" {
+    const allocator = std.testing.allocator;
+    const long = try allocator.alloc(u8, 5000);
+    defer allocator.free(long);
+    @memset(long, 'a');
+    const stmt = try std.fmt.allocPrint(allocator, "RETURN size('{s}') as", .{long});
+    defer allocator.free(stmt);
+    try std.testing.expect(isIncompleteGqlStatement(stmt));
+    try std.testing.expect(!isComplete(stmt));
+    const done = try std.fmt.allocPrint(allocator, "RETURN size('{s}') AS n", .{long});
+    defer allocator.free(done);
+    try std.testing.expect(!isIncompleteGqlStatement(done));
+}
+
+test "repl_parse: parser balance" {
     try std.testing.expect(!isBalanced("MATCH (n"));
     try std.testing.expect(isBalanced("MATCH (n)\nRETURN n;"));
     try std.testing.expect(!isBalanced("MATCH (n) WHERE n.prop = \"unclosed string"));
@@ -96,7 +105,7 @@ test "parser balance" {
     try std.testing.expect(isBalanced("MATCH /* closed comment */"));
 }
 
-test "multi-line parsing" {
+test "repl_parse: multi-line parsing" {
     const testing = std.testing;
 
     // Test continuation detection (trailing operators/brackets)

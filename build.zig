@@ -535,7 +535,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6494-repl-long-input", .reason = "intentionally red TDD reproduction (SONNY-6494 item 3); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
 };
 
@@ -8193,7 +8192,7 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6494-repl-long-input", "Run SONNY-6494 item 3 regression (geode shell: \\echo, \\set, an unknown command, \\use and \\graph answer long text; \\source runs a path over 500 bytes and names one it cannot open; a statement over 4 KiB typed across lines runs once, whole; \\history prints it; ESC before a UTF-8 character is not Alt; real shell, plain mode and a PTY)").dependOn(&run_tests.step);
     }
 
@@ -15434,10 +15433,10 @@ pub fn build(b: *std.Build) void {
         // module, filtered (test "repl_dispatch: inline test root" in
         // src/lib.zig keeps the file in discovery).
         {
-            const sonny6494_step = b.step("test-sonny6494-inline", "Run SONNY-6494 item 2: the inline tests of src/conformance.zig and src/client/repl/repl_dispatch.zig, which did not compile on Zig 0.16 and ran in no step");
+            const sonny6494_step = b.step("test-sonny6494-inline", "Run SONNY-6494 item 2: the inline tests of src/conformance.zig and src/client/repl/repl_dispatch.zig, which did not compile on Zig 0.16 and ran in no step, and of src/client/repl/repl_parse.zig");
             for ([_]struct { name: []const u8, mod: *std.Build.Module, filters: []const []const u8 = &.{} }{
                 .{ .name = "conformance", .mod = b.createModule(.{ .root_source_file = b.path("src/conformance.zig"), .target = target, .optimize = optimize }) },
-                .{ .name = "repl-dispatch", .mod = root_mod, .filters = &.{"repl_dispatch:"} },
+                .{ .name = "repl-dispatch", .mod = root_mod, .filters = &.{ "repl_dispatch:", "repl_parse:" } },
             }) |entry| {
                 const tests = b.addTest(.{ .name = b.fmt("sonny6494-{s}", .{entry.name}), .root_module = entry.mod, .filters = entry.filters });
                 const run_tests = b.addRunArtifact(tests);

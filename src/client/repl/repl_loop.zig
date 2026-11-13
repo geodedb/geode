@@ -1166,9 +1166,12 @@ fn parseKeyEvent(data: []const u8) !KeyEvent {
             } else if (data[1] == '[' and data.len == 2) {
                 // Incomplete CSI sequence, wait for more data
                 return KeyEvent{ .key = 0x1b };
-            } else if ((data[1] & 0x7f) >= 'a' and (data[1] & 0x7f) <= 'z') {
-                // Alt+letter
-                return KeyEvent{ .key = @intCast(data[1] & 0x7f), .alt = true };
+            } else if (data[1] >= 'a' and data[1] <= 'z') {
+                // Alt+letter. SONNY-6494: the byte was masked to 7 bits, so
+                // ESC followed by a UTF-8 lead byte (é is 0xC3 0xA9; 0xC3 &
+                // 0x7f is 'C', 0xE6 & 0x7f is 'f') was read as Alt+<letter>
+                // and the character lost. Now ESC alone (getKeyEventLength).
+                return KeyEvent{ .key = data[1], .alt = true };
             } else if (data[1] >= 'A' and data[1] <= 'Z') {
                 // Alt+Shift+letter
                 return KeyEvent{ .key = @intCast(data[1] - 'A' + 'a'), .alt = true };
@@ -1213,8 +1216,9 @@ fn getKeyEventLength(data: []const u8) usize {
                 return 3;
             }
             return 2;
-        } else if (data.len > 1) {
-            // Alt+key sequences
+        } else if (data.len > 1 and data[1] < 0x80) {
+            // Alt+key sequences (SONNY-6494: never a UTF-8 lead byte, which
+            // starts the next character)
             return 2;
         }
         return 1; // Just ESC

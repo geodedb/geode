@@ -94,6 +94,15 @@ fn isValidGraphName(name: []const u8) bool {
     return true;
 }
 
+/// SONNY-6494: write a formatted reply sized to its text. The replies that
+/// echo user text were formatted into fixed stack buffers, so long text made
+/// the command fail with NoSpaceLeft (or, with `catch return`, do nothing).
+fn writeFmt(file: std.Io.File, allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
+    const msg = try std.fmt.allocPrint(allocator, fmt, args);
+    defer allocator.free(msg);
+    try file.writeStreamingAll(replIo(), msg);
+}
+
 fn clearSessionLastResponse(session: *ClientSession) void {
     if (session.last_response) |resp| {
         session.allocator.free(resp);
@@ -2015,8 +2024,13 @@ pub fn promptTransactionRecovery(pending_state: *const PendingTransactionState) 
     try stdout.writeStreamingAll(replIo(), stmt_msg);
 
     if (pending_state.current_graph) |graph| {
-        const graph_msg = std.fmt.bufPrint(&buf, "║ Graph context: {s:<45} ║\r\n", .{graph}) catch "";
-        try stdout.writeStreamingAll(replIo(), graph_msg);
+        // SONNY-6494: written in parts; a name longer than the 256-byte
+        // buffer it was formatted into was dropped without a word.
+        try stdout.writeStreamingAll(replIo(), "║ Graph context: ");
+        try stdout.writeStreamingAll(replIo(), graph);
+        const pad = "                                             "; // 45
+        if (graph.len < pad.len) try stdout.writeStreamingAll(replIo(), pad[graph.len..]);
+        try stdout.writeStreamingAll(replIo(), " ║\r\n");
     } else {
         try stdout.writeStreamingAll(replIo(), "║ Graph context: (default)                                     ║\r\n");
     }
@@ -2324,9 +2338,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 0;
 
             for (state.history.entries.items[start..], start..) |entry, i| {
-                var buf: [1024]u8 = undefined;
-                const line = try std.fmt.bufPrint(&buf, "{d:4}: {s}\r\n", .{ i + 1, entry });
-                try stdout.writeStreamingAll(replIo(), line);
+                try writeFmt(stdout, state.allocator, "{d:4}: {s}\r\n", .{ i + 1, entry });
             }
         }
     } else if (std.mem.eql(u8, cmd, "clear")) {
@@ -2339,9 +2351,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             state.session.* = try ClientSession.init(state.allocator, args, current_transport);
             try state.session.connect();
             try state.session.hello();
-            var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Connected to {s}\r\n", .{args});
-            try stdout.writeStreamingAll(replIo(), msg);
+            try writeFmt(stdout, state.allocator, "Connected to {s}\r\n", .{args});
         } else {
             const stderr = platform.getStderrHandle();
             var buf: [512]u8 = undefined;
@@ -2380,9 +2390,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             // Sync session graph for HELLO on reconnect
             if (state.session.graph) |old_graph| state.allocator.free(old_graph);
             state.session.graph = try state.allocator.dupe(u8, graph_name);
-            var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{graph_name});
-            try stdout.writeStreamingAll(replIo(), msg);
+            try writeFmt(stdout, state.allocator, "Switched to graph: {s}\r\n", .{graph_name});
         } else {
             const stderr = platform.getStderrHandle();
             try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");
@@ -2390,9 +2398,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "graph")) {
         // \graph - Show current graph
         if (state.current_graph) |graph| {
-            var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Current graph: {s}\r\n", .{graph});
-            try stdout.writeStreamingAll(replIo(), msg);
+            try writeFmt(stdout, state.allocator, "Current graph: {s}\r\n", .{graph});
         } else {
             try stdout.writeStreamingAll(replIo(), "No graph selected (using default)\r\n");
         }
@@ -2461,14 +2467,10 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 try stderr.writeStreamingAll(replIo(), msg);
             }
         } else {
-            var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Unknown option: {s}\r\n", .{parts[0]});
-            try stdout.writeStreamingAll(replIo(), msg);
+            try writeFmt(stdout, state.allocator, "Unknown option: {s}\r\n", .{parts[0]});
         }
     } else if (std.mem.eql(u8, cmd, "echo")) {
-        var buf: [512]u8 = undefined;
-        const msg = try std.fmt.bufPrint(&buf, "{s}\r\n", .{args});
-        try stdout.writeStreamingAll(replIo(), msg);
+        try writeFmt(stdout, state.allocator, "{s}\r\n", .{args});
     } else if (std.mem.eql(u8, cmd, "source")) {
         // \source <file> - Execute commands from a GQL file
         if (args.len > 0) {
@@ -2482,9 +2484,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\r\n");
     } else {
         const stderr = platform.getStderrHandle();
-        var buf: [256]u8 = undefined;
-        const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2001]: Unknown command '\\{s}'\r\n", .{cmd});
-        try stderr.writeStreamingAll(replIo(), msg);
+        try writeFmt(stderr, state.allocator, "Error [GEODE-E2001]: Unknown command '\\{s}'\r\n", .{cmd});
     }
 }
 
@@ -2744,9 +2744,9 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
 
     // Open the file
     const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), resolved_path, .{}) catch |err| {
-        var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot open file '{s}': {s}\r\n", .{ resolved_path, @errorName(err) }) catch return;
-        try stderr.writeStreamingAll(replIo(), msg);
+        // SONNY-6494: a path over ~480 bytes did not fit a 512-byte buffer
+        // and the command returned without a word.
+        try writeFmt(stderr, state.allocator, "Error [GEODE-E2005]: Cannot open file '{s}': {s}\r\n", .{ resolved_path, @errorName(err) });
         return;
     };
     const repl_io = std.Io.Threaded.global_single_threaded.io();
@@ -2810,9 +2810,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     }
 
     // Display source file info
-    var info_buf: [512]u8 = undefined;
-    const info_msg = std.fmt.bufPrint(&info_buf, "Sourcing: {s}\r\n", .{resolved_path}) catch return;
-    try stdout.writeStreamingAll(replIo(), info_msg);
+    try writeFmt(stdout, state.allocator, "Sourcing: {s}\r\n", .{resolved_path});
 
     // CANARY: REQ=REQ-SHELL-SPINNER-003; FEATURE="ShellProcessingIndicator"; ASPECT=SourceFileSpinner; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig:"executeSourceFile: small batch path, re-source tracking, error extraction"; OWNER=cli; UPDATED=2026-11-12
     // Initialize spinner with background thread for visual feedback during long-running source operations

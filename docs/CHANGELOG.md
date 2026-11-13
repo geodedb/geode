@@ -2218,6 +2218,23 @@
 
 ### Fixed
 
+- **`geode shell` handles long input (SONNY-6494 item 3).** The
+  meta-commands formatted replies that echo user text into fixed stack
+  buffers, so `\echo`, `\set <option>`, `\use`, `\graph`, `\connect`,
+  `\history` (an entry over about 1 KiB) and the unknown-command error
+  failed with `NoSpaceLeft` on long text, and `\source` with a path over
+  about 500 bytes did nothing and printed nothing; the transaction-recovery
+  prompt dropped a graph name over about 200 bytes. The replies are now
+  sized to their text. The line editor called any input of 4096 bytes or
+  more a complete statement, so a long statement typed across lines was
+  submitted at the first line ending in a keyword such as `AS` or `WHERE`;
+  it now checks only the end of the input. ESC followed by a non-ASCII
+  character in one read was taken as Alt+<letter> and the character lost;
+  it is now ESC and then the character. Still open: East Asian wide
+  characters are drawn one column wide (neither geode nor its `strings`
+  dependency has an East Asian Width table). Regression: `zig build
+  test-sonny6494-repl-long-input` (the real shell, plain mode and a
+  pseudo-terminal).
 - **Command audit fails closed: `geode` refuses to run when the audit it
   was asked for cannot be set up (SONNY-6494 item 4).** A
   `GEODE_AUDIT_SYSLOG_PORT` that was not a port silently became 514, a host
