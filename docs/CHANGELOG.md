@@ -1709,6 +1709,18 @@
 
 ### Fixed
 
+- **`geode query --file` over QUIC stops, with the summary, when the retry
+  of a rejected chunk cannot connect (SONNY-6447 item 7).** When the server
+  rejects a chunk, the CLI retries its statements one at a time on one new
+  connection. When that connection or its HELLO failed, the run printed
+  `Error retrying chunk statement-by-statement`, counted one error and went
+  on with the next chunk, so the rejected chunk's statements were silently
+  dropped and later chunks that may depend on them were sent. It now prints
+  that the retry could not start, how many statements from that chunk on
+  were not executed, and the chunked summary, and exits with
+  `general_error`, as every other transport failure of a chunked run does.
+  Regression: `zig build test-sonny6447-quic-retry-connect-stops` (a real
+  server and CLI, with a UDP forwarder that drops the retry's connection).
 - **The netns cluster scripts run their nodes as the invoking user and say
   when a node they killed survives (SONNY-6447 items 2 and 9).**
   `tests/cluster/netns_cluster_replication_test.sh` and

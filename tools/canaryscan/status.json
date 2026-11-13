@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T02:26:01.260237069Z",
+  "generated_at": "2026-11-13T02:26:38.737344865Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84496,6 +84496,20 @@
           "benches": [],
           "owner": "cli",
           "updated": "2026-11-12"
+        },
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "RetryStartFailureStops",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_quic_retry_connect_stops.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
         }
       ]
     },
@@ -92180,7 +92194,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4797
+      "TESTED": 4798
     },
     "by_aspect": {
       "2PC": 3,
@@ -95353,6 +95367,7 @@
       "RetentionCleanup": 1,
       "RetireMigratedGrantPolicies": 1,
       "RetryLogic": 1,
+      "RetryStartFailureStops": 1,
       "RetryStopsWithSummary": 1,
       "RetryTailRegressionCounters": 1,
       "ReturnAfterSet": 1,

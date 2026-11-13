@@ -5396,6 +5396,7 @@ REQ-SONNY-6447-LEAN-KEY-OVERFLOW,LeanMergeKeyIndexing,GrowableRegistry,TESTED,sr
 REQ-SONNY-6447-LEAN-KEY-OVERFLOW,LeanMergeKeyIndexing,Regression,TESTED,tests/test_sonny6447_lean_key_overflow.zig,tests/test_sonny6447_lean_key_overflow.zig,,storage,2026-11-12
 REQ-SONNY-6447-NUMERIC-KEY-PARITY,WriteFastPathParity,IntFloatEqualEndpointKeys,TESTED,tests/test_sonny6429_sole_holder_tenant_wire.zig,tests/test_sonny6429_sole_holder_tenant_wire.zig,,storage,2026-11-12
 REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS,ChunkedExecution,Regression,TESTED,tests/test_sonny6447_quic_retry_connect_stops.zig,tests/test_sonny6447_quic_retry_connect_stops.zig,,cli,2026-11-12
+REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS,ChunkedExecution,RetryStartFailureStops,TESTED,src/cli/main.zig,tests/test_sonny6447_quic_retry_connect_stops.zig,,cli,2026-11-12
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,QuoteAndParenAwareSplit,TESTED,src/security/rls_core.zig,tests/test_sonny6447_rls_raw_tokenize.zig,,security,2026-11-12
 REQ-SONNY-6447-RLS-RAW-TOKENIZE,RLSExpressionEvaluation,Regression,TESTED,tests/test_sonny6447_rls_raw_tokenize.zig,tests/test_sonny6447_rls_raw_tokenize.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
