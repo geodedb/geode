@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T00:41:39.987429035Z",
+  "generated_at": "2026-11-13T00:56:15.742469636Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84390,6 +84390,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6433-MEMBER-READ-BORROWED",
+      "features": [
+        {
+          "feature": "ExpressionEvaluator",
+          "aspect": "MemberReadOwnership",
+          "status": "TESTED",
+          "files": [
+            "src/eval.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2653_planned_read_ext_read_leak.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6433-MERGE-KEYS",
       "features": [
         {
@@ -92138,7 +92157,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 337,
-      "TESTED": 4790
+      "TESTED": 4791
     },
     "by_aspect": {
       "2PC": 3,
@@ -94232,6 +94251,7 @@
       "MeanDistance": 1,
       "MeasureOverhead": 1,
       "MemberOfValue": 1,
+      "MemberReadOwnership": 1,
       "MemberResolution": 1,
       "MemoryEfficiency": 2,
       "MemoryEstimation": 1,

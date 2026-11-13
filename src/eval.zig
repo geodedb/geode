@@ -2180,6 +2180,19 @@ fn fleReadMember(allocator: std.mem.Allocator, kind: fle_integration.EntityKind,
     return fle_integration.readStoredStringOwned(allocator, kind, type_name, field, stored, id) catch |err| fleEvalError(err);
 }
 
+// CANARY: REQ=REQ-SONNY-6433-MEMBER-READ-BORROWED; FEATURE="ExpressionEvaluator"; ASPECT=MemberReadOwnership; STATUS=TESTED; TEST=tests/test_sonny2653_planned_read_ext_read_leak.zig; OWNER=eval; UPDATED=2026-11-12
+/// SONNY-6433: `fleReadMember` for a member access (`memberOfValue`): the
+/// stored bytes themselves when the policy passes them unchanged (no FLE
+/// field, or a field the principal reads in plaintext), as a member read
+/// returned them before SONNY-6327; a decrypted or redacted string is
+/// allocated. A member value is borrowed (`value_utilities.evaluatesFresh`):
+/// the final projection duplicates it (GAP-0535) and an ORDER BY compares
+/// it without freeing it, so the copy SONNY-6327 made leaked once per row
+/// and per comparison (`test-sonny2653-planned-read-ext-read-leak`).
+fn fleReadMemberView(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64) EvalError![]const u8 {
+    return fle_integration.readStoredString(allocator, kind, type_name, field, stored, id) catch |err| fleEvalError(err);
+}
+
 /// SONNY-6327: the same, for a whole-entity read (`properties()`, map
 /// projection): a field the principal may not read is "[REDACTED]".
 fn fleReadEntity(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64) EvalError![]u8 {
@@ -2209,7 +2222,7 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
             const result = switch (val) {
                 // SONNY-6327: the shared FLE read policy (a decrypt failure
                 // is an error; it fell back to the stored bytes).
-                .String => |s| Value{ .Str = try fleReadMember(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, s, node.id) },
+                .String => |s| Value{ .Str = try fleReadMemberView(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, s, node.id) },
                 else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
             };
             return result;
@@ -2224,7 +2237,7 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
                 // SONNY-6327: the edge's record identity ("edge_<id>", as the
                 // write side encrypts it; it used the node form, so nothing
                 // decrypted and the stored bytes were returned).
-                .String => |s| Value{ .Str = try fleReadMember(allocator, .edge, edge.label, field, s, edge.id) },
+                .String => |s| Value{ .Str = try fleReadMemberView(allocator, .edge, edge.label, field, s, edge.id) },
                 else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
             };
             return result;

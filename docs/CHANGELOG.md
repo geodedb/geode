@@ -1632,6 +1632,18 @@
 
 ### Fixed
 
+- **A member read of a string property (`n.p`) no longer leaks a copy per
+  row (SONNY-6433 item 5).** SONNY-6327 routed every string read through the
+  FLE read policy and made the member access (`memberOfValue`) return a copy
+  of the stored bytes even when nothing was decrypted. A member value is
+  borrowed by contract (`value_utilities.evaluatesFresh`): the final
+  projection duplicates it (GAP-0535) and an ORDER BY compares it without
+  freeing it, so the copy leaked on every row a projection or sort
+  evaluated without a per-query arena (12 allocations in
+  `test-sonny2653-planned-read-ext-read-leak`'s `RETURN a.s, r`). A member
+  read now returns the stored bytes when the policy passes them unchanged,
+  as before SONNY-6327; a decrypted or redacted string is still a fresh
+  copy. Regression: `zig build test-sonny2653-planned-read-ext-read-leak`.
 - **A cluster follower drops replaced or removed text from its fulltext
   indexes, as the leader does (SONNY-6433 item 3).** The fts engine cannot
   take words out of a document, so the executor queues every covering index
