@@ -3984,6 +3984,13 @@ fn isAllSimpleNodeMultiChain(q: *const ast.Query) bool {
     for (q.match.chains) |chain| {
         if (chain.is_optional or chain.is_shortest or chain.path_mode != .walk) return false;
         if (chain.hops.len > 0) return false;
+        // SONNY-6498: a property value that reads another chain's variable
+        // (`MATCH (n), (t {k: n.k})`) is the legacy executor's: each chain's
+        // start slots are filtered here with no variable bound, so the value
+        // read NULL and the chain matched nothing (an error in it was lost).
+        if (chain.head) |head| if (head.props) |props| for (props) |prop| {
+            if (pattern_helpers.containsVariableReference(prop.value.*)) return false;
+        };
     }
     return true;
 }

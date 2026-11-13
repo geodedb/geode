@@ -557,7 +557,9 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
 
             for (group_by_indices.items) |idx| {
                 const item = with_clause.items[idx];
-                const val = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
+                // SONNY-6498: a key that fails fails the statement (it
+                // grouped as NULL).
+                const val = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, env);
                 var buf: [256]u8 = undefined;
                 const val_str = formatValue(val, &buf);
                 try key_parts.appendSlice(allocator, val_str);
@@ -581,111 +583,66 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         // Build result rows from groups
         var grouped_rows = try std.ArrayList([]Value).initCapacity(allocator, groups.count());
         defer grouped_rows.deinit(allocator);
+        // SONNY-6498: the rows built so far, on an error (an item that
+        // fails); what the items compute is the statement scratch's.
+        errdefer for (grouped_rows.items) |r| allocator.free(r);
 
         var group_iter = groups.iterator();
         while (group_iter.next()) |entry| {
             const group_envs = entry.value_ptr.items;
             var row = try allocator.alloc(Value, with_clause.items.len);
+            errdefer allocator.free(row);
 
             for (with_clause.items, 0..) |item, i| {
                 if (return_and_sorting.isAggregationExpr(item.expr)) {
                     // Compute aggregation over all envs in this group
-                    row[i] = try computeChainAggregation(allocator, item.expr, group_envs);
+                    row[i] = try computeChainAggregation(value_utilities.lentAllocator(allocator), item.expr, group_envs);
                 } else {
                     // Use value from first row in group
-                    row[i] = eval.evalExpr(allocator, item.expr, group_envs[0]) catch Value{ .Null = {} };
+                    // SONNY-6498: an item that fails fails the statement.
+                    row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, group_envs[0]);
                 }
             }
             try grouped_rows.append(allocator, row);
         }
 
-        // Build column names
-        var grouped_columns = try allocator.alloc([]const u8, with_clause.items.len);
-        for (with_clause.items, 0..) |item, i| {
-            grouped_columns[i] = if (item.alias) |alias|
-                try allocator.dupe(u8, alias)
-            else if (item.expr == .Ident)
-                try allocator.dupe(u8, item.expr.Ident.orig)
-            else
-                try allocator.dupe(u8, "?column?");
-        }
+        // Build column names (SONNY-6498: freed on an error)
+        const grouped_columns = try itemColumnNames(allocator, with_clause.items);
+        var grouped_columns_owned = true;
+        errdefer if (grouped_columns_owned) freeColumnNames(allocator, grouped_columns);
 
         // Now continue with remaining chain if any
         if (agg_query.next_query) |remaining_query| {
             // Execute remaining chain with grouped results
-            const grouped_result = ExecutionResult{
+            var grouped_result = ExecutionResult{
                 .columns = grouped_columns,
                 .rows = try grouped_rows.toOwnedSlice(allocator),
                 .flags = std.ArrayList([]const u8).empty,
             };
-
-            // Clean up current_result (its entities went with the rows)
-
-            current_live = false;
-
-            var spent_first = current_result;
-
-            spent_first.owned_graph_entities = null;
-
-            releasePart(allocator, &spent_first);
+            grouped_columns_owned = false;
+            // SONNY-6498: freed once the rest of the chain has read it.
+            defer releasePart(allocator, &grouped_result);
 
             // Process remaining query using the grouped result rows as input
-            var final_rows = try std.ArrayList([]Value).initCapacity(allocator, grouped_result.rows.len);
-            defer final_rows.deinit(allocator);
-            var final_columns: [][]const u8 = &.{};
+            // SONNY-6498: collected by `ChainRows`, which owns what it took.
             // SONNY-6483 (1): the rows hold values of the first part's rows
             // and of each part after it; the nodes and relationships those
             // results track (a planned read's materialized nodes) are the
-            // result's. They were dropped with the rows (a leak per node).
-            var final_entities: ?*execution.OwnedGraphEntities = current_result.owned_graph_entities;
+            // result's.
+            var collected: ChainRows = .{ .allocator = allocator };
+            defer collected.deinit();
+            collected.entities = current_result.owned_graph_entities;
+            current_result.owned_graph_entities = null;
+
+            // Clean up current_result (its entities went with the rows)
+            current_live = false;
+            releasePart(allocator, &current_result);
 
             for (grouped_result.rows) |grouped_row| {
                 // Execute remaining query with grouped row as bindings
-                const next_result = try executeQueryChainWithBindings(allocator, remaining_query.*, context, grouped_result.columns, grouped_row);
-
-                if (final_columns.len == 0) {
-                    final_columns = try allocator.alloc([]const u8, next_result.columns.len);
-                    for (next_result.columns, 0..) |col, i| {
-                        final_columns[i] = try allocator.dupe(u8, col);
-                    }
-                }
-
-                for (next_result.rows) |row| {
-                    const row_copy = try allocator.alloc(Value, row.len);
-                    for (row, 0..) |val, i| {
-                        row_copy[i] = val;
-                    }
-                    try final_rows.append(allocator, row_copy);
-                }
-
-                // Clean up next_result
-                for (next_result.columns) |col| {
-                    allocator.free(col);
-                }
-                allocator.free(next_result.columns);
-                for (next_result.rows) |row| {
-                    allocator.free(row);
-                }
-                allocator.free(next_result.rows);
-                try adoptEntities(&final_entities, next_result.owned_graph_entities);
+                try collected.take(try executeQueryChainWithBindings(allocator, remaining_query.*, context, grouped_result.columns, grouped_row));
             }
-
-            // Clean up grouped result
-            for (grouped_result.columns) |col| {
-                allocator.free(col);
-            }
-            allocator.free(grouped_result.columns);
-            for (grouped_result.rows) |row| {
-                allocator.free(row);
-            }
-            allocator.free(grouped_result.rows);
-
-            return ExecutionResult{
-                .columns = final_columns,
-                .rows = try final_rows.toOwnedSlice(allocator),
-                .flags = std.ArrayList([]const u8).empty,
-                .owned_graph_entities = final_entities,
-            };
+            return collected.finish();
         } else {
             // This is the final query, apply ORDER BY if present
             var result = ExecutionResult{
@@ -695,50 +652,15 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
                 // SONNY-6483 (1): see above.
                 .owned_graph_entities = current_result.owned_graph_entities,
             };
+            grouped_columns_owned = false;
+            // SONNY-6498: freed on an error below; the entities are its.
+            current_result.owned_graph_entities = null;
+            errdefer result.deinit(allocator);
 
-            if (agg_query.ret.items.len > 0) {
-                // Apply RETURN clause transformation
-                var final_columns = try allocator.alloc([]const u8, agg_query.ret.items.len);
-                for (agg_query.ret.items, 0..) |item, i| {
-                    final_columns[i] = if (item.alias) |alias|
-                        try allocator.dupe(u8, alias)
-                    else if (item.expr == .Ident)
-                        try allocator.dupe(u8, item.expr.Ident.orig)
-                    else
-                        try allocator.dupe(u8, "?column?");
-                }
+            // Apply RETURN clause transformation
+            if (agg_query.ret.items.len > 0) try projectGroupedReturn(allocator, &result, agg_query.ret.items, exec_ctx);
 
-                var final_rows = try allocator.alloc([]Value, result.rows.len);
-                for (result.rows, 0..) |row, ri| {
-                    var new_row = try allocator.alloc(Value, agg_query.ret.items.len);
-                    const row_env = Env{
-                        .allocator = allocator,
-                        .names = result.columns,
-                        .values = row,
-                        .param_names = &.{},
-                        .param_values = &.{},
-                        .exec_context = exec_ctx,
-                    };
-                    for (agg_query.ret.items, 0..) |item, i| {
-                        new_row[i] = eval.evalExpr(allocator, item.expr, row_env) catch Value{ .Null = {} };
-                    }
-                    final_rows[ri] = new_row;
-                    allocator.free(row);
-                }
-
-                for (result.columns) |col| {
-                    allocator.free(col);
-                }
-                allocator.free(result.columns);
-                allocator.free(result.rows);
-
-                result.columns = final_columns;
-                result.rows = final_rows;
-            }
-
-            if (agg_query.order_by) |order_by| {
-                try return_and_sorting.sortRows(allocator, &result, order_by);
-            }
+            if (agg_query.order_by) |order_by| try return_and_sorting.sortRows(allocator, &result, order_by);
 
             // Clean up current_result (its entities went with the rows)
 
@@ -842,7 +764,6 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
 
 // Helper function to execute a query with pre-existing bindings from a previous query
 fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext, binding_names: []const []const u8, binding_values: []const Value) anyerror!ExecutionResult {
-    const exec_ctx: *ExecutionContext = @constCast(&context);
     // Check if this query also has a next_query (multi-level chaining)
     if (q.next_query) |next_query_ptr| {
         // Execute current query with bindings, then chain to next
@@ -888,136 +809,14 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
         }
 
         if (has_aggregation and next_query_ptr.next_query == null) {
-            // Process all rows together for aggregation
-            // First apply WITH clause and WHERE filter to each row, collect filtered bindings
-            // GAP-0220 FIX: Use try for proper error propagation
-            var filtered_envs = try std.ArrayList(Env).initCapacity(allocator, current_result.rows.len);
-            defer {
-                for (filtered_envs.items) |env| {
-                    allocator.free(env.names);
-                    allocator.free(env.values);
-                }
-                filtered_envs.deinit(allocator);
-            }
-
-            for (current_result.rows) |current_row| {
-                // Build environment from current row
-                var env_names = try allocator.alloc([]const u8, current_result.columns.len);
-                var env_values = try allocator.alloc(Value, current_result.columns.len);
-
-                for (current_result.columns, current_row, 0..) |col_name, col_value, i| {
-                    env_names[i] = col_name;
-                    env_values[i] = col_value;
-                }
-
-                var current_names = env_names;
-                var current_values = env_values;
-
-                // Apply WITH clause if present
-                if (next_query_ptr.with_clause) |with_clause| {
-                    const with_env = Env{
-                        .allocator = allocator,
-                        .names = env_names,
-                        .values = env_values,
-                        .param_names = &.{},
-                        .param_values = &.{},
-                        .exec_context = exec_ctx,
-                    };
-
-                    var new_names = try allocator.alloc([]const u8, with_clause.items.len);
-                    var new_values = try allocator.alloc(Value, with_clause.items.len);
-
-                    for (with_clause.items, 0..) |item, i| {
-                        new_values[i] = eval.evalExpr(allocator, item.expr, with_env) catch Value{ .Null = {} };
-                        new_names[i] = if (item.alias) |alias|
-                            alias
-                        else if (item.expr == .Ident)
-                            item.expr.Ident.orig
-                        else
-                            "?column?";
-                    }
-
-                    allocator.free(env_names);
-                    allocator.free(env_values);
-                    current_names = new_names;
-                    current_values = new_values;
-                }
-
-                // Apply WHERE filter
-                var passes_filter = true;
-                if (next_query_ptr.where_clause) |where_expr| {
-                    const filter_env = Env{
-                        .allocator = allocator,
-                        .names = current_names,
-                        .values = current_values,
-                        .param_names = &.{},
-                        .param_values = &.{},
-                        .exec_context = exec_ctx,
-                    };
-                    const where_result = eval.evalExpr(allocator, where_expr, filter_env) catch Value{ .Bool = false };
-                    passes_filter = switch (where_result) {
-                        .Bool => |b| b,
-                        else => false,
-                    };
-                }
-
-                if (passes_filter) {
-                    try filtered_envs.append(allocator, Env{
-                        .allocator = allocator,
-                        .names = current_names,
-                        .values = current_values,
-                        .param_names = &.{},
-                        .param_values = &.{},
-                        .exec_context = exec_ctx,
-                    });
-                } else {
-                    allocator.free(current_names);
-                    allocator.free(current_values);
-                }
-            }
-
-            // Now compute aggregation over all filtered rows
-            const items = next_query_ptr.ret.items;
-            var columns = try allocator.alloc([]const u8, items.len);
-            for (items, 0..) |item, i| {
-                columns[i] = if (item.alias) |alias|
-                    try allocator.dupe(u8, alias)
-                else
-                    try allocator.dupe(u8, "?column?");
-            }
-
-            var row = try allocator.alloc(Value, items.len);
-            for (items, 0..) |item, i| {
-                if (return_and_sorting.isAggregationExpr(item.expr)) {
-                    row[i] = try computeChainAggregation(allocator, item.expr, filtered_envs.items);
-                } else {
-                    // Non-aggregation: use first row's value
-                    if (filtered_envs.items.len > 0) {
-                        row[i] = eval.evalExpr(allocator, item.expr, filtered_envs.items[0]) catch Value{ .Null = {} };
-                    } else {
-                        row[i] = Value{ .Null = {} };
-                    }
-                }
-            }
-
-            var rows = try allocator.alloc([]Value, 1);
-            rows[0] = row;
-
-            // Clean up current_result (its entities went with the rows)
-
+            // SONNY-6498: the last part's aggregate over every row, as the
+            // outermost chain computes it (`chainFinalAggregate`: the part's
+            // pattern joined to each row, the shared projection). This
+            // branch applied only the part's WITH and WHERE, evaluated
+            // without the statement's parameters, read an item or a WHERE
+            // that failed as NULL or false, and folded integers only.
             current_live = false;
-
-            var spent_first = current_result;
-
-            spent_first.owned_graph_entities = null;
-
-            releasePart(allocator, &spent_first);
-
-            return ExecutionResult{
-                .columns = columns,
-                .rows = rows,
-                .flags = std.ArrayList([]const u8).empty,
-            };
+            return chainFinalAggregate(allocator, current_result, next_query_ptr, context);
         }
 
         // Chain to next query using the result as bindings (original per-row logic)
@@ -1062,6 +861,56 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
     return executeQueryWithBindingsImpl(allocator, q, context, binding_names, binding_values);
 }
 
+/// SONNY-6498: the column names `items` project (an alias, a variable's
+/// name, else `?column?`), copied; freed with `freeColumnNames`.
+fn itemColumnNames(allocator: std.mem.Allocator, items: []const ast.ReturnItem) ![][]const u8 {
+    const names = try allocator.alloc([]const u8, items.len);
+    defer allocator.free(names);
+    for (items, names) |item, *n| n.* = item.alias orelse if (item.expr == .Ident) item.expr.Ident.orig else "?column?";
+    return dupeColumns(allocator, names);
+}
+
+/// SONNY-6498: `result`'s rows projected by the RETURN `items`; `result`
+/// is unchanged when anything fails (each piece is owned before the next is
+/// made). What the items compute is the statement scratch's.
+fn projectGroupedReturn(allocator: std.mem.Allocator, result: *ExecutionResult, items: []const ast.ReturnItem, exec_ctx: *ExecutionContext) !void {
+    const columns = try itemColumnNames(allocator, items);
+    errdefer freeColumnNames(allocator, columns);
+    const rows = try allocator.alloc([]Value, result.rows.len);
+    var filled: usize = 0;
+    errdefer {
+        for (rows[0..filled]) |r| allocator.free(r);
+        allocator.free(rows);
+    }
+    const lent = value_utilities.lentAllocator(allocator);
+    for (result.rows) |row| {
+        const new_row = try allocator.alloc(Value, items.len);
+        errdefer allocator.free(new_row);
+        const row_env = Env{
+            .allocator = allocator,
+            .names = result.columns,
+            .values = row,
+            .param_names = &.{},
+            .param_values = &.{},
+            .exec_context = exec_ctx,
+        };
+        // SONNY-6498: an item that fails fails the statement.
+        for (items, new_row) |item, *cell| cell.* = try eval.evalExpr(lent, item.expr, row_env);
+        rows[filled] = new_row;
+        filled += 1;
+    }
+    // Nothing below fails: the old rows and names go, the new ones stay.
+    var old = result.*;
+    old.owns_value_memory = false;
+    old.owned_graph_entities = null;
+    old.flags = .empty;
+    old.variable_bindings = null;
+    old.deinit(allocator);
+    result.columns = columns;
+    result.column_buffer = null;
+    result.rows = rows;
+}
+
 // E25 Fix: Format a Value to string for group key building
 // CANARY: REQ=REQ-GQL-WITH-GROUP-KEY-001; FEATURE="WithGroupKey"; ASPECT=FormatValue; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 fn formatValue(val: Value, buf: []u8) []const u8 {
@@ -1090,22 +939,6 @@ fn formatValue(val: Value, buf: []u8) []const u8 {
 /// SONNY-3189: one integer link of an aggregate expression (`count(n) + 1`):
 /// Int op Int, NULL otherwise, and NULL for a division by zero. An overflow
 /// is `IntegerOverflow`, as the evaluator's; it was a panic.
-fn aggregateArithStep(op: ast.BinOp, left: Value, right: Value) error{IntegerOverflow}!Value {
-    if (left != .Int or right != .Int) return Value{ .Null = {} };
-    return switch (op) {
-        .Sub => Value{ .Int = std.math.sub(i64, left.Int, right.Int) catch return error.IntegerOverflow },
-        .Add => Value{ .Int = std.math.add(i64, left.Int, right.Int) catch return error.IntegerOverflow },
-        .Mul => Value{ .Int = std.math.mul(i64, left.Int, right.Int) catch return error.IntegerOverflow },
-        .Div => if (right.Int == 0)
-            Value{ .Null = {} }
-        else if (left.Int == std.math.minInt(i64) and right.Int == -1)
-            error.IntegerOverflow
-        else
-            Value{ .Int = @divTrunc(left.Int, right.Int) },
-        else => Value{ .Null = {} },
-    };
-}
-
 fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: []const Env) !Value {
     // SONNY-2696: this chained-part executor computes an aggregate call and
     // arithmetic over aggregates; an aggregate inside anything else (a
@@ -1114,77 +947,11 @@ fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: [
     // projection computes those shapes everywhere else.
     if (expr != .Binary and !return_and_sorting.isAggregateCall(expr) and return_and_sorting.isAggregationExpr(expr)) return error.UnsupportedAggregateExpression;
     switch (expr) {
-        .Call => |call| {
-            if (call.callee.* == .Ident) {
-                const func_name = call.callee.Ident.orig;
-
-                if (std.ascii.eqlIgnoreCase(func_name, "count")) {
-                    if (call.args.len == 1 and call.args[0].* == .Ident and std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
-                        return Value{ .Int = @intCast(envs.len) };
-                    }
-                    // COUNT(expr) - count non-null values
-                    var count: i64 = 0;
-                    for (envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val != .Null) count += 1;
-                    }
-                    return Value{ .Int = count };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-                    // docs/@BUGS_731.md bug 6b: converged onto the shared
-                    // DistinctSet; this site handled only Int and Str, so
-                    // booleans and node/edge identities counted as 0.
-                    var distinct = distinct_set.DistinctSet.init(allocator);
-                    defer distinct.deinit();
-
-                    for (envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        _ = try distinct.add(val);
-                    }
-                    return Value{ .Int = @intCast(distinct.count()) };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
-                    var sum: i64 = 0;
-                    for (envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        // SONNY-2769: checked; `+=` aborted the server past i64.
-                        if (val == .Int) sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
-                    }
-                    return Value{ .Int = sum };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
-                    var sum: i64 = 0;
-                    var count: i64 = 0;
-                    for (envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) {
-                            sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
-                            count += 1;
-                        }
-                    }
-                    if (count == 0) return Value{ .Null = {} };
-                    // avg() is a mean — never integer-divide (gql_conformance T16).
-                    return Value{ .Double = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(count)) };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-                    var min: ?i64 = null;
-                    for (envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) {
-                            if (min == null or val.Int < min.?) min = val.Int;
-                        }
-                    }
-                    if (min) |m| return Value{ .Int = m };
-                    return Value{ .Null = {} };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-                    var max: ?i64 = null;
-                    for (envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) {
-                            if (max == null or val.Int > max.?) max = val.Int;
-                        }
-                    }
-                    if (max) |m| return Value{ .Int = m };
-                    return Value{ .Null = {} };
-                }
-            }
-        },
+        // SONNY-6498: the shared aggregate (every value type, DISTINCT, an
+        // argument that fails fails the statement, ISO/IEC 39075 19.1 GR 1);
+        // this fold skipped a row whose argument failed and kept integers
+        // only (sum, avg, min, max over doubles or strings were NULL).
+        .Call => return match_operations.envGroupAggregation(allocator, expr, envs),
         .Binary => |bin| {
             // Handle expressions like d.budget - sum(e.salary)
             // SONNY-3189: a left-deep chain with a loop, not one recursion
@@ -1207,15 +974,17 @@ fn computeChainAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: [
             while (i > 0) {
                 i -= 1;
                 const right = try computeChainAggregation(allocator, links.items[i].right.*, envs);
-                const next = try aggregateArithStep(links.items[i].op, acc, right);
-                acc = next;
+                // SONNY-6498: the evaluator's arithmetic (division by zero
+                // is 22012, a double is a double); it was integers only,
+                // anything else NULL.
+                acc = try eval.evalBinary(allocator, links.items[i].op, acc, right);
             }
             return acc;
         },
         else => {
             // For non-aggregation expressions, use first row
             if (envs.len > 0) {
-                return eval.evalExpr(allocator, expr, envs[0]) catch Value{ .Null = {} };
+                return eval.evalExpr(allocator, expr, envs[0]);
             }
         },
     }

@@ -164,7 +164,6 @@ const containsVariableReference = pattern_helpers.containsVariableReference;
 const matchesLabels = pattern_helpers.matchesLabels;
 const matchesEdgeProperties = pattern_helpers.matchesEdgeProperties;
 const getWithExpressionName = pattern_helpers.getWithExpressionName;
-const computeAggregationForGroup = pattern_helpers.computeAggregationForGroup;
 const whereExprReferencesVar = pattern_helpers.whereExprReferencesVar;
 const propertyValueToValue = pattern_helpers.propertyValueToValue;
 
@@ -4733,6 +4732,15 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     // Generate Cartesian product of all matching nodes
     // GAP-0220 FIX: Use try for proper error propagation
     var rows = std.ArrayList([]Value).empty;
+    // SONNY-6498: the names and the rows, until the result holds them (a
+    // property value, a key or an item that fails fails the statement).
+    var parts_owned = true;
+    errdefer if (parts_owned) {
+        for (rows.items) |r| allocator.free(r);
+        rows.deinit(allocator);
+        for (columns) |c| allocator.free(c);
+        allocator.free(columns);
+    };
 
     // Recursive function to generate combinations
     const Context = struct {
@@ -4779,7 +4787,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                             for (props) |prop| {
                                 // Only check properties that have variable references
                                 if (containsVariableReference(prop.value.*)) {
-                                    const expected_val = eval.evalExpr(value_utilities.lentAllocator(self.allocator), prop.value.*, env) catch Value{ .Null = {} };
+                                    // SONNY-6498: a value that fails fails the statement (it was NULL).
+                                    const expected_val = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), prop.value.*, env);
                                     if (node.properties.get(prop.key)) |node_prop_val| {
                                         const node_val = propertyValueToValue(node_prop_val);
                                         if (!valuesEqual(node_val, expected_val)) {
@@ -4951,7 +4960,13 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 if (node_pattern.props) |props| {
                                     for (props) |prop| {
                                         if (containsVariableReference(prop.value.*)) {
-                                            const expected_val = eval.evalExpr(value_utilities.lentAllocator(self.allocator), prop.value.*, env) catch Value{ .Null = {} };
+                                            // SONNY-6498: as above; the combination's names and values are this
+                                            // frame's until the group takes them.
+                                            const expected_val = eval.evalExpr(value_utilities.lentAllocator(self.allocator), prop.value.*, env) catch |err| {
+                                                self.allocator.free(env_names);
+                                                self.allocator.free(env_values);
+                                                return err;
+                                            };
                                             if (node.properties.get(prop.key)) |node_prop_val| {
                                                 const node_val = propertyValueToValue(node_prop_val);
                                                 if (!valuesEqual(node_val, expected_val)) {
@@ -4976,7 +4991,12 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                         errdefer key_aw.deinit();
                         const key_writer = &key_aw.writer;
                         for (self.group_by.keys) |key_expr| {
-                            const key_val = eval.evalExpr(self.allocator, key_expr, env) catch Value{ .Null = {} };
+                            // SONNY-6498: a key that fails fails the statement (it grouped as NULL).
+                            const key_val = eval.evalExpr(value_utilities.lentAllocator(self.allocator), key_expr, env) catch |err| {
+                                self.allocator.free(env_names);
+                                self.allocator.free(env_values);
+                                return err;
+                            };
                             // SONNY-2675: the key's typed canonical encoding.
                             try distinct_set.writeGroupKeyPart(key_writer, self.allocator, key_val);
                         }
@@ -5036,14 +5056,16 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 if (group_envs.len == 0) continue;
 
                 var row = try allocator.alloc(Value, items.len);
+                errdefer allocator.free(row);
 
                 for (items, 0..) |item, i| {
                     if (isAggregationExpr(item.expr)) {
                         // Compute aggregation over all rows in group
-                        row[i] = try computeMultiNodeAggregation(allocator, item.expr, group_envs);
+                        row[i] = try computeMultiNodeAggregation(value_utilities.lentAllocator(allocator), item.expr, group_envs);
                     } else {
                         // Use first row's value for non-aggregated expressions
-                        row[i] = eval.evalExpr(allocator, item.expr, group_envs[0]) catch Value{ .Null = {} };
+                        // (SONNY-6498: an item that fails fails the statement).
+                        row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, group_envs[0]);
                     }
                 }
 
@@ -5059,14 +5081,11 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
         .rows = try rows.toOwnedSlice(allocator),
         .flags = std.ArrayList([]const u8).empty,
     };
+    parts_owned = false;
+    errdefer result.deinit(allocator);
 
-    if (q.order_by) |order| {
-        sortRows(allocator, &result, order) catch |err| {
-            // SONNY-2811: a key that fails to evaluate fails the sort.
-            result.deinit(allocator);
-            return err;
-        };
-    }
+    // SONNY-2811: a key that fails to evaluate fails the sort.
+    if (q.order_by) |order| try sortRows(allocator, &result, order);
 
     if (q.ret.distinct) {
         try applyDistinct(allocator, &result);
@@ -5079,97 +5098,15 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 /// SONNY-3189: one integer link of an aggregate expression (`count(n) + 1`):
 /// Int op Int, NULL otherwise, and NULL for a division by zero. An overflow
 /// is `IntegerOverflow`, as the evaluator's; it was a panic.
-fn aggregateArithStep(op: ast.BinOp, left: Value, right: Value) error{IntegerOverflow}!Value {
-    if (left != .Int or right != .Int) return Value{ .Null = {} };
-    return switch (op) {
-        .Sub => Value{ .Int = std.math.sub(i64, left.Int, right.Int) catch return error.IntegerOverflow },
-        .Add => Value{ .Int = std.math.add(i64, left.Int, right.Int) catch return error.IntegerOverflow },
-        .Mul => Value{ .Int = std.math.mul(i64, left.Int, right.Int) catch return error.IntegerOverflow },
-        .Div => if (right.Int == 0)
-            Value{ .Null = {} }
-        else if (left.Int == std.math.minInt(i64) and right.Int == -1)
-            error.IntegerOverflow
-        else
-            Value{ .Int = @divTrunc(left.Int, right.Int) },
-        else => Value{ .Null = {} },
-    };
-}
-
+// SONNY-6498: the shared aggregate (`execution.computeGroupAggregation`:
+// every value type, DISTINCT, an argument that fails fails the statement,
+// ISO/IEC 39075 19.1 GR 1); this fold skipped a row whose argument failed
+// and kept integers only (sum, avg, min, max over doubles or strings was
+// NULL). Arithmetic over aggregates is the evaluator's (`eval.evalBinary`):
+// division by zero is 22012, not NULL.
 fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, group_envs: []const Env) !Value {
     switch (expr) {
-        .Call => |call| {
-            if (call.callee.* == .Ident) {
-                const func_name = call.callee.Ident.orig;
-
-                if (std.ascii.eqlIgnoreCase(func_name, "count")) {
-                    if (call.args.len == 1 and call.args[0].* == .Ident and std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
-                        return Value{ .Int = @intCast(group_envs.len) };
-                    }
-                    // COUNT(expr) - count non-null values
-                    var count: i64 = 0;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val != .Null) count += 1;
-                    }
-                    return Value{ .Int = count };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-                    // CANARY: REQ=REQ-GQL-MULTINODE-COUNTDISTINCT-001; FEATURE="MultiNodeCountDistinct"; ASPECT=Aggregation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=engine; UPDATED=2026-07-31
-                    // COUNT(DISTINCT expr) - count distinct non-null values.
-                    // docs/@BUGS_731.md bug 6b: converged onto the shared
-                    // DistinctSet; this site had no boolean, edge or decimal
-                    // handling of its own.
-                    var distinct = distinct_set.DistinctSet.init(allocator);
-                    defer distinct.deinit();
-
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        _ = try distinct.add(val);
-                    }
-                    return Value{ .Int = @intCast(distinct.count()) };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
-                    var sum: i64 = 0;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        // SONNY-2769: checked; `+=` aborted the server past i64.
-                        if (val == .Int) sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
-                    }
-                    return Value{ .Int = sum };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
-                    var sum: i64 = 0;
-                    var count: i64 = 0;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) {
-                            sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
-                            count += 1;
-                        }
-                    }
-                    if (count == 0) return Value{ .Null = {} };
-                    // avg() is a mean — never integer-divide (gql_conformance T16).
-                    return Value{ .Double = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(count)) };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-                    var min: ?i64 = null;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) {
-                            if (min == null or val.Int < min.?) min = val.Int;
-                        }
-                    }
-                    if (min) |m| return Value{ .Int = m };
-                    return Value{ .Null = {} };
-                } else if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-                    var max: ?i64 = null;
-                    for (group_envs) |env| {
-                        const val = eval.evalExpr(allocator, call.args[0].*, env) catch continue;
-                        if (val == .Int) {
-                            if (max == null or val.Int > max.?) max = val.Int;
-                        }
-                    }
-                    if (max) |m| return Value{ .Int = m };
-                    return Value{ .Null = {} };
-                }
-            }
-        },
+        .Call => return envGroupAggregation(allocator, expr, group_envs),
         .Binary => |bin| {
             // Handle expressions like d.budget - sum(e.salary)
             // SONNY-3189: a left-deep chain with a loop, not one recursion
@@ -5192,19 +5129,32 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
             while (i > 0) {
                 i -= 1;
                 const right = try computeMultiNodeAggregation(allocator, links.items[i].right.*, group_envs);
-                const next = try aggregateArithStep(links.items[i].op, acc, right);
-                acc = next;
+                acc = try eval.evalBinary(allocator, links.items[i].op, acc, right);
             }
             return acc;
         },
         else => {
             // For non-aggregation expressions, use first row
             if (group_envs.len > 0) {
-                return eval.evalExpr(allocator, expr, group_envs[0]) catch Value{ .Null = {} };
+                return eval.evalExpr(allocator, expr, group_envs[0]);
             }
         },
     }
     return Value{ .Null = {} };
+}
+
+/// SONNY-6498: aggregate `expr` (a call) over `envs`, rows that all bind the
+/// same names, by the shared aggregate.
+pub fn envGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, envs: []const Env) !Value {
+    var sfa = std.heap.stackFallback(64 * @sizeOf([]const Value), allocator);
+    const la = sfa.get();
+    const rows = try la.alloc([]const Value, envs.len);
+    defer la.free(rows);
+    for (envs, rows) |env, *r| r.* = env.values;
+    const names: []const []const u8 = if (envs.len > 0) envs[0].names else &.{};
+    const pn: []const []const u8 = if (envs.len > 0) envs[0].param_names else &.{};
+    const pv: []const Value = if (envs.len > 0) envs[0].param_values else &.{};
+    return execution.computeGroupAggregation(allocator, expr, rows, names, pn, pv);
 }
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=NodeCache; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-29
@@ -7176,10 +7126,9 @@ fn executeVariableLengthPathTraversal(
                         .param_values = param_values,
                         .allocator = allocator,
                     };
-                    const prop_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch {
-                        passes_props = false;
-                        break;
-                    };
+                    // SONNY-6498: a value that fails fails the statement (the
+                    // node did not match).
+                    const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                     if (!valuesEqual(node_val, prop_val)) {
                         passes_props = false;
                         break;
@@ -7675,10 +7624,8 @@ fn executeSingleHopEdgeTraversal(
                             .param_values = param_values,
                             .allocator = allocator,
                         };
-                        const prop_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch {
-                            passes_props = false;
-                            break;
-                        };
+                        // SONNY-6498: a value that fails fails the statement.
+                        const prop_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                         if (!valuesEqual(node_val, prop_val)) {
                             passes_props = false;
                             break;
@@ -9522,7 +9469,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate WHERE clause
                         if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch Value{ .Bool = false };
+                            // SONNY-6498: a WHERE that fails fails the statement (it was false).
+                            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch |err| {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                return err;
+                            };
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
@@ -9613,7 +9565,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate WHERE clause
                         if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch Value{ .Bool = false };
+                            // SONNY-6498: a WHERE that fails fails the statement (it was false).
+                            const where_result = eval.evalExpr(value_utilities.lentAllocator(allocator), where_expr, env) catch |err| {
+                                allocator.free(env_names);
+                                allocator.free(env_values);
+                                return err;
+                            };
                             const passes_where = switch (where_result) {
                                 .Bool => |b| b,
                                 .Null => false,
@@ -9648,7 +9605,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 .param_values = param_values,
                                 .allocator = allocator,
                             };
-                            row[i] = eval.evalExpr(allocator, item.expr, base_env) catch Value{ .Null = {} };
+                            // SONNY-6498: an item that fails fails the statement.
+                            row[i] = try eval.evalExpr(value_utilities.lentAllocator(allocator), item.expr, base_env);
                         } else {
                             row[i] = Value{ .Null = {} };
                         }

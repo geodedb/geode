@@ -4415,29 +4415,19 @@ fn resolveGroupByKeyThroughAlias(
 
 // CANARY: REQ=REQ-GROUPED-UNKNOWN-FUNCTION; FEATURE="GroupedProjection"; ASPECT=UnknownFunctionEscapes; STATUS=TESTED; TEST=tests/test_unsupported_aggregates.zig; OWNER=execution; UPDATED=2026-08-25
 /// Evaluate one expression of a grouped query (projection item, GROUP BY key or
-/// HAVING predicate) with the path's long-standing tolerance for per-group
-/// evaluation failures — EXCEPT for an unknown function, which escapes.
+/// HAVING predicate).
 ///
 /// GROUPED-UNKNOWN-FUNCTION: every one of these sites used a blanket
-/// `catch -> NULL` so a cell that cannot be computed for THIS group still gets
-/// a value. That also swallowed `error.UnknownFunction`, so
-///
-///     MATCH (n:G) RETURN n.k, banana(n.v) GROUP BY n.k
-///
-/// came back as a full, successful result set with a NULL column, while the
-/// identical ungrouped `RETURN banana(n.v)` raised undefined_function
-/// (SQLSTATE 42883, src/server/proto_util.zig). An unknown function is a static
-/// defect in the query text, not a per-group evaluation failure: it cannot
-/// depend on which rows landed in the group, and it must be reported the same
-/// way in both shapes. SONNY-2675: the other query-level errors
-/// (`isQueryLevelEvalError`: a missing positional parameter, a refusal, OOM)
-/// escape the same way. Every other error keeps collapsing to the caller's
-/// fallback, so the six aggregates and ordinary scalar functions are untouched.
-fn evalGroupedExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env, fallback: Value) !Value {
-    return eval.evalExpr(allocator, expr, env) catch |err| {
-        if (isQueryLevelEvalError(err)) return err;
-        return fallback;
-    };
+/// `catch -> NULL`, so `MATCH (n:G) RETURN n.k, banana(n.v) GROUP BY n.k`
+/// came back as a full result with a NULL column while the ungrouped
+/// `RETURN banana(n.v)` raised 42883; the query-level errors then escaped
+/// (SONNY-2675). SONNY-6498 item 3: so does every other error. ISO/IEC 39075
+/// 19.1 GR 1: an exception raised evaluating a value expression is the
+/// statement's; a division by zero, an overflow or a type error in a key, an
+/// item or a HAVING grouped its rows as NULL, or dropped the group, and the
+/// statement answered success.
+fn evalGroupedExpr(allocator: std.mem.Allocator, expr: ast.Expr, env: Env) !Value {
+    return eval.evalExpr(allocator, expr, env);
 }
 
 /// A projection over groups: its items, and its GROUP BY keys resolved
@@ -4564,7 +4554,7 @@ const HavingFilter = struct {
                 // scratch arena's (`value_utilities.lentAllocator`).
                 .aggregate => |agg| try computeGroupAggregation(value_utilities.lentAllocator(allocator), agg, group_rows, input_columns, self.param_names, self.param_values),
                 // Every row of the group shares its key.
-                .key => |key| try evalGroupedExpr(value_utilities.lentAllocator(allocator), key, key_env, Value{ .Null = {} }),
+                .key => |key| try evalGroupedExpr(value_utilities.lentAllocator(allocator), key, key_env),
             };
         }
         return self.evaluate(allocator, self.names, self.values);
@@ -4591,7 +4581,7 @@ const HavingFilter = struct {
             .param_values = self.param_values,
             .allocator = allocator,
         };
-        const result = try evalGroupedExpr(value_utilities.lentAllocator(allocator), self.expr, env, Value{ .Bool = false });
+        const result = try evalGroupedExpr(value_utilities.lentAllocator(allocator), self.expr, env);
         return switch (result) {
             .Bool => |b| b,
             else => false,
@@ -4701,7 +4691,7 @@ const GroupedItems = struct {
             else if (group_rows.len == 0)
                 Value{ .Null = {} }
             else
-                try evalGroupedExpr(scratch, item.expr, first_env, Value{ .Null = {} });
+                try evalGroupedExpr(scratch, item.expr, first_env);
         }
         // After every other item: a lifted item reads their columns.
         for (self.lifted, row) |plan, *cell| {
@@ -4733,7 +4723,7 @@ const GroupedItems = struct {
             .column => |i| row[i],
             .aggregate => |agg| try computeGroupAggregation(scratch, agg, group_rows, self.input_columns, self.param_names, self.param_values),
             // Every row of the group shares its key.
-            .key => |key| try evalGroupedExpr(scratch, key, key_env, Value{ .Null = {} }),
+            .key => |key| try evalGroupedExpr(scratch, key, key_env),
         };
         const env = Env{
             .names = plan.slot_names,
@@ -4994,7 +4984,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             // s`) to its underlying expression before evaluating against the
             // input row (`keys`, above).
             for (keys) |key_expr| {
-                const key_val = try evalGroupedExpr(key_arena.allocator(), key_expr, env, Value{ .Null = {} });
+                const key_val = try evalGroupedExpr(key_arena.allocator(), key_expr, env);
                 // SONNY-2675: the key's typed canonical encoding.
                 try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
             }
@@ -5072,7 +5062,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     const key_writer = &key_aw.writer;
                     for (with_items) |item| {
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
-                            const key_val = try evalGroupedExpr(key_arena.allocator(), item.expr, env, Value{ .Null = {} });
+                            const key_val = try evalGroupedExpr(key_arena.allocator(), item.expr, env);
                             // SONNY-2675: the key's typed canonical encoding.
                             try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
                         }

@@ -2235,6 +2235,35 @@
 
 ### Fixed
 
+- **An expression that fails fails the statement on every executor path
+  (SONNY-6498 item 3, BREAKING).** ISO/IEC 39075:2024 19.1 GR 1: an
+  exception raised while a value expression is evaluated is the
+  statement's. About forty legacy-executor sites caught it instead: a comma
+  pattern's property map that read another pattern's variable matched
+  nothing (`MATCH (n), (t {k: n.k / 0})` answered no rows), its grouping
+  key and non-aggregated items were NULL, its aggregates skipped the row
+  whose argument failed; the chained-part aggregates (`... WITH n WITH n.g
+  AS g, sum(n.k / 0) AS s`) summed 0 and grouped a failing key as NULL; a
+  hop or variable-length WHERE was false; a shortestPath or EXISTS / COUNT
+  pattern whose inline property or WHERE failed matched (or counted)
+  anyway; the shared projection (`execution.zig` `evalGroupedExpr`) kept a
+  "tolerance" that read a failing GROUP BY key or grouped item as NULL and a
+  failing HAVING as false. Each now raises the error (22012, 22003, a type
+  error ...). The planned read declines a comma pattern whose property map
+  reads another pattern's variable (it filtered each chain with no variable
+  bound, so `MATCH (n), (t {k: n.k})` matched nothing even when valid). The
+  chained-part and comma-pattern aggregates use the shared
+  `computeGroupAggregation` (every value type and DISTINCT; they folded
+  integers only, so sum / avg / min / max over doubles or strings were
+  NULL) and the evaluator's arithmetic over aggregates (division by zero
+  was NULL); the nested chain's final aggregate is `chainFinalAggregate`
+  (it ignored the part's pattern and the statement's parameters). Kept,
+  because the predicate is evaluated again where it counts: the WHERE
+  pushdown pre-filter, the seek-key and selectivity precomputations, the
+  write pre-checks. What a newly raising site computes is lent from the
+  statement's scratch arena, and its rows and names are freed on the error.
+  `pattern_helpers.computeAggregationForGroup` was dead code and is
+  removed. Regression: `zig build test-sonny6498-swallowed-errors`.
 - **Temporaries a predicate, a CTE or a standalone WITH computes are freed
   (SONNY-6496 item 2).** A list literal, a map, a string or any other value
   a WHERE, a FILTER or a pattern's property map computed was allocated on

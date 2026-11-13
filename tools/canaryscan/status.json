@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T20:17:53.931435642Z",
+  "generated_at": "2026-11-13T21:32:14.19503253Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -2307,20 +2307,6 @@
     {
       "id": "REQ-AGG-COLLECT-004",
       "features": [
-        {
-          "feature": "AggregationFunctions",
-          "aspect": "COLLECT_GROUP",
-          "status": "TESTED",
-          "files": [
-            "src/execution/pattern_helpers.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_query_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-28"
-        },
         {
           "feature": "ShellTestVerification",
           "aspect": "AggregationCollect",
@@ -11363,20 +11349,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "CountDistinctGroupAggregation",
-          "aspect": "GroupAggregation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/pattern_helpers.zig"
-          ],
-          "tests": [
-            "tests/test_bug731_aggregates_vectors.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-07-31"
         }
       ]
     },
@@ -40771,20 +40743,6 @@
           "benches": [],
           "owner": "engine",
           "updated": "2026-01-15"
-        },
-        {
-          "feature": "MultiNodeCountDistinct",
-          "aspect": "Aggregation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/match_operations.zig"
-          ],
-          "tests": [
-            "tests/test_bug731_aggregates_vectors.zig"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2026-07-31"
         }
       ]
     },
@@ -41341,25 +41299,6 @@
           "benches": [],
           "owner": "execution",
           "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-GQL-OPTIONAL-MATCH-WITH-002",
-      "features": [
-        {
-          "feature": "OptionalMatchWithAggregation",
-          "aspect": "AggregationComputation",
-          "status": "TESTED",
-          "files": [
-            "src/execution/pattern_helpers.zig"
-          ],
-          "tests": [
-            "geodetestlab/specs/gql_pattern_matching_comprehensive.yml"
-          ],
-          "benches": [],
-          "owner": "engine",
-          "updated": "2025-12-23"
         }
       ]
     },
@@ -95362,7 +95301,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4981
+      "TESTED": 4977
     },
     "by_aspect": {
       "2PC": 3,
@@ -95461,9 +95400,9 @@
       "AggregateWithoutMatch": 1,
       "AggregatesInsideItems": 1,
       "AggregatesThroughSharedProjection": 1,
-      "Aggregation": 7,
+      "Aggregation": 6,
       "AggregationCollect": 1,
-      "AggregationComputation": 3,
+      "AggregationComputation": 2,
       "AggregationEdgeTraversal": 1,
       "AggregationFiltering": 1,
       "AggregationHelpers": 1,
@@ -95743,7 +95682,6 @@
       "CLIParsing": 1,
       "CLI_ARGS": 1,
       "COLLECT": 1,
-      "COLLECT_GROUP": 1,
       "COLLECT_NULL_SKIP": 1,
       "CREATE": 1,
       "CRUD_OPERATIONS": 1,
@@ -96972,7 +96910,7 @@
       "GreyCardinalCompositeMetricBreakdownVarianceEnvelope": 1,
       "GreyCardinalVarianceEnvelope": 1,
       "GroupAccumulatorOwnership": 1,
-      "GroupAggregation": 2,
+      "GroupAggregation": 1,
       "GroupBy": 5,
       "GroupByPatterns": 1,
       "GroupByVerification": 1,

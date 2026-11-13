@@ -1,4 +1,5 @@
 const std = @import("std");
+const value_utilities = @import("value_utilities.zig");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
@@ -274,9 +275,11 @@ fn nodeMatchesProperties(
     props: []const ast.Property,
     env: Env,
     allocator: std.mem.Allocator,
-) bool {
+) !bool {
     for (props) |prop| {
-        const expected = eval.evalExpr(allocator, prop.value.*, env) catch return false;
+        // SONNY-6498: a value that fails fails the statement (the element
+        // did not match).
+        const expected = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, env);
         if (node_properties.get(prop.key)) |node_prop_val| {
             const node_val = propertyToValue(node_prop_val);
             if (!valuesEqual(node_val, expected)) return false;
@@ -394,7 +397,7 @@ fn findFirstMatchingNode(
         // cannot see (another graph or tenant, or denied by RLS) must read as
         // ABSENT (`null`), never as an error that would confirm it exists.
         if (!scope.nodeVisible(node_ptr)) continue;
-        if (nodeMatchesPattern(node, node_pattern, env, allocator)) {
+        if (try nodeMatchesPattern(node, node_pattern, env, allocator)) {
             return node.id;
         }
     }
@@ -402,7 +405,7 @@ fn findFirstMatchingNode(
 }
 
 /// Whether node `id` is one the session may see that `pattern` matches.
-fn endMatches(store: *graph_store.GraphStore, id: u64, pattern: ast.NodePattern, env: Env, allocator: std.mem.Allocator, scope: *ExprScope) bool {
+fn endMatches(store: *graph_store.GraphStore, id: u64, pattern: ast.NodePattern, env: Env, allocator: std.mem.Allocator, scope: *ExprScope) !bool {
     const node = (store.nodes.getOrHydratePtr(id) catch null) orelse return false;
     if (!scope.nodeVisible(node)) return false;
     return nodeMatchesPattern(node.*, pattern, env, allocator);
@@ -414,13 +417,13 @@ fn nodeMatchesPattern(
     pattern: ast.NodePattern,
     env: Env,
     allocator: std.mem.Allocator,
-) bool {
+) !bool {
     // Check labels
     if (!nodeHasAllLabels(node.labels, pattern.labels)) return false;
 
     // Check properties if present
     if (pattern.props) |props| {
-        if (!nodeMatchesProperties(node.properties, props, env, allocator)) return false;
+        if (!try nodeMatchesProperties(node.properties, props, env, allocator)) return false;
     }
     return true;
 }
@@ -531,7 +534,7 @@ const PatternWalk = struct {
             if (value != .Node) return true;
             const n = value.Node;
             if (!self.scope.nodeVisible(n)) return true;
-            if (!nodeMatchesPattern(n.*, start, env, self.allocator)) return true;
+            if (!try nodeMatchesPattern(n.*, start, env, self.allocator)) return true;
             return self.walkHop(ci, 0, n, env, sink);
         }
         // SONNY-1562: every node of the graph, not just the resident ones.
@@ -541,7 +544,7 @@ const PatternWalk = struct {
             // SONNY-1326 / SONNY-2679 / SONNY-2687: only rows the session
             // scope admits (graph, tenant and RLS).
             if (!self.scope.nodeVisible(n)) continue;
-            if (!nodeMatchesPattern(n.*, start, env, self.allocator)) continue;
+            if (!try nodeMatchesPattern(n.*, start, env, self.allocator)) continue;
             const next_env = try self.bindIfNamed(env, start.name, .{ .Node = n });
             defer freeExtendedEnv(self.allocator, next_env, env);
             if (!try self.walkHop(ci, 0, n, next_env, sink)) return false;
@@ -553,7 +556,7 @@ const PatternWalk = struct {
         const chain = self.chains[ci];
         if (hi == chain.hops.len) return self.walkChain(ci + 1, env, sink);
         const hop = chain.hops[hi];
-        if (hi > 0 and !nodeMatchesPattern(current.*, hop.left, env, self.allocator)) return true;
+        if (hi > 0 and !try nodeMatchesPattern(current.*, hop.left, env, self.allocator)) return true;
         const last = ci + 1 == self.chains.len and hi + 1 == chain.hops.len;
         const target_name: ?[]const u8 = if (hop.right.name) |n| n else if (last and self.bind_pattern_target) pattern_target_name else null;
         if (hop.rel.min_len != null or hop.rel.max_len != null) {
@@ -587,7 +590,7 @@ const PatternWalk = struct {
                 // visible, and its type's RLS policies allow it (SONNY-2679).
                 if (!self.scope.edgeWalkable(self.store, edge)) continue;
                 if (hop.rel.props) |props| {
-                    if (!nodeMatchesProperties(edge.properties, props, env, self.allocator)) continue;
+                    if (!try nodeMatchesProperties(edge.properties, props, env, self.allocator)) continue;
                 }
                 if (bound_rel) |v| if (v.Edge.id != edge.id) continue;
                 const far_id = if (side == 0) edge.to_id else edge.from_id;
@@ -596,7 +599,7 @@ const PatternWalk = struct {
                 // SONNY-1326 / SONNY-2679 / SONNY-2687: only a node the scope
                 // may see.
                 if (!self.scope.nodeVisible(far)) continue;
-                if (!nodeMatchesPattern(far.*, hop.right, env, self.allocator)) continue;
+                if (!try nodeMatchesPattern(far.*, hop.right, env, self.allocator)) continue;
 
                 const right_env = if (bound_right == null) try self.bindIfNamed(env, target_name, .{ .Node = far }) else env;
                 defer freeExtendedEnv(self.allocator, right_env, env);
@@ -646,7 +649,7 @@ const PatternWalk = struct {
             const end = try self.node(end_id) orelse continue;
             // Every earlier step passed the scope in the PathIterator.
             if (!self.scope.nodeVisible(end)) continue;
-            if (!nodeMatchesPattern(end.*, hop.right, env, self.allocator)) continue;
+            if (!try nodeMatchesPattern(end.*, hop.right, env, self.allocator)) continue;
 
             var edges_ok = true;
             for (path.edges.items) |eid| {
@@ -656,7 +659,7 @@ const PatternWalk = struct {
                 };
                 if (!typeAllowed(hop.rel.types, e.label)) edges_ok = false;
                 if (edges_ok) if (hop.rel.props) |props| {
-                    if (!nodeMatchesProperties(e.properties, props, env, self.allocator)) edges_ok = false;
+                    if (!try nodeMatchesProperties(e.properties, props, env, self.allocator)) edges_ok = false;
                 };
                 if (!edges_ok) break;
             }
@@ -701,7 +704,9 @@ const CountSink = struct {
         // walk frees only after this returns. An evaluation error reads as
         // false, as it always has here.
         if (self.where_filter) |wf| {
-            const result = eval.evalExpr(self.allocator, wf.*, env) catch return true;
+            // SONNY-6498: a WHERE that fails fails the statement (it read
+            // as false).
+            const result = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), wf.*, env);
             if (result != .Bool or !result.Bool) return true;
         }
         self.count += 1;
@@ -849,7 +854,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         }
 
         // Check if we reached the end node
-        const reached = current.depth >= min_depth and if (end_id) |eid| current.node_id == eid else endMatches(store, current.node_id, end_pattern.?, env, allocator, &scope);
+        const reached = current.depth >= min_depth and if (end_id) |eid| current.node_id == eid else try endMatches(store, current.node_id, end_pattern.?, env, allocator, &scope);
         if (reached) {
             shortest_depth = current.depth;
             try found_paths.append(allocator, current);

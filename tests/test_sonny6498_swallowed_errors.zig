@@ -81,11 +81,21 @@ fn subst(comptime s: []const u8, comptime from: []const u8, comptime to: []const
     }
 }
 
+/// What the same shapes answer when nothing fails (the planned read
+/// filtered a comma pattern's chain with no variable bound, so a property
+/// value that read another chain's variable matched nothing).
+const valid = [_]Case{
+    .{ .q = "MATCH (n:S6498), (t:S6498T {k: n.k}) RETURN t.k AS k", .want = &.{"1"} },
+    .{ .q = "MATCH (n:S6498) WITH n WITH n.g AS g, sum(n.k * 1.5) AS s RETURN g, s > 1.0 AS big", .want = &.{ "'a', true", "'b', true" } },
+    .{ .q = "MATCH (n:S6498) WITH n WITH n.g AS g, max(n.g) AS m RETURN g, m", .want = &.{ "'a', 'a'", "'b', 'b'" } },
+};
+
 const cases = blk: {
     @setEvalBranchQuota(100_000);
-    var out: [1 + shapes.len * failures.len]Case = undefined;
+    var out: [1 + valid.len + shapes.len * failures.len]Case = undefined;
     out[0] = .{ .q = "CREATE (:S6498 {k: 1, g: 'a'})-[:R6498 {w: 1}]->(:S6498T {k: 1}), (:S6498 {k: 2, g: 'b'})" };
-    var i: usize = 1;
+    for (valid, out[1 .. 1 + valid.len]) |v, *o| o.* = v;
+    var i: usize = 1 + valid.len;
     for (shapes) |shape| for (failures) |f| {
         out[i] = .{ .q = subst(subst(shape, "@R", f.row), "@L", f.lit), .err = f.err };
         i += 1;
