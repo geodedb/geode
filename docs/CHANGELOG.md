@@ -801,6 +801,17 @@
   auth state, timeseries, tenants and audit log in the resolved directory
   from now on (none of it had been kept). Regression:
   `zig build test-sonny6339-resolved-data-dir`.
+- **FLE key manager and blind index live for the process; the node-scan
+  WHERE no longer leaks on FLE deployments (SONNY-2670).** The two
+  process-wide FLE singletons were created on the first caller's allocator
+  (a request arena, a per-node scratch arena, the read-budget metered
+  allocator); once that was torn down the next encrypt or decrypt used freed
+  memory. They are now made on the process allocator, as the FLE catalog
+  is, and the engine-direct node scan runs a WHERE on its per-node scratch
+  arena on deployments with encrypted fields too (it used the server's main
+  allocator there and leaked every extended value a WHERE read, the
+  SONNY-2656 leak). Regression: `zig build
+  test-sonny2670-fle-singletons-process-allocator`.
 - **FLE: a string shaped like an envelope is encrypted; the record's tenant
   is the encryption identity (SONNY-6347).** (2) The graph-store write
   primitives skipped encryption for any string with the shape of an FLE

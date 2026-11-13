@@ -55,7 +55,6 @@ const Env = struct {
         errdefer self.f.deinit();
         _ = setenv("GEODE_MASTER_KEY", master_key, 1);
         fle_integration.resetGlobalKeyStateForTesting();
-        _ = try fle_integration.getCurrentKeyVersion(.{ .tenant_id = "default", .schema_name = "P6362", .allocator = std.heap.smp_allocator }, "init");
         fle_catalog.resetGlobalCatalog(testing.allocator);
         fle_integration.setHasEncryptedFields(false);
         self.session = execution.SessionState.init(testing.allocator);

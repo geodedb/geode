@@ -113,9 +113,6 @@ const Env = struct {
         gps.setInsecureAllowAll(false);
         _ = setenv("GEODE_MASTER_KEY", master_key, 1);
         fle_integration.resetGlobalKeyStateForTesting();
-        // The process-global key manager, built on the process allocator
-        // (never a request arena: it outlives every query; SONNY-2670).
-        _ = try fle_integration.getCurrentKeyVersion(.{ .tenant_id = "default", .schema_name = "T6334", .allocator = std.heap.smp_allocator }, "init");
         fle_catalog.resetGlobalCatalog(testing.allocator);
         fle_integration.setHasEncryptedFields(false);
         // SONNY-6341: a session acts under an FLE role its user holds. The
@@ -408,10 +405,6 @@ test "SONNY-6334 (2): a searchable field refused by GPS is 42501 on member acces
     var roles = [_][]const u8{"pii"};
     try catalog.configureField("S6334", .{ .field_name = "ssn", .encryption = .{ .enabled = true }, .search = .{ .enabled = true }, .visibility = .{ .to_roles = &roles } });
     fle_integration.setHasEncryptedFields(true);
-    // The process-global blind index is made by its first user with that
-    // user's allocator: make it here on the process allocator, not on a
-    // request arena (SONNY-2670).
-    std.heap.smp_allocator.free(try fle_integration.encryptFieldIfNeeded(.{ .tenant_id = "default", .schema_name = "S6334", .allocator = std.heap.smp_allocator }, "S6334", "ssn", "warm", "0"));
     _ = try e.run(admin_pii, "CREATE (:S6334 {k: 1, ssn: 'x'})");
     try expectSqlstate(e.refusedWith(ro_pii, "MATCH (n:S6334 {k: 1}) RETURN n.ssn AS v"), "42501");
 }

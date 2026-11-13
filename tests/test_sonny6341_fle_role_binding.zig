@@ -120,8 +120,6 @@ const Env = struct {
         errdefer self.f.deinit();
         _ = setenv("GEODE_MASTER_KEY", master_key, 1);
         fle_integration.resetGlobalKeyStateForTesting();
-        // The process-global key manager on the process allocator (SONNY-2670).
-        _ = try fle_integration.getCurrentKeyVersion(.{ .tenant_id = "default", .schema_name = "T6341", .allocator = std.heap.smp_allocator }, "init");
         fle_catalog.resetGlobalCatalog(testing.allocator);
         fle_integration.setHasEncryptedFields(false);
         fle_role_grants.resetForTesting();

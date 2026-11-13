@@ -78,8 +78,6 @@ const Env = struct {
         errdefer self.f.deinit();
         _ = setenv("GEODE_MASTER_KEY", master_key, 1);
         fle_integration.resetGlobalKeyStateForTesting();
-        // Process-lifetime key manager (SONNY-2670 workaround).
-        _ = try fle_integration.getCurrentKeyVersion(.{ .tenant_id = "default", .schema_name = "T6347", .allocator = std.heap.smp_allocator }, "init");
         fle_catalog.resetGlobalCatalog(testing.allocator);
         fle_integration.setHasEncryptedFields(false);
         self.engine = try testing.allocator.create(rls.RLSEngine);

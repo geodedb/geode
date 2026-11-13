@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:58:42.740065415Z",
+  "generated_at": "2026-11-13T10:11:47.259808896Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -70284,6 +70284,20 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-11-13"
+        },
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "SingletonsOnProcessAllocator",
+          "status": "TESTED",
+          "files": [
+            "src/fle_integration.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2670_fle_singletons_process_allocator.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -93370,7 +93384,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4864
+      "TESTED": 4865
     },
     "by_aspect": {
       "2PC": 3,
@@ -96908,6 +96922,7 @@
       "SingleSourceOfTruth": 1,
       "SingleStreamLoop": 1,
       "SingleStreamStressMode": 1,
+      "SingletonsOnProcessAllocator": 1,
       "Sinks": 1,
       "SizeCap": 1,
       "SizeCheck": 1,

@@ -63,6 +63,7 @@ fn encryptCopy(allocator: std.mem.Allocator, out: std.mem.Allocator, type_name: 
     const ctx = fle_integration.EncryptionContext{ .tenant_id = "default", .schema_name = type_name, .allocator = allocator };
     const env = try fle_integration.encryptFieldIfNeeded(ctx, type_name, field, plain, record_id);
     if (env.ptr == plain.ptr) return error.NotEncrypted;
+    defer allocator.free(env);
     return out.dupe(u8, env);
 }
 

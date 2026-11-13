@@ -388,7 +388,16 @@ pub const EncryptionContext = struct {
     plaintext_gate: ?PlaintextGate = null,
 };
 
-/// Get or create global key manager
+// CANARY: REQ=REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR; FEATURE="FieldLevelEncryption"; ASPECT=SingletonsOnProcessAllocator; STATUS=TESTED; TEST=tests/test_sonny2670_fle_singletons_process_allocator.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-2670: the allocator the process-wide key manager and blind index
+/// live on, as the FLE catalog's does. They were made on the first caller's
+/// allocator, which could be a request arena, a per-node scratch arena or
+/// the read-budget metered allocator: once that was torn down the singleton
+/// held freed memory and the next encrypt or decrypt used it.
+const singleton_allocator = std.heap.smp_allocator;
+
+/// Get or create global key manager. `allocator` is used only for the
+/// duration of the call.
 fn getGlobalKeyManager(allocator: std.mem.Allocator) !*key_manager_mod.KeyManager {
     global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -404,13 +413,13 @@ fn getGlobalKeyManager(allocator: std.mem.Allocator) !*key_manager_mod.KeyManage
         defer allocator.free(dir);
         try master_key_check.verifyOrRecord(allocator, dir, .in_process);
     }
-    const km = try key_manager_mod.initFromEnv(allocator);
+    const km = try key_manager_mod.initFromEnv(singleton_allocator);
     global_key_manager_instance = km;
     return km;
 }
 
-/// Get or create global blind index
-fn getGlobalBlindIndex(allocator: std.mem.Allocator) !*blind_index_mod.BlindIndex {
+/// Get or create global blind index (SONNY-2670: on `singleton_allocator`).
+fn getGlobalBlindIndex() !*blind_index_mod.BlindIndex {
     global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -418,8 +427,8 @@ fn getGlobalBlindIndex(allocator: std.mem.Allocator) !*blind_index_mod.BlindInde
         return bi;
     }
 
-    const bi = try allocator.create(blind_index_mod.BlindIndex);
-    bi.* = blind_index_mod.BlindIndex.init(allocator);
+    const bi = try singleton_allocator.create(blind_index_mod.BlindIndex);
+    bi.* = blind_index_mod.BlindIndex.init(singleton_allocator);
     global_blind_index_instance = bi;
     return bi;
 }
@@ -427,9 +436,8 @@ fn getGlobalBlindIndex(allocator: std.mem.Allocator) !*blind_index_mod.BlindInde
 /// Tear down the process-global FLE key manager and blind index, freeing all
 /// memory they own and clearing the singletons so the next access re-initializes
 /// from the environment. Production never calls this (the singletons live for the
-/// process lifetime); it exists so leak-checked unit tests that actually exercise
-/// the encrypt path (which lazily instantiates these globals on the test
-/// allocator) can release that memory deterministically. Safe to call when no
+/// process lifetime); tests use it to start from no key state (the next use
+/// reads GEODE_MASTER_KEY again). Safe to call when no
 /// global has been created — it is a no-op in that case.
 pub fn resetGlobalKeyStateForTesting() void {
     global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -706,7 +714,7 @@ pub fn encryptFieldIfNeeded(
 
     // 7. If searchable, update blind index
     if (policy.searchable) {
-        const blind_index = try getGlobalBlindIndex(ctx.allocator);
+        const blind_index = try getGlobalBlindIndex();
         const bik = try key_manager.getBIK(key_ids);
 
         try blind_index.put(

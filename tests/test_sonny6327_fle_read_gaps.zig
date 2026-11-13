@@ -90,7 +90,6 @@ const SavedEnv = struct {
 fn useMasterKey(key: [:0]const u8) !void {
     fle_integration.resetGlobalKeyStateForTesting();
     _ = setenv("GEODE_MASTER_KEY", key.ptr, 1);
-    _ = try fle_integration.getCurrentKeyVersion(.{ .tenant_id = "default", .schema_name = "S6327", .allocator = std.heap.smp_allocator }, "init");
 }
 
 fn resetGlobalCatalog() void {
