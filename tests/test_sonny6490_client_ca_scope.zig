@@ -3,9 +3,9 @@
 // anchors for a SERVER certificate an outbound dial from the same process
 // receives.
 //
-// Before: `installClientCaTrust` (what `geode serve` runs for
-// GEODE_MTLS_REQUIRED) also installed the bundle as the process-wide x509
-// trust store. The listener no longer needs that (SONNY-6457 passes the
+// Before: `installClientCaTrust` (now `loadClientCaTrust`, what `geode
+// serve` runs for GEODE_MTLS_REQUIRED) also installed the bundle as the
+// process-wide x509 trust store. The listener no longer needs that (SONNY-6457 passes the
 // bundle to it as `inline_client_ca_der`), but every client TLS context
 // created afterwards in the process caches that store and, when it has no
 // CA of its own, validates the server against it. A dial without its own CA
@@ -15,7 +15,7 @@
 //
 // Real QUIC: an in-process `QuicTransport` on 127.0.0.149 presents the pinned
 // client certificate of the mTLS bundle as its server certificate. The
-// bundle is loaded with `installClientCaTrust`, as `geode serve` does. Then:
+// bundle is loaded with `loadClientCaTrust`, as `geode serve` does. Then:
 //   - the process-wide trust store stays unset;
 //   - a dial with no CA of its own fails the handshake;
 //   - the vendor's server-chain validation with no anchors of its own (the
@@ -210,7 +210,7 @@ test "SONNY-6490: loading the mTLS client CA bundle installs no process-wide tru
     defer fx.deinit();
     try std.testing.expect(quic_x509.getTrustStore() == null);
 
-    var trust = try quic.installClientCaTrust(a, fx.bundle);
+    var trust = try quic.loadClientCaTrust(a, fx.bundle);
     defer trust.deinit();
     // Both bundle certificates go to the listener (inline_client_ca_der).
     try std.testing.expectEqual(@as(usize, 2), trust.ders.len);
@@ -222,7 +222,7 @@ test "SONNY-6490: a dial with no CA of its own rejects a server presenting a cli
     const a = std.testing.allocator;
     var fx = try makeFixtures();
     defer fx.deinit();
-    var trust = try quic.installClientCaTrust(a, fx.bundle);
+    var trust = try quic.loadClientCaTrust(a, fx.bundle);
     defer trust.deinit();
     var srv: Server = undefined;
     try Server.start(a, &srv, &fx);
@@ -247,7 +247,7 @@ test "SONNY-6490: server-chain validation without its own anchors rejects a chai
     const a = std.testing.allocator;
     var fx = try makeFixtures();
     defer fx.deinit();
-    var trust = try quic.installClientCaTrust(a, fx.bundle);
+    var trust = try quic.loadClientCaTrust(a, fx.bundle);
     defer trust.deinit();
 
     // What a client TLS context with no trusted_ca_der runs on the server's
@@ -266,7 +266,7 @@ test "SONNY-6490: the cluster peer dial and the remote KMS client never fall bac
     _ = unsetenv("GEODE_CLUSTER_INSECURE");
     var fx = try makeFixtures();
     defer fx.deinit();
-    var trust = try quic.installClientCaTrust(a, fx.bundle);
+    var trust = try quic.loadClientCaTrust(a, fx.bundle);
     defer trust.deinit();
     var srv: Server = undefined;
     try Server.start(a, &srv, &fx);

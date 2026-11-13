@@ -288,7 +288,8 @@ REQ-AUTH-MTLS-QUIC-005,mTLS over QUIC,ServerInit,TESTED,src/server/main.zig,geod
 REQ-AUTH-MTLS-QUIC-006,mTLS over QUIC,ClientCaTrust,TESTED,src/server/main.zig,tests/test_sonny6453_mtls_client_ca.zig,,security,2026-11-13
 REQ-AUTH-MTLS-QUIC-006,mTLS over QUIC,ClientCaTrust,TESTED,tests/test_sonny6453_mtls_client_ca.zig,,,security,2026-11-13
 REQ-AUTH-MTLS-QUIC-007,mTLS over QUIC,ClientCertPresentation,TESTED,src/transport/quic.zig,tests/test_sonny6457_connectex_client_cert.zig,,security,2026-11-13
-REQ-AUTH-MTLS-QUIC-008,mTLS over QUIC,ClientCaScope,TESTED,tests/test_sonny6490_client_ca_scope.zig,tests/test_sonny6490_client_ca_scope.zig,,security,2026-11-13
+REQ-AUTH-MTLS-QUIC-008,mTLS over QUIC,ClientCaScope,TESTED,src/transport/quic.zig,tests/test_sonny6490_client_ca_scope.zig,,security,2026-11-13
+REQ-AUTH-MTLS-QUIC-008,mTLS over QUIC,ClientCaScope,TESTED,tests/test_sonny6490_client_ca_scope.zig,,,security,2026-11-13
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,tests/test_auth_persistence.zig,persistent_writer_all_callbacks,,security,2026-05-11
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,,self,,security,2026-05-11
 REQ-AUTH-POLICY-001,AuthPolicy,PasswordReset,IMPL,tests/test_gap_0193_batch2_security.zig,,,security,2026-11-12

@@ -4,6 +4,23 @@
 
 ### Security
 
+- **The mTLS client CAs are no longer trusted for server certificates
+  (SONNY-6490 item 1).** Loading `GEODE_MTLS_CLIENT_CA` for
+  `GEODE_MTLS_REQUIRED` also installed the bundle as the process-wide x509
+  trust store, although the listener has taken it directly since SONNY-6457
+  (`inline_client_ca_der`). Every client TLS context created later in the
+  server process validates a server certificate against that store when it
+  has no CA of its own, so a QUIC dial without one (`QuicClient.connect`,
+  `connectEx` with no CA) accepted a server presenting a client identity
+  from the bundle, or a chain ending in a client CA. The bundle now reaches
+  the listener only (`loadClientCaTrust`, formerly `installClientCaTrust`).
+  No outbound dial of a running server relied on it: the cluster peer dial
+  (raft, coordinator, 2PC) and the remote KMS client pin their own CA, and
+  the HTTP clients (KMS, S3 backup, webhook sink) use std's TLS with their
+  own CA bundle. Also: with `GEODE_QUIC_PASSIVE_TEARDOWN=1` (tests) the
+  transport is never torn down, and the client CA bundle it points at is now
+  left allocated with it instead of being freed under it (item 2).
+  Regression: `zig build test-sonny6490-client-ca-scope`.
 - **The TLS exporter comes from the tls library again (SONNY-6448).** The
   remote-KMS attestation binds each reply to its channel with the RFC 8446
   §7.5 exporter (`EXPORTER-geode-kms-attest-v3`, SONNY-6442). geode computed

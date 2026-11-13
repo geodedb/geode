@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:44:39.51959043Z",
+  "generated_at": "2026-11-13T15:51:05.778583265Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -4869,6 +4869,7 @@
           "aspect": "ClientCaScope",
           "status": "TESTED",
           "files": [
+            "src/transport/quic.zig",
             "tests/test_sonny6490_client_ca_scope.zig"
           ],
           "tests": [
