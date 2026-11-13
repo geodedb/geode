@@ -2218,6 +2218,24 @@
 
 ### Fixed
 
+- **The cluster listener binds an IPv6 `GEODE_CLUSTER_LISTEN_ADDRESS`; a
+  port-only `--listen-grpc` no longer listens wider than QUIC (SONNY-6494
+  item 5).** The QUIC transport bound `"{address}:{port}"`, so an IPv6
+  address written bare (`GEODE_CLUSTER_LISTEN_ADDRESS=::1`, which the
+  cluster listener passes through as written) became `::1:4242` and the
+  listener could not start. The bind address is now bracketed for an IPv6
+  host however it was written (`QuicTransport.formatBindAddress`). A failed
+  bind also left the transport holding the listen configuration it had just
+  freed, so `deinit` freed it again (a crash on, for example, an address the
+  host does not have); it now returns the bind error cleanly. A port-only
+  `--listen-grpc` beside an IPv6 or host-name `--listen` bound `0.0.0.0`
+  (every IPv4 interface while QUIC listened on one address); it is now
+  refused at startup with exit status 2 and a message naming both flags.
+  **Behaviour change:** `geode serve --listen [::1]:3141 --listen-grpc 50051`
+  no longer starts; give `--listen-grpc` an IPv4 address. Regression:
+  `zig build test-sonny6494-listen-addresses` (also covers the acceptor
+  watchdog of `--listen <port>` and `--listen <host>`, already correct
+  after SONNY-6480).
 - **MCP `validate` and LSP diagnostics show the WHERE, FILTER and ORDER BY
   recommendations again (SONNY-6494 item 1).** The recommendation engine
   (`src/gql/recommendations.zig`) recognised a property reference only as

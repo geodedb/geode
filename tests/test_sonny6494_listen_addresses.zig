@@ -69,6 +69,24 @@ fn listenIpv6(address: []const u8, cert: []const u8, key: []const u8) !void {
     try testing.expectEqualSlices(u8, &([_]u8{0} ** 15 ++ [_]u8{1}), &sin6.addr);
 }
 
+test "SONNY-6494: the QUIC bind address brackets an IPv6 host however it was written" {
+    const a = testing.allocator;
+    const Case = struct { address: []const u8, port: u16, want: []const u8 };
+    for ([_]Case{
+        .{ .address = "::1", .port = 4242, .want = "[::1]:4242" },
+        .{ .address = "[::1]", .port = 4242, .want = "[::1]:4242" },
+        .{ .address = "::", .port = 1, .want = "[::]:1" },
+        .{ .address = "fe80::1%lo", .port = 3141, .want = "[fe80::1%lo]:3141" },
+        .{ .address = "0.0.0.0", .port = 3141, .want = "0.0.0.0:3141" },
+        .{ .address = "127.0.0.2", .port = 0, .want = "127.0.0.2:0" },
+        .{ .address = "localhost", .port = 3141, .want = "127.0.0.1:3141" },
+    }) |c| {
+        const got = try quic.QuicTransport.formatBindAddress(a, c.address, c.port);
+        defer a.free(got);
+        try testing.expectEqualStrings(c.want, got);
+    }
+}
+
 const CertFixture = struct {
     tmp: std.testing.TmpDir,
     dir: []u8,

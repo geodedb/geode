@@ -535,7 +535,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6494-listen-addresses", .reason = "intentionally red TDD reproduction (SONNY-6494 item 5); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
 };
 
@@ -8164,7 +8163,7 @@ pub fn build(b: *std.Build) void {
         tests.root_module.link_libc = true;
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6494-listen-addresses", "Run SONNY-6494 item 5 regression (QuicTransport listens on ::1 written bare, as GEODE_CLUSTER_LISTEN_ADDRESS may be, and bracketed; a port-only --listen-grpc is refused (exit 2) when --listen is IPv6 or a host name instead of binding 0.0.0.0; the acceptor watchdog of geode serve --listen <port> and --listen <host> watches the bound listener)").dependOn(&run_tests.step);
     }
 

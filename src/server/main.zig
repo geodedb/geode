@@ -1419,7 +1419,7 @@ pub fn main() !void {
     const config_opt = cli_args.parseArgs(gpa) catch |err| switch (err) {
         error.UnknownServeOption, error.MissingArgument => std.process.exit(2),
         // SONNY-1336: a --listen-grpc address the listener cannot bind as given.
-        error.InvalidGrpcListenPort, error.GrpcListenAddressNotIpv4 => std.process.exit(2),
+        error.InvalidGrpcListenPort, error.GrpcListenAddressNotIpv4, error.GrpcPortOnlyListenNotIpv4 => std.process.exit(2),
         else => return err,
     };
     if (config_opt == null) return; // Help was shown, exit

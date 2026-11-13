@@ -150,7 +150,7 @@ The server reads none of `GEODE_WAL_COMPACT_INTERVAL`,
 | `GEODE_NODE_ID` | - | This node's number: its 1-based position in `GEODE_PEERS` (derived from `$HOSTNAME` when that matches an entry) |
 | `GEODE_CLUSTER_NAME` | - | Cluster name |
 | `GEODE_CLUSTER_PORT` | - | Intra-cluster (Raft) port |
-| `GEODE_CLUSTER_LISTEN_ADDRESS` | `0.0.0.0` | Intra-cluster bind address |
+| `GEODE_CLUSTER_LISTEN_ADDRESS` | `0.0.0.0` | Intra-cluster bind address (an IPv6 address may be written bare, `::1`, or bracketed, `[::1]`) |
 
 See `src/server/cluster_bootstrap.zig`. The server reads none of
 `GEODE_MAX_SHARDS`, `GEODE_QUERY_TIMEOUT_MS`, `GEODE_MAX_PARALLEL_QUERIES`,
