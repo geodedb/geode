@@ -12168,6 +12168,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6483_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6483_step = b.step("test-sonny6483-query-residuals", "Run SONNY-6483 regression (an aggregating WITH followed by another WITH, aggregates over no MATCH under RLS, an any-direction pattern matching a self-loop once, a failing property map failing the statement: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6483_step.dependOn(&run_sonny6483_tests.step);
+    const sonny2669_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2669_planned_ext_property_leak.zig"), .target = target, .optimize = optimize });
+    sonny2669_test_mod.addImport("geode", root_mod);
+    sonny2669_test_mod.addImport("logging", logging_mod);
+    sonny2669_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny2669_tests = b.addTest(.{ .root_module = sonny2669_test_mod });
+    const run_sonny2669_tests = b.addRunArtifact(sonny2669_tests);
+    shardDep(test_step, &run_sonny2669_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2669_step = b.step("test-sonny2669-planned-ext-property-leak", "Run SONNY-2669 regression (extended property reads, WHERE, inline maps, ORDER BY and a HAVING's hidden collect free their evaluated copies: planned read and legacy executor, leak-checked)");
+    sonny2669_step.dependOn(&run_sonny2669_tests.step);
 
     // SONNY-2739: a float or decimal narrowed to an integer (a group or
     // DISTINCT key at 2^63, the power operator, casts, rounding functions,

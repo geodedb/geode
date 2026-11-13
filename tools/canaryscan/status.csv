@@ -4517,6 +4517,7 @@ REQ-SONNY-2656-EXTENDED-VALUE-LEAKS,EngineDirectExtendedValueOwnership,Regressio
 REQ-SONNY-2667-RETURN-WHERE,PlannedReadReturnWhere,PostProjectionFilter,TESTED,src/execution.zig,tests/test_sonny2667_return_where.zig,,engine,2026-09-25
 REQ-SONNY-2667-RETURN-WHERE,PlannedReadReturnWhere,Regression,TESTED,tests/test_sonny2667_return_where.zig,tests/test_sonny2667_return_where.zig,,engine,2026-09-25
 REQ-SONNY-2668-HAVING-GROUP-KEY,GroupedHaving,Regression,TESTED,tests/test_sonny2668_having_group_key.zig,tests/test_sonny2668_having_group_key.zig,,engine,2026-09-25
+REQ-SONNY-2669-PLANNED-EXT-PROPERTY-LEAK,PlannedReadStorageReads,Regression,TESTED,tests/test_sonny2669_planned_ext_property_leak.zig,tests/test_sonny2669_planned_ext_property_leak.zig,,engine,2026-11-13
 REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR,FieldLevelEncryption,Regression,TESTED,tests/test_sonny2670_fle_singletons_process_allocator.zig,tests/test_sonny2670_fle_singletons_process_allocator.zig,,security,2026-11-13
 REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR,FieldLevelEncryption,SingletonsOnProcessAllocator,TESTED,src/fle_integration.zig,tests/test_sonny2670_fle_singletons_process_allocator.zig,,security,2026-11-13
 REQ-SONNY-2672-READ-SEMANTICS-BATCH,ReadSemanticsBatch,Regression,TESTED,tests/test_sonny2672_read_semantics_batch.zig,tests/test_sonny2672_read_semantics_batch.zig,,engine,2026-11-12

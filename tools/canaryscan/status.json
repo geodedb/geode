@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:18:20.849064753Z",
+  "generated_at": "2026-11-13T14:29:01.402031117Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -70420,6 +70420,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2669-PLANNED-EXT-PROPERTY-LEAK",
+      "features": [
+        {
+          "feature": "PlannedReadStorageReads",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2669_planned_ext_property_leak.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2669_planned_ext_property_leak.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2670-FLE-SINGLETONS-PROCESS-ALLOCATOR",
       "features": [
         {
@@ -94505,7 +94524,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4930
+      "TESTED": 4931
     },
     "by_aspect": {
       "2PC": 3,
@@ -97653,7 +97672,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 321,
+      "Regression": 322,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
