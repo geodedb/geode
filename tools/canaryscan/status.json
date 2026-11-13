@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:29:01.402031117Z",
+  "generated_at": "2026-11-13T14:29:22.992272416Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79917,6 +79917,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3378-MAP-PROJECTION-LEAK",
+      "features": [
+        {
+          "feature": "SharedProjection",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3378_map_projection_leak.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3378_map_projection_leak.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3379-GRPC-VECTOR-TEARDOWN",
       "features": [
         {
@@ -94524,7 +94543,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4931
+      "TESTED": 4932
     },
     "by_aspect": {
       "2PC": 3,
@@ -97672,7 +97691,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 322,
+      "Regression": 323,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,

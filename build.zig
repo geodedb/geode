@@ -12168,6 +12168,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6483_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6483_step = b.step("test-sonny6483-query-residuals", "Run SONNY-6483 regression (an aggregating WITH followed by another WITH, aggregates over no MATCH under RLS, an any-direction pattern matching a self-loop once, a failing property map failing the statement: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6483_step.dependOn(&run_sonny6483_tests.step);
+    const sonny3378_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3378_map_projection_leak.zig"), .target = target, .optimize = optimize });
+    sonny3378_test_mod.addImport("geode", root_mod);
+    sonny3378_test_mod.addImport("logging", logging_mod);
+    sonny3378_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3378_tests = b.addTest(.{ .root_module = sonny3378_test_mod });
+    const run_sonny3378_tests = b.addRunArtifact(sonny3378_tests);
+    shardDep(test_step, &run_sonny3378_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3378_step = b.step("test-sonny3378-map-projection-leak", "Run SONNY-3378 regression (a map built in a RETURN or WITH is freed with the result: four session kinds, leak-checked)");
+    sonny3378_step.dependOn(&run_sonny3378_tests.step);
     const sonny2669_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2669_planned_ext_property_leak.zig"), .target = target, .optimize = optimize });
     sonny2669_test_mod.addImport("geode", root_mod);
     sonny2669_test_mod.addImport("logging", logging_mod);
