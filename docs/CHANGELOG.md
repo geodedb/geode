@@ -2200,6 +2200,11 @@
   could trigger it; the lists are now allocated to their real length
   (`formatHoverParams`, `formatHoverColumns`). Regression:
   `zig build test-sonny6487-mcp-hover-bounds`.
+- **Server: removed the unused MVCC manager fields from the connection
+  state (SONNY-6487 item 6).** `ServerState.mvcc_manager` and
+  `current_mvcc_txn` (`src/server/server_state.zig`) were never set or read;
+  the server never ran the `src/server/txn/mvcc.zig` conflict detector they
+  named. Regression: `zig build test-sonny6487-server-state-mvcc-fields`.
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness

@@ -238,7 +238,6 @@ pub const UnionMetrics = struct {
 // Additional imports needed for ServerState (use relative imports since this file is part of geode module)
 const execution = @import("../execution.zig");
 const node_scan_stream = @import("node_scan_stream.zig");
-const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
 // Note: query_ast_cache type reference is opaque to avoid circular dependency with lib.zig
 // The actual type is query_ast_cache.SharedAstCache but we use *anyopaque here
@@ -318,9 +317,6 @@ pub const ServerState = struct {
     inserted_values: std.ArrayList(ServerStateInsertedValue) = undefined,
     global_commit_ts: u64 = 0, // monotonically increasing commit timestamp
     session_snapshot_ts: u64 = 0, // snapshot timestamp captured at BEGIN
-    // MVCC manager for conflict detection
-    mvcc_manager: ?*mvcc.MVCCManager = null,
-    current_mvcc_txn: ?*mvcc.Transaction = null,
     // Aggregation memory metrics (non-PROFILE path instrumentation)
     agg_build_bytes_last: usize = 0,
     agg_emit_bytes_last: usize = 0,
