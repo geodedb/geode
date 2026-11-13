@@ -111,6 +111,8 @@ fn checkToBoolean(s: *Session, f: *Failures) !void {
     try expectValue(s, f, "RETURN CAST(' TRUE ' AS BOOLEAN) AS x", &.{}, "true");
     try expectValue(s, f, "RETURN CAST('false' AS BOOL) AS x", &.{}, "false");
     try expectFail(s, f, "RETURN CAST('yes' AS BOOLEAN) AS x", &.{}, error.InvalidCast);
+    // GR k i: a date string, trimmed.
+    try expectValue(s, f, "RETURN CAST(' 2024-01-02 ' AS DATE) = date('2024-01-02') AS x", &.{}, "true");
 }
 
 /// Every type with a character form reads back from it as the same value.

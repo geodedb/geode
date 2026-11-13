@@ -77,6 +77,10 @@ pub const EvalError = error{
     // character for the target) vs an unsupported target type.
     InvalidCast,
     UnsupportedCastTarget,
+    // SONNY-6499: a value no target number type represents without losing
+    // leading digits (ISO/IEC 39075 20.8 GR i i 2, 22003): CAST('1e400' AS
+    // DOUBLE), CAST of a NaN or an infinity to STRING.
+    NumericOutOfRange,
     // GAP-0926: an out-of-range positional parameter ($2 with one param).
     MissingParameter,
     IdnaError,

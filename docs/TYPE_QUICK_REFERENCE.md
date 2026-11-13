@@ -254,6 +254,24 @@ CAST(value AS TypeName)              -- Standard SQL cast
 value::TypeName                      -- PostgreSQL-style cast
 ```
 
+`CAST` follows ISO/IEC 39075:2024 20.8 (Table 4 and General Rules g to k).
+A value stored on a node converts as the value it is (a stored DOUBLE is a
+DOUBLE). No combination answers a silent NULL; `CAST(NULL AS T)` is NULL.
+
+| Source \ Target | INTEGER / INT / BIGINT | DECIMAL(p, s) / NUMERIC | FLOAT / DOUBLE / REAL | STRING / VARCHAR / TEXT | BOOLEAN | DATE / TIME / TIMESTAMP |
+|---|---|---|---|---|---|---|
+| INTEGER | itself | exact, 22003 past i128 | the nearest DOUBLE | digits | Geode extension: `<> 0` | 22018 |
+| DECIMAL | truncated, 22003 past i64 | rescaled (truncated) | the nearest DOUBLE | its digits at its scale | 22018 | 22018 |
+| DOUBLE | truncated, 22003 out of range | truncated at `s`, 22003 out of range | itself | shortest literal: `1.5E0`, `1.0E-1`, `0E0` | 22018 | 22018 |
+| STRING | trimmed numeric literal, exponent allowed, truncated; else 22018; 22003 out of range | the same | trimmed numeric literal (no `nan`, `inf`, `_`, hex), else 22018; 22003 out of range | itself | trimmed `true` / `false` (any case), Geode extension `1` / `0`; else 22018 | trimmed ISO 8601 literal, else 22018 |
+| BOOLEAN | Geode extension: 1 / 0 | 22018 | 22018 | `TRUE` / `FALSE` | itself | 22018 |
+| DATE, TIME, TIMESTAMP, zoned, DURATION | 22018 | 22018 | 22018 | its ISO 8601 literal | 22018 | itself; DATE from TIMESTAMP, TIME from TIMESTAMP, TIMESTAMP from DATE; other pairs 22018 (the standard also allows zoned to local: not implemented) |
+| LIST, RECORD, NODE, EDGE, PATH, extension types | 22018 | 22018 | 22018 | 22018 | 22018 | 22018 |
+
+An unknown target type name (`CAST(x AS DURATION)`, `AS ZONED DATETIME`)
+is 0A000. Every type with a character form reads back from it as the same
+value (`CAST(CAST(x AS STRING) AS T) = x`).
+
 ## Error Handling
 
 ### Common Error Codes

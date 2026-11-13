@@ -428,10 +428,12 @@ fn checkConversions(s: *Session, f: *Failures) !void {
     }
     try expectValue(s, f, "RETURN toFloat('4503599627370496') AS x", "4503599627370496.000000m");
     try expectValue(s, f, "RETURN toFloat('2.5') AS x", "2.500000m");
-    try expectFail(s, f, "RETURN CAST('nan' AS DOUBLE) AS x", &.{}, error.DecimalOverflow);
-    try expectFail(s, f, "RETURN CAST('1e400' AS FLOAT) AS x", &.{}, error.DecimalOverflow);
-    try expectFail(s, f, "RETURN CAST('-inf' AS REAL) AS x", &.{}, error.DecimalOverflow);
-    try expectValue(s, f, "RETURN CAST('2.5' AS DOUBLE) AS x", "2.500000m");
+    // SONNY-6499: an approximate CAST target gives a DOUBLE; 'nan' and
+    // 'inf' are no numeric literal (22018); 1e400 no double holds (22003).
+    try expectFail(s, f, "RETURN CAST('nan' AS DOUBLE) AS x", &.{}, error.InvalidCast);
+    try expectFail(s, f, "RETURN CAST('1e400' AS FLOAT) AS x", &.{}, error.NumericOutOfRange);
+    try expectFail(s, f, "RETURN CAST('-inf' AS REAL) AS x", &.{}, error.InvalidCast);
+    try expectValue(s, f, "RETURN CAST('2.5' AS DOUBLE) AS x", "2.5d");
     // degrees and radians.
     try expectFail(s, f, "RETURN degrees(1e33) AS x", &.{}, error.DecimalOverflow);
     try expectFail(s, f, "RETURN radians(1e35) AS x", &.{}, error.DecimalOverflow);

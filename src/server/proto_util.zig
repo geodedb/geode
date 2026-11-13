@@ -390,6 +390,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DecimalOverflow => .{ .code = "22003", .message = "Numeric value out of range for DECIMAL" },
         // GAP-0921: CAST semantic validation.
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
+        // SONNY-6499: ISO/IEC 39075 20.8 GR i i 2 (numeric value out of range).
+        error.NumericOutOfRange => .{ .code = "22003", .message = "Numeric value out of range: no value of the target type represents it" },
         // CANARY: REQ=REQ-SONNY-6489-DATA-EXCEPTION-CODES; FEATURE="ErrorMapping"; ASPECT=DataExceptionGqlstatus; STATUS=TESTED; TEST=tests/test_sonny6489_data_exception_codes.zig; OWNER=engine; UPDATED=2026-11-13
         // SONNY-6489: data exceptions with an ISO/IEC 39075:2024 code (23.1,
         // Table 8, class 22); each answered 58000 (system error).

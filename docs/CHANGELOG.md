@@ -2235,6 +2235,26 @@
 
 ### Fixed
 
+- **CAST follows ISO/IEC 39075 20.8 for every source and target (SONNY-6499
+  item 2).** `CAST(x AS STRING)` returned NULL for a DOUBLE, a REAL, a
+  stored DOUBLE (read back as an extended value), a list, a record and
+  every other kind it did not name; `CAST(x AS FLOAT / DOUBLE / REAL)`
+  returned a DECIMAL at scale 6 and refused a DOUBLE; a DOUBLE could not be
+  cast to INTEGER or DECIMAL; text was not trimmed and `nan`, `inf`,
+  `1_000` and `0x10` were read as numbers. Now (`src/eval/call_handlers.zig`
+  `evalTypeCastFunction`): a DOUBLE casts to its shortest approximate
+  numeric literal (`1.5E0`, `1.0E-1`, `0E0`; GR j ii), which reads back as
+  the same DOUBLE; a BOOLEAN to `TRUE` / `FALSE` (GR j v); an approximate
+  target gives a DOUBLE (GR i); a DOUBLE converts to INTEGER and DECIMAL
+  truncated, 22003 out of range (GR g i); text is trimmed and must be a
+  `<signed numeric literal>`, exponent included (`'1e3'` AS INTEGER is
+  1000), else 22018, and `'1e400'` AS DOUBLE is 22003 (new
+  `NumericOutOfRange`); a value with no character form is 22018, never
+  NULL. Matrix: docs/TYPE_QUICK_REFERENCE.md. **Behaviour change:**
+  `CAST(1 AS DOUBLE)` is `1.0` (DOUBLE), was `1.000000` (DECIMAL);
+  `CAST(true AS STRING)` is `'TRUE'`, was `'true'`; `CAST('nan' AS
+  DOUBLE)` is 22018, was 22003. Regression:
+  `zig build test-sonny6499-cast-matrix`.
 - **`ORDER BY ... LIMIT k` fast paths return the NULL rows, honour NULLS
   FIRST / LAST, and never serve a mis-ordered index (SONNY-6499 item 1).**
   Both fast paths for `MATCH (n:L) RETURN n.k ORDER BY n.k LIMIT k` (the
