@@ -3830,6 +3830,25 @@ pub fn main() !void {
             std.debug.print("[shutdown] TEST: stalling durability flush {d}ms (GEODE_TEST_SHUTDOWN_FLUSH_STALL_MS) to exercise the liveness watchdog\n", .{flush_stall_ms});
             compat_sleepMs(flush_stall_ms);
         }
+        // ── Cluster transport (SONNY-6451) ──
+        // Stop the raft loops, the outbox drains, the client poll / peer
+        // re-resolve thread and the inbound cluster handlers BEFORE the final
+        // flush: a node still leading or following would otherwise apply
+        // committed entries to the store during and after the flush, and its
+        // transport threads ran on until the `cluster_handle` defer. Runs under
+        // the first-stage flush watchdog (armed above), so a wedged join still
+        // ends in a bounded exit; every raft apply has finished before the
+        // full checkpoint below. `stop()` is idempotent; the defer still frees
+        // the coordinator.
+        if (cluster_handle) |*h| {
+            const cstop_t0 = compat_milliTimestamp();
+            h.coordinator.stop();
+            std.debug.print(
+                "[shutdown] cluster transport stopped ({d}ms)\n",
+                .{compat_milliTimestamp() - cstop_t0},
+            );
+        }
+
         graph_store.flushForCleanShutdown();
         g_shutdown_flush_done.store(true, .release); // disarm the first-stage watchdog
         persistence_flushed_eagerly = true;

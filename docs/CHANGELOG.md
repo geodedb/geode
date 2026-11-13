@@ -1844,6 +1844,19 @@
 
 ### Fixed
 
+- **Operator-visible: on SIGTERM a cluster node stops its raft transport
+  before the final flush and exits promptly (SONNY-6451 item 3).**
+  `geode serve` stopped the `ClusterCoordinator` only in a defer that ran
+  after "[shutdown] data flush complete", so the node kept leading or
+  following (applying committed entries to the store) during and after the
+  flush, its transport threads kept re-resolving peers, and the teardown
+  then waited on inbound cluster handlers parked on a live peer's stream:
+  "thread-pool deinit timed out after 2000ms with 2 active tasks", and the
+  teardown watchdog force-exited the process 30 s later (orchestrators
+  SIGKILLed it first). The coordinator is now stopped right before the full
+  checkpoint, under the first-stage flush watchdog, and the log shows
+  "[shutdown] cluster transport stopped (<n>ms)" before "[shutdown] data
+  flush complete". Regression: `zig build test-sonny6451-cluster-sigterm`.
 - **A cluster node keeps receiving raft traffic after its peers restart
   or move (SONNY-6451 item 1).** Raft frames ride one long-lived stream per
   peer, and the inbound handler on the receiver parked on that stream in a
