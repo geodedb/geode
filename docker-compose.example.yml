@@ -15,10 +15,10 @@ services:
       - ./migrations:/migrations:ro
       - ./certs:/certs
     environment:
-      - LOG_LEVEL=${LOG_LEVEL:-error}
-      - GEODE_LOG_JSON=true
       - GEODE_DATA_DIR=/data
-      - GEODE_CERT_PATH=/certs
+      # geode reads no LOG_LEVEL, GEODE_LOG_JSON or GEODE_CERT_PATH: the log
+      # level is `--log-level`, the certificate `--cert` / `--key` (or the
+      # config file's log_level, cert_path and key_path). SONNY-6435.
       # Extended type system is enabled by default
       # All indexes (Patricia, R-tree, HNSW) are automatically available
     ulimits:

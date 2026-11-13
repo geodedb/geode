@@ -795,41 +795,21 @@ pub const Config = struct {
 
 ### 7.1 Transparent Data Encryption (TDE)
 
-**Implementation**: `/src/security/tde.zig`
+**Implementation**: page and WAL encryption are the storage engine's
+(`graph_storage`, `PageEncryption`), keyed by `GEODE_TDE_KEY` in
+`graph_store.initGlobalAdapter`; `/src/security/tde.zig` holds the `tde.*`
+procedures (gated by `GEODE_ENABLE_TDE`), not the page encryption.
 **CANARY**: `REQ-GQL-TDE-*`
 
 **Encryption Modes**:
 
-- **Page-Level**: XTS-AES-256 for storage pages
+- **Page-Level**: AES-256-GCM per page, the nonce derived from the page id, file id and a per-page write count (SONNY-6435: was described as XTS-AES-256)
 - **WAL-Level**: AES-256-GCM for log records
 - **Backup-Level**: AES-256-GCM over the whole backup payload under `GEODE_TDE_KEY` when it is set (no envelope or derived backup key; an unusable key fails the backup). Without `GEODE_TDE_KEY` backups are unencrypted (SONNY-6355)
 
-**Key Hierarchy**:
-
-```
-Master Key (256-bit)
-  ├─> Data Key (for pages)
-  ├─> WAL Key (for log records)
-  └─> Backup Key (for cloud backups)
-```
-
-**Key Derivation**:
-
-```zig
-pub const KeyHierarchy = struct {
-    master_key: [32]u8,
-    data_key: [32]u8,
-    wal_key: [32]u8,
-    backup_key: [32]u8,
-
-    pub fn init(master: [32]u8) KeyHierarchy {
-        // HKDF key derivation
-        data_key = hkdf_expand(master, "data_key", 32);
-        wal_key = hkdf_expand(master, "wal_key", 32);
-        backup_key = hkdf_expand(master, "backup_key", 32);
-    }
-};
-```
+**Keys**: one 256-bit key, `GEODE_TDE_KEY`, used for pages, WAL and
+backups alike. There is no hierarchy of derived data, WAL and backup keys in
+the server (`src/security/tde_hierarchy.zig` is compiled only by a test).
 
 **Performance Overhead**:
 
@@ -839,38 +819,24 @@ pub const KeyHierarchy = struct {
 
 ### 7.2 Key Management System (KMS)
 
-**Implementation**: `/src/security/kms.zig`, `/src/security/kms_remote.zig`
+**Implementation**: `/src/security/kms.zig` (`KMSProvider`),
+`/src/security/kms_remote.zig` (a remote KMS prototype over QUIC). Neither
+supplies a key to the server: the page and WAL key is `GEODE_TDE_KEY`, the FLE
+master key `GEODE_MASTER_KEY`, both from the environment
+([KMS_PROVIDER_SYSTEM.md](KMS_PROVIDER_SYSTEM.md), "TDE-KMS Integration — Not
+Implemented").
 
-**Supported Providers**:
+**Providers** (`KMSProvider`, corrected SONNY-6435):
 
-1. **Local** (file-based): Development only
-2. **HashiCorp Vault**: Enterprise production
-3. **AWS KMS**: Cloud deployments
-4. **Azure Key Vault**: Azure cloud
-5. **GCP KMS**: Google Cloud
+1. **Local development** (`local_dev`): wraps and unwraps data keys; development only
+2. **External** (`external_kms`): an in-process deterministic stand-in, not production-safe
+3. HashiCorp Vault, AWS KMS and Azure Key Vault configurations are refused (`error.UnsupportedProvider`); there is no GCP provider
 
-**Remote KMS Features**:
-
-- Automatic key unwrapping
-- Envelope encryption (KEK + DEK)
-- Key rotation with re-encryption
-- Audit logging integration
-- Attestation support
-
-**Example (Vault)**:
-
-```zig
-const vault_config = VaultConfig{
-    .address = "https://vault.example.com",
-    .token = "s.secret_token",
-    .namespace = "production",
-    .mount_path = "transit",
-    .key_name = "geode-master-key",
-};
-
-const kms = try VaultKMSProvider.init(allocator, vault_config);
-const dek = try kms.unwrapKey(wrapped_dek);
-```
+**Remote KMS prototype** (`kms_remote.zig`): `Generate`, `Unwrap` and
+`PrivUnwrap` of AES-256-GCM envelopes, and an Ed25519 attestation the client
+verifies under a pinned key over its own nonce (SONNY-6435). No server path
+uses it. There is no key rotation with re-encryption and no audit
+integration.
 
 ### 7.3 Row-Level Security (RLS)
 
@@ -1179,67 +1145,46 @@ The server reads none of `GEODE_WAL_ENCRYPTION`, `GEODE_WAL_SEGMENT_SIZE`,
 (corrected 2026-11-12, SONNY-6430): the WAL is encrypted with
 `GEODE_TDE_KEY`, and its segmenting and flushing are the storage engine's own.
 
-**CDC**:
-
-- `CDC_ENABLED`: Enable change data capture
-- `CDC_SINKS`: Comma-separated sink list
-- `CDC_BATCH_SIZE`: Batch size (default: 1000)
-- `CDC_ADAPTIVE_FLUSH`: Enable adaptive batching
-
 **Network**:
 
-- `GEODE_LISTEN_ADDR`: Bind address (default: 0.0.0.0)
-- `GEODE_LISTEN_PORT`: Bind port (default: 7567)
-- `GEODE_TLS_CERT`: TLS certificate path
-- `GEODE_TLS_KEY`: TLS private key path
+- `GEODE_PORT`: QUIC port when `--listen` is not given (binds `0.0.0.0:<port>`; default 3141; an invalid value refuses startup)
+- `GEODE_METRICS_PORT` / `GEODE_METRICS_BIND`: Prometheus `/metrics` and `/health` listener (off when the port is unset)
+
+The listen address and the TLS certificate are options, not variables:
+`--listen <host:port>`, `--cert <path>`, `--key <path>`.
 
 **Security**:
 
-- `GEODE_MFA_ENABLED`: Enable MFA
-- `GEODE_AUDIT_LOG_PATH`: Audit log location
-- `GEODE_KMS_PROVIDER`: `local`, `vault`, `aws`, `azure`, `gcp`
+- `GEODE_AUDIT_LOG_PATH`: Audit log file (default `<data dir>/audit.jsonl`)
+- `GEODE_ENABLE_MFA`: MFA feature flag (`src/util/feature_flags.zig`)
+
+Corrected 2026-11-12 (SONNY-6435): the server reads none of `CDC_ENABLED`,
+`CDC_SINKS`, `CDC_BATCH_SIZE`, `CDC_ADAPTIVE_FLUSH`, `GEODE_LISTEN_ADDR`,
+`GEODE_LISTEN_PORT`, `GEODE_TLS_CERT`, `GEODE_TLS_KEY`, `GEODE_MFA_ENABLED`
+or `GEODE_KMS_PROVIDER`; it has no KMS provider setting (section 7.2).
 
 ### Configuration File
 
-Geode supports TOML configuration file:
+`geode serve` reads the file `--config <path>` names, else the first of
+`.geode/config.{yaml,yml,toml,json}` and `config.{yaml,yml,toml,json}` in
+the user configuration directory (`geode/` under `$XDG_CONFIG_HOME`, else
+`~/.config`). It takes flat keys, each the counterpart of a command-line
+option, values as strings, durations in milliseconds; an option given on
+the command line wins (`src/server/cli_args.zig`):
 
 ```toml
-[server]
-listen_addr = "0.0.0.0"
-listen_port = 7567
-max_connections = 10000
-
-[storage]
+listen_quic = "0.0.0.0:3141"
+cert_path = "/etc/geode/server.crt"
+key_path = "/etc/geode/server.key"
 data_dir = "/var/lib/geode"
-page_size = 4096
-encryption_enabled = true
-
-[wal]
-segment_size = 1048576  # 1MB
-flush_mode = "every_n"
-flush_every_n = 10
-
-[cdc]
-enabled = true
-sinks = ["kafka"]
-batch_size = 1000
-adaptive_flush = true
-
-[cdc.kafka]
-brokers = "kafka1:9092,kafka2:9092"
-topic = "geode_changes"
-compression = "snappy"
-
-[security]
-mfa_enabled = true
-audit_log_path = "/var/log/geode/audit.log"
-kms_provider = "vault"
-
-[security.vault]
-address = "https://vault.example.com"
-token = "${VAULT_TOKEN}"
-key_name = "geode-master-key"
+log_level = "info"
+idle_timeout = "300000"  # milliseconds
 ```
+
+Also read: `listen_grpc`, `persist_interval`, `idle_in_transaction_timeout`,
+`grpc_session_idle_timeout`, `grpc_max_sessions_per_principal` and
+`require_capability_profile`. There are no `[server]`, `[storage]`, `[wal]`,
+`[cdc]` or `[security]` sections (corrected 2026-11-12, SONNY-6435).
 
 ---
 

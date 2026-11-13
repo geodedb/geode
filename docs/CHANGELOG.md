@@ -1702,6 +1702,31 @@
 
 ### Fixed
 
+- **The compose files and the deployment docs give geode only settings it
+  reads (SONNY-6435 item 5).** The compose files passed geode `LOG_LEVEL`,
+  `RUST_BACKTRACE`, `VAULT_ADDR` / `VAULT_TOKEN`, `REDIS_URL`, `FIPS_MODE`,
+  `GPU_ENABLED`, `GEODE_LOG_JSON`, `GEODE_CERT_PATH` and, in
+  `docker-compose.distributed.yml`, `NODE_*` / `RAFT_*` / `CLUSTER_*` /
+  `GEODE_DISTRIBUTED` / `GEODE_SHARD_COUNT` / `GEODE_REPLICATION_FACTOR`
+  plus Raft options `geode serve` does not have (it ignores unknown
+  options), so the "cluster" was three standalone nodes. They are gone; the
+  log level is now passed as `--log-level`, and the distributed file says
+  it is not a cluster and names the real `GEODE_CLUSTER_TOKEN` /
+  `GEODE_PEERS` / `GEODE_NODE_ID` variables. `docs/SERVER_FEATURES.md` 7.1
+  (XTS-AES pages, a derived key hierarchy), 7.2 (Vault / AWS / Azure / GCP
+  KMS providers, rotation) and Appendix B (`CDC_*`, `GEODE_LISTEN_*`,
+  `GEODE_TLS_*`, `GEODE_MFA_ENABLED`, `GEODE_KMS_PROVIDER`, a sectioned TOML
+  file) now describe AES-256-GCM pages under `GEODE_TDE_KEY`, no KMS key
+  source and the flat config keys `geode serve` reads;
+  `docs/DOCKER_OVERVIEW.md` drops 17 `GEODE_*` variables nothing reads, the
+  Vault-backed TDE and cluster examples and `--gpu-acceleration`, and lists
+  the real cluster variables; `docs/TDE_FILE_LEVEL_ENCRYPTION.md` no longer
+  points to automated key rotation; `docs/NIX_DEPLOYMENT.md` uses
+  `GEODE_ENV` and `--log-level`. Regression:
+  `zig build test-sonny6430-deploy-docs-truth`, which now also fails when a
+  compose file's environment or one of those docs names a `GEODE_*`
+  variable no source file reads (a quoted literal in `src/**/*.zig` or
+  `$NAME` in `docker/*.sh`).
 - **Deployment config and docs describe only settings the server has
   (SONNY-6430 item 9).** `docker-compose.yml`, `docker-compose.dev.yml` and
   `docker-compose.gpu.yml` passed `S3_ENDPOINT` / `S3_ACCESS_KEY` /

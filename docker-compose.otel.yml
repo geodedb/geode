@@ -95,7 +95,7 @@ services:
       # IP-only dotted-quad (metrics_server.zig:359 parses address only, no port).
       GEODE_METRICS_PORT: "9091"
       GEODE_METRICS_BIND: "0.0.0.0"
-      LOG_LEVEL: "info"
+      # The log level is --log-level (below); geode reads no LOG_LEVEL.
     command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--log-level", "info"]
     # Host QUIC published on 13141 (not 3141) so this stack coexists with a
     # host-resident geode (e.g. a systemd geode.service) that already owns

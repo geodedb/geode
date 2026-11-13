@@ -51,17 +51,15 @@ services:
     environment:
       # Development environment
       - GEODE_ENV=development
-      - LOG_LEVEL=debug
-      - RUST_BACKTRACE=1
-      # Service connections
-      - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=${VAULT_TOKEN:?set VAULT_TOKEN in .env}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+      # geode reads no LOG_LEVEL (run it with --log-level debug), no
+      # RUST_BACKTRACE (it is not written in Rust), no VAULT_* (no KMS
+      # provider reads Vault) and no REDIS_URL (it has no Redis cache).
+      # SONNY-6435.
       # geode reads no S3_* variable: backups are local files written by
       # `geode backup create` (SONNY-6290); copy them to object storage yourself
       # (scripts/init-minio.sh sets up the MinIO bucket). SONNY-6430.
-      # FIPS mode
-      - FIPS_MODE=enabled
+      # FIPS: geode reads no FIPS_MODE; FIPS is the -Dfips=true build, whose
+      # OpenSSL provider reads OPENSSL_CONF. SONNY-6435.
       - OPENSSL_CONF=/opt/openssl-fips/ssl/openssl.cnf
       # Build optimization
       - ZIG_LOCAL_CACHE_DIR=/workspace/zig-cache

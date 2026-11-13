@@ -265,7 +265,10 @@ Key rotation requires:
 2. Re-encrypt with new key
 3. Atomic swap of key in all cluster nodes
 
-See [KMS Provider System](KMS_PROVIDER_SYSTEM.md) for automated key rotation support.
+There is no automated key rotation: no command or KMS provider rotates
+`GEODE_TDE_KEY` or re-encrypts the files under a new key (corrected
+2026-11-12, SONNY-6435; [KMS Provider System](KMS_PROVIDER_SYSTEM.md),
+"TDE-KMS Integration — Not Implemented").
 
 ## Related Documentation
 
