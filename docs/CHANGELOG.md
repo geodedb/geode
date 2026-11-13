@@ -2235,6 +2235,20 @@
 
 ### Fixed
 
+- **Stored lists compare their string elements by NFC (SONNY-6489 item 3).**
+  `value_types.eqVals` (the element rule of `[...] = [...]`) and
+  `value_types.eqExtValues` (two stored extended values) compared STRING,
+  TEXT, CHAR and VARCHAR elements by raw bytes, so a list property holding
+  a precomposed `é` was not equal to one holding `e` + U+0301, although `=`
+  finds the strings equal (SONNY-3055). Both now use
+  `canonical_string.eqlNoAlloc`. **Not changed:** full-text search keeps its
+  normaliser (`index/fts_tokenizer.zig`, a two-character NFC) on both the
+  indexed and the query side, so it stays self-consistent; switching it to
+  full NFC changes the tokens stored in existing fts-storage indexes and
+  needs a versioned index rebuilt on open (story). `fts/advanced.zig`'s
+  analyzer is not on any live path (`LanguageAnalyzer.analyze` uses the
+  removed managed `std.ArrayList` API and is never compiled). Regression:
+  `zig build test-sonny6489-list-string-nfc`.
 - **Duration arithmetic raises the standard's exceptions (SONNY-6489 item
   6).** ISO/IEC 39075:2024 20.28 GR 5c ii: a duration plus or minus a
   duration of the other unit group is 22G14 (incompatible temporal instant
