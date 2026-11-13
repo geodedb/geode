@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:40:16.380630563Z",
+  "generated_at": "2026-11-13T12:40:38.329476661Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79784,6 +79784,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3383-COMMIT-REFUSED-WIRE",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "RefusedCommitOnQuicWire",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3383_commit_refused_wire.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3383_commit_refused_wire.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3384-SET-DELETE-RETURN",
       "features": [
         {
@@ -94032,7 +94051,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4903
+      "TESTED": 4904
     },
     "by_aspect": {
       "2PC": 3,
@@ -97168,6 +97187,7 @@
       "RefuseFabricated": 2,
       "RefuseInternal": 1,
       "RefuseReserved": 1,
+      "RefusedCommitOnQuicWire": 1,
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,

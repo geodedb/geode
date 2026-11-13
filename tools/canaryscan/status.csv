@@ -5113,6 +5113,7 @@ REQ-SONNY-3380-MERGE-ALIAS-SET,Execution,DuplicateSetUndo,TESTED,tests/test_sonn
 REQ-SONNY-3381-UNDO-INDEX-REPAIR,Execution,UndoIndexRegression,TESTED,tests/test_sonny3381_undo_index_entries.zig,tests/test_sonny3381_undo_index_entries.zig,,execution,2026-11-12
 REQ-SONNY-3381-UNDO-INDEX-REPAIR,Execution,UndoIndexRepairHook,TESTED,src/execution/undo_index_repair.zig,tests/test_sonny3381_undo_index_entries.zig,,execution,2026-11-12
 REQ-SONNY-3381-UNDO-INDEX-REPAIR,TransactionUndoLog,IndexRepairCollector,TESTED,src/txn_undo_log.zig,tests/test_sonny3381_undo_index_entries.zig,,engine,2026-11-12
+REQ-SONNY-3383-COMMIT-REFUSED-WIRE,TransactionManagement,RefusedCommitOnQuicWire,TESTED,tests/test_sonny3383_commit_refused_wire.zig,tests/test_sonny3383_commit_refused_wire.zig,,transport,2026-11-13
 REQ-SONNY-3384-SET-DELETE-RETURN,DELETE in Query,Regression,TESTED,tests/test_sonny3384_set_detach_delete.zig,tests/test_sonny3384_set_detach_delete.zig,,engine,2026-09-29
 REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,OwnedGraphEntities,TESTED,src/execution/value_utilities.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,transport,2026-09-29
 REQ-SONNY-3385-GRPC-OWNED-ENTITIES,GrpcStreaming,RealServer,TESTED,tests/test_sonny_write_allowlist_r4_transport.zig,tests/test_sonny_write_allowlist_r4_transport.zig,,transport,2026-09-29

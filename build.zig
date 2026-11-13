@@ -5963,6 +5963,21 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6466-for-statement-atomicity", "Run SONNY-6466 item 2 regression (a real geode serve over QUIC: a FOR whose CREATE or MATCH ... SET body fails at its third element leaves nothing of the earlier elements, also after a restart; ISO/IEC 39075:2024 4.9.3, 14.8)").dependOn(&run_tests.step);
     }
 
+    // SONNY-3383: a refused COMMIT is unambiguous on the QUIC wire.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3383_commit_refused_wire.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny3383-commit-refused-wire", "Run SONNY-3383 engine-side regression (a real geode serve over QUIC: a COMMIT of a transaction whose statement failed answers CommitResponse success=false with SQLSTATE 40000 and keeps nothing; an accepted COMMIT answers success=true with no error)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6463 (5): source files outside src/distributed whose inline tests
     // no step ran. Each file is its own test root (its inline tests only).
     {
