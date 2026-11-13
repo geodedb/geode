@@ -1632,6 +1632,18 @@
 
 ### Fixed
 
+- **`test-startup-lazy-hydrate` finishes in under a minute instead of
+  running past 25 (SONNY-6433 item 9).** Every one of its 47 tests opens,
+  writes (one fsync per commit), checkpoints, crashes or closes, and reopens
+  a persisted store under `.zig-cache/tmp`; on a loaded host's shared disk
+  each took 15 to 170 seconds and the run reached test 41 of 47 at the
+  25-minute cap (the 3,000-node GAP-ENT-0048 seeding tests alone took
+  minutes each), so its last tests, and those of its `-tsan` companion,
+  never ran. Each test's data directory now lives on tmpfs (`/dev/shm`) when
+  the host has one, as the write harness's do (SONNY-6333), and is removed
+  with the test's scratch directory; the storage code paths and the
+  assertions are unchanged. 47/47 in 38 s (was 40/47 at 1,500 s). The TSan
+  companion now runs to completion (see `docs/KNOWN_TEST_ISSUES.md`).
 - **An undirected edge pattern is refused with 0A000 and a message that
   says so (SONNY-6433 item 8).** ISO/IEC 39075:2024 16.5 / 16.7 spell an
   undirected edge `~[ ]~` (and `~`, `<~[ ]~`, `~[ ]~>`, `<~`, `~>`), Feature
