@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:26:20.407027625Z",
+  "generated_at": "2026-11-13T07:27:01.301313263Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85697,6 +85697,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6456-CLUSTER-DEAD-CONN-REAP",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "ClusterListenerReapsDeadConnections",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6456_cluster_dead_conn_reap.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6456_cluster_dead_conn_reap.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6456-SHUTDOWN-PERSISTENCE-STOP",
       "features": [
         {
@@ -93346,7 +93365,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4865
+      "TESTED": 4866
     },
     "by_aspect": {
       "2PC": 3,
@@ -93883,6 +93902,7 @@
       "ClusterBindAddress": 1,
       "ClusterBootstrap": 3,
       "ClusterErrorSqlstateMapping": 1,
+      "ClusterListenerReapsDeadConnections": 1,
       "ClusterMergePrePass": 1,
       "ClusterPort": 1,
       "ClusterSetPrePass": 1,

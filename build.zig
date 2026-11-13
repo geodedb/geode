@@ -15724,6 +15724,22 @@ pub fn build(b: *std.Build) void {
     const sonny6451_restart_step = b.step("test-sonny6451-raft-restarted-peer", "Run the SONNY-6451 item 1 regression (a raft peer that restarts more times than the receiver has connection workers still reaches it: an inbound handler whose multiplexed stream goes silent releases its worker after the idle deadline)");
     sonny6451_restart_step.dependOn(&run_sonny6451_restart_tests.step);
 
+    // SONNY-6456 item 2: the cluster listener reaps an inbound connection
+    // whose peer went silent (the QUIC dead-connection reaper is on in the
+    // production `ClusterCoordinator.start` path).
+    const sonny6456_reap_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6456_cluster_dead_conn_reap.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6456_reap_tests.root_module.addImport("geode", root_mod);
+    sonny6456_reap_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    sonny6456_reap_tests.root_module.link_libc = true;
+    const run_sonny6456_reap_tests = b.addRunArtifact(sonny6456_reap_tests);
+    shardDep(test_step, &run_sonny6456_reap_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6456_reap_step = b.step("test-sonny6456-cluster-dead-conn-reap", "Run the SONNY-6456 item 2 regression (a started ClusterCoordinator's QUIC listener reaps an inbound connection whose peer went silent, with GEODE_RAFT_DEAD_CONN_REAP_MS, well before the inbound idle deadline)");
+    sonny6456_reap_step.dependOn(&run_sonny6456_reap_tests.step);
+
     // SONNY-6451 item 3: SIGTERM stops a cluster node's raft transport before
     // the final flush and the node exits well inside the teardown watchdog
     // (spawns two cluster nodes of the built geode).
