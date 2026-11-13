@@ -5931,6 +5931,42 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny3390-quic-disconnect-cancels-read", "Run SONNY-3390 regression (a real geode serve: a client that closes its QUIC connection (CONNECTION_CLOSE) 1 s into a comma join whose WHERE keeps nothing leaves the server idle within 20 s, well before the 60 s stall watchdog, and the server answers a new connection)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6463 (5): source files outside src/distributed whose inline tests
+    // no step ran. Each file is its own test root (its inline tests only).
+    {
+        const sonny6463_step = b.step("test-sonny6463-inline", "Run SONNY-6463 item 5: the inline tests of live source files outside src/distributed that no build step ran (std-only and crypto_backend-only files; each file is its own test root)");
+        for ([_][]const u8{
+            "src/transactions/mvcc_adv/conflict_repair_heuristics.zig",
+            "src/transactions/mvcc_adv/early_detect.zig",
+            "src/transactions/mvcc_adv/partial_rollback.zig",
+            "src/transactions/mvcc_adv/predictive_skew_filter.zig",
+            "src/transport/stream_scheduler.zig",
+            "src/index/selectivity.zig",
+            "src/mcp/prompts.zig",
+            "src/tools/bulk_loader.zig",
+            "src/cli/tenant_cli.zig",
+            "src/transactions/range_tracker.zig",
+        }) |path| {
+            const mod = b.createModule(.{ .root_source_file = b.path(path), .target = target, .optimize = optimize });
+            const tests = b.addTest(.{ .root_module = mod });
+            const run_tests = b.addRunArtifact(tests);
+            shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+            sonny6463_step.dependOn(&run_tests.step);
+        }
+        for ([_][]const u8{
+            "src/cli/security/session_storage.zig",
+            "src/cli/geode_audit_verify.zig",
+        }) |path| {
+            const mod = b.createModule(.{ .root_source_file = b.path(path), .target = target, .optimize = optimize });
+            mod.addImport("crypto_backend", crypto_backend_mod);
+            mod.link_libc = true;
+            const tests = b.addTest(.{ .root_module = mod });
+            const run_tests = b.addRunArtifact(tests);
+            shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+            sonny6463_step.dependOn(&run_tests.step);
+        }
+    }
+
     // SONNY-6453 (3): an MCP endpoint DSN with insecure=true follows the CLI
     // insecure-TLS rule (refused under production posture, warned otherwise).
     {
