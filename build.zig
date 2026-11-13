@@ -10084,6 +10084,15 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6484-client-hard-deadline", "Run SONNY-6484 item 3 regression (the shared QUIC test client: executeAndCollectWithTimeout and readPacket fail with Timeout at their deadline against a live but stopped server instead of waiting up to the 120 s liveness cap; calls that take no timeout still wait while the server is alive)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6487 item 5: src/distributed/federation_flag.zig (std-only; the
+    // build imports it only as a named module of benchmarks and tests).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize });
+        const tests = b.addTest(.{ .name = "sonny6487-federation-flag", .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-federation-flag-inline", "Run SONNY-6487 item 5: src/distributed/federation_flag.zig's inline test").dependOn(&run_tests.step);
+    }
     // SONNY-6487 (3): src/client/repl/line_text.zig's grapheme/width helpers.
     {
         const mod = b.createModule(.{ .root_source_file = b.path("src/client/repl/line_text.zig"), .target = target, .optimize = optimize });

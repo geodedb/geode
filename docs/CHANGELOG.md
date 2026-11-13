@@ -2226,6 +2226,10 @@
   `Ipv6EndpointUnsupported` instead of failing with a bare `InvalidAddress`.
   Regressions: `zig build test-sonny6487-host-port`,
   `test-sonny6487-endpoint-host-family`, `test-sonny6487-ipv6-serve`.
+- **Test infrastructure: `src/distributed/federation_flag.zig`'s inline
+  test runs (SONNY-6487 item 5).** The build imported the file only as a
+  named module of benchmarks and tests, so its test ran in no step:
+  `zig build test-sonny6487-federation-flag-inline` (1/1).
 - **Shell: the interactive editor keeps and edits non-ASCII text
   (SONNY-6487 item 3).** `geode shell`'s line editor
   (`src/client/repl/`) inserted only bytes 0x20-0x7e from typed keys, so
