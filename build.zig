@@ -3751,6 +3751,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_secure_zero_tests = b.addRunArtifact(secure_zero_tests);
+    // SONNY-6453 (5): it ran only in the aggregate.
+    b.step("test-secure-zero", "Run GAP-0499 regression (key material is zeroed with secureZero, never @memset)").dependOn(&run_secure_zero_tests.step);
 
     // GAP-0289: Per-tenant resource quotas — connection and query limits
     const tenant_quota_tests = b.addTest(.{
@@ -5870,7 +5872,7 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny6453-hygiene", "Run SONNY-6453 item 5 regression (no compose file sets pids_limit - the limit is deploy.resources.limits.pids; src/security/kms.zig has no dead compat_fillRandom; the kms.zig inline tests and the GAP-0499 secure-zero test have named steps)").dependOn(&run_tests.step);
+        b.step("test-sonny6453-hygiene", "Run SONNY-6453 item 5 regression (no compose file sets pids_limit - the limit is deploy.resources.limits.pids; src/security/kms.zig has no dead compat_fillRandom; the kms.zig inline tests no step ran moved to tests/test_kms_provider.zig; the GAP-0499 secure-zero test has a named step)").dependOn(&run_tests.step);
     }
 
     // SONNY-6453 (2): 2PC, raft and the cluster coordinator dial peers

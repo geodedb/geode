@@ -25,7 +25,12 @@ services:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
+    deploy:
+      resources:
+        limits:
+          # SONNY-6453: here, not pids_limit, so a later deploy limit cannot
+          # conflict with it (Compose refuses both).
+          pids: 4096
     healthcheck:
       # SONNY-6442: the image's shared probe (GET /health on
       # GEODE_METRICS_PORT). The exec-form program used to be the one string

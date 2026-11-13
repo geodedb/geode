@@ -1,13 +1,5 @@
 const std = @import("std");
 
-// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
-fn compat_fillRandom(buf: []u8) void {
-    if (comptime @import("builtin").os.tag == .linux) {
-        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
-    } else {
-        std.c.arc4random_buf(buf.ptr, buf.len);
-    }
-}
 const external_kms = @import("external_kms_client.zig");
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -220,79 +212,7 @@ pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, va
     return KMSProvider.init(allocator, KMSConfig{ .provider_type = .vault_transit, .vault_addr = vault_addr, .auth_token = vault_token, .vault_key_path = key_path });
 }
 
-test "external KMS provider wrap/unwrap roundtrip" {
-    const allocator = std.testing.allocator;
-    var provider = try externalKMSProvider(allocator, 0xDEADBEEF);
-    defer provider.deinit();
-
-    const plaintext = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"; // 32 bytes
-    var wrapped = try provider.wrapDataKey(plaintext);
-    defer wrapped.deinit(allocator);
-
-    const unwrapped = try provider.unwrapDataKey(wrapped);
-    defer allocator.free(unwrapped);
-
-    try std.testing.expectEqualSlices(u8, plaintext, unwrapped);
-
-    // Verify metadata exists for external KMS
-    try std.testing.expect(wrapped.metadata != null);
-    try std.testing.expect(wrapped.metadata.?.len > 0);
-}
-
-test "KMS provider types" {
-    const allocator = std.testing.allocator;
-
-    // Test different provider configurations
-    const configs = [_]KMSConfig{
-        .{ .provider_type = .external_kms, .seed = 0x12345 },
-        .{ .provider_type = .vault_transit, .endpoint = "https://vault.example.com", .auth_token = "test_token" },
-    };
-
-    for (configs) |config| {
-        var provider = try KMSProvider.init(allocator, config);
-        defer provider.deinit();
-
-        const info = provider.getProviderInfo();
-        try std.testing.expectEqual(config.provider_type, info.provider_type);
-        try std.testing.expectEqual(config.auth_token != null, info.authenticated);
-    }
-}
-
-test "master key ID generation" {
-    const allocator = std.testing.allocator;
-
-    // Test external KMS provider
-    var external_provider = try externalKMSProvider(allocator, 0xCAFEBABE);
-    defer external_provider.deinit();
-    const external_key = try external_provider.fetchActiveMasterKey();
-    defer allocator.free(external_key);
-    try std.testing.expect(std.mem.startsWith(u8, external_key, "external-kms-"));
-
-    // Test custom master key ID
-    var custom_provider = try KMSProvider.init(allocator, KMSConfig{
-        .provider_type = .external_kms,
-        .seed = 0x5EED,
-        .master_key_id = "custom-master-key-123",
-    });
-    defer custom_provider.deinit();
-    const custom_key = try custom_provider.fetchActiveMasterKey();
-    try std.testing.expectEqualStrings("custom-master-key-123", custom_key);
-}
-
-// =============================================================================
-// GAP-0066 Regression Tests: Production Safety Checks
-// Verify isProductionSafe() correctly identifies insecure providers
-// =============================================================================
-
-test "GAP-0066: isProductionSafe identifies external_kms as unsafe" {
-    try std.testing.expect(!KMSProviderType.external_kms.isProductionSafe());
-}
-
-test "GAP-0066: isProductionSafe identifies vault_transit as safe" {
-    try std.testing.expect(KMSProviderType.vault_transit.isProductionSafe());
-}
-
-test "GAP-0066: default config is external_kms" {
-    const default_config = KMSConfig{};
-    try std.testing.expectEqual(KMSProviderType.external_kms, default_config.provider_type);
-}
+// SONNY-6453: the inline tests that lived here could run in no step (this
+// file's import closure pulls in external_kms_client.zig's Vault tests, which
+// do not compile under Zig 0.16); they are in tests/test_kms_provider.zig
+// (`zig build test-kms-provider`).

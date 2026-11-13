@@ -7,8 +7,10 @@
 //     the `pids_limit` files would break it. Every compose file now uses
 //     `deploy.resources.limits.pids` only.
 //   * src/security/kms.zig carried a dead `compat_fillRandom`, and its
-//     inline tests ran in no step; they now run in
-//     `zig build test-sonny6453-kms-inline`.
+//     inline tests ran in no step (its import closure pulls in
+//     external_kms_client.zig's Vault tests, which do not compile under Zig
+//     0.16). The ones not already in tests/test_kms_provider.zig moved
+//     there (`zig build test-kms-provider`); kms.zig has no inline tests.
 //   * The GAP-0499 secure-zero test (src/security/test_secure_zero.zig) ran
 //     only in the aggregate; it now has `zig build test-secure-zero`.
 //
@@ -58,19 +60,23 @@ test "SONNY-6453 (5) no compose file sets pids_limit (the limit is deploy.resour
     try testing.expectEqual(@as(usize, 0), bad);
 }
 
-test "SONNY-6453 (5) kms.zig has no dead compat_fillRandom" {
+test "SONNY-6453 (5) kms.zig has no dead compat_fillRandom and no inline test that no step runs" {
     const allocator = testing.allocator;
     const text = try readRepoFile(allocator, "src/security/kms.zig");
     defer allocator.free(text);
     try testing.expect(std.mem.indexOf(u8, text, "fn compat_fillRandom") == null);
+    try testing.expect(std.mem.indexOf(u8, text, "\ntest \"") == null);
+    const moved = try readRepoFile(allocator, "tests/test_kms_provider.zig");
+    defer allocator.free(moved);
+    try testing.expect(std.mem.indexOf(u8, moved, "isProductionSafe") != null);
 }
 
-test "SONNY-6453 (5) the kms.zig inline tests and the secure-zero test have named steps" {
+test "SONNY-6453 (5) the secure-zero test has a named step" {
     const allocator = testing.allocator;
     const text = try readRepoFile(allocator, "build.zig");
     defer allocator.free(text);
     var bad: usize = 0;
-    for ([_][]const u8{ "b.step(\"test-sonny6453-kms-inline\"", "b.step(\"test-secure-zero\"" }) |needle| {
+    for ([_][]const u8{"b.step(\"test-secure-zero\""}) |needle| {
         if (std.mem.indexOf(u8, text, needle) == null) {
             std.debug.print("SONNY-6453 (5): build.zig has no {s}\n", .{needle});
             bad += 1;

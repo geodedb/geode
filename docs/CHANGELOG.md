@@ -48,6 +48,22 @@
   unless `GEODE_ALLOW_INSECURE_TLS=1`, and a warning on stderr whenever
   accepted. Give the DSN a `ca=` bundle instead. Regression:
   `zig build test-sonny6453-mcp-insecure-dsn`.
+- **Operator-visible: every compose file sets its PID limit as
+  `deploy.resources.limits.pids` (SONNY-6453 item 5).**
+  `docker-compose.yml`, `docker-compose.example.yml`,
+  `docker-compose.gpu.yml`, `docker-compose.otel.yml`,
+  `tests/docker-compose.test.yml` and `tests/ha/docker-compose.yml` used
+  `pids_limit`, which Compose refuses next to a deploy limit; the limit
+  (4096) is unchanged. The GPU and test-stack healthchecks ran
+  `geode query` with no `--ca-cert`, which a release image now refuses
+  (item 4); they use the image's shared `/usr/local/bin/health-check.sh`.
+  `src/security/kms.zig` loses a dead `compat_fillRandom`; its inline tests,
+  which no step could run (the file's import closure includes
+  `external_kms_client.zig`'s Vault tests, which do not compile under Zig
+  0.16), moved to `tests/test_kms_provider.zig` (`zig build
+  test-kms-provider`), and the GAP-0499 secure-zero test has
+  `zig build test-secure-zero`. Regression:
+  `zig build test-sonny6453-hygiene`.
 - **Operator-visible: every cluster peer dial uses one verified
   configuration (SONNY-6453 items 2 and 5).** The 2PC transport never read
   `GEODE_CLUSTER_CA_CERT`: it dialled with verification on and no trust

@@ -29,7 +29,10 @@ services:
     - ha-net
     ports:
     - 3200:3141/udp
-    pids_limit: 4096
+    deploy:
+      resources:
+        limits:
+          pids: 4096  # SONNY-6453: not pids_limit (Compose refuses both)
     healthcheck:
       test: [CMD, /usr/local/bin/health-check.sh]
       interval: 5s
@@ -64,7 +67,10 @@ services:
     - ha-net
     depends_on:
     - node-1
-    pids_limit: 4096
+    deploy:
+      resources:
+        limits:
+          pids: 4096  # SONNY-6453: not pids_limit (Compose refuses both)
     healthcheck:
       test: [CMD, /usr/local/bin/health-check.sh]
       interval: 5s
@@ -99,7 +105,10 @@ services:
     - ha-net
     depends_on:
     - node-1
-    pids_limit: 4096
+    deploy:
+      resources:
+        limits:
+          pids: 4096  # SONNY-6453: not pids_limit (Compose refuses both)
     healthcheck:
       test: [CMD, /usr/local/bin/health-check.sh]
       interval: 5s
