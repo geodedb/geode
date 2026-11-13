@@ -19,7 +19,8 @@ RUN chmod +x /usr/local/bin/health-check.sh
 USER geode
 WORKDIR /home/geode
 
-ENV LOG_LEVEL=error
+# The log level is geode serve --log-level (in CMD below). geode reads no
+# LOG_LEVEL variable (SONNY-6442).
 
 # Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
 # GET http://127.0.0.1:$GEODE_METRICS_PORT/health (bound to loopback unless
@@ -35,4 +36,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD /usr/local/bin/health-check.sh
 
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data", "--enable-auth"]
+CMD ["--data-dir", "/data", "--log-level", "error", "--enable-auth"]

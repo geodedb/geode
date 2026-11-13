@@ -4,6 +4,21 @@
 
 ### Security
 
+- **Operator-visible: the Docker images run the server at the log level
+  they document (SONNY-6442 item 5).** `Dockerfile`, `Dockerfile.prebuilt`,
+  `Dockerfile.simple` and `Dockerfile.reliable` set `ENV LOG_LEVEL=error`
+  (as did `Dockerfile.base` and the dev images) and
+  `docs/DOCKER_LOG_LEVEL_CONFIG.md` gave it as the server's log level, but
+  geode reads no `LOG_LEVEL` (only the vendored QUIC logger does, and its
+  default is already `error`): the server ran at `info`. The variable is
+  gone and those images pass `--log-level error` in `CMD`, so their server
+  now logs at `error` by default; give `--log-level` with the other
+  arguments to change it (they replace `CMD`).
+  `docker-integration/Dockerfile.server` and its compose file dropped the
+  unread `GEODE_LOG_LEVEL` and `GEODE_LISTEN` (the compose file passes
+  `--log-level ${GEODE_LOG_LEVEL:-info}`). `docs/DOCKER_LOG_LEVEL_CONFIG.md`
+  and the log-level parts of `docs/docker/DOCKER.md` are rewritten.
+  `zig build test-sonny6430-deploy-docs-truth` now checks every Dockerfile.
 - **BREAKING (operator): `geode serve` refuses an unknown option (SONNY-6442
   item 4).** It skipped any argument it did not know, so a misspelt option
   (`--data-dri /srv/geode`) or a removed one started a server on the
