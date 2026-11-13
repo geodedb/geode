@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T19:20:56.480372999Z",
+  "generated_at": "2026-11-13T19:24:09.9377442Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -39288,6 +39288,25 @@
           "benches": [],
           "owner": "compliance",
           "updated": "2026-06-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-GQL-ISO-NEXT-001",
+      "features": [
+        {
+          "feature": "ISOLinearComposition",
+          "aspect": "Next",
+          "status": "TESTED",
+          "files": [
+            "tests/gql_iso_conformance.zig"
+          ],
+          "tests": [
+            "test-iso-conformance"
+          ],
+          "benches": [],
+          "owner": "compliance",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -95258,7 +95277,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4975
+      "TESTED": 4976
     },
     "by_aspect": {
       "2PC": 3,
@@ -97558,6 +97577,7 @@
       "NetworkTransportTests": 1,
       "NeverEqual": 1,
       "NewlineOnEmptyInput": 1,
+      "Next": 1,
       "NextAsWithChain": 1,
       "NextFreshnessGuard": 1,
       "NextPlanFreshnessGuard": 1,

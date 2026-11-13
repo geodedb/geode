@@ -2604,6 +2604,7 @@ REQ-GQL-ISO-CONFORM-001,ISOConformanceEvidence,TestSuite,TESTED,tests/gql_iso_co
 REQ-GQL-ISO-EXPR-001,ISOExpressions,Operators,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-LET-001,ISOLetBinding,VariableScoping,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-NEGATIVE-001,ISOSyntaxValidation,ErrorDetection,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
+REQ-GQL-ISO-NEXT-001,ISOLinearComposition,Next,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-11-13
 REQ-GQL-ISO-SEC-10-001,ISODataDefinition,DDL,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-SEC-11-001,ISOTransactions,Transactions,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
 REQ-GQL-ISO-SEC-12-001,ISOFunctions,BuiltinFunctions,TESTED,tests/gql_iso_conformance.zig,test-iso-conformance,,compliance,2026-06-11
