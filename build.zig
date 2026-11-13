@@ -6042,6 +6042,21 @@ pub fn build(b: *std.Build) void {
     eval_handler_mod.addImport("distributed_schema", distributed_schema_mod);
     eval_handler_mod.addImport("protobuf", protobuf_mod);
     eval_handler_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    // SONNY-6459: in test builds raft_consensus.zig now references the real
+    // QUIC module (SONNY-6456 `useRealQuicInTests`); it used to sit in the
+    // untaken branch of a comptime `is_test` switch. These two test roots
+    // compile raft_consensus.zig and failed with "no module named
+    // 'transport/quic'". They get their own instance of the module, wired
+    // like transport_quic_mod but with their otel_metrics instance (two
+    // modules rooted at otel_metrics.zig cannot share one compilation).
+    const transport_quic_mod_for_gs_tests = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    {
+        var it = transport_quic_mod.import_table.iterator();
+        while (it.next()) |entry| transport_quic_mod_for_gs_tests.addImport(entry.key_ptr.*, entry.value_ptr.*);
+    }
+    transport_quic_mod_for_gs_tests.addImport("otel_metrics", otel_metrics_mod_for_gs_tests);
+    graph_store_unit_tests.root_module.addImport("transport/quic", transport_quic_mod_for_gs_tests);
+    eval_handler_mod.addImport("transport/quic", transport_quic_mod_for_gs_tests);
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=build; UPDATED=2026-06-11
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);
