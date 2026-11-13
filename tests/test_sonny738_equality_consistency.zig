@@ -29,7 +29,7 @@
 //     recursive CTE executor leaks on this leak-checked harness);
 //   * `WHERE n.k = B`, `B = n.k`, `n.k <> B`, `n.k IN [B]` over a stored
 //     property;
-//   * the inline property map `{k: B}` (16.7 SR: equivalent to
+//   * the inline property map `{k: B}` (16.3 SR: equivalent to
 //     `WHERE n.k = B`), which on the persisted sessions seeks the exact
 //     property index;
 //   * MERGE on the property (geode extension: it finds the node the inline

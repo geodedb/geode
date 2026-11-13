@@ -12578,6 +12578,17 @@ pub fn build(b: *std.Build) void {
     const sonny738_eq_step = b.step("test-sonny738-equality-consistency", "Run SONNY-738 regression (each value pair is equal, unequal or unknown alike at =, <>, IN, simple CASE, list/record equality, DISTINCT, WHERE over a stored property, the inline property map / index seek and MERGE; ISO/IEC 39075 19.3, 22.12: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
     sonny738_eq_step.dependOn(&run_sonny738_eq_tests.step);
 
+    // SONNY-3248: the allowlist minors (a read CALL { } or procedure CALL in an IN subquery, WHERE truthiness, SET/WITH ... DELETE, UNIQUE). See tests/test_sonny3248_allowlist_minors.zig.
+    const sonny3248_m_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3248_allowlist_minors.zig"), .target = target, .optimize = optimize });
+    sonny3248_m_test_mod.addImport("geode", root_mod);
+    sonny3248_m_test_mod.addImport("logging", logging_mod);
+    sonny3248_m_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny3248_m_tests = b.addTest(.{ .root_module = sonny3248_m_test_mod });
+    const run_sonny3248_m_tests = b.addRunArtifact(sonny3248_m_tests);
+    shardDep(test_step, &run_sonny3248_m_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny3248_m_step = b.step("test-sonny3248-allowlist-minors", "Run SONNY-3248 regression (a read-only CALL { } or procedure CALL inside an IN subquery is a read, a write inside one is still refused with nothing written; a WHERE keeps a row only when True; SET ... DETACH DELETE and WITH ... ORDER BY ... SKIP ... DELETE run; UNIQUE holds on CREATE, SET and MERGE ... SET: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny3248_m_step.dependOn(&run_sonny3248_m_tests.step);
+
     // SONNY-6266: a relationship walked from its target keeps its properties on the planned read. See tests/test_sonny6266_planned_reverse_edge_props.zig.
     const sonny6266_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6266_planned_reverse_edge_props.zig"), .target = target, .optimize = optimize });
     sonny6266_q_test_mod.addImport("geode", root_mod);

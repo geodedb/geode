@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:35:46.974375689Z",
+  "generated_at": "2026-11-13T15:44:37.660755761Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -78296,6 +78296,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-3248-ALLOWLIST-MINORS",
+      "features": [
+        {
+          "feature": "WriteShapeValidator",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny3248_allowlist_minors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3248_allowlist_minors.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-3248-EXISTS-WHERE",
       "features": [
         {
@@ -94446,7 +94465,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4930
+      "TESTED": 4931
     },
     "by_aspect": {
       "2PC": 3,
@@ -97597,7 +97616,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 320,
+      "Regression": 321,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
