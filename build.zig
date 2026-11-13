@@ -15650,6 +15650,21 @@ pub fn build(b: *std.Build) void {
     const sonny6436_secrets_step = b.step("test-sonny6436-fixture-secrets", "Run the SONNY-6436 item 1 regression (every admin password and auth-chain HMAC key the in-repo scripts and fixtures seed is one the server accepts: 64 hex characters, a passphrase meeting the password policy)");
     sonny6436_secrets_step.dependOn(&run_sonny6436_secrets_tests.step);
 
+    // SONNY-6451 item 2: a cluster health pass hands handleNodeFailure only
+    // configured peers (never the 0xAA slot swapRemove vacated) and keeps a
+    // failed peer's endpoint in the address book.
+    const sonny6451_health_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6451_health_failed_peer.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6451_health_tests.root_module.addImport("geode", root_mod);
+    sonny6451_health_tests.root_module.link_libc = true;
+    const run_sonny6451_health_tests = b.addRunArtifact(sonny6451_health_tests);
+    shardDep(test_step, &run_sonny6451_health_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6451_health_step = b.step("test-sonny6451-health-failed-peer", "Run the SONNY-6451 item 2 regression (a cluster health pass fails over only configured peers, never an uninitialised node id, and keeps a failed peer's endpoint so it can return)");
+    sonny6451_health_step.dependOn(&run_sonny6451_health_tests.step);
+
     // SONNY-6436 item 5: an RLS policy admits a row only when its predicate
     // is True, in the raw-string interpreter and the compiled VM.
     const sonny6436_rls_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_rls_raw_truthiness.zig"), .target = target, .optimize = optimize });

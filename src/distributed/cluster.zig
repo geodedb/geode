@@ -1520,16 +1520,7 @@ pub const ClusterCoordinator = struct {
         };
 
         while (!self.shutdown.load(.acquire)) {
-            for (self.cluster_state.nodes.items) |*node| {
-                if (node.id == self.node_id) continue;
-
-                const health_status = try self.checkNodeHealth(node);
-                try self.updateHealthStatus(node.id, health_status);
-
-                if (health_status == .unhealthy) {
-                    try self.handleNodeFailure(node.id);
-                }
-            }
+            try self.healthPass();
 
             // RC-A: independent inbound-pool occupancy sweep. Frees worker slots
             // pinned by zombie half-open inbound conns so a rebuilt leader conn
@@ -1538,6 +1529,20 @@ pub const ClusterCoordinator = struct {
             self.sweepInboundOccupancy(inbound_idle_deadline_ms);
 
             compat_sleepNs(self.health_monitor.check_interval_ms * std.time.ns_per_ms);
+        }
+    }
+
+    /// One health-check pass over the peers in `cluster_state.nodes`.
+    fn healthPass(self: *ClusterCoordinator) !void {
+        for (self.cluster_state.nodes.items) |*node| {
+            if (node.id == self.node_id) continue;
+
+            const health_status = try self.checkNodeHealth(node);
+            try self.updateHealthStatus(node.id, health_status);
+
+            if (health_status == .unhealthy) {
+                try self.handleNodeFailure(node.id);
+            }
         }
     }
 
@@ -3156,6 +3161,10 @@ pub const testing_surface = struct {
         msg: TestingMessage,
     ) !TestingResponse {
         return coord.forwardToShard(shard_id, msg);
+    }
+    /// One pass of the health loop (SONNY-6451 item 2).
+    pub fn healthPass(coord: *ClusterCoordinator) !void {
+        return coord.healthPass();
     }
 };
 

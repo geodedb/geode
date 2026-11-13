@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T03:28:32.185024391Z",
+  "generated_at": "2026-11-13T03:35:01.937017784Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85678,6 +85678,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6451-HEALTH-FAILED-PEER",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "HealthPassKeepsFailedPeer",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6451_health_failed_peer.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6451_health_failed_peer.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6451-UNKNOWN-SECRET",
       "features": [
         {
@@ -93327,7 +93346,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4863
+      "TESTED": 4864
     },
     "by_aspect": {
       "2PC": 3,
@@ -94984,6 +95003,7 @@
       "HavingFilter": 1,
       "HeadElement": 1,
       "HealthCheck": 1,
+      "HealthPassKeepsFailedPeer": 1,
       "HeapDecimalScale": 1,
       "HeapRounding": 1,
       "HelloAuthCheck": 1,
