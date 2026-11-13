@@ -10053,6 +10053,17 @@ pub fn build(b: *std.Build) void {
     const sonny6492_repl_step = b.step("test-sonny6492-replicated-write-dropped-graph", "Run SONNY-6492 item 3 regression (a Raft-applied data write after a replicated DROP GRAPH answers GraphNotFound and does not create the graph again; a replicated CREATE GRAPH does; createNode with no graph lock fails with GraphNotFound when the graph is dropped under it)");
     sonny6492_repl_step.dependOn(&run_sonny6492_repl_tests.step);
 
+    // SONNY-6492 (4): DROP GRAPH clears the graph's label and
+    // relationship-type counts of evicted nodes and never touches another
+    // graph's ("g1" vs "g1:x").
+    const sonny6492_drop_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_drop_graph_label_counts.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    sonny6492_drop_test_mod.addImport("geode", root_mod);
+    const sonny6492_drop_tests = b.addTest(.{ .root_module = sonny6492_drop_test_mod });
+    const run_sonny6492_drop_tests = b.addRunArtifact(sonny6492_drop_tests);
+    shardDep(test_step, &run_sonny6492_drop_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6492_drop_step = b.step("test-sonny6492-drop-graph-label-counts", "Run SONNY-6492 item 4 regression (graphs g1 and g1:x with colliding labels and relationship types count their own nodes; DROP GRAPH g1 with most nodes evicted leaves g1:x untouched and nothing of g1: created again, it starts empty)");
+    sonny6492_drop_step.dependOn(&run_sonny6492_drop_tests.step);
+
     const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
     sonny2979_test_mod.link_libc = true;
     sonny2979_test_mod.addImport("geode", root_mod);

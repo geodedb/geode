@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T17:30:08.611040299Z",
+  "generated_at": "2026-11-13T17:31:35.148619563Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86987,6 +86987,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6492-DROP-GRAPH-COUNTS",
+      "features": [
+        {
+          "feature": "MultiGraphIsolation",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6492_drop_graph_label_counts.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6492_drop_graph_label_counts.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6492-HYDRATION-LIVE-COUNT-RACE",
       "features": [
         {
@@ -94727,7 +94746,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4942
+      "TESTED": 4943
     },
     "by_aspect": {
       "2PC": 3,
@@ -97883,7 +97902,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 326,
+      "Regression": 327,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
