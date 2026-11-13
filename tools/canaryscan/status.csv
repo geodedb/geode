@@ -1762,9 +1762,6 @@ REQ-GQL-002,HELLO Capabilities,Wire,TESTED,,TestCANARY_REQ_GQL_005_HelloRoundTri
 REQ-GQL-004,Pagination,PaginationAutoCalibration,TESTED,src/pagination/calibration.zig,TestCANARY_REQ_GQL_004_PaginationAutoCalibratePageSize,,planner,2025-09-26
 REQ-GQL-004,Pagination,PaginationAutoCalibration,TESTED,tests/canary_pagination_variance_autocalib.zig,,,planner,2025-09-26
 REQ-GQL-004,Pagination,PaginationExecutionStreaming,BENCHED,tests/benchmark_pagination_execution_streaming.zig,,BenchmarkCANARY_REQ_GQL_004_PaginationExecutionStreaming,planner,2025-09-23
-REQ-GQL-004,Pagination,PaginationExecutionVarianceEnvelope,BENCHED,src/benchmarks/pagination_execution_variance.zig,,BenchmarkCANARY_REQ_GQL_004_PaginationExecutionVarianceEnvelope,planner,2025-09-21
-REQ-GQL-004,Pagination,PaginationOrderedVarianceEnvelope,BENCHED,benchmarks/benchmark_pagination_order_variance.zig,,BenchmarkCANARY_REQ_GQL_004_PaginationOrderedVarianceEnvelope,planner,2025-09-21
-REQ-GQL-004,Pagination,PaginationOrderedVarianceEnvelope,BENCHED,src/benchmarks/pagination_variance.zig,,,planner,2025-09-21
 REQ-GQL-004,Pagination Legality (US001),Core,TESTED,src/gql.zig,src/gql.zig,,planner,2026-01-25
 REQ-GQL-004,Pagination Legality (US001),IllegalOrderKeyPolicy,TESTED,src/lib.zig,TestGQL_IllegalOrderKey,,planner,2025-09-26
 REQ-GQL-004,Pagination Legality (US001),OrderKeyExprOverrideEnv,TESTED,src/lib.zig,TestGQL_IllegalOrderKey,,planner,2025-09-27

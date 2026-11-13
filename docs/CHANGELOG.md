@@ -5348,6 +5348,18 @@
 
 ### Removed
 
+- **Dead benchmarks: `src/benchmarks/pagination_variance.zig`,
+  `src/benchmarks/pagination_execution_variance.zig` and
+  `benchmarks/benchmark_pagination_order_variance.zig` (SONNY-6511
+  item 1).** Variance envelopes of the planner phase timer on one
+  `ORDER BY ... LIMIT` query and of a synthetic per-page workload ("simulates
+  execution-phase latency"), not of geode's paging. Neither `src/benchmarks/` file
+  compiled on Zig 0.16 (`std.time.nanoTimestamp`, `std.io.fixedBufferStream`)
+  and nothing ran them: their only references were the
+  `geode.benchmarks.pagination*` re-exports, which nothing named; the
+  `benchmarks/` copy was rooted by no build step. Their BENCHED markers
+  (REQ-GQL-004 PaginationOrderedVarianceEnvelope,
+  PaginationExecutionVarianceEnvelope) described only these files.
 - **Dead code: `src/types/i256.zig` (SONNY-6511 item 1).** An `Int256`
   stub (`add` with a `comptime_int` carry that cannot compile, `toString`
   allocating from `std.testing.allocator` in product code) that nothing

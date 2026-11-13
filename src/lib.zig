@@ -309,10 +309,6 @@ pub const tde_page_tail = @import("storage/tde_page_tail.zig");
 
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
-    // Pagination ordered variance benchmark (exposed for variance runner)
-    pub const pagination = @import("benchmarks/pagination_variance.zig");
-    // Pagination execution (streaming page) variance benchmark
-    pub const pagination_execution = @import("benchmarks/pagination_execution_variance.zig");
     // Shared variance configuration helper
     pub const variance_config = @import("benchmarks/variance_config.zig");
 };

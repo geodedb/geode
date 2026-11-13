@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:31:08.521274454Z",
+  "generated_at": "2026-11-13T18:32:28.879482045Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -27135,35 +27135,6 @@
           ],
           "owner": "planner",
           "updated": "2025-09-23"
-        },
-        {
-          "feature": "Pagination",
-          "aspect": "PaginationExecutionVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "src/benchmarks/pagination_execution_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_004_PaginationExecutionVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
-        },
-        {
-          "feature": "Pagination",
-          "aspect": "PaginationOrderedVarianceEnvelope",
-          "status": "BENCHED",
-          "files": [
-            "benchmarks/benchmark_pagination_order_variance.zig",
-            "src/benchmarks/pagination_variance.zig"
-          ],
-          "tests": [],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_004_PaginationOrderedVarianceEnvelope"
-          ],
-          "owner": "planner",
-          "updated": "2025-09-21"
         },
         {
           "feature": "Pagination Legality (US001)",
@@ -93822,7 +93793,7 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 167,
+      "BENCHED": 165,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
@@ -96301,8 +96272,6 @@
       "PageRank": 3,
       "PaginationAutoCalibration": 1,
       "PaginationExecutionStreaming": 1,
-      "PaginationExecutionVarianceEnvelope": 1,
-      "PaginationOrderedVarianceEnvelope": 1,
       "PagingEvents": 1,
       "ParallelCorrectness": 1,
       "ParallelExecution": 1,
