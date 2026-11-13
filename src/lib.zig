@@ -966,3 +966,10 @@ test "SONNY-2799 undo log inline test roots" {
 test "SONNY-6342 AuthProvider: authn inline test root" {
     _ = @import("security/authn.zig");
 }
+
+// SONNY-6460: src/exec.zig's inline tests entered no test binary. Named with
+// the "exec.zig:" filter of `zig build test-sonny6460-exec-inline`, so the
+// filter keeps this block, and with it the file, in discovery.
+test "exec.zig: inline test root" {
+    _ = @import("exec.zig");
+}

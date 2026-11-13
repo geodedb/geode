@@ -213,7 +213,7 @@ pub fn stableOrderByTemporal(rows: []Row, desc: bool, nulls_policy: ?ast.OrderBy
     std.mem.copyForwards(Row, rows, tmp);
 }
 
-test "stable ORDER BY with cross-timezone equivalence and local attach" {
+test "exec.zig: stable ORDER BY with cross-timezone equivalence and local attach" {
     const allocator = std.testing.allocator;
     const ctx = planner.SessionContext{ .session_offset_minutes = 0 };
     var rows: [4]Row = .{
@@ -231,7 +231,7 @@ test "stable ORDER BY with cross-timezone equivalence and local attach" {
     try std.testing.expect(rows[3].id == 3);
 }
 
-test "ORDER BY nulls policy: FIRST/LAST" {
+test "exec.zig: ORDER BY nulls policy: FIRST/LAST" {
     const allocator = std.testing.allocator;
     const ctx = planner.SessionContext{ .session_offset_minutes = 0 };
     var rows: [5]Row = .{
@@ -773,7 +773,7 @@ fn valueToBinding(v: eval.Value) BindingValue {
 // Acceptance tests for executor
 // ---------------------------
 
-test "executor: COUNT(expr) vs COUNT(*)" {
+test "exec.zig: executor: COUNT(expr) vs COUNT(*)" {
     const allocator = std.testing.allocator;
     // Query: GROUP BY s RETURN COUNT(a), COUNT(*)
     const cal = ast.Expr{ .Ident = "count" };
@@ -820,7 +820,7 @@ test "executor: COUNT(expr) vs COUNT(*)" {
     try std.testing.expect(seen[0]);
 }
 
-test "executor: empty input yields no groups" {
+test "exec.zig: executor: empty input yields no groups" {
     const allocator = std.testing.allocator;
     const cal = ast.Expr{ .Ident = "count" };
     const s_id = ast.Expr{ .Ident = "s" };
@@ -834,7 +834,7 @@ test "executor: empty input yields no groups" {
     try std.testing.expect(out.len == 0);
 }
 
-test "executor: multi-key GROUP BY counts" {
+test "exec.zig: executor: multi-key GROUP BY counts" {
     const allocator = std.testing.allocator;
     const cal = ast.Expr{ .Ident = "count" };
     const s1 = ast.Expr{ .Ident = "s1" };
@@ -852,7 +852,7 @@ test "executor: multi-key GROUP BY counts" {
     try std.testing.expect(out.len == 2);
 }
 
-test "executor: complex HAVING with SUM/AVG/COUNT and projection" {
+test "exec.zig: executor: complex HAVING with SUM/AVG/COUNT and projection" {
     const allocator = std.testing.allocator;
     // Query: GROUP BY g HAVING COUNT(*) > 2 AND (SUM(a) > 2 OR AVG(a) = 1) RETURN g, SUM(a), AVG(a)
     const g = ast.Expr{ .Ident = "g" };
@@ -889,7 +889,7 @@ test "executor: complex HAVING with SUM/AVG/COUNT and projection" {
     try std.testing.expect(r[2] == .Int and r[2].Int == 1);
 }
 
-test "executor: COUNT on NULL-only inputs and COUNT(*)" {
+test "exec.zig: executor: COUNT on NULL-only inputs and COUNT(*)" {
     const allocator = std.testing.allocator;
     const cal = ast.Expr{ .Ident = "count" };
     const a = ast.Expr{ .Ident = "a" };
@@ -909,7 +909,7 @@ test "executor: COUNT on NULL-only inputs and COUNT(*)" {
     try std.testing.expect(out[0][1] == .Int and out[0][1].Int == 3);
 }
 
-test "executor: HAVING 3VL nested boolean with NULL short-circuit" {
+test "exec.zig: executor: HAVING 3VL nested boolean with NULL short-circuit" {
     const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
@@ -936,7 +936,7 @@ test "executor: HAVING 3VL nested boolean with NULL short-circuit" {
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "A"));
 }
 
-test "executor: multi-key GROUP BY with NULL keys" {
+test "exec.zig: executor: multi-key GROUP BY with NULL keys" {
     const allocator = std.testing.allocator;
     const k1 = ast.Expr{ .Ident = "k1" };
     const k2 = ast.Expr{ .Ident = "k2" };
@@ -954,7 +954,7 @@ test "executor: multi-key GROUP BY with NULL keys" {
     try std.testing.expect(out.len == 2);
 }
 
-test "executor: ORDER BY over aggregated outputs with NULLS policy" {
+test "exec.zig: executor: ORDER BY over aggregated outputs with NULLS policy" {
     const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
@@ -979,7 +979,7 @@ test "executor: ORDER BY over aggregated outputs with NULLS policy" {
     try std.testing.expect(out[2][0] == .Str and std.mem.eql(u8, out[2][0].Str, "B"));
 }
 
-test "grouping: Decimal SUM/AVG and MIN/MAX over strings and bools" {
+test "exec.zig: grouping: Decimal SUM/AVG and MIN/MAX over strings and bools" {
     const allocator = std.testing.allocator;
     // rows: (g, d as Decimal literal via eval.Value, s, b)
     const rows: []const []BindingValue = &.{
@@ -1019,7 +1019,7 @@ test "grouping: Decimal SUM/AVG and MIN/MAX over strings and bools" {
     try std.testing.expect(sawA and sawB);
 }
 
-test "executor: HAVING with Decimal literal compares against decimal AVG" {
+test "exec.zig: executor: HAVING with Decimal literal compares against decimal AVG" {
     const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
@@ -1041,7 +1041,7 @@ test "executor: HAVING with Decimal literal compares against decimal AVG" {
     try std.testing.expect(out[0][0] == .Str and std.mem.eql(u8, out[0][0].Str, "X"));
 }
 
-test "executor: ORDER BY using ordinal and alias resolution on aggregated output" {
+test "exec.zig: executor: ORDER BY using ordinal and alias resolution on aggregated output" {
     const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
@@ -1065,7 +1065,7 @@ test "executor: ORDER BY using ordinal and alias resolution on aggregated output
     try std.testing.expect(out[1][0] == .Str and std.mem.eql(u8, out[1][0].Str, "X"));
 }
 
-test "executor: COUNT_DISTINCT basic dedup and NULL exclusion" {
+test "exec.zig: executor: COUNT_DISTINCT basic dedup and NULL exclusion" {
     const allocator = std.testing.allocator;
     // Query: GROUP BY g RETURN COUNT_DISTINCT(a)
     const g = ast.Expr{ .Ident = "g" };
@@ -1087,7 +1087,7 @@ test "executor: COUNT_DISTINCT basic dedup and NULL exclusion" {
     try std.testing.expect(out[0][0] == .Int and out[0][0].Int == 2);
 }
 
-test "executor: COUNT_DISTINCT multi-group" {
+test "exec.zig: executor: COUNT_DISTINCT multi-group" {
     const allocator = std.testing.allocator;
     const g = ast.Expr{ .Ident = "g" };
     const a = ast.Expr{ .Ident = "a" };
@@ -1155,7 +1155,7 @@ pub fn multisetExcept(allocator: std.mem.Allocator, a: []const i64, b: []const i
     return out.toOwnedSlice(allocator);
 }
 
-test "set ops semantics: UNION DISTINCT and INTERSECT/EXCEPT ALL" {
+test "exec.zig: set ops semantics: UNION DISTINCT and INTERSECT/EXCEPT ALL" {
     const A = [_]i64{ 1, 2, 2, 3 };
     const B = [_]i64{ 2, 3, 4 };
     // UNION DISTINCT
@@ -1348,7 +1348,7 @@ pub fn pathLess(a: Path, b: Path) bool {
     return false; // equal sequences not less
 }
 
-test "path tie-break: shorter first, then lexicographic ids" {
+test "exec.zig: path tie-break: shorter first, then lexicographic ids" {
     const p1 = Path{ .nodes = &.{ 1, 2, 3 } }; // 2 hops
     const p2 = Path{ .nodes = &.{ 1, 5 } }; // 1 hop
     try std.testing.expect(pathLess(p2, p1)); // shorter wins
@@ -2045,7 +2045,7 @@ pub fn exceptDistinctRows(allocator: std.mem.Allocator, a: []const []const Bindi
     return try sortUniqueRows(allocator, uniq.items);
 }
 
-test "binding table set ops: multi-column with NULLs" {
+test "exec.zig: binding table set ops: multi-column with NULLs" {
     const A0 = [_]BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
     const A1 = [_]BindingValue{ .{.Null}, .{ .Str = "x" } };
     const A2 = [_]BindingValue{ .{ .Int = 1 }, .{ .Str = "a" } };
@@ -2072,7 +2072,7 @@ test "binding table set ops: multi-column with NULLs" {
     try std.testing.expect(eA.len == 1);
 }
 
-test "binding table set ops: DISTINCT sorted order with mixed types and NULLs" {
+test "exec.zig: binding table set ops: DISTINCT sorted order with mixed types and NULLs" {
     // Build inputs with duplicates and mixed types across both sides
     const R0 = [_]BindingValue{ .{.Null}, .{ .Str = "n" } };
     const R1 = [_]BindingValue{ .{ .Bool = false }, .{ .Str = "b" } };
