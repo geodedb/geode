@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T21:33:33.370526068Z",
+  "generated_at": "2026-11-13T22:17:20.610073094Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -87580,6 +87580,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6498-SCAN-BOX-CHECK",
+      "features": [
+        {
+          "feature": "WriteStep",
+          "aspect": "NoReboxing",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3148_write_step_amplification.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -95301,7 +95320,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
-      "TESTED": 4977
+      "TESTED": 4978
     },
     "by_aspect": {
       "2PC": 3,
@@ -97650,6 +97669,7 @@
       "NoPlaintextFallback": 1,
       "NoPlaintextOnDisk": 1,
       "NoPrincipalUnauthenticated": 1,
+      "NoReboxing": 1,
       "NoReplayAfterSend": 1,
       "NoResendAfterSend": 1,
       "NoRetainedNodeCopies": 1,

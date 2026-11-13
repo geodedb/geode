@@ -2235,6 +2235,17 @@
 
 ### Fixed
 
+- **The write step keeps the scan's node copy (SONNY-6498 item 4).**
+  `match_operations.stabilizeValue` boxed again (`getNodePtrForScan`) a
+  node the scan had already boxed, one more detached copy per written row,
+  held until the graph's next checkpoint and charged to the write budget.
+  `GraphStore.isScanBox` answers in constant time (a set of the detached
+  boxes, kept with `scan_hydrated_nodes` under its leaf mutex) and such a
+  node is kept. Measured over 32 rows (in-memory): one SET group 3.00 ->
+  2.00 copies per row (1038 -> 705 bytes), two SET groups 4.00 -> 3.00
+  (1694 -> 1281), a node every row writes 4.03 -> 2.03 (1464 -> 736).
+  Regression: `zig build test-sonny3148-write-step-amplification` (bounds
+  2.0 / 3.0 / 3.5).
 - **An expression that fails fails the statement on every executor path
   (SONNY-6498 item 3, BREAKING).** ISO/IEC 39075:2024 19.1 GR 1: an
   exception raised while a value expression is evaluated is the

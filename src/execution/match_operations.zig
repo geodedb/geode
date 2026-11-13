@@ -8653,7 +8653,12 @@ pub fn stabilizeBindings(allocator: std.mem.Allocator, rows: *ExecutionResult) !
 pub fn stabilizeValue(allocator: std.mem.Allocator, rows: *ExecutionResult, value: *Value) !void {
     const store = graph_store.getGlobalStore(allocator);
     switch (value.*) {
-        .Node => |node| value.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound },
+        // SONNY-6498 item 4: a node the scan boxed already is stable until
+        // the grace boundary; boxing it again was one more copy per written
+        // row (the SONNY-3148 remainder).
+        .Node => |node| if (!store.isScanBox(node)) {
+            value.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound };
+        },
         .Edge => |edge| value.* = .{ .Edge = try boxEdge(allocator, rows, edge) },
         .List => |items| for (items) |*item| try stabilizeValue(allocator, rows, item),
         .Map => |map| {
@@ -8662,7 +8667,9 @@ pub fn stabilizeValue(allocator: std.mem.Allocator, rows: *ExecutionResult, valu
         },
         .Path => |path| {
             // The executors allocate a path's arrays for the row.
-            for (@constCast(path.nodes)) |*node| node.* = store.getNodePtrForScan(node.*.id) orelse return error.NodeNotFound;
+            for (@constCast(path.nodes)) |*node| {
+                if (!store.isScanBox(node.*)) node.* = store.getNodePtrForScan(node.*.id) orelse return error.NodeNotFound;
+            }
             for (@constCast(path.edges)) |*edge| edge.* = try boxEdge(allocator, rows, edge.*);
         },
         else => {},
