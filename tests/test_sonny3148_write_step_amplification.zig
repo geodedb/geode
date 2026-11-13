@@ -10,9 +10,10 @@
 //
 // Before (each statement run twice over 32 rows, in-memory): one SET group
 // 4.00 copies (1411 bytes) per row, two SET groups 5.00 (2148), a node every
-// row writes 6.00 (2004). After: 3.00 (1038), 4.00 (1694), 4.03 (1464). The
-// read side still takes two copies of each row's node (the scan's detached
-// box, and `stabilizeBindings` boxing it again for the write step).
+// row writes 6.00 (2004). After: 3.00 (1038), 4.00 (1694), 4.03 (1464).
+// SONNY-6498 item 4: the read side took two copies of each row's node (the
+// scan's detached box, and `stabilizeBindings` boxing it again for the write
+// step); a node that is already a scan box is kept (`GraphStore.isScanBox`).
 //
 // Measured on an in-memory session (no background checkpoint frees the
 // boxes mid-statement): the detached boxes a statement leaves and their
@@ -88,12 +89,12 @@ test "SONNY-3148: a written row keeps one detached copy per write, not one per r
     const per_row_shared = @as(f64, @floatFromInt(shared.boxes)) / @as(f64, @floatFromInt(2 * rows));
     std.debug.print("SONNY-3148: a shared written node: {d} boxes ({d:.2}/row), {d} bytes ({d}/row)\n", .{ shared.boxes, per_row_shared, shared.bytes, shared.bytes / (2 * rows) });
 
-    // Per row: the read's copies (the scan's and the write step's
-    // stabilizing one, SONNY-2694) and one per clause group that writes it;
-    // the RETURN reuses the last. A refresh took a copy each time it ran.
-    try testing.expect(per_row_one <= 3.0);
-    try testing.expect(per_row_two <= 4.0);
+    // Per row: the scan's copy (the write step keeps it, SONNY-6498) and
+    // one per clause group that writes it; the RETURN reuses the last. A
+    // refresh took a copy each time it ran.
+    try testing.expect(per_row_one <= 2.0);
+    try testing.expect(per_row_two <= 3.0);
     // Each row's write of the shared node takes one copy; a refresh took
     // one per row again at the start of the next row (6.00 per row).
-    try testing.expect(per_row_shared < 4.5);
+    try testing.expect(per_row_shared < 3.5);
 }

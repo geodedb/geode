@@ -5270,7 +5270,7 @@ REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,Regression,TESTED,,,engine,20
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,TraversalBuffers,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,7312
 REQ-SONNY-3148-WRITE-LEAKS,WriteStatementOwnership,WithStageItems,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,8269
 REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION,WriteStep,RefreshOncePerWrite,TESTED,,,engine,2026-11-13,src/execution/match_operations.zig,8555
-REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION,WriteStep,Regression,TESTED,,,engine,2026-11-13,tests/test_sonny3148_write_step_amplification.zig,22
+REQ-SONNY-3148-WRITE-STEP-AMPLIFICATION,WriteStep,Regression,TESTED,,,engine,2026-11-13,tests/test_sonny3148_write_step_amplification.zig,23
 REQ-SONNY-3166-STATEMENT-BOUNDARY,StatementBoundary,Parser,TESTED,,,parser,2026-09-27,src/gql/parser.zig,978
 REQ-SONNY-3166-STATEMENT-BOUNDARY,StatementBoundary,WholeProgram,TESTED,,,engine,2026-09-27,src/execution.zig,1600
 REQ-SONNY-3166-STATEMENT-BOUNDARY,StatementBoundary,WholeProgram,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,847
