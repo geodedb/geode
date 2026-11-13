@@ -9673,6 +9673,17 @@ pub fn build(b: *std.Build) void {
     const sonny3121_step = b.step("test-sonny3121-direct-bulk-pin", "Run SONNY-3121 regression (the direct bulk MERGE helpers - relationship and multi-property node - hold a pin on their graph; a DROP GRAPH between their lookup and their locks makes them fail with GraphNotFound, and the graph is freed when they let go)");
     sonny3121_step.dependOn(&run_sonny3121_tests.step);
 
+    // SONNY-6472 (2): a write racing a DROP GRAPH (createNode, the bulk
+    // insert, pinOrCreateGraph) fails with GraphNotFound and never creates
+    // the graph again; CREATE GRAPH does.
+    const sonny6472_writes_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6472_dropped_graph_writes.zig"), .target = target, .optimize = optimize });
+    sonny6472_writes_test_mod.addImport("geode", root_mod);
+    const sonny6472_writes_tests = b.addTest(.{ .root_module = sonny6472_writes_test_mod });
+    const run_sonny6472_writes_tests = b.addRunArtifact(sonny6472_writes_tests);
+    shardDep(test_step, &run_sonny6472_writes_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6472_writes_step = b.step("test-sonny6472-dropped-graph-writes", "Run SONNY-6472 item 2 regression (writes racing a DROP GRAPH - createNode, bulkInsertNodeWithReservedId, pinOrCreateGraph - fail with GraphNotFound and never create the dropped graph again; CREATE GRAPH creates it afresh; a never-dropped name is still created by its first write)");
+    sonny6472_writes_step.dependOn(&run_sonny6472_writes_tests.step);
+
     const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
     sonny2979_test_mod.link_libc = true;
     sonny2979_test_mod.addImport("geode", root_mod);
