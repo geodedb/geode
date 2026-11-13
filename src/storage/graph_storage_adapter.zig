@@ -2388,14 +2388,22 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
 /// (which join the statement or session engine txn) do it here. Without
 /// the images the property pages reached the WAL with nothing that
 /// pointed at them, and a crash lost the properties.
+/// SONNY-6492 (5) measurement only: test binaries can skip the three page
+/// images below to time and size them against the shipped path
+/// (test-sonny6492-edge-prop-image-cost). Compiled out of every other build.
+pub var bench_skip_edge_prop_head_images: bool = false;
+
 fn publishEdgePropHead(shard: *gs.GraphEngine, txn: gs.TxnId, from_id: u64, from_out_head: anytype, to_id: u64, edge_id: u64, new_head: u64) !void {
+    const log_images = !(@import("builtin").is_test and bench_skip_edge_prop_head_images);
     if (try shard.adj_out.updateEdgePropHead(from_out_head, edge_id, new_head)) |page| {
-        try shard.logPagePublic(txn, .adj_out, page);
-        try shard.logPagePublic(txn, .nodes, from_id / shard.node_store.nodes_per_page);
+        if (log_images) {
+            try shard.logPagePublic(txn, .adj_out, page);
+            try shard.logPagePublic(txn, .nodes, from_id / shard.node_store.nodes_per_page);
+        }
     }
     const in_head = try shard.in_head_dir.getHead(to_id);
     if (try shard.adj_in_remote.updateEdgePropHead(in_head, edge_id, new_head)) |page| {
-        try shard.logPagePublic(txn, .in_idx, page);
+        if (log_images) try shard.logPagePublic(txn, .in_idx, page);
     }
     // v0.2.26: copy-on-write (the mmap base is immutable). The dirty flag
     // keeps a checkpoint from re-blessing the stale edges.idx snapshot.
@@ -3327,8 +3335,9 @@ pub fn noteSessionCommitFailure(err: anyerror) void {
 pub var bulk_graph_resolved_hook: ?*const fn (mg: *ManagedGraph) void = null;
 
 /// SONNY-6472 (4) test hook: runs in `bulkInsertNodeWithReservedIdGraphLocked`
-/// right after the engine counted the new node and before its record is
-/// written. A test scans the graph there.
+/// and (SONNY-6492 (3)) `createNode` right after the engine counted the new
+/// node and before its record is written. A test scans the graph there, or
+/// drops it.
 pub var node_slot_allocated_hook: ?*const fn (mg: *ManagedGraph) void = null;
 
 /// SONNY-3031 fault injection for tests: the next N commits of a session
@@ -4336,7 +4345,14 @@ pub const StorageAdapter = struct {
             const _dur: f64 = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() -% _t0_12)) / @as(f64, std.time.ns_per_s);
             _om12.recordStorageOp(.write_node, _dur, if (_ok_12) .success else .error_, null);
         }
-        const mg = try self.getOrCreateGraph(graph_name);
+        // SONNY-6492 (3): pinned for the create, as the bulk helpers do
+        // (SONNY-3121). An embedding caller may hold no graph lock (which
+        // pins): a DROP GRAPH after the lookup freed the graph under the
+        // create. The lookup and the pin share one hold of the adapter's
+        // mutex, so a dropped graph is never found (GraphNotFound); a drop
+        // after it waits for this pin before freeing the graph.
+        const mg = try self.pinOrCreateGraph(graph_name);
+        defer self.unpinGraph(mg);
 
         // R7 (2026-04-22): batch every sub-op (putNode + per-label addLabel)
         // into a SINGLE storage-engine transaction so we incur exactly one
@@ -4365,6 +4381,7 @@ pub const StorageAdapter = struct {
             try mg.engine.shards[shardedTxnShard(s.txn_id)].allocNode()
         else
             try mg.engine.allocNode();
+        if (node_slot_allocated_hook) |hook| hook(mg);
         const node_shard = mg.shardEngineForNode(node_id);
 
         // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard
@@ -4409,6 +4426,9 @@ pub const StorageAdapter = struct {
         // relogSecurityLabelPageTxn) — no-op outside __geode_security.
         try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
 
+        // SONNY-6492 (3): dropped while this create ran (its pin kept the
+        // graph): the node is not reported created in a graph that is gone.
+        if (mg.isDropped()) return error.GraphNotFound;
         if (own_txn) try node_shard.commitTxn(local_txn);
         _ok_12 = true;
         // OTel Task 13: graph data model mutation counter.
@@ -9063,7 +9083,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        return hydration_scan.scanShard(allocator, mg.engine.shards[shard_idx], opts);
+        var scan_opts = opts;
+        scan_opts.node_census_writers = &mg.node_census_writers; // SONNY-6492 (2)
+        return hydration_scan.scanShard(allocator, mg.engine.shards[shard_idx], scan_opts);
     }
 
     /// Resolve a raw label/rel-type id to its dictionary string, or null when
@@ -10934,6 +10956,79 @@ pub const StorageAdapter = struct {
                 log.warn("graph '{s}' has invalid persisted free.store; truncating it so GraphEngine.open can rebuild from disk", .{name});
             }
         }
+        try truncateStaleShardFreeStores(self.allocator, name, graph_dir);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6492-STALE-FREE-STORE; FEATURE="CrashRecovery"; ASPECT=StaleFreeStoreRebuild; STATUS=TESTED; TEST=tests/test_sonny6492_checkpoint_free_store_crash.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6492 (1): a shard's `free.store` older than one of its manifest
+    /// slots is truncated before the open, so graph-storage rebuilds the
+    /// shard's page bitmaps from the store files (`rebuildFreeSpaceFromDisk`)
+    /// instead of loading them.
+    ///
+    /// graph-storage 0.4.13's checkpoint (`engine_persist.checkpointEx`)
+    /// writes the manifest and truncates the WAL (`doCheckpoint`) BEFORE it
+    /// saves `free.store`. A crash between the two (a SIGKILL during the
+    /// periodic light checkpoint), or a failed save (ENOSPC, EIO), leaves the
+    /// previous checkpoint's bitmaps beside a manifest and a WAL that already
+    /// count the pages allocated since. The reopen replays no tail, so it
+    /// loads them: every node page allocated since that checkpoint reads as
+    /// free, the node scans skip it (the nodes on it are gone from every
+    /// read; the live-count check reports DataCorruption, REQ-GQL-028), and
+    /// the allocator hands out pages that hold live data.
+    ///
+    /// The rule: graph-storage writes `free.store` (tmp + rename) after the
+    /// manifest of the same checkpoint, and after the manifest a recovery
+    /// writes, so a `free.store` written at or after the newer manifest slot
+    /// belongs to it, and one written before it is stale. Rebuilding from the
+    /// files marks every page below each file's end allocated, which is what
+    /// graph-storage does after any WAL replay: pages freed since the stale
+    /// checkpoint stay unused until the next checkpoint persists the rebuilt
+    /// bitmaps (space, never correctness). Limits: the rule reads file
+    /// modification times, so it needs them to move forward between two
+    /// checkpoints (a clock stepped back across a crash can hide a stale
+    /// file), and a copy of the data directory that does not keep them can
+    /// flag a current file (a needless rebuild) or hide a stale one.
+    fn truncateStaleShardFreeStores(allocator: Allocator, name: []const u8, graph_dir: []const u8) !void {
+        const shards_path = try std.fmt.allocPrint(allocator, "{s}/graphs", .{graph_dir});
+        defer allocator.free(shards_path);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var shards_dir = std.Io.Dir.cwd().openDir(io, shards_path, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
+        defer shards_dir.close(io);
+        var it = shards_dir.iterate();
+        while (try it.next(io)) |entry| {
+            if (entry.kind != .directory) continue;
+            const shard_dir = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ shards_path, entry.name });
+            defer allocator.free(shard_dir);
+            if (!try freeStoreOlderThanManifest(allocator, shard_dir)) continue;
+            if (try truncateFreeStoreIfPresent(allocator, shard_dir)) {
+                log.warn("graph '{s}' shard {s}: free.store predates the shard's last manifest (a checkpoint stopped between its manifest and its free.store); truncating it so GraphEngine.open rebuilds the page bitmaps from disk", .{ name, entry.name });
+            }
+        }
+    }
+
+    fn freeStoreOlderThanManifest(allocator: Allocator, shard_dir: []const u8) !bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const free_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ shard_dir, free_store_path_name });
+        defer allocator.free(free_path);
+        const free_stat = std.Io.Dir.cwd().statFile(io, free_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return false,
+            else => return err,
+        };
+        // Empty: graph-storage rebuilds from disk anyway.
+        if (free_stat.size == 0) return false;
+        for ([_][]const u8{ "manifest.a", "manifest.b" }) |slot| {
+            const manifest_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ shard_dir, slot });
+            defer allocator.free(manifest_path);
+            const manifest_stat = std.Io.Dir.cwd().statFile(io, manifest_path, .{}) catch |err| switch (err) {
+                error.FileNotFound => continue,
+                else => return err,
+            };
+            if (manifest_stat.mtime.nanoseconds > free_stat.mtime.nanoseconds) return true;
+        }
+        return false;
     }
 
     // CANARY: REQ=REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED; FEATURE="Security Graph Audit"; ASPECT=NoUnauditedOpen; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=security; UPDATED=2026-11-12

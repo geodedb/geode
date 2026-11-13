@@ -2604,6 +2604,90 @@
   by zero (`decimal_div`) is 22012; `char(s, n)` of a longer string is 22001
   string data, right truncation. Regression: `zig build
   test-sonny6489-data-exception-codes` (QUIC and gRPC).
+- **Data loss: nodes survive a crash during a checkpoint (SONNY-6492 item
+  1).** graph-storage 0.4.13's checkpoint writes a shard's manifest and
+  truncates its WAL, and only then saves the shard's page bitmaps
+  (`free.store`). The server runs a light checkpoint on every persistence
+  tick (`--persist-interval`, 30 s by default; `GEODE_CHECKPOINT_INTERVAL_MS`
+  and `GEODE_CHECKPOINT_OPS` do not stop it), so a SIGKILL could land
+  between the two, and a failed bitmap save (ENOSPC, EIO) leaves the same
+  state without a crash. The restart replayed no WAL and loaded the previous
+  checkpoint's bitmaps: the node pages allocated since read as free, so
+  every read missed the nodes on them, the first query after the restart
+  failed with `DataCorruption` (the hydration scan's live-count check:
+  "found 42 live node record(s) but the shard manifest counts 84"), and the
+  allocator could hand out pages holding live data. This was the
+  unexplained `DataCorruption` of `test-sonny6471-edge-prop-crash`. Before
+  it opens a graph, the storage adapter now truncates a shard's
+  `free.store` written before the shard's newer manifest slot, so
+  graph-storage rebuilds the bitmaps from the store files, as it does after
+  any WAL replay. Pages freed since that checkpoint stay unused until the
+  next checkpoint saves the rebuilt bitmaps. The rule reads file
+  modification times; a copy of a data directory that does not keep them
+  can make a needless rebuild. The graph-storage ordering itself is
+  reported upstream (save, or truncate, `free.store` before the WAL is
+  truncated). Regression: `zig build
+  test-sonny6492-checkpoint-free-store-crash` (464 of 464 nodes after the
+  kill, with and without TDE; 0 before).
+- **The hydration scan no longer fails with a false `DataCorruption` while
+  nodes are being created (SONNY-6492 item 2).** The first-access hydration
+  scan (`hydration_scan.scanShard`) has the same live-count check as the
+  unlabeled scan (REQ-GQL-028) but none of the SONNY-6472 item 4 allowance
+  for node writes in flight, and it read the count after its dirty-page
+  snapshot, so a create finished in between was counted while its record
+  was read from disk without it. Hydration holds no graph lock, so a node
+  write that does not wait for it (an adapter-level write path) could make
+  it fail and quarantine the graph. The count
+  and the writers in flight are now read before the snapshot and the check
+  allows one missing record per node write in flight at either read, as the
+  unlabeled scan does; with none in flight it stays exact. Regression: `zig
+  build test-sonny6492-hydration-live-count-race`; the detection itself:
+  `test-sonny2409-zeroed-page-header`, `test-canary-recovery-corrupt-latency`.
+- **A replicated write no longer creates a dropped graph again (SONNY-6492
+  item 3).** The Raft apply of a data write (`raft_apply`, the
+  `cluster_replication` apply helpers, the 2PC write-set apply) ensured its
+  graph with `GraphStore.createGraph`, CREATE GRAPH, which creates a dropped
+  name afresh: a write later in the log than a replicated DROP GRAPH brought
+  the graph back with the write in it. They now use
+  `GraphStore.ensureGraphForReplicatedWrite`, which answers `GraphNotFound`
+  for a name dropped since the store opened, on every replica alike, and
+  creates a never-dropped name lazily as before; a replicated CREATE GRAPH
+  (schema_change) still creates the name again. `StorageAdapter.createNode`,
+  which embedding code may call with no graph lock, now pins the graph for
+  the create (a DROP GRAPH between its lookup and its write freed the graph
+  under it) and fails with `GraphNotFound` when the graph was dropped before
+  the create committed. Limit: the dropped names are kept in memory, so after
+  a restart a replayed write of a name dropped before the restart is created
+  lazily again. Regression: `zig build
+  test-sonny6492-replicated-write-dropped-graph`.
+- **DROP GRAPH clears the graph's counts of evicted nodes, and graph names
+  with ':' no longer share counts (SONNY-6492 item 4).** The per-graph label
+  and relationship-type counts and postings were keyed "graph:label":
+  graph "g1" with label "x:y" and graph "g1:x" with label "y" shared one
+  counter and one posting list. They are now keyed "graph\x00label", as the
+  merge-index and tenant keys are. DROP GRAPH removed only the graph's
+  resident nodes and edges from memory; with the node cache bounded, the
+  evicted ones' counts and postings stayed, so a graph created again under
+  the name started with the dropped graph's counts. DROP GRAPH now removes
+  every entry keyed by the graph (label and relationship-type postings and
+  counts, its node set, its tenant-introspection entries) and nothing of
+  another graph. Regression: `zig build test-sonny6492-drop-graph-label-counts`
+  (before: g1 counted 340 nodes with label `x:y`, its 300 and g1:x's 40;
+  with the keys fixed but no purge, g1 created again counted 300).
+- **Measured: the cost of the SONNY-6471 relationship-property images
+  (SONNY-6492 item 5).** `zig build test-sonny6492-edge-prop-image-cost`
+  sets the first property of relationships through
+  `StorageAdapter.setEdgeProperty` with and without the head page images
+  (interleaved perf_gate batches; the skip exists only in test binaries).
+  Each SET that moves a property-chain head adds two 8 KiB page images to
+  the WAL: 24.8 KB of WAL per SET instead of 8.3 KB (x3), in one
+  transaction per SET and in a statement of 100 SETs alike (a SET whose
+  relationship's source is on another shard than the statement transaction
+  commits on its own, SONNY-2979). With the default fsync per commit the
+  time is within noise (-5.3% and +0.5% at about 19 ms per SET on a loaded
+  host); with `GEODE_WAL_SYNC=deferred` a SET takes 280 us instead of
+  109 us (+156%). graph-storage does not deduplicate page images within a
+  transaction. Not reduced in this change.
 - **Test infrastructure: an explicit QUIC test-client timeout is a hard
   deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
   client connected to a loopback address to its server's liveness

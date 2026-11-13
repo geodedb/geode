@@ -141,7 +141,7 @@ fn findNodeByProperty(
 
 fn labelPostingLen(store: *graph_store.GraphStore, graph_name: []const u8, label: []const u8) usize {
     var buf: [256]u8 = undefined;
-    const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, label }) catch return 0;
+    const key = std.fmt.bufPrint(&buf, "{s}\x00{s}", .{ graph_name, label }) catch return 0;
     const posting = store.label_index.getPtr(key) orelse return 0;
     posting.lock();
     defer posting.unlock();

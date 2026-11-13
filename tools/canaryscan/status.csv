@@ -5440,6 +5440,14 @@ REQ-SONNY-6489-TEMPORAL-RENDERING,TemporalTypes,DurationIsoWriter,TESTED,src/typ
 REQ-SONNY-6489-TEMPORAL-RENDERING,TemporalTypes,LocalDatetimeAndDurationFraction,TESTED,tests/test_sonny6489_temporal_rendering.zig,tests/test_sonny6489_temporal_rendering.zig,,datetime,2026-11-13
 REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED,src/execution/match_operations.zig,tests/test_sonny6489_topk_order.zig,,execution,2026-11-13
 REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED,tests/test_sonny6489_topk_order.zig,,,execution,2026-11-13
+REQ-SONNY-6492-DROP-GRAPH-COUNTS,MultiGraphIsolation,PurgeEvictedCounts,TESTED,src/graph_store.zig,tests/test_sonny6492_drop_graph_label_counts.zig,,storage,2026-11-13
+REQ-SONNY-6492-DROP-GRAPH-COUNTS,MultiGraphIsolation,Regression,TESTED,tests/test_sonny6492_drop_graph_label_counts.zig,tests/test_sonny6492_drop_graph_label_counts.zig,,storage,2026-11-13
+REQ-SONNY-6492-EDGE-PROP-IMAGE-COST,TransactionManagement,Measurement,BENCHED,tests/test_sonny6492_edge_prop_image_cost.zig,,tests/test_sonny6492_edge_prop_image_cost.zig,storage,2026-11-13
+REQ-SONNY-6492-HYDRATION-LIVE-COUNT-RACE,StorageIntegrity,Regression,TESTED,tests/test_sonny6492_hydration_live_count_race.zig,tests/test_sonny6492_hydration_live_count_race.zig,,storage,2026-11-13
+REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT,DistributedCluster,ApplyDoesNotRecreateDroppedGraph,TESTED,src/graph_store.zig,tests/test_sonny6492_replicated_write_dropped_graph.zig,,storage,2026-11-13
+REQ-SONNY-6492-REPLICATED-WRITE-NO-RESURRECT,DistributedCluster,Regression,TESTED,tests/test_sonny6492_replicated_write_dropped_graph.zig,tests/test_sonny6492_replicated_write_dropped_graph.zig,,storage,2026-11-13
+REQ-SONNY-6492-STALE-FREE-STORE,CrashRecovery,Regression,TESTED,tests/test_sonny6492_checkpoint_free_store_crash.zig,tests/test_sonny6492_checkpoint_free_store_crash.zig,,storage,2026-11-13
+REQ-SONNY-6492-STALE-FREE-STORE,CrashRecovery,StaleFreeStoreRebuild,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6492_checkpoint_free_store_crash.zig,,storage,2026-11-13
 REQ-SONNY-6494-AUDIT-FAILCLOSED,CLI Audit Configuration,FailClosed,TESTED,src/cli/cli_dispatcher.zig,tests/test_sonny6494_audit_failclosed.zig,,audit,2026-11-13
 REQ-SONNY-6499-CAST-MATRIX,TypeCasting,StandardCastMatrix,TESTED,tests/test_sonny6499_cast_matrix.zig,tests/test_sonny6499_cast_matrix.zig,,eval,2026-11-13
 REQ-SONNY-6499-EXEC-ORDER-NFC,UnicodeOrderBy,ExecTextFallbackNfc,TESTED,tests/test_sonny6499_exec_order_nfc.zig,tests/test_sonny6499_exec_order_nfc.zig,,unicode,2026-11-13

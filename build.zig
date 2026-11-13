@@ -4989,6 +4989,19 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6435-tde-overhead", "Run SONNY-6435 item 2 measurement (TDE overhead of the storage engine: the same insert+read workload with page and WAL encryption off vs on, interleaved perf_gate batches, median overhead, deferred and sync_each_commit WAL sync; asserts the encrypted arm writes no plaintext)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6492 (5): the measured cost of the SONNY-6471 relationship-
+    // property head images (interleaved perf_gate A/B, WAL bytes per SET).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_edge_prop_image_cost.zig"), .target = target, .optimize = optimize, .link_libc = true });
+        mod.addImport("geode", root_mod);
+        mod.addImport("perf_gate", perf_gate_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        bench_step.dependOn(&run_tests.step);
+        b.step("test-sonny6492-edge-prop-image-cost", "Run SONNY-6492 item 5 measurement (time and WAL bytes per relationship-property SET with and without the SONNY-6471 head page images, one transaction per SET and 100 SETs in one transaction, interleaved perf_gate batches)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6435 / SONNY-6441: graph_storage up to 0.4.11 lost committed node
     // records with page encryption (the AES-GCM tag overwrote the page tail);
     // fixed in graph_storage 0.4.12, so this runs in the aggregate.
@@ -10115,6 +10128,21 @@ pub fn build(b: *std.Build) void {
     const sonny6471_step = b.step("test-sonny6471-edge-prop-crash", "Run SONNY-6471 regression (every relationship-property write: CREATE and MERGE with inline properties on the fast paths and the executor, SET r.p, SET r = {...}, REMOVE, outside and inside a transaction, same- and cross-shard, with and without TDE, survives a SIGKILL of a real server; read back outgoing, incoming and by an unlabeled scan)");
     sonny6471_step.dependOn(&run_sonny6471_tests.step);
 
+    // SONNY-6492 (1): nodes written before a checkpoint that stopped between
+    // its manifest and its free.store survive a SIGKILL of a real server.
+    const sonny6492_fs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_checkpoint_free_store_crash.zig"), .target = target, .optimize = optimize });
+    sonny6492_fs_test_mod.link_libc = true;
+    sonny6492_fs_test_mod.addImport("geode", root_mod);
+    sonny6492_fs_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6492_fs_test_mod.addImport("schema", schema_mod);
+    sonny6492_fs_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6492_fs_tests = b.addTest(.{ .root_module = sonny6492_fs_test_mod });
+    const run_sonny6492_fs_tests = b.addRunArtifact(sonny6492_fs_tests);
+    spawnsBuiltGeode(sonny6492_fs_tests);
+    shardDep(test_step, &run_sonny6492_fs_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6492_fs_step = b.step("test-sonny6492-checkpoint-free-store-crash", "Run SONNY-6492 item 1 regression (a real server checkpoints, a checkpoint then stops between its manifest/WAL truncate and its free.store save, the server is SIGKILLed: every node is there after the restart, by label and by an unlabeled scan, and new nodes do not reuse live pages; with and without TDE)");
+    sonny6492_fs_step.dependOn(&run_sonny6492_fs_tests.step);
+
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart
     // (multi-request, and one request left open). Not in shardDep until the
@@ -10180,6 +10208,37 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6472_scan_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6472_scan_step = b.step("test-sonny6472-scan-live-count-race", "Run SONNY-6472 item 4 regression (an unlabeled node scan racing shard-locked deletes and creates never reports DataCorruption; the zeroed-page detection stays, test-sonny2409-zeroed-page-header)");
     sonny6472_scan_step.dependOn(&run_sonny6472_scan_tests.step);
+
+    // SONNY-6492 (2): the hydration scan's live-count check (REQ-GQL-028)
+    // never reports DataCorruption for a create in flight.
+    const sonny6492_hyd_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_hydration_live_count_race.zig"), .target = target, .optimize = optimize });
+    sonny6492_hyd_test_mod.addImport("geode", root_mod);
+    const sonny6492_hyd_tests = b.addTest(.{ .root_module = sonny6492_hyd_test_mod });
+    const run_sonny6492_hyd_tests = b.addRunArtifact(sonny6492_hyd_tests);
+    shardDep(test_step, &run_sonny6492_hyd_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6492_hyd_step = b.step("test-sonny6492-hydration-live-count-race", "Run SONNY-6492 item 2 regression (a hydration scan between a node create's count and its record never reports DataCorruption; with nothing in flight it finds every node; the zeroed-page detection stays, test-sonny2409-zeroed-page-header)");
+    sonny6492_hyd_step.dependOn(&run_sonny6492_hyd_tests.step);
+
+    // SONNY-6492 (3): a replicated data write never creates a dropped graph
+    // again; an unlocked createNode never writes into a graph dropped under it.
+    const sonny6492_repl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_replicated_write_dropped_graph.zig"), .target = target, .optimize = optimize });
+    sonny6492_repl_test_mod.addImport("geode", root_mod);
+    const sonny6492_repl_tests = b.addTest(.{ .root_module = sonny6492_repl_test_mod });
+    const run_sonny6492_repl_tests = b.addRunArtifact(sonny6492_repl_tests);
+    shardDep(test_step, &run_sonny6492_repl_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6492_repl_step = b.step("test-sonny6492-replicated-write-dropped-graph", "Run SONNY-6492 item 3 regression (a Raft-applied data write after a replicated DROP GRAPH answers GraphNotFound and does not create the graph again; a replicated CREATE GRAPH does; createNode with no graph lock fails with GraphNotFound when the graph is dropped under it)");
+    sonny6492_repl_step.dependOn(&run_sonny6492_repl_tests.step);
+
+    // SONNY-6492 (4): DROP GRAPH clears the graph's label and
+    // relationship-type counts of evicted nodes and never touches another
+    // graph's ("g1" vs "g1:x").
+    const sonny6492_drop_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_drop_graph_label_counts.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    sonny6492_drop_test_mod.addImport("geode", root_mod);
+    const sonny6492_drop_tests = b.addTest(.{ .root_module = sonny6492_drop_test_mod });
+    const run_sonny6492_drop_tests = b.addRunArtifact(sonny6492_drop_tests);
+    shardDep(test_step, &run_sonny6492_drop_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6492_drop_step = b.step("test-sonny6492-drop-graph-label-counts", "Run SONNY-6492 item 4 regression (graphs g1 and g1:x with colliding labels and relationship types count their own nodes; DROP GRAPH g1 with most nodes evicted leaves g1:x untouched and nothing of g1: created again, it starts empty)");
+    sonny6492_drop_step.dependOn(&run_sonny6492_drop_tests.step);
 
     const sonny2979_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_crash_atomicity.zig"), .target = target, .optimize = optimize });
     sonny2979_test_mod.link_libc = true;

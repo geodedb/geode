@@ -281,7 +281,7 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
     var r = Reader{ .data = data, .pos = MAGIC.len };
 
     const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
@@ -560,7 +560,7 @@ fn applyMultiCreatePayloadAt(
     var r = Reader{ .data = data, .pos = MAGIC2.len };
 
     const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
@@ -720,7 +720,7 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     var r = Reader{ .data = data, .pos = MAGIC_DEL.len };
 
     const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
@@ -843,7 +843,7 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
 
     const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
@@ -966,7 +966,7 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
 
     const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
