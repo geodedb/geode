@@ -12237,6 +12237,16 @@ pub fn build(b: *std.Build) void {
     const sonny3055_step = b.step("test-sonny3055-nfc-string-identity", "Run SONNY-3055 regression (strings compare, key, hash and seek by their NFC form on every path: =, WHERE and inline-map seeks, IN, MERGE, GROUP BY, DISTINCT, joins, UNIQUE; a store whose indexes were written with raw-byte keys is rebuilt on open)");
     sonny3055_step.dependOn(&run_sonny3055_tests.step);
 
+    // SONNY-2796: see tests/test_sonny2796_temporal_fields.zig.
+    const sonny2796_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2796_temporal_fields.zig"), .target = target, .optimize = optimize });
+    sonny2796_test_mod.addImport("geode", root_mod);
+    sonny2796_test_mod.addImport("logging", logging_mod);
+    const sonny2796_tests = b.addTest(.{ .root_module = sonny2796_test_mod });
+    const run_sonny2796_tests = b.addRunArtifact(sonny2796_tests);
+    shardDep(test_step, &run_sonny2796_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2796_step = b.step("test-sonny2796-temporal-fields", "Run SONNY-2796 regression (the fields of a datetime before 1970 are its ISO 8601 time of day, not negative; local datetimes, plain zoned datetimes and zoned times have fields; tde.configure_rotation with a negative age is refused)");
+    sonny2796_step.dependOn(&run_sonny2796_tests.step);
+
     // SONNY-2806 (round 7): MERGE matches the lowest node id among the nodes
     // holding a merge key, after a delete or a SET, on the server's bulk MERGE
     // and on a reopened store; MERGE's index keeps no number that is not an

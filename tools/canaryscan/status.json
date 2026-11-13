@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:08:42.72521351Z",
+  "generated_at": "2026-11-13T14:10:24.831900429Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -73847,6 +73847,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2796-TEMPORAL-FIELDS",
+      "features": [
+        {
+          "feature": "DateTimeFunctions",
+          "aspect": "FieldsBefore1970",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2796_temporal_fields.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2796_temporal_fields.zig"
+          ],
+          "benches": [],
+          "owner": "datetime",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2798-OFFLINE-VERIFY-FIRST",
       "features": [
         {
@@ -94194,7 +94213,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4912
+      "TESTED": 4913
     },
     "by_aspect": {
       "2PC": 3,
@@ -95555,6 +95574,7 @@
       "FederationIntegration": 1,
       "FieldAllowlist": 1,
       "FieldRequiresEncryptionCheck": 1,
+      "FieldsBefore1970": 1,
       "FileAccessAPI": 1,
       "FileCreation": 1,
       "FileEncryption": 1,
