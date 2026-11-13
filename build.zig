@@ -12081,6 +12081,17 @@ pub fn build(b: *std.Build) void {
     const sonny6264_step = b.step("test-sonny6264-varlen-path-count", "Run SONNY-6264 regression (a variable-length MATCH, COUNT {} and a pattern comprehension return one row per path through parallel edges and a diamond: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
     sonny6264_step.dependOn(&run_sonny6264_tests.step);
 
+    // SONNY-6467: NOT (...) and CALL in a transaction body. See tests/test_sonny6467_query_residuals.zig.
+    const sonny6467_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6467_query_residuals.zig"), .target = target, .optimize = optimize });
+    sonny6467_q_test_mod.addImport("geode", root_mod);
+    sonny6467_q_test_mod.addImport("logging", logging_mod);
+    sonny6467_q_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6467_q_tests = b.addTest(.{ .root_module = sonny6467_q_test_mod });
+    const run_sonny6467_q_tests = b.addRunArtifact(sonny6467_q_tests);
+    shardDep(test_step, &run_sonny6467_q_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6467_q_step = b.step("test-sonny6467-query-residuals", "Run SONNY-6467 regression (NOT applied to a parenthesized comparison is a boolean, not a pattern; a CALL in a transaction body honours RETURN, ORDER BY, SKIP and LIMIT: in-memory, persisted, tenant-scoped and RLS-policy sessions, leak-checked)");
+    sonny6467_q_step.dependOn(&run_sonny6467_q_tests.step);
+
     // SONNY-6296: legacy read gaps from SONNY-2734's comments. See tests/test_sonny6296_legacy_read_gaps.zig.
     const sonny6296_q_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6296_legacy_read_gaps.zig"), .target = target, .optimize = optimize });
     sonny6296_q_test_mod.addImport("geode", root_mod);

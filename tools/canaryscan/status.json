@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T12:04:06.983881075Z",
+  "generated_at": "2026-11-13T12:04:12.469829296Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85995,6 +85995,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6467-QUERY-RESIDUALS",
+      "features": [
+        {
+          "feature": "BooleanExpressions",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6467_query_residuals.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6467_query_residuals.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93662,7 +93681,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4883
+      "TESTED": 4884
     },
     "by_aspect": {
       "2PC": 3,
@@ -96791,7 +96810,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 308,
+      "Regression": 309,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
