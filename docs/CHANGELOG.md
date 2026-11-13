@@ -4,6 +4,19 @@
 
 ### Security
 
+- **A user's own password change is refused in cluster mode (SONNY-1332).**
+  `ALTER USER <self> SET PASSWORD` (and the forced reset after a
+  `password_reset_required` login) is handled by the QUIC and gRPC
+  transports, not by the auth DDL path, and had no cluster gate: it wrote
+  the new password to the `__geode_security` graph of the one node it
+  reached, so the old password stayed valid on every other member. It now
+  fails closed like the other auth writes (`ClusterNotLeader` on a
+  follower, `ClusterWriteNotReplicable` on the leader, 40001). Standalone
+  mode is unaffected. Behaviour change: in cluster mode a user can no
+  longer change their password, and one that must reset it at login cannot
+  complete the reset until auth state is replicated. Regression: the
+  `auth-self-password-change` surface of `zig build
+  test-cluster-replicable-mutations`.
 - **`db.relationshipTypes()` and `db.propertyKeys()` no longer list what
   only edges with an RLS-hidden endpoint carry (SONNY-6460 item 5).** The
   RLS label policies were applied to an edge's type only, so a user denied
@@ -862,6 +875,43 @@
   allocator there and leaked every extended value a WHERE read, the
   SONNY-2656 leak). Regression: `zig build
   test-sonny2670-fle-singletons-process-allocator`.
+- **Work submitted to an idle geode pool starts at once (SONNY-2440).**
+  thread_pool 0.2.10 wakes a parked worker only on every 32nd submit
+  (`wake_coalesce_batch`) and counts on idle workers seeing queued work
+  before they park; a worker already parked sleeps until its idle park
+  expires, 500 ms in geode. So a connection, stream or background task
+  submitted to an idle pool waited up to half a second (449 ms measured)
+  while workers sat parked. geode's pools now wake on every submit
+  (`ThreadPoolConfig.wake_coalesce_batch = 1`). Still open, in thread_pool:
+  with every default-lane worker busy, a default-lane task waits for the
+  parked blocking-lane worker's idle park, because a default-lane submit
+  never wakes it (red reproduction `test-sonny2440-blocking-worker-fallback`,
+  KNOWN_TEST_ISSUES; a library patch is attached to the ticket).
+  Regression: `zig build test-sonny2440-default-lane-wake`.
+- **A CPU-starved or overloaded server is slowed, not killed by the acceptor
+  wedge watchdog (SONNY-2719).** The watchdog exited the process with code 70
+  ("ACCEPTOR WEDGE") once the listener's UDP rx_queue had stayed at or above
+  its threshold for the deadline of wall-clock time, so a server that was
+  draining its backlog more slowly than datagrams arrived (a 1-CPU runner, a
+  throttled container, the CI thresholds of 64 KiB) was restarted and lost
+  every connection. A wedge now also requires that no datagram was drained
+  from the socket over the whole deadline (`QuicTransport.getDatagramsDrained`,
+  counted on every server-side poll), and one 5 s sample interval adds at
+  most 10 s to it (a longer gap means the watchdog itself did not run).
+  A wedged acceptor, which drains nothing, is still restarted after the
+  deadline. Regression: `zig build test-sonny2719-starved-acceptor-survives`
+  (a real `geode serve` throttled to 5% of a CPU with a backlogged listener),
+  and the tracker cases in `zig build test-acceptor-watchdog`.
+- **The schema catalog lives for the process; a batch property write
+  encrypts each FLE value once (SONNY-6468).** `ensureCatalogInstance` made
+  the process-wide catalog on its first caller's allocator, so a request
+  arena could own it and leave it freed (the SONNY-2670 class); it is now
+  made on the process allocator. `setNodePropertiesBatch` and
+  `setEdgePropertiesBatch` sealed each FLE value twice, once for the storage
+  layer and once for the in-memory copy: twice the encryption work, and two
+  different envelopes for one write (each seal draws a fresh nonce). Each
+  value is now sealed once and both copies hold that envelope. Regression:
+  `zig build test-sonny6468-catalog-and-batch-fle`.
 - **FLE: a string shaped like an envelope is encrypted; the record's tenant
   is the encryption identity (SONNY-6347).** (2) The graph-store write
   primitives skipped encryption for any string with the shape of an FLE

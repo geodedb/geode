@@ -956,6 +956,13 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
         .{ .name = "rls-remove-deny-policy", .query = "CALL geode.rls.remove_deny_policy('default', 'FcSecret', 'fcuser')" },
         .{ .name = "rls-add-attribute-policy", .query = "CALL geode.rls.add_attribute_policy('default', 'FcDoc', 'dept', 'department')" },
         .{ .name = "rls-remove-attribute-policy", .query = "CALL geode.rls.remove_attribute_policy('default', 'FcDoc', 'dept', 'department')" },
+        // SONNY-1332: a user's own password change is intercepted by the
+        // transport (quic_connection_handler handleAlterUserSetPassword, the
+        // gRPC twin), not by admin_ddl, and wrote __geode_security on the
+        // one node it reached: the old password stayed valid on every other
+        // member. LAST: if a node accepts it, the admin password there
+        // changes and later probes against that node could not log in.
+        .{ .name = "auth-self-password-change", .query = "ALTER USER geode SET PASSWORD 'Changed Cluster Admin Passphrase 2'" },
     };
 
     var failures: std.ArrayList([]const u8) = .empty;

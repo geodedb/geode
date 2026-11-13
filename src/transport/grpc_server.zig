@@ -3018,6 +3018,15 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 return encodeMessage(allocator, resp);
             }
 
+            // SONNY-1332: refused in cluster mode (no Raft slice for
+            // __geode_security); see the QUIC handler's twin.
+            geode.distributed.cluster.gateUnreplicatedWrite() catch |err| {
+                const info = proto_util.mapError(err);
+                var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            };
+
             // Validate password against SecurityManager policy BEFORE updating
             if (state.security_manager) |sm| {
                 sm.validatePassword(parsed.new_password) catch |err| {

@@ -158,6 +158,16 @@ pub const ThreadPoolConfig = struct {
     /// variant (no inter-worker stealing) so nothing relies on a fast
     /// idle re-poll.
     idle_park_after_ns: u64 = 500_000_000,
+    // CANARY: REQ=REQ-SONNY-2440-DEFAULT-LANE-WAKE; FEATURE="ThreadPool"; ASPECT=WakeEverySubmit; STATUS=TESTED; TEST=tests/test_sonny2440_default_lane_wake.zig; OWNER=transport; UPDATED=2026-11-13
+    /// SONNY-2440: wake a parked worker on every submit (1). thread_pool's
+    /// default (32) scans for a parked worker only on every 32nd submit and
+    /// relies on idle workers noticing queued work before they park; a
+    /// worker already parked sleeps until `idle_park_after_ns` (500 ms
+    /// above), so a connection, stream or background task submitted to an
+    /// idle pool waited up to that long while workers sat parked. The cost
+    /// is one scan of the pool's workers per submit, which geode's handler
+    /// tasks (not millions of microtasks) do not notice.
+    wake_coalesce_batch: u32 = 1,
     /// How long `deinit` waits for in-flight tasks to drain before
     /// giving up and logging a warning.  Upstream default is 30 s —
     /// way too long for per-connection pools on a server where the
@@ -231,6 +241,7 @@ pub const ThreadPool = struct {
             // GAP-0807: raise default idle park from the upstream 250 µs
             // to this caller's config (default 10 ms). See config doc.
             .idle_park_after_ns = config.idle_park_after_ns,
+            .wake_coalesce_batch = config.wake_coalesce_batch, // SONNY-2440
             // 2026-04-23: propagate the caller's deinit timeout through
             // to the upstream pool (default 2 s, was 30 s upstream).
             .deinit_timeout_ns = config.deinit_timeout_ns,

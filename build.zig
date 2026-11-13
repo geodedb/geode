@@ -537,6 +537,8 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
+    .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
+    .{ .name = "test-sonny2440-blocking-worker-fallback", .reason = "intentionally red reproduction of a thread_pool dependency defect (SONNY-2440, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a thread_pool release with the fix" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -5506,6 +5508,24 @@ pub fn build(b: *std.Build) void {
     thread_pool_lane_test_step.dependOn(&run_thread_pool_lane_tests.step);
     shardDep(test_step, &run_thread_pool_lane_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // SONNY-2440: a default-lane task submitted to an idle pool starts at
+    // once (geode's pools wake a parked worker on every submit).
+    const sonny2440_wake_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2440_default_lane_wake.zig"), .target = target, .optimize = optimize }) });
+    sonny2440_wake_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    const run_sonny2440_wake_tests = b.addRunArtifact(sonny2440_wake_tests);
+    shardDep(test_step, &run_sonny2440_wake_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny2440-default-lane-wake", "Run SONNY-2440 regression (every default-lane task submitted to an idle geode pool starts without waiting out a parked worker's 500 ms idle park: thread_pool's submit wakes only every wake_coalesce_batch-th time)").dependOn(&run_sonny2440_wake_tests.step);
+
+    // SONNY-2440: intentionally RED reproduction (docs/KNOWN_TEST_ISSUES.md):
+    // the defect is in the thread_pool dependency (a default-lane submit never
+    // wakes the parked blocking worker). Kept out of `shardDep` until a
+    // thread_pool release with the fix is pinned; compiled by `test-compile`.
+    const sonny2440_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2440_blocking_worker_fallback.zig"), .target = target, .optimize = optimize }) });
+    sonny2440_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    const run_sonny2440_tests = b.addRunArtifact(sonny2440_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny2440_tests.step);
+    b.step("test-sonny2440-blocking-worker-fallback", "Run SONNY-2440 red reproduction (with every default-lane worker busy, a default-lane task waits up to idle_park_after_ns, 500 ms, for the parked blocking worker: thread_pool's scanAndWake never wakes it)").dependOn(&run_sonny2440_tests.step);
+
     // Task #31: QUIC stream multiplex hang — per-connection stream pool
     // must run 4 concurrent streams, not 2.  Root cause: `submit()` routes
     // every task to the 1-wide blocking lane.  See
@@ -5779,6 +5799,23 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6435-kms-attestation", "Run SONNY-6435 item 1 regression (RemoteKmsClient.attest refuses without a pinned key, rejects another server's key, a tampered or replayed attestation and a nonce-less Attest, and accepts the pinned server's fresh attestation, over real QUIC)").dependOn(&run_tests.step);
+    }
+    // SONNY-2412: remote KMS latency stays flat over 64 requests on one
+    // connection (perf gate: enforced when CI is unset). Intentionally RED
+    // reproduction of a quic dependency defect (docs/KNOWN_TEST_ISSUES.md):
+    // kept out of `shardDep` until a quic release with the fix is pinned;
+    // compiled by `test-compile`.
+    {
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2412_kms_latency_flat.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("transport/quic", transport_quic_mod);
+        tests.root_module.addImport("vendor_quic", quic_ext_mod);
+        tests.root_module.addImport("security/kms_remote", kms_remote_mod);
+        tests.root_module.addImport("tls_material", tls_material_mod);
+        tests.root_module.addImport("perf_gate", perf_gate_mod);
+        tests.root_module.link_libc = true;
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny2412-kms-latency-flat", "Run SONNY-2412 regression (64 remote KMS unwraps on one QUIC connection keep a flat latency: the median of the last 16 within 2x of the first 16; perf gate, enforced when CI is unset)").dependOn(&run_tests.step);
     }
 
     // SONNY-6442 (1-3): the remote KMS client verifies the server's
@@ -7972,6 +8009,20 @@ pub fn build(b: *std.Build) void {
     const new1_bola_step = b.step("test-new1-cross-graph-bola", "NEW-1: QUIC HELLO cross-graph BOLA regression (non-admin binds ungranted graph, #861)");
     new1_bola_step.dependOn(&run_new1_bola_tests.step);
     shardDep(test_step, &run_new1_bola_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // SONNY-2719: a CPU-starved server whose listener stays backlogged while
+    // it drains it must not be killed by the acceptor wedge watchdog.
+    const sonny2719_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2719_starved_acceptor_survives.zig"), .target = target, .optimize = optimize });
+    sonny2719_test_mod.addImport("geode", root_mod);
+    sonny2719_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2719_test_mod.addImport("schema", schema_mod);
+    sonny2719_test_mod.addImport("transport/quic", transport_quic_mod);
+    sonny2719_test_mod.link_libc = true;
+    const sonny2719_tests = b.addTest(.{ .root_module = sonny2719_test_mod });
+    const run_sonny2719_tests = b.addRunArtifact(sonny2719_tests);
+    spawnsBuiltGeode(sonny2719_tests);
+    shardDep(test_step, &run_sonny2719_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny2719-starved-acceptor-survives", "Run SONNY-2719 regression (a real geode serve throttled to 5% of a CPU, its listener backlogged by datagrams it is draining, is slowed and not killed by the acceptor wedge watchdog, and answers a query afterwards)").dependOn(&run_sonny2719_tests.step);
 
     // SEC-002 (#849): Unauthenticated CDC arm access — per-arm guard regression.
     // Spawns a real server with GEODE_CDC_ENABLE=1, connects WITHOUT hello,
@@ -15527,6 +15578,19 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6347_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6347_step = b.step("test-sonny6347-fle-envelope-identity", "Run SONNY-6347 regression (a string shaped like an FLE envelope reaching a graph-store write primitive is encrypted unless it authenticates as the record's envelope; the encryption identity is the record's stored tenant, so a parent tenant reads its child's encrypted row, and values written under the writer's request tenant still decrypt)");
     sonny6347_step.dependOn(&run_sonny6347_tests.step);
+
+    const sonny6468_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6468_catalog_and_batch_fle.zig"), .target = target, .optimize = optimize });
+    sonny6468_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6468_test_mod.addImport("geode", root_mod);
+    sonny6468_test_mod.addImport("schema", schema_mod);
+    sonny6468_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6468_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6468_test_mod.addImport("logging", logging_mod);
+    const sonny6468_tests = b.addTest(.{ .root_module = sonny6468_test_mod });
+    const run_sonny6468_tests = b.addRunArtifact(sonny6468_tests);
+    shardDep(test_step, &run_sonny6468_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6468_step = b.step("test-sonny6468-catalog-and-batch-fle", "Run SONNY-6468 regression (the process schema catalog made by a first caller on a transient arena outlives the arena; a batch node or edge property write seals each FLE value once, so the store and the engine hold one envelope)");
+    sonny6468_step.dependOn(&run_sonny6468_tests.step);
 
     const sonny6294_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6294_drop_index_rules.zig"), .target = target, .optimize = optimize });
     sonny6294_test_mod.link_libc = true;

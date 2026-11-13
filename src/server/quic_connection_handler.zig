@@ -6573,6 +6573,18 @@ fn handleAlterUserSetPassword(
         return;
     }
 
+    // CANARY: REQ=REQ-SONNY-1332-SELF-PASSWORD-CLUSTER-GATE; FEATURE="DistributedCluster"; ASPECT=GateSelfPasswordChange; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=security; UPDATED=2026-11-13
+    // SONNY-1332: a user's own password change (and a forced reset) writes
+    // the per-node __geode_security graph, which has no Raft slice. In
+    // cluster mode it changed the password on the one node it reached and
+    // left the old one valid on every other member; refused like the rest
+    // of the auth writes (admin_ddl, auth_dispatch).
+    geode.distributed.cluster.gateUnreplicatedWrite() catch |err| {
+        const info = proto_util.mapError(err);
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+        return;
+    };
+
     // Validate password against SecurityManager policy BEFORE updating the
     // in-memory store.  Previously, user_mgmt accepted any password (no policy
     // validation), then sm.updatePassword silently failed when the password

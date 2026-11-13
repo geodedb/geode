@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T11:32:53.723653436Z",
+  "generated_at": "2026-11-13T12:06:25.702004139Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -69609,6 +69609,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-1332-SELF-PASSWORD-CLUSTER-GATE",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "GateSelfPasswordChange",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_cluster_replicable_mutations.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED",
       "features": [
         {
@@ -69943,6 +69962,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-2412-KMS-LATENCY-FLAT",
+      "features": [
+        {
+          "feature": "RemoteKMSPrototype",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2412_kms_latency_flat.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2412_kms_latency_flat.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-2439-PERF-METHODOLOGY",
       "features": [
         {
@@ -69958,6 +69996,58 @@
           "benches": [],
           "owner": "performance",
           "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2440-BLOCKING-WORKER-FALLBACK",
+      "features": [
+        {
+          "feature": "ThreadPool",
+          "aspect": "DefaultLaneFallbackLatency",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2440_blocking_worker_fallback.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2440_blocking_worker_fallback.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2440-DEFAULT-LANE-WAKE",
+      "features": [
+        {
+          "feature": "ThreadPool",
+          "aspect": "ParkedWorkerWake",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2440_default_lane_wake.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2440_default_lane_wake.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "ThreadPool",
+          "aspect": "WakeEverySubmit",
+          "status": "TESTED",
+          "files": [
+            "src/transport/thread_pool.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2440_default_lane_wake.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -71874,6 +71964,63 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-09-26"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2719-DATAGRAMS-DRAINED",
+      "features": [
+        {
+          "feature": "QUIC High-Concurrency Connection Admission",
+          "aspect": "AcceptorProgressCounter",
+          "status": "TESTED",
+          "files": [
+            "src/transport/quic.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2719_starved_acceptor_survives.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2719-PROGRESS-BASED-WEDGE",
+      "features": [
+        {
+          "feature": "QUIC High-Concurrency Connection Admission",
+          "aspect": "StarvationIsNotAWedge",
+          "status": "TESTED",
+          "files": [
+            "src/server/acceptor_watchdog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2719_starved_acceptor_survives.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-2719-STARVED-ACCEPTOR-SURVIVES",
+      "features": [
+        {
+          "feature": "QUIC High-Concurrency Connection Admission",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny2719_starved_acceptor_survives.zig"
+          ],
+          "tests": [
+            "tests/test_sonny2719_starved_acceptor_survives.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -86270,6 +86417,63 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6468-BATCH-FLE-SEAL-ONCE",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "BatchSealOnce",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6468_catalog_and_batch_fle.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6468-CATALOG-AND-BATCH-FLE",
+      "features": [
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6468_catalog_and_batch_fle.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6468_catalog_and_batch_fle.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6468-CATALOG-PROCESS-ALLOCATOR",
+      "features": [
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "SingletonOnProcessAllocator",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6468_catalog_and_batch_fle.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -93937,7 +94141,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4898
+      "TESTED": 4909
     },
     "by_aspect": {
       "2PC": 3,
@@ -93971,6 +94175,7 @@
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
       "AcceptWithoutPoolAndPeerEndpointChange": 1,
+      "AcceptorProgressCounter": 1,
       "AcceptorSpawn": 1,
       "AccessControl": 3,
       "AccurateStorageMetrics": 1,
@@ -94200,6 +94405,7 @@
       "BatchGeneration": 1,
       "BatchParsing": 1,
       "BatchProcessing": 1,
+      "BatchSealOnce": 1,
       "BatchStreaming": 1,
       "BatchTxnGate": 1,
       "BatchedCountFastPathResponse": 1,
@@ -94823,6 +95029,7 @@
       "DefaultDeny": 1,
       "DefaultFastPathClusterBypass": 1,
       "DefaultGraphProcedures": 1,
+      "DefaultLaneFallbackLatency": 1,
       "DefaultSimpleCreateFastPath": 1,
       "DefenseInDepth": 1,
       "DeferCleanup": 2,
@@ -95404,6 +95611,7 @@
       "GateHelperStandaloneUnit": 1,
       "GateIndexDDL": 1,
       "GatePolicyDDL": 1,
+      "GateSelfPasswordChange": 1,
       "GateStorageProcs": 1,
       "GateTenantOps": 1,
       "GateTsIngest": 1,
@@ -96446,6 +96654,7 @@
       "ParameterHandling": 1,
       "Parentheses": 1,
       "ParityTesting": 1,
+      "ParkedWorkerWake": 1,
       "ParseAttrPredicate": 1,
       "ParseCaptureUsing": 1,
       "ParseErrors": 1,
@@ -97072,7 +97281,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 309,
+      "Regression": 312,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
@@ -97492,6 +97701,7 @@
       "SingleSourceOfTruth": 1,
       "SingleStreamLoop": 1,
       "SingleStreamStressMode": 1,
+      "SingletonOnProcessAllocator": 1,
       "SingletonsOnProcessAllocator": 1,
       "Sinks": 1,
       "SizeCap": 1,
@@ -97563,6 +97773,7 @@
       "StartupReport": 1,
       "StartupVerifyOrRecord": 1,
       "StartupWiring": 4,
+      "StarvationIsNotAWedge": 1,
       "State": 2,
       "StateChangeClassifier": 1,
       "StateEnforcement": 1,
@@ -98017,6 +98228,7 @@
       "VisibleTenantTags": 1,
       "VulkanCompute": 1,
       "WaitForApplied": 1,
+      "WakeEverySubmit": 1,
       "WalLsnAnchorAtOpen": 1,
       "WallClockTiming": 1,
       "WatchdogExitCode": 1,
