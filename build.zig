@@ -9992,6 +9992,15 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_endpoint_host_tests.step, 1, test_shard_loads, test_shard_index);
     const endpoint_host_step = b.step("test-5077-quic-endpoint-host", "Run QUIC endpoint hostname and IP literal resolution regressions");
     endpoint_host_step.dependOn(&run_endpoint_host_tests.step);
+    {
+        const test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_endpoint_host_family.zig"), .target = target, .optimize = optimize });
+        test_mod.link_libc = true;
+        test_mod.addImport("quic_endpoint_host", endpoint_host_mod);
+        const tests = b.addTest(.{ .root_module = test_mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-endpoint-host-family", "Run SONNY-6487 item 2 regression (the CLI QUIC client looks a server name up in both address families, prefers IPv4, and refuses an IPv6-only destination with Ipv6EndpointUnsupported because geode-client-zig binds an IPv4-only endpoint)").dependOn(&run_tests.step);
+    }
 
     const backup_remote_failure_mod = b.createModule(.{ .root_source_file = b.path("tests/test_backup_create_remote_failure.zig"), .target = target, .optimize = optimize });
     backup_remote_failure_mod.link_libc = true;
@@ -10070,6 +10079,32 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6484-client-hard-deadline", "Run SONNY-6484 item 3 regression (the shared QUIC test client: executeAndCollectWithTimeout and readPacket fail with Timeout at their deadline against a live but stopped server instead of waiting up to the 120 s liveness cap; calls that take no timeout still wait while the server is alive)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6487 (2): one host:port grammar; IPv6 listen and dial end to end.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_ipv6_serve.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-ipv6-serve", "Run SONNY-6487 item 2 end-to-end regression (geode serve --listen [::1]:<port> answers a QUIC query over IPv6; --listen and --audit-syslog refuse a port that is not a port; geode query refuses an IPv6 server with the client-library reason)").dependOn(&run_tests.step);
+    }
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_host_port.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("cli_args", cli_args_mod);
+        mod.addImport("cluster_bootstrap", cluster_bootstrap_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-host-port", "Run SONNY-6487 item 2 regression (one host:port grammar: bracketed IPv6 with optional zone, bare IPv6 refused, a port is 1-5 digits; --listen, --listen-grpc and cluster peer specs parse with it and refuse bad ports)").dependOn(&run_tests.step);
     }
 
     // SONNY-6325: no secret or temp directory at a fixed shared /tmp path:
