@@ -850,10 +850,15 @@ pub const QuicTransport = struct {
         // Allocate QuicConfig on the heap so cert/key DER slices remain valid
         // for the lifetime of the endpoint (endpointInit stores references).
         const cfg = try self.allocator.create(VendorQuicConfig);
+        // SONNY-6489: `self.quic_config` is set to `cfg` below, before the
+        // endpoint is created; a failure after that (an address the endpoint
+        // refuses) must not leave it pointing at freed memory, or `deinit`
+        // frees the config, certificate and key a second time.
         errdefer {
             self.allocator.free(inline_cert_der);
             self.allocator.free(inline_priv_key);
             self.allocator.destroy(cfg);
+            self.quic_config = null;
         }
         cfg.* = VendorQuicConfig{
             .version = .v1,

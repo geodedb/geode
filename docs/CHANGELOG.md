@@ -2235,6 +2235,14 @@
 
 ### Fixed
 
+- **A QUIC listener that cannot bind frees its TLS configuration once
+  (SONNY-6489 item 5).** `geode serve --listen ::1:0` (an unbracketed IPv6
+  address, refused with InvalidAddress; the grammar is SONNY-6487) logged
+  three DebugAllocator double frees: `QuicTransport.listen` recorded its
+  config before creating the endpoint, its error path freed the config,
+  certificate and key, and `deinit` freed them again. The error path now
+  clears the recorded config. Regression: `zig build
+  test-sonny6489-listen-error-free`.
 - **`ORDER BY ... LIMIT k` returns the first k rows of the full ORDER BY
   (SONNY-6489 item 2).** The top-K heap that serves `MATCH (n:L) RETURN n.k
   ORDER BY n.k LIMIT k` compared an INT with a DOUBLE or DECIMAL through f64
