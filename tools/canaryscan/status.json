@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T10:54:09.173218322Z",
+  "generated_at": "2026-11-13T10:54:14.004152138Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79755,6 +79755,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6266-EDGE-PROP-HEAD-IN",
+      "features": [
+        {
+          "feature": "EdgeProperties",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6266_planned_reverse_edge_props.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6266_planned_reverse_edge_props.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6268-EDGE-CREATE-ATOMIC",
       "features": [
         {
@@ -93572,7 +93591,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4878
+      "TESTED": 4879
     },
     "by_aspect": {
       "2PC": 3,
@@ -96700,7 +96719,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 304,
+      "Regression": 305,
       "Regression+Stress": 1,
       "RegressionPrevention": 1,
       "RegressionRepro": 1,
