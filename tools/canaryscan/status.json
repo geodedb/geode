@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T09:26:17.804102417Z",
+  "generated_at": "2026-11-13T09:28:57.687102029Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85607,6 +85607,20 @@
       "features": [
         {
           "feature": "GPS Metadata Isolation",
+          "aspect": "EdgeEndpointVisibility",
+          "status": "TESTED",
+          "files": [
+            "src/execution/meta_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6460_meta_rls.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        },
+        {
+          "feature": "GPS Metadata Isolation",
           "aspect": "Regression",
           "status": "TESTED",
           "files": [
@@ -93275,7 +93289,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4859
+      "TESTED": 4860
     },
     "by_aspect": {
       "2PC": 3,
@@ -94347,6 +94361,7 @@
       "EdgeCreateInMemory": 1,
       "EdgeCreation": 1,
       "EdgeCutMinimization": 1,
+      "EdgeEndpointVisibility": 1,
       "EdgeGraphNameLoad": 1,
       "EdgeGraphNamePersistence": 1,
       "EdgeGraphTag": 2,

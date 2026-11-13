@@ -534,7 +534,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny-write-allowlist-r4-transport", .reason = "failing: SONNY-3368 QUIC case times out while seeding on unmodified code" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6460-meta-rls", .reason = "intentionally red TDD reproduction (SONNY-6460 item 5); register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6430-remote-backup-large", .reason = "intentionally red TDD reproduction (SONNY-6430 item 1, KNOWN_TEST_ISSUES): the stall is in the vendored QUIC library; compiled by test-compile; register it through shardDep in the commit that bumps the fixed quic" },
 };
 
@@ -15006,6 +15005,7 @@ pub fn build(b: *std.Build) void {
     sonny6460_meta_mod.addImport("rls_types", rls_types_mod);
     const sonny6460_meta_tests = b.addTest(.{ .root_module = sonny6460_meta_mod });
     const run_sonny6460_meta_tests = b.addRunArtifact(sonny6460_meta_tests);
+    shardDep(test_step, &run_sonny6460_meta_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6460_meta_step = b.step("test-sonny6460-meta-rls", "Run SONNY-6460 item 5 regression (db.relationshipTypes() and db.propertyKeys() omit the types and keys only edges with an endpoint the session's RLS label policies hide carry, as a MATCH does not reach those edges)");
     sonny6460_meta_step.dependOn(&run_sonny6460_meta_tests.step);
     const sonny6460_exec_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{ "exec.zig:", "TestCANARY_REQ_GQL_012_CountDistinctExec" } });

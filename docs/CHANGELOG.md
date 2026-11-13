@@ -4,6 +4,14 @@
 
 ### Security
 
+- **`db.relationshipTypes()` and `db.propertyKeys()` no longer list what
+  only edges with an RLS-hidden endpoint carry (SONNY-6460 item 5).** The
+  RLS label policies were applied to an edge's type only, so a user denied
+  `:Sec` was still told the type and the property keys of edges that touch a
+  `:Sec` node, which no MATCH of theirs reaches (SONNY-2679). Under a deny an
+  edge now counts only when its type is allowed and neither endpoint is
+  hidden; an endpoint that cannot be read counts as hidden. Regression:
+  `zig build test-sonny6460-meta-rls` (in the aggregate).
 - **Encrypted (TDE) stores no longer lose committed records
   (SONNY-6441; graph_storage 0.4.12).** The storage engine wrote the 16-byte
   AES-GCM tag over the last 16 bytes of every encrypted page. At the default

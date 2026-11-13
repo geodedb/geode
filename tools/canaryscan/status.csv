@@ -5461,6 +5461,7 @@ REQ-SONNY-6456-RAFT-REAL-SENDER,DistributedCluster,RaftSenderReconnectsInProcess
 REQ-SONNY-6456-SHUTDOWN-PERSISTENCE-STOP,Persistence,PersistenceStopIsPrompt,TESTED,tests/test_sonny6456_shutdown_persistence_stop.zig,tests/test_sonny6456_shutdown_persistence_stop.zig,,storage,2026-11-13
 REQ-SONNY-6460-CLUSTER-TEST-ADDRESSES,DistributedCluster,DisjointLoopbackAddresses,TESTED,tests/test_sonny6460_cluster_test_addresses.zig,tests/test_sonny6460_cluster_test_addresses.zig,,distributed,2026-11-13
 REQ-SONNY-6460-GQL-GROUP-OWNERSHIP,GqlEngineAggregation,GroupAccumulatorOwnership,TESTED,src/exec.zig,tests/test_sonny6460_query_residuals.zig,,engine,2026-11-13
+REQ-SONNY-6460-META-ENDPOINT-RLS,GPS Metadata Isolation,EdgeEndpointVisibility,TESTED,src/execution/meta_dispatch.zig,tests/test_sonny6460_meta_rls.zig,,security,2026-11-13
 REQ-SONNY-6460-META-ENDPOINT-RLS,GPS Metadata Isolation,Regression,TESTED,tests/test_sonny6460_meta_rls.zig,tests/test_sonny6460_meta_rls.zig,,security,2026-11-13
 REQ-SONNY-6460-QUERY-RESIDUALS,GqlEngineAggregation,Regression,TESTED,tests/test_sonny6460_query_residuals.zig,tests/test_sonny6460_query_residuals.zig,,engine,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
