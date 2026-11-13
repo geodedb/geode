@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T01:04:35.835568773Z",
+  "generated_at": "2026-11-13T01:08:18.359478816Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -84537,6 +84537,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6442-TDE-MEASURE-OVERHEAD-REFUSED",
+      "features": [
+        {
+          "feature": "TDEProcedures",
+          "aspect": "NoFakeOverheadMeasurement",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6442_tde_measure_overhead.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6442_tde_measure_overhead.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -92224,7 +92243,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4796
+      "TESTED": 4797
     },
     "by_aspect": {
       "2PC": 3,
@@ -94479,6 +94498,7 @@
       "NoFabricatedKeyManagement": 1,
       "NoFabricatedKmsSelfTestTruth": 1,
       "NoFabricatedResults": 1,
+      "NoFakeOverheadMeasurement": 1,
       "NoFalseSuccessOnShutdown": 1,
       "NoFixedListenPorts": 1,
       "NoFixedSharedPaths": 1,

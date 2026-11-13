@@ -5400,6 +5400,7 @@ REQ-SONNY-6435-MASTER-KEY-CHECK,Key configuration,MasterKeyCheckValue,TESTED,tes
 REQ-SONNY-6435-MASTER-KEY-CHECK,Key configuration,StartupVerifyOrRecord,TESTED,src/server/server_init.zig,tests/test_sonny6435_master_key_check.zig,,security,2026-11-12
 REQ-SONNY-6435-TDE-CLAIMS-TRUTH,Docs,NoUnmeasuredTdeOverheadClaim,TESTED,tests/test_sonny6435_tde_claims_truth.zig,tests/test_sonny6435_tde_claims_truth.zig,,perf,2026-11-12
 REQ-SONNY-6442-SERVE-UNKNOWN-OPTION,ServerCli,UnknownOptionRefused,TESTED,tests/test_sonny6442_serve_unknown_options.zig,tests/test_sonny6442_serve_unknown_options.zig,,cli,2026-11-12
+REQ-SONNY-6442-TDE-MEASURE-OVERHEAD-REFUSED,TDEProcedures,NoFakeOverheadMeasurement,TESTED,tests/test_sonny6442_tde_measure_overhead.zig,tests/test_sonny6442_tde_measure_overhead.zig,,security,2026-11-12
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,TESTED,src/server/cli_args.zig,tests/test_capability_gate.zig,,server,2026-09-08

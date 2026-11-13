@@ -10014,6 +10014,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6342_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6342_step = b.step("test-sonny6342-tde-stub-procedures", "Run SONNY-6342 regression (tde.* key-management stubs are refused as unsupported with TDE on or off; the real TDE self tests still answer; the dead blind-index predicate rewrite is removed)");
     sonny6342_step.dependOn(&run_sonny6342_tests.step);
+    // SONNY-6442 (6): tde.measure_overhead timed a memcpy against an AEAD
+    // call; it is refused (0A000) and the fake measurement is gone.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6442_tde_measure_overhead.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6442-tde-measure-overhead", "Run SONNY-6442 item 6 regression (CALL tde.measure_overhead() is refused as unsupported with TDE on or off, and the memcpy-vs-AEAD measurement is gone; the real measurement is test-sonny6435-tde-overhead)").dependOn(&run_tests.step);
+    }
     const sonny6386_tde_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6386_tde_key_fail_closed.zig"), .target = target, .optimize = optimize });
     sonny6386_tde_test_mod.link_libc = true;
     sonny6386_tde_test_mod.addImport("geode", root_mod);
