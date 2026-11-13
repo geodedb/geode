@@ -6,7 +6,7 @@ set -e
 
 echo "Dataset integration tests..."
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 
 # Check if dataset is loaded or if we should skip
 if [ "$GEODE_DATASET" != "1" ]; then

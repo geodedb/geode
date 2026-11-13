@@ -50,7 +50,10 @@ have openssl || skip "openssl not available"
 have python3 || skip "python3 not available"
 [ -x "$BIN" ] || skip "geode binary not found at $BIN (build first: zig build)"
 
-TOKEN="netns-test-token"; HMAC="netns-test-hmac-0123456789abcdef0123456789abcdef"; ADMINPW="NetnsTestPw123!"
+# SONNY-6436: the auth-chain HMAC key must be 64 hex characters (the server
+# refuses any other), and the admin seed a passphrase meeting the password
+# policy (anything else forces a reset at the first login).
+TOKEN="netns-test-token"; HMAC="$(openssl rand -hex 32)"; ADMINPW="Netns Cluster Admin Passphrase"
 PEERS="geode-1.geode.test:4242,geode-2.geode.test:4242,geode-3.geode.test:4242"
 FAILED=0
 declare -A PID

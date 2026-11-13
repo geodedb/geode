@@ -12,7 +12,9 @@
 #
 # GEODE_OTEL_PASSWORD MUST be set in the environment (no secret is committed). The verify
 # script and `make otel-compose-up` auto-generate a random one; for a manual `docker compose
-# up` export your own, e.g.  GEODE_OTEL_PASSWORD=$(openssl rand -hex 12) docker compose ... up
+# up` export your own passphrase (it seeds the admin, so it must meet the password policy:
+# 20+ characters, 3+ words, upper and lower case), e.g.
+#   GEODE_OTEL_PASSWORD="Otel Compose $(openssl rand -hex 12) Passphrase" docker compose ... up
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.162.0

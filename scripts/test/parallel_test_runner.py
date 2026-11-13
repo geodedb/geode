@@ -505,7 +505,7 @@ class ParallelTestRunner:
                     processed_arg = arg
                     processed_arg = processed_arg.replace("${secret:api_token}", "test-token-123")
                     processed_arg = processed_arg.replace("${secret:user_password}", "password123")
-                    processed_arg = processed_arg.replace("${secret:admin_password}", "geode-test-password")
+                    processed_arg = processed_arg.replace("${secret:admin_password}", "Geode Test Admin Passphrase")
                     processed_args.append(processed_arg)
                 else:
                     processed_args.append(arg)
@@ -1010,7 +1010,7 @@ class ParallelTestRunner:
         if "GEODE_ADMIN_USERNAME" not in server_env_overrides and "GEODE_ADMIN_USERNAME" not in os.environ:
             server_env_overrides["GEODE_ADMIN_USERNAME"] = "geode"
         if "GEODE_DEFAULT_PASSWORD" not in server_env_overrides and "GEODE_DEFAULT_PASSWORD" not in os.environ:
-            server_env_overrides["GEODE_DEFAULT_PASSWORD"] = "geode-test-password"
+            server_env_overrides["GEODE_DEFAULT_PASSWORD"] = "Geode Test Admin Passphrase"
 
         # Allocate unique port for this spec from the port pool
         port = None

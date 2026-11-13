@@ -1662,6 +1662,24 @@
 
 ### Fixed
 
+- **The in-repo scripts and fixtures seed an HMAC key and admin passwords
+  the server accepts (SONNY-6436 item 1).** The netns cluster scripts
+  (`tests/cluster/netns_cluster_replication_test.sh`,
+  `netns_cluster_membership_churn_test.sh`) passed a
+  `GEODE_AUTH_HMAC_KEY` that is not 64 hex characters, so no node started;
+  they now generate one with `openssl rand -hex 32`. They, the
+  `scripts/` helpers and Python test runners (default
+  `geode-test-password`), `scripts/perf-gate.sh`, the gap0894 repro, the
+  OTel compose stack (`make otel-compose-up`,
+  `scripts/otel-compose-verify.sh`: a bare random hex string) and three
+  `tests/` scripts seeded an admin password the password policy refuses,
+  which forces a reset at the first login, so every later query of the
+  script failed; each now seeds a passphrase (the generated OTel one is
+  wrapped in words), and the scripts quote it where it is passed on. The
+  default of the runners' `admin_password` secret is now `Geode Test
+  Admin Passphrase`, as in `tests/proto_test_util.zig`. Regression:
+  `zig build test-sonny6436-fixture-secrets` scans tests/**, scripts/**,
+  deployment/**, docker-compose* and the Makefile.
 - **Deployment config and docs describe only settings the server has
   (SONNY-6430 item 9).** `docker-compose.yml`, `docker-compose.dev.yml` and
   `docker-compose.gpu.yml` passed `S3_ENDPOINT` / `S3_ACCESS_KEY` /
