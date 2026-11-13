@@ -19,7 +19,7 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
-const batch = @import("test_sonny2672_read_semantics_batch.zig");
+const batch = @import("read_semantics_batch_harness.zig");
 
 const Case = batch.Case;
 

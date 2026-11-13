@@ -22,7 +22,7 @@
 // CANARY: REQ=REQ-SONNY-2812-DISTINCT-LIST-KEYS; FEATURE="AggregateSetQuantifier"; ASPECT=ListKeys; STATUS=TESTED; TEST=tests/test_sonny2812_distinct_list_keys.zig; OWNER=execution; UPDATED=2026-11-12
 
 const std = @import("std");
-const batch = @import("test_sonny2672_read_semantics_batch.zig");
+const batch = @import("read_semantics_batch_harness.zig");
 
 const Case = batch.Case;
 

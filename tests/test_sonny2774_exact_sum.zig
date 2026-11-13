@@ -18,7 +18,7 @@
 // CANARY: REQ=REQ-SONNY-2774-EXACT-SUM; FEATURE="GroupedAggregates"; ASPECT=ExactIntegerSum; STATUS=TESTED; TEST=tests/test_sonny2774_exact_sum.zig; OWNER=execution; UPDATED=2026-11-12
 
 const std = @import("std");
-const batch = @import("test_sonny2672_read_semantics_batch.zig");
+const batch = @import("read_semantics_batch_harness.zig");
 
 const Case = batch.Case;
 const max = "9223372036854775807";
