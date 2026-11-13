@@ -4292,6 +4292,7 @@ REQ-SEC-INFRA-03-TOKEN-ROTATION,ClusterTokenRotation,DualTokenValidation,TESTED,
 REQ-SEC-INFRA-03-TOKEN-ROTATION,ClusterTokenRotation,Regression,TESTED,tests/test_sec_infra03_token_rotation.zig,,,security,2026-06-10
 REQ-SEC-INPUT-VAL-001,Security,InputValidation,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-KMS-001,Security,KMS,TESTED,tests/test_gap_0193_batch5_comprehensive.zig,,,security,2026-01-16
+REQ-SEC-MCP-INSECURE-DSN-001,InsecureTlsFlagGate,McpDsn,TESTED,tests/test_sonny6453_mcp_insecure_dsn.zig,tests/test_sonny6453_mcp_insecure_dsn.zig,,security,2026-11-13
 REQ-SEC-MFA-001,Security,MFA,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-MFA-STEPUP-CLASS-001,MFA step-up operation classification,SECURITY,TESTED,src/security/geode_auth_lib.zig,tests/test_gap0884_stepup_classification.zig,,security,2026-06-10
 REQ-SEC-MFA-STEPUP-CLASS-001,MFA step-up operation classification,SECURITY,TESTED,tests/test_gap0884_stepup_classification.zig,,,security,2026-06-10

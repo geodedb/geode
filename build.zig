@@ -5832,6 +5832,18 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6453-mtls-client-ca", "Run SONNY-6453 item 1 regression (GEODE_MTLS_REQUIRED accepts a client certificate that chains to GEODE_MTLS_CLIENT_CA and rejects one from another CA, a self-signed or expired one, none, and one sent without CertificateVerify; refuses to start with no usable client CA or with a gRPC listener; spawns the built geode over real QUIC)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6453 (3): an MCP endpoint DSN with insecure=true follows the CLI
+    // insecure-TLS rule (refused under production posture, warned otherwise).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_mcp_insecure_dsn.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode_mcp", mcp_cli_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6453-mcp-insecure-dsn", "Run SONNY-6453 item 3 regression (geode mcp refuses an endpoint DSN with insecure=true / insecure_tls_skip_verify / skip_verify under production posture unless GEODE_ALLOW_INSECURE_TLS=1, and warns otherwise; a verified DSN is unaffected)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6453 (4): one rule for a CLI connection with no trust material:
     // refused under production posture, the Debug developer default
     // otherwise; real QUIC against an in-process server.

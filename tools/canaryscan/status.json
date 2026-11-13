@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:39:49.414946875Z",
+  "generated_at": "2026-11-13T07:40:31.226334928Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -66730,6 +66730,25 @@
       ]
     },
     {
+      "id": "REQ-SEC-MCP-INSECURE-DSN-001",
+      "features": [
+        {
+          "feature": "InsecureTlsFlagGate",
+          "aspect": "McpDsn",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6453_mcp_insecure_dsn.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_mcp_insecure_dsn.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SEC-MFA-001",
       "features": [
         {
@@ -93424,7 +93443,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4869
+      "TESTED": 4870
     },
     "by_aspect": {
       "2PC": 3,
@@ -95534,6 +95553,7 @@
       "MaySchema": 1,
       "MaySchemaDatabase": 1,
       "McpCancellation": 1,
+      "McpDsn": 1,
       "McpEnvelopeRoundTrip": 1,
       "MeanDistance": 1,
       "MemberOfValue": 1,
