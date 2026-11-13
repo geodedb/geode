@@ -2015,8 +2015,8 @@ REQ-GQL-024,Nulls-Last Ordering Parity,ProtocolE2E,TESTED,tests/e2e_protocol_tra
 REQ-GQL-025,DistributedQueryPlanning,CoordinatorOperations,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_025_CoordinatorOperations,,distributed,2025-10-05
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,BENCHED,tests/canary_txn_write_skew.zig,TestCANARY_REQ_GQL_025_WriteSkewDetection,BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope,txn,2025-09-21
 REQ-GQL-025,Transactions/MVCC,WriteSkewDetection,BENCHED,src/transactions/manager.zig,TestCANARY_REQ_GQL_025_WriteSkewDetection,BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope,txn,2025-09-26
-REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,BENCHED,src/conformance.zig,TestCANARY_REQ_GQL_026_FlaggerCompleteness,BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope,conformance,2026-02-23
-REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,BENCHED,,TestCANARY_REQ_GQL_026_FlaggerNegativeMissing,,conformance,2026-02-23
+REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,src/conformance.zig,TestCANARY_REQ_GQL_026_FlaggerCompleteness,,conformance,2026-11-13
+REQ-GQL-026,Conformance/Flagger,FlaggerCompleteness,TESTED,,TestCANARY_REQ_GQL_026_FlaggerNegativeMissing,,conformance,2026-11-13
 REQ-GQL-026,DistributedQueryPlanning,ExecutionPhasing,TESTED,tests/distributed_query_planner_test.zig,TestCANARY_REQ_GQL_026_ExecutionPhasing,,distributed,2025-10-05
 REQ-GQL-028,Recovery After Compaction,Storage,TESTED,src/canary.zig,TestCANARY_REQ_GQL_028_RecoveryAfterCompaction,,storage,2025-09-20
 REQ-GQL-028,Snapshot Adaptive Policy,SnapshotAdaptivePolicyLatencyVarianceEnvelope,BENCHED,tests/benchmark_snapshot_adaptive_policy_latency_variance.zig,,BenchmarkCANARY_REQ_GQL_028_SnapshotAdaptivePolicyLatencyVarianceEnvelope,storage,2026-02-04
@@ -4389,7 +4389,6 @@ REQ-SHELL-INTERRUPT-013,SourceInterrupt,BeginInterrupt,TESTED,src/client/repl/re
 REQ-SHELL-INTERRUPT-016,SourceInterrupt,HelloInterrupt,TESTED,src/client/repl/repl_dispatch.zig,tests/test_gap0514_repl_dispatch.zig,,cli,2026-06-11
 REQ-SHELL-INTERRUPT-018,SourceInterrupt,ParsingInterrupt,TESTED,src/client/repl/repl_dispatch.zig,tests/test_gap0514_repl_dispatch.zig,,cli,2026-06-11
 REQ-SHELL-INTERRUPT-022,SourceInterrupt,ExecutionInterrupt,IMPL,src/client/repl/repl_dispatch.zig,,,cli,2026-01-30
-REQ-SHELL-INTERRUPT-030,SourceInterrupt,RollbackScalingTests,TESTED,src/client/repl/repl_dispatch.zig,,,cli,2026-01-30
 REQ-SHELL-INTERRUPT-034,SourceInterrupt,QuicReadLineTimeout,TESTED,src/transport/quic.zig,"""QuicClientStream.readLine: WouldBlock on quiet stream",,transport,2026-06-11
 REQ-SHELL-INTERRUPT-034,SourceInterrupt,QuicReadLineTimeout,TESTED,,"Interrupted with armed callback (GAP-0514 P3)""",,transport,2026-06-11
 REQ-SHELL-INTERRUPT-036,SourceInterrupt,SignalBasedInterrupt,TESTED,src/client/repl/repl_dispatch.zig,tests/test_gap0514_repl_dispatch.zig,,cli,2026-06-11
@@ -5577,6 +5576,7 @@ REQ-SONNY-6489-TEMPORAL-RENDERING,TemporalTypes,DurationIsoWriter,TESTED,src/typ
 REQ-SONNY-6489-TEMPORAL-RENDERING,TemporalTypes,LocalDatetimeAndDurationFraction,TESTED,tests/test_sonny6489_temporal_rendering.zig,tests/test_sonny6489_temporal_rendering.zig,,datetime,2026-11-13
 REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED,src/execution/match_operations.zig,tests/test_sonny6489_topk_order.zig,,execution,2026-11-13
 REQ-SONNY-6489-TOPK-EXACT-ORDER,ValueOrdering,TopKHeapSharesFullSortOrder,TESTED,tests/test_sonny6489_topk_order.zig,,,execution,2026-11-13
+REQ-SONNY-6494-AUDIT-FAILCLOSED,CLI Audit Configuration,FailClosed,TESTED,src/cli/cli_dispatcher.zig,tests/test_sonny6494_audit_failclosed.zig,,audit,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,tests/test_sonny738_equality_consistency.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
@@ -5608,7 +5608,6 @@ REQ-SOURCE-PERF-003,SourceFilePerformance,CacheCleanupOnExit,TESTED,src/client/r
 REQ-SOURCE-PERF-003,SourceFilePerformance,UnitTests,TESTED,src/client/repl/repl_dispatch.zig,,,cli,2026-01-29
 REQ-SOURCE-PERF-004,SourceFilePerformance,BatchParsing,TESTED,src/client/repl/repl_dispatch.zig,geodetestlab/specs/shell_source_batch.yml,,cli,2026-01-29
 REQ-SOURCE-PERF-005,SourceFilePerformance,SingleRequestExecution,TESTED,src/client/repl/repl_dispatch.zig,geodetestlab/specs/shell_source_batch.yml,,cli,2026-01-29
-REQ-SOURCE-PERF-006,SourceBatchTests,UnitTests,TESTED,src/client/repl/repl_dispatch.zig,,,cli,2026-01-29
 REQ-SOURCE-PERF-012,SourceFilePerformance,TransactionDetectionTests,TESTED,src/client/repl/repl_dispatch.zig,,,cli,2026-01-29
 REQ-SPATIAL-AREA-001,SpatialArea,GeometryMeasure,TESTED,src/eval_extended.zig,geodetestlab/specs/spatial_wkb_functions.yml,,spatial,2026-01-10
 REQ-SPATIAL-BUFFER-001,SpatialBuffer,GeometryTransform,TESTED,src/eval_extended.zig,geodetestlab/specs/spatial_wkb_functions.yml,,spatial,2026-01-10

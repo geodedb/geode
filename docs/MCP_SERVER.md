@@ -23,7 +23,7 @@ operators and client authors must understand.
 | `notifications/initialized` | Accepted; flips the server to the initialized state. |
 | `ping` | Standard liveness reply. |
 | `tools/list` | Lists Geode tools: `query`, `schema`, `explain`, `catalogs`, `graphs`, `validate`, `complete`, `hover`, `diagnostics`. |
-| `tools/call` | Dispatches to the named tool (`src/mcp/tools.zig`). Backend tools (`query`/`schema`/`explain`/`catalogs`/`graphs`) require a configured geode endpoint; the language tools (`validate`/`complete`/`hover`/`diagnostics`) are pure and need no backend. See [MCP_LSP_BRIDGE.md](MCP_LSP_BRIDGE.md). |
+| `tools/call` | Dispatches to the named tool (`src/mcp/tools.zig`). Backend tools (`query`/`schema`/`explain`/`catalogs`/`graphs`) require a configured geode endpoint; the language tools (`validate`/`complete`/`hover`/`diagnostics`) are pure and need no backend; `validate` and `diagnostics` include the recommendations listed in [LSP_FEATURES.md](LSP_FEATURES.md#recommendations). See [MCP_LSP_BRIDGE.md](MCP_LSP_BRIDGE.md). |
 | `resources/list` | Lists Geode resources. |
 | `resources/read` | Reads a resource by URI. |
 | `resources/templates/list` | Lists resource templates. |

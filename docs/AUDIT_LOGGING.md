@@ -372,6 +372,31 @@ The system is designed with multiple layers of protection:
 - SIGNING_KEY_ROTATION events are emitted when keys change
 - Limits: RSS <= 512 MiB; append latency <= 500 us (excluding fsync)
 
+## Command audit (`geode --audit*`, `GEODE_AUDIT_*`)
+
+Every `geode` command (including `geode serve`) can log its own start and
+dispatch events, separately from the server's audit chain above. The sinks
+come from the global flags `--audit`, `--audit-file <path>`,
+`--audit-syslog <host>[:<port>]` and `--audit-eventlog [<source>]`, or from
+the environment:
+
+| Variable | Meaning |
+| -------- | ------- |
+| `GEODE_AUDIT_ENABLED` | `1` / `true` turns command audit on |
+| `GEODE_AUDIT_FILE_ENABLED`, `GEODE_AUDIT_FILE_PATH` | append JSON lines to the file (default `/var/log/geode/cli-audit.log`) |
+| `GEODE_AUDIT_SYSLOG_ENABLED`, `GEODE_AUDIT_SYSLOG_HOST`, `GEODE_AUDIT_SYSLOG_PORT` | send RFC 5424 datagrams over UDP; the host is an IPv4 address, a bracketed IPv6 address (`[::1]`) or `localhost`, optionally with `:<port>`; the port defaults to 514 |
+| `GEODE_AUDIT_WINDOWS_EVENTLOG_ENABLED`, `..._SOURCE`, `..._LOG` | Windows Event Log (Windows only) |
+
+Command audit **fails closed** (SONNY-6494): a `GEODE_AUDIT_SYSLOG_PORT`
+that is not a port, a `GEODE_AUDIT_SYSLOG_HOST` the sender cannot send to (a
+host name, a bare IPv6 address), or a sink that cannot be opened (an audit
+file whose directory or file cannot be created) makes the command exit
+non-zero with a message naming the setting, before it does anything. A
+`geode serve` asked to audit does not start, as it does when the server's
+own audit file cannot be opened. These used to print a warning (or nothing:
+a bad port became 514 and a host name dropped every message) and run
+unaudited. The `--audit-syslog` flag is validated the same way (SONNY-6487).
+
 ## Design Rationale
 
 - **Security-First Architecture**: Default-deny filtering with fail-closed behavior ensures no sensitive data can be accidentally logged, providing defense in depth against data leakage.

@@ -8,6 +8,8 @@
 // certificate and key DER it holds, and `QuicTransport.deinit` (the server's
 // teardown) freed all three again: three DebugAllocator double frees.
 // (Accepting the unbracketed form is SONNY-6487, the address grammar.)
+// Since SONNY-6494 the transport brackets a bare IPv6 host itself, so "::1"
+// binds; the test uses an address no endpoint can parse instead.
 //
 // Drives the real transport under `std.testing.allocator`, which reports a
 // double free and a leak.
@@ -37,14 +39,14 @@ test "SONNY-6489: a QUIC listener that cannot bind its address frees its TLS con
     defer a.free(key);
 
     var transport = try quic.QuicTransport.init(a, .{
-        .address = "::1",
+        .address = "not an address",
         .port = 0,
         .cert_path = cert,
         .key_path = key,
         .cert_auto_generate = .always,
     });
     defer transport.deinit();
-    // The certificate is made and loaded; binding "::1:0" fails.
+    // The certificate is made and loaded; binding an unparseable address fails.
     if (transport.listen()) |_| {
         return error.TestUnexpectedResult;
     } else |err| try std.testing.expectEqual(error.InvalidAddress, err);

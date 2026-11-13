@@ -145,11 +145,11 @@ test "SONNY-6487: --listen-grpc parses brackets and keeps refusing IPv6 (grpc-zi
     for ([_][]const u8{ "127.0.0.1:+80", "127.0.0.1:", "127.0.0.1:grpc", "[::1]:x", "1_000" }) |bad| {
         try std.testing.expectError(error.InvalidGrpcListenPort, cli_args.resolveGrpcBind(bad, null));
     }
-    // A port alone binds the QUIC listener's IPv4 address, else 0.0.0.0.
+    // A port alone binds the QUIC listener's IPv4 address; beside an IPv6
+    // QUIC listener it is refused, not widened to 0.0.0.0 (SONNY-6494).
     const same = try cli_args.resolveGrpcBind("50051", "127.0.0.2:3141");
     try std.testing.expectEqualStrings("127.0.0.2", same.address);
-    const wild = try cli_args.resolveGrpcBind("50051", "[::1]:3141");
-    try std.testing.expectEqualStrings("0.0.0.0", wild.address);
+    try std.testing.expectError(error.GrpcPortOnlyListenNotIpv4, cli_args.resolveGrpcBind("50051", "[::1]:3141"));
 }
 
 test "SONNY-6487: cluster peer specs with bracketed IPv6 hosts are loopback, not DNS names" {

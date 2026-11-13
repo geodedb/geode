@@ -2235,6 +2235,70 @@
 
 ### Fixed
 
+- **`geode shell` handles long input (SONNY-6494 item 3).** The
+  meta-commands formatted replies that echo user text into fixed stack
+  buffers, so `\echo`, `\set <option>`, `\use`, `\graph`, `\connect`,
+  `\history` (an entry over about 1 KiB) and the unknown-command error
+  failed with `NoSpaceLeft` on long text, and `\source` with a path over
+  about 500 bytes did nothing and printed nothing; the transaction-recovery
+  prompt dropped a graph name over about 200 bytes. The replies are now
+  sized to their text. The line editor called any input of 4096 bytes or
+  more a complete statement, so a long statement typed across lines was
+  submitted at the first line ending in a keyword such as `AS` or `WHERE`;
+  it now checks only the end of the input. ESC followed by a non-ASCII
+  character in one read was taken as Alt+<letter> and the character lost;
+  it is now ESC and then the character. Still open: East Asian wide
+  characters are drawn one column wide (neither geode nor its `strings`
+  dependency has an East Asian Width table). Regression: `zig build
+  test-sonny6494-repl-long-input` (the real shell, plain mode and a
+  pseudo-terminal).
+- **Command audit fails closed: `geode` refuses to run when the audit it
+  was asked for cannot be set up (SONNY-6494 item 4).** A
+  `GEODE_AUDIT_SYSLOG_PORT` that was not a port silently became 514, a host
+  name in `GEODE_AUDIT_SYSLOG_HOST` was kept and every audit message
+  dropped, an audit configuration error turned command audit off with a
+  warning, and an audit file that could not be opened only printed a
+  warning, so the command (including `geode serve`) ran unaudited. The env
+  form now uses the `--audit-syslog` grammar (`geode.host_port`), and any of
+  these makes the command exit non-zero naming the setting before it
+  starts. **Behaviour change:** a deployment whose `GEODE_AUDIT_*` settings
+  were silently ignored (for example `GEODE_AUDIT_FILE_ENABLED=1` with the
+  default `/var/log/geode/cli-audit.log` not writable, or a syslog host
+  name) no longer starts until they are corrected. See
+  [AUDIT_LOGGING.md](AUDIT_LOGGING.md) ("Command audit").
+  Regression: `zig build test-sonny6494-audit-failclosed` (the built
+  binary).
+- **The cluster listener binds an IPv6 `GEODE_CLUSTER_LISTEN_ADDRESS`; a
+  port-only `--listen-grpc` no longer listens wider than QUIC (SONNY-6494
+  item 5).** The QUIC transport bound `"{address}:{port}"`, so an IPv6
+  address written bare (`GEODE_CLUSTER_LISTEN_ADDRESS=::1`, which the
+  cluster listener passes through as written) became `::1:4242` and the
+  listener could not start. The bind address is now bracketed for an IPv6
+  host however it was written (`QuicTransport.formatBindAddress`). A failed
+  bind also left the transport holding the listen configuration it had just
+  freed, so `deinit` freed it again (a crash on, for example, an address the
+  host does not have); it now returns the bind error cleanly. A port-only
+  `--listen-grpc` beside an IPv6 or host-name `--listen` bound `0.0.0.0`
+  (every IPv4 interface while QUIC listened on one address); it is now
+  refused at startup with exit status 2 and a message naming both flags.
+  **Behaviour change:** `geode serve --listen [::1]:3141 --listen-grpc 50051`
+  no longer starts; give `--listen-grpc` an IPv4 address. Regression:
+  `zig build test-sonny6494-listen-addresses` (also covers the acceptor
+  watchdog of `--listen <port>` and `--listen <host>`, already correct
+  after SONNY-6480).
+- **MCP `validate` and LSP diagnostics show the WHERE, FILTER and ORDER BY
+  recommendations again (SONNY-6494 item 1).** The recommendation engine
+  (`src/gql/recommendations.zig`) recognised a property reference only as
+  `.PropertyAccess`, but the parser writes `n.prop` as `.Member` on an
+  identifier, so the index (`WHERE n.p = …`, `ORDER BY n.p`), fulltext
+  index (`CONTAINS`, `STARTS WITH`) and coalesce (`IS NULL`) suggestions
+  never fired. It now reads both forms and also checks the ISO `FILTER`
+  statement. The suggestions and their triggers are listed in
+  [LSP_FEATURES.md](LSP_FEATURES.md#recommendations). Regression:
+  `zig build test-sonny6494-recommendations-inline` (the file's inline tests,
+  which no step ran) and `zig build
+  test-sonny6494-mcp-validate-recommendations` (MCP `tools/call` →
+  `validate`).
 - **MCP hover: function and procedure signatures are no longer built in
   fixed stack buffers (SONNY-6487 item 1).** `src/mcp/lsp.zig` `getHover`
   wrote a function's parameter list into a 1024-byte stack array and a

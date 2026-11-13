@@ -284,7 +284,7 @@ pub fn printHelp() void {
     std.debug.print("Options:\n", .{});
     std.debug.print("  -c, --config <path>          Path to config file (YAML, TOML, or JSON)\n", .{});
     std.debug.print("  --listen <addr:port>         Listen on QUIC/TLS (e.g., 0.0.0.0:3141). Also GEODE_PORT=<port> (binds 0.0.0.0:<port>)\n", .{});
-    std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:50051); IPv4 only; a port alone binds the --listen address (or 0.0.0.0)\n", .{});
+    std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:50051); IPv4 only; a port alone binds the --listen address (0.0.0.0 without --listen; refused when --listen is not IPv4)\n", .{});
     std.debug.print("  --lsp-port=<port>            Embedded LSP TCP listener port (default 3142; 0 disables it; also GEODE_LSP_PORT)\n", .{});
     std.debug.print("  --lsp-bind-all               Bind the embedded LSP listener on 0.0.0.0 instead of 127.0.0.1\n", .{});
     std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
@@ -389,6 +389,9 @@ pub const GrpcListenError = error{
     InvalidGrpcListenPort,
     /// Not an IPv4 address (IPv6 or a host name): grpc-zig cannot bind it.
     GrpcListenAddressNotIpv4,
+    /// A port alone binds the --listen address, and that is not IPv4 (an
+    /// IPv6 address or a host name) (SONNY-6494).
+    GrpcPortOnlyListenNotIpv4,
 };
 
 /// The IPv4 address a listen host names, or null when it names none.
@@ -439,30 +442,34 @@ pub fn resolveQuicListen(listen: []const u8) QuicListenError!QuicListen {
     return .{ .address = if (hp.host.len == 0) "0.0.0.0" else hp.host_literal, .port = hp.port };
 }
 
-/// The IPv4 address the QUIC listener binds, for a port-only --listen-grpc.
-fn quicListenIpv4(listen_quic: ?[]const u8) ?[]const u8 {
-    const quic = resolveQuicListen(listen_quic orelse return null) catch return null;
-    return ipv4ListenHost(quic.address);
+/// The address a port-only --listen-grpc binds: the QUIC listener's, or
+/// 0.0.0.0 -- QUIC's own port-only default -- with no --listen. SONNY-6494:
+/// a --listen that is IPv6 or a host name is refused, not widened to
+/// 0.0.0.0 (every IPv4 interface while QUIC listens on one address).
+fn grpcPortOnlyHost(listen_quic: ?[]const u8) GrpcListenError![]const u8 {
+    const quic = resolveQuicListen(listen_quic orelse return "0.0.0.0") catch return error.GrpcPortOnlyListenNotIpv4;
+    return ipv4ListenHost(quic.address) orelse error.GrpcPortOnlyListenNotIpv4;
 }
 
 /// SONNY-1336: resolve `--listen-grpc` (`<ipv4>:<port>`, `localhost:<port>`
 /// or `<port>`) to the address the gRPC listener binds. A port alone binds
 /// the QUIC listener's address (`listen_quic`), or 0.0.0.0 -- the QUIC
-/// port-only default -- when that names no IPv4 address. An IPv6 address or a
-/// host name is refused rather than replaced: grpc-zig binds IPv4 only.
+/// port-only default -- when there is no `listen_quic`; it is refused when
+/// that address is not IPv4 (SONNY-6494). An IPv6 address or a host name is
+/// refused rather than replaced: grpc-zig binds IPv4 only.
 /// SONNY-6487: parsed with the shared grammar, so `[::1]:50051` and
 /// `::1:50051` are refused as IPv6 (not as a host named `[::1]`), and a port
 /// is 1-5 digits (`+80` and `1_000` are refused).
 pub fn resolveGrpcBind(listen_grpc: []const u8, listen_quic: ?[]const u8) GrpcListenError!GrpcBind {
     if (isPortOnly(listen_grpc)) {
         const port = host_port.parsePort(listen_grpc) catch return error.InvalidGrpcListenPort;
-        return .{ .address = quicListenIpv4(listen_quic) orelse "0.0.0.0", .port = port };
+        return .{ .address = try grpcPortOnlyHost(listen_quic), .port = port };
     }
     const hp = host_port.split(listen_grpc, null) catch |err| return switch (err) {
         error.InvalidPort => error.InvalidGrpcListenPort,
         error.InvalidAddress => error.GrpcListenAddressNotIpv4,
     };
-    if (hp.host.len == 0) return .{ .address = quicListenIpv4(listen_quic) orelse "0.0.0.0", .port = hp.port };
+    if (hp.host.len == 0) return .{ .address = try grpcPortOnlyHost(listen_quic), .port = hp.port };
     const address = ipv4ListenHost(hp.host) orelse return error.GrpcListenAddressNotIpv4;
     return .{ .address = address, .port = hp.port };
 }
@@ -738,6 +745,7 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
             switch (err) {
                 error.InvalidGrpcListenPort => std.debug.print("Error: geode serve: --listen-grpc '{s}' has no valid port (expected <ipv4>:<port> or <port>, port 0-65535)\n", .{grpc_addr}),
                 error.GrpcListenAddressNotIpv4 => std.debug.print("Error: geode serve: --listen-grpc '{s}' is not an IPv4 address; the gRPC listener binds IPv4 only (for example 0.0.0.0:50051 or 127.0.0.1:50051)\n", .{grpc_addr}),
+                error.GrpcPortOnlyListenNotIpv4 => std.debug.print("Error: geode serve: --listen-grpc '{s}' has no address, and a port alone binds the --listen address '{s}', which is not IPv4; the gRPC listener binds IPv4 only, so give --listen-grpc an IPv4 address (for example 127.0.0.1:50051)\n", .{ grpc_addr, config.listen_quic orelse "" }),
             }
             return err;
         };

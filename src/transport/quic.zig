@@ -892,14 +892,7 @@ pub const QuicTransport = struct {
         };
         self.quic_config = cfg;
 
-        // Normalize "localhost" to "127.0.0.1"
-        const bind_address = if (std.mem.eql(u8, self.config.address, "localhost"))
-            "127.0.0.1"
-        else
-            self.config.address;
-
-        // Create bind address string
-        const bind_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ bind_address, self.config.port });
+        const bind_addr = try formatBindAddress(self.allocator, self.config.address, self.config.port);
         defer self.allocator.free(bind_addr);
 
         // Initialize endpoint using api.endpointInit (heap-allocates the Endpoint struct).
@@ -919,6 +912,25 @@ pub const QuicTransport = struct {
         // Set module-level pointer so the callback can read getConnectionCount().
         g_quic_transport_instance = self;
         @import("otel_metrics").registerTransportConnectionGauge(activeConnectionCountProvider) catch {};
+    }
+
+    /// SONNY-6494: the `host:port` the endpoint binds. `address` may be
+    /// bracketed (`[::1]`, as `--listen` passes it) or bare (`::1`, as
+    /// GEODE_CLUSTER_LISTEN_ADDRESS may be written); an IPv6 host is always
+    /// bracketed, which the QUIC library's address parser requires.
+    /// "localhost" binds 127.0.0.1. (src/client/host_port.zig formatAlloc,
+    /// which this module cannot import: that file belongs to the geode
+    /// module, which imports this one.)
+    pub fn formatBindAddress(allocator: std.mem.Allocator, address: []const u8, port: u16) ![]u8 {
+        const host = if (std.mem.eql(u8, address, "localhost"))
+            "127.0.0.1"
+        else if (address.len >= 2 and address[0] == '[' and address[address.len - 1] == ']')
+            address[1 .. address.len - 1]
+        else
+            address;
+        if (std.mem.indexOfScalar(u8, host, ':') != null)
+            return std.fmt.allocPrint(allocator, "[{s}]:{d}", .{ host, port });
+        return std.fmt.allocPrint(allocator, "{s}:{d}", .{ host, port });
     }
 
     /// The UDP port the listening socket is bound to (SONNY-6332). Differs

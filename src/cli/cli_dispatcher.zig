@@ -205,9 +205,13 @@ pub fn dispatch(
         .{ .name = "apikey", .handler = cmdApiKey, .description = "API key management" },
     };
 
-    // Parse audit configuration from environment variables
+    // Parse audit configuration from environment variables.
+    // SONNY-6494: an audit setting that cannot be used refuses the command
+    // (below, after --help / --version); it used to turn audit off with a
+    // warning. parseAuditConfigFromEnv printed which setting.
+    var audit_env_err: ?anyerror = null;
     var audit_cfg = parseAuditConfigFromEnv(allocator) catch |err| blk: {
-        std.debug.print("Warning: Failed to parse audit configuration: {s}\n", .{@errorName(err)});
+        audit_env_err = err;
         break :blk CliAuditConfig{};
     };
 
@@ -296,9 +300,22 @@ pub fn dispatch(
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    // Initialize audit logging
+    // CANARY: REQ=REQ-SONNY-6494-AUDIT-FAILCLOSED; FEATURE="CLI Audit Configuration"; ASPECT=FailClosed; STATUS=TESTED; TEST=tests/test_sonny6494_audit_failclosed.zig; OWNER=audit; UPDATED=2026-11-13
+    // SONNY-6494: audit fails closed. A command asked to audit whose audit
+    // configuration or sink cannot be set up does not run (as the server's
+    // own audit sink refuses startup when it cannot be opened); it used to
+    // print a warning and run unaudited.
+    if (audit_env_err) |err| {
+        std.debug.print("Error: geode: the GEODE_AUDIT_* audit configuration is invalid ({s}); refusing to run without the audit logging it asks for\n", .{@errorName(err)});
+        return err;
+    }
     initializeAuditLogger(allocator, audit_cfg) catch |err| {
-        std.debug.print("Warning: Failed to initialize audit logging: {s}\n", .{@errorName(err)});
+        std.debug.print("Error: geode: cannot open the audit sink ({s}{s}{s}); refusing to run without the audit logging that was requested\n", .{
+            @errorName(err),
+            if (audit_cfg.file_enabled) ", audit file " else "",
+            if (audit_cfg.file_enabled) (audit_cfg.file_path orelse default_cli_audit_file) else "",
+        });
+        return error.AuditSinkUnavailable;
     };
     defer deinitializeAuditLogger();
 
@@ -1156,9 +1173,23 @@ pub fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
     return getEnvVarOwned(allocator, key) catch null;
 }
 
+const default_cli_audit_file = "/var/log/geode/cli-audit.log";
+
+pub const AuditEnvError = error{
+    /// GEODE_AUDIT_SYSLOG_PORT is not 1-5 digits in 0..65535.
+    InvalidAuditSyslogPort,
+    /// GEODE_AUDIT_SYSLOG_HOST is not an IPv4 address, a bracketed IPv6
+    /// address or localhost (optionally with :port), or names a port as
+    /// well as GEODE_AUDIT_SYSLOG_PORT.
+    InvalidAuditSyslogHost,
+};
+
 // CANARY: REQ=REQ-AUDIT-CLI-001; FEATURE="CLI Audit Configuration"; ASPECT=Configuration; STATUS=TESTED; TEST=TestCANARY_REQ_AUDIT_CLI_001_Configuration; OWNER=audit; UPDATED=2025-09-30
 pub fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
     var cli_config = CliAuditConfig{};
+    errdefer inline for (.{ "syslog_host", "file_path", "windows_eventlog_source", "windows_eventlog_log" }) |field| {
+        if (@field(cli_config, field)) |owned| allocator.free(owned);
+    };
 
     // Check if audit is enabled
     if (getEnvVar(allocator, "GEODE_AUDIT_ENABLED")) |value| {
@@ -1172,13 +1203,35 @@ pub fn parseAuditConfigFromEnv(allocator: std.mem.Allocator) !CliAuditConfig {
         cli_config.syslog_enabled = std.mem.eql(u8, value, "true") or std.mem.eql(u8, value, "1");
     }
 
-    if (getEnvVar(allocator, "GEODE_AUDIT_SYSLOG_HOST")) |value| {
-        cli_config.syslog_host = value; // Keep ownership
-    }
-
+    // SONNY-6494: the --audit-syslog grammar (SONNY-6487, geode.host_port);
+    // a port that is not a port is refused (it used to become 514), and so
+    // is a host the sender cannot send to (it used to drop every message).
+    var port_from_env = false;
     if (getEnvVar(allocator, "GEODE_AUDIT_SYSLOG_PORT")) |value| {
         defer allocator.free(value);
-        cli_config.syslog_port = std.fmt.parseInt(u16, value, 10) catch 514;
+        cli_config.syslog_port = geode.host_port.parsePort(value) catch {
+            std.debug.print("Error: GEODE_AUDIT_SYSLOG_PORT '{s}' is not a port (1-5 digits, 0-65535)\n", .{value});
+            return error.InvalidAuditSyslogPort;
+        };
+        port_from_env = true;
+    }
+
+    if (getEnvVar(allocator, "GEODE_AUDIT_SYSLOG_HOST")) |value| {
+        defer allocator.free(value);
+        const target = geode.host_port.split(value, cli_config.syslog_port) catch {
+            std.debug.print("Error: GEODE_AUDIT_SYSLOG_HOST '{s}' is not a valid address (expected <host>[:<port>] or [<ipv6>][:<port>], port 0-65535)\n", .{value});
+            return error.InvalidAuditSyslogHost;
+        };
+        if (syslogTarget(target.host, target.port) == null) {
+            std.debug.print("Error: GEODE_AUDIT_SYSLOG_HOST '{s}': the syslog sender sends to an IPv4 address, a bracketed IPv6 address or localhost, not to a host name\n", .{value});
+            return error.InvalidAuditSyslogHost;
+        }
+        if (port_from_env and target.port != cli_config.syslog_port) {
+            std.debug.print("Error: GEODE_AUDIT_SYSLOG_HOST '{s}' names port {d} and GEODE_AUDIT_SYSLOG_PORT names {d}\n", .{ value, target.port, cli_config.syslog_port });
+            return error.InvalidAuditSyslogHost;
+        }
+        cli_config.syslog_host = try allocator.dupe(u8, target.host);
+        cli_config.syslog_port = target.port;
     }
 
     // Note: Protocol and facility configuration can be added later if needed
@@ -1217,7 +1270,7 @@ pub fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditC
 
     // Initialize file logging if enabled
     if (cli_config.file_enabled) {
-        const path = cli_config.file_path orelse "/var/log/geode/cli-audit.log";
+        const path = cli_config.file_path orelse default_cli_audit_file;
 
         // Create directory if it doesn't exist
         if (std.fs.path.dirname(path)) |dir| {

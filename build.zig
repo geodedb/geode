@@ -8013,6 +8013,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gap0516_tests.step, 1, test_shard_loads, test_shard_index);
     const gap0516_step = b.step("test-gap0516", "GAP-0516: MCP resource-subscription contract + truthful capability reporting");
     gap0516_step.dependOn(&run_gap0516_tests.step);
+    // SONNY-6494 (1): MCP `validate` (tools/call through processMessage)
+    // shows each recommendation kind of src/gql/recommendations.zig.
+    const sonny6494_mcp_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_mcp_validate_recommendations.zig"), .target = target, .optimize = optimize });
+    sonny6494_mcp_test_mod.addImport("mcp_server", gap0516_server_mod);
+    sonny6494_mcp_test_mod.link_libc = true;
+    const sonny6494_mcp_tests = b.addTest(.{ .root_module = sonny6494_mcp_test_mod });
+    const run_sonny6494_mcp_tests = b.addRunArtifact(sonny6494_mcp_tests);
+    shardDep(test_step, &run_sonny6494_mcp_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6494_mcp_step = b.step("test-sonny6494-mcp-validate-recommendations", "Run SONNY-6494 item 1 regression (MCP validate, through the real tools/call dispatch, shows the index, fulltext-index, coalesce, encrypted, searchable, vector-index, path-mode and degree recommendations on the query shapes that trigger them)");
+    sonny6494_mcp_step.dependOn(&run_sonny6494_mcp_tests.step);
 
     // Task 6 (hybrid-RAG audit spec): MCP server read-only mode. Roots the
     // regression file through src/mcp/server.zig exposed as `mcp_server`,
@@ -8169,6 +8179,50 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6480-acceptor-watchdog", "Run SONNY-6480 regression (the acceptor watchdog watches the bound listener: --listen host:0 and IPv6 (/proc/net/udp6), rows matched by address and owning socket; the default threshold detects a one-datagram wedge and never restarts a draining acceptor)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6494 (5): the QUIC listener binds a bare or bracketed IPv6
+    // address (the cluster listener's GEODE_CLUSTER_LISTEN_ADDRESS); a
+    // port-only --listen-grpc is refused when --listen is not IPv4; the
+    // acceptor watchdog watches `--listen <port>` and `--listen <host>`.
+    {
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_listen_addresses.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.addImport("transport/quic", transport_quic_mod);
+        tests.root_module.addImport("cli_args", cli_args_mod);
+        tests.root_module.link_libc = true;
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6494-listen-addresses", "Run SONNY-6494 item 5 regression (QuicTransport listens on ::1 written bare, as GEODE_CLUSTER_LISTEN_ADDRESS may be, and bracketed; a port-only --listen-grpc is refused (exit 2) when --listen is IPv6 or a host name instead of binding 0.0.0.0; the acceptor watchdog of geode serve --listen <port> and --listen <host> watches the bound listener)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6494 (4): the CLI audit configuration fails closed (bad
+    // GEODE_AUDIT_SYSLOG_PORT / _HOST, an audit file that cannot be opened:
+    // geode serve refuses to start). Spawns the built geode.
+    {
+        const tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_audit_failclosed.zig"), .target = target, .optimize = optimize }) });
+        tests.root_module.link_libc = true;
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6494-audit-failclosed", "Run SONNY-6494 item 4 regression (geode serve refuses to start on a GEODE_AUDIT_SYSLOG_PORT that is not a port, a GEODE_AUDIT_SYSLOG_HOST the sender cannot send to, or an audit file it cannot open; valid env syslog targets, IPv4 and IPv6, receive the startup event; built binary)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6494 (3): geode shell and long input (meta-command replies,
+    // \source paths, a statement over 4 KiB across lines, \history, ESC
+    // before a UTF-8 character). The real shell, plain and through a PTY.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6494_repl_long_input.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6494-repl-long-input", "Run SONNY-6494 item 3 regression (geode shell: \\echo, \\set, an unknown command, \\use and \\graph answer long text; \\source runs a path over 500 bytes and names one it cannot open; a statement over 4 KiB typed across lines runs once, whole; \\history prints it; ESC before a UTF-8 character is not Alt; real shell, plain mode and a PTY)").dependOn(&run_tests.step);
     }
 
     // SEC-002 (#849): Unauthenticated CDC arm access — per-arm guard regression.
@@ -9190,6 +9244,17 @@ pub fn build(b: *std.Build) void {
         .root_module = proto_reap_mod,
         .filters = &.{"proto_reader_idle_connection_reap_deadline_regression"},
     });
+    // SONNY-6494 (2): the handler's other inline tests (shared connection
+    // state, idle read errors, the global stream throttle, the detached
+    // first-stream owner gate), which no filter of the steps above named.
+    const sonny6494_handler_tests = b.addTest(.{
+        .name = "sonny6494-handler-inline",
+        .root_module = proto_reap_mod,
+        .filters = &.{ "SharedConnState", "isIdleStreamReadError", "setMaxGlobalStreamThreads", "global stream throttle", "detached first-stream owner gate" },
+    });
+    const run_sonny6494_handler_tests = b.addRunArtifact(sonny6494_handler_tests);
+    b.step("test-sonny6494-handler-inline", "Run SONNY-6494 item 2: src/server/quic_connection_handler.zig's inline tests no other step's filter named (SharedConnState stream slots and graph sync, isIdleStreamReadError, the global stream throttle, the detached first-stream owner gate)").dependOn(&run_sonny6494_handler_tests.step);
+    shardDep(test_step, &run_sonny6494_handler_tests.step, 8, test_shard_loads, test_shard_index);
     const run_proto_reap_tests = b.addRunArtifact(proto_reap_tests);
     const proto_reap_step = b.step("test-proto-reader-idle-reap", "Run idle-connection reap-cap regression (8.3h vs 300s reap deadline)");
     proto_reap_step.dependOn(&run_proto_reap_tests.step);
@@ -15608,6 +15673,23 @@ pub fn build(b: *std.Build) void {
                 sonny6463b_step.dependOn(&run_tests.step);
             }
         }
+        // SONNY-6494 (2): geode-module files whose inline tests no step ran.
+        // conformance.zig is std-only (its own root); repl_dispatch.zig
+        // reaches src/lib.zig back, so its tests run from the geode lib
+        // module, filtered (test "repl_dispatch: inline test root" in
+        // src/lib.zig keeps the file in discovery).
+        {
+            const sonny6494_step = b.step("test-sonny6494-inline", "Run SONNY-6494 item 2: the inline tests of src/conformance.zig and src/client/repl/repl_dispatch.zig, which did not compile on Zig 0.16 and ran in no step, and of src/client/repl/repl_parse.zig");
+            for ([_]struct { name: []const u8, mod: *std.Build.Module, filters: []const []const u8 = &.{} }{
+                .{ .name = "conformance", .mod = b.createModule(.{ .root_source_file = b.path("src/conformance.zig"), .target = target, .optimize = optimize }) },
+                .{ .name = "repl-dispatch", .mod = root_mod, .filters = &.{ "repl_dispatch:", "repl_parse:" } },
+            }) |entry| {
+                const tests = b.addTest(.{ .name = b.fmt("sonny6494-{s}", .{entry.name}), .root_module = entry.mod, .filters = entry.filters });
+                const run_tests = b.addRunArtifact(tests);
+                shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+                sonny6494_step.dependOn(&run_tests.step);
+            }
+        }
     }
 
     // GAP-0929: GEODE_PORT env var now sets the bind address (was inert).
@@ -16243,6 +16325,51 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6460_exec_inline_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6460_exec_inline_step = b.step("test-sonny6460-exec-inline", "Run src/exec.zig inline unit tests (grouping, HAVING, ORDER BY, set operations; SONNY-6460)");
     sonny6460_exec_inline_step.dependOn(&run_sonny6460_exec_inline_tests.step);
+    // SONNY-6494 (2): the inline tests of the geode-module files no step
+    // ran, filtered by their fully qualified names (src/lib.zig test
+    // "sonny6494-lib: inline test roots" keeps the files in discovery).
+    const sonny6494_lib_inline_tests = b.addTest(.{ .name = "sonny6494-lib-inline", .root_module = root_mod, .filters = &.{
+        "sonny6494-lib:",
+        "client.repl.repl_errors.test.",
+        "client.repl.repl_history.test.",
+        "client.repl.repl_render.test.",
+        "client.query_scope.test.",
+        "transport.connection_manager.test.",
+        "gql.confusable_check.test.",
+        "types.numeric_promotion.test.",
+        "unicode.confusables.test.",
+        "algorithms.drr.test.",
+        "algorithms.congestion_newreno.test.",
+        "algorithms.loss_recovery.test.",
+        "algorithms.timer_heap.test.",
+        "algorithms.sharding.test.",
+        "client.repl.line_text.test.",
+        "distributed.distributed_explain.test.",
+        "protocol.test.",
+        "optimizer.advanced_types_optimizer.test.",
+        "server.server_flags.test.",
+        "execution.bulk_ingest.test.",
+        "net_policy.test.",
+        "gpu.flagger.test.",
+        "admin.fle_commands.test.",
+        "planner.cost_seed.test.",
+        "planner.gpu_ops.test.",
+        "planner.calibration.test.",
+        "log.logger.test.",
+        "security.key_rotation.test.",
+        "pagination.calibration.test.",
+    } });
+    const run_sonny6494_lib_inline_tests = b.addRunArtifact(sonny6494_lib_inline_tests);
+    shardDep(test_step, &run_sonny6494_lib_inline_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6494-lib-inline", "Run SONNY-6494 item 2: the inline tests of 28 geode-module files no step ran (query scope, connection manager, confusables, numeric promotion, transport algorithms, REPL line text, errors, history and renderer, distributed explain, protocol, server flags, bulk ingest, planner calibration, ...)").dependOn(&run_sonny6494_lib_inline_tests.step);
+    // SONNY-6494 (1): src/gql/recommendations.zig's inline tests (the MCP
+    // `validate` / LSP diagnostics recommendation engine), filtered from the
+    // geode lib module as test-sonny6460-exec-inline does.
+    const sonny6494_rec_inline_tests = b.addTest(.{ .root_module = root_mod, .filters = &.{"recommendations:"} });
+    const run_sonny6494_rec_inline_tests = b.addRunArtifact(sonny6494_rec_inline_tests);
+    shardDep(test_step, &run_sonny6494_rec_inline_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6494_rec_inline_step = b.step("test-sonny6494-recommendations-inline", "Run src/gql/recommendations.zig inline unit tests (FLE/index/fulltext/vector/path-mode/coalesce/degree recommendations behind MCP validate and LSP diagnostics; SONNY-6494)");
+    sonny6494_rec_inline_step.dependOn(&run_sonny6494_rec_inline_tests.step);
 
     // SONNY-6460 item 6: every cluster test step binds loopback addresses no
     // other test uses, so the aggregate can run them at the same time.

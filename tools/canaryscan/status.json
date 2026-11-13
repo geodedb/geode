@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T18:10:23.864812456Z",
+  "generated_at": "2026-11-13T18:15:55.14749636Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -30680,7 +30680,7 @@
         {
           "feature": "Conformance/Flagger",
           "aspect": "FlaggerCompleteness",
-          "status": "BENCHED",
+          "status": "TESTED",
           "files": [
             "src/conformance.zig"
           ],
@@ -30688,11 +30688,9 @@
             "TestCANARY_REQ_GQL_026_FlaggerCompleteness",
             "TestCANARY_REQ_GQL_026_FlaggerNegativeMissing"
           ],
-          "benches": [
-            "BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope"
-          ],
+          "benches": [],
           "owner": "conformance",
-          "updated": "2026-02-23"
+          "updated": "2026-11-13"
         },
         {
           "feature": "DistributedQueryPlanning",
@@ -68365,23 +68363,6 @@
       ]
     },
     {
-      "id": "REQ-SHELL-INTERRUPT-030",
-      "features": [
-        {
-          "feature": "SourceInterrupt",
-          "aspect": "RollbackScalingTests",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl/repl_dispatch.zig"
-          ],
-          "tests": [],
-          "benches": [],
-          "owner": "cli",
-          "updated": "2026-01-30"
-        }
-      ]
-    },
-    {
       "id": "REQ-SHELL-INTERRUPT-034",
       "features": [
         {
@@ -87518,6 +87499,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6494-AUDIT-FAILCLOSED",
+      "features": [
+        {
+          "feature": "CLI Audit Configuration",
+          "aspect": "FailClosed",
+          "status": "TESTED",
+          "files": [
+            "src/cli/cli_dispatcher.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6494_audit_failclosed.zig"
+          ],
+          "benches": [],
+          "owner": "audit",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88037,23 +88037,6 @@
           "tests": [
             "geodetestlab/specs/shell_source_batch.yml"
           ],
-          "benches": [],
-          "owner": "cli",
-          "updated": "2026-01-29"
-        }
-      ]
-    },
-    {
-      "id": "REQ-SOURCE-PERF-006",
-      "features": [
-        {
-          "feature": "SourceBatchTests",
-          "aspect": "UnitTests",
-          "status": "TESTED",
-          "files": [
-            "src/client/repl/repl_dispatch.zig"
-          ],
-          "tests": [],
           "benches": [],
           "owner": "cli",
           "updated": "2026-01-29"
@@ -95235,7 +95218,7 @@
   ],
   "summary": {
     "by_status": {
-      "BENCHED": 208,
+      "BENCHED": 207,
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 326,
@@ -96586,7 +96569,7 @@
       "Facade": 1,
       "FactoryFunction": 1,
       "Facts": 1,
-      "FailClosed": 1,
+      "FailClosed": 2,
       "FailOpenInterim": 2,
       "FailSecureOnCatalogError": 1,
       "FailSecureOnKeyError": 1,
@@ -98551,7 +98534,6 @@
       "RollBack": 1,
       "Rollback": 4,
       "RollbackGraphStore": 2,
-      "RollbackScalingTests": 1,
       "RollbackToSavepoint": 1,
       "RollbackTransaction": 2,
       "RollbackUseGraphStore": 1,
@@ -99244,7 +99226,7 @@
       "UnitTestExecution": 1,
       "UnitTestFramework": 1,
       "UnitTesting": 5,
-      "UnitTests": 28,
+      "UnitTests": 27,
       "UnitValidation": 1,
       "UnitVerification": 1,
       "UniversalAndUserSpecificMixed": 1,

@@ -981,3 +981,55 @@ test "SONNY-6342 AuthProvider: authn inline test root" {
 test "exec.zig: inline test root" {
     _ = @import("exec.zig");
 }
+
+// SONNY-6494: src/gql/recommendations.zig's inline tests entered no test
+// binary. Named with the "recommendations:" filter of `zig build
+// test-sonny6494-recommendations-inline`, so the filter keeps this block,
+// and with it the file, in discovery.
+test "recommendations: inline test root" {
+    _ = @import("gql/recommendations.zig");
+}
+
+// SONNY-6494: src/client/repl/repl_dispatch.zig's inline tests did not
+// compile on Zig 0.16, and they and repl_parse.zig's ("repl_parse:")
+// entered no test binary. Named with the "repl_dispatch:" filter of
+// `zig build test-sonny6494-inline`.
+test "repl_dispatch: inline test root" {
+    _ = @import("client/repl/repl_dispatch.zig");
+    _ = @import("client/repl/repl_parse.zig");
+}
+
+// SONNY-6494: files of the geode module whose inline tests no step ran (the
+// lib-module steps filter to other names). Named with the "sonny6494-lib:"
+// filter of `zig build test-sonny6494-lib-inline`, which also names each
+// file's tests by their fully qualified prefix (`<path>.test.`).
+test "sonny6494-lib: inline test roots" {
+    _ = @import("client/repl/repl_errors.zig");
+    _ = @import("client/repl/repl_history.zig");
+    _ = @import("client/repl/repl_render.zig");
+    _ = @import("client/query_scope.zig");
+    _ = @import("transport/connection_manager.zig");
+    _ = @import("gql/confusable_check.zig");
+    _ = @import("types/numeric_promotion.zig");
+    _ = @import("unicode/confusables.zig");
+    _ = @import("algorithms/drr.zig");
+    _ = @import("algorithms/congestion_newreno.zig");
+    _ = @import("algorithms/loss_recovery.zig");
+    _ = @import("algorithms/timer_heap.zig");
+    _ = @import("algorithms/sharding.zig");
+    _ = @import("client/repl/line_text.zig");
+    _ = @import("distributed/distributed_explain.zig");
+    _ = @import("protocol.zig");
+    _ = @import("optimizer/advanced_types_optimizer.zig");
+    _ = @import("server/server_flags.zig");
+    _ = @import("execution/bulk_ingest.zig");
+    _ = @import("net_policy.zig");
+    _ = @import("gpu/flagger.zig");
+    _ = @import("admin/fle_commands.zig");
+    _ = @import("planner/cost_seed.zig");
+    _ = @import("planner/gpu_ops.zig");
+    _ = @import("planner/calibration.zig");
+    _ = @import("log/logger.zig");
+    _ = @import("security/key_rotation.zig");
+    _ = @import("pagination/calibration.zig");
+}

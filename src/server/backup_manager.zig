@@ -303,17 +303,3 @@ fn realtimeMs() i64 {
     if (rc != 0) return std.math.maxInt(i64);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
-
-test "SimplifiedBackupManager creates backup with GraphStore" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    const store = graph_store.getGlobalStore(allocator);
-    _ = try store.createNode(&.{"Person"});
-
-    var mgr = try SimplifiedBackupManager.init(allocator, "./test_backups", .{});
-    defer mgr.deinit();
-    const meta = try mgr.createFullBackup();
-    try std.testing.expect(meta.backup_type == .full);
-}

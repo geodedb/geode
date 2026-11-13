@@ -19,7 +19,7 @@ published container port reached nothing):
 |---|---|
 | `0.0.0.0:50051` | every IPv4 interface |
 | `127.0.0.1:50051` / `localhost:50051` | loopback only |
-| `50051` | the `--listen` (QUIC) address, or `0.0.0.0` when there is no IPv4 QUIC address (QUIC's own port-only default) |
+| `50051` | the `--listen` (QUIC) address when it is IPv4 (`localhost` is `127.0.0.1`), or `0.0.0.0` when there is no `--listen` or it is a port alone (QUIC's own port-only default). When `--listen` is IPv6 or a host name it is refused (SONNY-6494): gRPC cannot bind that address, and `0.0.0.0` would listen more widely than QUIC |
 
 The gRPC listener binds **IPv4 only**: grpc-zig's `GrpcServer.initWithBind`
 parses an IPv4 literal. An IPv6 address (`[::]:50051`), a host name, or a
