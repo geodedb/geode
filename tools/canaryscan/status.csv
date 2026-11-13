@@ -2395,10 +2395,10 @@ REQ-GQL-202,UserStorage,PersistentStorage,TESTED,src/storage/user_storage.zig,Te
 REQ-GQL-203,VectorKNNIntegration,IndexIntegration,TESTED,tests/test_vector_knn_integration.zig,TestCANARY_REQ_GQL_203_VectorKNNIntegration,,index,2025-10-04
 REQ-GQL-204,FullTextBM25Integration,IndexIntegration,TESTED,tests/test_fulltext_bm25_integration.zig,TestCANARY_REQ_GQL_204_FullTextBM25Integration,,index,2025-10-04
 REQ-GQL-2PC-002,2PC,Coordinator,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
-REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Coordinator,,distributed,2026-06-10
 REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,src/distributed/txn_coordinator.zig,tests/test_gap0870_raft_command_variants.zig,,distributed,2026-06-11
+REQ-GQL-2PC-002,Distributed Transaction Coordinator,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Coordinator,,distributed,2026-11-13
 REQ-GQL-2PC-003,2PC,Idempotence,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
-REQ-GQL-2PC-003,2PC Idempotence,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Idempotent,,distributed,2026-06-10
+REQ-GQL-2PC-003,2PC Idempotence,2PC,TESTED,tests/test_txn_coordinator_2pc.zig,TestCANARY_2PC_Idempotent,,distributed,2026-11-13
 REQ-GQL-2PC-004,2PC,RaftIntegration,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-APPLY-001,2PC,WriteSetApplication,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12
 REQ-GQL-2PC-APPLY-002,2PC,WriteSetParser,IMPL,tests/test_gap_0193_batch2_misc.zig,,,distributed,2026-11-12

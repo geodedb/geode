@@ -537,7 +537,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6457-cli-client-cert", .reason = "intentionally red TDD reproduction (SONNY-6457 item 2, KNOWN_TEST_ISSUES): the defect is in the geode-client-zig dependency; compiled by test-compile; register it through shardDep in the commit that pins the fixed client library" },
     .{ .name = "test-sonny2412-kms-latency-flat", .reason = "intentionally red (when the perf gate is enforced) reproduction of a quic dependency defect (SONNY-2412, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a quic release with the fix" },
-    .{ .name = "test-sonny6484-client-hard-deadline", .reason = "intentionally red TDD reproduction (SONNY-6484 item 3: explicit test-client timeouts never fire against a live server); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2440-blocking-worker-fallback", .reason = "intentionally red reproduction of a thread_pool dependency defect (SONNY-2440, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that pins a thread_pool release with the fix" },
 };
 
@@ -4674,24 +4673,19 @@ pub fn build(b: *std.Build) void {
     // 2PC coordinator tests — MOVED out of src/distributed/txn_coordinator.zig's
     // inline `test` blocks (2026-06-10) so they no longer ride into the
     // graph_store_unit_tests test root (which transitively imports
-    // txn_coordinator) and break the sharded `zig build test` to compile. The
-    // union-encoding bodies are comptime-gated behind a protobuf-union blocker
-    // flag in the file, so this step compiles + self-skips until the protobuf
-    // dependency supports a union as a repeated submessage. See
-    // docs/KNOWN_TEST_ISSUES.md.
+    // txn_coordinator). SONNY-6484: they build native G2PC write sets and run
+    // (they used to self-skip behind a protobuf-union flag for a wire format
+    // the coordinator no longer accepts). See docs/KNOWN_TEST_ISSUES.md.
     const txn2pc_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_txn_coordinator_2pc.zig"),
         .target = target,
         .optimize = optimize,
     });
     txn2pc_test_mod.addImport("geode", root_mod);
-    txn2pc_test_mod.addImport("protobuf", protobuf_mod);
-    txn2pc_test_mod.addImport("schema", schema_mod);
-    txn2pc_test_mod.addImport("distributed_schema", distributed_schema_mod);
     const txn2pc_tests = b.addTest(.{ .root_module = txn2pc_test_mod });
     const run_txn2pc_tests = b.addRunArtifact(txn2pc_tests);
     shardDep(test_step, &run_txn2pc_tests.step, 1, test_shard_loads, test_shard_index);
-    const txn2pc_step = b.step("test-txn-coordinator-2pc", "Run distributed 2PC coordinator tests (guarded by protobuf-union blocker; see KNOWN_TEST_ISSUES.md)");
+    const txn2pc_step = b.step("test-txn-coordinator-2pc", "Run distributed 2PC coordinator tests (TxnCoordinator prepare/decide on native G2PC write sets: commit, conflicting prepare votes abort, multi-node apply, delete)");
     txn2pc_step.dependOn(&run_txn2pc_tests.step);
 
     // E2E tests (slower, require more setup - not run in pre-push hooks)
@@ -10065,7 +10059,7 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6484-client-hard-deadline", "Run SONNY-6484 item 3 regression (the shared QUIC test client: executeAndCollectWithTimeout and readPacket fail with Timeout at their deadline against a live but stopped server instead of waiting up to the 120 s liveness cap; calls that take no timeout still wait while the server is alive)").dependOn(&run_tests.step);
     }
 

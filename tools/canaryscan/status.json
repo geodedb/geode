@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T14:03:34.234960116Z",
+  "generated_at": "2026-11-13T14:35:16.373974468Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -35885,20 +35885,6 @@
           "aspect": "2PC",
           "status": "TESTED",
           "files": [
-            "tests/test_txn_coordinator_2pc.zig"
-          ],
-          "tests": [
-            "TestCANARY_2PC_Coordinator"
-          ],
-          "benches": [],
-          "owner": "distributed",
-          "updated": "2026-06-10"
-        },
-        {
-          "feature": "Distributed Transaction Coordinator",
-          "aspect": "2PC",
-          "status": "TESTED",
-          "files": [
             "src/distributed/txn_coordinator.zig"
           ],
           "tests": [
@@ -35907,6 +35893,20 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-06-11"
+        },
+        {
+          "feature": "Distributed Transaction Coordinator",
+          "aspect": "2PC",
+          "status": "TESTED",
+          "files": [
+            "tests/test_txn_coordinator_2pc.zig"
+          ],
+          "tests": [
+            "TestCANARY_2PC_Coordinator"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -35937,7 +35937,7 @@
           ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-06-10"
+          "updated": "2026-11-13"
         }
       ]
     },

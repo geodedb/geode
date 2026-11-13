@@ -117,3 +117,35 @@ test "SONNY-6484: readPacket gives up at its timeout although the server is aliv
         try std.testing.expect(elapsed < 8_000);
     }
 }
+
+test "SONNY-6484: a while_server_alive wait and a call without a timeout still wait for a live server" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var server = try util.spawnServerRandom(allocator, null);
+    defer server.deinit();
+    var client = try connectHello(allocator, server.getAddr());
+    defer client.deinit();
+
+    // The explicit opt-in: a 1 s slice, the server stopped for 3.5 s.
+    {
+        var stopped = Stopped{ .pid = server.child.id.? };
+        try stopped.begin(3_500);
+        defer stopped.finish();
+        try client.writeMessage(.{ .ping = .{} });
+        const t0 = monoMs();
+        var packet = try client.readPacketWait(allocator, .{ .while_server_alive_ms = 1_000 });
+        defer packet.deinit(allocator);
+        try std.testing.expect(monoMs() - t0 >= 3_000);
+    }
+    // No timeout given: `executeAndCollect` waits for the stopped server.
+    {
+        var stopped = Stopped{ .pid = server.child.id.? };
+        try stopped.begin(7_000);
+        defer stopped.finish();
+        const t0 = monoMs();
+        var res = try client.executeAndCollect(allocator, "RETURN 1 AS x", util.emptyParams(), 16);
+        defer res.deinit(allocator);
+        try std.testing.expect(res.error_code == null);
+        try std.testing.expect(monoMs() - t0 >= 6_000);
+    }
+}

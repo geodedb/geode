@@ -2189,6 +2189,26 @@
 
 ### Fixed
 
+- **Test infrastructure: an explicit QUIC test-client timeout is a hard
+  deadline (SONNY-6484 item 3).** `tests/proto_test_util.zig` bound every
+  client connected to a loopback address to its server's liveness
+  (SONNY-6301) and then treated every reply deadline as soft: while the
+  server was alive the wait went on up to 120 s. So
+  `executeAndCollectWithTimeout(.., 8)`, `helloWithTimeout(.., 1000)` and
+  `readPacket(.., 5000)` never gave up on a live server, and the tests that
+  rely on a short deadline to turn a hang into a fast failure (the
+  sequential-upsert desync and high-concurrency e2e lanes) were measuring
+  120 s. Those calls now fail with `Timeout` at their deadline (a server that
+  exits still fails at once with `ServerExited`), and
+  `executeAndCollectWithTimeout` bounds the whole exchange rather than each
+  reply page. Waiting while the server is alive is a separately named
+  choice: `ReplyWait.while_server_alive_ms` (`readPacketWait`, `helloWait`,
+  `executeAndCollectWait`), used by the calls that take no timeout
+  (`hello`, `executeAndCollect`, `ping`, `begin`, `commit`, ...).
+  `tests/test_txn_coordinator_2pc.zig` ran 0 of 4 tests (all skipped behind
+  a protobuf-union flag for a write-set format the coordinator stopped
+  accepting in GAP-0870); they now build native G2PC write sets and run
+  (4/4). Regression: `zig build test-sonny6484-client-hard-deadline`.
 - **`geode shell --plain` no longer drops non-ASCII text (SONNY-6484 item
   2).** The plain-mode line reader kept only bytes 32-126, so every byte of
   a multi-byte UTF-8 character, and a tab, vanished without a word:
