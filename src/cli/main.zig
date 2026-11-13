@@ -2777,10 +2777,24 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 chunk_end,
                 chunk_use_graph,
             ) catch |err| {
-                std.debug.print("Error retrying chunk statement-by-statement: {}\n", .{err});
+                // CANARY: REQ=REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS; FEATURE="ChunkedExecution"; ASPECT=RetryStartFailureStops; STATUS=TESTED; TEST=tests/test_sonny6447_quic_retry_connect_stops.zig; OWNER=cli; UPDATED=2026-11-12
+                // SONNY-6447: the retry could not start (its connection or
+                // HELLO failed): none of the chunk's statements ran, and a
+                // later chunk may depend on them. The run stops with the
+                // summary, as for every other transport failure; it went on
+                // with the next chunk.
                 error_count += 1;
-                chunk_start = chunk_end;
-                continue;
+                var not_run: usize = 0;
+                for (chunk_start..statements.len) |idx| {
+                    if (!txn_strip.items[idx]) not_run += 1;
+                }
+                std.debug.print(
+                    "Error: the statement-by-statement retry of chunk {d}-{d} could not start ({t}); its statements were not executed.\n" ++
+                        "Stopping: the {d} statement(s) from it on were not executed.\n",
+                    .{ chunk_start + 1, chunk_end, err, not_run },
+                );
+                printChunkedSummary(executed, error_count);
+                return error.ChunkRetryConnectionLost;
             };
             executed += outcome.succeeded;
             error_count += outcome.failed;

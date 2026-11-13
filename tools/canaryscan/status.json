@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T03:21:33.963967008Z",
+  "generated_at": "2026-11-13T03:22:16.301330562Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -6876,120 +6876,6 @@
           "benches": [],
           "owner": "build",
           "updated": "2026-02-10"
-        }
-      ]
-    },
-    {
-      "id": "REQ-BUILD-SYSTEM-MODULE-DEPS-001",
-      "features": [
-        {
-          "feature": "Build System Module Dependencies",
-          "aspect": "ModuleStructure",
-          "status": "TESTED",
-          "files": [
-            "tests/test_build_system_module_dependencies.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_001_ModuleStructure"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-BUILD-SYSTEM-MODULE-DEPS-002",
-      "features": [
-        {
-          "feature": "Build System Module Dependencies",
-          "aspect": "CircularDependencyPrevention",
-          "status": "TESTED",
-          "files": [
-            "tests/test_build_system_module_dependencies.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_002_CircularDependencyPrevention"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-BUILD-SYSTEM-MODULE-DEPS-003",
-      "features": [
-        {
-          "feature": "Build System Module Dependencies",
-          "aspect": "SharedTypeAccessibility",
-          "status": "TESTED",
-          "files": [
-            "tests/test_build_system_module_dependencies.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_003_SharedTypeAccessibility"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-001",
-      "features": [
-        {
-          "feature": "Build System Module Dependencies Integration",
-          "aspect": "EndToEndWorkflow",
-          "status": "TESTED",
-          "files": [
-            "tests/test_build_system_module_dependencies_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_001_EndToEndWorkflow"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-002",
-      "features": [
-        {
-          "feature": "Build System Module Dependencies Integration",
-          "aspect": "MaterializedViewsIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_build_system_module_dependencies_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_002_MaterializedViewsIntegration"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
-        }
-      ]
-    },
-    {
-      "id": "REQ-BUILD-SYSTEM-MODULE-DEPS-INTEGRATION-003",
-      "features": [
-        {
-          "feature": "Build System Module Dependencies Integration",
-          "aspect": "GraphStoreIntegration",
-          "status": "TESTED",
-          "files": [
-            "tests/test_build_system_module_dependencies_integration.zig"
-          ],
-          "tests": [
-            "TestCANARY_REQ_BUILD_SYSTEM_MODULE_DEPS_INTEGRATION_003_GraphStoreIntegration"
-          ],
-          "benches": [],
-          "owner": "build",
-          "updated": "2025-10-05"
         }
       ]
     },
@@ -85621,6 +85507,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6447-MERGE-EDGE-ENDPOINT-TENANT",
+      "features": [
+        {
+          "feature": "WriteFastPathParity",
+          "aspect": "CompositeEndpointTenantScope",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6429_sole_holder_tenant_wire.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-12"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6447-NUMERIC-KEY-PARITY",
       "features": [
         {
@@ -85648,6 +85553,20 @@
           "status": "TESTED",
           "files": [
             "tests/test_sonny6447_quic_retry_connect_stops.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6447_quic_retry_connect_stops.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-12"
+        },
+        {
+          "feature": "ChunkedExecution",
+          "aspect": "RetryStartFailureStops",
+          "status": "TESTED",
+          "files": [
+            "src/cli/main.zig"
           ],
           "tests": [
             "tests/test_sonny6447_quic_retry_connect_stops.zig"
@@ -93322,7 +93241,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 336,
-      "TESTED": 4862
+      "TESTED": 4858
     },
     "by_aspect": {
       "2PC": 3,
@@ -93815,7 +93734,6 @@
       "ChildVerifier": 1,
       "ChunkFailureDetection": 1,
       "ChunkedExecution": 1,
-      "CircularDependencyPrevention": 1,
       "CircularQueuePerformance": 1,
       "ClaimGG01GG20": 1,
       "ClassifierImport": 1,
@@ -93914,6 +93832,7 @@
       "ComplianceLog": 1,
       "Composite": 1,
       "CompositeBackfillFromPostings": 1,
+      "CompositeEndpointTenantScope": 1,
       "CompositeSoleHolderEndpoint": 1,
       "ComprehensiveBatch3": 1,
       "ComprehensiveBatch4": 1,
@@ -94452,7 +94371,6 @@
       "EndToEndIntegration": 2,
       "EndToEndTesting": 1,
       "EndToEndTests": 1,
-      "EndToEndWorkflow": 1,
       "EndpointSeek": 1,
       "EndpointSideSetDestroyCleanup": 1,
       "EndpointUnification": 1,
@@ -94884,7 +94802,6 @@
       "GraphStoreFlushPolicyBench": 1,
       "GraphStoreImport": 1,
       "GraphStoreIndep": 1,
-      "GraphStoreIntegration": 1,
       "GraphStoreLoadOptimizationDeltaVarianceEnvelope": 1,
       "GraphStorePersistence": 2,
       "GraphStoreRefusesDefault": 1,
@@ -95419,7 +95336,6 @@
       "MaterializeCapNeedsLimit": 1,
       "MaterializeKnownOnly": 1,
       "MaterializeLimitFails": 1,
-      "MaterializedViewsIntegration": 1,
       "Math": 1,
       "MathAndCastFunctions": 1,
       "MathFunctions": 4,
@@ -95511,7 +95427,7 @@
       "ModuleLoader": 1,
       "ModuleOrder": 1,
       "ModuleSplit": 1,
-      "ModuleStructure": 3,
+      "ModuleStructure": 2,
       "ModuleSystem": 1,
       "MonotonicClockNoTestLocalBenchmarks": 1,
       "MultiByteRange": 1,
@@ -96539,6 +96455,7 @@
       "RetentionCleanup": 1,
       "RetireMigratedGrantPolicies": 1,
       "RetryLogic": 1,
+      "RetryStartFailureStops": 1,
       "RetryStopsWithSummary": 1,
       "RetryTailRegressionCounters": 1,
       "ReturnAfterSet": 1,
@@ -96801,7 +96718,6 @@
       "SharedPlanConcurrentHits": 1,
       "SharedPredicate": 1,
       "SharedProjection": 2,
-      "SharedTypeAccessibility": 1,
       "SharedTypes": 1,
       "SharedUtility": 1,
       "SharedVerifyOrRecord": 1,

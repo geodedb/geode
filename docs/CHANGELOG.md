@@ -2013,6 +2013,51 @@
   compose file's environment or one of those docs names a `GEODE_*`
   variable no source file reads (a quoted literal in `src/**/*.zig` or
   `$NAME` in `docker/*.sh`).
+- **The MATCH ... MERGE edge fast path resolves its endpoints for the
+  request's tenant (SONNY-6447 item 6).** `executeBulkMatchMergeEdge`
+  resolved both endpoints with no tenant
+  (`lookupPublicNodeIdByLabelAndAllProps`) and was safe only because the
+  session gate (`bulk_ingest.sessionAllowsKeyResolvedWrites`) sends every
+  tenant-scoped session to the executor. It now calls
+  `lookupPublicNodeIdByLabelAndAllPropsForTenant` with the request's
+  tenant: an unscoped request is answered as before; a scoped one gets the
+  sole matching node only when it is that tenant's, a miss when the sole
+  match is another tenant's, and a decline (`MergeKeyNotUnique`, the
+  executor answers) when several nodes match. Another tenant's node is never
+  an endpoint, whatever gate the caller passed. No behaviour changes today
+  (the gate still declines scoped sessions). Regression: `zig build
+  test-sonny6429-sole-holder-tenant-wire`.
+- **`geode query --file` over QUIC stops, with the summary, when the retry
+  of a rejected chunk cannot connect (SONNY-6447 item 7).** When the server
+  rejects a chunk, the CLI retries its statements one at a time on one new
+  connection. When that connection or its HELLO failed, the run printed
+  `Error retrying chunk statement-by-statement`, counted one error and went
+  on with the next chunk, so the rejected chunk's statements were silently
+  dropped and later chunks that may depend on them were sent. It now prints
+  that the retry could not start, how many statements from that chunk on
+  were not executed, and the chunked summary, and exits with
+  `general_error`, as every other transport failure of a chunked run does.
+  Regression: `zig build test-sonny6447-quic-retry-connect-stops` (a real
+  server and CLI, with a UDP forwarder that drops the retry's connection).
+- **The netns cluster scripts run their nodes as the invoking user and say
+  when a node they killed survives (SONNY-6447 items 2 and 9).**
+  `tests/cluster/netns_cluster_replication_test.sh` and
+  `netns_cluster_membership_churn_test.sh` ran every node as
+  `${SUDO_USER:-$(id -un)}`; a `SUDO_USER` left in the environment by an
+  outer session (an ansible become) named a user that cannot reach the work
+  directory, and no node started ("Permission denied"). `SUDO_USER` is now
+  used only when the script itself runs as root under sudo. The churn
+  script's `kill_and_reap` matched `sudo pkill -9 -f` against its own
+  command line (it SIGKILLed its own sudo, whose pty hang-up can end pkill
+  before it reaches a geode with a higher pid once pids wrap) and went on
+  silently when a process survived; the pattern no longer matches itself,
+  and a survivor fails the phase by name instead of surfacing only as the
+  replacement's (correct) `DataDirLocked`. The data-dir lock itself needed
+  no change: it is a kernel `flock` on an `O_CLOEXEC` descriptor and no
+  geode process spawns children, so the lock ends with the process however
+  it dies; `zig build test-datadir-lock-subprocess` now also covers a
+  SIGABRTed holder (a panic ends in abort) and a frozen, live one (still
+  refused).
 - **Lean indexing registers and indexes every MERGE key, the 65th included
   (SONNY-6447 item 3).** With `GEODE_INDEX_MERGE_KEYS_ONLY=1` the
   registered-key set was a fixed table of 64 keys of at most 128 bytes, and
@@ -3549,6 +3594,17 @@
 
 ### Removed
 
+- **Dead code: three test files no build step compiles, and an unused
+  import (SONNY-6447 item 9).** `tests/test_build_system_module_dependencies.zig`,
+  its sibling `tests/test_build_system_module_dependencies_integration.zig`
+  and `tests/index_optimizer_regression_test.zig` were referenced by no
+  step and could not compile (Zig 0.15 `ArrayList(...).init`, an `@import`
+  outside the module path, `try` on the `void` `removeNodeProperty`); what
+  they touched is covered by compiled tests. Their CANARY markers
+  (REQ-BUILD-SYSTEM-MODULE-DEPS-001..003 and -INTEGRATION-001..003)
+  described only these files. `src/server/main.zig` no longer imports the
+  unused `geode.exec`, and `tests/benchmark_hashagg_spill_variance.zig` no
+  longer names the removed `HashAggregator`.
 - **Dead code: `GraphStore.restoreNodeNoSave` / `restoreEdgeNoSave`
   (SONNY-6436 item 4).** No caller anywhere in the repository (a reference
   search finds only their definitions); both tagged the restored row tenant
