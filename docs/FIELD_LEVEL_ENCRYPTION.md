@@ -517,11 +517,11 @@ per write) or, maintained from a decrypted value, the plaintext. So:
   matching nothing. Its files may hold values written before the field was
   encrypted: drop it (`DROP INDEX`).
 
-Searchable (blind-index) fields exist in the FLE catalog and the read
-path (`@searchable`, `lookupEncryptedField`), but no `CALL` procedure can
-declare one (`configureField` always configures `searchable: false`), and the
-blind-index equality search is not wired to `WHERE` or to inline maps
-(SONNY-6335 item 5).
+Searchable (blind-index) fields exist only in the FLE catalog (a field a
+catalog file marks `searchable`): no `CALL` procedure can declare one
+(`configureField` refuses a `searchable` key), a write adds its blind-index
+entry, and nothing reads the blind index, so there is no equality search on
+an encrypted field (see "Searchable fields today" above; SONNY-6335 item 5).
 
 #### `CALL geode.fle.getFieldConfig(type_name, field_name)`
 
