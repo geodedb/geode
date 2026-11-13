@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T13:01:19.569935161Z",
+  "generated_at": "2026-11-13T13:01:42.680856092Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -86384,6 +86384,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6476-FINGERPRINT-UID",
+      "features": [
+        {
+          "feature": "CliSessionStorage",
+          "aspect": "PortableUid",
+          "status": "TESTED",
+          "files": [
+            "src/cli/security/session_storage.zig"
+          ],
+          "tests": [
+            "src/cli/security/session_storage.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6476-SHELL-LONG-LINE",
       "features": [
         {
@@ -94071,7 +94090,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 333,
-      "TESTED": 4905
+      "TESTED": 4906
     },
     "by_aspect": {
       "2PC": 3,
@@ -96880,6 +96899,7 @@
       "PollWorkerContentionCap": 1,
       "PopulationSystem": 1,
       "PortEnvVar": 1,
+      "PortableUid": 1,
       "PositionalSearch": 1,
       "PostAuthCheck": 1,
       "PostFilter": 1,

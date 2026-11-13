@@ -346,12 +346,12 @@ REQ-AUTH-ROLE-001,RoleAssignment,Mutation,TESTED,,,security,2026-05-11,src/secur
 REQ-AUTH-ROLE-002,BuiltinRoleHardening,Validation,TESTED,,,security,2026-05-11,src/execution/auth_dispatch.zig,1867
 REQ-AUTH-SALT-001,SecurePasswordSalt,Security,EXEMPT,,,security,2026-02-24,src/security/user_management.zig,650
 REQ-AUTH-SESSION-001,LocalSessionStorage,SECURITY,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,1
-REQ-AUTH-SESSION-002,SaveSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,183
-REQ-AUTH-SESSION-003,LoadSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,197
-REQ-AUTH-SESSION-004,DeleteSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,260
-REQ-AUTH-SESSION-005,RegisterSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,310
-REQ-AUTH-SESSION-006,ValidateSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,320
-REQ-AUTH-SESSION-007,CleanupExpiredSessions,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,340
+REQ-AUTH-SESSION-002,SaveSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,196
+REQ-AUTH-SESSION-003,LoadSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,210
+REQ-AUTH-SESSION-004,DeleteSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,273
+REQ-AUTH-SESSION-005,RegisterSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,323
+REQ-AUTH-SESSION-006,ValidateSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,333
+REQ-AUTH-SESSION-007,CleanupExpiredSessions,IMPL,TESTED,,,security,2026-01-15,src/cli/security/session_storage.zig,353
 REQ-AUTH-SESSION-008,TokenBasedLogin,IMPL,TESTED,,,security,2026-01-15,src/cli/main.zig,4413
 REQ-AUTH-SESSION-009,AutoLoadSessionToken,IMPL,TESTED,,,security,2026-01-15,src/cli/main.zig,1480
 REQ-AUTH-SESSION-ROTATE-001,RotatingSessionToken,SECURITY,IMPL,,,security,2026-11-12,src/security/authn.zig,139
@@ -5816,6 +5816,7 @@ REQ-SONNY-6466-FOR-ATOMICITY,ForStatement,StatementAtomicityOnElementFailure,TES
 REQ-SONNY-6466-RANGE-CONTRACT,range() function,ExclusiveEndGeodeExtension,TESTED,,,eval,2026-11-13,tests/test_for_write_body.zig,320
 REQ-SONNY-6466-SIBLING-READ-CANCEL-ON-CLOSE,QUIC Abandoned Read Cancellation,DrainedConnectionCancelsEveryStream,TESTED,,,transport,2026-11-13,tests/test_sonny6466_abandoned_read_cancel.zig,210
 REQ-SONNY-6466-VANISHED-CLIENT-READ-CANCEL,QUIC Abandoned Read Cancellation,ConnectionKeyedStallWatchdog,TESTED,,,transport,2026-11-13,tests/test_sonny6466_abandoned_read_cancel.zig,136
+REQ-SONNY-6476-FINGERPRINT-UID,CliSessionStorage,PortableUid,TESTED,,,cli,2026-11-13,src/cli/security/session_storage.zig,382
 REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,,,cli,2026-11-13,src/client/repl/repl_loop.zig,252
 REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,,,cli,2026-11-13,tests/test_sonny6476_shell_long_line.zig,14
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521

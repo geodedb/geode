@@ -2151,6 +2151,10 @@
   up to 16 MiB (the server's largest request); a longer line is refused
   whole with an error. Regression: `zig build
   test-sonny6476-shell-long-line`.
+- **macOS/BSD: the CLI session fingerprint reads the uid through libc
+  (SONNY-6476 item 3).** `getSystemFingerprint` called the Linux `getuid`
+  syscall on every non-Windows target. Regression: the inline test in
+  `src/cli/security/session_storage.zig` (`zig build test-sonny6463-inline`).
 - **Memory safety: with group commit off, a DROP GRAPH no longer frees a
   graph under a bulk MERGE (SONNY-3121).** With `GEODE_GROUP_COMMIT=0` the
   QUIC fast paths for a relationship MERGE and a multi-property node MERGE
