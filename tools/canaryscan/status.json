@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:55:02.67248119Z",
+  "generated_at": "2026-11-13T08:15:22.184589007Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -85890,6 +85890,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6459-CHECKPOINT-ONCE",
+      "features": [
+        {
+          "feature": "Persistence",
+          "aspect": "OneCheckpointPerTickAndShutdown",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6459_checkpoint_once.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6459_checkpoint_once.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93524,7 +93543,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 335,
-      "TESTED": 4875
+      "TESTED": 4876
     },
     "by_aspect": {
       "2PC": 3,
@@ -95931,6 +95950,7 @@
       "OnCreateSetRelationship": 1,
       "OnMessage": 1,
       "OneActionDerivation": 1,
+      "OneCheckpointPerTickAndShutdown": 1,
       "OneEncryptionIdentity": 1,
       "OneEngine": 1,
       "OneGraphLockAtATime": 1,

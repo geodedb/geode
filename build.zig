@@ -15883,6 +15883,20 @@ pub fn build(b: *std.Build) void {
     const sonny6456_shutdown_step = b.step("test-sonny6456-shutdown-persistence-stop", "Run the SONNY-6456 item 4 regression (SIGTERM stops the persistence thread within 3 s and the process exits within 10 s on an idle single-node server and an idle cluster node; no light checkpoint of the default graph is skipped)");
     sonny6456_shutdown_step.dependOn(&run_sonny6456_shutdown_tests.step);
 
+    // SONNY-6459 items 1-2: one light checkpoint per persistence tick, and one
+    // full checkpoint (no other) per clean shutdown (spawns the built geode).
+    const sonny6459_ckpt_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny6459_checkpoint_once.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    sonny6459_ckpt_tests.root_module.link_libc = true;
+    spawnsBuiltGeode(sonny6459_ckpt_tests);
+    const run_sonny6459_ckpt_tests = b.addRunArtifact(sonny6459_ckpt_tests);
+    shardDep(test_step, &run_sonny6459_ckpt_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6459_ckpt_step = b.step("test-sonny6459-checkpoint-once", "Run the SONNY-6459 items 1-2 regression (each persistence tick advances checkpoints_total by one; a SIGTERM runs the full checkpoint once per graph and no other checkpoint, logs its phase timings, and the data survives a restart)");
+    sonny6459_ckpt_step.dependOn(&run_sonny6459_ckpt_tests.step);
+
     // SONNY-6436 item 5: an RLS policy admits a row only when its predicate
     // is True, in the raw-string interpreter and the compiled VM.
     const sonny6436_rls_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6436_rls_raw_truthiness.zig"), .target = target, .optimize = optimize });
