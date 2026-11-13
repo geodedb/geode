@@ -482,6 +482,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-startup-lazy-hydrate-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-scan-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-ordered-index-autobuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    .{ .name = "test-sonny2745-id-maps-race-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow) of test-sonny3180-id-maps-race (SONNY-2745); the file runs uninstrumented in the aggregate" },
     .{ .name = "test-sonny6375-global-store-race-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-sonny6375-ordered-scan-locking-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-parallel-index-rebuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
@@ -10921,6 +10922,23 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny3180_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3180_step = b.step("test-sonny3180-id-maps-race", "Run SONNY-3180 regression (GraphStore.id_maps is locked and each IdMap keeps its address: writers of distinct graphs, readers and CREATE/DROP GRAPH at once, no corruption, under the testing allocator)");
     sonny3180_step.dependOn(&run_sonny3180_tests.step);
+
+    // SONNY-2745: the same race under ThreadSanitizer: per-graph IdMap
+    // readers against first writes to new graphs (which insert into, and may
+    // grow, GraphStore.id_maps) and CREATE/DROP GRAPH. Opt-in; built with
+    // tsanTest() (SONNY-6328).
+    const sonny2745_tsan_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_sonny3180_id_maps_race.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    sonny2745_tsan_mod.addImport("geode", root_mod);
+    const sonny2745_tsan_tests = tsanTest(b, sonny2745_tsan_mod);
+    const run_sonny2745_tsan_tests = b.addRunArtifact(sonny2745_tsan_tests);
+    const sonny2745_tsan_step = b.step("test-sonny2745-id-maps-race-tsan", "SONNY-2745 TSan: GraphStore.id_maps readers against first writes to new graphs and CREATE/DROP GRAPH, under -fsanitize-thread");
+    sonny2745_tsan_step.dependOn(&run_sonny2745_tsan_tests.step);
 
     // SONNY-3032: gRPC sessions end: one idle in an open transaction past
     // idle_in_transaction_timeout_ms is closed with its transaction rolled
