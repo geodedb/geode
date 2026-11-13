@@ -5,11 +5,12 @@
 # GEODE_DISTRIBUTED, GEODE_SHARD_COUNT and GEODE_REPLICATION_FACTOR, and with
 # `geode serve` options for a node id, a Raft bind / advertise / join address,
 # a bootstrap size and JSON logs. geode reads none of those variables and has
-# none of those options (`geode serve` ignores an option it does not know), so
-# the three nodes ran standalone. They have been removed; the nodes still run
-# standalone. Geode forms a cluster from GEODE_CLUSTER_TOKEN, GEODE_PEERS (the
-# same comma-separated host:port list on every node), GEODE_NODE_ID (a number,
-# the node's 1-based position in GEODE_PEERS), GEODE_CLUSTER_NAME,
+# none of those options (`geode serve` then ignored an option it did not
+# know; it refuses one since SONNY-6442), so the three nodes ran standalone.
+# They have been removed; the nodes still run standalone. Geode forms a
+# cluster from GEODE_CLUSTER_TOKEN, GEODE_PEERS (the same comma-separated
+# host:port list on every node), GEODE_NODE_ID (a number, the node's 1-based
+# position in GEODE_PEERS), GEODE_CLUSTER_NAME,
 # GEODE_CLUSTER_PORT and the cluster TLS certificate
 # (src/server/cluster_bootstrap.zig); this file has not been validated with
 # them. The log level is --log-level.

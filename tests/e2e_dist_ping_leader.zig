@@ -18,7 +18,7 @@ test "PING ok in single-node raft mode" {
     defer allocator.free(addr);
 
     util.progress("Starting server on port {d} with Raft enabled...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--dist-enable-raft" }, util.TestEnv.standard()) catch |err| {
+    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;

@@ -387,8 +387,8 @@ GEODE_DEBUG=1 ./geode command
 #### 2. Check Server Logs
 
 ```bash
-# Enable JSON logging (unified CLI - geode serve symlink also works for backward compat)
-./zig-out/bin/geode serve --log_json
+# Verbose server logging (geode serve has no --log_json option; it refuses unknown options)
+./zig-out/bin/geode serve --log-level debug
 
 # Capture server stderr
 GEODE_CAPTURE_SERVER_STDERR=1 ./run_tests.sh

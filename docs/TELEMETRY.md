@@ -66,7 +66,7 @@ The server logs JSON on stderr when a `PULL` emits a page. Telemetry is orthogon
 ### Server with Telemetry
 
 ```bash
-GEODE_TELEMETRY_PAGING=1 ./zig-out/bin/geode serve --listen 127.0.0.1:7567 --log_json --result-format json 2>server.log &
+GEODE_TELEMETRY_PAGING=1 ./zig-out/bin/geode serve --listen 127.0.0.1:7567 2>server.log &
 PID=$!
 ./zig-out/bin/geode query "RETURN 1 AS x ORDER BY x LIMIT 1" --format json
 kill $PID

@@ -116,8 +116,8 @@ export VAULT_TOKEN="hvs.CAESI..."
 export GEODE_KMS_PROVIDER="vault"
 export GEODE_VAULT_KEY_PATH="geode/encryption"
 
-# Start Geode with Vault-backed TDE
-./zig-out/bin/geode serve --enable-tde --kms-provider vault
+# There is no --kms-provider option: geode serve refuses it (SONNY-6442).
+./zig-out/bin/geode serve --enable-tde
 ```
 
 ## Security & Compliance Features

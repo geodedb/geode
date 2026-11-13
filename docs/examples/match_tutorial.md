@@ -15,7 +15,7 @@ zig build -Doptimize=ReleaseSafe
 - Start the server (QUIC):
 
 ```bash
-./zig-out/bin/geode serve --listen-quic 127.0.0.1:7567 --log_json --result-format json
+./zig-out/bin/geode serve --listen-quic 127.0.0.1:7567
 ```
 
 ## Basic Pattern: Single Hop

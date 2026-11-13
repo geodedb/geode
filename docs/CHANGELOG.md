@@ -4,6 +4,25 @@
 
 ### Security
 
+- **BREAKING (operator): `geode serve` refuses an unknown option (SONNY-6442
+  item 4).** It skipped any argument it did not know, so a misspelt option
+  (`--data-dri /srv/geode`) or a removed one started a server on the
+  defaults. An unknown option or a stray argument now exits 2 with
+  `Error: geode serve: unknown option '<arg>'`, and a known option without
+  its value exits 2 with `option '<arg>' requires a value`, as
+  `geode backup create` and `geode restore` do. Every option
+  `geode serve --help` lists still parses (`--lsp-port=<n>` and
+  `--lsp-bind-all` included), and so do the compatibility no-ops
+  `--enable-auth`, `--enable-fle`, `--enable-tde` and `--tde-provider`.
+  In-repo uses of options `geode serve` never had are gone:
+  `--gpu-acceleration` (`Dockerfile.release.gpu` and its release manifest
+  entry), `--dist-enable-raft` (`tests/e2e_dist_ping_leader.zig`),
+  `--insecure` (five `tests/*index*_test.sh` scripts), `--no-cluster`
+  (`tests/integration/test_mermaid_external.sh`), and `--log_json`,
+  `--log-json`, `--result-format`, `--tls-cert`, `--tls-key`,
+  `--kms-provider` and `--match-max-*` in the docs. Regression:
+  `zig build test-sonny6442-serve-unknown-options` (parser and the built
+  binary).
 - **BREAKING (remote KMS client): the remote KMS client verifies the
   server, binds attestations to the TLS channel and has no local fallback
   (SONNY-6442 items 1-3).** `RemoteKmsClient.connect` dialed with

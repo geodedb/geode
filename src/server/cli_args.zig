@@ -333,6 +333,47 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
     return try parseArgsFromSlice(allocator, args);
 }
 
+/// Options of `geode serve` that take a value (the next argument).
+const serve_value_options = [_][]const u8{
+    "--listen",                          "--listen-quic",                 "--listen-grpc",
+    "--cert",                            "--key",                         "--data_dir",
+    "--data-dir",                        "--order-keys",                  "--log-level",
+    "--idle-timeout",                    "--idle-in-transaction-timeout", "--grpc-session-idle-timeout",
+    "--grpc-max-sessions-per-principal", "--max-connections",             "--persist-interval",
+    "--cluster-port",                    "--peers",                       "--auth-lockout-attempts",
+    "--auth-lockout-secs",               "--auth-lockout-ip-attempts",    "--tde-provider",
+    "--config",                          "-c",                            "--require-capability-profile",
+};
+
+/// Index of the first `geode serve` option in `args`: the one after the
+/// `serve` subcommand, or 1 when argv has none (the parser's unit tests).
+fn serveOptionsStart(args: []const []const u8) usize {
+    for (args[1..], 1..) |arg, i| {
+        if (std.mem.eql(u8, arg, "serve")) return i + 1;
+    }
+    return 1;
+}
+
+/// SONNY-6442: refuse an argument `geode serve` does not accept. It used to
+/// be skipped, so a misspelt option (`--data-dri /srv/geode`) or a removed
+/// one started a server on the defaults. A known option without its value
+/// is error.MissingArgument; anything else error.UnknownServeOption. The
+/// caller (`geode serve`) exits 2 on both, as `geode backup create` does.
+fn refuseServeArgument(arg: []const u8) error{ MissingArgument, UnknownServeOption } {
+    for (serve_value_options) |opt| {
+        if (std.mem.eql(u8, arg, opt)) {
+            std.debug.print("Error: geode serve: option '{s}' requires a value (see geode serve --help)\n", .{arg});
+            return error.MissingArgument;
+        }
+    }
+    if (std.mem.startsWith(u8, arg, "-")) {
+        std.debug.print("Error: geode serve: unknown option '{s}' (see geode serve --help)\n", .{arg});
+    } else {
+        std.debug.print("Error: geode serve: unexpected argument '{s}' (see geode serve --help)\n", .{arg});
+    }
+    return error.UnknownServeOption;
+}
+
 /// Parse command line arguments from a caller-supplied slice.
 /// This is the testable seam under parseArgs — unit tests construct an
 /// argv slice in-memory and avoid /proc/self/cmdline.
@@ -358,7 +399,7 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
     var ai: usize = 1;
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--config") or std.mem.eql(u8, args[ai], "-c")) {
-            if (ai + 1 >= args.len) return error.MissingArgument;
+            if (ai + 1 >= args.len) return refuseServeArgument(args[ai]);
             custom_config_path = args[ai + 1];
             break;
         }
@@ -394,16 +435,19 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
     if (posixGetenv("GEODE_REQUIRE_CAPABILITY_PROFILE")) |path|
         try setCapabilityProfile(allocator, &config, path);
 
-    // Parse all arguments (CLI flags override config file values)
+    // Parse all arguments (CLI flags override config file values).
+    // SONNY-6442: the options are the arguments after the `serve`
+    // subcommand (global CLI flags such as --audit may precede it); every
+    // one must be known.
     var saw_capability_profile = false;
-    ai = 1;
+    ai = serveOptionsStart(args);
     while (ai < args.len) : (ai += 1) {
         const arg = args[ai];
 
         if (std.mem.eql(u8, arg, "--require-capability-profile")) {
             if (saw_capability_profile) return error.DuplicateCapabilityProfileArgument;
             saw_capability_profile = true;
-            if (ai + 1 >= args.len) return error.MissingArgument;
+            if (ai + 1 >= args.len) return refuseServeArgument(arg);
             ai += 1;
             if (std.mem.startsWith(u8, args[ai], "-")) return error.InvalidCapabilityProfilePath;
             try setCapabilityProfile(allocator, &config, args[ai]);
@@ -550,6 +594,10 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
         } else if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
             // Already processed in first pass, skip value
             if (ai + 1 < args.len) ai += 1;
+        } else if (inlineLongOptionValue(arg, "--lsp-port") != null or std.mem.eql(u8, arg, "--lsp-bind-all")) {
+            // Read by server/main.zig (parseLspBootstrapConfig).
+        } else {
+            return refuseServeArgument(arg);
         }
     }
 
