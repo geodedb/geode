@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T15:53:01.069601719Z",
+  "generated_at": "2026-11-13T15:56:34.872924538Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -64929,6 +64929,25 @@
       ]
     },
     {
+      "id": "REQ-REPL-UTF8-EDIT-6487",
+      "features": [
+        {
+          "feature": "REPL UTF-8 line editing",
+          "aspect": "GraphemeCursor",
+          "status": "TESTED",
+          "files": [
+            "src/client/repl/line_text.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6487_repl_utf8.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-RLS-001",
       "features": [
         {
@@ -94417,7 +94436,7 @@
       "COMPLETE": 2,
       "EXEMPT": 216,
       "IMPL": 329,
-      "TESTED": 4925
+      "TESTED": 4926
     },
     "by_aspect": {
       "2PC": 3,
@@ -96004,6 +96023,7 @@
       "GraphTraversal": 3,
       "GraphUserGrantsField": 1,
       "GraphWriteGate": 1,
+      "GraphemeCursor": 1,
       "GraphsMutex": 1,
       "GreyCardinal": 1,
       "GreyCardinalCompositeMetricBreakdownVarianceEnvelope": 1,

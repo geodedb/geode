@@ -32,7 +32,9 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
             'c' => .cancel, // Ctrl+C: cancel
             'i', '\t' => .complete, // Tab: trigger tab completion
             'j', 'm', '\r', '\n' => .execute, // Enter: execute
-            0x7f - 'a' + 1 => .delete_char_forward, // Delete key (mapped from ESC[3~)
+            // SONNY-6487: parseKeyEvent maps ESC[3~ to key 0x7f with ctrl; this
+            // arm compared 0x7f - 'a' + 1 (0x1f), so Delete never matched.
+            0x7f => .delete_char_forward, // Delete key (mapped from ESC[3~)
             else => .none,
         };
     }
@@ -47,8 +49,10 @@ pub fn handleKey(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction {
         };
     }
 
-    // Regular characters
-    if (key.key >= 0x20 and key.key < 0x7f) {
+    // Regular characters. SONNY-6487: a byte of a UTF-8 sequence (>= 0x80)
+    // is text too; a character's bytes arrive one key event each, so
+    // inserting each at the cursor rebuilds the sequence.
+    if ((key.key >= 0x20 and key.key < 0x7f) or key.key >= 0x80) {
         state.buffer.insert(state.allocator, state.cursor, key.key) catch return .none;
         state.cursor += 1;
         return .insert;

@@ -10084,6 +10084,15 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6484-client-hard-deadline", "Run SONNY-6484 item 3 regression (the shared QUIC test client: executeAndCollectWithTimeout and readPacket fail with Timeout at their deadline against a live but stopped server instead of waiting up to the 120 s liveness cap; calls that take no timeout still wait while the server is alive)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6487 (3): src/client/repl/line_text.zig's grapheme/width helpers.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("src/client/repl/line_text.zig"), .target = target, .optimize = optimize });
+        mod.addImport("strings", strings_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6487-repl-line-text", "Run SONNY-6487 item 3 unit tests of the shell editor's UTF-8 helpers (grapheme boundaries, display width, whole-cluster removal)").dependOn(&run_tests.step);
+    }
     // SONNY-6487 (3): the interactive shell edits multi-byte text (PTY).
     {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6487_repl_utf8.zig"), .target = target, .optimize = optimize });

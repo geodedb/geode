@@ -1,5 +1,6 @@
 const std = @import("std");
 const repl_loop = @import("repl_loop.zig");
+const line_text = @import("line_text.zig");
 
 pub const ViMode = enum { normal, insert, visual };
 
@@ -55,7 +56,7 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
         },
         'a' => {
             state.vi_mode = .insert;
-            if (state.cursor < state.buffer.items.len) state.cursor += 1;
+            state.cursor = line_text.nextBoundary(state.buffer.items, state.cursor);
             return .vi_insert_mode;
         },
         'A' => {
@@ -87,12 +88,11 @@ fn handleNormalMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
         'w' => return .move_word_right,
         'b' => return .move_word_left,
         'e' => {
-            // Move to end of word
-            var i = state.cursor;
-            if (i < state.buffer.items.len and !std.ascii.isWhitespace(state.buffer.items[i])) {
-                while (i < state.buffer.items.len - 1 and !std.ascii.isWhitespace(state.buffer.items[i + 1])) : (i += 1) {}
-            }
-            state.cursor = i;
+            // Move to the last character of the word (SONNY-6487: its
+            // first byte, not the word's last byte).
+            var end = state.cursor;
+            while (end < state.buffer.items.len and !std.ascii.isWhitespace(state.buffer.items[end])) : (end += 1) {}
+            if (end > state.cursor) state.cursor = line_text.prevBoundary(state.buffer.items, end);
             return .none;
         },
 
@@ -195,7 +195,7 @@ fn handleInsertMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
     // ESC returns to normal mode
     if (key.key == 0x1b) {
         state.vi_mode = .normal;
-        if (state.cursor > 0) state.cursor -= 1;
+        state.cursor = line_text.prevBoundary(state.buffer.items, state.cursor);
         return .vi_normal_mode;
     }
 
@@ -227,7 +227,7 @@ fn handleInsertMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
             'l' => .clear_screen, // Ctrl+L: clear screen
             'i', '\t' => .complete, // Tab: trigger tab completion
             'j', 'm', '\r', '\n' => .execute,
-            0x7f - 'a' + 1 => .delete_char_forward, // Delete key
+            0x7f => .delete_char_forward, // Delete key (ESC[3~; SONNY-6487: was 0x1f, never matched)
             else => .none,
         };
     }
@@ -242,8 +242,8 @@ fn handleInsertMode(state: anytype, key: repl_loop.KeyEvent) repl_loop.KeyAction
         };
     }
 
-    // Regular characters
-    if (key.key >= 0x20 and key.key < 0x7f) {
+    // Regular characters (SONNY-6487: and the bytes of a UTF-8 sequence).
+    if ((key.key >= 0x20 and key.key < 0x7f) or key.key >= 0x80) {
         state.buffer.insert(state.allocator, state.cursor, key.key) catch return .none;
         state.cursor += 1;
         return .insert;

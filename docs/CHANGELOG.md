@@ -2226,6 +2226,27 @@
   `Ipv6EndpointUnsupported` instead of failing with a bare `InvalidAddress`.
   Regressions: `zig build test-sonny6487-host-port`,
   `test-sonny6487-endpoint-host-family`, `test-sonny6487-ipv6-serve`.
+- **Shell: the interactive editor keeps and edits non-ASCII text
+  (SONNY-6487 item 3).** `geode shell`'s line editor
+  (`src/client/repl/`) inserted only bytes 0x20-0x7e from typed keys, so
+  `é`, `€` or a combining accent typed at the prompt were dropped (pasted
+  text kept them); the cursor keys, Backspace and Delete moved or removed
+  one byte, so they could split a character and send invalid UTF-8; the
+  cursor column counted bytes; and Ctrl-R history search dropped non-ASCII
+  search terms (and ended the editor on a match longer than about 1000
+  bytes, `NoSpaceLeft` from a fixed 1024-byte line buffer). Typed UTF-8 is
+  inserted; cursor moves, Backspace, Delete and vi `a`/`e`/Esc step over a
+  whole grapheme cluster (`strings` UAX #29 segmentation, so `e` + U+0301
+  is one step); a combining mark takes no column; Ctrl-R searches UTF-8 and
+  writes its line without a fixed buffer. The Delete key (`ESC [ 3 ~`) did
+  nothing in either keymap (its arm compared key `0x1f`, the parser produces
+  `0x7f`); it deletes the character at the cursor now. Known gap: East Asian wide
+  characters are drawn as one column (no East Asian Width table in the
+  repository or its dependencies), so the cursor is placed one column left
+  per wide character before it; the text is unaffected. Regressions:
+  `zig build test-sonny6487-repl-utf8` (real `geode shell` through a
+  pseudo-terminal against a real server) and
+  `test-sonny6487-repl-line-text`.
 - **Test infrastructure: the abandoned-read test measures idle per thread
   (SONNY-6487 item 4).** `tests/test_sonny6466_abandoned_read_cancel.zig`'s
   "vanish" case failed under parallel load although the server behaved: the

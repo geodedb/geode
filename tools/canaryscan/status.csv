@@ -4181,6 +4181,7 @@ REQ-REPL-QUIC-005,REPL E2E Tests,EndToEndIntegration,EXEMPT,tests/test_repl_e2e.
 REQ-REPL-SESSION-001,REPL Session Persistence,Implementation,TESTED,src/client/repl/session_state.zig,test_session_state,,repl,2025-11-17
 REQ-REPL-SYNTAX-001,REPL Syntax Highlighting,Implementation,TESTED,src/client/repl/syntax_highlighter.zig,test_syntax_highlighting,,repl,2025-11-17
 REQ-REPL-TIMING-001,REPL Timing,RegressionTesting,TESTED,tests/repl_timing_regression_test.sh,repl_timing_regression_test,,repl,2026-02-16
+REQ-REPL-UTF8-EDIT-6487,REPL UTF-8 line editing,GraphemeCursor,TESTED,src/client/repl/line_text.zig,tests/test_sonny6487_repl_utf8.zig,,cli,2026-11-13
 REQ-RLS-001,RLSExpressionCompilation,PolicyParsing,TESTED,tests/test_gap_0193_remaining_categories.zig,,,security,2026-01-15
 REQ-RLS-002,RLSExpressionCompilation,ExpressionOptimization,TESTED,tests/test_gap_0193_remaining_categories.zig,,,security,2026-01-15
 REQ-RLS-003,RLSExpressionCompilation,CacheIntegration,TESTED,tests/test_gap_0193_remaining_categories.zig,,,security,2026-01-15

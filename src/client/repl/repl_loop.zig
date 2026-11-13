@@ -1,4 +1,5 @@
 const std = @import("std");
+const line_text = @import("line_text.zig");
 const builtin = @import("builtin");
 const repl_history = @import("repl_history.zig");
 const repl_complete = @import("repl_complete.zig");
@@ -501,10 +502,13 @@ fn calculateVisualLines(prompt_len: usize, buffer: []const u8, term_width: usize
     var lines: usize = 0;
     var col: usize = prompt_len;
 
-    for (buffer) |c| {
+    var i: usize = 0;
+    while (i < buffer.len) {
+        const c = buffer[i];
         if (c == '\n') {
             lines += 1;
             col = 0; // Continuation lines have no prompt
+            i += 1;
         } else if (c == '\t') {
             // Tab expands to next tab stop
             const width = tabWidth(col);
@@ -513,12 +517,17 @@ fn calculateVisualLines(prompt_len: usize, buffer: []const u8, term_width: usize
                 lines += 1;
                 col = 0;
             }
+            i += 1;
         } else {
-            col += 1;
+            // SONNY-6487: one code point, its display width (0 for a
+            // combining mark), not one column per byte.
+            const g = line_text.glyphAt(buffer, i);
+            col += g.width;
             if (col >= term_width) {
                 lines += 1;
                 col = 0;
             }
+            i += g.len;
         }
     }
 
@@ -536,16 +545,19 @@ fn calculateCursorPosition(prompt_len: usize, buffer: []const u8, cursor: usize,
     var col: usize = prompt_len;
     var found_cursor = false;
 
-    for (buffer, 0..) |c, i| {
+    var i: usize = 0;
+    while (i < buffer.len) {
         if (i == cursor) {
             cursor_line = total_lines;
             cursor_col = col;
             found_cursor = true;
         }
 
+        const c = buffer[i];
         if (c == '\n') {
             total_lines += 1;
             col = 0;
+            i += 1;
         } else if (c == '\t') {
             // Tab expands to next tab stop
             const width = tabWidth(col);
@@ -554,12 +566,16 @@ fn calculateCursorPosition(prompt_len: usize, buffer: []const u8, cursor: usize,
                 total_lines += 1;
                 col = 0;
             }
+            i += 1;
         } else {
-            col += 1;
+            // SONNY-6487: display width per code point (see calculateVisualLines).
+            const g = line_text.glyphAt(buffer, i);
+            col += g.width;
             if (col >= term_width) {
                 total_lines += 1;
                 col = 0;
             }
+            i += g.len;
         }
     }
 
@@ -1264,21 +1280,23 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
             }
         },
         .backspace => {
-            // Backspace - delete character before cursor
+            // Backspace - delete the character (grapheme cluster, SONNY-6487)
+            // before the cursor, never part of one.
             if (state.cursor > 0) {
-                state.cursor -= 1;
-                _ = state.buffer.orderedRemove(state.cursor);
+                const start = line_text.prevBoundary(state.buffer.items, state.cursor);
+                line_text.removeRange(&state.buffer, start, state.cursor);
+                state.cursor = start;
             }
         },
         .delete_char => {
             if (state.cursor < state.buffer.items.len) {
-                _ = state.buffer.orderedRemove(state.cursor);
+                line_text.removeRange(&state.buffer, state.cursor, line_text.nextBoundary(state.buffer.items, state.cursor));
             }
         },
         .delete_char_forward => {
-            // Delete key - delete character at cursor (not before like backspace)
+            // Delete key - delete the character at the cursor (not before like backspace)
             if (state.cursor < state.buffer.items.len) {
-                _ = state.buffer.orderedRemove(state.cursor);
+                line_text.removeRange(&state.buffer, state.cursor, line_text.nextBoundary(state.buffer.items, state.cursor));
             }
         },
         .delete_word => {
@@ -1315,10 +1333,10 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
             state.last_was_kill = true;
         },
         .move_left => {
-            if (state.cursor > 0) state.cursor -= 1;
+            state.cursor = line_text.prevBoundary(state.buffer.items, state.cursor);
         },
         .move_right => {
-            if (state.cursor < state.buffer.items.len) state.cursor += 1;
+            state.cursor = line_text.nextBoundary(state.buffer.items, state.cursor);
         },
         .move_word_left => {
             state.cursor = findWordStart(state.buffer.items, state.cursor);
@@ -1515,9 +1533,10 @@ fn handleSearch(state: *ReplState) !void {
 
             const c = search_buf[i];
 
-            // In paste mode, add printable chars to search (skip newlines)
+            // In paste mode, add printable chars to search (skip newlines).
+            // SONNY-6487: and the bytes of UTF-8 text.
             if (in_paste) {
-                if (c >= 0x20 and c < 0x7f) {
+                if ((c >= 0x20 and c < 0x7f) or c >= 0x80) {
                     try state.search_buffer.append(state.allocator, c);
                 }
                 i += 1;
@@ -1535,11 +1554,10 @@ fn handleSearch(state: *ReplState) !void {
                 break;
             }
 
-            if (c == 0x7f or c == 0x08) { // Backspace
-                if (state.search_buffer.items.len > 0) {
-                    _ = state.search_buffer.pop();
-                }
-            } else if (c >= 0x20 and c < 0x7f) {
+            if (c == 0x7f or c == 0x08) { // Backspace: one character, not one byte
+                const len = state.search_buffer.items.len;
+                state.search_buffer.items.len = line_text.prevBoundary(state.search_buffer.items, len);
+            } else if ((c >= 0x20 and c < 0x7f) or c >= 0x80) { // SONNY-6487: UTF-8 text too
                 try state.search_buffer.append(state.allocator, c);
             }
 
@@ -1573,9 +1591,13 @@ fn handleSearch(state: *ReplState) !void {
             }
         }
 
-        var search_line_buf: [1024]u8 = undefined;
-        const search_line = try std.fmt.bufPrint(&search_line_buf, "\r(reverse-i-search)`{s}': {s}", .{ state.search_buffer.items, if (found) state.buffer.items else "" });
-        try stdout_file.writeStreamingAll(replIo(), search_line);
+        // SONNY-6487: written in pieces; a match longer than about 1000
+        // bytes overflowed a fixed 1024-byte line buffer (NoSpaceLeft) and
+        // ended the read loop.
+        try stdout_file.writeStreamingAll(replIo(), "\r(reverse-i-search)`");
+        try stdout_file.writeStreamingAll(replIo(), state.search_buffer.items);
+        try stdout_file.writeStreamingAll(replIo(), "': ");
+        if (found) try stdout_file.writeStreamingAll(replIo(), state.buffer.items);
     }
 }
 
