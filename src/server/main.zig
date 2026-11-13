@@ -1288,6 +1288,44 @@ fn enforceCapabilityProfile(allocator: std.mem.Allocator, path: []const u8) !voi
     try geode.capability_gate.validateProfile(allocator, bytes, rows, geode.capability_gate.engineVersionFromBuildLabel(build_options.version));
 }
 
+/// GEODE_MTLS_REQUIRED is "1", "true" or "on" (case-insensitive).
+fn mtlsRequiredFromEnv(gpa: std.mem.Allocator) bool {
+    const v = getEnvVarOwned(gpa, "GEODE_MTLS_REQUIRED") catch return false;
+    defer gpa.free(v);
+    return std.ascii.eqlIgnoreCase(v, "true") or std.mem.eql(u8, v, "1") or std.ascii.eqlIgnoreCase(v, "on");
+}
+
+// CANARY: REQ=REQ-AUTH-MTLS-QUIC-006; FEATURE="mTLS over QUIC"; ASPECT=ClientCaTrust; STATUS=TESTED; TEST=tests/test_sonny6453_mtls_client_ca.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6453: with GEODE_MTLS_REQUIRED set, load GEODE_MTLS_CLIENT_CA (a PEM
+/// bundle of CA certificates) as the only trust anchors for client
+/// certificates. Refuses (error) when it is unset, cannot be loaded, holds no
+/// certificate or a non-CA one, or when a gRPC listener is configured: the
+/// gRPC transport does not request or verify client certificates, so it would
+/// serve without the mTLS the operator required.
+fn loadMtlsClientCa(gpa: std.mem.Allocator, grpc_listener: bool) !quic_transport.ClientCaTrust {
+    if (grpc_listener) {
+        log.err("mTLS: GEODE_MTLS_REQUIRED cannot be enforced on the gRPC listener; refusing to start (drop --listen-grpc or GEODE_MTLS_REQUIRED)", &.{});
+        return error.MtlsNotSupportedOnGrpc;
+    }
+    const path = getEnvVarOwned(gpa, "GEODE_MTLS_CLIENT_CA") catch {
+        log.err("mTLS: GEODE_MTLS_REQUIRED is set but GEODE_MTLS_CLIENT_CA (the CA bundle client certificates must chain to) is not; refusing to start", &.{});
+        return error.MtlsClientCaRequired;
+    };
+    defer gpa.free(path);
+    const trust = quic_transport.installClientCaTrust(gpa, path) catch |err| {
+        log.err("mTLS: cannot use GEODE_MTLS_CLIENT_CA; refusing to start", &.{
+            Attr.string("path", path),
+            Attr.string("error", @errorName(err)),
+        });
+        return err;
+    };
+    log.info("mTLS: client certificates verified against GEODE_MTLS_CLIENT_CA", &.{
+        Attr.string("path", path),
+        Attr.int("ca_certificates", @intCast(trust.spkis.len)),
+    });
+    return trust;
+}
+
 // CANARY: REQ=REQ-SONNY-6339-RESOLVED-DATA-DIR; FEATURE="Server Startup"; ASPECT=OneResolver; STATUS=TESTED; TEST=tests/test_sonny6339_resolved_data_dir.zig; OWNER=security; UPDATED=2026-11-12
 /// SONNY-6339: the server's data directory: the `--data-dir` flag, else
 /// GEODE_DATA_DIR, else the per-user default (graph_store's own chain,
@@ -1393,6 +1431,15 @@ pub fn main() !void {
     // SONNY-6422: likewise a half-configured audit key pair, a short
     // GEODE_MASTER_KEY, or a GEODE_WAL_KEY nothing reads.
     try server_init.refuseUnusableKeyConfig(gpa);
+    // SONNY-6453: GEODE_MTLS_REQUIRED verifies client certificates against
+    // GEODE_MTLS_CLIENT_CA and nothing else; without a usable one, or with a
+    // gRPC listener (which cannot verify client certificates), refuse to start.
+    const mtls_required = mtlsRequiredFromEnv(gpa);
+    var mtls_client_ca: ?quic_transport.ClientCaTrust = if (mtls_required)
+        try loadMtlsClientCa(gpa, listen_grpc != null)
+    else
+        null;
+    defer if (mtls_client_ca) |*t| t.deinit();
     const data_dir: []const u8 = try resolveServerDataDir(gpa, &config);
     graph_store.setDataDirOverride(gpa, data_dir);
 
@@ -2525,15 +2572,7 @@ pub fn main() !void {
 
         // GAP-0258: Initialize mTLS provider for QUIC client certificate authentication
         // CANARY: REQ=REQ-AUTH-MTLS-QUIC-005; FEATURE="mTLS over QUIC"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
-        const mtls_required_env = getEnvVarOwned(gpa, "GEODE_MTLS_REQUIRED") catch null;
-        defer if (mtls_required_env) |e| gpa.free(e);
-        const mtls_required = if (mtls_required_env) |v| blk: {
-            if (v.len == 0) break :blk false;
-            if (std.ascii.eqlIgnoreCase(v, "true") or std.ascii.eqlIgnoreCase(v, "1") or std.ascii.eqlIgnoreCase(v, "on"))
-                break :blk true;
-            break :blk false;
-        } else false;
-
+        // SONNY-6453: resolved (and the client CA installed) at startup.
         if (mtls_required) {
             transport.config.require_client_cert = true;
         }

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-13T07:26:31.961132353Z",
+  "generated_at": "2026-11-13T07:54:57.771647354Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -1660,14 +1660,16 @@
         {
           "feature": "2PC TLS",
           "aspect": "Security",
-          "status": "IMPL",
+          "status": "TESTED",
           "files": [
             "src/distributed/twophase.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
           "benches": [],
           "owner": "distributed",
-          "updated": "2026-04-10"
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -1697,6 +1699,25 @@
           "benches": [],
           "owner": "distributed",
           "updated": "2026-04-10"
+        }
+      ]
+    },
+    {
+      "id": "REQ-2PC-TLS-003",
+      "features": [
+        {
+          "feature": "2PC TLS",
+          "aspect": "ClusterCa",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -4856,6 +4877,26 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-06-11"
+        }
+      ]
+    },
+    {
+      "id": "REQ-AUTH-MTLS-QUIC-006",
+      "features": [
+        {
+          "feature": "mTLS over QUIC",
+          "aspect": "ClientCaTrust",
+          "status": "TESTED",
+          "files": [
+            "src/server/main.zig",
+            "tests/test_sonny6453_mtls_client_ca.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_mtls_client_ca.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -10530,6 +10571,25 @@
           "benches": [],
           "owner": "transport",
           "updated": "2026-06-04"
+        }
+      ]
+    },
+    {
+      "id": "REQ-CLUSTER-PEER-DIAL-001",
+      "features": [
+        {
+          "feature": "ClusterAuth",
+          "aspect": "PeerTls",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_auth.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -66367,6 +66427,25 @@
       ]
     },
     {
+      "id": "REQ-SEC-CLI-NO-CA-DEFAULT-001",
+      "features": [
+        {
+          "feature": "InsecureTlsFlagGate",
+          "aspect": "ImplicitNoCaDefault",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6453_cli_no_ca_default.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_cli_no_ca_default.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SEC-CONN-001",
       "features": [
         {
@@ -66647,6 +66726,25 @@
           "benches": [],
           "owner": "security",
           "updated": "2026-01-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SEC-MCP-INSECURE-DSN-001",
+      "features": [
+        {
+          "feature": "InsecureTlsFlagGate",
+          "aspect": "McpDsn",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6453_mcp_insecure_dsn.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_mcp_insecure_dsn.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-13"
         }
       ]
     },
@@ -85711,6 +85809,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6453-HYGIENE",
+      "features": [
+        {
+          "feature": "Docs",
+          "aspect": "ComposePidsAndTestSteps",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6453_hygiene.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6453_hygiene.zig"
+          ],
+          "benches": [],
+          "owner": "docs",
+          "updated": "2026-11-13"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-CAPABILITY-PROFILE-001",
       "features": [
         {
@@ -93272,10 +93389,12 @@
           "files": [
             "src/distributed/raft_consensus.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-04-10"
+          "updated": "2026-11-13"
         },
         {
           "feature": "Raft RPC TLS",
@@ -93284,10 +93403,12 @@
           "files": [
             "src/distributed/raft_consensus.zig"
           ],
-          "tests": [],
+          "tests": [
+            "tests/test_sonny6453_cluster_peer_tls.zig"
+          ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-04-10"
+          "updated": "2026-11-13"
         },
         {
           "feature": "Raft RPC TLS",
@@ -93340,8 +93461,8 @@
       "BENCHED": 209,
       "COMPLETE": 2,
       "EXEMPT": 216,
-      "IMPL": 336,
-      "TESTED": 4864
+      "IMPL": 335,
+      "TESTED": 4871
     },
     "by_aspect": {
       "2PC": 3,
@@ -93857,6 +93978,7 @@
       "CliPlaintextDiagnostic": 1,
       "CliRlsPolicyCreate": 1,
       "CliUtf16HexInputFlag": 1,
+      "ClientCaTrust": 1,
       "ClientConnect": 1,
       "ClientConnectEx": 1,
       "ClientExecTimeout": 1,
@@ -93877,6 +93999,7 @@
       "Cluster": 1,
       "ClusterBindAddress": 1,
       "ClusterBootstrap": 3,
+      "ClusterCa": 1,
       "ClusterErrorSqlstateMapping": 1,
       "ClusterMergePrePass": 1,
       "ClusterPort": 1,
@@ -93930,6 +94053,7 @@
       "ComplexQueries": 1,
       "Compliance": 2,
       "ComplianceLog": 1,
+      "ComposePidsAndTestSteps": 1,
       "Composite": 1,
       "CompositeBackfillFromPostings": 1,
       "CompositeEndpointTenantScope": 1,
@@ -95067,6 +95191,7 @@
       "Implementation": 12,
       "ImplementationVerification": 1,
       "ImplicitAckStampsProof": 1,
+      "ImplicitNoCaDefault": 1,
       "InFlightHandlerDrain": 1,
       "InMemoryCatalog": 1,
       "InWorkloadMutationVerifier": 1,
@@ -95448,6 +95573,7 @@
       "MaySchema": 1,
       "MaySchemaDatabase": 1,
       "McpCancellation": 1,
+      "McpDsn": 1,
       "McpEnvelopeRoundTrip": 1,
       "MeanDistance": 1,
       "MemberOfValue": 1,
@@ -95953,6 +96079,7 @@
       "PeerDecimal": 1,
       "PeerIPExtraction": 1,
       "PeerIsolation": 1,
+      "PeerTls": 1,
       "PeerTlsHandshakeDistinctIp": 1,
       "PeersList": 1,
       "PendingStatementFailure": 1,

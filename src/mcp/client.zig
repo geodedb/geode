@@ -48,6 +48,19 @@ pub const GeodeClient = struct {
             std.log.warn("MCP endpoint contains embedded credentials. Prefer explicit credential passing for production.", .{});
         }
 
+        // SONNY-6453: a DSN `insecure=true` (insecure_tls_skip_verify,
+        // skip_verify) follows the CLI's --insecure-tls-skip-verify rule:
+        // refused under production posture (release build or
+        // GEODE_ENV=production) unless GEODE_ALLOW_INSECURE_TLS=1, and loud
+        // otherwise. stdout is the MCP channel, so both go to the log (stderr).
+        if (cfg.insecure) {
+            if (geode.zig_quic_bridge.liveInsecurePosture() == .refuse) {
+                std.log.warn("MCP endpoint DSN sets insecure=true: refusing to disable TLS certificate verification under production conditions (release build or GEODE_ENV=production). Give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to explicitly accept the risk.", .{});
+                return error.InsecureTlsRefused;
+            }
+            std.log.warn("MCP endpoint DSN sets insecure=true: the server's TLS certificate is NOT verified; this connection is exposed to man-in-the-middle attacks. NOT FOR PRODUCTION.", .{});
+        }
+
         const client = try zig_client.GeodeClient.initFromConfig(allocator, cfg);
 
         self.* = .{

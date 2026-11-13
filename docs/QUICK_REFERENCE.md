@@ -18,12 +18,18 @@ geode serve --listen-quic 0.0.0.0:3141 \
 
 ### Client Operations
 
+A release `geode` verifies the server: pass the CA that signed the server
+certificate with `--ca-cert` (SONNY-6453). Without it (and without
+`--insecure-tls-skip-verify` plus `GEODE_ALLOW_INSECURE_TLS=1`) a release
+build, or `GEODE_ENV=production`, refuses to connect; a Debug build from
+`make build` connects unverified with a warning.
+
 ```bash
 # Run single query
-geode query "MATCH (n) RETURN n LIMIT 10"
+geode query "MATCH (n) RETURN n LIMIT 10" --ca-cert ca.crt
 
 # Query with JSON output
-geode query "RETURN 1 AS x" --format json
+geode query "RETURN 1 AS x" --format json --ca-cert ca.crt
 
 # Interactive REPL
 gql

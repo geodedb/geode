@@ -454,7 +454,7 @@ pub const RpcClient = struct {
     pub fn sendMessage(self: *RpcClient, from: u64, term: u64, msg: Message) !void {
         if (self.client == null) {
             var qc = quic.QuicClient.init(self.allocator);
-            try connectWithTLS(&qc, self.allocator, self.host, self.port);
+            try connectWithTLS(&qc, self.host, self.port);
             self.client = qc;
             self.stream = try self.client.?.getStream();
         }
@@ -1922,7 +1922,7 @@ pub const Transport = struct {
         };
         errdefer conn.client.deinit();
 
-        try connectWithTLS(&conn.client, self.allocator, conn.endpoint, conn.port);
+        try connectWithTLS(&conn.client, conn.endpoint, conn.port);
         conn.established = true;
 
         // Re-acquire the lock to insert.  If another caller beat us to
@@ -1984,32 +1984,13 @@ pub const Transport = struct {
     }
 };
 
-/// SEC-D011: Establish a TLS-aware QUIC connection for Raft RPC, matching the
-/// pattern from cluster.zig:sendToNode.
-///
-/// 1. If GEODE_CLUSTER_INSECURE=1, use connectInsecure (skip TLS verification).
-/// 2. If GEODE_CLUSTER_CA_CERT is set, use connectEx with the CA certificate.
-/// 3. Otherwise, use the default connect (system CA bundle).
-///
-/// A log warning is emitted when TLS verification is bypassed.
-// CANARY: REQ=SEC-D011; FEATURE="Raft RPC TLS"; ASPECT=ConnectHelper; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
-fn connectWithTLS(qc: *quic.QuicClient, allocator: Allocator, host: []const u8, port: u16) !void {
-    const ca = @import("cluster_auth.zig");
-    const allow_insecure = ca.isInsecureModeAllowed();
-
-    if (allow_insecure) {
-        log.warn("SEC-D011: Raft RPC TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
-        try qc.connectInsecure(host, port, true);
-    } else {
-        const ca_path = getEnvVarOwned(allocator, "GEODE_CLUSTER_CA_CERT") catch null;
-        defer if (ca_path) |p| allocator.free(p);
-
-        if (ca_path) |path| {
-            try qc.connectEx(host, port, path, null, null);
-        } else {
-            try qc.connect(host, port);
-        }
-    }
+/// SEC-D011: dial a raft peer with the cluster transport configuration
+/// (`cluster_auth.dialClusterPeer`: GEODE_CLUSTER_CA_CERT, or
+/// GEODE_CLUSTER_INSECURE in Debug builds; neither is error.ClusterCaRequired,
+/// as no CA is loaded from anywhere else), then wait for the handshake.
+// CANARY: REQ=SEC-D011; FEATURE="Raft RPC TLS"; ASPECT=ConnectHelper; STATUS=TESTED; TEST=tests/test_sonny6453_cluster_peer_tls.zig; OWNER=security; UPDATED=2026-11-13
+fn connectWithTLS(qc: *quic.QuicClient, host: []const u8, port: u16) !void {
+    try @import("cluster_auth.zig").dialClusterPeer(qc, host, port);
     // Task A6e (2026-05-26): the previous 10s timeout was disastrous on
     // the outbox dispatch path: every send to a peer that's still
     // booting or transiently unreachable stalls the dispatch thread for
@@ -4376,17 +4357,15 @@ test "raft stall: progress refresh clears the stall (no immediate re-evict loop)
     try std.testing.expect(!Transport.shouldEvictOnStallArmed(pc, now_ms + Transport.peer_stall_budget_ms, .leader));
 }
 
-// SEC-D011: Verify connectWithTLS compiles and selects the correct path.
-// In test mode, GEODE_CLUSTER_INSECURE is not set, so the default (TLS) path is used.
-// CANARY: REQ=SEC-D011; FEATURE="Raft RPC TLS"; ASPECT=ConnectCompile; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
-test "raft_consensus: connectWithTLS defaults to TLS connect" {
+// SEC-D011 / SONNY-6453: with neither GEODE_CLUSTER_INSECURE nor
+// GEODE_CLUSTER_CA_CERT set, a peer dial is refused before any packet is sent.
+// CANARY: REQ=SEC-D011; FEATURE="Raft RPC TLS"; ASPECT=ConnectCompile; STATUS=TESTED; TEST=tests/test_sonny6453_cluster_peer_tls.zig; OWNER=security; UPDATED=2026-11-13
+test "raft_consensus: connectWithTLS refuses without a cluster CA" {
+    if (std.c.getenv("GEODE_CLUSTER_CA_CERT") != null or std.c.getenv("GEODE_CLUSTER_INSECURE") != null) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var qc = quic.QuicClient.init(allocator);
     defer qc.deinit();
-
-    // In test mode the QUIC stubs are no-ops, so this should succeed
-    // without GEODE_CLUSTER_INSECURE set (default = TLS path).
-    try connectWithTLS(&qc, allocator, "127.0.0.1", 7890);
+    try std.testing.expectError(error.ClusterCaRequired, connectWithTLS(&qc, "127.0.0.1", 7890));
 }
 
 test "raft_consensus: Transport.send uses TLS-aware connection" {

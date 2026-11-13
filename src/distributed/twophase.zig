@@ -247,28 +247,25 @@ pub const TwoPhaseTransport = struct {
         // Phase 2: Connect + handshake WITHOUT holding the mutex.
         // Parse endpoint into host and port
         // GAP-0144: Secure TLS connections for 2PC coordination
-        // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+        // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_sonny6453_cluster_peer_tls.zig; OWNER=distributed; UPDATED=2026-11-13
         const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
         const host = endpoint[0..colon_pos];
         const port_str = endpoint[colon_pos + 1 ..];
         const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidPort;
 
-        // SEC-D005/SEC-D006: Consolidated to cluster_auth.isInsecureModeAllowed()
-        const allow_insecure = cluster_auth.isInsecureModeAllowed();
-        if (allow_insecure) {
-            log.warn("SECURITY WARNING: 2PC TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
-        }
-
-        // Create new connection with TLS verification by default.
-        // The mutex is NOT held here — connectInsecure + waitForHandshake can take
+        // SONNY-6453: the cluster transport configuration raft uses
+        // (GEODE_CLUSTER_CA_CERT, or GEODE_CLUSTER_INSECURE in Debug builds);
+        // with neither, refused (error.ClusterCaRequired) before dialling.
+        // The mutex is NOT held here — the dial + waitForHandshake can take
         // up to 5 seconds and must not stall unrelated 2PC participants.
         var client = quic.QuicClient.init(self.allocator);
-        client.connectInsecure(host, port, allow_insecure) catch |err| {
+        cluster_auth.dialClusterPeer(&client, host, port) catch |err| {
+            client.deinit();
             log.err("2PC transport failed to connect", &.{
                 Attr.string("endpoint", endpoint),
                 Attr.string("error", @errorName(err)),
             });
-            return error.ConnectionFailed;
+            return if (err == error.ClusterCaRequired) error.ClusterCaRequired else error.ConnectionFailed;
         };
 
         client.waitForHandshake(5) catch |err| {
@@ -444,22 +441,16 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // SEC-D005/SEC-D006: Consolidated to cluster_auth.isInsecureModeAllowed()
-    const allow_insecure = cluster_auth.isInsecureModeAllowed();
-    if (allow_insecure) {
-        log.warn("SECURITY WARNING: 2PC one-shot TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
-    }
-
-    // Create QUIC client and connect with TLS verification by default
+    // SONNY-6453: the cluster transport configuration (see getConnection).
     var client = quic.QuicClient.init(allocator);
     defer client.deinit();
 
-    client.connectInsecure(host, port, allow_insecure) catch |err| {
+    cluster_auth.dialClusterPeer(&client, host, port) catch |err| {
         log.err("2PC transport one-shot connect failed", &.{
             Attr.string("endpoint", endpoint),
             Attr.string("error", @errorName(err)),
         });
-        return error.ConnectionFailed;
+        return if (err == error.ClusterCaRequired) error.ClusterCaRequired else error.ConnectionFailed;
     };
 
     // Wait for handshake with timeout

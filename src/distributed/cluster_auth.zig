@@ -94,6 +94,34 @@ pub fn buildClusterHelloRequest(allocator: std.mem.Allocator) !schema.HelloReque
     };
 }
 
+/// SEC-D011 / SONNY-6453: dial a cluster peer (raft, the cluster coordinator,
+/// 2PC) with THE cluster transport configuration. `qc` is a
+/// `*transport/quic.QuicClient` (or raft's test-build stub). Does not wait for
+/// the handshake.
+///
+/// 1. GEODE_CLUSTER_INSECURE=1, honoured in Debug builds only
+///    (`isInsecureModeAllowed`): connect without verification, with a warning.
+/// 2. GEODE_CLUSTER_CA_CERT set: verify the peer's chain against that CA
+///    bundle and its name against `host` (`QuicClient.connectEx`; a bundle
+///    that cannot be loaded is an error).
+/// 3. Neither: error.ClusterCaRequired. No CA is loaded from anywhere else
+///    (there is no system bundle), so dialling could only fail the handshake.
+// CANARY: REQ=REQ-CLUSTER-PEER-DIAL-001; FEATURE="ClusterAuth"; ASPECT=PeerTls; STATUS=TESTED; TEST=tests/test_sonny6453_cluster_peer_tls.zig; OWNER=security; UPDATED=2026-11-13
+pub fn dialClusterPeer(qc: anytype, host: []const u8, port: u16) !void {
+    if (isInsecureModeAllowed()) {
+        log.warn("cluster peer TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
+        return qc.connectInsecure(host, port, true);
+    }
+    const ca_path = posixGetenv("GEODE_CLUSTER_CA_CERT") orelse {
+        log.err("cluster peer TLS: GEODE_CLUSTER_CA_CERT is not set; refusing to dial a peer unverified", &.{
+            logging.Attr.string("host", host),
+            logging.Attr.int("port", port),
+        });
+        return error.ClusterCaRequired;
+    };
+    return qc.connectEx(host, port, ca_path, null, null);
+}
+
 /// Check whether insecure mode (no TLS verification) is explicitly allowed.
 ///
 /// GAP-0737 / SEC-INFRA-01 (2026-04-16):

@@ -232,3 +232,29 @@ test "KMS large scale operations" {
         wrapped_keys[i].deinit(allocator);
     }
 }
+
+// SONNY-6453: moved from src/security/kms.zig, whose inline tests ran in no
+// step (the ones test_kms_provider.zig did not already cover).
+test "KMS provider types report their configuration (external_kms, vault_transit)" {
+    const configs = [_]kms.KMSConfig{
+        .{ .provider_type = .external_kms, .seed = 0x12345 },
+        .{ .provider_type = .vault_transit, .endpoint = "https://vault.example.com", .auth_token = "test_token" },
+    };
+    for (configs) |config| {
+        var provider = try kms.KMSProvider.init(testing.allocator, config);
+        defer provider.deinit();
+        const info = provider.getProviderInfo();
+        try testing.expectEqual(config.provider_type, info.provider_type);
+        try testing.expectEqual(config.auth_token != null, info.authenticated);
+    }
+}
+
+test "GAP-0066: isProductionSafe identifies external_kms as unsafe and vault_transit as safe" {
+    try testing.expect(!kms.KMSProviderType.external_kms.isProductionSafe());
+    try testing.expect(kms.KMSProviderType.vault_transit.isProductionSafe());
+}
+
+test "GAP-0066: default config is external_kms" {
+    const default_config = kms.KMSConfig{};
+    try testing.expectEqual(kms.KMSProviderType.external_kms, default_config.provider_type);
+}

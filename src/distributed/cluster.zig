@@ -2764,20 +2764,8 @@ pub const ClusterCoordinator = struct {
         // cluster_auth.isInsecureModeAllowed() chokepoint so release builds
         // refuse the flag automatically.  The old envFlagEnabled path would
         // honour the env var in any build mode.
-        const allow_insecure = cluster_auth.isInsecureModeAllowed();
-        if (allow_insecure) {
-            log.warn("SECURITY WARNING: Cluster TLS verification disabled via GEODE_CLUSTER_INSECURE (Debug build only)", &.{});
-            _ = client.connectInsecure(host, port, true) catch |err| return err;
-        } else {
-            const ca_path = getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
-            defer if (ca_path) |p| self.allocator.free(p);
-
-            if (ca_path) |path| {
-                try client.connectEx(host, port, path, null, null);
-            } else {
-                try client.connect(host, port);
-            }
-        }
+        // SONNY-6453: one cluster dial configuration (cluster_auth.dialClusterPeer).
+        try cluster_auth.dialClusterPeer(&client, host, port);
         _ = client.waitForHandshake(10) catch |err| return err;
 
         var stream = try client.openStream(true);
@@ -3075,20 +3063,8 @@ pub const ClusterCoordinator = struct {
         var client = quic.QuicClient.init(self.allocator);
         defer client.deinit();
 
-        const allow_insecure = cluster_auth.isInsecureModeAllowed();
-        if (allow_insecure) {
-            log.warn("SECURITY WARNING: Cluster RPC TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
-            _ = client.connectInsecure(host, port, true) catch |err| return err;
-        } else {
-            const ca_path = getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
-            defer if (ca_path) |p| self.allocator.free(p);
-
-            if (ca_path) |path| {
-                try client.connectEx(host, port, path, null, null);
-            } else {
-                try client.connect(host, port);
-            }
-        }
+        // SONNY-6453: one cluster dial configuration (cluster_auth.dialClusterPeer).
+        try cluster_auth.dialClusterPeer(&client, host, port);
         _ = client.waitForHandshake(10) catch |err| return err;
 
         var stream = try client.openStream(true);

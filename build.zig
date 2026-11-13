@@ -1144,6 +1144,18 @@ pub fn build(b: *std.Build) void {
     // libc getenv (SONNY-2394 certificate auto-generation posture).
     const transport_quic_mod = b.createModule(.{ .root_source_file = b.path("src/transport/quic.zig"), .target = target, .optimize = optimize, .link_libc = true });
     transport_quic_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
+    // SONNY-6453: the x509 module the QUIC library's TLS contexts use (same
+    // dependency arguments as quic's own `tls` dependency, so the same module
+    // instance): mTLS client-CA trust is installed in its global trust store.
+    // quic.zig asserts at compile time that the instances match.
+    const quic_tls_dep = quic_ext_dep.builder.dependency("tls", .{
+        .target = target,
+        .optimize = optimize,
+        .@"tls-insecure-testing" = true,
+        .fips = fips,
+        .openssl_path = openssl_path orelse "/usr/local/ssl",
+    });
+    transport_quic_mod.addImport("quic_x509", quic_tls_dep.module("x509"));
     transport_quic_mod.addImport("logging", logging_mod);
     transport_quic_mod.addImport("dns", dns_mod);
     transport_quic_mod.addImport("quic_response_metrics", quic_response_metrics_mod);
@@ -3738,6 +3750,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_secure_zero_tests = b.addRunArtifact(secure_zero_tests);
+    // SONNY-6453 (5): it ran only in the aggregate.
+    b.step("test-secure-zero", "Run GAP-0499 regression (key material is zeroed with secureZero, never @memset)").dependOn(&run_secure_zero_tests.step);
 
     // GAP-0289: Per-tenant resource quotas — connection and query limits
     const tenant_quota_tests = b.addTest(.{
@@ -5798,6 +5812,79 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6448-tls-fail-closed", "Run SONNY-6448 item 1 regression (QuicClient.connectEx refuses a missing, unreadable or certificate-less CA bundle instead of connecting without a trust anchor; the CLI QUIC client verifies against a supplied --ca-cert instead of ignoring it; a CA that did not sign the server fails the handshake and the right one completes it, over real QUIC)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6453 (1): GEODE_MTLS_REQUIRED verifies client certificates
+    // against GEODE_MTLS_CLIENT_CA only, and refuses to start without one;
+    // spawns the built geode and dials it over real QUIC.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_mtls_client_ca.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("vendor_quic", quic_ext_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6453-mtls-client-ca", "Run SONNY-6453 item 1 regression (GEODE_MTLS_REQUIRED accepts a client certificate that chains to GEODE_MTLS_CLIENT_CA and rejects one from another CA, a self-signed or expired one, none, and one sent without CertificateVerify; refuses to start with no usable client CA or with a gRPC listener; spawns the built geode over real QUIC)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6453 (3): an MCP endpoint DSN with insecure=true follows the CLI
+    // insecure-TLS rule (refused under production posture, warned otherwise).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_mcp_insecure_dsn.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode_mcp", mcp_cli_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6453-mcp-insecure-dsn", "Run SONNY-6453 item 3 regression (geode mcp refuses an endpoint DSN with insecure=true / insecure_tls_skip_verify / skip_verify under production posture unless GEODE_ALLOW_INSECURE_TLS=1, and warns otherwise; a verified DSN is unaffected)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6453 (4): one rule for a CLI connection with no trust material:
+    // refused under production posture, the Debug developer default
+    // otherwise; real QUIC against an in-process server.
+    {
+        const bridge_mod = b.createModule(.{ .root_source_file = b.path("src/client/zig_quic_bridge.zig"), .target = target, .optimize = optimize });
+        bridge_mod.addImport("geode_client_zig", zig_client_real_mod);
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_cli_no_ca_default.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("zig_quic_bridge", bridge_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6453-cli-no-ca-default", "Run SONNY-6453 item 4 regression (geode query / shell / REPL refuse an implicit unverified connection - no --ca-cert, no client certificate, no insecure flag - under production posture, like geode auth; GEODE_ALLOW_INSECURE_TLS=1 or a --ca-cert connects, and a Debug build outside GEODE_ENV=production keeps the warning-only developer default; real QUIC)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6453 (5): compose files set no pids_limit; kms.zig has no dead
+    // helper; the kms.zig inline tests and the secure-zero test have steps.
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_hygiene.zig"), .target = target, .optimize = optimize });
+        mod.addImport("sonny6453_hygiene_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6453-hygiene", "Run SONNY-6453 item 5 regression (no compose file sets pids_limit - the limit is deploy.resources.limits.pids; src/security/kms.zig has no dead compat_fillRandom; the kms.zig inline tests no step ran moved to tests/test_kms_provider.zig; the GAP-0499 secure-zero test has a named step)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6453 (2): 2PC, raft and the cluster coordinator dial peers
+    // through one verified configuration (GEODE_CLUSTER_CA_CERT), over real
+    // QUIC against an in-process server with openssl-made CAs.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6453_cluster_peer_tls.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6453-cluster-peer-tls", "Run SONNY-6453 item 2 regression (the 2PC transport verifies participants against GEODE_CLUSTER_CA_CERT: the signing CA completes the handshake, another CA fails it; 2PC and the raft / cluster peer dial refuse with ClusterCaRequired when no cluster CA is configured; real QUIC)").dependOn(&run_tests.step);
     }
 
     // SONNY-6442 (4): geode serve refuses an unknown option (exit 2) and

@@ -606,7 +606,7 @@ This authentication system provides **enterprise-grade security** with **complet
 | **MFA (TOTP)** | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
 | **Session Tokens** | ✅ Implemented | Session continuity with rotation | High | `src/security/authn.zig` |
 | **API Keys** | ❌ Not on the server wire | Service accounts, automation | — | Library `auth_lib.api_keys` and the offline `geode apikey` CLI (local state file) only; see below |
-| **mTLS (Certificate)** | ✅ Implemented | Zero-trust, service mesh | Very High | `src/security/mtls_provider.zig` |
+| **mTLS (Certificate)** | ⚠️ Transport gate only (see below) | Zero-trust, service mesh | Very High | `GEODE_MTLS_REQUIRED` + `GEODE_MTLS_CLIENT_CA`; `src/security/mtls_provider.zig` |
 
 ### API Key Authentication (not implemented on the server)
 
@@ -625,18 +625,40 @@ passwords, or mTLS, for programmatic access.
 
 ### mTLS Certificate Authentication
 
-For zero-trust environments and service mesh deployments:
+mTLS on the QUIC listener is a transport gate: with it on, a connection
+must present a client certificate that chains to a CA you configure, and
+then still authenticates with a username and password in HELLO.
 
 ```bash
-# Connect with client certificate
-geode shell --cert /path/to/client.crt --key /path/to/client.key --server geode.example.com:3141
-
-# Certificate identity is extracted from:
-# - Subject CN (Common Name)
-# - Subject DN (Distinguished Name)
-# - SAN (Subject Alternative Names)
-# - Certificate fingerprint
+# Server: require client certificates that chain to the CAs in this bundle
+GEODE_MTLS_REQUIRED=1 \
+GEODE_MTLS_CLIENT_CA=/etc/geode/client-ca.pem \
+geode serve --listen 0.0.0.0:3141 --cert /etc/geode/server.crt --key /etc/geode/server.key
 ```
+
+- `GEODE_MTLS_CLIENT_CA` is a PEM bundle of CA certificates
+  (basicConstraints `CA:TRUE`). It is the only trust anchor for client
+  certificates (SONNY-6453). `geode serve` refuses to start when
+  `GEODE_MTLS_REQUIRED` is set and the bundle is unset, cannot be read,
+  holds no certificate or holds a non-CA certificate.
+- `GEODE_MTLS_REQUIRED` is QUIC only. The gRPC listener does not verify
+  client certificates, so `geode serve` refuses to start with both
+  `GEODE_MTLS_REQUIRED` and `--listen-grpc`.
+- A certificate is accepted only when the client proves it holds the key
+  (TLS CertificateVerify) and the chain it sends ends in a CA from the
+  bundle, within its validity period. A client must therefore send its
+  chain up to that CA, or present a self-signed CA certificate that is
+  itself in the bundle (pinning).
+- **Known limit:** the TLS library geode's Zig clients use (including
+  `geode query` / `geode shell --client-cert --client-key`) sends only the
+  leaf certificate, and the server does not complete a client chain from
+  the bundle, so such a client is rejected even when its leaf is signed by
+  a CA in the bundle. Clients that send the full chain are not affected.
+- **Identity mapping is not active.** The server's certificate-to-user
+  mapping (`src/security/mtls_provider.zig`) starts empty and nothing on
+  the server loads mappings (`geode mtls map ...` writes a local file the
+  server does not read), so a client certificate never selects the user:
+  the user is always the one that authenticates in HELLO.
 
 ### Not Supported (Tracking Issues Open)
 

@@ -22,6 +22,79 @@
   raft v0.1.22, timeseries-storage v0.2.20.** The storage engine anchors its
   WAL sequence at the last checkpoint on open, and the WAL keeps its
   sequence file when compaction empties the log.
+- **BREAKING (operator): `GEODE_MTLS_REQUIRED` verifies client
+  certificates against `GEODE_MTLS_CLIENT_CA`, and refuses to start without
+  it (SONNY-6453 item 1).** The server asked for a client certificate but
+  never told the TLS layer which CA to trust, so a certificate from the
+  operator's CA was rejected; and a client that sent ANY certificate without
+  a CertificateVerify (no proof it holds the key, no chain validation) passed
+  the "certificate present" check and went on to authenticate by password.
+  Now `GEODE_MTLS_CLIENT_CA` (a PEM bundle of CA certificates) is the only
+  trust anchor for client certificates; a certificate counts only with a
+  verified CertificateVerify; and `geode serve` exits at startup when
+  `GEODE_MTLS_REQUIRED` is set and `GEODE_MTLS_CLIENT_CA` is unset, cannot
+  be loaded, or holds a non-CA certificate, or when `--listen-grpc` is also
+  given (the gRPC transport does not verify client certificates). Known
+  limit (dependency): the TLS library checks the client chain as sent, so a
+  client must send its chain up to a CA in the bundle (or present a pinned
+  self-signed CA certificate from the bundle); Zig `tls`-based clients,
+  including `geode query --client-cert`, send only the leaf and are
+  rejected. Regression: `zig build test-sonny6453-mtls-client-ca`.
+- **BREAKING (operator): `geode query`, `geode shell` and the REPL refuse
+  an implicit unverified connection under production posture, like
+  `geode auth` (SONNY-6453 item 4).** With no `--ca-cert`, no client
+  certificate and no `--insecure-tls-skip-verify`, they connected without
+  verifying the server (a stderr warning since SONNY-6448). One rule now
+  applies to every CLI command (`zig_quic_bridge.liveInsecurePosture`, the
+  SEC-CLI-01 gate): a release build, or `GEODE_ENV=production`, refuses
+  with `ImplicitInsecureTlsRefused` and says to pass `--ca-cert` (or the
+  insecure flag with `GEODE_ALLOW_INSECURE_TLS=1`); `geode backup` /
+  `restore` and the `geode auth` login path, which verified with no trust
+  anchor and failed the handshake, now refuse up front with the same
+  message. A Debug build outside `GEODE_ENV=production` keeps the
+  warning-only developer default. Scripts that ran a release `geode query`
+  with no CA must pass `--ca-cert`: `scripts/docker/test.sh`,
+  `scripts/docker/test-ci.sh` (`GEODE_CA_CERT`, default `/certs/ca.crt`)
+  and the `docker-compose.example.yml` dataset loader (`./certs/ca.crt`)
+  are updated. Regression: `zig build test-sonny6453-cli-no-ca-default`.
+- **BREAKING (operator): `geode mcp` refuses an endpoint DSN with
+  `insecure=true` under production posture (SONNY-6453 item 3).** The DSN
+  parameter (`insecure`, `insecure_tls_skip_verify`, `skip_verify`) turned
+  server certificate verification off silently in any build. It now
+  follows the CLI's `--insecure-tls-skip-verify` rule: refused
+  (`InsecureTlsRefused`) in a release build or with `GEODE_ENV=production`
+  unless `GEODE_ALLOW_INSECURE_TLS=1`, and a warning on stderr whenever
+  accepted. Give the DSN a `ca=` bundle instead. Regression:
+  `zig build test-sonny6453-mcp-insecure-dsn`.
+- **Operator-visible: every compose file sets its PID limit as
+  `deploy.resources.limits.pids` (SONNY-6453 item 5).**
+  `docker-compose.yml`, `docker-compose.example.yml`,
+  `docker-compose.gpu.yml`, `docker-compose.otel.yml`,
+  `tests/docker-compose.test.yml` and `tests/ha/docker-compose.yml` used
+  `pids_limit`, which Compose refuses next to a deploy limit; the limit
+  (4096) is unchanged. The GPU and test-stack healthchecks ran
+  `geode query` with no `--ca-cert`, which a release image now refuses
+  (item 4); they use the image's shared `/usr/local/bin/health-check.sh`.
+  `src/security/kms.zig` loses a dead `compat_fillRandom`; its inline tests,
+  which no step could run (the file's import closure includes
+  `external_kms_client.zig`'s Vault tests, which do not compile under Zig
+  0.16), moved to `tests/test_kms_provider.zig` (`zig build
+  test-kms-provider`), and the GAP-0499 secure-zero test has
+  `zig build test-secure-zero`. Regression:
+  `zig build test-sonny6453-hygiene`.
+- **Operator-visible: every cluster peer dial uses one verified
+  configuration (SONNY-6453 items 2 and 5).** The 2PC transport never read
+  `GEODE_CLUSTER_CA_CERT`: it dialled with verification on and no trust
+  anchor, so a verified 2PC handshake could never complete. It now dials
+  exactly like raft and the cluster coordinator
+  (`cluster_auth.dialClusterPeer`): verified against
+  `GEODE_CLUSTER_CA_CERT`, or unverified with `GEODE_CLUSTER_INSECURE`
+  (Debug builds only). With neither set, raft, the coordinator and 2PC
+  refuse the dial with `ClusterCaRequired` and a log line naming the
+  variable, instead of attempting a handshake against a "system CA bundle"
+  geode never loads (the raft comment that promised one is corrected).
+  2PC (`src/distributed/twophase.zig`) is reachable from no server path
+  today. Regression: `zig build test-sonny6453-cluster-peer-tls`.
 - **BREAKING (operator): QUIC clients verify against the CA bundle they are
   given, or do not connect (SONNY-6448 item 1).** `QuicClient.connectEx`
   (the cluster, Raft and 2PC peer path, which reads

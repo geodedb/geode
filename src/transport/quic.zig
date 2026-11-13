@@ -42,6 +42,7 @@ const dns_search = @import("dns_search");
 
 // Import the QUIC modules through the vendor API which re-exports them
 const api = @import("vendor_quic");
+const quic_x509 = @import("quic_x509");
 const Endpoint = api.QuicEndpoint;
 const Connection = api.QuicConnection;
 const VendorQuicConfig = api.QuicConfig;
@@ -1507,6 +1508,19 @@ pub const QuicConnection = struct {
         return chain[0];
     }
 
+    /// SONNY-6453: the peer's leaf certificate only when the peer PROVED it
+    /// holds the key: it sent a CertificateVerify, which the TLS layer checks
+    /// (with the chain) before the handshake can complete. A client may send
+    /// a Certificate without a CertificateVerify; the vendor TLS server then
+    /// validates nothing, so `getPeerCertificateDer` alone is not evidence
+    /// of anything and must not authenticate or satisfy mTLS.
+    pub fn getVerifiedPeerCertificateDer(self: *QuicConnection) ?[]const u8 {
+        const qc = self.quic_connection orelse return null;
+        const tls_ctx = qc.tls_context orelse return null;
+        if (tls_ctx.peer_cert_verify_sig == null) return null;
+        return self.getPeerCertificateDer();
+    }
+
     /// Keying material exported from this connection's TLS handshake under
     /// `label` (see `exportTlsKeyingMaterial`).
     pub fn exportKeyingMaterial(self: *QuicConnection, label: []const u8, out: []u8) !void {
@@ -2015,6 +2029,72 @@ pub fn resolveHostIpAlloc(allocator: std.mem.Allocator, host: []const u8) ![]u8 
     const out = try allocator.dupe(u8, r.ip);
     if (r.allocated) allocator.free(@constCast(r.ip));
     return out;
+}
+
+// SONNY-6453: the vendor TLS server checks a client certificate chain against
+// the process-global x509 trust store (`x509.getTrustStore()`, cached when each
+// TLS context is created). That store must be the one in the x509 module the
+// QUIC library's TLS contexts use, or installing it changes nothing.
+comptime {
+    const TlsCtx = @typeInfo(@typeInfo(@FieldType(Connection, "tls_context")).optional.child).pointer.child;
+    if (@FieldType(TlsCtx, "cached_trust_store") != ?quic_x509.TrustStore)
+        @compileError("quic_x509 is not the x509 module instance the QUIC TLS stack uses");
+}
+
+/// SPKIs of the client CAs (GEODE_MTLS_CLIENT_CA). Written once by
+/// `installClientCaTrust` before the listener starts, then only read.
+var g_client_ca_spkis: []const []const u8 = &.{};
+
+fn clientCaIsTrustedSpki(spki_der: []const u8) bool {
+    for (g_client_ca_spkis) |spki| {
+        if (std.mem.eql(u8, spki, spki_der)) return true;
+    }
+    return false;
+}
+
+/// The installed client-CA trust store (see `installClientCaTrust`).
+pub const ClientCaTrust = struct {
+    allocator: std.mem.Allocator,
+    spkis: []const []const u8,
+
+    /// Removes the trust store and frees the anchors.
+    pub fn deinit(self: *ClientCaTrust) void {
+        quic_x509.setTrustStore(null);
+        g_client_ca_spkis = &.{};
+        for (self.spkis) |s| self.allocator.free(s);
+        self.allocator.free(self.spkis);
+    }
+};
+
+/// SONNY-6453: trust exactly the CA certificates in the PEM bundle at `path`
+/// for client-certificate (mTLS) verification. A client chain is accepted
+/// only when it ends in one of these certificates (matched by public key).
+/// Every certificate in the bundle must be a CA (basicConstraints CA:TRUE):
+/// the TLS layer requires the chain's last certificate to be one. Call once,
+/// before the QUIC listener starts. A bundle that cannot be loaded, holds no
+/// certificate, or holds a non-CA certificate is an error.
+pub fn installClientCaTrust(allocator: std.mem.Allocator, path: []const u8) !ClientCaTrust {
+    const chain = try loadCaChainDer(allocator, path);
+    defer {
+        for (chain) |der| allocator.free(der);
+        allocator.free(chain);
+    }
+    var spkis = std.ArrayList([]const u8).empty;
+    errdefer {
+        for (spkis.items) |s| allocator.free(s);
+        spkis.deinit(allocator);
+    }
+    for (chain) |der| {
+        var cert = quic_x509.parseCert(allocator, der) catch return error.InvalidClientCaCertificate;
+        defer cert.deinit(allocator);
+        const is_ca = if (cert.basic) |b| b.ca else false;
+        if (!is_ca) return error.ClientCaNotACa;
+        try spkis.append(allocator, try allocator.dupe(u8, cert.spki));
+    }
+    const owned = try spkis.toOwnedSlice(allocator);
+    g_client_ca_spkis = owned;
+    quic_x509.setTrustStore(.{ .isTrustedSpki = clientCaIsTrustedSpki });
+    return .{ .allocator = allocator, .spkis = owned };
 }
 
 /// GAP-0838: parse a PEM CA file into a DER trust-anchor chain.

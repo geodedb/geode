@@ -101,9 +101,10 @@ REQ-2PC-PREPARE-001,2PC,Prepare,TESTED,tests/test_gap_0193_batch4_comprehensive.
 REQ-2PC-ROLLBACK-001,2PC,Rollback,TESTED,tests/test_gap_0193_batch5_comprehensive.zig,,,txn,2026-01-16
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
 REQ-2PC-TLS-001,2PC,TLSSecurity,IMPL,tests/test_gap_0193_batch2_security.zig,,,distributed,2026-11-12
-REQ-2PC-TLS-001,2PC TLS,Security,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
+REQ-2PC-TLS-001,2PC TLS,Security,TESTED,src/distributed/twophase.zig,tests/test_sonny6453_cluster_peer_tls.zig,,distributed,2026-11-13
 REQ-2PC-TLS-002,2PC,TLSOneShot,IMPL,tests/test_gap_0193_batch2_security.zig,,,distributed,2026-11-12
 REQ-2PC-TLS-002,2PC TLS One-shot,Security,IMPL,src/distributed/twophase.zig,,,distributed,2026-04-10
+REQ-2PC-TLS-003,2PC TLS,ClusterCa,TESTED,tests/test_sonny6453_cluster_peer_tls.zig,tests/test_sonny6453_cluster_peer_tls.zig,,distributed,2026-11-13
 REQ-ABAC-WIRE-001,ABAC Enforcement,ServerInit,IMPL,src/server/server_init.zig,,,security,2026-11-12
 REQ-ABAC-WIRE-001,ABAC Enforcement,ServerIntegration,IMPL,src/server/server_state.zig,,,security,2026-11-12
 REQ-ABAC-WIRE-002,ABAC Enforcement,SecurityManager,IMPL,src/server/server_state.zig,,,security,2026-11-12
@@ -288,6 +289,8 @@ REQ-AUTH-MTLS-001,MtlsAuthentication,SECURITY,TESTED,src/security/mtls_provider.
 REQ-AUTH-MTLS-QUIC-003,mTLS over QUIC,ConnectionAuth,TESTED,src/server/quic_connection_handler.zig,geodetestlab/specs/authn_mtls_rejection_matrix.yml,,security,2026-06-11
 REQ-AUTH-MTLS-QUIC-004,mTLS over QUIC,GlobalProvider,TESTED,src/server/quic_connection_handler.zig,geodetestlab/specs/authn_mtls_rejection_matrix.yml,,security,2026-06-11
 REQ-AUTH-MTLS-QUIC-005,mTLS over QUIC,ServerInit,TESTED,src/server/main.zig,geodetestlab/specs/authn_mtls_rejection_matrix.yml,,security,2026-06-11
+REQ-AUTH-MTLS-QUIC-006,mTLS over QUIC,ClientCaTrust,TESTED,src/server/main.zig,tests/test_sonny6453_mtls_client_ca.zig,,security,2026-11-13
+REQ-AUTH-MTLS-QUIC-006,mTLS over QUIC,ClientCaTrust,TESTED,tests/test_sonny6453_mtls_client_ca.zig,,,security,2026-11-13
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,tests/test_auth_persistence.zig,persistent_writer_all_callbacks,,security,2026-05-11
 REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,,self,,security,2026-05-11
 REQ-AUTH-POLICY-001,AuthPolicy,PasswordReset,IMPL,tests/test_gap_0193_batch2_security.zig,,,security,2026-11-12
@@ -625,6 +628,7 @@ REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ExplicitCertLoadAsIs,TES
 REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ExplicitCertNotDiscarded,TESTED,tests/test_cert_provided_cert_honored.zig,tests/test_cert_provided_cert_honored.zig,,distributed,2026-06-04
 REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ExplicitCertTracking,TESTED,src/server/cli_args.zig,tests/test_cert_provided_cert_honored.zig,,distributed,2026-06-04
 REQ-CLUSTER-CERT-PROVIDED-HONORED,DistributedClusterTLS,ListenerCertProbe,TESTED,src/transport/quic.zig,tests/test_cert_provided_cert_honored.zig,,transport,2026-06-04
+REQ-CLUSTER-PEER-DIAL-001,ClusterAuth,PeerTls,TESTED,src/distributed/cluster_auth.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
 REQ-CODEQUALITY-001,CodeQuality,ErrorHandling,TESTED,tests/test_gap_0193_remaining_categories.zig,,,engine,2026-01-15
 REQ-CODEQUALITY-002,CodeQuality,MemoryManagement,TESTED,tests/test_gap_0193_remaining_categories.zig,,,engine,2026-01-15
 REQ-CODEQUALITY-003,CodeQuality,NamingConventions,TESTED,tests/test_gap_0193_remaining_categories.zig,,,engine,2026-01-15
@@ -4269,6 +4273,7 @@ REQ-SEC-AUTH-UNAVAILABLE-005,AuthOutcomeClassification,StoreLockReentrancy,TESTE
 REQ-SEC-AUTH-VALIDATION-001,Security,AuthValidation,TESTED,tests/test_gap_0193_batch4_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-CLI-INSECURE-TLS-GATE-001,InsecureTlsFlagGate,Policy,TESTED,src/cli/insecure_tls_gate.zig,tests/test_s3_sigv4.zig,,security,2026-06-10
 REQ-SEC-CLI-INSECURE-TLS-GATE-001,InsecureTlsFlagGate,Policy,TESTED,tests/test_s3_sigv4.zig,,,security,2026-06-10
+REQ-SEC-CLI-NO-CA-DEFAULT-001,InsecureTlsFlagGate,ImplicitNoCaDefault,TESTED,tests/test_sonny6453_cli_no_ca_default.zig,tests/test_sonny6453_cli_no_ca_default.zig,,security,2026-11-13
 REQ-SEC-CONN-001,Security,ConnectionSecurity,TESTED,tests/test_gap_0193_batch3_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-CRYPTO-001,Security,Cryptography,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-CRYPTO-TRUTH-001,HmacSha3RealConstruction,Security,TESTED,tests/test_gap0881_crypto_truth.zig,tests/test_gap0881_crypto_truth.zig:1,,security,2026-06-10
@@ -4287,6 +4292,7 @@ REQ-SEC-INFRA-03-TOKEN-ROTATION,ClusterTokenRotation,DualTokenValidation,TESTED,
 REQ-SEC-INFRA-03-TOKEN-ROTATION,ClusterTokenRotation,Regression,TESTED,tests/test_sec_infra03_token_rotation.zig,,,security,2026-06-10
 REQ-SEC-INPUT-VAL-001,Security,InputValidation,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-KMS-001,Security,KMS,TESTED,tests/test_gap_0193_batch5_comprehensive.zig,,,security,2026-01-16
+REQ-SEC-MCP-INSECURE-DSN-001,InsecureTlsFlagGate,McpDsn,TESTED,tests/test_sonny6453_mcp_insecure_dsn.zig,tests/test_sonny6453_mcp_insecure_dsn.zig,,security,2026-11-13
 REQ-SEC-MFA-001,Security,MFA,TESTED,tests/test_gap_0193_batch6_comprehensive.zig,,,security,2026-01-16
 REQ-SEC-MFA-STEPUP-CLASS-001,MFA step-up operation classification,SECURITY,TESTED,src/security/geode_auth_lib.zig,tests/test_gap0884_stepup_classification.zig,,security,2026-06-10
 REQ-SEC-MFA-STEPUP-CLASS-001,MFA step-up operation classification,SECURITY,TESTED,tests/test_gap0884_stepup_classification.zig,,,security,2026-06-10
@@ -5469,6 +5475,7 @@ REQ-SONNY-6451-CLUSTER-SIGTERM,DistributedCluster,ShutdownStopsRaftBeforeFlush,T
 REQ-SONNY-6451-HEALTH-FAILED-PEER,DistributedCluster,HealthPassKeepsFailedPeer,TESTED,tests/test_sonny6451_health_failed_peer.zig,tests/test_sonny6451_health_failed_peer.zig,,distributed,2026-11-12
 REQ-SONNY-6451-RAFT-RESTARTED-PEER,DistributedCluster,InboundStreamReleasesWorker,TESTED,tests/test_sonny6451_raft_restarted_peer.zig,tests/test_sonny6451_raft_restarted_peer.zig,,distributed,2026-11-12
 REQ-SONNY-6451-UNKNOWN-SECRET,GQL Auth DDL,UndeclaredSecretIsAnError,TESTED,tests/test_sonny6436_fixture_secrets.zig,tests/test_sonny6436_fixture_secrets.zig,,security,2026-11-12
+REQ-SONNY-6453-HYGIENE,Docs,ComposePidsAndTestSteps,TESTED,tests/test_sonny6453_hygiene.zig,tests/test_sonny6453_hygiene.zig,,docs,2026-11-13
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,DiscoveryRows,TESTED,src/execution/admin_ddl.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-001,SonnyCapabilityProfile,PublicationContract,TESTED,tests/test_sonny_capability_profile.zig,tests/test_sonny_capability_profile.zig,,execution,2026-09-08
 REQ-SONNY-CAPABILITY-PROFILE-002,SonnyCapabilityProfile,Config,TESTED,src/server/cli_args.zig,tests/test_capability_gate.zig,,server,2026-09-08
@@ -5933,8 +5940,8 @@ REQ-WITH-GROUPBY-008,WithGroupByAggregation,OrderByAggregation,TESTED,tests/test
 REQ-WITH-GROUPBY-009,WithGroupByAggregation,NestedWith,TESTED,tests/test_gap_0193_impl_batch_promotion.zig,test_gap_0193_impl_batch_promotion.zig,,execution,2026-01-15
 REQ-ZERO-LEN-PATH-002,ZeroLengthPaths,Basic,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,engine,2026-01-15
 REQ-ZERO-LEN-PATH-003,ZeroLengthPaths,SelfLoop,TESTED,tests/test_gap_0193_impl_verification.zig,test_gap_0193_impl_verification.zig,,engine,2026-01-15
-SEC-D011,Raft RPC TLS,ConnectCompile,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
-SEC-D011,Raft RPC TLS,ConnectHelper,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
+SEC-D011,Raft RPC TLS,ConnectCompile,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
+SEC-D011,Raft RPC TLS,ConnectHelper,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6453_cluster_peer_tls.zig,,security,2026-11-13
 SEC-D011,Raft RPC TLS,RpcClientConnect,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
 SEC-D011,Raft RPC TLS,TransportSend,TESTED,src/distributed/raft_consensus.zig,,,security,2026-04-10
 SONNY-1841,WriteCancelReleasesLock,Regression,TESTED,tests/test_sonny1841_write_lock_cancel.zig,tests/test_sonny1841_write_lock_cancel.zig,,execution,2026-09-18
