@@ -2235,6 +2235,19 @@
 
 ### Fixed
 
+- **`geode serve --data-dir` with a relative path holding `..` starts, and a
+  startup refusal leaks nothing (SONNY-6499 item 3).** On a fresh directory
+  `--data-dir ../X` refused to start with "HMAC key required": the server
+  kept the path as given, the timeseries store behind the auth graph
+  manager refuses any path holding `..` (`validateDataDir`,
+  PathTraversal), and the startup guard (`storeHasAuthRecords`) read that
+  failure as "auth records exist". The data directory is now made absolute
+  and normalized once, where it is resolved (`resolveServerDataDir`); an
+  auth graph manager that cannot be opened refuses startup naming its error
+  (`AuthGraphUnavailable`) instead of claiming records exist; and every
+  startup refusal frees the index catalog it had set up (5 allocations the
+  debug allocator reported leaked). The log and messages show the absolute
+  path. Regression: `zig build test-sonny6499-relative-data-dir`.
 - **CAST follows ISO/IEC 39075 20.8 for every source and target (SONNY-6499
   item 2).** `CAST(x AS STRING)` returned NULL for a DOUBLE, a REAL, a
   stored DOUBLE (read back as an extended value), a list, a record and

@@ -1355,17 +1355,35 @@ fn loadMtlsClientCa(gpa: std.mem.Allocator, grpc_listener: bool) !quic_transport
 /// storage did, and ran without durable state. A source check in
 /// tests/test_sonny6339_resolved_data_dir.zig fails when main.zig reads the
 /// flag anywhere else.
+///
+/// SONNY-6499: the path is made absolute and normalized (`.` and `..`
+/// resolved against the working directory) once, here, so every component
+/// sees the same path: the timeseries store refuses any path holding `..`
+/// (`validateDataDir`, PathTraversal), and the auth graph manager's failure
+/// to open read as "auth records exist", so `--data-dir ../X` on a fresh
+/// directory refused to start with "HMAC key required".
 fn resolveServerDataDir(gpa: std.mem.Allocator, config: *cli_args.ServerConfig) ![]const u8 {
-    const resolved: []u8 = if (config.data_dir) |flag|
+    const given: []u8 = if (config.data_dir) |flag|
         try gpa.dupe(u8, flag)
     else
         try graph_store.getPersistenceFilePath(gpa);
+    defer gpa.free(given);
+    const resolved: []u8 = try absoluteDataDir(gpa, given);
     if (config._allocated_data_dir) {
         if (config.data_dir) |old| gpa.free(old);
     }
     config.data_dir = resolved;
     config._allocated_data_dir = true;
     return resolved;
+}
+
+/// SONNY-6499: `path` absolute and normalized; a relative path is taken
+/// from the working directory. Owned by `gpa`.
+fn absoluteDataDir(gpa: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) return std.fs.path.resolve(gpa, &.{path});
+    const cwd = try std.process.currentPathAlloc(std.Io.Threaded.global_single_threaded.io(), gpa);
+    defer gpa.free(cwd);
+    return std.fs.path.resolve(gpa, &.{ cwd, path });
 }
 
 pub fn main() !void {
