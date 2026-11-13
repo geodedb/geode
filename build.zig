@@ -9952,6 +9952,21 @@ pub fn build(b: *std.Build) void {
     const sonny6471_step = b.step("test-sonny6471-edge-prop-crash", "Run SONNY-6471 regression (every relationship-property write: CREATE and MERGE with inline properties on the fast paths and the executor, SET r.p, SET r = {...}, REMOVE, outside and inside a transaction, same- and cross-shard, with and without TDE, survives a SIGKILL of a real server; read back outgoing, incoming and by an unlabeled scan)");
     sonny6471_step.dependOn(&run_sonny6471_tests.step);
 
+    // SONNY-6492 (1): nodes written before a checkpoint that stopped between
+    // its manifest and its free.store survive a SIGKILL of a real server.
+    const sonny6492_fs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_checkpoint_free_store_crash.zig"), .target = target, .optimize = optimize });
+    sonny6492_fs_test_mod.link_libc = true;
+    sonny6492_fs_test_mod.addImport("geode", root_mod);
+    sonny6492_fs_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6492_fs_test_mod.addImport("schema", schema_mod);
+    sonny6492_fs_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6492_fs_tests = b.addTest(.{ .root_module = sonny6492_fs_test_mod });
+    const run_sonny6492_fs_tests = b.addRunArtifact(sonny6492_fs_tests);
+    spawnsBuiltGeode(sonny6492_fs_tests);
+    shardDep(test_step, &run_sonny6492_fs_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6492_fs_step = b.step("test-sonny6492-checkpoint-free-store-crash", "Run SONNY-6492 item 1 regression (a real server checkpoints, a checkpoint then stops between its manifest/WAL truncate and its free.store save, the server is SIGKILLed: every node is there after the restart, by label and by an unlabeled scan, and new nodes do not reuse live pages; with and without TDE)");
+    sonny6492_fs_step.dependOn(&run_sonny6492_fs_tests.step);
+
     // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
     // transaction open at a SIGKILL must leave nothing after the restart
     // (multi-request, and one request left open). Not in shardDep until the
